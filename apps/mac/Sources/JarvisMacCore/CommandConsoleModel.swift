@@ -9,10 +9,12 @@ public final class CommandConsoleModel: ObservableObject {
     @Published public private(set) var pauseStatus: JarvisPauseResponse?
     @Published public private(set) var isWorking: Bool
     @Published public private(set) var lastError: String?
+    @Published public private(set) var isDegraded: Bool
+    @Published public private(set) var degradedReason: String?
 
-    private let client: JarvisIPCClient
+    private let client: any JarvisCoreClient
 
-    public init(client: JarvisIPCClient = JarvisIPCClient()) {
+    public init(client: any JarvisCoreClient = JarvisIPCClient()) {
         self.client = client
         self.transcript = []
         self.activity = []
@@ -20,6 +22,8 @@ public final class CommandConsoleModel: ObservableObject {
         self.pauseStatus = nil
         self.isWorking = false
         self.lastError = nil
+        self.isDegraded = false
+        self.degradedReason = nil
     }
 
     public func refreshHealth() async {
@@ -34,7 +38,14 @@ public final class CommandConsoleModel: ObservableObject {
                 resumedAt: nil,
                 cancelledSchedulerJobs: 0
             )
+            self.clearDegradedMode()
         }
+    }
+
+    public func markDegraded(_ reason: String) {
+        health = nil
+        isDegraded = true
+        degradedReason = reason
     }
 
     public func refreshPauseStatus() async {
@@ -83,9 +94,18 @@ public final class CommandConsoleModel: ObservableObject {
 
         do {
             try await operation()
+            clearDegradedMode()
         } catch {
-            lastError = String(describing: error)
+            let message = String(describing: error)
+            lastError = message
+            isDegraded = true
+            degradedReason = message
         }
+    }
+
+    private func clearDegradedMode() {
+        isDegraded = false
+        degradedReason = nil
     }
 }
 

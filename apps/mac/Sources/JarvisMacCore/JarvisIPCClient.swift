@@ -40,6 +40,52 @@ public struct JarvisHealth: Decodable, Equatable, Sendable {
     }
 }
 
+public struct JarvisDiagnosticsExport: Decodable, Equatable, Sendable {
+    public var generatedAt: String
+    public var redaction: String
+    public var health: JarvisHealth
+    public var schedulerJobs: [JarvisDiagnosticSchedulerJob]
+    public var repositoryBacked: Bool
+    public var schemaVersion: Int?
+    public var taskCount: Int?
+    public var auditEntryCount: Int?
+    public var activeMemoryItemCount: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case generatedAt = "generated_at"
+        case redaction
+        case health
+        case schedulerJobs = "scheduler_jobs"
+        case repositoryBacked = "repository_backed"
+        case schemaVersion = "schema_version"
+        case taskCount = "task_count"
+        case auditEntryCount = "audit_entry_count"
+        case activeMemoryItemCount = "active_memory_item_count"
+    }
+}
+
+public struct JarvisDiagnosticSchedulerJob: Decodable, Equatable, Identifiable, Sendable {
+    public var id: UUID
+    public var name: String
+    public var trigger: JarvisSchedulerTrigger
+    public var status: String
+    public var createdAt: String
+    public var updatedAt: String
+    public var cancelledAt: String?
+    public var cancellationReasonPresent: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case trigger
+        case status
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+        case cancelledAt = "cancelled_at"
+        case cancellationReasonPresent = "cancellation_reason_present"
+    }
+}
+
 public struct JarvisCommandRequest: Encodable, Equatable, Sendable {
     public var input: String
     public var dryRun: Bool
@@ -417,7 +463,29 @@ public enum JarvisIPCError: Error, Equatable {
     case httpStatus(Int, String)
 }
 
-public final class JarvisIPCClient: Sendable {
+public protocol JarvisCoreClient: Sendable {
+    func health() async throws -> JarvisHealth
+    func submit(_ command: JarvisCommandRequest) async throws -> JarvisCommandResponse
+    func pause(reason: String) async throws -> JarvisPauseResponse
+    func resume() async throws -> JarvisPauseResponse
+    func pauseStatus() async throws -> JarvisPauseResponse
+    func listTasks() async throws -> [JarvisTask]
+    func task(id: UUID) async throws -> JarvisTask
+    func listAuditEntries(taskId: UUID?) async throws -> [JarvisAuditEntry]
+    func listMemoryItems(includeDeleted: Bool) async throws -> [JarvisMemoryItem]
+    func createMemoryItem(_ request: JarvisCreateMemoryItemRequest) async throws -> JarvisMemoryItem
+    func memoryItem(id: UUID) async throws -> JarvisMemoryItem
+    func updateMemoryItem(id: UUID, request: JarvisMemoryMutationRequest) async throws -> JarvisMemoryItem
+    func reviewMemoryItem(id: UUID) async throws -> JarvisMemoryItem
+    func deleteMemoryItem(id: UUID) async throws -> JarvisMemoryItem
+    func listPluginManifests() async throws -> [JarvisPluginManifest]
+    func listSchedulerJobs() async throws -> [JarvisSchedulerJob]
+    func createSchedulerJob(_ request: JarvisCreateSchedulerJobRequest) async throws -> JarvisSchedulerJob
+    func cancelSchedulerJob(id: UUID) async throws -> JarvisSchedulerJob
+    func diagnosticsExport() async throws -> JarvisDiagnosticsExport
+}
+
+public final class JarvisIPCClient: JarvisCoreClient {
     private let endpoint: JarvisEndpoint
     private let session: URLSession
     private let encoder: JSONEncoder
@@ -506,6 +574,10 @@ public final class JarvisIPCClient: Sendable {
 
     public func cancelSchedulerJob(id: UUID) async throws -> JarvisSchedulerJob {
         try await send(path: "/scheduler/jobs/\(id.uuidString)", method: "DELETE", body: Optional<Data>.none)
+    }
+
+    public func diagnosticsExport() async throws -> JarvisDiagnosticsExport {
+        try await send(path: "/diagnostics/export", method: "GET", body: Optional<Data>.none)
     }
 
     private func send<Response: Decodable>(
