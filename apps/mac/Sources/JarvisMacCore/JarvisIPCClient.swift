@@ -59,6 +59,22 @@ public struct JarvisTask: Decodable, Equatable, Sendable {
     }
 }
 
+public struct JarvisAuditEntry: Decodable, Equatable, Identifiable, Sendable {
+    public var id: UUID
+    public var taskId: UUID?
+    public var eventType: String
+    public var summary: String
+    public var createdAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case taskId = "task_id"
+        case eventType = "event_type"
+        case summary
+        case createdAt = "created_at"
+    }
+}
+
 public struct JarvisRuntimeStep: Decodable, Equatable, Sendable {
     public var index: Int
     public var message: String
@@ -71,12 +87,45 @@ public struct JarvisModelRoute: Decodable, Equatable, Sendable {
     public var reason: String
 }
 
+public struct JarvisPluginCallMetadata: Decodable, Equatable, Sendable {
+    public var pluginId: String
+    public var action: String
+    public var riskTier: String
+    public var approvalStatus: String
+
+    enum CodingKeys: String, CodingKey {
+        case pluginId = "plugin_id"
+        case action
+        case riskTier = "risk_tier"
+        case approvalStatus = "approval_status"
+    }
+}
+
+public struct JarvisPluginCallResult: Decodable, Equatable, Sendable {
+    public var status: String
+    public var metadata: JarvisPluginCallMetadata
+}
+
 public struct JarvisCommandResponse: Decodable, Equatable, Sendable {
     public var accepted: Bool
     public var task: JarvisTask
+    public var auditEntry: JarvisAuditEntry
+    public var auditEntries: [JarvisAuditEntry]
     public var route: JarvisModelRoute?
     public var steps: [JarvisRuntimeStep]
+    public var pluginResults: [JarvisPluginCallResult]
     public var message: String
+
+    enum CodingKeys: String, CodingKey {
+        case accepted
+        case task
+        case auditEntry = "audit_entry"
+        case auditEntries = "audit_entries"
+        case route
+        case steps
+        case pluginResults = "plugin_results"
+        case message
+    }
 }
 
 public struct JarvisPauseRequest: Encodable, Equatable, Sendable {

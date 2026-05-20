@@ -164,9 +164,10 @@ sequenceDiagram
   endpoints, listing/scheduling/cancelling scheduler jobs over HTTP, and
   running `jarvis smoke` against ephemeral local servers.
 - `apps/mac/JarvisMacCore`: Swift IPC client and command-console model that
-  decode the Rust health/command/pause JSON contracts.
+  decode the Rust health/command/pause JSON contracts, including task, route,
+  step, audit, and plugin-result evidence from command responses.
 - `apps/mac/JarvisMacApp`: SwiftUI command-console scaffold with health status,
-  transcript, send, pause/resume, and refresh controls.
+  transcript, activity/audit panel, send, pause/resume, and refresh controls.
 
 ## End-Goal Production Architecture
 
@@ -271,7 +272,7 @@ erDiagram
 
 Current evidence supports a Rust foundation claim: the workspace has typed
 contracts and tested scaffolding for IPC, policy, routing, runtime, storage,
-plugins, scheduler, and CLI behavior, plus a first Swift command-console shell.
-It does not support a claim that Jarvis is a finished voice assistant, packaged
-Mac app, autonomous external-action agent, plugin marketplace, or production
-cloud-integrated system.
+plugins, scheduler, and CLI behavior, plus a first Swift command-console and
+activity/audit shell. It does not support a claim that Jarvis is a finished
+voice assistant, packaged Mac app, autonomous external-action agent, plugin
+marketplace, or production cloud-integrated system.
