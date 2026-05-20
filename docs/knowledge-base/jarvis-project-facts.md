@@ -11,7 +11,7 @@ These notes capture durable facts for future agents working on this repository.
   `jarvis-cli`, plus a Swift package scaffold under `apps/mac`.
 - Implemented `jarvis-core` surfaces include shared task/audit/safety types,
   an Axum loopback IPC server, runtime-backed command execution with
-  `FakeLocalModel`, emergency-pause state, in-memory scheduler state, a
+  `FakeLocalModel`, emergency-pause state, inspectable scheduler state, a
   conversation runtime with SQLite task/audit persistence hooks, local-first
   model routing policy, SQLite repository migrations, memory item persistence,
   append-only audit table triggers, plugin manifest validation, and
@@ -22,8 +22,9 @@ These notes capture durable facts for future agents working on this repository.
   `plugin echo ...` and `status` through policy. `dry_run` skips plugin
   execution and records audit evidence.
 - Repository-backed IPC state exposes task, audit, and memory inspection routes,
-  and all IPC states expose `/plugins/manifests` for deterministic first-party
-  plugin manifests. The CLI has matching `tasks`, `memory`, and `plugins`
+  persists scheduler jobs, restores them at startup, and all IPC states expose
+  `/plugins/manifests` for deterministic first-party plugin manifests. The CLI
+  has matching `tasks`, `memory`, `scheduler`, `diagnostics`, and `plugins`
   subcommands.
 - The planned packaged app, approval UI, local model provider integration,
   plugin installation flow, and autonomous model-router to plugin execution loop
@@ -40,8 +41,9 @@ These notes capture durable facts for future agents working on this repository.
   questions.
 - The Swift shell is currently a client/scaffold, not a packaged app that
   starts or supervises `jarvis-core`.
-- The scheduler is currently inspectable and cancellable but in-memory; durable
-  scheduler storage and proactive production trigger execution remain target
+- The scheduler is currently inspectable and cancellable. Scheduler jobs are
+  in-memory without repository backing and durable when the IPC state is started
+  with `SqliteRepository`. Proactive production trigger execution remains target
   architecture.
 
 ## Proof Boundaries
@@ -80,7 +82,8 @@ These notes capture durable facts for future agents working on this repository.
   audit, memory, and emergency-pause state for manual persistence checks.
 - `cargo run -p jarvis-cli -- smoke` now covers baseline command/pause smoke,
   plugin manifest listing, and repository-backed task plus memory inspection
-  paths.
+  paths, diagnostics redaction, and repository-backed scheduler/job state
+  surfaces.
 
 ## Safety Guardrails
 

@@ -36,7 +36,12 @@ release requirements, not optional UX guidance.
   final state.
 - Memory writes must have provenance, timestamp, category, sensitivity label,
   and review/delete controls.
-- Diagnostics exports must redact credentials and sensitive payloads.
+- Scheduler jobs must remain inspectable and cancellable. Persisted scheduler
+  metadata is not permission to execute proactive side effects; trigger
+  execution still has to pass policy and visibility rules.
+- Diagnostics exports must redact credentials, command bodies, scheduler
+  commands, audit payloads, memory values, raw cancellation reasons, and other
+  sensitive payloads.
 
 ## V1 Blocks
 
@@ -61,3 +66,5 @@ Safety regressions should fail release verification:
 - Scheduled jobs running while emergency pause is active.
 - Audit entries missing route, policy, approval, or action evidence.
 - Diagnostics containing raw secrets.
+- Diagnostics exposing command bodies, memory values, scheduler command text,
+  audit payloads, or cancellation reason text.

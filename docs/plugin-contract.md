@@ -66,7 +66,8 @@ to explain what happened:
 
 ## Testing Expectations
 
-When plugin APIs land, tests should cover:
+The current branch has deterministic first-party in-process plugin APIs for
+contract testing. Release verification should keep covering:
 
 - Manifest validation success and failure cases.
 - Unknown action rejection.

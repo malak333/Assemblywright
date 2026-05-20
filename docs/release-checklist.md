@@ -62,6 +62,12 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
 - Confirm task, audit, memory, and plugin manifest inspection endpoints still
   require or use the correct repository/plugin backing and are covered by local
   smoke or focused IPC tests.
+- Confirm scheduler job create/list/cancel state is restored and updated when
+  repository backing is enabled. This is durable job metadata, not proof that
+  proactive production triggers execute.
+- Confirm diagnostics export remains redacted and does not include command
+  bodies, scheduler commands, audit payloads, memory values, raw cancellation
+  reasons, or credentials.
 - Confirm the Swift shell remains described as a scaffold until it starts and
   supervises the Rust core, handles approval prompts, and passes packaged app
   smoke checks.
