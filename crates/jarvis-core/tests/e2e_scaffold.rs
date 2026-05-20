@@ -166,11 +166,13 @@ fn command_pipeline_executes_confirm_tier_plugin_action_after_approval() {
 #[test]
 fn plugin_manifest_rejects_actions_outside_declared_scopes() {
     let manifest = PluginManifest {
+        manifest_schema_version: 1,
         id: "bad_scope_plugin".to_string(),
         name: "Bad Scope Plugin".to_string(),
         version: "0.1.0".to_string(),
         source: PluginSource::FirstParty,
         author: "Jarvis".to_string(),
+        source_path: None,
         actions: vec![PluginActionManifest {
             name: "write_memory_without_scope".to_string(),
             description: "Invalid action that claims write memory access without permission."
@@ -256,11 +258,13 @@ impl InProcessPlugin for ConfirmWritePlugin {
         }));
 
         PluginManifest {
+            manifest_schema_version: 1,
             id: "confirm_write".to_string(),
             name: "Confirm Write".to_string(),
             version: "0.1.0".to_string(),
             source: PluginSource::FirstParty,
             author: "Jarvis".to_string(),
+            source_path: None,
             actions: vec![PluginActionManifest {
                 name: "write_note".to_string(),
                 description: "A fake side-effecting action that must require approval.".to_string(),

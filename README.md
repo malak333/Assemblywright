@@ -4,9 +4,9 @@ Jarvis is a local-first macOS assistant foundation. The current repo implements
 the Rust core described in [DESIGN.md](DESIGN.md): durable task/audit
 primitives, policy-gated first-party plugin commands, bounded model-planned
 first-party tool orchestration, local-first model routing evidence, plugin
-contracts, scheduler state, redacted diagnostics export, a loopback IPC
-surface, and CLI smoke paths for the Swift shell scaffold and future packaged
-app.
+contracts, metadata-only local plugin installation, scheduler state, redacted
+diagnostics export, a loopback IPC surface, and CLI smoke paths for the Swift
+shell scaffold and future packaged app.
 It also includes the first buildable Swift/SwiftUI Mac shell scaffold under
 `apps/mac`, with a tested IPC client, command-console state model,
 activity/audit panel for command evidence, management surfaces, degraded-mode
@@ -19,8 +19,9 @@ and not an autonomous external-communication system. Risky side effects must be
 blocked or require approval, and every meaningful decision should be auditable.
 The current implementation should not be described as a finished production
 assistant: signed packaging, real model providers, approval UI, voice support,
-plugin installation, and packaged Mac smoke evidence are still target
-architecture.
+installed plugin execution, and packaged Mac smoke evidence are still target
+architecture. Local plugin installation currently stores validated manifest
+metadata only and does not create an execution path.
 
 ## Build
 
@@ -46,8 +47,8 @@ want manual IPC commands to persist task and audit state locally.
 
 With a repository-backed server running, `jarvis tasks`, `jarvis memory`,
 `jarvis scheduler`, `jarvis diagnostics`, and `jarvis plugins` expose the
-current durable state, redacted diagnostics, and first-party plugin manifests
-over IPC.
+current durable state, redacted diagnostics, first-party plugin manifests, and
+disabled installed-plugin registry metadata over IPC.
 
 ## Docs
 

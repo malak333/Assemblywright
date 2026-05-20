@@ -7,11 +7,11 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
-    AuditEntry, JarvisError, JarvisResult, SchedulerJob, SchedulerJobStatus, Sensitivity,
-    TaskRecord, TaskStatus, TriggerKind,
+    AuditEntry, InstalledPlugin, JarvisError, JarvisResult, PluginManifest, SchedulerJob,
+    SchedulerJobStatus, Sensitivity, TaskRecord, TaskStatus, TriggerKind,
 };
 
-const CURRENT_SCHEMA_VERSION: i64 = 2;
+const CURRENT_SCHEMA_VERSION: i64 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EmergencyPauseState {
@@ -42,6 +42,15 @@ pub struct NewMemoryItem {
     pub value: String,
     pub provenance: String,
     pub sensitivity: Sensitivity,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InstalledPluginRecord {
+    pub id: String,
+    pub manifest: PluginManifest,
+    pub source_path: String,
+    pub execution_enabled: bool,
+    pub installed_at: DateTime<Utc>,
 }
 
 pub struct SqliteRepository {
@@ -497,6 +506,74 @@ impl SqliteRepository {
         collect_rows(rows)
     }
 
+    pub fn install_plugin_metadata(
+        &self,
+        installed: InstalledPlugin,
+    ) -> JarvisResult<InstalledPluginRecord> {
+        let now = Utc::now();
+        let manifest_json = serde_json::to_string(&installed.manifest).map_err(|err| {
+            JarvisError::Storage(format!(
+                "serialize plugin manifest {}: {err}",
+                installed.manifest.id
+            ))
+        })?;
+        self.conn
+            .execute(
+                "INSERT INTO installed_plugins
+                 (id, manifest_json, source_path, execution_enabled, installed_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(id) DO UPDATE SET
+                    manifest_json = excluded.manifest_json,
+                    source_path = excluded.source_path,
+                    execution_enabled = 0,
+                    installed_at = excluded.installed_at",
+                params![
+                    &installed.manifest.id,
+                    manifest_json,
+                    &installed.source_path,
+                    if installed.execution_enabled { 1 } else { 0 },
+                    to_db_time(now),
+                ],
+            )
+            .map_err(storage_error)?;
+
+        self.get_installed_plugin(&installed.manifest.id)?
+            .ok_or_else(|| {
+                JarvisError::Storage(format!(
+                    "installed plugin not found after upsert: {}",
+                    installed.manifest.id
+                ))
+            })
+    }
+
+    pub fn get_installed_plugin(&self, id: &str) -> JarvisResult<Option<InstalledPluginRecord>> {
+        self.conn
+            .query_row(
+                "SELECT id, manifest_json, source_path, execution_enabled, installed_at
+                 FROM installed_plugins
+                 WHERE id = ?1",
+                params![id],
+                installed_plugin_from_row,
+            )
+            .optional()
+            .map_err(storage_error)
+    }
+
+    pub fn list_installed_plugins(&self) -> JarvisResult<Vec<InstalledPluginRecord>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, manifest_json, source_path, execution_enabled, installed_at
+                 FROM installed_plugins
+                 ORDER BY installed_at DESC, id ASC",
+            )
+            .map_err(storage_error)?;
+        let rows = stmt
+            .query_map([], installed_plugin_from_row)
+            .map_err(storage_error)?;
+        collect_rows(rows)
+    }
+
     fn update_scheduler_job_status(
         &self,
         id: Uuid,
@@ -593,6 +670,9 @@ impl SqliteRepository {
         }
         if version < 2 {
             self.apply_migration_2()?;
+        }
+        if version < 3 {
+            self.apply_migration_3()?;
         }
 
         let migrated = self.schema_version()?;
@@ -751,6 +831,36 @@ impl SqliteRepository {
         tx.commit().map_err(storage_error)?;
         Ok(())
     }
+
+    fn apply_migration_3(&self) -> JarvisResult<()> {
+        let now = to_db_time(Utc::now());
+        let tx = self.conn.unchecked_transaction().map_err(storage_error)?;
+
+        tx.execute_batch(
+            "
+                CREATE TABLE installed_plugins (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    manifest_json TEXT NOT NULL,
+                    source_path TEXT NOT NULL,
+                    execution_enabled INTEGER NOT NULL CHECK (execution_enabled = 0),
+                    installed_at TEXT NOT NULL
+                );
+
+                CREATE INDEX idx_installed_plugins_installed_at
+                    ON installed_plugins (installed_at);
+                ",
+        )
+        .map_err(storage_error)?;
+
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+            params![3, now],
+        )
+        .map_err(storage_error)?;
+
+        tx.commit().map_err(storage_error)?;
+        Ok(())
+    }
 }
 
 fn task_from_row(row: &Row<'_>) -> rusqlite::Result<TaskRecord> {
@@ -815,6 +925,21 @@ fn scheduler_job_from_row(row: &Row<'_>) -> rusqlite::Result<SchedulerJob> {
             .map(|time| parse_db_time(&time))
             .transpose()?,
         cancellation_reason: row.get(8)?,
+    })
+}
+
+fn installed_plugin_from_row(row: &Row<'_>) -> rusqlite::Result<InstalledPluginRecord> {
+    let manifest_json: String = row.get(1)?;
+    let manifest = serde_json::from_str::<PluginManifest>(&manifest_json).map_err(|err| {
+        rusqlite::Error::FromSqlConversionFailure(1, rusqlite::types::Type::Text, Box::new(err))
+    })?;
+
+    Ok(InstalledPluginRecord {
+        id: row.get(0)?,
+        manifest,
+        source_path: row.get(2)?,
+        execution_enabled: row.get::<_, i64>(3)? != 0,
+        installed_at: parse_db_time(&row.get::<_, String>(4)?)?,
     })
 }
 
@@ -1159,5 +1284,68 @@ mod tests {
         assert!(jobs
             .iter()
             .any(|job| job.id == fail_job.id && job.status == SchedulerJobStatus::Failed));
+    }
+
+    #[test]
+    fn installed_plugin_metadata_persists_disabled_registry_record() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("jarvis.sqlite");
+        let source_path = dir.path().join("plugin-source");
+        std::fs::create_dir(&source_path).unwrap();
+        let source_path = source_path.canonicalize().unwrap().display().to_string();
+        let repo = SqliteRepository::open(&db_path).unwrap();
+
+        let installed = InstalledPlugin {
+            manifest: local_test_manifest(&source_path),
+            source_path: source_path.clone(),
+            execution_enabled: false,
+        };
+        let record = repo.install_plugin_metadata(installed).unwrap();
+
+        assert_eq!(record.id, "local_registry_test");
+        assert_eq!(record.source_path, source_path);
+        assert!(!record.execution_enabled);
+        assert_eq!(record.manifest.actions[0].name, "inspect");
+        assert_eq!(repo.list_installed_plugins().unwrap().len(), 1);
+
+        drop(repo);
+
+        let repo = SqliteRepository::open(db_path).unwrap();
+        let persisted = repo
+            .get_installed_plugin("local_registry_test")
+            .unwrap()
+            .unwrap();
+        assert_eq!(persisted.id, "local_registry_test");
+        assert!(!persisted.execution_enabled);
+        assert_eq!(
+            persisted.manifest.source_path.as_deref(),
+            Some(source_path.as_str())
+        );
+    }
+
+    fn local_test_manifest(source_path: &str) -> PluginManifest {
+        PluginManifest {
+            manifest_schema_version: 1,
+            id: "local_registry_test".to_string(),
+            name: "Local Registry Test".to_string(),
+            version: "0.1.0".to_string(),
+            source: crate::PluginSource::LocalDevelopment,
+            author: "Jarvis Test".to_string(),
+            source_path: Some(source_path.to_string()),
+            actions: vec![crate::PluginActionManifest {
+                name: "inspect".to_string(),
+                description: "Validate registry persistence.".to_string(),
+                permissions: vec![crate::PluginPermission::ReadWorkspace],
+                risk_tier: crate::RiskTier::Low,
+                input_schema: crate::JsonSchema::empty_object(),
+                output_schema: crate::JsonSchema::empty_object(),
+                proactive: false,
+                memory_access: crate::PluginAccess::None,
+                model_access: crate::PluginAccess::None,
+                audit_fields: Vec::new(),
+                timeout: crate::PluginTimeout::default_for_action(),
+                cancellation: crate::CancellationBehavior::Cooperative,
+            }],
+        }
     }
 }

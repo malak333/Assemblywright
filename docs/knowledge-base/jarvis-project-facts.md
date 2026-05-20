@@ -27,11 +27,15 @@ These notes capture durable facts for future agents working on this repository.
   real-provider or installed-plugin orchestration.
 - Repository-backed IPC state exposes task, audit, and memory inspection routes,
   persists scheduler jobs, restores them at startup, and all IPC states expose
-  `/plugins/manifests` for deterministic first-party plugin manifests. The CLI
-  has matching `tasks`, `memory`, `scheduler`, `diagnostics`, and `plugins`
-  subcommands.
+  `/plugins/manifests` for deterministic first-party plugin manifests.
+  Repository-backed IPC also exposes `/plugins/installed` for metadata-only
+  local plugin installation. Installed records are persisted with
+  `execution_enabled: false`; they are not executable.
+- The CLI has matching `tasks`, `memory`, `scheduler`, `diagnostics`, and
+  `plugins` subcommands, including `plugins install`, `plugins installed`, and
+  `plugins installed-get` for disabled local manifest metadata.
 - The planned signed packaged app, approval UI, local model provider
-  integration, plugin installation flow, and production real-provider tool
+  integration, installed plugin execution, and production real-provider tool
   orchestration are not yet implemented in this worktree. The first SwiftUI
   shell scaffold and IPC client live under `apps/mac`, including a command
   transcript, activity/audit panel, management tabs, degraded-mode handling, and

@@ -9,7 +9,12 @@ the stable commitment is the manifest and audit contract.
 
 Each plugin manifest must declare:
 
+- `manifest_schema_version: 1`.
 - Name, version, author or source.
+- Source type. Local installation accepts only `local_development` or
+  `third_party` metadata; installed metadata cannot claim `first_party`.
+- Absolute `source_path` for local installation metadata. The manifest file
+  must be a readable file under that canonical directory.
 - Capabilities provided.
 - Required permission scopes.
 - Risk tier for each action.
@@ -58,6 +63,15 @@ to explain what happened:
 - A plugin cannot execute actions outside its manifest.
 - Unknown manifest fields are allowed only when versioned and ignored safely.
 - Missing required fields fail validation.
+- Local plugin installation is metadata-only in the current implementation.
+  Validated installed manifests are stored as `execution_enabled: false`.
+- Local installed manifests do not create executable plugins. Runtime execution
+  remains limited to registered first-party in-process plugins until a safe
+  sandboxed runtime is explicitly implemented and tested.
+- Local manifest validation rejects invalid schemas, blocked action risk tiers,
+  missing proactive/memory/model permissions, zero or excessive timeouts,
+  first-party source claims, relative source paths, unreadable source
+  directories, and manifests outside the declared source directory.
 - Side-effecting actions require policy evaluation even for first-party plugins.
 - Proactive actions must be opt-in and visible in scheduler state.
 - Memory access must be scoped by category and sensitivity label.
@@ -77,3 +91,5 @@ contract testing. Release verification should keep covering:
 - Audit entries for allowed, approval-required, denied, blocked, failed, and
   cancelled actions.
 - Proactive action gating.
+- Local manifest install acceptance/rejection and disabled registry
+  persistence.

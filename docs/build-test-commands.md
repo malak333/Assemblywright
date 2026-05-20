@@ -76,6 +76,7 @@ cargo run -p jarvis-cli -- plugins list
 cargo run -p jarvis-cli -- diagnostics export
 cargo run -p jarvis-cli -- scheduler list
 cargo run -p jarvis-cli -- scheduler schedule "manual check" "status check"
+cargo run -p jarvis-cli -- plugins installed
 cargo run -p jarvis-cli -- pause --reason "manual smoke"
 cargo run -p jarvis-cli -- pause-status
 cargo run -p jarvis-cli -- resume
@@ -88,7 +89,10 @@ policy engine, honors `--dry-run` for plugin execution, and can persist
 task/audit state when configured with a repository-backed IPC state. It does
 also has deterministic coverage for bounded model-planned first-party tool
 calls. It does not yet implement real model providers, installed plugin
-sandboxing, or approval UI.
+sandboxing, installed plugin execution, or approval UI. Local plugin install is
+metadata-only: `jarvis plugins install /absolute/path/to/jarvis-plugin.json`
+validates and stores a disabled registry record when repository backing is
+enabled.
 
 When the server is started with `--db-path`, these inspection commands are also
 available:

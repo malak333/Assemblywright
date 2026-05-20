@@ -18,11 +18,12 @@ use crate::storage::{
 };
 use crate::{
     plugin_permission_scopes, ApprovalDecision, ApprovalStatus, AuditEntry, CapabilityScope,
-    ConversationRuntime, FakeLocalModel, JarvisError, JarvisResult, ModelRoute, ModelRouteRecord,
-    PermissionEngine, PluginCallRequest, PluginCallResult, PluginCallStatus, PluginHost,
-    PluginManifest, PolicyRequest, RuntimeCommandRequest, RuntimeCommandStore, RuntimeConfig,
-    RuntimeControl, RuntimeStep, Scheduler, SchedulerJob, SchedulerJobSpec, SchedulerJobStatus,
-    Sensitivity, TaskRecord, TaskStatus, TriggerKind,
+    ConversationRuntime, FakeLocalModel, InstalledPlugin, InstalledPluginRecord, JarvisError,
+    JarvisResult, ModelRoute, ModelRouteRecord, PermissionEngine, PluginCallRequest,
+    PluginCallResult, PluginCallStatus, PluginHost, PluginManifest, PolicyRequest,
+    RuntimeCommandRequest, RuntimeCommandStore, RuntimeConfig, RuntimeControl, RuntimeStep,
+    Scheduler, SchedulerJob, SchedulerJobSpec, SchedulerJobStatus, Sensitivity, TaskRecord,
+    TaskStatus, TriggerKind,
 };
 
 pub const IPC_CONTRACT_VERSION: u16 = 1;
@@ -171,6 +172,11 @@ pub struct UpdateMemoryItemRequest {
     pub sensitivity: Sensitivity,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstallPluginRequest {
+    pub manifest_path: String,
+}
+
 #[derive(Debug, Clone, Default)]
 struct EmergencyPauseState {
     paused: bool,
@@ -267,6 +273,8 @@ impl IpcState {
                 "/diagnostics/export".to_string(),
                 "/plugins/manifests".to_string(),
                 "/plugins/manifests/:id".to_string(),
+                "/plugins/installed".to_string(),
+                "/plugins/installed/:id".to_string(),
                 "/scheduler/jobs".to_string(),
                 "/scheduler/jobs/:id".to_string(),
                 "/memory".to_string(),
@@ -779,6 +787,11 @@ pub fn router(state: IpcState) -> Router {
         .route("/plugins/manifests", get(list_plugin_manifests))
         .route("/plugins/manifests/:id", get(get_plugin_manifest))
         .route(
+            "/plugins/installed",
+            get(list_installed_plugins).post(install_plugin),
+        )
+        .route("/plugins/installed/:id", get(get_installed_plugin))
+        .route(
             "/emergency-pause",
             get(pause_status).post(pause).delete(resume),
         )
@@ -978,6 +991,41 @@ async fn get_plugin_manifest(
         .map_err(error_response)
 }
 
+async fn list_installed_plugins(
+    State(state): State<IpcState>,
+) -> Result<Json<Vec<InstalledPluginRecord>>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .using_repository(SqliteRepository::list_installed_plugins)
+        .map(Json)
+        .map_err(error_response)
+}
+
+async fn get_installed_plugin(
+    State(state): State<IpcState>,
+    Path(id): Path<String>,
+) -> Result<Json<InstalledPluginRecord>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .using_repository(|repository| {
+            repository
+                .get_installed_plugin(&id)?
+                .ok_or_else(|| JarvisError::Storage(format!("installed plugin not found: {id}")))
+        })
+        .map(Json)
+        .map_err(error_response)
+}
+
+async fn install_plugin(
+    State(state): State<IpcState>,
+    Json(request): Json<InstallPluginRequest>,
+) -> Result<Json<InstalledPluginRecord>, (StatusCode, Json<ErrorResponse>)> {
+    let installed = InstalledPlugin::from_local_manifest_path(&request.manifest_path)
+        .map_err(error_response)?;
+    state
+        .using_repository(|repository| repository.install_plugin_metadata(installed))
+        .map(Json)
+        .map_err(error_response)
+}
+
 async fn pause_status(State(state): State<IpcState>) -> Json<EmergencyPauseResponse> {
     Json(state.pause_status())
 }
@@ -1054,6 +1102,9 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
         endpoint("POST", "/memory/:id/review", true, false),
         endpoint("GET", "/plugins/manifests", false, true),
         endpoint("GET", "/plugins/manifests/:id", false, true),
+        endpoint("GET", "/plugins/installed", true, true),
+        endpoint("POST", "/plugins/installed", true, false),
+        endpoint("GET", "/plugins/installed/:id", true, true),
         endpoint("GET", "/emergency-pause", false, true),
         endpoint("POST", "/emergency-pause", false, false),
         endpoint("DELETE", "/emergency-pause", false, true),
@@ -1139,6 +1190,9 @@ mod tests {
         assert!(contract
             .safe_inspection_paths
             .contains(&"/plugins/manifests/:id".to_string()));
+        assert!(contract
+            .safe_inspection_paths
+            .contains(&"/plugins/installed/:id".to_string()));
         assert!(contract
             .endpoints
             .iter()
@@ -1489,7 +1543,7 @@ mod tests {
             .expect("diagnostics export");
         assert_eq!(export.health.status, "ok");
         assert!(export.repository_backed);
-        assert_eq!(export.schema_version, Some(2));
+        assert_eq!(export.schema_version, Some(3));
         assert_eq!(export.task_count, Some(1));
         assert!(export.audit_entry_count.unwrap_or_default() >= 2);
         assert_eq!(export.scheduler_jobs.len(), 1);
