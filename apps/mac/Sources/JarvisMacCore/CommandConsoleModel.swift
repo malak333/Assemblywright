@@ -6,6 +6,7 @@ public final class CommandConsoleModel: ObservableObject {
     @Published public private(set) var transcript: [TranscriptEntry]
     @Published public private(set) var activity: [ActivityEntry]
     @Published public private(set) var isPaused: Bool
+    @Published public private(set) var pauseStatus: JarvisPauseResponse?
     @Published public private(set) var isWorking: Bool
     @Published public private(set) var lastError: String?
 
@@ -16,6 +17,7 @@ public final class CommandConsoleModel: ObservableObject {
         self.transcript = []
         self.activity = []
         self.isPaused = false
+        self.pauseStatus = nil
         self.isWorking = false
         self.lastError = nil
     }
@@ -25,6 +27,21 @@ public final class CommandConsoleModel: ObservableObject {
             let health = try await self.client.health()
             self.health = health
             self.isPaused = health.emergencyPaused
+            self.pauseStatus = JarvisPauseResponse(
+                paused: health.emergencyPaused,
+                reason: health.emergencyPauseReason,
+                pausedAt: nil,
+                resumedAt: nil,
+                cancelledSchedulerJobs: 0
+            )
+        }
+    }
+
+    public func refreshPauseStatus() async {
+        await run {
+            let response = try await self.client.pauseStatus()
+            self.pauseStatus = response
+            self.isPaused = response.paused
         }
     }
 
@@ -47,6 +64,7 @@ public final class CommandConsoleModel: ObservableObject {
         await run {
             let response = try await self.client.pause(reason: "user requested from Mac shell")
             self.isPaused = response.paused
+            self.pauseStatus = response
         }
     }
 
@@ -54,6 +72,7 @@ public final class CommandConsoleModel: ObservableObject {
         await run {
             let response = try await self.client.resume()
             self.isPaused = response.paused
+            self.pauseStatus = response
         }
     }
 

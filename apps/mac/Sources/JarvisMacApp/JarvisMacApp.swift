@@ -101,7 +101,8 @@ struct CommandConsoleView: View {
             return "Core status unknown"
         }
 
-        return "\(health.status) | \(health.commandRuntime) | jobs: \(health.schedulerJobs)"
+        let pause = model.pauseStatus?.reason.map { " | paused: \($0)" } ?? ""
+        return "\(health.status) | \(health.commandRuntime) | jobs: \(health.schedulerJobs)\(pause)"
     }
 
     private func send() {

@@ -8,7 +8,17 @@ public struct JarvisEndpoint: Equatable, Sendable {
     }
 
     public func url(path: String) -> URL {
-        baseURL.appending(path: path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
+        let trimmed = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let separator = trimmed.firstIndex(of: "?") else {
+            return baseURL.appending(path: trimmed)
+        }
+
+        var components = URLComponents(
+            url: baseURL.appending(path: String(trimmed[..<separator])),
+            resolvingAgainstBaseURL: false
+        )!
+        components.percentEncodedQuery = String(trimmed[trimmed.index(after: separator)...])
+        return components.url!
     }
 }
 
@@ -45,17 +55,65 @@ public struct JarvisCommandRequest: Encodable, Equatable, Sendable {
     }
 }
 
+public enum JarvisJSONValue: Codable, Equatable, Sendable {
+    case object([String: JarvisJSONValue])
+    case array([JarvisJSONValue])
+    case string(String)
+    case number(Double)
+    case bool(Bool)
+    case null
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() {
+            self = .null
+        } else if let object = try? container.decode([String: JarvisJSONValue].self) {
+            self = .object(object)
+        } else if let array = try? container.decode([JarvisJSONValue].self) {
+            self = .array(array)
+        } else if let bool = try? container.decode(Bool.self) {
+            self = .bool(bool)
+        } else if let number = try? container.decode(Double.self) {
+            self = .number(number)
+        } else {
+            self = .string(try container.decode(String.self))
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case let .object(object):
+            try container.encode(object)
+        case let .array(array):
+            try container.encode(array)
+        case let .string(string):
+            try container.encode(string)
+        case let .number(number):
+            try container.encode(number)
+        case let .bool(bool):
+            try container.encode(bool)
+        case .null:
+            try container.encodeNil()
+        }
+    }
+}
+
 public struct JarvisTask: Decodable, Equatable, Sendable {
     public var id: UUID
     public var sessionId: UUID
     public var userInput: String
     public var status: String
+    public var createdAt: String?
+    public var updatedAt: String?
 
     enum CodingKeys: String, CodingKey {
         case id
         case sessionId = "session_id"
         case userInput = "user_input"
         case status
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
     }
 }
 
@@ -64,6 +122,7 @@ public struct JarvisAuditEntry: Decodable, Equatable, Identifiable, Sendable {
     public var taskId: UUID?
     public var eventType: String
     public var summary: String
+    public var payload: JarvisJSONValue?
     public var createdAt: String
 
     enum CodingKeys: String, CodingKey {
@@ -71,6 +130,7 @@ public struct JarvisAuditEntry: Decodable, Equatable, Identifiable, Sendable {
         case taskId = "task_id"
         case eventType = "event_type"
         case summary
+        case payload
         case createdAt = "created_at"
     }
 }
@@ -90,20 +150,220 @@ public struct JarvisModelRoute: Decodable, Equatable, Sendable {
 public struct JarvisPluginCallMetadata: Decodable, Equatable, Sendable {
     public var pluginId: String
     public var action: String
+    public var permissions: [String]
     public var riskTier: String
+    public var approvalRequired: Bool
     public var approvalStatus: String
+    public var proactive: Bool
+    public var memoryAccess: String
+    public var modelAccess: String
+    public var timeoutMilliseconds: Int
+    public var cancellation: String
+    public var auditFields: [String]
 
     enum CodingKeys: String, CodingKey {
         case pluginId = "plugin_id"
         case action
+        case permissions
         case riskTier = "risk_tier"
+        case approvalRequired = "approval_required"
         case approvalStatus = "approval_status"
+        case proactive
+        case memoryAccess = "memory_access"
+        case modelAccess = "model_access"
+        case timeoutMilliseconds = "timeout_ms"
+        case cancellation
+        case auditFields = "audit_fields"
     }
 }
 
 public struct JarvisPluginCallResult: Decodable, Equatable, Sendable {
     public var status: String
+    public var output: JarvisJSONValue?
     public var metadata: JarvisPluginCallMetadata
+}
+
+public struct JarvisMemoryItem: Codable, Equatable, Identifiable, Sendable {
+    public var id: UUID
+    public var category: String
+    public var key: String
+    public var value: String
+    public var provenance: String
+    public var sensitivity: String
+    public var createdAt: String
+    public var updatedAt: String
+    public var reviewedAt: String?
+    public var deletedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case category
+        case key
+        case value
+        case provenance
+        case sensitivity
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+        case reviewedAt = "reviewed_at"
+        case deletedAt = "deleted_at"
+    }
+}
+
+public struct JarvisMemoryMutationRequest: Encodable, Equatable, Sendable {
+    public var value: String
+    public var provenance: String
+    public var sensitivity: String
+
+    public init(value: String, provenance: String, sensitivity: String) {
+        self.value = value
+        self.provenance = provenance
+        self.sensitivity = sensitivity
+    }
+}
+
+public struct JarvisCreateMemoryItemRequest: Encodable, Equatable, Sendable {
+    public var category: String
+    public var key: String
+    public var value: String
+    public var provenance: String
+    public var sensitivity: String
+
+    public init(category: String, key: String, value: String, provenance: String, sensitivity: String) {
+        self.category = category
+        self.key = key
+        self.value = value
+        self.provenance = provenance
+        self.sensitivity = sensitivity
+    }
+}
+
+public struct JarvisPluginManifest: Decodable, Equatable, Identifiable, Sendable {
+    public var id: String
+    public var name: String
+    public var version: String
+    public var source: String
+    public var author: String
+    public var actions: [JarvisPluginActionManifest]
+}
+
+public struct JarvisPluginActionManifest: Decodable, Equatable, Sendable {
+    public var name: String
+    public var description: String
+    public var permissions: [String]
+    public var riskTier: String
+    public var inputSchema: JarvisJSONValue
+    public var outputSchema: JarvisJSONValue
+    public var proactive: Bool
+    public var memoryAccess: String
+    public var modelAccess: String
+    public var auditFields: [String]
+    public var timeout: JarvisPluginTimeout
+    public var cancellation: String
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case description
+        case permissions
+        case riskTier = "risk_tier"
+        case inputSchema = "input_schema"
+        case outputSchema = "output_schema"
+        case proactive
+        case memoryAccess = "memory_access"
+        case modelAccess = "model_access"
+        case auditFields = "audit_fields"
+        case timeout
+        case cancellation
+    }
+}
+
+public struct JarvisPluginTimeout: Decodable, Equatable, Sendable {
+    public var timeoutMilliseconds: Int
+
+    enum CodingKeys: String, CodingKey {
+        case timeoutMilliseconds = "timeout_ms"
+    }
+}
+
+public enum JarvisSchedulerTrigger: Codable, Equatable, Sendable {
+    case manual
+    case onceAt(runAt: String)
+    case interval(everySeconds: UInt64)
+
+    enum CodingKeys: String, CodingKey {
+        case manual
+        case onceAt = "once_at"
+        case runAt = "run_at"
+        case interval
+        case everySeconds = "every_seconds"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let value = try? container.decode(String.self), value == CodingKeys.manual.rawValue {
+            self = .manual
+            return
+        }
+
+        let keyed = try decoder.container(keyedBy: CodingKeys.self)
+        if let once = try? keyed.nestedContainer(keyedBy: CodingKeys.self, forKey: .onceAt) {
+            self = .onceAt(runAt: try once.decode(String.self, forKey: .runAt))
+        } else {
+            let interval = try keyed.nestedContainer(keyedBy: CodingKeys.self, forKey: .interval)
+            self = .interval(everySeconds: try interval.decode(UInt64.self, forKey: .everySeconds))
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .manual:
+            var container = encoder.singleValueContainer()
+            try container.encode(CodingKeys.manual.rawValue)
+        case let .onceAt(runAt):
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            var once = container.nestedContainer(keyedBy: CodingKeys.self, forKey: .onceAt)
+            try once.encode(runAt, forKey: .runAt)
+        case let .interval(everySeconds):
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            var interval = container.nestedContainer(keyedBy: CodingKeys.self, forKey: .interval)
+            try interval.encode(everySeconds, forKey: .everySeconds)
+        }
+    }
+}
+
+public struct JarvisSchedulerJob: Codable, Equatable, Identifiable, Sendable {
+    public var id: UUID
+    public var name: String
+    public var command: String
+    public var trigger: JarvisSchedulerTrigger
+    public var status: String
+    public var createdAt: String
+    public var updatedAt: String
+    public var cancelledAt: String?
+    public var cancellationReason: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case command
+        case trigger
+        case status
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+        case cancelledAt = "cancelled_at"
+        case cancellationReason = "cancellation_reason"
+    }
+}
+
+public struct JarvisCreateSchedulerJobRequest: Encodable, Equatable, Sendable {
+    public var name: String
+    public var command: String
+    public var trigger: JarvisSchedulerTrigger
+
+    public init(name: String, command: String, trigger: JarvisSchedulerTrigger) {
+        self.name = name
+        self.command = command
+        self.trigger = trigger
+    }
 }
 
 public struct JarvisCommandResponse: Decodable, Equatable, Sendable {
@@ -139,11 +399,15 @@ public struct JarvisPauseRequest: Encodable, Equatable, Sendable {
 public struct JarvisPauseResponse: Decodable, Equatable, Sendable {
     public var paused: Bool
     public var reason: String?
+    public var pausedAt: String?
+    public var resumedAt: String?
     public var cancelledSchedulerJobs: Int
 
     enum CodingKeys: String, CodingKey {
         case paused
         case reason
+        case pausedAt = "paused_at"
+        case resumedAt = "resumed_at"
         case cancelledSchedulerJobs = "cancelled_scheduler_jobs"
     }
 }
@@ -184,6 +448,64 @@ public final class JarvisIPCClient: Sendable {
 
     public func resume() async throws -> JarvisPauseResponse {
         try await send(path: "/emergency-pause", method: "DELETE", body: Optional<Data>.none)
+    }
+
+    public func pauseStatus() async throws -> JarvisPauseResponse {
+        try await send(path: "/emergency-pause", method: "GET", body: Optional<Data>.none)
+    }
+
+    public func listTasks() async throws -> [JarvisTask] {
+        try await send(path: "/tasks", method: "GET", body: Optional<Data>.none)
+    }
+
+    public func task(id: UUID) async throws -> JarvisTask {
+        try await send(path: "/tasks/\(id.uuidString)", method: "GET", body: Optional<Data>.none)
+    }
+
+    public func listAuditEntries(taskId: UUID? = nil) async throws -> [JarvisAuditEntry] {
+        let path = taskId.map { "/tasks/\($0.uuidString)/audit" } ?? "/audit"
+        return try await send(path: path, method: "GET", body: Optional<Data>.none)
+    }
+
+    public func listMemoryItems(includeDeleted: Bool = false) async throws -> [JarvisMemoryItem] {
+        let path = includeDeleted ? "/memory?include_deleted=true" : "/memory"
+        return try await send(path: path, method: "GET", body: Optional<Data>.none)
+    }
+
+    public func createMemoryItem(_ request: JarvisCreateMemoryItemRequest) async throws -> JarvisMemoryItem {
+        try await send(path: "/memory", method: "POST", body: encoder.encode(request))
+    }
+
+    public func memoryItem(id: UUID) async throws -> JarvisMemoryItem {
+        try await send(path: "/memory/\(id.uuidString)", method: "GET", body: Optional<Data>.none)
+    }
+
+    public func updateMemoryItem(id: UUID, request: JarvisMemoryMutationRequest) async throws -> JarvisMemoryItem {
+        try await send(path: "/memory/\(id.uuidString)", method: "PATCH", body: encoder.encode(request))
+    }
+
+    public func reviewMemoryItem(id: UUID) async throws -> JarvisMemoryItem {
+        try await send(path: "/memory/\(id.uuidString)/review", method: "POST", body: Optional<Data>.none)
+    }
+
+    public func deleteMemoryItem(id: UUID) async throws -> JarvisMemoryItem {
+        try await send(path: "/memory/\(id.uuidString)", method: "DELETE", body: Optional<Data>.none)
+    }
+
+    public func listPluginManifests() async throws -> [JarvisPluginManifest] {
+        try await send(path: "/plugins/manifests", method: "GET", body: Optional<Data>.none)
+    }
+
+    public func listSchedulerJobs() async throws -> [JarvisSchedulerJob] {
+        try await send(path: "/scheduler/jobs", method: "GET", body: Optional<Data>.none)
+    }
+
+    public func createSchedulerJob(_ request: JarvisCreateSchedulerJobRequest) async throws -> JarvisSchedulerJob {
+        try await send(path: "/scheduler/jobs", method: "POST", body: encoder.encode(request))
+    }
+
+    public func cancelSchedulerJob(id: UUID) async throws -> JarvisSchedulerJob {
+        try await send(path: "/scheduler/jobs/\(id.uuidString)", method: "DELETE", body: Optional<Data>.none)
     }
 
     private func send<Response: Decodable>(
