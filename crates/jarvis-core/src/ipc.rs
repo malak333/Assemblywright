@@ -18,11 +18,12 @@ use crate::storage::{
 };
 use crate::{
     plugin_permission_scopes, ApprovalDecision, ApprovalStatus, AuditEntry, CapabilityScope,
-    ConversationRuntime, FakeLocalModel, JarvisError, JarvisResult, ModelRoute, ModelRouteRecord,
-    PermissionEngine, PluginCallRequest, PluginCallResult, PluginCallStatus, PluginHost,
-    PluginManifest, PolicyRequest, RuntimeCommandRequest, RuntimeCommandStore, RuntimeConfig,
-    RuntimeControl, RuntimeStep, Scheduler, SchedulerJob, SchedulerJobSpec, SchedulerJobStatus,
-    Sensitivity, TaskRecord, TaskStatus, TriggerKind,
+    ConversationRuntime, FakeLocalModel, JarvisError, JarvisResult, LocalModelExecutor,
+    LocalModelProviderKind, ModelRoute, ModelRouteRecord, PermissionEngine, PluginCallRequest,
+    PluginCallResult, PluginCallStatus, PluginHost, PluginManifest, PolicyRequest, ProviderConfig,
+    RuntimeCommandRequest, RuntimeCommandStore, RuntimeConfig, RuntimeControl, RuntimeStep,
+    Scheduler, SchedulerJob, SchedulerJobSpec, SchedulerJobStatus, Sensitivity, TaskRecord,
+    TaskStatus, TriggerKind,
 };
 
 pub const IPC_CONTRACT_VERSION: u16 = 1;
@@ -61,6 +62,9 @@ pub struct HealthResponse {
     pub emergency_pause_updated_at: Option<DateTime<Utc>>,
     pub scheduler_jobs: usize,
     pub command_runtime: String,
+    pub local_model_provider: LocalModelProviderKind,
+    pub local_model: String,
+    pub local_endpoint_configured: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -202,6 +206,7 @@ pub struct IpcState {
     runtime_control: RuntimeControl,
     emergency_pause: Arc<Mutex<EmergencyPauseState>>,
     repository: Option<Arc<Mutex<SqliteRepository>>>,
+    provider_config: ProviderConfig,
 }
 
 impl Default for IpcState {
@@ -212,6 +217,10 @@ impl Default for IpcState {
 
 impl IpcState {
     pub fn new() -> Self {
+        Self::with_provider_config(ProviderConfig::default())
+    }
+
+    pub fn with_provider_config(provider_config: ProviderConfig) -> Self {
         Self {
             version: env!("CARGO_PKG_VERSION").to_string(),
             started_at: Utc::now(),
@@ -219,10 +228,18 @@ impl IpcState {
             runtime_control: RuntimeControl::default(),
             emergency_pause: Arc::new(Mutex::new(EmergencyPauseState::default())),
             repository: None,
+            provider_config,
         }
     }
 
     pub fn with_repository(repository: SqliteRepository) -> JarvisResult<Self> {
+        Self::with_repository_and_provider_config(repository, ProviderConfig::default())
+    }
+
+    pub fn with_repository_and_provider_config(
+        repository: SqliteRepository,
+        provider_config: ProviderConfig,
+    ) -> JarvisResult<Self> {
         let stored_pause = repository.emergency_pause_state()?;
         let stored_scheduler_jobs = repository.list_scheduler_jobs()?;
         let scheduler = Scheduler::with_jobs(stored_scheduler_jobs);
@@ -238,6 +255,7 @@ impl IpcState {
                     stored_pause,
                 ))),
                 repository: Some(Arc::new(Mutex::new(repository))),
+                provider_config,
             })
         } else {
             Ok(Self {
@@ -249,6 +267,7 @@ impl IpcState {
                     stored_pause,
                 ))),
                 repository: Some(Arc::new(Mutex::new(repository))),
+                provider_config,
             })
         }
     }
@@ -286,8 +305,19 @@ impl IpcState {
             emergency_pause_reason: pause.reason.clone(),
             emergency_pause_updated_at: pause.updated_at(),
             scheduler_jobs: self.scheduler.list().len(),
-            command_runtime: "routed-fake-local-model+first-party-plugins".to_string(),
+            command_runtime: self.command_runtime_label(),
+            local_model_provider: self.provider_config.local.provider,
+            local_model: self.provider_config.local.model.clone(),
+            local_endpoint_configured: self.provider_config.local.base_url.is_some(),
         }
+    }
+
+    fn command_runtime_label(&self) -> String {
+        match self.provider_config.local.provider {
+            LocalModelProviderKind::Fake => "routed-fake-local-model+first-party-plugins",
+            LocalModelProviderKind::Ollama => "routed-ollama-local-model+first-party-plugins",
+        }
+        .to_string()
     }
 
     fn contract_metadata(&self) -> ContractMetadata {
@@ -340,10 +370,15 @@ impl IpcState {
         }
 
         let command_store = self.command_store();
+        let local_model = if self.provider_config.local.enabled {
+            LocalModelExecutor::from_config(&self.provider_config.local)?
+        } else {
+            LocalModelExecutor::Fake(FakeLocalModel::default())
+        };
         let runtime = ConversationRuntime::with_storage_parts(
-            RuntimeConfig::default(),
+            RuntimeConfig::default().with_provider_config(self.provider_config.clone()),
             self.runtime_control.clone(),
-            FakeLocalModel::default(),
+            local_model,
             crate::NoopRuntimeHooks,
             command_store.clone(),
         );
@@ -1083,6 +1118,7 @@ fn error_response(error: JarvisError) -> (StatusCode, Json<ErrorResponse>) {
         JarvisError::Validation(_) => StatusCode::BAD_REQUEST,
         JarvisError::PolicyBlocked(_) => StatusCode::FORBIDDEN,
         JarvisError::ApprovalRequired(_) => StatusCode::ACCEPTED,
+        JarvisError::Model(_) => StatusCode::BAD_GATEWAY,
         JarvisError::Storage(_) | JarvisError::Plugin(_) | JarvisError::Other(_) => {
             StatusCode::INTERNAL_SERVER_ERROR
         }
