@@ -86,9 +86,13 @@ Current boundary: the command endpoint runs `ConversationRuntime` with
 deterministic first-party plugin commands such as `plugin echo ...` through the
 policy engine, honors `--dry-run` for plugin execution, and can persist
 task/audit state when configured with a repository-backed IPC state. It does
-also has deterministic coverage for bounded model-planned first-party tool
-calls. It does not yet implement real model providers, installed plugin
-sandboxing, or approval UI.
+also have deterministic coverage for bounded model-planned first-party tool
+calls. Approval-required command scaffolds such as `plugin approval echo ...`
+fail closed by returning `waiting_for_approval`, persisting an inspectable
+pending approval when repository backing is enabled, and requiring a separate
+CLI/IPC grant or denial. Granting an approval records the decision but does not
+execute the side effect. It does not yet implement real model providers,
+installed plugin sandboxing, or Swift approval UI.
 
 When the server is started with `--db-path`, these inspection commands are also
 available:
@@ -96,6 +100,9 @@ available:
 ```sh
 cargo run -p jarvis-cli -- tasks list
 cargo run -p jarvis-cli -- tasks audit
+cargo run -p jarvis-cli -- approvals list --status pending
+cargo run -p jarvis-cli -- approvals approve <approval-id> --decided-by cli --reason "reviewed"
+cargo run -p jarvis-cli -- approvals deny <approval-id> --decided-by cli --reason "not safe"
 cargo run -p jarvis-cli -- memory list
 cargo run -p jarvis-cli -- memory create workflow release-gate "run local gate before PR" --provenance "manual note" --sensitivity workspace
 cargo run -p jarvis-cli -- diagnostics export
@@ -118,9 +125,10 @@ passes standard and ignored release-proof tests, runs the CLI smoke command,
 packages the Rust crates, and passes the Swift package build/test gate. The
 cross-process IPC E2E test proves the local server and CLI can exchange JSON for
 health, runtime-backed command execution, deterministic first-party plugin
-execution, route/policy/plugin audit evidence, scheduler schedule/cancel and
-persistence, redacted diagnostics export, memory create/update/review/delete
-and persistence, plugin manifests, and emergency-pause blocking/resume surfaces.
+execution, route/policy/plugin audit evidence, approval-required persistence and
+grant/deny decisions, scheduler schedule/cancel and persistence, redacted
+diagnostics export, memory create/update/review/delete and persistence, plugin
+manifests, and emergency-pause blocking/resume surfaces.
 Runtime unit tests additionally prove bounded fake-model first-party tool-call
 orchestration, including policy checks, approval stops, validation failures, and
 tool-result feedback into later model steps. They do not prove signed app

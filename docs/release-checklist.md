@@ -63,12 +63,17 @@ stage.
 - Confirm route, policy, approval, action, and failure evidence stay covered
   before claiming an end-to-end assistant release. The current command path
   persists runtime, route, and deterministic first-party plugin audit evidence
-  when repository backing is used. Bounded fake-model first-party tool calls are
-  covered in runtime tests; real provider tool calls and user approval UI remain
-  future gates.
+  when repository backing is used. Approval-required first-party command
+  scaffolds persist inspectable pending approvals and record CLI/IPC grant or
+  denial decisions without executing side effects. Bounded fake-model
+  first-party tool calls are covered in runtime tests; real provider tool calls
+  and Swift user approval UI remain future gates.
 - Confirm task, audit, memory, and plugin manifest inspection endpoints still
   require or use the correct repository/plugin backing and are covered by local
   smoke or focused IPC tests.
+- Confirm approval inspection and grant/deny endpoints require repository
+  backing, preserve fail-closed execution behavior, and stay covered by local
+  IPC tests.
 - Confirm scheduler job create/list/cancel state is restored and updated when
   repository backing is enabled. This is durable job metadata, not proof that
   proactive production triggers execute.
