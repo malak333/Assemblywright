@@ -42,7 +42,7 @@ flowchart TB
         PluginHost --> FirstParty["fake_echo and fake_status plugins"]
         PluginHost --> TimeoutCancel["timeout and cancellation handling"]
 
-        SchedulerApi --> Scheduler["in-memory Scheduler"]
+        SchedulerApi --> Scheduler["Scheduler"]
         PauseApi --> RuntimeControl
     end
 
@@ -50,10 +50,12 @@ flowchart TB
     RuntimeStore --> RepoState
     Inspection --> RepoState
     PauseApi --> RepoState
+    SchedulerApi --> RepoState
     RepoState --> Tasks["tasks"]
     RepoState --> Audit["append-only audit_entries"]
     RepoState --> Memory["memory_items"]
     RepoState --> StoredPause["emergency_pause"]
+    RepoState --> StoredScheduler["scheduler_jobs"]
 
     Types["shared contract types"] --> Runtime
     Types --> IPC
@@ -165,11 +167,12 @@ sequenceDiagram
   timeout handling, cooperative cancellation signal, and two deterministic
   first-party test plugins.
 - `jarvis-core::scheduler`: Inspectable scheduler jobs with manual, one-time,
-  and interval trigger contracts plus cancellation support. Repository-backed
-  IPC state restores and updates scheduler jobs through SQLite.
+  and interval trigger contracts plus cancellation support. Jobs are in-memory
+  when the IPC state has no repository and restored/updated through SQLite
+  when repository backing is enabled.
 - `jarvis-core::storage`: SQLite schema migrations for tasks, append-only
   audit entries, emergency pause, memory items with provenance/sensitivity/
-  review/soft-delete fields, and durable scheduler jobs.
+  review/soft-delete fields, and scheduler jobs.
 - `jarvis-cli`: Local CLI for serving the IPC API with optional `--db-path`
   SQLite backing, calling health/command/pause/task/audit/memory/plugin
   endpoints, exporting redacted diagnostics, listing/scheduling/cancelling
@@ -247,10 +250,10 @@ Rust and Swift scaffold surfaces listed above.
 | Command runtime | `ConversationRuntime` creates tasks, runs `FakeLocalModel`, records structured audit entries, handles pause/cancel, enforces max steps, and can persist task/audit state through `RuntimeCommandStore`. | Multi-step assistant runtime with real model responses, autonomous model-generated tool-call orchestration, streaming progress, approval handoff, and robust recovery. | Runtime foundation implemented; autonomous tool orchestration pending. |
 | Model routing | Local-first `ModelRouter` exists with sensitivity checks, ChatGPT opt-in gate, approval delegation, and redaction logic. The active `/commands` path still uses `FakeLocalModel`; no real provider call is wired. | Real local model provider integration, explicit ChatGPT escalation, minimized cloud context, user approval where required, and route evidence in every relevant task. | Policy/routing scaffolding implemented; provider integration pending. |
 | Plugins and tools | Deterministic in-process first-party plugins (`fake_echo`, `fake_status`) execute only through command-pattern dispatch, manifest validation, policy checks, timeout, cancellation, and audit evidence. | First-party production plugins plus installed local plugins behind manifests, sandboxing, user grants, UI approval, proactive gating, and model-generated tool-call execution. | Contract and deterministic plugin path implemented; production plugin runtime pending. |
-| Scheduler | Inspectable in-memory scheduler jobs with manual, one-time, interval trigger contracts and cancellation support. Emergency pause cancels active scheduler jobs. | Durable scheduler and trigger engine for approved proactive routines, persisted job state, visible task records, and policy-gated execution. | In-memory foundation implemented; durable proactive engine pending. |
-| Storage and memory | SQLite migration v1 stores tasks, append-only audit entries, emergency pause, and memory items with provenance, sensitivity, review, and soft-delete fields. CLI/IPC can inspect and mutate memory items when repository backing is enabled. | SQLite also owns permissions, plugin registry, model-route records, durable scheduler jobs, migrations with backup/rollback, and memory UX review flows; vector indexes remain rebuildable. | Core local state implemented; broader production schema pending. |
+| Scheduler | Inspectable scheduler jobs with manual, one-time, interval trigger contracts and cancellation support. Repository-backed IPC state restores and updates jobs through SQLite. Emergency pause cancels active scheduler jobs. It does not yet run proactive jobs on a clock or create visible task records from triggers. | Durable scheduler and trigger engine for approved proactive routines, persisted job state, visible task records, and policy-gated execution. | Durable job state implemented; proactive execution engine pending. |
+| Storage and memory | SQLite migrations store tasks, append-only audit entries, emergency pause, memory items with provenance/sensitivity/review/soft-delete fields, and scheduler jobs. CLI/IPC can inspect and mutate memory items when repository backing is enabled. | SQLite also owns permissions, plugin registry, model-route records, migrations with backup/rollback, and memory UX review flows; vector indexes remain rebuildable. | Core local state implemented; broader production schema pending. |
 | Safety and approvals | Capability scopes, risk tiers, emergency-pause fail-closed behavior, audit-required flags, and approval-required decisions exist in Rust. There is no user approval UI yet. | Human approval prompts, permission center, grants history, policy review, and no bypass for high-risk side effects. | Policy engine implemented; human approval product surface pending. |
-| Voice and diagnostics | Not implemented beyond design docs. | Voice input/output loop, interruption/cancel behavior, microphone degraded modes, and local diagnostics export. | Pending. |
+| Voice and diagnostics | Voice is not implemented beyond design docs. Redacted diagnostics export exists over CLI/IPC and omits command bodies, scheduler commands, audit payloads, memory values, and cancellation reason text. | Voice input/output loop, interruption/cancel behavior, microphone degraded modes, and local diagnostics export integrated into the packaged app. | Diagnostics foundation implemented; voice and packaged UX pending. |
 | Release proof | Local Rust and Swift build/test/smoke commands document the current proof boundary. | Signed/packaged app release with clean-profile Mac smoke, app-supervised core, command, audit, pause, restart, migration, and diagnostics checks. | Local foundation proof only. |
 
 ## Data Ownership
@@ -303,6 +306,17 @@ erDiagram
         text reason
         text updated_at
         text updated_by
+    }
+    SCHEDULER_JOBS {
+        text id PK
+        text name
+        text command
+        text trigger_json
+        text status
+        text created_at
+        text updated_at
+        text cancelled_at
+        text cancellation_reason
     }
     SCHEMA_MIGRATIONS {
         integer version PK
