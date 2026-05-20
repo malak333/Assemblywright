@@ -14,6 +14,10 @@ activity/audit panel for command evidence.
 This repository is intentionally v1 foundation work, not a Marvel/JARVIS clone
 and not an autonomous external-communication system. Risky side effects must be
 blocked or require approval, and every meaningful decision should be auditable.
+The current implementation should not be described as a finished production
+assistant: packaged app supervision, real model providers, approval UI, voice
+support, plugin installation, and packaged Mac smoke evidence are still target
+architecture.
 
 ## Build
 
@@ -49,3 +53,7 @@ manifests over IPC.
 - [Build and test commands](docs/build-test-commands.md)
 - [Release checklist](docs/release-checklist.md)
 - [Knowledge-base facts](docs/knowledge-base/jarvis-project-facts.md)
+
+The architecture map includes both the implemented current-state diagram and
+the end-goal production diagram, plus a phase table that separates verified
+foundation work from future production assistant requirements.
