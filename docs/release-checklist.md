@@ -6,9 +6,9 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
 ## Scope Check
 
 - Confirm `DESIGN.md` still matches the implementation scope.
-- Confirm release notes distinguish implemented Rust foundation behavior from
-  planned Swift shell, real local model integration, approval UI, plugin
-  installation, and packaging work.
+- Confirm release notes distinguish implemented Rust foundation and Swift shell
+  scaffold behavior from planned real local model integration, approval UI,
+  plugin installation, voice support, and packaging work.
 - Confirm the current architecture map still matches the real module wiring,
   especially the fact that `/commands` invokes the runtime/fake local model path
   but does not yet compose autonomous model-router-to-plugin tool execution.
@@ -24,6 +24,8 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
 - `cargo build --workspace`
 - `cargo run -p jarvis-cli -- smoke`
 - `cargo package --workspace`
+- `swift test --package-path apps/mac`
+- `swift build --package-path apps/mac`
 - Optional manual CLI/IPC smoke against a running local server:
   - Terminal 1: `cargo run -p jarvis-cli -- serve`
   - Terminal 2: `cargo run -p jarvis-cli -- health`
@@ -64,7 +66,7 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
 
 ## Mac App Smoke Test
 
-This is a future gate once `Jarvis.app` exists:
+This is a future gate once a packaged `Jarvis.app` exists:
 
 - Packaged app launches on a clean Mac user profile.
 - App starts and supervises `jarvis-core`.

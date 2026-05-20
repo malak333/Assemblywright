@@ -8,7 +8,7 @@ These notes capture durable facts for future agents working on this repository.
 - The product direction is a local-first macOS assistant foundation, legally
   distinct from Marvel/JARVIS branding and assets.
 - The current repo contains a Rust workspace with `jarvis-core` and
-  `jarvis-cli`.
+  `jarvis-cli`, plus a Swift package scaffold under `apps/mac`.
 - Implemented `jarvis-core` surfaces include shared task/audit/safety types,
   an Axum loopback IPC server, runtime-backed command execution with
   `FakeLocalModel`, emergency-pause state, in-memory scheduler state, a
@@ -16,9 +16,10 @@ These notes capture durable facts for future agents working on this repository.
   model routing policy, SQLite repository migrations, memory item persistence,
   append-only audit table triggers, plugin manifest validation, and
   deterministic first-party test plugins.
-- The planned Swift/SwiftUI Mac shell, packaged app, approval UI, local model
-  provider integration, plugin installation flow, and autonomous model-router to
-  plugin execution loop are not yet implemented in this worktree.
+- The planned packaged app, approval UI, local model provider integration,
+  plugin installation flow, and autonomous model-router to plugin execution loop
+  are not yet implemented in this worktree. The first SwiftUI shell scaffold and
+  IPC client live under `apps/mac`.
 - The IPC `/commands` endpoint calls `ConversationRuntime` and can persist
   through `SqliteRepository` when repository-backed state is used. It does not
   currently compose `ModelRouter` or `PluginHost` into the command pipeline.
@@ -28,7 +29,8 @@ These notes capture durable facts for future agents working on this repository.
 - Local Rust proof currently means `cargo fmt --check`, `cargo clippy
   --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `cargo
   test --workspace -- --ignored`, `cargo build --workspace`, `cargo run -p
-  jarvis-cli -- smoke`, and `cargo package --workspace`.
+  jarvis-cli -- smoke`, `cargo package --workspace`, `swift test
+  --package-path apps/mac`, and `swift build --package-path apps/mac`.
 - Do not describe Jarvis as a finished desktop assistant until the Swift shell,
   packaged app, approval UI, real model providers, and Mac release smoke test
   exist.

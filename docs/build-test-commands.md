@@ -12,6 +12,8 @@ cargo test --workspace -- --ignored
 cargo build --workspace
 cargo run -p jarvis-cli -- smoke
 cargo package --workspace
+swift test --package-path apps/mac
+swift build --package-path apps/mac
 ```
 
 ## Current Health Check
@@ -78,5 +80,7 @@ Passing these commands proves the current Rust workspace builds and its tests
 pass. The smoke commands prove the local server and CLI can exchange JSON for
 health, runtime-backed command execution, scheduler, and emergency-pause
 surfaces. They do not prove the future Swift shell, app packaging, real local
-model provider integration, plugin side effects, memory UX, approval UI, or Mac
-release smoke test until those surfaces exist and are covered.
+model provider integration, plugin side effects, memory UX, approval UI, voice
+loop, or packaged Mac release smoke test until those surfaces exist and are
+covered. The current Swift gate proves the Mac shell scaffold builds and its IPC
+contract decoding tests pass.
