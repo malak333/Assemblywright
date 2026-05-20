@@ -14,7 +14,8 @@ pub use ipc::{
     HealthResponse, IpcState, UpdateMemoryItemRequest,
 };
 pub use model::{
-    FakeLocalModel, ModelExecutor, ModelProvider, ModelRequest, ModelResponse, ModelRoute,
+    ChatGptProviderConfig, FakeLocalModel, LocalModelConfig, ModelExecutor, ModelProvider,
+    ModelRequest, ModelResponse, ModelRoute, ProviderConfig, ProviderStatus,
 };
 pub use plugin::{
     plugin_permission_scopes, CancellationBehavior, CancellationSignal, EchoPlugin,
@@ -28,7 +29,7 @@ pub use policy::{
 };
 pub use router::{
     redact_for_chatgpt, ModelProvider as RoutedModelProvider, ModelRouteRecord, ModelRouteRequest,
-    ModelRouter, RouteOutcome,
+    ModelRouter, RouteEvidence, RouteOutcome,
 };
 pub use runtime::{
     CommandRequest as RuntimeCommandRequest, CommandResponse as RuntimeCommandResponse,

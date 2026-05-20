@@ -6,24 +6,38 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::model::{ModelExecutor, ModelRequest, ModelResponse, ModelRoute};
+use crate::model::{ModelExecutor, ModelRequest, ModelResponse, ModelRoute, ProviderConfig};
+use crate::router::{
+    ModelProvider as RoutedModelProvider, ModelRouteRecord, ModelRouteRequest, ModelRouter,
+    RouteOutcome,
+};
 use crate::storage::SqliteRepository;
 use crate::types::{AuditEntry, JarvisResult, Sensitivity, TaskRecord, TaskStatus};
+use crate::CapabilityScope;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeConfig {
     pub max_steps: u32,
+    pub provider_config: ProviderConfig,
 }
 
 impl RuntimeConfig {
-    pub const fn new(max_steps: u32) -> Self {
-        Self { max_steps }
+    pub fn new(max_steps: u32) -> Self {
+        Self {
+            max_steps,
+            provider_config: ProviderConfig::local_only(),
+        }
+    }
+
+    pub fn with_provider_config(mut self, provider_config: ProviderConfig) -> Self {
+        self.provider_config = provider_config;
+        self
     }
 }
 
 impl Default for RuntimeConfig {
     fn default() -> Self {
-        Self { max_steps: 8 }
+        Self::new(8)
     }
 }
 
@@ -66,6 +80,7 @@ pub struct CommandResponse {
     pub task: TaskRecord,
     pub message: String,
     pub route: Option<ModelRoute>,
+    pub route_evidence: Option<ModelRouteRecord>,
     pub steps: Vec<RuntimeStep>,
     pub audit_entries: Vec<AuditEntry>,
 }
@@ -282,6 +297,7 @@ where
                 task,
                 "Command input is required.",
                 None,
+                None,
                 vec![],
                 audit_entries,
             ));
@@ -302,6 +318,51 @@ where
                 task,
                 "Emergency pause is active; command execution is blocked.",
                 None,
+                None,
+                vec![],
+                audit_entries,
+            ));
+        }
+
+        let route_record = ModelRouter::route(&ModelRouteRequest {
+            task_id: Some(task.id),
+            user_intent: task.user_input.clone(),
+            sensitivity: request.sensitivity,
+            required_scopes: vec![CapabilityScope::Conversation, CapabilityScope::LocalModel],
+            granted_scopes: vec![CapabilityScope::Conversation, CapabilityScope::LocalModel],
+            local_available: self.config.provider_config.local.enabled,
+            local_sufficient: self.config.provider_config.local.enabled,
+            provider_status: crate::ProviderStatus::from_config(&self.config.provider_config),
+            emergency_paused: self.control.is_emergency_paused(),
+            approval: None,
+            context_preview: task.user_input.clone(),
+        });
+        self.record_audit(
+            &mut audit_entries,
+            route_audit_entry(task.id, &route_record),
+        )?;
+
+        if route_record.outcome == RouteOutcome::NeedsApproval {
+            self.update_task_status(&mut task, TaskStatus::WaitingForApproval)?;
+            return Ok(self.finish(
+                task,
+                "Model route requires approval before execution.",
+                None,
+                Some(route_record),
+                vec![],
+                audit_entries,
+            ));
+        }
+
+        if route_record.outcome == RouteOutcome::Blocked
+            || route_record.selected_provider != Some(RoutedModelProvider::Local)
+        {
+            self.update_task_status(&mut task, TaskStatus::Blocked)?;
+            return Ok(self.finish(
+                task,
+                format!("Model route blocked: {}", route_record.reason),
+                None,
+                Some(route_record),
                 vec![],
                 audit_entries,
             ));
@@ -314,11 +375,15 @@ where
                 Some(task.id),
                 "task_running",
                 "command entered model execution",
-                json!({ "max_steps": self.config.max_steps }),
+                json!({
+                    "max_steps": self.config.max_steps,
+                    "provider": "local",
+                }),
             ),
         )?;
 
         let mut route = None;
+        let route_evidence = Some(route_record);
         let mut steps = Vec::new();
 
         for step_index in 0..self.config.max_steps {
@@ -337,6 +402,7 @@ where
                     task,
                     "Command cancelled because emergency pause was activated.",
                     route,
+                    route_evidence,
                     steps,
                     audit_entries,
                 ));
@@ -354,7 +420,14 @@ where
                         json!({ "step_index": step_index }),
                     ),
                 )?;
-                return Ok(self.finish(task, "Command cancelled.", route, steps, audit_entries));
+                return Ok(self.finish(
+                    task,
+                    "Command cancelled.",
+                    route,
+                    route_evidence,
+                    steps,
+                    audit_entries,
+                ));
             }
 
             self.hooks.before_model_step(&task, step_index);
@@ -373,6 +446,7 @@ where
                     task,
                     "Command cancelled because emergency pause was activated.",
                     route,
+                    route_evidence,
                     steps,
                     audit_entries,
                 ));
@@ -390,7 +464,14 @@ where
                         json!({ "step_index": step_index }),
                     ),
                 )?;
-                return Ok(self.finish(task, "Command cancelled.", route, steps, audit_entries));
+                return Ok(self.finish(
+                    task,
+                    "Command cancelled.",
+                    route,
+                    route_evidence,
+                    steps,
+                    audit_entries,
+                ));
             }
 
             let model_response = match self
@@ -446,7 +527,14 @@ where
                         json!({ "steps": steps.len() }),
                     ),
                 )?;
-                return Ok(self.finish(task, model_response.message, route, steps, audit_entries));
+                return Ok(self.finish(
+                    task,
+                    model_response.message,
+                    route,
+                    route_evidence,
+                    steps,
+                    audit_entries,
+                ));
             }
         }
 
@@ -464,6 +552,7 @@ where
             task,
             "Command failed because the runtime step limit was reached.",
             route,
+            route_evidence,
             steps,
             audit_entries,
         ))
@@ -488,6 +577,7 @@ where
         task: TaskRecord,
         message: impl Into<String>,
         route: Option<ModelRoute>,
+        route_evidence: Option<ModelRouteRecord>,
         steps: Vec<RuntimeStep>,
         audit_entries: Vec<AuditEntry>,
     ) -> CommandResponse {
@@ -495,6 +585,7 @@ where
             task,
             message: message.into(),
             route,
+            route_evidence,
             steps,
             audit_entries,
         };
@@ -521,12 +612,34 @@ fn model_audit_entry(task_id: Uuid, step_index: u32, response: &ModelResponse) -
     )
 }
 
+fn route_audit_entry(task_id: Uuid, record: &ModelRouteRecord) -> AuditEntry {
+    AuditEntry::new(
+        Some(task_id),
+        "model_route_selected",
+        "model router selected the command route",
+        json!({
+            "route_id": record.id,
+            "outcome": record.outcome,
+            "selected_provider": record.selected_provider,
+            "reason": record.reason,
+            "sensitivity": record.sensitivity,
+            "approval_status": record.approval_status,
+            "redaction_applied": record.redaction_applied,
+            "evidence": record.evidence,
+        }),
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    };
 
     use super::*;
-    use crate::model::{FakeLocalModel, ModelProvider};
+    use crate::model::{FakeLocalModel, ModelProvider, ProviderConfig};
+    use crate::router::RouteOutcome;
     use crate::types::TaskStatus;
 
     #[tokio::test]
@@ -544,6 +657,12 @@ mod tests {
         assert_eq!(
             response.route.expect("route").provider,
             ModelProvider::Local
+        );
+        let route_evidence = response.route_evidence.expect("route evidence");
+        assert_eq!(route_evidence.outcome, RouteOutcome::Selected);
+        assert_eq!(
+            route_evidence.selected_provider,
+            Some(RoutedModelProvider::Local)
         );
         assert!(response
             .audit_entries
@@ -588,6 +707,7 @@ mod tests {
             event_types,
             vec![
                 "task_created",
+                "model_route_selected",
                 "task_running",
                 "model_step_completed",
                 "task_completed"
@@ -613,8 +733,69 @@ mod tests {
                 .list_audit_entries(Some(task_id))
                 .expect("reopened audit")
                 .len(),
-            4
+            5
         );
+    }
+
+    #[tokio::test]
+    async fn chatgpt_disabled_blocks_before_model_execution_when_local_unavailable() {
+        let executions = Arc::new(AtomicUsize::new(0));
+        let runtime = ConversationRuntime::with_parts(
+            RuntimeConfig::default()
+                .with_provider_config(ProviderConfig::local_only().without_local()),
+            RuntimeControl::default(),
+            CountingModel {
+                executions: Arc::clone(&executions),
+            },
+            NoopRuntimeHooks,
+        );
+
+        let response = runtime
+            .execute_command(CommandRequest::new("needs remote model"))
+            .await
+            .expect("route block should return structured response");
+
+        assert_eq!(response.task.status, TaskStatus::Blocked);
+        assert!(response.steps.is_empty());
+        assert_eq!(executions.load(Ordering::SeqCst), 0);
+        let route = response.route_evidence.expect("route evidence");
+        assert_eq!(route.outcome, RouteOutcome::Blocked);
+        assert!(route.reason.contains("ChatGPT routing is disabled"));
+        assert!(!route.evidence.chatgpt_enabled);
+    }
+
+    #[tokio::test]
+    async fn restricted_data_never_routes_to_cloud_before_model_execution() {
+        let executions = Arc::new(AtomicUsize::new(0));
+        let runtime = ConversationRuntime::with_parts(
+            RuntimeConfig::default().with_provider_config(
+                ProviderConfig::local_only()
+                    .without_local()
+                    .with_chatgpt_enabled("chatgpt-disabled-test"),
+            ),
+            RuntimeControl::default(),
+            CountingModel {
+                executions: Arc::clone(&executions),
+            },
+            NoopRuntimeHooks,
+        );
+
+        let response = runtime
+            .execute_command(
+                CommandRequest::new("summarize restricted credential material")
+                    .with_sensitivity(Sensitivity::Restricted),
+            )
+            .await
+            .expect("restricted route block should return structured response");
+
+        assert_eq!(response.task.status, TaskStatus::Blocked);
+        assert!(response.steps.is_empty());
+        assert_eq!(executions.load(Ordering::SeqCst), 0);
+        let route = response.route_evidence.expect("route evidence");
+        assert_eq!(route.outcome, RouteOutcome::Blocked);
+        assert!(route.reason.contains("restricted data"));
+        assert!(route.evidence.chatgpt_enabled);
+        assert!(route.evidence.restricted_cloud_block);
     }
 
     #[tokio::test]
@@ -755,5 +936,21 @@ mod tests {
                 .event_type,
             "task_cancelled"
         );
+    }
+
+    struct CountingModel {
+        executions: Arc<AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl ModelExecutor for CountingModel {
+        async fn execute(&self, request: ModelRequest) -> JarvisResult<ModelResponse> {
+            self.executions.fetch_add(1, Ordering::SeqCst);
+            Ok(ModelResponse {
+                route: ModelRoute::fake_local("counting local model"),
+                message: format!("counted: {}", request.user_input),
+                complete: true,
+            })
+        }
     }
 }
