@@ -8,8 +8,9 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
 - Confirm `DESIGN.md` still matches the implementation scope.
 - Confirm release notes distinguish implemented Rust foundation and Swift shell
   scaffold behavior from the implemented opt-in Ollama-compatible local
-  provider boundary and planned ChatGPT execution, approval UI, plugin
-  installation, voice support, and packaging work.
+  provider boundary, metadata-only local plugin installation, and planned
+  ChatGPT execution, Swift approval UI, installed plugin execution, voice
+  support, and packaging work.
 - Confirm the current architecture map still matches the real module wiring,
   especially the fact that `/commands` invokes the configured local
   `ModelExecutor` (`FakeLocalModel` by default, Ollama-compatible HTTP when
@@ -63,6 +64,11 @@ stage.
   command cancellation.
 - Confirm plugin manifests validate declared permissions, schemas, proactive
   behavior, memory/model access, timeout behavior, and cancellation behavior.
+- Confirm local plugin installation accepts only validated manifest metadata
+  with safe absolute source paths and stores installed records with
+  `execution_enabled: false`.
+- Confirm installed plugin metadata does not become executable; execution is
+  still limited to deterministic first-party in-process plugins.
 - Confirm persistent audit entries remain append-only in SQLite tests.
 - Confirm route, policy, approval, action, and failure evidence stay covered
   before claiming an end-to-end assistant release. The current command path
@@ -85,9 +91,10 @@ stage.
 - Confirm diagnostics export remains redacted and does not include command
   bodies, scheduler commands, audit payloads, memory values, raw cancellation
   reasons, or credentials.
-- Confirm the cross-process CLI E2E still covers command, plugin, audit,
-  memory create/update/review/delete, scheduler schedule/get/list/cancel,
-  diagnostics redaction, persistence restart, and emergency-pause
+- Confirm the cross-process CLI E2E still covers command, first-party plugin
+  execution, local plugin metadata install/list/get, audit, memory
+  create/update/review/delete, scheduler schedule/get/list/cancel, diagnostics
+  redaction, persistence restart, and emergency-pause
   blocking/resume behavior.
 - Confirm the Swift shell remains described as a scaffold until a signed
   packaged app bundles/launches the Rust core, handles approval prompts, and

@@ -11,8 +11,8 @@ pub mod types;
 pub use ipc::{
     router, serve, serve_listener, ApprovalDecisionRequest, CommandRequest, CommandResponse,
     CreateMemoryItemRequest, CreateSchedulerJobRequest, EmergencyPauseRequest,
-    EmergencyPauseResponse, ErrorResponse, HealthResponse, IpcState, SchedulerJobExecution,
-    SchedulerRunResponse, UpdateMemoryItemRequest,
+    EmergencyPauseResponse, ErrorResponse, HealthResponse, InstallPluginRequest, IpcState,
+    SchedulerJobExecution, SchedulerRunResponse, UpdateMemoryItemRequest,
 };
 pub use model::{
     redact_url_credentials, ChatGptProviderConfig, FakeLocalModel, LocalModelConfig,
@@ -22,9 +22,10 @@ pub use model::{
 };
 pub use plugin::{
     plugin_permission_scopes, CancellationBehavior, CancellationSignal, EchoPlugin,
-    InProcessPlugin, JsonSchema, PluginAccess, PluginActionManifest, PluginCallMetadata,
-    PluginCallRequest, PluginCallResult, PluginCallStatus, PluginHost, PluginManifest,
-    PluginPermission, PluginSource, PluginTimeout, PluginTimeoutAction, StatusPlugin,
+    InProcessPlugin, InstalledPlugin, JsonSchema, PluginAccess, PluginActionManifest,
+    PluginCallMetadata, PluginCallRequest, PluginCallResult, PluginCallStatus, PluginHost,
+    PluginManifest, PluginPermission, PluginSource, PluginTimeout, PluginTimeoutAction,
+    StatusPlugin,
 };
 pub use policy::{
     ApprovalDecision, ApprovalGrant, CapabilityScope, PermissionEngine, PolicyDecision,
@@ -41,8 +42,8 @@ pub use runtime::{
 };
 pub use scheduler::{Scheduler, SchedulerJob, SchedulerJobSpec, SchedulerJobStatus, TriggerKind};
 pub use storage::{
-    EmergencyPauseState, MemoryItem, NewMemoryItem, NewPendingApproval, PendingApproval,
-    SqliteRepository,
+    EmergencyPauseState, InstalledPluginRecord, MemoryItem, NewMemoryItem, NewPendingApproval,
+    PendingApproval, SqliteRepository,
 };
 pub use types::{
     ApprovalStatus, AuditEntry, JarvisError, JarvisResult, RiskTier, Sensitivity, TaskRecord,

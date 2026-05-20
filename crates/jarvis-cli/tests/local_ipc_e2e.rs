@@ -1,3 +1,4 @@
+use std::fs;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::path::Path;
@@ -64,6 +65,63 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     ]);
     assert_eq!(fake_echo_manifest["id"], "fake_echo");
     assert_eq!(fake_echo_manifest["source"], "first_party");
+
+    let plugin_dir = temp_dir.path().join("local-plugin");
+    fs::create_dir(&plugin_dir).expect("create local plugin dir");
+    let plugin_dir = plugin_dir.canonicalize().expect("canonical plugin dir");
+    let plugin_manifest_path = plugin_dir.join("jarvis-plugin.json");
+    fs::write(
+        &plugin_manifest_path,
+        json!({
+            "manifest_schema_version": 1,
+            "id": "local_e2e_plugin",
+            "name": "Local E2E Plugin",
+            "version": "0.1.0",
+            "source": "local_development",
+            "author": "Jarvis E2E",
+            "source_path": plugin_dir.display().to_string(),
+            "actions": [{
+                "name": "inspect",
+                "description": "Validate local install metadata.",
+                "permissions": ["read_workspace"],
+                "risk_tier": "low",
+                "input_schema": { "schema": { "type": "object" } },
+                "output_schema": { "schema": { "type": "object" } },
+                "proactive": false,
+                "memory_access": "none",
+                "model_access": "none",
+                "audit_fields": ["path"],
+                "timeout": { "timeout_ms": 5000, "on_timeout": "cancel" },
+                "cancellation": "cooperative"
+            }]
+        })
+        .to_string(),
+    )
+    .expect("write local plugin manifest");
+
+    let installed_plugin = run_cli_json([
+        "plugins",
+        "install",
+        plugin_manifest_path.to_str().expect("manifest path"),
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(installed_plugin["id"], "local_e2e_plugin");
+    assert_eq!(installed_plugin["execution_enabled"], false);
+    assert_eq!(installed_plugin["manifest"]["source"], "local_development");
+
+    let installed_plugins = run_cli_json(["plugins", "installed", "--endpoint", endpoint.as_str()]);
+    assert_array_contains(&installed_plugins, "id", "local_e2e_plugin");
+
+    let installed_plugin_get = run_cli_json([
+        "plugins",
+        "installed-get",
+        "local_e2e_plugin",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(installed_plugin_get["id"], "local_e2e_plugin");
+    assert_eq!(installed_plugin_get["execution_enabled"], false);
 
     let tasks = run_cli_json(["tasks", "list", "--endpoint", endpoint.as_str()]);
     assert_array_contains(&tasks, "id", &task_id);
@@ -342,7 +400,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
 
     let diagnostics = run_cli_json(["diagnostics", "export", "--endpoint", endpoint.as_str()]);
     assert_eq!(diagnostics["repository_backed"], true);
-    assert_eq!(diagnostics["schema_version"], 3);
+    assert_eq!(diagnostics["schema_version"], 4);
     assert_eq!(
         diagnostics["health"]["contract"]["name"],
         "jarvis.local-ipc"
@@ -443,6 +501,14 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         restarted_endpoint.as_str(),
     ]);
     assert_array_contains(&persisted_scheduler, "id", &scheduler_id);
+
+    let persisted_installed_plugins = run_cli_json([
+        "plugins",
+        "installed",
+        "--endpoint",
+        restarted_endpoint.as_str(),
+    ]);
+    assert_array_contains(&persisted_installed_plugins, "id", "local_e2e_plugin");
 
     let persisted_diagnostics = run_cli_json([
         "diagnostics",

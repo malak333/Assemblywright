@@ -5,8 +5,9 @@ the Rust core described in [DESIGN.md](DESIGN.md): durable task/audit
 primitives, policy-gated first-party plugin commands, bounded model-planned
 first-party tool orchestration, local-first model routing evidence, an
 opt-in Ollama-compatible local HTTP provider boundary, plugin contracts,
-scheduler state, redacted diagnostics export, a loopback IPC surface, and CLI
-smoke paths for the Swift shell scaffold and future packaged app.
+metadata-only local plugin installation, scheduler state, redacted diagnostics
+export, a loopback IPC surface, and CLI smoke paths for the Swift shell scaffold
+and future packaged app.
 It also includes the first buildable Swift/SwiftUI Mac shell scaffold under
 `apps/mac`, with a tested IPC client, command-console state model,
 activity/audit panel for command evidence, management surfaces, degraded-mode
@@ -18,12 +19,13 @@ This repository is intentionally v1 foundation work, not a Marvel/JARVIS clone
 and not an autonomous external-communication system. Risky side effects must be
 blocked or require approval, and every meaningful decision should be auditable.
 The current implementation should not be described as a finished production
-assistant: signed packaging, approval UI, voice support, plugin installation,
-ChatGPT execution, and packaged Mac smoke evidence are still target
+assistant: signed packaging, Swift approval UI, voice support, installed plugin
+execution, ChatGPT execution, and packaged Mac smoke evidence are still target
 architecture. The default command path still uses `FakeLocalModel`; set
 `JARVIS_LOCAL_MODEL_PROVIDER=ollama`, `JARVIS_LOCAL_MODEL`, and optionally
 `JARVIS_OLLAMA_BASE_URL`/`JARVIS_LOCAL_MODEL_TIMEOUT_MS` to exercise the local
-HTTP provider.
+HTTP provider. Local plugin installation currently stores validated manifest
+metadata only and does not create an execution path.
 
 ## Build
 
@@ -49,8 +51,8 @@ want manual IPC commands to persist task and audit state locally.
 
 With a repository-backed server running, `jarvis tasks`, `jarvis memory`,
 `jarvis scheduler`, `jarvis diagnostics`, and `jarvis plugins` expose the
-current durable state, redacted diagnostics, and first-party plugin manifests
-over IPC.
+current durable state, redacted diagnostics, first-party plugin manifests, and
+disabled installed-plugin registry metadata over IPC.
 
 ## Docs
 

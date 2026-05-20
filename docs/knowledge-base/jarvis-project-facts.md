@@ -29,15 +29,19 @@ These notes capture durable facts for future agents working on this repository.
   orchestration remains target architecture.
 - Repository-backed IPC state exposes task, audit, and memory inspection routes,
   persists scheduler jobs, restores them at startup, and all IPC states expose
-  `/plugins/manifests` for deterministic first-party plugin manifests. The CLI
-  has matching `tasks`, `memory`, `scheduler`, `diagnostics`, and `plugins`
-  subcommands.
+  `/plugins/manifests` for deterministic first-party plugin manifests.
+  Repository-backed IPC also exposes `/plugins/installed` for metadata-only
+  local plugin installation. Installed records are persisted with
+  `execution_enabled: false`; they are not executable.
+- The CLI has matching `tasks`, `memory`, `scheduler`, `diagnostics`, and
+  `plugins` subcommands, including `plugins install`, `plugins installed`, and
+  `plugins installed-get` for disabled local manifest metadata.
 - The planned signed packaged app, approval UI, ChatGPT execution, plugin
-  installation flow, and production real-provider tool orchestration are not
-  yet implemented in this worktree. The first SwiftUI shell scaffold and IPC
-  client live under `apps/mac`, including a command transcript, activity/audit
-  panel, management tabs, degraded-mode handling, and a core supervisor
-  abstraction for configured or bundled local core binaries.
+  execution, and production real-provider tool orchestration are not yet
+  implemented in this worktree. The first SwiftUI shell scaffold and IPC client
+  live under `apps/mac`, including a command transcript, activity/audit panel,
+  management tabs, degraded-mode handling, and a core supervisor abstraction for
+  configured or bundled local core binaries.
 - The architecture docs must preserve two diagrams: the current implemented
   Rust/Swift scaffold and the end-goal production architecture. Keep the
   current-vs-target phase table aligned with code before answering readiness

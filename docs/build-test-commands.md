@@ -88,6 +88,7 @@ cargo run -p jarvis-cli -- plugins list
 cargo run -p jarvis-cli -- diagnostics export
 cargo run -p jarvis-cli -- scheduler list
 cargo run -p jarvis-cli -- scheduler schedule "manual check" "status check"
+cargo run -p jarvis-cli -- plugins installed
 cargo run -p jarvis-cli -- pause --reason "manual smoke"
 cargo run -p jarvis-cli -- pause-status
 cargo run -p jarvis-cli -- resume
@@ -105,7 +106,10 @@ fail closed by returning `waiting_for_approval`, persisting an inspectable
 pending approval when repository backing is enabled, and requiring a separate
 CLI/IPC grant or denial. Granting an approval records the decision but does not
 execute the side effect. It does not yet implement ChatGPT execution, installed
-plugin sandboxing, or Swift approval UI.
+plugin sandboxing, installed plugin execution, or Swift approval UI. Local
+plugin install is metadata-only:
+`jarvis plugins install /absolute/path/to/jarvis-plugin.json` validates and
+stores a disabled registry record when repository backing is enabled.
 
 When the server is started with `--db-path`, these inspection commands are also
 available:

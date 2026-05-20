@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 use jarvis_core::{
     ApprovalDecisionRequest, CommandRequest, CreateMemoryItemRequest, CreateSchedulerJobRequest,
-    EmergencyPauseRequest, Sensitivity, TriggerKind, UpdateMemoryItemRequest,
+    EmergencyPauseRequest, InstallPluginRequest, Sensitivity, TriggerKind, UpdateMemoryItemRequest,
 };
 use tokio::net::TcpListener;
 
@@ -230,6 +230,23 @@ enum PluginsCommand {
     },
     /// Fetch one registered plugin manifest by id.
     Get {
+        id: String,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    /// Validate and store local plugin manifest metadata without enabling execution.
+    Install {
+        manifest_path: PathBuf,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    /// List locally installed plugin metadata.
+    Installed {
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    /// Fetch one locally installed plugin metadata record by id.
+    InstalledGet {
         id: String,
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
@@ -480,6 +497,28 @@ async fn main() -> anyhow::Result<()> {
                 println!(
                     "{}",
                     request(&endpoint, "GET", &format!("/plugins/manifests/{id}"), None)?
+                );
+            }
+            PluginsCommand::Install {
+                manifest_path,
+                endpoint,
+            } => {
+                let manifest_path = std::fs::canonicalize(manifest_path)?;
+                let body = serde_json::to_string(&InstallPluginRequest {
+                    manifest_path: manifest_path.display().to_string(),
+                })?;
+                println!(
+                    "{}",
+                    request(&endpoint, "POST", "/plugins/installed", Some(&body))?
+                );
+            }
+            PluginsCommand::Installed { endpoint } => {
+                println!("{}", request(&endpoint, "GET", "/plugins/installed", None)?);
+            }
+            PluginsCommand::InstalledGet { id, endpoint } => {
+                println!(
+                    "{}",
+                    request(&endpoint, "GET", &format!("/plugins/installed/{id}"), None)?
                 );
             }
         },
