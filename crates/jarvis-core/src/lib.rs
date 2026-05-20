@@ -11,7 +11,8 @@ pub mod types;
 pub use ipc::{
     router, serve, serve_listener, ApprovalDecisionRequest, CommandRequest, CommandResponse,
     CreateMemoryItemRequest, CreateSchedulerJobRequest, EmergencyPauseRequest,
-    EmergencyPauseResponse, ErrorResponse, HealthResponse, IpcState, UpdateMemoryItemRequest,
+    EmergencyPauseResponse, ErrorResponse, HealthResponse, IpcState, SchedulerJobExecution,
+    SchedulerRunResponse, UpdateMemoryItemRequest,
 };
 pub use model::{
     redact_url_credentials, ChatGptProviderConfig, FakeLocalModel, LocalModelConfig,

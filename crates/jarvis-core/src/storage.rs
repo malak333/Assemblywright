@@ -500,6 +500,53 @@ impl SqliteRepository {
         self.update_scheduler_job_status(id, SchedulerJobStatus::Failed, None)
     }
 
+    pub fn reschedule_interval_scheduler_job(&self, id: Uuid) -> JarvisResult<SchedulerJob> {
+        let current = self
+            .get_scheduler_job(id)?
+            .ok_or_else(|| JarvisError::Storage(format!("scheduler job not found: {id}")))?;
+
+        if !matches!(current.trigger, TriggerKind::Interval { .. }) {
+            return Err(JarvisError::Storage(format!(
+                "non-interval scheduler job cannot be rescheduled: {id}"
+            )));
+        }
+
+        if matches!(
+            current.status,
+            SchedulerJobStatus::Completed
+                | SchedulerJobStatus::Cancelled
+                | SchedulerJobStatus::Failed
+        ) {
+            return Err(JarvisError::Storage(format!(
+                "terminal scheduler job cannot be rescheduled: {id}"
+            )));
+        }
+
+        let updated_at = Utc::now();
+        let changed = self
+            .conn
+            .execute(
+                "UPDATE scheduler_jobs
+                 SET status = 'scheduled',
+                     updated_at = ?1,
+                     cancelled_at = NULL,
+                     cancellation_reason = NULL
+                 WHERE id = ?2",
+                params![to_db_time(updated_at), id.to_string()],
+            )
+            .map_err(storage_error)?;
+
+        if changed == 0 {
+            return Err(JarvisError::Storage(format!(
+                "scheduler job not found after reschedule: {id}"
+            )));
+        }
+
+        self.get_scheduler_job(id)?.ok_or_else(|| {
+            JarvisError::Storage(format!("scheduler job not found after reschedule: {id}"))
+        })
+    }
+
     pub fn cancel_scheduler_job(
         &self,
         id: Uuid,
@@ -1442,6 +1489,30 @@ mod tests {
         assert!(jobs
             .iter()
             .any(|job| job.id == fail_job.id && job.status == SchedulerJobStatus::Failed));
+    }
+
+    #[test]
+    fn interval_scheduler_job_reschedule_is_durable() {
+        let repo = SqliteRepository::in_memory().unwrap();
+        let scheduler = crate::Scheduler::new();
+        let job = scheduler
+            .schedule(crate::SchedulerJobSpec {
+                name: "interval".to_string(),
+                command: "status".to_string(),
+                trigger: TriggerKind::Interval { every_seconds: 60 },
+            })
+            .unwrap();
+
+        repo.upsert_scheduler_job(&job).unwrap();
+        repo.mark_scheduler_job_running(job.id).unwrap();
+        let rescheduled = repo.reschedule_interval_scheduler_job(job.id).unwrap();
+
+        assert_eq!(rescheduled.status, SchedulerJobStatus::Scheduled);
+        assert_eq!(
+            rescheduled.trigger,
+            TriggerKind::Interval { every_seconds: 60 }
+        );
+        assert!(rescheduled.updated_at >= job.updated_at);
     }
 
     #[test]
