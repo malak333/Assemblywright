@@ -460,10 +460,12 @@ impl IpcState {
     pub fn pause(&self, reason: impl Into<String>) -> JarvisResult<EmergencyPauseResponse> {
         let reason = reason.into();
         let stored_pause = self.persist_pause(true, Some(&reason))?;
-        let cancelled = self
+        let cancelled_jobs = self
             .scheduler
-            .cancel_active(format!("emergency pause: {reason}"));
-        self.persist_scheduler_snapshot()?;
+            .cancel_active_jobs(format!("emergency pause: {reason}"));
+        for job in &cancelled_jobs {
+            self.persist_scheduler_job(job)?;
+        }
         self.runtime_control.emergency_pause();
         let paused_at = stored_pause
             .as_ref()
@@ -484,7 +486,7 @@ impl IpcState {
             reason: pause.reason.clone(),
             paused_at: pause.paused_at,
             resumed_at: pause.resumed_at,
-            cancelled_scheduler_jobs: cancelled,
+            cancelled_scheduler_jobs: cancelled_jobs.len(),
         })
     }
 
@@ -545,10 +547,29 @@ impl IpcState {
         Ok(job)
     }
 
+    pub fn mark_scheduler_job_running(&self, id: Uuid) -> JarvisResult<SchedulerJob> {
+        let job = self.scheduler.mark_running(id)?;
+        self.persist_scheduler_transition(&job, |repository| {
+            repository.mark_scheduler_job_running(id)
+        })
+    }
+
+    pub fn complete_scheduler_job(&self, id: Uuid) -> JarvisResult<SchedulerJob> {
+        let job = self.scheduler.complete(id)?;
+        self.persist_scheduler_transition(&job, |repository| repository.complete_scheduler_job(id))
+    }
+
+    pub fn fail_scheduler_job(&self, id: Uuid) -> JarvisResult<SchedulerJob> {
+        let job = self.scheduler.fail(id)?;
+        self.persist_scheduler_transition(&job, |repository| repository.fail_scheduler_job(id))
+    }
+
     pub fn cancel_scheduler_job(&self, id: Uuid, reason: &str) -> JarvisResult<SchedulerJob> {
         let job = self.scheduler.cancel(id, reason)?;
-        self.persist_scheduler_job(&job)?;
-        Ok(job)
+        let reason = reason.to_string();
+        self.persist_scheduler_transition(&job, |repository| {
+            repository.cancel_scheduler_job(id, reason)
+        })
     }
 
     fn persist_scheduler_job(&self, job: &SchedulerJob) -> JarvisResult<()> {
@@ -564,11 +585,18 @@ impl IpcState {
             .map(|_| ())
     }
 
-    fn persist_scheduler_snapshot(&self) -> JarvisResult<()> {
-        for job in self.scheduler.list() {
-            self.persist_scheduler_job(&job)?;
+    fn persist_scheduler_transition(
+        &self,
+        job: &SchedulerJob,
+        transition: impl FnOnce(&SqliteRepository) -> JarvisResult<SchedulerJob>,
+    ) -> JarvisResult<SchedulerJob> {
+        match &self.repository {
+            Some(repository) => {
+                let repository = repository.lock().expect("IPC repository lock poisoned");
+                transition(&repository)
+            }
+            None => Ok(job.clone()),
         }
-        Ok(())
     }
 
     fn pause_snapshot(&self) -> EmergencyPauseState {
@@ -1221,6 +1249,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn repository_backed_scheduler_lifecycle_survives_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("jarvis.sqlite");
+        let repository = SqliteRepository::open(&db_path).unwrap();
+        let state = IpcState::with_repository(repository).expect("state");
+
+        let completed = state
+            .schedule_scheduler_job(SchedulerJobSpec {
+                name: "completed".to_string(),
+                command: "record completed job".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .expect("schedule completed");
+        let failed = state
+            .schedule_scheduler_job(SchedulerJobSpec {
+                name: "failed".to_string(),
+                command: "record failed job".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .expect("schedule failed");
+
+        assert_eq!(
+            state
+                .mark_scheduler_job_running(completed.id)
+                .expect("mark running")
+                .status,
+            SchedulerJobStatus::Running
+        );
+        assert_eq!(
+            state
+                .complete_scheduler_job(completed.id)
+                .expect("complete")
+                .status,
+            SchedulerJobStatus::Completed
+        );
+        assert_eq!(
+            state.fail_scheduler_job(failed.id).expect("fail").status,
+            SchedulerJobStatus::Failed
+        );
+        drop(state);
+
+        let repository = SqliteRepository::open(&db_path).unwrap();
+        let restarted = IpcState::with_repository(repository).expect("restarted state");
+        let jobs = restarted.scheduler().list();
+        assert_eq!(jobs.len(), 2);
+        assert!(jobs
+            .iter()
+            .any(|job| job.id == completed.id && job.status == SchedulerJobStatus::Completed));
+        assert!(jobs
+            .iter()
+            .any(|job| job.id == failed.id && job.status == SchedulerJobStatus::Failed));
+    }
+
+    #[tokio::test]
     async fn diagnostics_export_is_redacted_and_counts_repository_state() {
         let repository = SqliteRepository::in_memory().unwrap();
         let state = IpcState::with_repository(repository).expect("state");
@@ -1315,9 +1397,8 @@ mod tests {
         let db_path = dir.path().join("jarvis.sqlite");
         let repository = SqliteRepository::open(&db_path).unwrap();
         let state = IpcState::with_repository(repository).expect("state");
-        state
-            .scheduler()
-            .schedule(SchedulerJobSpec {
+        let scheduled = state
+            .schedule_scheduler_job(SchedulerJobSpec {
                 name: "persisted pause job".to_string(),
                 command: "run persisted pause job".to_string(),
                 trigger: TriggerKind::Manual,
@@ -1368,5 +1449,14 @@ mod tests {
         assert!(!stored.paused);
         assert_eq!(stored.reason, None);
         assert_eq!(stored.updated_by.as_deref(), Some("ipc"));
+        let jobs = repository.list_scheduler_jobs().unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].id, scheduled.id);
+        assert_eq!(jobs[0].status, SchedulerJobStatus::Cancelled);
+        assert!(jobs[0].cancelled_at.is_some());
+        assert_eq!(
+            jobs[0].cancellation_reason.as_deref(),
+            Some("emergency pause: maintenance window")
+        );
     }
 }
