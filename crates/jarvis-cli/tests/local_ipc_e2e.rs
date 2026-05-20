@@ -21,6 +21,13 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert!(health.contains("jarvis-core: ok"), "{health}");
     assert!(health.contains("runtime: routed-fake-local-model+first-party-plugins"));
     assert!(health.contains("paused: false"));
+    assert!(health.contains("contract: v1"), "{health}");
+
+    let contract = run_cli_json(["contract", "--endpoint", endpoint.as_str()]);
+    assert_eq!(contract["contract"]["name"], "jarvis.local-ipc");
+    assert_eq!(contract["contract"]["version"], 1);
+    assert_array_contains(&contract["endpoints"], "path", "/diagnostics/export");
+    assert_string_array_contains(&contract["safe_inspection_paths"], "/scheduler/jobs/:id");
 
     let command = run_cli_json([
         "command",
@@ -45,6 +52,16 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     let manifests = run_cli_json(["plugins", "list", "--endpoint", endpoint.as_str()]);
     assert_array_contains(&manifests, "id", "fake_echo");
     assert_array_contains(&manifests, "id", "fake_status");
+
+    let fake_echo_manifest = run_cli_json([
+        "plugins",
+        "get",
+        "fake_echo",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(fake_echo_manifest["id"], "fake_echo");
+    assert_eq!(fake_echo_manifest["source"], "first_party");
 
     let tasks = run_cli_json(["tasks", "list", "--endpoint", endpoint.as_str()]);
     assert_array_contains(&tasks, "id", &task_id);
@@ -81,8 +98,82 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_eq!(memory["sensitivity"], "workspace");
     let memory_id = memory["id"].as_str().expect("memory id").to_string();
 
+    let fetched_memory = run_cli_json([
+        "memory",
+        "get",
+        memory_id.as_str(),
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(fetched_memory["id"], memory_id);
+    assert_eq!(
+        fetched_memory["value"],
+        "persisted through jarvis-cli serve"
+    );
+
+    let updated_memory = run_cli_json([
+        "memory",
+        "update",
+        memory_id.as_str(),
+        "updated through jarvis-cli e2e",
+        "--provenance",
+        "local_ipc_e2e update",
+        "--sensitivity",
+        "workspace",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(updated_memory["value"], "updated through jarvis-cli e2e");
+
+    let reviewed_memory = run_cli_json([
+        "memory",
+        "review",
+        memory_id.as_str(),
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert!(reviewed_memory["reviewed_at"].is_string());
+
     let memory_list = run_cli_json(["memory", "list", "--endpoint", endpoint.as_str()]);
     assert_array_contains(&memory_list, "id", &memory_id);
+
+    let scheduled = run_cli_json([
+        "scheduler",
+        "schedule",
+        "local e2e job",
+        "plugin status",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(scheduled["name"], "local e2e job");
+    assert_eq!(scheduled["status"], "scheduled");
+    let scheduler_id = scheduled["id"].as_str().expect("scheduler id").to_string();
+
+    let scheduler_list = run_cli_json(["scheduler", "list", "--endpoint", endpoint.as_str()]);
+    assert_array_contains(&scheduler_list, "id", &scheduler_id);
+
+    let scheduler_item = run_cli_json([
+        "scheduler",
+        "get",
+        scheduler_id.as_str(),
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(scheduler_item["id"], scheduler_id);
+    assert_eq!(scheduler_item["command"], "plugin status");
+
+    let diagnostics = run_cli_json(["diagnostics", "export", "--endpoint", endpoint.as_str()]);
+    assert_eq!(diagnostics["repository_backed"], true);
+    assert_eq!(diagnostics["schema_version"], 2);
+    assert_eq!(
+        diagnostics["health"]["contract"]["name"],
+        "jarvis.local-ipc"
+    );
+    assert_eq!(diagnostics["active_memory_item_count"], 1);
+    assert_array_contains(&diagnostics["scheduler_jobs"], "id", &scheduler_id);
+    let diagnostics_encoded = serde_json::to_string(&diagnostics).expect("diagnostics JSON");
+    assert!(!diagnostics_encoded.contains("updated through jarvis-cli e2e"));
+    assert!(!diagnostics_encoded.contains("plugin status"));
 
     let pause = run_cli_json([
         "pause",
@@ -105,6 +196,15 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
 
     let resume = run_cli_json(["resume", "--endpoint", endpoint.as_str()]);
     assert_eq!(resume["paused"], false);
+
+    let cancelled = run_cli_json([
+        "scheduler",
+        "cancel",
+        scheduler_id.as_str(),
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(cancelled["status"], "cancelled");
 
     let pause_status = run_cli_json(["pause-status", "--endpoint", endpoint.as_str()]);
     assert_eq!(pause_status["paused"], false);
@@ -147,8 +247,47 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_array_contains(&persisted_memory, "id", &memory_id);
     assert_array_contains(&persisted_memory, "key", "ipc-contract");
 
+    let persisted_scheduler = run_cli_json([
+        "scheduler",
+        "list",
+        "--endpoint",
+        restarted_endpoint.as_str(),
+    ]);
+    assert_array_contains(&persisted_scheduler, "id", &scheduler_id);
+
+    let persisted_diagnostics = run_cli_json([
+        "diagnostics",
+        "export",
+        "--endpoint",
+        restarted_endpoint.as_str(),
+    ]);
+    assert_eq!(persisted_diagnostics["repository_backed"], true);
+    assert_array_contains(
+        &persisted_diagnostics["scheduler_jobs"],
+        "id",
+        &scheduler_id,
+    );
+
     let persisted_pause = run_cli_json(["pause-status", "--endpoint", restarted_endpoint.as_str()]);
     assert_eq!(persisted_pause["paused"], false);
+
+    let deleted_memory = run_cli_json([
+        "memory",
+        "delete",
+        memory_id.as_str(),
+        "--endpoint",
+        restarted_endpoint.as_str(),
+    ]);
+    assert!(deleted_memory["deleted_at"].is_string());
+
+    let deleted_memory_list = run_cli_json([
+        "memory",
+        "list",
+        "--include-deleted",
+        "--endpoint",
+        restarted_endpoint.as_str(),
+    ]);
+    assert_array_contains(&deleted_memory_list, "id", &memory_id);
 
     restarted.stop();
     drop(temp_dir);
@@ -290,6 +429,16 @@ fn assert_array_contains(value: &Value, field: &str, expected: &str) {
             .iter()
             .any(|item| item.get(field).and_then(Value::as_str) == Some(expected)),
         "expected array to contain object with {field}={expected}, got {value}"
+    );
+}
+
+fn assert_string_array_contains(value: &Value, expected: &str) {
+    let array = value.as_array().unwrap_or_else(|| {
+        panic!("expected array, got {}", json!(value));
+    });
+    assert!(
+        array.iter().any(|item| item.as_str() == Some(expected)),
+        "expected array to contain {expected}, got {value}"
     );
 }
 

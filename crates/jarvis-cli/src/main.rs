@@ -32,6 +32,11 @@ enum CliCommand {
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
+    /// Print supported IPC contract metadata and endpoint inventory as JSON.
+    Contract {
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
     /// Run a local IPC smoke test against an ephemeral core server.
     Smoke,
     /// Submit a command to the core command endpoint.
@@ -93,6 +98,12 @@ enum SchedulerCommand {
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
+    /// Fetch one scheduler job by id.
+    Get {
+        id: String,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
     /// Create an inspectable manual scheduler job.
     Schedule {
         name: String,
@@ -148,6 +159,12 @@ enum MemoryCommand {
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
+    /// Fetch one persisted memory item by id.
+    Get {
+        id: String,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
     /// Create a persisted memory item.
     Create {
         category: String,
@@ -192,6 +209,12 @@ enum PluginsCommand {
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
+    /// Fetch one registered plugin manifest by id.
+    Get {
+        id: String,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
 }
 
 #[tokio::main]
@@ -218,6 +241,9 @@ async fn main() -> anyhow::Result<()> {
                 "{}",
                 format_health(&request(&endpoint, "GET", "/health", None)?)?
             );
+        }
+        CliCommand::Contract { endpoint } => {
+            println!("{}", request(&endpoint, "GET", "/contract", None)?);
         }
         CliCommand::Smoke => {
             run_smoke().await?;
@@ -255,6 +281,12 @@ async fn main() -> anyhow::Result<()> {
         CliCommand::Scheduler { command } => match command {
             SchedulerCommand::List { endpoint } => {
                 println!("{}", request(&endpoint, "GET", "/scheduler/jobs", None)?);
+            }
+            SchedulerCommand::Get { id, endpoint } => {
+                println!(
+                    "{}",
+                    request(&endpoint, "GET", &format!("/scheduler/jobs/{id}"), None)?
+                );
             }
             SchedulerCommand::Schedule {
                 name,
@@ -315,6 +347,12 @@ async fn main() -> anyhow::Result<()> {
                 };
                 println!("{}", request(&endpoint, "GET", path, None)?);
             }
+            MemoryCommand::Get { id, endpoint } => {
+                println!(
+                    "{}",
+                    request(&endpoint, "GET", &format!("/memory/{id}"), None)?
+                );
+            }
             MemoryCommand::Create {
                 category,
                 key,
@@ -365,6 +403,12 @@ async fn main() -> anyhow::Result<()> {
         CliCommand::Plugins { command } => match command {
             PluginsCommand::List { endpoint } => {
                 println!("{}", request(&endpoint, "GET", "/plugins/manifests", None)?);
+            }
+            PluginsCommand::Get { id, endpoint } => {
+                println!(
+                    "{}",
+                    request(&endpoint, "GET", &format!("/plugins/manifests/{id}"), None)?
+                );
             }
         },
     }
@@ -426,10 +470,20 @@ async fn run_smoke() -> anyhow::Result<()> {
     let health = request_with_retry(&endpoint, "GET", "/health", None)?;
     let health_json: serde_json::Value = serde_json::from_str(&health)?;
     require_json_field(&health_json, "status", "ok")?;
+    require_nested_field(&health_json, &["contract", "name"], "jarvis.local-ipc")?;
     require_json_field(
         &health_json,
         "command_runtime",
         "routed-fake-local-model+first-party-plugins",
+    )?;
+
+    let contract = request(&endpoint, "GET", "/contract", None)?;
+    let contract_json: serde_json::Value = serde_json::from_str(&contract)?;
+    require_nested_field(&contract_json, &["contract", "name"], "jarvis.local-ipc")?;
+    require_array_contains_object_field(
+        &contract_json["endpoints"],
+        "path",
+        "/diagnostics/export",
     )?;
 
     let command_body = serde_json::to_string(&CommandRequest {
@@ -569,9 +623,14 @@ fn format_health(response_body: &str) -> anyhow::Result<String> {
         .get("scheduler_jobs")
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
+    let contract_version = health
+        .get("contract")
+        .and_then(|contract| contract.get("version"))
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
 
     Ok(format!(
-        "jarvis-core: {status} (runtime: {runtime}, paused: {paused}, scheduler_jobs: {scheduler_jobs})"
+        "jarvis-core: {status} (runtime: {runtime}, paused: {paused}, scheduler_jobs: {scheduler_jobs}, contract: v{contract_version})"
     ))
 }
 
