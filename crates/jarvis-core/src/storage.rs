@@ -449,6 +449,39 @@ impl SqliteRepository {
         Ok(())
     }
 
+    pub fn get_scheduler_job(&self, id: Uuid) -> JarvisResult<Option<SchedulerJob>> {
+        self.conn
+            .query_row(
+                "SELECT id, name, command, trigger, status, created_at, updated_at, cancelled_at, cancellation_reason
+                 FROM scheduler_jobs
+                 WHERE id = ?1",
+                params![id.to_string()],
+                scheduler_job_from_row,
+            )
+            .optional()
+            .map_err(storage_error)
+    }
+
+    pub fn mark_scheduler_job_running(&self, id: Uuid) -> JarvisResult<SchedulerJob> {
+        self.update_scheduler_job_status(id, SchedulerJobStatus::Running, None)
+    }
+
+    pub fn complete_scheduler_job(&self, id: Uuid) -> JarvisResult<SchedulerJob> {
+        self.update_scheduler_job_status(id, SchedulerJobStatus::Completed, None)
+    }
+
+    pub fn fail_scheduler_job(&self, id: Uuid) -> JarvisResult<SchedulerJob> {
+        self.update_scheduler_job_status(id, SchedulerJobStatus::Failed, None)
+    }
+
+    pub fn cancel_scheduler_job(
+        &self,
+        id: Uuid,
+        reason: impl Into<String>,
+    ) -> JarvisResult<SchedulerJob> {
+        self.update_scheduler_job_status(id, SchedulerJobStatus::Cancelled, Some(reason.into()))
+    }
+
     pub fn list_scheduler_jobs(&self) -> JarvisResult<Vec<SchedulerJob>> {
         let mut stmt = self
             .conn
@@ -462,6 +495,67 @@ impl SqliteRepository {
             .query_map([], scheduler_job_from_row)
             .map_err(storage_error)?;
         collect_rows(rows)
+    }
+
+    fn update_scheduler_job_status(
+        &self,
+        id: Uuid,
+        status: SchedulerJobStatus,
+        cancellation_reason: Option<String>,
+    ) -> JarvisResult<SchedulerJob> {
+        let current = self
+            .get_scheduler_job(id)?
+            .ok_or_else(|| JarvisError::Storage(format!("scheduler job not found: {id}")))?;
+
+        if current.status == SchedulerJobStatus::Cancelled
+            && status == SchedulerJobStatus::Cancelled
+        {
+            return Ok(current);
+        }
+
+        if matches!(
+            current.status,
+            SchedulerJobStatus::Completed
+                | SchedulerJobStatus::Cancelled
+                | SchedulerJobStatus::Failed
+        ) {
+            return Err(JarvisError::Storage(format!(
+                "terminal scheduler job cannot transition from {} to {}: {id}",
+                scheduler_status_to_str(current.status),
+                scheduler_status_to_str(status)
+            )));
+        }
+
+        let updated_at = Utc::now();
+        let cancelled_at = (status == SchedulerJobStatus::Cancelled).then_some(updated_at);
+        let changed = self
+            .conn
+            .execute(
+                "UPDATE scheduler_jobs
+                 SET status = ?1,
+                     updated_at = ?2,
+                     cancelled_at = ?3,
+                     cancellation_reason = CASE WHEN ?1 = 'cancelled' THEN ?4 ELSE cancellation_reason END
+                 WHERE id = ?5",
+                params![
+                    scheduler_status_to_str(status),
+                    to_db_time(updated_at),
+                    cancelled_at.map(to_db_time),
+                    cancellation_reason,
+                    id.to_string()
+                ],
+            )
+            .map_err(storage_error)?;
+
+        if changed == 0 {
+            return Err(JarvisError::Storage(format!(
+                "scheduler job not found after transition: {id}"
+            )));
+        }
+
+        self.get_scheduler_job(id)?.ok_or_else(|| {
+            JarvisError::Storage(format!("scheduler job not found after transition: {id}"))
+        })
     }
 
     #[cfg(test)]
@@ -1022,5 +1116,48 @@ mod tests {
             TriggerKind::Interval { every_seconds: 900 }
         );
         assert_eq!(jobs[0].cancellation_reason.as_deref(), Some("test cleanup"));
+    }
+
+    #[test]
+    fn scheduler_job_lifecycle_transitions_are_durable() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("jarvis.sqlite");
+        let repo = SqliteRepository::open(&db_path).unwrap();
+        let scheduler = crate::Scheduler::new();
+        let complete_job = scheduler
+            .schedule(crate::SchedulerJobSpec {
+                name: "complete".to_string(),
+                command: "record local completion".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .unwrap();
+        let fail_job = scheduler
+            .schedule(crate::SchedulerJobSpec {
+                name: "fail".to_string(),
+                command: "record local failure".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .unwrap();
+
+        repo.upsert_scheduler_job(&complete_job).unwrap();
+        repo.upsert_scheduler_job(&fail_job).unwrap();
+        repo.mark_scheduler_job_running(complete_job.id).unwrap();
+        let completed = repo.complete_scheduler_job(complete_job.id).unwrap();
+        let failed = repo.fail_scheduler_job(fail_job.id).unwrap();
+
+        assert_eq!(completed.status, SchedulerJobStatus::Completed);
+        assert_eq!(failed.status, SchedulerJobStatus::Failed);
+        assert!(repo.cancel_scheduler_job(completed.id, "too late").is_err());
+        drop(repo);
+
+        let repo = SqliteRepository::open(db_path).unwrap();
+        let jobs = repo.list_scheduler_jobs().unwrap();
+        assert_eq!(jobs.len(), 2);
+        assert!(jobs
+            .iter()
+            .any(|job| job.id == complete_job.id && job.status == SchedulerJobStatus::Completed));
+        assert!(jobs
+            .iter()
+            .any(|job| job.id == fail_job.id && job.status == SchedulerJobStatus::Failed));
     }
 }

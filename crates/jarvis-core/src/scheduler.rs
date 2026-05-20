@@ -73,6 +73,15 @@ impl SchedulerJob {
             cancellation_reason: None,
         })
     }
+
+    fn is_terminal(&self) -> bool {
+        matches!(
+            self.status,
+            SchedulerJobStatus::Completed
+                | SchedulerJobStatus::Cancelled
+                | SchedulerJobStatus::Failed
+        )
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -125,14 +134,52 @@ impl Scheduler {
             .get_mut(&id)
             .ok_or_else(|| JarvisError::Validation(format!("unknown scheduler job: {id}")))?;
 
-        if job.status == SchedulerJobStatus::Cancelled {
+        if job.is_terminal() {
             return Err(JarvisError::Validation(format!(
-                "cancelled scheduler job cannot be marked running: {id}"
+                "terminal scheduler job cannot be marked running: {id}"
             )));
         }
 
         let now = Utc::now();
         job.status = SchedulerJobStatus::Running;
+        job.updated_at = now;
+
+        Ok(job.clone())
+    }
+
+    pub fn complete(&self, id: Uuid) -> JarvisResult<SchedulerJob> {
+        let mut jobs = self.jobs.lock().expect("scheduler jobs lock poisoned");
+        let job = jobs
+            .get_mut(&id)
+            .ok_or_else(|| JarvisError::Validation(format!("unknown scheduler job: {id}")))?;
+
+        if job.is_terminal() {
+            return Err(JarvisError::Validation(format!(
+                "terminal scheduler job cannot be completed: {id}"
+            )));
+        }
+
+        let now = Utc::now();
+        job.status = SchedulerJobStatus::Completed;
+        job.updated_at = now;
+
+        Ok(job.clone())
+    }
+
+    pub fn fail(&self, id: Uuid) -> JarvisResult<SchedulerJob> {
+        let mut jobs = self.jobs.lock().expect("scheduler jobs lock poisoned");
+        let job = jobs
+            .get_mut(&id)
+            .ok_or_else(|| JarvisError::Validation(format!("unknown scheduler job: {id}")))?;
+
+        if job.is_terminal() {
+            return Err(JarvisError::Validation(format!(
+                "terminal scheduler job cannot be failed: {id}"
+            )));
+        }
+
+        let now = Utc::now();
+        job.status = SchedulerJobStatus::Failed;
         job.updated_at = now;
 
         Ok(job.clone())
@@ -148,6 +195,12 @@ impl Scheduler {
             return Ok(job.clone());
         }
 
+        if job.is_terminal() {
+            return Err(JarvisError::Validation(format!(
+                "terminal scheduler job cannot be cancelled: {id}"
+            )));
+        }
+
         let now = Utc::now();
         job.status = SchedulerJobStatus::Cancelled;
         job.updated_at = now;
@@ -157,11 +210,11 @@ impl Scheduler {
         Ok(job.clone())
     }
 
-    pub fn cancel_active(&self, reason: impl Into<String>) -> usize {
+    pub fn cancel_active_jobs(&self, reason: impl Into<String>) -> Vec<SchedulerJob> {
         let reason = reason.into();
         let now = Utc::now();
-        let mut cancelled = 0;
         let mut jobs = self.jobs.lock().expect("scheduler jobs lock poisoned");
+        let mut cancelled = Vec::new();
 
         for job in jobs.values_mut() {
             if matches!(
@@ -172,11 +225,15 @@ impl Scheduler {
                 job.updated_at = now;
                 job.cancelled_at = Some(now);
                 job.cancellation_reason = Some(reason.clone());
-                cancelled += 1;
+                cancelled.push(job.clone());
             }
         }
 
         cancelled
+    }
+
+    pub fn cancel_active(&self, reason: impl Into<String>) -> usize {
+        self.cancel_active_jobs(reason).len()
     }
 }
 
@@ -267,5 +324,33 @@ mod tests {
         }));
         assert!(cancelled.iter().any(|job| job.id == scheduled.id));
         assert!(cancelled.iter().any(|job| job.id == running.id));
+    }
+
+    #[test]
+    fn completes_and_fails_open_jobs() {
+        let scheduler = Scheduler::new();
+        let completed = scheduler
+            .schedule(SchedulerJobSpec {
+                name: "completed".to_string(),
+                command: "record completion".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .expect("completed");
+        let failed = scheduler
+            .schedule(SchedulerJobSpec {
+                name: "failed".to_string(),
+                command: "record failure".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .expect("failed");
+
+        scheduler.mark_running(completed.id).expect("mark running");
+        let completed = scheduler.complete(completed.id).expect("complete");
+        let failed = scheduler.fail(failed.id).expect("fail");
+
+        assert_eq!(completed.status, SchedulerJobStatus::Completed);
+        assert_eq!(failed.status, SchedulerJobStatus::Failed);
+        assert!(scheduler.cancel(completed.id, "too late").is_err());
+        assert!(scheduler.mark_running(failed.id).is_err());
     }
 }
