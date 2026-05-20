@@ -6,9 +6,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::{AuditEntry, JarvisError, JarvisResult, Sensitivity, TaskRecord, TaskStatus};
+use crate::{
+    AuditEntry, JarvisError, JarvisResult, SchedulerJob, SchedulerJobStatus, Sensitivity,
+    TaskRecord, TaskStatus, TriggerKind,
+};
 
-const CURRENT_SCHEMA_VERSION: i64 = 1;
+const CURRENT_SCHEMA_VERSION: i64 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EmergencyPauseState {
@@ -416,6 +419,51 @@ impl SqliteRepository {
         })
     }
 
+    pub fn upsert_scheduler_job(&self, job: &SchedulerJob) -> JarvisResult<()> {
+        self.conn
+            .execute(
+                "INSERT INTO scheduler_jobs
+                 (id, name, command, trigger, status, created_at, updated_at, cancelled_at, cancellation_reason)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                 ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    command = excluded.command,
+                    trigger = excluded.trigger,
+                    status = excluded.status,
+                    updated_at = excluded.updated_at,
+                    cancelled_at = excluded.cancelled_at,
+                    cancellation_reason = excluded.cancellation_reason",
+                params![
+                    job.id.to_string(),
+                    &job.name,
+                    &job.command,
+                    trigger_to_json(&job.trigger)?,
+                    scheduler_status_to_str(job.status),
+                    to_db_time(job.created_at),
+                    to_db_time(job.updated_at),
+                    job.cancelled_at.map(to_db_time),
+                    &job.cancellation_reason,
+                ],
+            )
+            .map_err(storage_error)?;
+        Ok(())
+    }
+
+    pub fn list_scheduler_jobs(&self) -> JarvisResult<Vec<SchedulerJob>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, name, command, trigger, status, created_at, updated_at, cancelled_at, cancellation_reason
+                 FROM scheduler_jobs
+                 ORDER BY created_at ASC, id ASC",
+            )
+            .map_err(storage_error)?;
+        let rows = stmt
+            .query_map([], scheduler_job_from_row)
+            .map_err(storage_error)?;
+        collect_rows(rows)
+    }
+
     #[cfg(test)]
     fn raw_connection(&self) -> &Connection {
         &self.conn
@@ -448,6 +496,9 @@ impl SqliteRepository {
         let version = self.schema_version()?;
         if version < 1 {
             self.apply_migration_1()?;
+        }
+        if version < 2 {
+            self.apply_migration_2()?;
         }
 
         let migrated = self.schema_version()?;
@@ -557,7 +608,49 @@ impl SqliteRepository {
 
         tx.execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
-            params![CURRENT_SCHEMA_VERSION, now],
+            params![1, now],
+        )
+        .map_err(storage_error)?;
+
+        tx.commit().map_err(storage_error)?;
+        Ok(())
+    }
+
+    fn apply_migration_2(&self) -> JarvisResult<()> {
+        let now = to_db_time(Utc::now());
+        let tx = self.conn.unchecked_transaction().map_err(storage_error)?;
+
+        tx.execute_batch(
+            "
+                CREATE TABLE scheduler_jobs (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    name TEXT NOT NULL,
+                    command TEXT NOT NULL,
+                    trigger TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN (
+                        'scheduled',
+                        'running',
+                        'completed',
+                        'cancelled',
+                        'failed'
+                    )),
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    cancelled_at TEXT NULL,
+                    cancellation_reason TEXT NULL
+                );
+
+                CREATE INDEX idx_scheduler_jobs_status_updated
+                    ON scheduler_jobs (status, updated_at);
+                CREATE INDEX idx_scheduler_jobs_created
+                    ON scheduler_jobs (created_at);
+                ",
+        )
+        .map_err(storage_error)?;
+
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+            params![2, now],
         )
         .map_err(storage_error)?;
 
@@ -614,6 +707,23 @@ fn memory_item_from_row(row: &Row<'_>) -> rusqlite::Result<MemoryItem> {
     })
 }
 
+fn scheduler_job_from_row(row: &Row<'_>) -> rusqlite::Result<SchedulerJob> {
+    Ok(SchedulerJob {
+        id: parse_uuid(&row.get::<_, String>(0)?)?,
+        name: row.get(1)?,
+        command: row.get(2)?,
+        trigger: trigger_from_json(&row.get::<_, String>(3)?)?,
+        status: scheduler_status_from_str(&row.get::<_, String>(4)?)?,
+        created_at: parse_db_time(&row.get::<_, String>(5)?)?,
+        updated_at: parse_db_time(&row.get::<_, String>(6)?)?,
+        cancelled_at: row
+            .get::<_, Option<String>>(7)?
+            .map(|time| parse_db_time(&time))
+            .transpose()?,
+        cancellation_reason: row.get(8)?,
+    })
+}
+
 fn collect_rows<T>(rows: impl Iterator<Item = rusqlite::Result<T>>) -> JarvisResult<Vec<T>> {
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(storage_error)
@@ -651,6 +761,33 @@ fn task_status_to_str(status: &TaskStatus) -> &'static str {
 
 fn task_status_from_str(value: &str) -> rusqlite::Result<TaskStatus> {
     serde_json::from_value(json!(value)).map_err(|err| {
+        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(err))
+    })
+}
+
+fn scheduler_status_to_str(status: SchedulerJobStatus) -> &'static str {
+    match status {
+        SchedulerJobStatus::Scheduled => "scheduled",
+        SchedulerJobStatus::Running => "running",
+        SchedulerJobStatus::Completed => "completed",
+        SchedulerJobStatus::Cancelled => "cancelled",
+        SchedulerJobStatus::Failed => "failed",
+    }
+}
+
+fn scheduler_status_from_str(value: &str) -> rusqlite::Result<SchedulerJobStatus> {
+    serde_json::from_value(json!(value)).map_err(|err| {
+        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(err))
+    })
+}
+
+fn trigger_to_json(trigger: &TriggerKind) -> JarvisResult<String> {
+    serde_json::to_string(trigger)
+        .map_err(|err| JarvisError::Storage(format!("serialize scheduler trigger: {err}")))
+}
+
+fn trigger_from_json(value: &str) -> rusqlite::Result<TriggerKind> {
+    serde_json::from_str(value).map_err(|err| {
         rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(err))
     })
 }
@@ -854,5 +991,36 @@ mod tests {
 
         repo.delete_memory_item(created.id).unwrap();
         assert!(repo.create_memory_item(item).is_ok());
+    }
+
+    #[test]
+    fn scheduler_jobs_persist_trigger_status_and_cancellation() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("jarvis.sqlite");
+        let repo = SqliteRepository::open(&db_path).unwrap();
+        let scheduler = crate::Scheduler::new();
+        let job = scheduler
+            .schedule(crate::SchedulerJobSpec {
+                name: "daily review".to_string(),
+                command: "summarize open loops".to_string(),
+                trigger: TriggerKind::Interval { every_seconds: 900 },
+            })
+            .unwrap();
+
+        repo.upsert_scheduler_job(&job).unwrap();
+        let cancelled = scheduler.cancel(job.id, "test cleanup").unwrap();
+        repo.upsert_scheduler_job(&cancelled).unwrap();
+        drop(repo);
+
+        let repo = SqliteRepository::open(db_path).unwrap();
+        let jobs = repo.list_scheduler_jobs().unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].id, job.id);
+        assert_eq!(jobs[0].status, SchedulerJobStatus::Cancelled);
+        assert_eq!(
+            jobs[0].trigger,
+            TriggerKind::Interval { every_seconds: 900 }
+        );
+        assert_eq!(jobs[0].cancellation_reason.as_deref(), Some("test cleanup"));
     }
 }

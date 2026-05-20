@@ -154,15 +154,17 @@ sequenceDiagram
   permission metadata, approval-required handling, proactive-action checks,
   timeout handling, cooperative cancellation signal, and two deterministic
   first-party test plugins.
-- `jarvis-core::scheduler`: Inspectable in-memory scheduler jobs with manual,
-  one-time, and interval trigger contracts plus cancellation support.
-- `jarvis-core::storage`: SQLite schema migration version 1 for tasks,
-  append-only audit entries, emergency pause, and memory items with provenance,
-  sensitivity, review, and soft-delete fields.
+- `jarvis-core::scheduler`: Inspectable scheduler jobs with manual, one-time,
+  and interval trigger contracts plus cancellation support. Repository-backed
+  IPC state restores and updates scheduler jobs through SQLite.
+- `jarvis-core::storage`: SQLite schema migrations for tasks, append-only
+  audit entries, emergency pause, memory items with provenance/sensitivity/
+  review/soft-delete fields, and durable scheduler jobs.
 - `jarvis-cli`: Local CLI for serving the IPC API with optional `--db-path`
   SQLite backing, calling health/command/pause/task/audit/memory/plugin
-  endpoints, listing/scheduling/cancelling scheduler jobs over HTTP, and
-  running `jarvis smoke` against ephemeral local servers.
+  endpoints, exporting redacted diagnostics, listing/scheduling/cancelling
+  scheduler jobs over HTTP, and running `jarvis smoke` against ephemeral local
+  servers.
 - `apps/mac/JarvisMacCore`: Swift IPC client and command-console model that
   decode the Rust health/command/pause JSON contracts, including task, route,
   step, audit, and plugin-result evidence from command responses.
