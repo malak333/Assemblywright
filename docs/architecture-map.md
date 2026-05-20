@@ -3,15 +3,17 @@
 Jarvis is a local-first macOS assistant foundation. The current repository
 contains a Rust workspace with the core contracts, loopback IPC server,
 SQLite-backed repository primitives, policy/model-routing rules, in-process
-plugin contracts, scheduler state, and CLI client. The Swift/SwiftUI Mac shell
-from `DESIGN.md` remains an end-goal surface, not an implemented app in this
-worktree.
+plugin contracts, scheduler state, CLI client, and a first Swift/SwiftUI Mac
+shell scaffold under `apps/mac`.
 
 ## Current Implementation
 
 ```mermaid
 flowchart LR
     User["User or local test operator"] --> CLI["jarvis-cli"]
+    User --> MacShell["JarvisMacApp SwiftUI scaffold"]
+    MacShell --> MacCore["JarvisMacCore IPC client and console model"]
+    MacCore -->|HTTP on configured core URL| IPC
     CLI -->|HTTP on 127.0.0.1 by default| IPC["jarvis-core::ipc Axum server"]
 
     IPC --> IpcState["IpcState"]
@@ -60,6 +62,13 @@ composed into the command endpoint as autonomous tool-calling behavior.
 |-- Cargo.toml
 |-- DESIGN.md
 |-- README.md
+|-- apps/
+|   `-- mac/
+|       |-- Package.swift
+|       |-- Sources/
+|       |   |-- JarvisMacApp/
+|       |   `-- JarvisMacCore/
+|       `-- Tests/JarvisMacCoreTests/
 |-- crates/
 |   |-- jarvis-cli/
 |   |   `-- src/main.rs
@@ -111,6 +120,10 @@ composed into the command endpoint as autonomous tool-calling behavior.
 - `jarvis-cli`: Local CLI for serving the IPC API, calling health/command/pause
   endpoints, listing/scheduling/cancelling scheduler jobs over HTTP, and running
   `jarvis smoke` against an ephemeral local server.
+- `apps/mac/JarvisMacCore`: Swift IPC client and command-console model that
+  decode the Rust health/command/pause JSON contracts.
+- `apps/mac/JarvisMacApp`: SwiftUI command-console scaffold with health status,
+  transcript, send, pause/resume, and refresh controls.
 
 ## End-Goal Production Architecture
 
@@ -148,11 +161,11 @@ flowchart TB
     PauseUI["Emergency pause control"] --> PolicyProd
 ```
 
-Production readiness for that end-state requires the Swift app, a versioned app
-IPC client, real local model provider integration, approval UI, plugin
-installation/runtime hardening, packaged app smoke tests, and operational
-release evidence. The current repository proves only the implemented Rust
-surfaces listed above.
+Production readiness for that end-state still requires a packaged `.app`
+release, real local model provider integration, approval UI, plugin
+installation/runtime hardening, voice support, packaged app smoke tests, and
+operational release evidence. The current repository proves only the implemented
+Rust and Swift scaffold surfaces listed above.
 
 ## Data Ownership
 
@@ -172,5 +185,5 @@ surfaces listed above.
 Current evidence supports a Rust foundation claim: the workspace has typed
 contracts and tested scaffolding for IPC, policy, routing, runtime, storage,
 plugins, scheduler, and CLI behavior. It does not support a claim that Jarvis is
-a finished desktop assistant, autonomous agent, packaged Mac app, plugin
+a finished voice assistant, autonomous agent, packaged Mac app, plugin
 marketplace, or production cloud-integrated system.
