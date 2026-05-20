@@ -15,7 +15,8 @@ pub use ipc::{
 };
 pub use model::{
     ChatGptProviderConfig, FakeLocalModel, LocalModelConfig, ModelExecutor, ModelProvider,
-    ModelRequest, ModelResponse, ModelRoute, ProviderConfig, ProviderStatus,
+    ModelRequest, ModelResponse, ModelRoute, ModelToolRequest, ModelToolResult, ProviderConfig,
+    ProviderStatus,
 };
 pub use plugin::{
     plugin_permission_scopes, CancellationBehavior, CancellationSignal, EchoPlugin,

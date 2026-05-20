@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::types::JarvisResult;
 
@@ -110,6 +111,7 @@ pub struct ModelRequest {
     pub session_id: uuid::Uuid,
     pub user_input: String,
     pub step_index: u32,
+    pub tool_results: Vec<ModelToolResult>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -117,6 +119,33 @@ pub struct ModelResponse {
     pub route: ModelRoute,
     pub message: String,
     pub complete: bool,
+    #[serde(default)]
+    pub tool_requests: Vec<ModelToolRequest>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelToolRequest {
+    pub plugin_id: String,
+    pub action: String,
+    pub input: Value,
+}
+
+impl ModelToolRequest {
+    pub fn new(plugin_id: impl Into<String>, action: impl Into<String>, input: Value) -> Self {
+        Self {
+            plugin_id: plugin_id.into(),
+            action: action.into(),
+            input,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelToolResult {
+    pub plugin_id: String,
+    pub action: String,
+    pub status: String,
+    pub output: Value,
 }
 
 #[async_trait]
@@ -128,6 +157,7 @@ pub trait ModelExecutor: Send + Sync {
 pub struct FakeLocalModel {
     response_prefix: String,
     complete_after_steps: u32,
+    tool_requests: Vec<ModelToolRequest>,
 }
 
 impl FakeLocalModel {
@@ -135,11 +165,17 @@ impl FakeLocalModel {
         Self {
             response_prefix: response_prefix.into(),
             complete_after_steps: 1,
+            tool_requests: Vec::new(),
         }
     }
 
     pub fn complete_after_steps(mut self, steps: u32) -> Self {
         self.complete_after_steps = steps.max(1);
+        self
+    }
+
+    pub fn with_tool_request(mut self, request: ModelToolRequest) -> Self {
+        self.tool_requests.push(request);
         self
     }
 }
@@ -158,6 +194,11 @@ impl ModelExecutor for FakeLocalModel {
             route: ModelRoute::fake_local("local model is the default route for v1 commands"),
             message: format!("{}: {}", self.response_prefix, request.user_input),
             complete,
+            tool_requests: if request.step_index == 0 {
+                self.tool_requests.clone()
+            } else {
+                Vec::new()
+            },
         })
     }
 }

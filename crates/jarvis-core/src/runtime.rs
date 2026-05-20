@@ -6,7 +6,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::model::{ModelExecutor, ModelRequest, ModelResponse, ModelRoute, ProviderConfig};
+use crate::model::{
+    ModelExecutor, ModelRequest, ModelResponse, ModelRoute, ModelToolRequest, ModelToolResult,
+    ProviderConfig,
+};
+use crate::plugin::{
+    plugin_permission_scopes, PluginCallRequest, PluginCallResult, PluginCallStatus, PluginHost,
+    PluginSource,
+};
 use crate::router::{
     ModelProvider as RoutedModelProvider, ModelRouteRecord, ModelRouteRequest, ModelRouter,
     RouteOutcome,
@@ -18,6 +25,8 @@ use crate::CapabilityScope;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeConfig {
     pub max_steps: u32,
+    #[serde(default = "default_max_tool_calls_per_step")]
+    pub max_tool_calls_per_step: u32,
     pub provider_config: ProviderConfig,
 }
 
@@ -25,8 +34,14 @@ impl RuntimeConfig {
     pub fn new(max_steps: u32) -> Self {
         Self {
             max_steps,
+            max_tool_calls_per_step: 4,
             provider_config: ProviderConfig::local_only(),
         }
+    }
+
+    pub fn with_max_tool_calls_per_step(mut self, max_tool_calls_per_step: u32) -> Self {
+        self.max_tool_calls_per_step = max_tool_calls_per_step;
+        self
     }
 
     pub fn with_provider_config(mut self, provider_config: ProviderConfig) -> Self {
@@ -39,6 +54,10 @@ impl Default for RuntimeConfig {
     fn default() -> Self {
         Self::new(8)
     }
+}
+
+fn default_max_tool_calls_per_step() -> u32 {
+    4
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,6 +92,8 @@ pub struct RuntimeStep {
     pub index: u32,
     pub message: String,
     pub complete: bool,
+    #[serde(default)]
+    pub tool_results: Vec<ModelToolResult>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,6 +103,8 @@ pub struct CommandResponse {
     pub route: Option<ModelRoute>,
     pub route_evidence: Option<ModelRouteRecord>,
     pub steps: Vec<RuntimeStep>,
+    #[serde(default)]
+    pub tool_results: Vec<ModelToolResult>,
     pub audit_entries: Vec<AuditEntry>,
 }
 
@@ -216,6 +239,7 @@ pub struct ConversationRuntime<M, H = NoopRuntimeHooks, S = NoopRuntimeCommandSt
     model: M,
     hooks: H,
     command_store: S,
+    plugin_host: PluginHost,
 }
 
 impl<M> ConversationRuntime<M, NoopRuntimeHooks> {
@@ -249,11 +273,18 @@ impl<M, H, S> ConversationRuntime<M, H, S> {
             model,
             hooks,
             command_store,
+            plugin_host: PluginHost::with_first_party_plugins()
+                .expect("first-party plugin manifests must validate"),
         }
     }
 
     pub fn control(&self) -> RuntimeControl {
         self.control.clone()
+    }
+
+    pub fn with_plugin_host(mut self, plugin_host: PluginHost) -> Self {
+        self.plugin_host = plugin_host;
+        self
     }
 }
 
@@ -385,6 +416,7 @@ where
         let mut route = None;
         let route_evidence = Some(route_record);
         let mut steps = Vec::new();
+        let mut tool_results = Vec::new();
 
         for step_index in 0..self.config.max_steps {
             if self.control.is_emergency_paused() {
@@ -481,6 +513,7 @@ where
                     session_id: task.session_id,
                     user_input: task.user_input.clone(),
                     step_index,
+                    tool_results: tool_results.clone(),
                 })
                 .await
             {
@@ -508,15 +541,73 @@ where
                 model_audit_entry(task.id, step_index, &model_response),
             )?;
 
+            if !model_response.tool_requests.is_empty() {
+                self.record_audit(
+                    &mut audit_entries,
+                    tool_plan_audit_entry(task.id, step_index, &model_response.tool_requests),
+                )?;
+            }
+
+            let step_tool_results = match self.execute_tool_plan(
+                &mut task,
+                request.sensitivity,
+                step_index,
+                &model_response.tool_requests,
+                &mut audit_entries,
+            )? {
+                ToolPlanOutcome::Completed(results) => results,
+                ToolPlanOutcome::WaitingForApproval(results, message) => {
+                    tool_results.extend(results.clone());
+                    let step = RuntimeStep {
+                        index: step_index,
+                        message: model_response.message,
+                        complete: false,
+                        tool_results: results,
+                    };
+                    self.hooks.model_step_completed(&task, &step);
+                    steps.push(step);
+                    return Ok(self.finish(
+                        task,
+                        message,
+                        route,
+                        route_evidence,
+                        steps,
+                        audit_entries,
+                    ));
+                }
+                ToolPlanOutcome::Blocked(results, message) => {
+                    tool_results.extend(results.clone());
+                    let step = RuntimeStep {
+                        index: step_index,
+                        message: model_response.message,
+                        complete: false,
+                        tool_results: results,
+                    };
+                    self.hooks.model_step_completed(&task, &step);
+                    steps.push(step);
+                    return Ok(self.finish(
+                        task,
+                        message,
+                        route,
+                        route_evidence,
+                        steps,
+                        audit_entries,
+                    ));
+                }
+            };
+            tool_results.extend(step_tool_results.clone());
+            let step_complete = model_response.complete && model_response.tool_requests.is_empty();
+
             let step = RuntimeStep {
                 index: step_index,
                 message: model_response.message.clone(),
-                complete: model_response.complete,
+                complete: step_complete,
+                tool_results: step_tool_results,
             };
             self.hooks.model_step_completed(&task, &step);
             steps.push(step);
 
-            if model_response.complete {
+            if step_complete {
                 self.update_task_status(&mut task, TaskStatus::Completed)?;
                 self.record_audit(
                     &mut audit_entries,
@@ -572,6 +663,190 @@ where
         Ok(())
     }
 
+    fn execute_tool_plan(
+        &self,
+        task: &mut TaskRecord,
+        sensitivity: Sensitivity,
+        step_index: u32,
+        tool_requests: &[ModelToolRequest],
+        audit_entries: &mut Vec<AuditEntry>,
+    ) -> JarvisResult<ToolPlanOutcome> {
+        if tool_requests.is_empty() {
+            return Ok(ToolPlanOutcome::Completed(Vec::new()));
+        }
+
+        if tool_requests.len() as u32 > self.config.max_tool_calls_per_step {
+            self.update_task_status(task, TaskStatus::Failed)?;
+            self.record_audit(
+                audit_entries,
+                AuditEntry::new(
+                    Some(task.id),
+                    "tool_plan_rejected",
+                    "model planned more tool calls than the runtime allows",
+                    json!({
+                        "step_index": step_index,
+                        "planned_tool_calls": tool_requests.len(),
+                        "max_tool_calls_per_step": self.config.max_tool_calls_per_step,
+                    }),
+                ),
+            )?;
+            return Ok(ToolPlanOutcome::Blocked(
+                Vec::new(),
+                "Command failed because the model planned too many tool calls.".to_string(),
+            ));
+        }
+
+        let mut results = Vec::new();
+        for (tool_index, tool_request) in tool_requests.iter().enumerate() {
+            let manifest = match self.validate_tool_request(task.id, step_index, tool_request) {
+                Ok(manifest) => manifest,
+                Err(error) => {
+                    self.update_task_status(task, TaskStatus::Failed)?;
+                    self.record_audit(
+                        audit_entries,
+                        AuditEntry::new(
+                            Some(task.id),
+                            "tool_request_rejected",
+                            "model-planned tool request failed validation",
+                            json!({
+                                "step_index": step_index,
+                                "tool_index": tool_index,
+                                "plugin_id": tool_request.plugin_id,
+                                "action": tool_request.action,
+                                "error": error.to_string(),
+                            }),
+                        ),
+                    )?;
+                    return Ok(ToolPlanOutcome::Blocked(
+                        results,
+                        format!("Tool request rejected: {error}"),
+                    ));
+                }
+            };
+            let action = manifest
+                .action(&tool_request.action)
+                .expect("validate_tool_request confirmed action exists");
+            let granted_scopes = plugin_permission_scopes(&action.permissions);
+            self.record_audit(
+                audit_entries,
+                AuditEntry::new(
+                    Some(task.id),
+                    "tool_policy_check",
+                    "runtime submitted model-planned tool call to plugin policy",
+                    json!({
+                        "step_index": step_index,
+                        "tool_index": tool_index,
+                        "plugin_id": tool_request.plugin_id,
+                        "action": tool_request.action,
+                        "risk_tier": action.risk_tier,
+                        "granted_scopes": granted_scopes,
+                    }),
+                ),
+            )?;
+
+            let call_result = match self.plugin_host.execute(
+                PluginCallRequest::reactive(
+                    tool_request.plugin_id.clone(),
+                    tool_request.action.clone(),
+                    tool_request.input.clone(),
+                )
+                .with_granted_scopes(granted_scopes)
+                .with_sensitivity(sensitivity),
+            ) {
+                Ok(result) => result,
+                Err(error) => {
+                    let status = if matches!(error, crate::JarvisError::PolicyBlocked(_)) {
+                        TaskStatus::Blocked
+                    } else {
+                        TaskStatus::Failed
+                    };
+                    self.update_task_status(task, status)?;
+                    self.record_audit(
+                        audit_entries,
+                        AuditEntry::new(
+                            Some(task.id),
+                            "tool_execution_blocked",
+                            "model-planned tool call was blocked before execution",
+                            json!({
+                                "step_index": step_index,
+                                "tool_index": tool_index,
+                                "plugin_id": tool_request.plugin_id,
+                                "action": tool_request.action,
+                                "error": error.to_string(),
+                            }),
+                        ),
+                    )?;
+                    return Ok(ToolPlanOutcome::Blocked(
+                        results,
+                        format!("Tool execution blocked: {error}"),
+                    ));
+                }
+            };
+
+            let result = model_tool_result(&call_result);
+            self.record_audit(
+                audit_entries,
+                tool_result_audit_entry(task.id, step_index, tool_index, &call_result),
+            )?;
+            results.push(result);
+
+            if call_result.status == PluginCallStatus::ApprovalRequired {
+                self.update_task_status(task, TaskStatus::WaitingForApproval)?;
+                return Ok(ToolPlanOutcome::WaitingForApproval(
+                    results,
+                    "Tool execution requires approval before continuing.".to_string(),
+                ));
+            }
+        }
+
+        Ok(ToolPlanOutcome::Completed(results))
+    }
+
+    fn validate_tool_request(
+        &self,
+        task_id: Uuid,
+        step_index: u32,
+        request: &ModelToolRequest,
+    ) -> JarvisResult<crate::PluginManifest> {
+        if request.plugin_id.trim().is_empty() {
+            return Err(crate::JarvisError::Validation(
+                "tool request plugin_id is required".to_string(),
+            ));
+        }
+        if request.action.trim().is_empty() {
+            return Err(crate::JarvisError::Validation(
+                "tool request action is required".to_string(),
+            ));
+        }
+        if !request.input.is_object() {
+            return Err(crate::JarvisError::Validation(
+                "tool request input must be an object".to_string(),
+            ));
+        }
+
+        let manifest = self.plugin_host.manifest(&request.plugin_id)?;
+        if manifest.source != PluginSource::FirstParty {
+            return Err(crate::JarvisError::PolicyBlocked(
+                "runtime only executes first-party model-planned tools".to_string(),
+            ));
+        }
+        let action = manifest.action(&request.action).ok_or_else(|| {
+            crate::JarvisError::Plugin(format!(
+                "plugin {} does not declare action {}",
+                request.plugin_id, request.action
+            ))
+        })?;
+        action.input_schema.validate_value(
+            &format!(
+                "{}.{} model-planned input for task {task_id} step {step_index}",
+                request.plugin_id, request.action
+            ),
+            &request.input,
+        )?;
+
+        Ok(manifest)
+    }
+
     fn finish(
         &self,
         task: TaskRecord,
@@ -581,12 +856,17 @@ where
         steps: Vec<RuntimeStep>,
         audit_entries: Vec<AuditEntry>,
     ) -> CommandResponse {
+        let tool_results = steps
+            .iter()
+            .flat_map(|step| step.tool_results.clone())
+            .collect();
         let response = CommandResponse {
             task,
             message: message.into(),
             route,
             route_evidence,
             steps,
+            tool_results,
             audit_entries,
         };
         self.hooks.task_finished(&response.task, &response);
@@ -608,8 +888,66 @@ fn model_audit_entry(task_id: Uuid, step_index: u32, response: &ModelResponse) -
             "provider": response.route.provider,
             "model": response.route.model,
             "complete": response.complete,
+            "planned_tool_calls": response.tool_requests.len(),
         }),
     )
+}
+
+fn tool_plan_audit_entry(
+    task_id: Uuid,
+    step_index: u32,
+    tool_requests: &[ModelToolRequest],
+) -> AuditEntry {
+    AuditEntry::new(
+        Some(task_id),
+        "tool_plan_received",
+        "model planned tool calls",
+        json!({
+            "step_index": step_index,
+            "tool_calls": tool_requests.iter().map(|request| {
+                json!({
+                    "plugin_id": request.plugin_id,
+                    "action": request.action,
+                    "input_is_object": request.input.is_object(),
+                })
+            }).collect::<Vec<_>>(),
+        }),
+    )
+}
+
+fn tool_result_audit_entry(
+    task_id: Uuid,
+    step_index: u32,
+    tool_index: usize,
+    result: &PluginCallResult,
+) -> AuditEntry {
+    AuditEntry::new(
+        Some(task_id),
+        "tool_execution_result",
+        "model-planned tool call completed policy and host execution",
+        json!({
+            "step_index": step_index,
+            "tool_index": tool_index,
+            "plugin_id": result.metadata.plugin_id,
+            "action": result.metadata.action,
+            "status": result.status,
+            "approval_required": result.metadata.approval_required,
+            "approval_status": result.metadata.approval_status,
+            "risk_tier": result.metadata.risk_tier,
+        }),
+    )
+}
+
+fn model_tool_result(result: &PluginCallResult) -> ModelToolResult {
+    ModelToolResult {
+        plugin_id: result.metadata.plugin_id.clone(),
+        action: result.metadata.action.clone(),
+        status: serde_json::to_value(&result.status)
+            .ok()
+            .and_then(|value| value.as_str().map(ToOwned::to_owned))
+            .unwrap_or_else(|| "failed".to_string()),
+        output: result.output.clone(),
+    }
 }
 
 fn route_audit_entry(task_id: Uuid, record: &ModelRouteRecord) -> AuditEntry {
@@ -630,6 +968,12 @@ fn route_audit_entry(task_id: Uuid, record: &ModelRouteRecord) -> AuditEntry {
     )
 }
 
+enum ToolPlanOutcome {
+    Completed(Vec<ModelToolResult>),
+    WaitingForApproval(Vec<ModelToolResult>, String),
+    Blocked(Vec<ModelToolResult>, String),
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{
@@ -638,9 +982,10 @@ mod tests {
     };
 
     use super::*;
-    use crate::model::{FakeLocalModel, ModelProvider, ProviderConfig};
+    use crate::model::{FakeLocalModel, ModelProvider, ModelToolRequest, ProviderConfig};
     use crate::router::RouteOutcome;
     use crate::types::TaskStatus;
+    use serde_json::json;
 
     #[tokio::test]
     async fn executes_command_with_fake_local_model() {
@@ -825,6 +1170,137 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn executes_model_planned_first_party_tool_call() {
+        let runtime = ConversationRuntime::new(FakeLocalModel::default().with_tool_request(
+            ModelToolRequest::new("fake_echo", "echo", json!({ "message": "from plan" })),
+        ));
+
+        let response = runtime
+            .execute_command(CommandRequest::new("use echo tool"))
+            .await
+            .expect("command should execute");
+
+        assert_eq!(response.task.status, TaskStatus::Completed);
+        assert_eq!(response.steps.len(), 2);
+        assert!(!response.steps[0].complete);
+        assert_eq!(response.tool_results.len(), 1);
+        assert_eq!(response.tool_results[0].plugin_id, "fake_echo");
+        assert_eq!(response.tool_results[0].action, "echo");
+        assert_eq!(response.tool_results[0].status, "completed");
+        assert_eq!(
+            response.tool_results[0].output,
+            json!({ "message": "from plan" })
+        );
+        assert_eq!(response.steps[0].tool_results, response.tool_results);
+        let event_types = response
+            .audit_entries
+            .iter()
+            .map(|entry| entry.event_type.as_str())
+            .collect::<Vec<_>>();
+        assert!(event_types.contains(&"tool_plan_received"));
+        assert!(event_types.contains(&"tool_policy_check"));
+        assert!(event_types.contains(&"tool_execution_result"));
+    }
+
+    #[tokio::test]
+    async fn feeds_tool_results_back_into_next_model_step() {
+        let runtime = ConversationRuntime::new(ToolAwareModel);
+
+        let response = runtime
+            .execute_command(CommandRequest::new("inspect tool result"))
+            .await
+            .expect("command should execute");
+
+        assert_eq!(response.task.status, TaskStatus::Completed);
+        assert_eq!(response.steps.len(), 2);
+        assert_eq!(response.tool_results.len(), 1);
+        assert_eq!(response.message, "saw tool result: from tool-aware model");
+    }
+
+    #[tokio::test]
+    async fn private_model_planned_tool_call_waits_for_approval_before_execution() {
+        let runtime = ConversationRuntime::new(FakeLocalModel::default().with_tool_request(
+            ModelToolRequest::new("fake_echo", "echo", json!({ "message": "private" })),
+        ));
+
+        let response = runtime
+            .execute_command(
+                CommandRequest::new("use echo tool on private context")
+                    .with_sensitivity(Sensitivity::Private),
+            )
+            .await
+            .expect("approval requirement should return structured response");
+
+        assert_eq!(response.task.status, TaskStatus::WaitingForApproval);
+        assert_eq!(response.tool_results.len(), 1);
+        assert_eq!(response.tool_results[0].status, "approval_required");
+        assert_eq!(
+            response.tool_results[0].output,
+            json!({ "approval_required": true })
+        );
+        assert!(response
+            .audit_entries
+            .iter()
+            .any(|entry| entry.event_type == "tool_execution_result"
+                && entry.payload["approval_required"] == true
+                && entry.payload["approval_status"] == "pending"));
+    }
+
+    #[tokio::test]
+    async fn rejects_invalid_model_planned_tool_request_before_execution() {
+        let runtime = ConversationRuntime::new(FakeLocalModel::default().with_tool_request(
+            ModelToolRequest::new("fake_echo", "echo", json!("not an object")),
+        ));
+
+        let response = runtime
+            .execute_command(CommandRequest::new("use malformed tool"))
+            .await
+            .expect("validation failure should return structured response");
+
+        assert_eq!(response.task.status, TaskStatus::Failed);
+        assert!(response.tool_results.is_empty());
+        assert!(response.message.contains("Tool request rejected"));
+        assert!(response.audit_entries.iter().any(|entry| entry.event_type
+            == "tool_request_rejected"
+            && entry.payload["error"]
+                .as_str()
+                .expect("error")
+                .contains("input must be an object")));
+    }
+
+    #[tokio::test]
+    async fn rejects_tool_plan_that_exceeds_runtime_bound() {
+        let runtime = ConversationRuntime::with_parts(
+            RuntimeConfig::default().with_max_tool_calls_per_step(1),
+            RuntimeControl::default(),
+            FakeLocalModel::default()
+                .with_tool_request(ModelToolRequest::new(
+                    "fake_echo",
+                    "echo",
+                    json!({ "message": "one" }),
+                ))
+                .with_tool_request(ModelToolRequest::new(
+                    "fake_echo",
+                    "echo",
+                    json!({ "message": "two" }),
+                )),
+            NoopRuntimeHooks,
+        );
+
+        let response = runtime
+            .execute_command(CommandRequest::new("too many tools"))
+            .await
+            .expect("bounded plan failure should return structured response");
+
+        assert_eq!(response.task.status, TaskStatus::Failed);
+        assert!(response.tool_results.is_empty());
+        assert!(response
+            .audit_entries
+            .iter()
+            .any(|entry| entry.event_type == "tool_plan_rejected"));
+    }
+
+    #[tokio::test]
     async fn emergency_pause_blocks_new_commands() {
         let control = RuntimeControl::default();
         control.emergency_pause();
@@ -950,6 +1426,39 @@ mod tests {
                 route: ModelRoute::fake_local("counting local model"),
                 message: format!("counted: {}", request.user_input),
                 complete: true,
+                tool_requests: Vec::new(),
+            })
+        }
+    }
+
+    struct ToolAwareModel;
+
+    #[async_trait::async_trait]
+    impl ModelExecutor for ToolAwareModel {
+        async fn execute(&self, request: ModelRequest) -> JarvisResult<ModelResponse> {
+            if request.step_index == 0 {
+                return Ok(ModelResponse {
+                    route: ModelRoute::fake_local("tool-aware local model"),
+                    message: "planning echo".to_string(),
+                    complete: false,
+                    tool_requests: vec![ModelToolRequest::new(
+                        "fake_echo",
+                        "echo",
+                        json!({ "message": "from tool-aware model" }),
+                    )],
+                });
+            }
+
+            Ok(ModelResponse {
+                route: ModelRoute::fake_local("tool-aware local model"),
+                message: format!(
+                    "saw tool result: {}",
+                    request.tool_results[0].output["message"]
+                        .as_str()
+                        .expect("echo message")
+                ),
+                complete: true,
+                tool_requests: Vec::new(),
             })
         }
     }
