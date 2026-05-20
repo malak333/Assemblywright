@@ -1,9 +1,9 @@
 use jarvis_core::{
-    ApprovalDecision, ApprovalStatus, AuditEntry, CancellationBehavior, CancellationSignal,
-    CapabilityScope, InProcessPlugin, JarvisError, JarvisResult, JsonSchema, PermissionEngine,
-    PluginAccess, PluginActionManifest, PluginCallRequest, PluginCallStatus, PluginHost,
-    PluginManifest, PluginPermission, PluginSource, PluginTimeout, PolicyRequest, RiskTier,
-    Sensitivity, TaskRecord, TaskStatus,
+    plugin_permission_scopes, ApprovalDecision, ApprovalGrant, ApprovalStatus, AuditEntry,
+    CancellationBehavior, CancellationSignal, CapabilityScope, InProcessPlugin, JarvisError,
+    JarvisResult, JsonSchema, PermissionEngine, PluginAccess, PluginActionManifest,
+    PluginCallRequest, PluginCallStatus, PluginHost, PluginManifest, PluginPermission,
+    PluginSource, PluginTimeout, PolicyRequest, RiskTier, Sensitivity, TaskRecord, TaskStatus,
 };
 use serde_json::json;
 use std::sync::{
@@ -107,16 +107,21 @@ fn command_pipeline_blocks_confirm_tier_plugin_actions_without_approval() {
     .expect("confirm plugin should register");
 
     let result = host
-        .execute(PluginCallRequest::reactive(
-            "confirm_write",
-            "write_note",
-            json!({ "note": "prepare external side effect" }),
-        ))
+        .execute(
+            PluginCallRequest::reactive(
+                "confirm_write",
+                "write_note",
+                json!({ "note": "prepare external side effect" }),
+            )
+            .with_granted_scopes(plugin_permission_scopes(&[
+                PluginPermission::WriteWorkspace,
+            ])),
+        )
         .expect("host should return approval requirement");
 
     assert_eq!(result.status, PluginCallStatus::ApprovalRequired);
     assert!(result.metadata.approval_required);
-    assert_eq!(result.metadata.approval_status, ApprovalStatus::NotRequired);
+    assert_eq!(result.metadata.approval_status, ApprovalStatus::Pending);
     assert_eq!(result.metadata.risk_tier, RiskTier::Confirm);
     assert!(
         !side_effect_ran.load(Ordering::SeqCst),
@@ -133,12 +138,17 @@ fn command_pipeline_executes_confirm_tier_plugin_action_after_approval() {
     })
     .expect("confirm plugin should register");
 
-    let mut request = PluginCallRequest::reactive(
+    let request = PluginCallRequest::reactive(
         "confirm_write",
         "write_note",
         json!({ "note": "approved side effect" }),
-    );
-    request.approval_status = ApprovalStatus::Approved;
+    )
+    .with_granted_scopes(plugin_permission_scopes(&[
+        PluginPermission::WriteWorkspace,
+    ]))
+    .with_approval(ApprovalGrant::approved(plugin_permission_scopes(&[
+        PluginPermission::WriteWorkspace,
+    ])));
 
     let result = host
         .execute(request)

@@ -17,10 +17,10 @@ use crate::storage::{
     EmergencyPauseState as StoredEmergencyPauseState, NewMemoryItem, SqliteRepository,
 };
 use crate::{
-    ApprovalDecision, ApprovalStatus, AuditEntry, CapabilityScope, ConversationRuntime,
-    FakeLocalModel, JarvisError, JarvisResult, ModelRoute, ModelRouteRequest, ModelRouter,
-    PermissionEngine, PluginCallRequest, PluginCallResult, PluginCallStatus, PluginHost,
-    PluginManifest, PluginPermission, PolicyRequest, RuntimeCommandRequest, RuntimeCommandStore,
+    plugin_permission_scopes, ApprovalDecision, ApprovalStatus, AuditEntry, CapabilityScope,
+    ConversationRuntime, FakeLocalModel, JarvisError, JarvisResult, ModelRoute, ModelRouteRequest,
+    ModelRouter, PermissionEngine, PluginCallRequest, PluginCallResult, PluginCallStatus,
+    PluginHost, PluginManifest, PolicyRequest, RuntimeCommandRequest, RuntimeCommandStore,
     RuntimeConfig, RuntimeControl, RuntimeStep, Scheduler, SchedulerJob, SchedulerJobSpec,
     Sensitivity, TaskRecord, TaskStatus, TriggerKind,
 };
@@ -322,9 +322,11 @@ impl IpcState {
                 plugin_request.plugin_id, plugin_request.action
             ))
         })?;
-        let requested_scopes = plugin_scopes(&action.permissions);
+        let requested_scopes = plugin_permission_scopes(&action.permissions);
         let mut granted_scopes = requested_scopes.clone();
         granted_scopes.push(CapabilityScope::Conversation);
+        plugin_request.granted_scopes = granted_scopes.clone();
+        plugin_request.sensitivity = sensitivity;
         let policy_request = PolicyRequest {
             task_id: Some(task_id),
             action: format!("{}.{}", plugin_request.plugin_id, plugin_request.action),
@@ -590,26 +592,6 @@ fn first_party_plugin_request(input: &str) -> Option<PluginCallRequest> {
     }
 
     None
-}
-
-fn plugin_scopes(permissions: &[PluginPermission]) -> Vec<CapabilityScope> {
-    let mut scopes = vec![CapabilityScope::PluginRun];
-    for permission in permissions {
-        let scope = match permission {
-            PluginPermission::ReadWorkspace => CapabilityScope::FileRead,
-            PluginPermission::WriteWorkspace => CapabilityScope::FileWrite,
-            PluginPermission::ReadMemory => CapabilityScope::MemoryRead,
-            PluginPermission::WriteMemory => CapabilityScope::MemoryWrite,
-            PluginPermission::CallModel => CapabilityScope::LocalModel,
-            PluginPermission::ProactiveRun => CapabilityScope::SchedulerRun,
-            PluginPermission::Network => CapabilityScope::NetworkAccess,
-            PluginPermission::SystemStatus => CapabilityScope::Conversation,
-        };
-        if !scopes.contains(&scope) {
-            scopes.push(scope);
-        }
-    }
-    scopes
 }
 
 pub fn router(state: IpcState) -> Router {
