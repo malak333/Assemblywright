@@ -5,6 +5,9 @@ These notes capture durable facts for future agents working on this repository.
 ## Repository And Scope
 
 - The repository is public at `https://github.com/malak333/Jarvis`.
+- Production implementation work should assume public-repo hygiene: no secrets,
+  no private-source material, no hidden readiness claims, and release evidence
+  that can be reviewed from the branch/PR.
 - The product direction is a local-first macOS assistant foundation, legally
   distinct from Marvel/JARVIS branding and assets.
 - The current repo contains a Rust workspace with `jarvis-core` and
@@ -66,6 +69,9 @@ These notes capture durable facts for future agents working on this repository.
   test --workspace -- --ignored`, `cargo build --workspace`, `cargo run -p
   jarvis-cli -- smoke`, `cargo package --workspace --allow-dirty`, `swift test
   --package-path apps/mac`, and `swift build --package-path apps/mac`.
+- The current E2E expectation for Rust/CLI foundation changes is
+  `cargo test -p jarvis-cli --test local_ipc_e2e`; the ignored variant is
+  release-proof coverage and is included by `./scripts/release-local.sh`.
 - Do not describe Jarvis as a finished desktop assistant until the Swift shell,
   packaged app, approval UI, ChatGPT execution where claimed, and Mac release
   smoke test exist.
@@ -86,6 +92,9 @@ These notes capture durable facts for future agents working on this repository.
 ## Workflow
 
 - Work in isolated worktrees and branches for reviewable slices.
+- Use topic branches and PRs for production work. The docs production slice is
+  `codex/production-docs` in
+  `/Users/michaelnobile/Antigravity/jarvis-worktrees/production-docs`.
 - When multiple agents are active, stay inside assigned ownership. For docs-only
   architecture work, use `apply_patch` and do not touch implementation files.
 - Do not revert or overwrite unrelated work from other agents.
@@ -93,6 +102,10 @@ These notes capture durable facts for future agents working on this repository.
 - Push the branch after local verification when requested.
 - Treat validation as a merge gate; if a command cannot run, record the blocker
   instead of implying coverage.
+- A six-agent autonomous sweep, sometimes referred to as the 6-agent sweep, is
+  a coordination model for parallel ownership slices. It is not itself
+  readiness evidence; only checked-in code/docs, reviewed PRs, and verification
+  output count as proof.
 - `jarvis-cli serve --db-path <path>` starts IPC with SQLite-backed task,
   audit, memory, and emergency-pause state for manual persistence checks.
 - `cargo run -p jarvis-cli -- smoke` now covers baseline command/pause smoke,

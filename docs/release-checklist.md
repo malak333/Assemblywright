@@ -5,6 +5,9 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
 
 ## Scope Check
 
+- Confirm the release target is this public repository
+  (`https://github.com/malak333/Jarvis`) and that the work is landing through a
+  reviewable worktree/branch/PR slice.
 - Confirm `DESIGN.md` still matches the implementation scope.
 - Confirm release notes distinguish implemented Rust foundation and Swift shell
   scaffold behavior from the implemented opt-in Ollama-compatible local
@@ -22,14 +25,17 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   readiness only for verified Rust/Swift surfaces, not full assistant readiness.
 - Confirm no Marvel branding, copyrighted visuals, or confusing product claims
   were introduced.
+- Confirm any autonomous sweep summary names the active ownership slices and
+  states which evidence came from commands, tests, or manual checks. A
+  six-agent sweep is coordination context, not proof of readiness.
 
 ## Code Gate
 
 - `./scripts/release-local.sh`
 
 The script runs the full local gate below, including the opt-in ignored
-release-proof test. Run individual commands only when diagnosing a failing
-stage.
+release-proof E2E test. Run individual commands only when diagnosing a failing
+stage or when a PR needs focused evidence for one ownership slice.
 
 - `cargo fmt --check`
 - `cargo clippy --workspace --all-targets -- -D warnings`
@@ -91,11 +97,13 @@ stage.
 - Confirm diagnostics export remains redacted and does not include command
   bodies, scheduler commands, audit payloads, memory values, raw cancellation
   reasons, or credentials.
-- Confirm the cross-process CLI E2E still covers command, first-party plugin
-  execution, local plugin metadata install/list/get, audit, memory
-  create/update/review/delete, scheduler schedule/get/list/cancel, diagnostics
-  redaction, persistence restart, and emergency-pause
-  blocking/resume behavior.
+- Confirm the cross-process CLI E2E still covers command, plugin, audit,
+  memory create/update/review/delete, scheduler schedule/get/list/cancel,
+  diagnostics redaction, persistence restart, and emergency-pause
+  blocking/resume behavior. Treat this as the minimum E2E expectation for the
+  current Rust/CLI foundation; packaged Mac E2E remains a future release gate.
+- Confirm local plugin metadata install/list/get coverage remains in that E2E
+  path while installed plugin execution remains disabled.
 - Confirm the Swift shell remains described as a scaffold until a signed
   packaged app bundles/launches the Rust core, handles approval prompts, and
   passes packaged app smoke checks.
@@ -103,11 +111,16 @@ stage.
 ## Documentation Gate
 
 - Architecture map is current.
+- Both architecture diagrams render: the current implementation diagram and the
+  end-goal production diagram.
 - Current-vs-target implementation phase table is current.
 - Plugin contract is current.
 - Safety rules are current.
 - Build/test commands are current.
 - Knowledge-base notes capture durable workflow and proof-boundary facts.
+- Knowledge-base notes include public-repo status, worktree/branch/PR workflow,
+  six-agent autonomous sweep expectations, E2E expectations, and proof
+  boundaries without overclaiming production readiness.
 - README points to the active design and command gate.
 - Mermaid diagrams render in GitHub or the intended documentation viewer.
 
@@ -134,3 +147,5 @@ Release notes must include:
 - Known limitations.
 - Local verification commands and dates.
 - Any manual checks that remain the user's responsibility.
+- Any blockers that prevent treating the run as full production assistant
+  readiness rather than local foundation evidence.

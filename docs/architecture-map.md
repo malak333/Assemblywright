@@ -13,14 +13,24 @@ flowchart TB
     User["User or local test operator"]
     User --> CLI["jarvis-cli"]
     User --> MacShell["JarvisMacApp SwiftUI scaffold"]
+    DocsAgent["Docs/release agent"] --> Docs["README, docs, knowledge-base"]
+    DocsAgent --> LocalGate["./scripts/release-local.sh"]
+    LocalGate --> E2E["local_ipc_e2e ignored release proof"]
+    LocalGate --> Smoke["jarvis-cli smoke"]
+    LocalGate --> SwiftGate["Swift package build/test"]
+    LocalGate --> CargoGate["fmt, clippy, tests, build, package"]
     MacShell --> MacCore["JarvisMacCore IPC client, supervisor, and view models"]
     MacCore --> Supervisor["JarvisCoreSupervisor configured or bundled process"]
     Supervisor --> CLI
     MacCore -->|"HTTP JSON on configured core URL"| IPC["jarvis-core::ipc Axum loopback server"]
     CLI -->|"HTTP JSON on 127.0.0.1:7787 by default"| IPC
+    E2E --> IPC
+    Smoke --> IPC
 
     subgraph Core["jarvis-core"]
         IPC --> Health["/health"]
+        IPC --> Contract["/contract"]
+        IPC --> Diagnostics["/diagnostics/export"]
         IPC --> Commands["/commands"]
         IPC --> Inspection["/tasks, /audit, /memory, /plugins/manifests, /plugins/installed"]
         IPC --> PauseApi["/emergency-pause"]
@@ -87,6 +97,10 @@ Swift user approval UI.
 Repository-backed IPC state also exposes task, audit, and memory inspection
 endpoints, plus first-party plugin manifest listing, so the CLI and Swift shell
 can inspect durable local state without reaching into SQLite directly.
+The release-proof path remains local: `./scripts/release-local.sh` runs Rust
+formatting, linting, tests, ignored release-proof tests, build/package, CLI
+smoke, and Swift package build/test. That evidence proves only the current
+implemented foundation surfaces.
 
 ## Current Command Flow
 
@@ -267,6 +281,9 @@ flowchart TB
     AppFiles["app-owned files and plugin bundles"] --> RuntimeProd
     DiagnosticsProd --> Diagnostics["local diagnostics export"]
     Diagnostics --> MacApp
+    ReleaseOps["release operator"] --> ReleaseGate["signed package, clean-profile Mac smoke, E2E, migration, recovery, diagnostics checks"]
+    ReleaseGate --> MacApp
+    ReleaseGate --> IPCServer
 ```
 
 Production readiness for that end-state still requires a packaged `.app`
@@ -275,6 +292,10 @@ packaged app smoke tests, and operational release evidence. The current
 repository proves only the implemented Rust and Swift scaffold surfaces listed
 above; the local HTTP provider boundary is implemented, but ChatGPT execution
 and full assistant behavior are not.
+A public PR may cite local gate output and cross-process E2E results as
+evidence for those surfaces, but must not extend that evidence to signed
+packaging, ChatGPT operation, Swift approval UX, real voice, or autonomous
+external action.
 
 ## Current Vs Target Implementation Phases
 
@@ -289,7 +310,8 @@ and full assistant behavior are not.
 | Storage and memory | SQLite migrations store tasks, append-only audit entries, emergency pause, memory items with provenance/sensitivity/review/soft-delete fields, scheduler jobs, pending approval records, and disabled installed-plugin registry metadata. CLI/IPC can inspect and mutate memory items, approval decisions, and plugin metadata when repository backing is enabled. | SQLite also owns permissions, executable plugin grants, model-route records, migrations with backup/rollback, and memory UX review flows; vector indexes remain rebuildable. | Core local state and plugin metadata registry implemented; broader production schema pending. |
 | Safety and approvals | Capability scopes, risk tiers, emergency-pause fail-closed behavior, audit-required flags, and approval-required decisions exist in Rust. Repository-backed IPC persists inspectable pending approvals and supports CLI grant/deny decisions without executing side effects. There is no Swift user approval UI yet. | Human approval prompts, permission center, grants history, policy review, and no bypass for high-risk side effects. | Policy engine and CLI/IPC approval scaffold implemented; human approval product surface pending. |
 | Voice and diagnostics | Voice is not implemented beyond design docs. Redacted diagnostics export exists over CLI/IPC and omits command bodies, scheduler commands, audit payloads, memory values, and cancellation reason text. | Voice input/output loop, interruption/cancel behavior, microphone degraded modes, and local diagnostics export integrated into the packaged app. | Diagnostics foundation implemented; voice and packaged UX pending. |
-| Release proof | Local Rust and Swift build/test/smoke commands document the current proof boundary. | Signed/packaged app release with clean-profile Mac smoke, app-supervised core, command, audit, pause, restart, migration, and diagnostics checks. | Local foundation proof only. |
+| Release proof | Local Rust and Swift build/test/smoke commands plus the ignored cross-process `local_ipc_e2e` release-proof test document the current proof boundary. | Signed/packaged app release with clean-profile Mac smoke, app-supervised core, command, audit, pause, restart, migration, recovery, diagnostics, and real-provider checks. | Local foundation proof only. |
+| Production workflow | Current production effort uses isolated worktrees, topic branches, reviewable PRs, and parallel ownership slices; this docs slice is branch `codex/production-docs`. | Public repo release train with PR evidence, reproducible local gates, owner-reviewed release notes, and no hidden readiness claims. | Workflow documented; release governance still manual. |
 
 ## Data Ownership
 
@@ -368,3 +390,6 @@ orchestration, and a first Swift command/management shell with core supervision
 abstractions. It does not support a claim that Jarvis is a finished
 voice assistant, packaged Mac app, autonomous external-action agent, plugin
 marketplace, or production cloud-integrated system.
+The six-agent autonomous sweep model is a workflow convention, not proof by
+itself. Only checked-in implementation, documented commands, and captured local
+verification output should be used as release evidence.

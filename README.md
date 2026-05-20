@@ -27,6 +27,15 @@ architecture. The default command path still uses `FakeLocalModel`; set
 HTTP provider. Local plugin installation currently stores validated manifest
 metadata only and does not create an execution path.
 
+## Production Work Protocol
+
+This public repository is being advanced through isolated worktrees, topic
+branches, and reviewable PR slices. During the autonomous production sweep,
+agents should stay inside their assigned ownership, preserve unrelated edits,
+and treat cross-process E2E plus the local release gate as the evidence bar.
+Passing the local gate supports only the implemented Rust/Swift foundation
+claim; it is not proof of a finished packaged assistant.
+
 ## Build
 
 ```sh
