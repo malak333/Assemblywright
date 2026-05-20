@@ -11,6 +11,83 @@ pub enum ModelProvider {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalModelConfig {
+    pub enabled: bool,
+    pub model: String,
+}
+
+impl Default for LocalModelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            model: "fake-local-model".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatGptProviderConfig {
+    pub enabled: bool,
+    pub model: String,
+    pub requires_approval: bool,
+}
+
+impl Default for ChatGptProviderConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model: "chatgpt-disabled".to_string(),
+            requires_approval: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ProviderConfig {
+    pub local: LocalModelConfig,
+    pub chatgpt: ChatGptProviderConfig,
+}
+
+impl ProviderConfig {
+    pub fn local_only() -> Self {
+        Self::default()
+    }
+
+    pub fn with_chatgpt_enabled(mut self, model: impl Into<String>) -> Self {
+        self.chatgpt.enabled = true;
+        self.chatgpt.model = model.into();
+        self.chatgpt.requires_approval = true;
+        self
+    }
+
+    pub fn without_local(mut self) -> Self {
+        self.local.enabled = false;
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderStatus {
+    pub local_available: bool,
+    pub local_model: String,
+    pub chatgpt_enabled: bool,
+    pub chatgpt_model: String,
+    pub chatgpt_requires_approval: bool,
+}
+
+impl ProviderStatus {
+    pub fn from_config(config: &ProviderConfig) -> Self {
+        Self {
+            local_available: config.local.enabled,
+            local_model: config.local.model.clone(),
+            chatgpt_enabled: config.chatgpt.enabled,
+            chatgpt_model: config.chatgpt.model.clone(),
+            chatgpt_requires_approval: config.chatgpt.requires_approval,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelRoute {
     pub provider: ModelProvider,
     pub model: String,
