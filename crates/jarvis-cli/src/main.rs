@@ -5,8 +5,8 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use jarvis_core::{
-    CommandRequest, CreateMemoryItemRequest, CreateSchedulerJobRequest, EmergencyPauseRequest,
-    Sensitivity, TriggerKind, UpdateMemoryItemRequest,
+    ApprovalDecisionRequest, CommandRequest, CreateMemoryItemRequest, CreateSchedulerJobRequest,
+    EmergencyPauseRequest, Sensitivity, TriggerKind, UpdateMemoryItemRequest,
 };
 use tokio::net::TcpListener;
 
@@ -46,6 +46,8 @@ enum CliCommand {
         endpoint: String,
         #[arg(long)]
         dry_run: bool,
+        #[arg(long)]
+        sensitivity: Option<String>,
     },
     /// Activate emergency pause.
     Pause {
@@ -88,6 +90,11 @@ enum CliCommand {
     Plugins {
         #[command(subcommand)]
         command: PluginsCommand,
+    },
+    /// Inspect and decide approval-required actions.
+    Approvals {
+        #[command(subcommand)]
+        command: ApprovalsCommand,
     },
 }
 
@@ -217,6 +224,43 @@ enum PluginsCommand {
     },
 }
 
+#[derive(Debug, Subcommand)]
+enum ApprovalsCommand {
+    /// List approval decisions, optionally filtered by status.
+    List {
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    /// Fetch one approval decision by id.
+    Get {
+        id: String,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    /// Grant an approval decision without executing the side effect.
+    Approve {
+        id: String,
+        #[arg(long, default_value = "cli")]
+        decided_by: String,
+        #[arg(long)]
+        reason: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    /// Deny an approval decision.
+    Deny {
+        id: String,
+        #[arg(long, default_value = "cli")]
+        decided_by: String,
+        #[arg(long)]
+        reason: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_env_filter("info").init();
@@ -254,13 +298,14 @@ async fn main() -> anyhow::Result<()> {
             input,
             endpoint,
             dry_run,
+            sensitivity,
         } => {
             let body = serde_json::to_string(&CommandRequest {
                 input,
                 session_id: None,
                 context: serde_json::Value::Null,
                 dry_run,
-                sensitivity: None,
+                sensitivity: sensitivity.as_deref().map(parse_sensitivity).transpose()?,
             })?;
             println!("{}", request(&endpoint, "POST", "/commands", Some(&body))?);
         }
@@ -410,6 +455,54 @@ async fn main() -> anyhow::Result<()> {
                 println!(
                     "{}",
                     request(&endpoint, "GET", &format!("/plugins/manifests/{id}"), None)?
+                );
+            }
+        },
+        CliCommand::Approvals { command } => match command {
+            ApprovalsCommand::List { status, endpoint } => {
+                let path = status
+                    .map(|status| format!("/approvals?status={status}"))
+                    .unwrap_or_else(|| "/approvals".to_string());
+                println!("{}", request(&endpoint, "GET", &path, None)?);
+            }
+            ApprovalsCommand::Get { id, endpoint } => {
+                println!(
+                    "{}",
+                    request(&endpoint, "GET", &format!("/approvals/{id}"), None)?
+                );
+            }
+            ApprovalsCommand::Approve {
+                id,
+                decided_by,
+                reason,
+                endpoint,
+            } => {
+                let body = serde_json::to_string(&ApprovalDecisionRequest { decided_by, reason })?;
+                println!(
+                    "{}",
+                    request(
+                        &endpoint,
+                        "POST",
+                        &format!("/approvals/{id}/approve"),
+                        Some(&body)
+                    )?
+                );
+            }
+            ApprovalsCommand::Deny {
+                id,
+                decided_by,
+                reason,
+                endpoint,
+            } => {
+                let body = serde_json::to_string(&ApprovalDecisionRequest { decided_by, reason })?;
+                println!(
+                    "{}",
+                    request(
+                        &endpoint,
+                        "POST",
+                        &format!("/approvals/{id}/deny"),
+                        Some(&body)
+                    )?
                 );
             }
         },
