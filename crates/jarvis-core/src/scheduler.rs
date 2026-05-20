@@ -111,6 +111,25 @@ impl Scheduler {
             .cloned()
     }
 
+    pub fn mark_running(&self, id: Uuid) -> JarvisResult<SchedulerJob> {
+        let mut jobs = self.jobs.lock().expect("scheduler jobs lock poisoned");
+        let job = jobs
+            .get_mut(&id)
+            .ok_or_else(|| JarvisError::Validation(format!("unknown scheduler job: {id}")))?;
+
+        if job.status == SchedulerJobStatus::Cancelled {
+            return Err(JarvisError::Validation(format!(
+                "cancelled scheduler job cannot be marked running: {id}"
+            )));
+        }
+
+        let now = Utc::now();
+        job.status = SchedulerJobStatus::Running;
+        job.updated_at = now;
+
+        Ok(job.clone())
+    }
+
     pub fn cancel(&self, id: Uuid, reason: impl Into<String>) -> JarvisResult<SchedulerJob> {
         let mut jobs = self.jobs.lock().expect("scheduler jobs lock poisoned");
         let job = jobs
@@ -209,5 +228,36 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn cancel_active_cancels_scheduled_and_running_jobs() {
+        let scheduler = Scheduler::new();
+        let scheduled = scheduler
+            .schedule(SchedulerJobSpec {
+                name: "scheduled".to_string(),
+                command: "do scheduled".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .expect("scheduled");
+        let running = scheduler
+            .schedule(SchedulerJobSpec {
+                name: "running".to_string(),
+                command: "do running".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .expect("running");
+        scheduler.mark_running(running.id).expect("mark running");
+
+        assert_eq!(scheduler.cancel_active("emergency pause"), 2);
+
+        let cancelled = scheduler.list();
+        assert!(cancelled.iter().all(|job| {
+            job.status == SchedulerJobStatus::Cancelled
+                && job.cancelled_at.is_some()
+                && job.cancellation_reason.as_deref() == Some("emergency pause")
+        }));
+        assert!(cancelled.iter().any(|job| job.id == scheduled.id));
+        assert!(cancelled.iter().any(|job| job.id == running.id));
     }
 }

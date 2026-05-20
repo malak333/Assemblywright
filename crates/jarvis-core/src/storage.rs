@@ -45,6 +45,14 @@ pub struct SqliteRepository {
     conn: Connection,
 }
 
+impl std::fmt::Debug for SqliteRepository {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SqliteRepository")
+            .finish_non_exhaustive()
+    }
+}
+
 impl SqliteRepository {
     pub fn open(path: impl AsRef<Path>) -> JarvisResult<Self> {
         let conn = Connection::open(path).map_err(storage_error)?;
@@ -765,7 +773,9 @@ mod tests {
 
     #[test]
     fn emergency_pause_state_can_be_toggled_durably() {
-        let repo = SqliteRepository::in_memory().unwrap();
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("jarvis.sqlite");
+        let repo = SqliteRepository::open(&db_path).unwrap();
 
         let paused = repo
             .set_emergency_pause(true, Some("manual stop"), Some("app"))
@@ -779,6 +789,15 @@ mod tests {
             .unwrap();
         assert!(!resumed.paused);
         assert_eq!(resumed.reason.as_deref(), Some("manual resume"));
+
+        drop(repo);
+
+        let reopened = SqliteRepository::open(db_path).unwrap();
+        let persisted = reopened.emergency_pause_state().unwrap();
+        assert!(!persisted.paused);
+        assert_eq!(persisted.reason.as_deref(), Some("manual resume"));
+        assert_eq!(persisted.updated_by.as_deref(), Some("app"));
+        assert!(persisted.updated_at >= paused.updated_at);
     }
 
     #[test]

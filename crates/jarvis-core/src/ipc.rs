@@ -12,9 +12,11 @@ use tokio::net::TcpListener;
 use tower_http::trace::TraceLayer;
 use uuid::Uuid;
 
+use crate::storage::{EmergencyPauseState as StoredEmergencyPauseState, SqliteRepository};
 use crate::{
-    AuditEntry, JarvisError, JarvisResult, Scheduler, SchedulerJob, SchedulerJobSpec, TaskRecord,
-    TaskStatus, TriggerKind,
+    AuditEntry, ConversationRuntime, FakeLocalModel, JarvisError, JarvisResult, ModelRoute,
+    RuntimeCommandRequest, RuntimeConfig, RuntimeControl, RuntimeStep, Scheduler, SchedulerJob,
+    SchedulerJobSpec, Sensitivity, TaskRecord, TaskStatus, TriggerKind,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,7 +25,10 @@ pub struct HealthResponse {
     pub version: String,
     pub started_at: DateTime<Utc>,
     pub emergency_paused: bool,
+    pub emergency_pause_reason: Option<String>,
+    pub emergency_pause_updated_at: Option<DateTime<Utc>>,
     pub scheduler_jobs: usize,
+    pub command_runtime: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,6 +47,9 @@ pub struct CommandResponse {
     pub accepted: bool,
     pub task: TaskRecord,
     pub audit_entry: AuditEntry,
+    pub audit_entries: Vec<AuditEntry>,
+    pub route: Option<ModelRoute>,
+    pub steps: Vec<RuntimeStep>,
     pub message: String,
 }
 
@@ -79,12 +87,29 @@ struct EmergencyPauseState {
     resumed_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Clone)]
+impl EmergencyPauseState {
+    fn from_stored(stored: StoredEmergencyPauseState) -> Self {
+        Self {
+            paused: stored.paused,
+            reason: stored.reason,
+            paused_at: stored.paused.then_some(stored.updated_at),
+            resumed_at: (!stored.paused).then_some(stored.updated_at),
+        }
+    }
+
+    fn updated_at(&self) -> Option<DateTime<Utc>> {
+        self.paused_at.or(self.resumed_at)
+    }
+}
+
+#[derive(Clone)]
 pub struct IpcState {
     version: String,
     started_at: DateTime<Utc>,
     scheduler: Scheduler,
+    runtime_control: RuntimeControl,
     emergency_pause: Arc<Mutex<EmergencyPauseState>>,
+    repository: Option<Arc<Mutex<SqliteRepository>>>,
 }
 
 impl Default for IpcState {
@@ -99,7 +124,38 @@ impl IpcState {
             version: env!("CARGO_PKG_VERSION").to_string(),
             started_at: Utc::now(),
             scheduler: Scheduler::new(),
+            runtime_control: RuntimeControl::default(),
             emergency_pause: Arc::new(Mutex::new(EmergencyPauseState::default())),
+            repository: None,
+        }
+    }
+
+    pub fn with_repository(repository: SqliteRepository) -> JarvisResult<Self> {
+        let stored_pause = repository.emergency_pause_state()?;
+        if stored_pause.paused {
+            let control = RuntimeControl::default();
+            control.emergency_pause();
+            Ok(Self {
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                started_at: Utc::now(),
+                scheduler: Scheduler::new(),
+                runtime_control: control,
+                emergency_pause: Arc::new(Mutex::new(EmergencyPauseState::from_stored(
+                    stored_pause,
+                ))),
+                repository: Some(Arc::new(Mutex::new(repository))),
+            })
+        } else {
+            Ok(Self {
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                started_at: Utc::now(),
+                scheduler: Scheduler::new(),
+                runtime_control: RuntimeControl::default(),
+                emergency_pause: Arc::new(Mutex::new(EmergencyPauseState::from_stored(
+                    stored_pause,
+                ))),
+                repository: Some(Arc::new(Mutex::new(repository))),
+            })
         }
     }
 
@@ -108,82 +164,79 @@ impl IpcState {
     }
 
     pub fn health(&self) -> HealthResponse {
+        let pause = self.pause_snapshot();
         HealthResponse {
             status: "ok".to_string(),
             version: self.version.clone(),
             started_at: self.started_at,
-            emergency_paused: self.is_paused(),
+            emergency_paused: pause.paused,
+            emergency_pause_reason: pause.reason.clone(),
+            emergency_pause_updated_at: pause.updated_at(),
             scheduler_jobs: self.scheduler.list().len(),
+            command_runtime: "fake-local-model".to_string(),
         }
     }
 
-    pub fn submit_command(&self, request: CommandRequest) -> JarvisResult<CommandResponse> {
+    pub async fn submit_command(&self, request: CommandRequest) -> JarvisResult<CommandResponse> {
         if request.input.trim().is_empty() {
             return Err(JarvisError::Validation(
                 "command input cannot be empty".to_string(),
             ));
         }
 
-        let now = Utc::now();
-        let mut task = TaskRecord {
-            id: Uuid::new_v4(),
-            session_id: request.session_id.unwrap_or_else(Uuid::new_v4),
-            user_input: request.input.clone(),
-            status: TaskStatus::Created,
-            created_at: now,
-            updated_at: now,
-        };
-
-        if self.is_paused() {
-            task.status = TaskStatus::Blocked;
-            task.updated_at = Utc::now();
-            let audit_entry = AuditEntry::new(
-                Some(task.id),
-                "command.blocked",
-                "command blocked by emergency pause",
-                json!({
-                    "input": request.input,
-                    "dry_run": request.dry_run,
-                    "context": request.context,
-                }),
-            );
-
-            return Ok(CommandResponse {
-                accepted: false,
-                task,
-                audit_entry,
-                message: "emergency pause is active".to_string(),
-            });
-        }
-
-        task.status = TaskStatus::Completed;
-        task.updated_at = Utc::now();
-        let audit_entry = AuditEntry::new(
-            Some(task.id),
-            "command.accepted",
-            "command accepted by IPC stub",
-            json!({
-                "input": request.input,
-                "dry_run": request.dry_run,
-                "context": request.context,
-                "execution": "stub",
-            }),
+        let runtime = ConversationRuntime::with_parts(
+            RuntimeConfig::default(),
+            self.runtime_control.clone(),
+            FakeLocalModel::default(),
+            crate::NoopRuntimeHooks,
         );
+        let runtime_response = runtime
+            .execute_command(
+                RuntimeCommandRequest::new(request.input.clone())
+                    .with_session_id(request.session_id.unwrap_or_else(Uuid::new_v4))
+                    .with_sensitivity(Sensitivity::Personal),
+            )
+            .await?;
+
+        let accepted = runtime_response.task.status == TaskStatus::Completed;
+        let audit_entry = runtime_response
+            .audit_entries
+            .last()
+            .cloned()
+            .unwrap_or_else(|| {
+                AuditEntry::new(
+                    Some(runtime_response.task.id),
+                    "command_runtime_empty",
+                    "command runtime returned no audit entries",
+                    json!({
+                        "dry_run": request.dry_run,
+                        "context": request.context,
+                    }),
+                )
+            });
 
         Ok(CommandResponse {
-            accepted: true,
-            task,
+            accepted,
+            task: runtime_response.task,
             audit_entry,
-            message: "command accepted; execution pipeline is stubbed".to_string(),
+            audit_entries: runtime_response.audit_entries,
+            route: runtime_response.route,
+            steps: runtime_response.steps,
+            message: runtime_response.message,
         })
     }
 
-    pub fn pause(&self, reason: impl Into<String>) -> EmergencyPauseResponse {
+    pub fn pause(&self, reason: impl Into<String>) -> JarvisResult<EmergencyPauseResponse> {
         let reason = reason.into();
+        let stored_pause = self.persist_pause(true, Some(&reason))?;
         let cancelled = self
             .scheduler
             .cancel_active(format!("emergency pause: {reason}"));
-        let paused_at = Utc::now();
+        self.runtime_control.emergency_pause();
+        let paused_at = stored_pause
+            .as_ref()
+            .map(|pause| pause.updated_at)
+            .unwrap_or_else(Utc::now);
         let mut pause = self
             .emergency_pause
             .lock()
@@ -194,52 +247,71 @@ impl IpcState {
         pause.paused_at = Some(paused_at);
         pause.resumed_at = None;
 
-        EmergencyPauseResponse {
+        Ok(EmergencyPauseResponse {
             paused: pause.paused,
             reason: pause.reason.clone(),
             paused_at: pause.paused_at,
             resumed_at: pause.resumed_at,
             cancelled_scheduler_jobs: cancelled,
-        }
+        })
     }
 
-    pub fn resume(&self) -> EmergencyPauseResponse {
+    pub fn resume(&self) -> JarvisResult<EmergencyPauseResponse> {
+        let stored_pause = self.persist_pause(false, None)?;
+        let resumed_at = stored_pause
+            .as_ref()
+            .map(|pause| pause.updated_at)
+            .unwrap_or_else(Utc::now);
         let mut pause = self
             .emergency_pause
             .lock()
             .expect("emergency pause lock poisoned");
+        self.runtime_control.resume();
         pause.paused = false;
         pause.reason = None;
-        pause.resumed_at = Some(Utc::now());
+        pause.resumed_at = Some(resumed_at);
 
-        EmergencyPauseResponse {
+        Ok(EmergencyPauseResponse {
             paused: pause.paused,
             reason: pause.reason.clone(),
             paused_at: pause.paused_at,
             resumed_at: pause.resumed_at,
             cancelled_scheduler_jobs: 0,
-        }
+        })
     }
 
     pub fn pause_status(&self) -> EmergencyPauseResponse {
-        let pause = self
-            .emergency_pause
-            .lock()
-            .expect("emergency pause lock poisoned");
+        let pause = self.pause_snapshot();
         EmergencyPauseResponse {
             paused: pause.paused,
-            reason: pause.reason.clone(),
+            reason: pause.reason,
             paused_at: pause.paused_at,
             resumed_at: pause.resumed_at,
             cancelled_scheduler_jobs: 0,
         }
     }
 
-    fn is_paused(&self) -> bool {
+    fn persist_pause(
+        &self,
+        paused: bool,
+        reason: Option<&str>,
+    ) -> JarvisResult<Option<StoredEmergencyPauseState>> {
+        self.repository
+            .as_ref()
+            .map(|repository| {
+                repository
+                    .lock()
+                    .expect("IPC repository lock poisoned")
+                    .set_emergency_pause(paused, reason, Some("ipc"))
+            })
+            .transpose()
+    }
+
+    fn pause_snapshot(&self) -> EmergencyPauseState {
         self.emergency_pause
             .lock()
             .expect("emergency pause lock poisoned")
-            .paused
+            .clone()
     }
 }
 
@@ -262,6 +334,10 @@ pub fn router(state: IpcState) -> Router {
 
 pub async fn serve(bind: SocketAddr, state: IpcState) -> anyhow::Result<()> {
     let listener = TcpListener::bind(bind).await?;
+    serve_listener(listener, state).await
+}
+
+pub async fn serve_listener(listener: TcpListener, state: IpcState) -> anyhow::Result<()> {
     axum::serve(listener, router(state)).await?;
     Ok(())
 }
@@ -276,6 +352,7 @@ async fn command(
 ) -> Result<Json<CommandResponse>, (StatusCode, Json<ErrorResponse>)> {
     state
         .submit_command(request)
+        .await
         .map(Json)
         .map_err(error_response)
 }
@@ -287,12 +364,17 @@ async fn pause_status(State(state): State<IpcState>) -> Json<EmergencyPauseRespo
 async fn pause(
     State(state): State<IpcState>,
     Json(request): Json<EmergencyPauseRequest>,
-) -> Json<EmergencyPauseResponse> {
-    Json(state.pause(request.reason))
+) -> Result<Json<EmergencyPauseResponse>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .pause(request.reason)
+        .map(Json)
+        .map_err(error_response)
 }
 
-async fn resume(State(state): State<IpcState>) -> Json<EmergencyPauseResponse> {
-    Json(state.resume())
+async fn resume(
+    State(state): State<IpcState>,
+) -> Result<Json<EmergencyPauseResponse>, (StatusCode, Json<ErrorResponse>)> {
+    state.resume().map(Json).map_err(error_response)
 }
 
 async fn list_scheduler_jobs(State(state): State<IpcState>) -> Json<Vec<SchedulerJob>> {
@@ -363,10 +445,13 @@ mod tests {
         assert_eq!(health.status, "ok");
         assert_eq!(health.scheduler_jobs, 1);
         assert!(!health.emergency_paused);
+        assert_eq!(health.emergency_pause_reason, None);
+        assert_eq!(health.emergency_pause_updated_at, None);
+        assert_eq!(health.command_runtime, "fake-local-model");
     }
 
-    #[test]
-    fn command_schema_accepts_stubbed_command() {
+    #[tokio::test]
+    async fn command_schema_executes_fake_local_runtime() {
         let state = IpcState::new();
         let response = state
             .submit_command(CommandRequest {
@@ -375,15 +460,26 @@ mod tests {
                 context: json!({"surface": "test"}),
                 dry_run: true,
             })
+            .await
             .expect("command");
 
         assert!(response.accepted);
         assert_eq!(response.task.status, TaskStatus::Completed);
-        assert_eq!(response.audit_entry.event_type, "command.accepted");
+        assert_eq!(response.audit_entry.event_type, "task_completed");
+        assert_eq!(response.steps.len(), 1);
+        assert!(response.message.contains("what is next"));
+        assert_eq!(
+            response.route.expect("fake local route").model,
+            "fake-local-model"
+        );
+        assert!(response
+            .audit_entries
+            .iter()
+            .any(|entry| entry.event_type == "model_step_completed"));
     }
 
-    #[test]
-    fn emergency_pause_blocks_commands_and_cancels_scheduler_jobs() {
+    #[tokio::test]
+    async fn emergency_pause_blocks_commands_and_cancels_scheduler_jobs() {
         let state = IpcState::new();
         state
             .scheduler()
@@ -394,9 +490,14 @@ mod tests {
             })
             .expect("schedule");
 
-        let pause = state.pause("testing");
+        let pause = state.pause("testing").expect("pause");
         assert!(pause.paused);
         assert_eq!(pause.cancelled_scheduler_jobs, 1);
+        assert!(state.health().emergency_paused);
+        assert_eq!(
+            state.health().emergency_pause_reason.as_deref(),
+            Some("testing")
+        );
 
         let response = state
             .submit_command(CommandRequest {
@@ -405,11 +506,73 @@ mod tests {
                 context: serde_json::Value::Null,
                 dry_run: false,
             })
+            .await
             .expect("blocked command is still represented");
         assert!(!response.accepted);
         assert_eq!(response.task.status, TaskStatus::Blocked);
+        assert_eq!(response.audit_entry.event_type, "emergency_pause_blocked");
 
-        let resume = state.resume();
+        let resume = state.resume().expect("resume");
         assert!(!resume.paused);
+    }
+
+    #[tokio::test]
+    async fn emergency_pause_loads_and_updates_persistent_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("jarvis.sqlite");
+        let repository = SqliteRepository::open(&db_path).unwrap();
+        let state = IpcState::with_repository(repository).expect("state");
+        state
+            .scheduler()
+            .schedule(SchedulerJobSpec {
+                name: "persisted pause job".to_string(),
+                command: "run persisted pause job".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .expect("schedule");
+
+        let pause = state.pause("maintenance window").expect("pause");
+        assert!(pause.paused);
+        assert_eq!(pause.reason.as_deref(), Some("maintenance window"));
+        assert_eq!(pause.cancelled_scheduler_jobs, 1);
+        assert!(pause.paused_at.is_some());
+        assert!(state.health().emergency_paused);
+
+        drop(state);
+
+        let repository = SqliteRepository::open(&db_path).unwrap();
+        let restarted = IpcState::with_repository(repository).expect("restarted state");
+        let status = restarted.pause_status();
+        assert!(status.paused);
+        assert_eq!(status.reason.as_deref(), Some("maintenance window"));
+        assert!(restarted.health().emergency_paused);
+        assert_eq!(
+            restarted.health().emergency_pause_reason.as_deref(),
+            Some("maintenance window")
+        );
+
+        let response = restarted
+            .submit_command(CommandRequest {
+                input: "still blocked".to_string(),
+                session_id: None,
+                context: serde_json::Value::Null,
+                dry_run: false,
+            })
+            .await
+            .expect("blocked command");
+        assert!(!response.accepted);
+        assert_eq!(response.task.status, TaskStatus::Blocked);
+
+        let resume = restarted.resume().expect("resume");
+        assert!(!resume.paused);
+        assert!(resume.resumed_at.is_some());
+
+        drop(restarted);
+
+        let repository = SqliteRepository::open(db_path).unwrap();
+        let stored = repository.emergency_pause_state().unwrap();
+        assert!(!stored.paused);
+        assert_eq!(stored.reason, None);
+        assert_eq!(stored.updated_by.as_deref(), Some("ipc"));
     }
 }
