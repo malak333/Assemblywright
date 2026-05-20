@@ -267,16 +267,18 @@ async fn main() -> anyhow::Result<()> {
 
     match Cli::parse().command {
         CliCommand::Serve { bind, db_path } => {
+            let provider_config = jarvis_core::ProviderConfig::from_env()?;
             let state = match db_path {
                 Some(path) => {
                     if let Some(parent) = path.parent() {
                         std::fs::create_dir_all(parent)?;
                     }
-                    jarvis_core::IpcState::with_repository(jarvis_core::SqliteRepository::open(
-                        path,
-                    )?)?
+                    jarvis_core::IpcState::with_repository_and_provider_config(
+                        jarvis_core::SqliteRepository::open(path)?,
+                        provider_config,
+                    )?
                 }
-                None => jarvis_core::IpcState::new(),
+                None => jarvis_core::IpcState::with_provider_config(provider_config),
             };
             jarvis_core::serve(bind.parse()?, state).await?;
         }

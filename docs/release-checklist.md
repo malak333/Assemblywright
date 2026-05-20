@@ -7,13 +7,15 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
 
 - Confirm `DESIGN.md` still matches the implementation scope.
 - Confirm release notes distinguish implemented Rust foundation and Swift shell
-  scaffold behavior from planned real local model integration, approval UI,
-  plugin installation, voice support, and packaging work.
+  scaffold behavior from the implemented opt-in Ollama-compatible local
+  provider boundary and planned ChatGPT execution, approval UI, plugin
+  installation, voice support, and packaging work.
 - Confirm the current architecture map still matches the real module wiring,
-  especially the fact that `/commands` invokes the runtime/fake local model
-  path, records route/policy/plugin audit evidence for deterministic
+  especially the fact that `/commands` invokes the configured local
+  `ModelExecutor` (`FakeLocalModel` by default, Ollama-compatible HTTP when
+  enabled), records route/policy/plugin audit evidence for deterministic
   first-party plugin commands, and supports bounded fake-model planned
-  first-party tool execution before any broader real-provider claim.
+  first-party tool execution before any broader assistant claim.
 - Confirm the current-vs-target implementation phase table is up to date before
   using any production-readiness language. Release notes may claim foundation
   readiness only for verified Rust/Swift surfaces, not full assistant readiness.
@@ -53,6 +55,8 @@ stage.
   approved.
 - Confirm restricted and credential-adjacent data cannot route to cloud without
   explicit approval.
+- Confirm local provider errors and route evidence do not include raw command
+  bodies or unredacted endpoint credentials.
 - Confirm emergency pause blocks IPC runtime command execution and cancels
   active scheduler jobs.
 - Confirm runtime emergency pause and cancellation tests still cover active
@@ -66,8 +70,9 @@ stage.
   when repository backing is used. Approval-required first-party command
   scaffolds persist inspectable pending approvals and record CLI/IPC grant or
   denial decisions without executing side effects. Bounded fake-model
-  first-party tool calls are covered in runtime tests; real provider tool calls
-  and Swift user approval UI remain future gates.
+  first-party tool calls and Ollama-compatible provider request/error behavior
+  are covered in focused tests; ChatGPT execution and Swift user approval UI
+  remain future gates.
 - Confirm task, audit, memory, and plugin manifest inspection endpoints still
   require or use the correct repository/plugin backing and are covered by local
   smoke or focused IPC tests.
