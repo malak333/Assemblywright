@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::{
     ApprovalDecision, ApprovalGrant, ApprovalStatus, CapabilityScope, PermissionEngine,
-    PolicyRequest, RiskTier, Sensitivity,
+    PolicyRequest, ProviderStatus, RiskTier, Sensitivity,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,7 +31,7 @@ pub struct ModelRouteRequest {
     pub granted_scopes: Vec<CapabilityScope>,
     pub local_available: bool,
     pub local_sufficient: bool,
-    pub chatgpt_enabled: bool,
+    pub provider_status: ProviderStatus,
     pub emergency_paused: bool,
     pub approval: Option<ApprovalGrant>,
     pub context_preview: String,
@@ -47,12 +47,23 @@ impl ModelRouteRequest {
             granted_scopes: vec![CapabilityScope::Conversation, CapabilityScope::LocalModel],
             local_available: true,
             local_sufficient: true,
-            chatgpt_enabled: false,
+            provider_status: ProviderStatus::from_config(&crate::ProviderConfig::local_only()),
             emergency_paused: false,
             approval: None,
             context_preview: context_preview.into(),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RouteEvidence {
+    pub local_available: bool,
+    pub local_sufficient: bool,
+    pub chatgpt_enabled: bool,
+    pub chatgpt_requires_approval: bool,
+    pub required_scopes: Vec<CapabilityScope>,
+    pub granted_scopes: Vec<CapabilityScope>,
+    pub restricted_cloud_block: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -68,6 +79,7 @@ pub struct ModelRouteRecord {
     pub context_for_model: Option<String>,
     pub local_available: bool,
     pub local_sufficient: bool,
+    pub evidence: RouteEvidence,
     pub created_at: DateTime<Utc>,
 }
 
@@ -92,11 +104,12 @@ impl ModelRouter {
                 context_for_model: Some(request.context_preview.clone()),
                 local_available: request.local_available,
                 local_sufficient: request.local_sufficient,
+                evidence: Self::evidence(request, false),
                 created_at: Utc::now(),
             };
         }
 
-        if !request.chatgpt_enabled {
+        if !request.provider_status.chatgpt_enabled {
             return Self::blocked(
                 request,
                 "local model is unavailable or insufficient and ChatGPT routing is disabled",
@@ -139,6 +152,7 @@ impl ModelRouter {
                     context_for_model: Some(redacted),
                     local_available: request.local_available,
                     local_sufficient: request.local_sufficient,
+                    evidence: Self::evidence(request, false),
                     created_at: Utc::now(),
                 }
             }
@@ -154,6 +168,7 @@ impl ModelRouter {
                 context_for_model: None,
                 local_available: request.local_available,
                 local_sufficient: request.local_sufficient,
+                evidence: Self::evidence(request, false),
                 created_at: Utc::now(),
             },
             ApprovalDecision::Blocked => ModelRouteRecord {
@@ -168,6 +183,7 @@ impl ModelRouter {
                 context_for_model: None,
                 local_available: request.local_available,
                 local_sufficient: request.local_sufficient,
+                evidence: Self::evidence(request, false),
                 created_at: Utc::now(),
             },
         }
@@ -184,6 +200,9 @@ impl ModelRouter {
     }
 
     fn blocked(request: &ModelRouteRequest, reason: impl Into<String>) -> ModelRouteRecord {
+        let restricted_cloud_block = request.sensitivity == Sensitivity::Restricted
+            && request.provider_status.chatgpt_enabled
+            && !(request.local_available && request.local_sufficient);
         ModelRouteRecord {
             id: Uuid::new_v4(),
             task_id: request.task_id,
@@ -196,7 +215,20 @@ impl ModelRouter {
             context_for_model: None,
             local_available: request.local_available,
             local_sufficient: request.local_sufficient,
+            evidence: Self::evidence(request, restricted_cloud_block),
             created_at: Utc::now(),
+        }
+    }
+
+    fn evidence(request: &ModelRouteRequest, restricted_cloud_block: bool) -> RouteEvidence {
+        RouteEvidence {
+            local_available: request.local_available,
+            local_sufficient: request.local_sufficient,
+            chatgpt_enabled: request.provider_status.chatgpt_enabled,
+            chatgpt_requires_approval: request.provider_status.chatgpt_requires_approval,
+            required_scopes: request.required_scopes.clone(),
+            granted_scopes: request.granted_scopes.clone(),
+            restricted_cloud_block,
         }
     }
 }
@@ -241,7 +273,9 @@ mod tests {
             ],
             local_available: true,
             local_sufficient: false,
-            chatgpt_enabled: true,
+            provider_status: ProviderStatus::from_config(
+                &crate::ProviderConfig::local_only().with_chatgpt_enabled("chatgpt-test"),
+            ),
             emergency_paused: false,
             approval: None,
             context_preview: "workspace summary api_key=abc123 token sk-test".to_string(),

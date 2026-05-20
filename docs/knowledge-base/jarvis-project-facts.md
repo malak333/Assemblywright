@@ -34,6 +34,15 @@ These notes capture durable facts for future agents working on this repository.
 - The IPC `/commands` endpoint still does not implement autonomous
   model-generated tool calls. Current plugin execution is deterministic and
   command-pattern driven.
+- The architecture docs must preserve two diagrams: the current implemented
+  Rust/Swift scaffold and the end-goal production architecture. Keep the
+  current-vs-target phase table aligned with code before answering readiness
+  questions.
+- The Swift shell is currently a client/scaffold, not a packaged app that
+  starts or supervises `jarvis-core`.
+- The scheduler is currently inspectable and cancellable but in-memory; durable
+  scheduler storage and proactive production trigger execution remain target
+  architecture.
 
 ## Proof Boundaries
 
@@ -45,6 +54,10 @@ These notes capture durable facts for future agents working on this repository.
 - Do not describe Jarvis as a finished desktop assistant until the Swift shell,
   packaged app, approval UI, real model providers, and Mac release smoke test
   exist.
+- Do not describe Jarvis as production assistant ready based only on the Rust
+  and Swift local gates. The stronger claim requires packaged-app evidence,
+  real provider integration, approval UI, voice or text UX parity as scoped,
+  diagnostics/recovery checks, and release smoke proof.
 - It is fair to describe the current repo as a Rust foundation with tested
   scaffolding for IPC, storage, policy, routing, runtime, scheduler, plugin
   contracts, deterministic first-party plugin command execution, CLI behavior,
@@ -56,6 +69,8 @@ These notes capture durable facts for future agents working on this repository.
 ## Workflow
 
 - Work in isolated worktrees and branches for reviewable slices.
+- When multiple agents are active, stay inside assigned ownership. For docs-only
+  architecture work, use `apply_patch` and do not touch implementation files.
 - Do not revert or overwrite unrelated work from other agents.
 - Keep branch work narrow and commit with clear evidence.
 - Push the branch after local verification when requested.

@@ -6,50 +6,60 @@ SQLite-backed repository primitives, policy/model-routing rules, in-process
 plugin contracts, scheduler state, CLI client, and a first Swift/SwiftUI Mac
 shell scaffold under `apps/mac`.
 
-## Current Implementation
+## Current Implementation Diagram
 
 ```mermaid
-flowchart LR
-    User["User or local test operator"] --> CLI["jarvis-cli"]
+flowchart TB
+    User["User or local test operator"]
+    User --> CLI["jarvis-cli"]
     User --> MacShell["JarvisMacApp SwiftUI scaffold"]
-    MacShell --> MacCore["JarvisMacCore IPC client and console model"]
-    MacCore -->|HTTP on configured core URL| IPC
-    CLI -->|HTTP on 127.0.0.1 by default| IPC["jarvis-core::ipc Axum server"]
+    MacShell --> MacCore["JarvisMacCore IPC client and command console model"]
+    MacCore -->|"HTTP JSON on configured core URL"| IPC["jarvis-core::ipc Axum loopback server"]
+    CLI -->|"HTTP JSON on 127.0.0.1:7787 by default"| IPC
 
-    IPC --> IpcState["IpcState"]
-    IPC --> Inspection["Task, audit, memory, plugin inspection routes"]
-    IpcState --> RuntimePath["Command endpoint runtime path"]
-    IpcState --> Pause["Emergency pause state"]
-    IpcState --> Scheduler["In-memory Scheduler"]
-    IpcState --> RepoState["Optional SqliteRepository"]
-    RuntimePath --> Router
-    RuntimePath --> PluginHost
+    subgraph Core["jarvis-core"]
+        IPC --> Health["/health"]
+        IPC --> Commands["/commands"]
+        IPC --> Inspection["/tasks, /audit, /memory, /plugins/manifests"]
+        IPC --> PauseApi["/emergency-pause"]
+        IPC --> SchedulerApi["/scheduler/jobs"]
 
-    Runtime["ConversationRuntime"] --> ModelExec["ModelExecutor trait"]
-    ModelExec --> FakeLocal["FakeLocalModel"]
-    Runtime --> RuntimeControl["RuntimeControl pause/cancel flags"]
-    Runtime --> RuntimeAudit["Structured AuditEntry list"]
-    Runtime --> RuntimeStore["RuntimeCommandStore persistence hook"]
+        Commands --> Runtime["ConversationRuntime"]
+        Runtime --> ModelExec["ModelExecutor trait"]
+        ModelExec --> FakeLocal["FakeLocalModel only"]
+        Runtime --> RuntimeControl["RuntimeControl pause/cancel flags"]
+        Runtime --> RuntimeStore["RuntimeCommandStore persistence hook"]
+        Runtime --> RuntimeAudit["runtime AuditEntry list"]
 
-    Router["ModelRouter"] --> Policy["PermissionEngine"]
-    Router --> LocalRoute["Local route"]
-    Router --> ChatGPTGate["ChatGPT route gate with redaction"]
+        Commands --> Router["ModelRouter evidence pass"]
+        Router --> LocalRoute["local-first route"]
+        Router --> ChatGPTGate["ChatGPT gate and redaction logic"]
 
-    PluginHost["PluginHost"] --> ManifestValidation["Manifest and JSON schema validation"]
-    PluginHost --> PluginPolicy["PermissionEngine policy check"]
-    PluginHost --> FirstParty["fake_echo and fake_status plugins"]
-    PluginHost --> TimeoutCancel["Timeout and cancellation handling"]
+        Commands --> PluginDispatch["command-pattern plugin dispatch"]
+        PluginDispatch --> PluginPolicy["PermissionEngine policy check"]
+        PluginPolicy --> PluginHost["PluginHost"]
+        PluginHost --> ManifestValidation["manifest and JSON schema validation"]
+        PluginHost --> FirstParty["fake_echo and fake_status plugins"]
+        PluginHost --> TimeoutCancel["timeout and cancellation handling"]
 
-    Repo["SqliteRepository"] --> Tasks["tasks"]
-    Repo --> Audit["append-only audit_entries"]
-    Repo --> Memory["memory_items"]
-    Repo --> StoredPause["emergency_pause"]
+        SchedulerApi --> Scheduler["in-memory Scheduler"]
+        PauseApi --> RuntimeControl
+    end
 
-    Types["Shared contract types"] --> Runtime
+    IPC --> RepoState["optional SqliteRepository backing"]
+    RuntimeStore --> RepoState
+    Inspection --> RepoState
+    PauseApi --> RepoState
+    RepoState --> Tasks["tasks"]
+    RepoState --> Audit["append-only audit_entries"]
+    RepoState --> Memory["memory_items"]
+    RepoState --> StoredPause["emergency_pause"]
+
+    Types["shared contract types"] --> Runtime
     Types --> IPC
-    Types --> Policy
-    Types --> Repo
     Types --> PluginHost
+    Types --> PluginPolicy
+    Types --> RepoState
 ```
 
 The current IPC `/commands` endpoint invokes `ConversationRuntime` with the
@@ -175,36 +185,51 @@ sequenceDiagram
 
 ```mermaid
 flowchart TB
-    MacApp["Jarvis.app Swift/SwiftUI shell"] --> UX["Voice, text console, settings, activity, diagnostics"]
-    UX --> IPCClient["Versioned IPC client"]
-    IPCClient --> IPCServer["jarvis-core local IPC server"]
+    MacApp["Packaged Jarvis.app"]
+    MacApp --> UX["voice, text console, settings, activity, memory, permissions, diagnostics"]
+    UX --> ApprovalUI["approval prompts and permission center"]
+    UX --> PauseUI["emergency pause and resume"]
+    UX --> IPCClient["versioned IPC client"]
+    MacApp --> Supervisor["app-supervised core process"]
+    Supervisor --> IPCServer["jarvis-core local IPC server"]
+    IPCClient --> IPCServer
 
-    IPCServer --> RuntimeProd["ConversationRuntime"]
-    RuntimeProd --> PolicyProd["PermissionEngine"]
-    RuntimeProd --> ModelRouterProd["ModelRouter"]
-    RuntimeProd --> PluginHostProd["Policy-gated PluginHost"]
-    RuntimeProd --> SchedulerProd["Scheduler and trigger engine"]
-    RuntimeProd --> RepoProd["SqliteRepository"]
+    subgraph CoreProd["jarvis-core production runtime"]
+        IPCServer --> RuntimeProd["ConversationRuntime with tool-call orchestration"]
+        RuntimeProd --> ModelRouterProd["ModelRouter"]
+        RuntimeProd --> PolicyProd["PermissionEngine"]
+        RuntimeProd --> PluginHostProd["policy-gated PluginHost"]
+        RuntimeProd --> SchedulerProd["scheduler and trigger engine"]
+        RuntimeProd --> MemoryPolicy["memory classification and review flow"]
+        RuntimeProd --> RepoProd["SqliteRepository"]
+        RuntimeProd --> DiagnosticsProd["diagnostics and redacted export data"]
 
-    ModelRouterProd --> LocalModels["Local model providers by default"]
-    ModelRouterProd --> ChatGPT["ChatGPT only after enablement, approval, redaction, and audit"]
+        ModelRouterProd --> LocalModels["real local model providers by default"]
+        ModelRouterProd --> ChatGPT["ChatGPT only after enablement, approval, redaction, and audit"]
 
-    PluginHostProd --> FirstPartyPlugins["First-party plugins"]
-    PluginHostProd --> ThirdPartyPlugins["Installed local plugins with manifests"]
-    PluginHostProd --> ToolSandbox["Declared scopes, schemas, timeouts, cancellation"]
+        PluginHostProd --> FirstPartyPlugins["first-party plugins"]
+        PluginHostProd --> InstalledPlugins["installed local plugins with manifests"]
+        PluginHostProd --> ToolSandbox["declared scopes, schemas, timeouts, cancellation, sandbox boundary"]
 
-    RepoProd --> TaskStore["Task lifecycle"]
-    RepoProd --> AuditStore["Append-only audit log"]
-    RepoProd --> MemoryStore["Memory with provenance and sensitivity"]
-    RepoProd --> PauseStore["Emergency pause state"]
+        SchedulerProd --> ProactiveJobs["approved proactive routines and triggers"]
+    end
+
+    ApprovalUI --> PolicyProd
+    PauseUI --> PolicyProd
+    PauseUI --> RuntimeProd
+    PauseUI --> SchedulerProd
+
+    RepoProd --> TaskStore["task lifecycle"]
+    RepoProd --> AuditStore["append-only audit log"]
+    RepoProd --> MemoryStore["memory with provenance, sensitivity, review, delete"]
+    RepoProd --> PauseStore["emergency pause state"]
+    RepoProd --> PluginRegistry["plugin registry and grants"]
+    RepoProd --> SchedulerStore["durable scheduler jobs"]
 
     MacKeychain["macOS Keychain"] --> RuntimeProd
-    AppFiles["App-owned files"] --> RuntimeProd
-    Diagnostics["Local diagnostics export"] --> MacApp
-
-    PolicyProd --> ApprovalUI["User approval UI"]
-    ApprovalUI --> MacApp
-    PauseUI["Emergency pause control"] --> PolicyProd
+    AppFiles["app-owned files and plugin bundles"] --> RuntimeProd
+    DiagnosticsProd --> Diagnostics["local diagnostics export"]
+    Diagnostics --> MacApp
 ```
 
 Production readiness for that end-state still requires a packaged `.app`
@@ -212,6 +237,21 @@ release, real local model provider integration, approval UI, plugin
 installation/runtime hardening, voice support, packaged app smoke tests, and
 operational release evidence. The current repository proves only the implemented
 Rust and Swift scaffold surfaces listed above.
+
+## Current Vs Target Implementation Phases
+
+| Area | Current implementation | Target production state | Phase |
+| --- | --- | --- | --- |
+| Mac shell | Buildable Swift/SwiftUI scaffold with health, command transcript, pause/resume, and activity/audit rendering over IPC. It does not start or supervise the Rust process. | Packaged `Jarvis.app` supervises the core, owns voice/text UX, settings, memory and permission surfaces, diagnostics export, and recovery states. | Scaffold implemented; packaging and supervision pending. |
+| IPC boundary | Axum loopback HTTP JSON API for health, commands, task/audit/memory inspection, plugin manifests, emergency pause, and scheduler jobs. | Versioned, compatibility-tested app/core API with packaged app smoke coverage and clear degraded-mode handling. | Core IPC implemented; production app contract hardening pending. |
+| Command runtime | `ConversationRuntime` creates tasks, runs `FakeLocalModel`, records structured audit entries, handles pause/cancel, enforces max steps, and can persist task/audit state through `RuntimeCommandStore`. | Multi-step assistant runtime with real model responses, autonomous model-generated tool-call orchestration, streaming progress, approval handoff, and robust recovery. | Runtime foundation implemented; autonomous tool orchestration pending. |
+| Model routing | Local-first `ModelRouter` exists with sensitivity checks, ChatGPT opt-in gate, approval delegation, and redaction logic. The active `/commands` path still uses `FakeLocalModel`; no real provider call is wired. | Real local model provider integration, explicit ChatGPT escalation, minimized cloud context, user approval where required, and route evidence in every relevant task. | Policy/routing scaffolding implemented; provider integration pending. |
+| Plugins and tools | Deterministic in-process first-party plugins (`fake_echo`, `fake_status`) execute only through command-pattern dispatch, manifest validation, policy checks, timeout, cancellation, and audit evidence. | First-party production plugins plus installed local plugins behind manifests, sandboxing, user grants, UI approval, proactive gating, and model-generated tool-call execution. | Contract and deterministic plugin path implemented; production plugin runtime pending. |
+| Scheduler | Inspectable in-memory scheduler jobs with manual, one-time, interval trigger contracts and cancellation support. Emergency pause cancels active scheduler jobs. | Durable scheduler and trigger engine for approved proactive routines, persisted job state, visible task records, and policy-gated execution. | In-memory foundation implemented; durable proactive engine pending. |
+| Storage and memory | SQLite migration v1 stores tasks, append-only audit entries, emergency pause, and memory items with provenance, sensitivity, review, and soft-delete fields. CLI/IPC can inspect and mutate memory items when repository backing is enabled. | SQLite also owns permissions, plugin registry, model-route records, durable scheduler jobs, migrations with backup/rollback, and memory UX review flows; vector indexes remain rebuildable. | Core local state implemented; broader production schema pending. |
+| Safety and approvals | Capability scopes, risk tiers, emergency-pause fail-closed behavior, audit-required flags, and approval-required decisions exist in Rust. There is no user approval UI yet. | Human approval prompts, permission center, grants history, policy review, and no bypass for high-risk side effects. | Policy engine implemented; human approval product surface pending. |
+| Voice and diagnostics | Not implemented beyond design docs. | Voice input/output loop, interruption/cancel behavior, microphone degraded modes, and local diagnostics export. | Pending. |
+| Release proof | Local Rust and Swift build/test/smoke commands document the current proof boundary. | Signed/packaged app release with clean-profile Mac smoke, app-supervised core, command, audit, pause, restart, migration, and diagnostics checks. | Local foundation proof only. |
 
 ## Data Ownership
 

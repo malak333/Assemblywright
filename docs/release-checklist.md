@@ -14,6 +14,9 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   path, records route/policy/plugin audit evidence for deterministic
   first-party plugin commands, and does not yet compose autonomous
   model-generated tool execution.
+- Confirm the current-vs-target implementation phase table is up to date before
+  using any production-readiness language. Release notes may claim foundation
+  readiness only for verified Rust/Swift surfaces, not full assistant readiness.
 - Confirm no Marvel branding, copyrighted visuals, or confusing product claims
   were introduced.
 
@@ -59,10 +62,14 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
 - Confirm task, audit, memory, and plugin manifest inspection endpoints still
   require or use the correct repository/plugin backing and are covered by local
   smoke or focused IPC tests.
+- Confirm the Swift shell remains described as a scaffold until it starts and
+  supervises the Rust core, handles approval prompts, and passes packaged app
+  smoke checks.
 
 ## Documentation Gate
 
 - Architecture map is current.
+- Current-vs-target implementation phase table is current.
 - Plugin contract is current.
 - Safety rules are current.
 - Build/test commands are current.

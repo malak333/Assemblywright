@@ -18,8 +18,10 @@ swift build --package-path apps/mac
 
 ## Current Health Check
 
-`jarvis smoke` starts an ephemeral loopback server and verifies health, command,
-pause blocking, and resume:
+`jarvis smoke` starts an ephemeral loopback server and verifies the currently
+implemented foundation surfaces: health, command execution, pause blocking,
+resume, plugin manifest listing, and repository-backed task plus memory
+inspection paths:
 
 ```sh
 cargo run -p jarvis-cli -- smoke
@@ -107,4 +109,5 @@ emergency-pause surfaces. They do not prove app packaging, real local model
 provider integration, autonomous model-generated tool calls, memory UX,
 approval UI, voice loop, or packaged Mac release smoke test until those
 surfaces exist and are covered. The current Swift gate proves the Mac shell
-scaffold builds and its IPC contract decoding tests pass.
+scaffold builds and its IPC contract decoding tests pass; it does not prove the
+Swift app starts, supervises, or packages the Rust core.

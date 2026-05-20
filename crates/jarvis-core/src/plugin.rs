@@ -1,4 +1,7 @@
-use crate::{ApprovalStatus, JarvisError, JarvisResult, RiskTier};
+use crate::{
+    ApprovalDecision, ApprovalGrant, ApprovalStatus, CapabilityScope, JarvisError, JarvisResult,
+    PermissionEngine, PolicyRequest, RiskTier, Sensitivity,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::{
@@ -366,6 +369,12 @@ pub struct PluginCallRequest {
     pub action: String,
     pub input: Value,
     pub approval_status: ApprovalStatus,
+    #[serde(default)]
+    pub granted_scopes: Vec<CapabilityScope>,
+    #[serde(default)]
+    pub approval: Option<ApprovalGrant>,
+    #[serde(default = "default_plugin_sensitivity")]
+    pub sensitivity: Sensitivity,
     pub proactive: bool,
 }
 
@@ -376,9 +385,32 @@ impl PluginCallRequest {
             action: action.into(),
             input,
             approval_status: ApprovalStatus::NotRequired,
+            granted_scopes: Vec::new(),
+            approval: None,
+            sensitivity: Sensitivity::Public,
             proactive: false,
         }
     }
+
+    pub fn with_granted_scopes(mut self, granted_scopes: Vec<CapabilityScope>) -> Self {
+        self.granted_scopes = granted_scopes;
+        self
+    }
+
+    pub fn with_approval(mut self, approval: ApprovalGrant) -> Self {
+        self.approval_status = approval.status;
+        self.approval = Some(approval);
+        self
+    }
+
+    pub fn with_sensitivity(mut self, sensitivity: Sensitivity) -> Self {
+        self.sensitivity = sensitivity;
+        self
+    }
+}
+
+fn default_plugin_sensitivity() -> Sensitivity {
+    Sensitivity::Public
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -558,7 +590,7 @@ impl PluginHost {
                 request.plugin_id, request.action
             ))
         })?;
-        let metadata = PluginCallMetadata::from_manifest(&manifest, &action, &request);
+        let mut metadata = PluginCallMetadata::from_manifest(&manifest, &action, &request);
 
         if request.proactive && !action.proactive {
             return Err(JarvisError::PolicyBlocked(format!(
@@ -567,7 +599,25 @@ impl PluginHost {
             )));
         }
 
-        if metadata.approval_required && request.approval_status != ApprovalStatus::Approved {
+        let policy_request = PolicyRequest {
+            task_id: None,
+            action: format!("{}.{}", manifest.id, action.name),
+            requested_scopes: plugin_permission_scopes(&action.permissions),
+            granted_scopes: request.granted_scopes.clone(),
+            risk_tier: action.risk_tier,
+            sensitivity: request.sensitivity,
+            emergency_paused: false,
+            approval: request.approval.clone(),
+        };
+        let policy = PermissionEngine::evaluate(&policy_request);
+        metadata.approval_required = policy.decision == ApprovalDecision::RequireConfirmation;
+        metadata.approval_status = policy.approval_status;
+
+        if policy.decision == ApprovalDecision::Blocked {
+            return Err(JarvisError::PolicyBlocked(policy.reason));
+        }
+
+        if policy.decision == ApprovalDecision::RequireConfirmation {
             return Ok(PluginCallResult::approval_required(metadata));
         }
 
@@ -618,6 +668,26 @@ impl PluginHost {
             }),
         }
     }
+}
+
+pub fn plugin_permission_scopes(permissions: &[PluginPermission]) -> Vec<CapabilityScope> {
+    let mut scopes = vec![CapabilityScope::PluginRun];
+    for permission in permissions {
+        let scope = match permission {
+            PluginPermission::ReadWorkspace => CapabilityScope::FileRead,
+            PluginPermission::WriteWorkspace => CapabilityScope::FileWrite,
+            PluginPermission::ReadMemory => CapabilityScope::MemoryRead,
+            PluginPermission::WriteMemory => CapabilityScope::MemoryWrite,
+            PluginPermission::CallModel => CapabilityScope::LocalModel,
+            PluginPermission::ProactiveRun => CapabilityScope::SchedulerRun,
+            PluginPermission::Network => CapabilityScope::NetworkAccess,
+            PluginPermission::SystemStatus => CapabilityScope::Conversation,
+        };
+        if !scopes.contains(&scope) {
+            scopes.push(scope);
+        }
+    }
+    scopes
 }
 
 #[derive(Debug, Clone)]
@@ -764,11 +834,10 @@ mod tests {
     fn echo_plugin_round_trips_input_and_metadata() {
         let host = PluginHost::with_first_party_plugins().expect("host should build");
         let result = host
-            .execute(PluginCallRequest::reactive(
-                "fake_echo",
-                "echo",
-                json!({ "message": "hello" }),
-            ))
+            .execute(
+                PluginCallRequest::reactive("fake_echo", "echo", json!({ "message": "hello" }))
+                    .with_granted_scopes(vec![CapabilityScope::PluginRun]),
+            )
             .expect("echo should execute");
 
         assert_eq!(result.status, PluginCallStatus::Completed);
@@ -787,6 +856,10 @@ mod tests {
         let host = PluginHost::with_first_party_plugins().expect("host should build");
         let mut request = PluginCallRequest::reactive("fake_status", "status", json!({}));
         request.proactive = true;
+        request.granted_scopes = plugin_permission_scopes(&[
+            PluginPermission::SystemStatus,
+            PluginPermission::ProactiveRun,
+        ]);
 
         let result = host.execute(request).expect("status should execute");
 
@@ -807,16 +880,46 @@ mod tests {
     fn schema_validation_blocks_invalid_input() {
         let host = PluginHost::with_first_party_plugins().expect("host should build");
         let error = host
-            .execute(PluginCallRequest::reactive(
-                "fake_echo",
-                "echo",
-                json!({ "message": 42 }),
-            ))
+            .execute(
+                PluginCallRequest::reactive("fake_echo", "echo", json!({ "message": 42 }))
+                    .with_granted_scopes(vec![CapabilityScope::PluginRun]),
+            )
             .expect_err("invalid input should fail");
 
         assert!(error
             .to_string()
             .contains("fake_echo.echo input field message must be string"));
+    }
+
+    #[test]
+    fn missing_granted_scope_blocks_before_execution() {
+        let host = PluginHost::with_first_party_plugins().expect("host should build");
+        let error = host
+            .execute(PluginCallRequest::reactive(
+                "fake_echo",
+                "echo",
+                json!({ "message": "hello" }),
+            ))
+            .expect_err("missing plugin_run grant should block execution");
+
+        assert!(error
+            .to_string()
+            .contains("requested capability scope is not granted"));
+    }
+
+    #[test]
+    fn private_sensitivity_requires_approval_even_for_low_risk_action() {
+        let host = PluginHost::with_first_party_plugins().expect("host should build");
+        let result = host
+            .execute(
+                PluginCallRequest::reactive("fake_echo", "echo", json!({ "message": "private" }))
+                    .with_granted_scopes(vec![CapabilityScope::PluginRun])
+                    .with_sensitivity(Sensitivity::Private),
+            )
+            .expect("private low-risk action should require approval");
+
+        assert_eq!(result.status, PluginCallStatus::ApprovalRequired);
+        assert_eq!(result.metadata.approval_status, ApprovalStatus::Pending);
     }
 
     #[test]
@@ -826,34 +929,66 @@ mod tests {
             .expect("register approval plugin");
 
         let result = host
-            .execute(PluginCallRequest::reactive(
-                "approval_plugin",
-                "needs_approval",
-                json!({ "message": "hello" }),
-            ))
+            .execute(
+                PluginCallRequest::reactive(
+                    "approval_plugin",
+                    "needs_approval",
+                    json!({ "message": "hello" }),
+                )
+                .with_granted_scopes(plugin_permission_scopes(&[
+                    PluginPermission::WriteWorkspace,
+                ])),
+            )
             .expect("approval result should be returned");
 
         assert_eq!(result.status, PluginCallStatus::ApprovalRequired);
         assert!(result.metadata.approval_required);
-        assert_eq!(result.metadata.approval_status, ApprovalStatus::NotRequired);
+        assert_eq!(result.metadata.approval_status, ApprovalStatus::Pending);
     }
 
     #[test]
-    fn approved_confirm_risk_executes() {
+    fn approved_status_without_grant_still_requires_approval() {
         let mut host = PluginHost::new();
         host.register(ApprovalPlugin)
             .expect("register approval plugin");
         let mut request = PluginCallRequest::reactive(
             "approval_plugin",
             "needs_approval",
-            json!({ "message": "approved" }),
+            json!({ "message": "status only" }),
         );
         request.approval_status = ApprovalStatus::Approved;
+        request.granted_scopes = plugin_permission_scopes(&[PluginPermission::WriteWorkspace]);
+
+        let result = host
+            .execute(request)
+            .expect("approval requirement should be returned");
+
+        assert_eq!(result.status, PluginCallStatus::ApprovalRequired);
+        assert_eq!(result.metadata.approval_status, ApprovalStatus::Pending);
+    }
+
+    #[test]
+    fn valid_approval_grant_executes_confirm_risk() {
+        let mut host = PluginHost::new();
+        host.register(ApprovalPlugin)
+            .expect("register approval plugin");
+        let request = PluginCallRequest::reactive(
+            "approval_plugin",
+            "needs_approval",
+            json!({ "message": "approved" }),
+        )
+        .with_granted_scopes(plugin_permission_scopes(&[
+            PluginPermission::WriteWorkspace,
+        ]))
+        .with_approval(ApprovalGrant::approved(plugin_permission_scopes(&[
+            PluginPermission::WriteWorkspace,
+        ])));
 
         let result = host.execute(request).expect("approved call should execute");
 
         assert_eq!(result.status, PluginCallStatus::Completed);
         assert_eq!(result.output, json!({ "message": "approved" }));
+        assert_eq!(result.metadata.approval_status, ApprovalStatus::Approved);
     }
 
     #[test]
@@ -862,14 +997,15 @@ mod tests {
         host.register(SlowPlugin).expect("register slow plugin");
 
         let result = host
-            .execute(PluginCallRequest::reactive(
-                "slow_plugin",
-                "sleep",
-                json!({}),
-            ))
+            .execute(
+                PluginCallRequest::reactive("slow_plugin", "sleep", json!({}))
+                    .with_granted_scopes(vec![CapabilityScope::PluginRun]),
+            )
             .expect("timeout should return result");
 
         assert_eq!(result.status, PluginCallStatus::TimedOut);
+        assert_eq!(result.output, json!({ "timed_out": true }));
+        assert_eq!(result.metadata.approval_status, ApprovalStatus::NotRequired);
         assert_eq!(result.metadata.timeout_ms, 10);
         assert_eq!(
             result.metadata.cancellation,

@@ -14,13 +14,14 @@ pub use ipc::{
     HealthResponse, IpcState, UpdateMemoryItemRequest,
 };
 pub use model::{
-    FakeLocalModel, ModelExecutor, ModelProvider, ModelRequest, ModelResponse, ModelRoute,
+    ChatGptProviderConfig, FakeLocalModel, LocalModelConfig, ModelExecutor, ModelProvider,
+    ModelRequest, ModelResponse, ModelRoute, ProviderConfig, ProviderStatus,
 };
 pub use plugin::{
-    CancellationBehavior, CancellationSignal, EchoPlugin, InProcessPlugin, JsonSchema,
-    PluginAccess, PluginActionManifest, PluginCallMetadata, PluginCallRequest, PluginCallResult,
-    PluginCallStatus, PluginHost, PluginManifest, PluginPermission, PluginSource, PluginTimeout,
-    PluginTimeoutAction, StatusPlugin,
+    plugin_permission_scopes, CancellationBehavior, CancellationSignal, EchoPlugin,
+    InProcessPlugin, JsonSchema, PluginAccess, PluginActionManifest, PluginCallMetadata,
+    PluginCallRequest, PluginCallResult, PluginCallStatus, PluginHost, PluginManifest,
+    PluginPermission, PluginSource, PluginTimeout, PluginTimeoutAction, StatusPlugin,
 };
 pub use policy::{
     ApprovalDecision, ApprovalGrant, CapabilityScope, PermissionEngine, PolicyDecision,
@@ -28,7 +29,7 @@ pub use policy::{
 };
 pub use router::{
     redact_for_chatgpt, ModelProvider as RoutedModelProvider, ModelRouteRecord, ModelRouteRequest,
-    ModelRouter, RouteOutcome,
+    ModelRouter, RouteEvidence, RouteOutcome,
 };
 pub use runtime::{
     CommandRequest as RuntimeCommandRequest, CommandResponse as RuntimeCommandResponse,

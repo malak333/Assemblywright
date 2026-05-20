@@ -17,12 +17,12 @@ use crate::storage::{
     EmergencyPauseState as StoredEmergencyPauseState, NewMemoryItem, SqliteRepository,
 };
 use crate::{
-    ApprovalDecision, ApprovalStatus, AuditEntry, CapabilityScope, ConversationRuntime,
-    FakeLocalModel, JarvisError, JarvisResult, ModelRoute, ModelRouteRequest, ModelRouter,
+    plugin_permission_scopes, ApprovalDecision, ApprovalStatus, AuditEntry, CapabilityScope,
+    ConversationRuntime, FakeLocalModel, JarvisError, JarvisResult, ModelRoute, ModelRouteRecord,
     PermissionEngine, PluginCallRequest, PluginCallResult, PluginCallStatus, PluginHost,
-    PluginManifest, PluginPermission, PolicyRequest, RuntimeCommandRequest, RuntimeCommandStore,
-    RuntimeConfig, RuntimeControl, RuntimeStep, Scheduler, SchedulerJob, SchedulerJobSpec,
-    SchedulerJobStatus, Sensitivity, TaskRecord, TaskStatus, TriggerKind,
+    PluginManifest, PolicyRequest, RuntimeCommandRequest, RuntimeCommandStore, RuntimeConfig,
+    RuntimeControl, RuntimeStep, Scheduler, SchedulerJob, SchedulerJobSpec, SchedulerJobStatus,
+    Sensitivity, TaskRecord, TaskStatus, TriggerKind,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -97,6 +97,7 @@ pub struct CommandResponse {
     pub audit_entry: AuditEntry,
     pub audit_entries: Vec<AuditEntry>,
     pub route: Option<ModelRoute>,
+    pub route_evidence: Option<ModelRouteRecord>,
     pub steps: Vec<RuntimeStep>,
     pub plugin_results: Vec<PluginCallResult>,
     pub message: String,
@@ -307,34 +308,6 @@ impl IpcState {
 
         let mut audit_entries = runtime_response.audit_entries;
         let plugin_results = if runtime_response.task.status == TaskStatus::Completed {
-            let route_record = ModelRouter::route(&ModelRouteRequest {
-                task_id: Some(runtime_response.task.id),
-                user_intent: request.input.clone(),
-                sensitivity,
-                required_scopes: vec![CapabilityScope::Conversation, CapabilityScope::LocalModel],
-                granted_scopes: vec![CapabilityScope::Conversation, CapabilityScope::LocalModel],
-                local_available: true,
-                local_sufficient: true,
-                chatgpt_enabled: false,
-                emergency_paused: self.runtime_control.is_emergency_paused(),
-                approval: None,
-                context_preview: context_preview(&request.context),
-            });
-            let route_audit = AuditEntry::new(
-                Some(runtime_response.task.id),
-                "model_route_selected",
-                "model router selected the command route",
-                json!({
-                    "outcome": route_record.outcome,
-                    "selected_provider": route_record.selected_provider,
-                    "reason": route_record.reason,
-                    "sensitivity": route_record.sensitivity,
-                    "approval_status": route_record.approval_status,
-                    "redaction_applied": route_record.redaction_applied,
-                }),
-            );
-            command_store.append_audit_entry(&route_audit)?;
-            audit_entries.push(route_audit);
             self.maybe_execute_first_party_plugin(
                 runtime_response.task.id,
                 &request.input,
@@ -366,6 +339,7 @@ impl IpcState {
             audit_entry,
             audit_entries,
             route: runtime_response.route,
+            route_evidence: runtime_response.route_evidence,
             steps: runtime_response.steps,
             plugin_results,
             message: runtime_response.message,
@@ -398,9 +372,11 @@ impl IpcState {
                 plugin_request.plugin_id, plugin_request.action
             ))
         })?;
-        let requested_scopes = plugin_scopes(&action.permissions);
+        let requested_scopes = plugin_permission_scopes(&action.permissions);
         let mut granted_scopes = requested_scopes.clone();
         granted_scopes.push(CapabilityScope::Conversation);
+        plugin_request.granted_scopes = granted_scopes.clone();
+        plugin_request.sensitivity = sensitivity;
         let policy_request = PolicyRequest {
             task_id: Some(task_id),
             action: format!("{}.{}", plugin_request.plugin_id, plugin_request.action),
@@ -669,14 +645,6 @@ fn sensitivity_from_context(context: &serde_json::Value) -> Option<Sensitivity> 
     }
 }
 
-fn context_preview(context: &serde_json::Value) -> String {
-    match context {
-        serde_json::Value::Null => String::new(),
-        serde_json::Value::String(value) => value.chars().take(512).collect(),
-        value => value.to_string().chars().take(512).collect(),
-    }
-}
-
 fn first_party_plugin_request(input: &str) -> Option<PluginCallRequest> {
     let trimmed = input.trim();
     if let Some(message) = trimmed.strip_prefix("plugin echo ") {
@@ -699,26 +667,6 @@ fn first_party_plugin_request(input: &str) -> Option<PluginCallRequest> {
     }
 
     None
-}
-
-fn plugin_scopes(permissions: &[PluginPermission]) -> Vec<CapabilityScope> {
-    let mut scopes = vec![CapabilityScope::PluginRun];
-    for permission in permissions {
-        let scope = match permission {
-            PluginPermission::ReadWorkspace => CapabilityScope::FileRead,
-            PluginPermission::WriteWorkspace => CapabilityScope::FileWrite,
-            PluginPermission::ReadMemory => CapabilityScope::MemoryRead,
-            PluginPermission::WriteMemory => CapabilityScope::MemoryWrite,
-            PluginPermission::CallModel => CapabilityScope::LocalModel,
-            PluginPermission::ProactiveRun => CapabilityScope::SchedulerRun,
-            PluginPermission::Network => CapabilityScope::NetworkAccess,
-            PluginPermission::SystemStatus => CapabilityScope::Conversation,
-        };
-        if !scopes.contains(&scope) {
-            scopes.push(scope);
-        }
-    }
-    scopes
 }
 
 pub fn router(state: IpcState) -> Router {
@@ -1032,13 +980,16 @@ mod tests {
 
         assert!(response.accepted);
         assert_eq!(response.task.status, TaskStatus::Completed);
-        assert_eq!(response.audit_entry.event_type, "model_route_selected");
+        assert_eq!(response.audit_entry.event_type, "task_completed");
         assert_eq!(response.steps.len(), 1);
         assert!(response.message.contains("what is next"));
         assert_eq!(
             response.route.expect("fake local route").model,
             "fake-local-model"
         );
+        let route_evidence = response.route_evidence.expect("route evidence");
+        assert_eq!(route_evidence.outcome, crate::RouteOutcome::Selected);
+        assert!(!route_evidence.evidence.chatgpt_enabled);
         assert!(response
             .audit_entries
             .iter()
