@@ -18,10 +18,10 @@ pub use model::{
     ModelRequest, ModelResponse, ModelRoute, ProviderConfig, ProviderStatus,
 };
 pub use plugin::{
-    CancellationBehavior, CancellationSignal, EchoPlugin, InProcessPlugin, JsonSchema,
-    PluginAccess, PluginActionManifest, PluginCallMetadata, PluginCallRequest, PluginCallResult,
-    PluginCallStatus, PluginHost, PluginManifest, PluginPermission, PluginSource, PluginTimeout,
-    PluginTimeoutAction, StatusPlugin,
+    plugin_permission_scopes, CancellationBehavior, CancellationSignal, EchoPlugin,
+    InProcessPlugin, JsonSchema, PluginAccess, PluginActionManifest, PluginCallMetadata,
+    PluginCallRequest, PluginCallResult, PluginCallStatus, PluginHost, PluginManifest,
+    PluginPermission, PluginSource, PluginTimeout, PluginTimeoutAction, StatusPlugin,
 };
 pub use policy::{
     ApprovalDecision, ApprovalGrant, CapabilityScope, PermissionEngine, PolicyDecision,
