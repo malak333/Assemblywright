@@ -7,6 +7,30 @@ public enum JarvisCoreMode: Equatable, Sendable {
     case degraded(reason: String)
 }
 
+public struct JarvisCoreSupervisorSmokeSnapshot: Equatable, Sendable {
+    public var mode: JarvisCoreMode
+    public var endpoint: URL
+    public var executablePath: String?
+    public var databasePath: String?
+    public var launchArguments: [String]
+    public var lastHealthStatus: String?
+    public var lastHealthRuntime: String?
+
+    public var executableConfigured: Bool {
+        executablePath != nil
+    }
+
+    public var canAttemptPackagedCoreSmoke: Bool {
+        executableConfigured && mode != .starting
+    }
+
+    public var summary: String {
+        let executable = executablePath ?? "not configured"
+        let health = lastHealthStatus.map { "\($0) / \(lastHealthRuntime ?? "unknown runtime")" } ?? "not checked"
+        return "endpoint: \(endpoint.absoluteString), executable: \(executable), health: \(health)"
+    }
+}
+
 public struct JarvisCoreSupervisorConfiguration: Equatable, Sendable {
     public var endpoint: JarvisEndpoint
     public var bindAddress: String
@@ -160,6 +184,18 @@ public final class JarvisCoreSupervisor: ObservableObject {
             return true
         }
         return false
+    }
+
+    public var smokeSnapshot: JarvisCoreSupervisorSmokeSnapshot {
+        JarvisCoreSupervisorSmokeSnapshot(
+            mode: mode,
+            endpoint: configuration.endpoint.baseURL,
+            executablePath: configuration.executableURL?.path,
+            databasePath: configuration.databaseURL?.path,
+            launchArguments: configuration.launchArguments,
+            lastHealthStatus: lastHealth?.status,
+            lastHealthRuntime: lastHealth?.commandRuntime
+        )
     }
 
     public func start() async {

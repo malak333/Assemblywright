@@ -151,9 +151,12 @@ orchestration, including policy checks, approval stops, validation failures, and
 tool-result feedback into later model steps. Focused provider tests prove typed
 Ollama-compatible request/error behavior without requiring a live model during
 the default release gate. They do not prove signed app packaging, ChatGPT
-execution, installed plugin sandboxing, memory UX beyond the scaffold, approval
-UI, voice loop, or packaged Mac release smoke test until those surfaces exist
-and are covered. The current Swift gate proves the Mac shell scaffold builds,
-decodes IPC contracts, exposes management models, and can supervise a
-configured local core process abstraction; it does not prove a signed packaged
-app bundles and launches the Rust core.
+execution, installed plugin sandboxing/execution, memory UX beyond the
+scaffold, Swift approval decision UI, voice loop, or packaged Mac release smoke
+test until those surfaces exist and are covered. The current Swift gate proves
+the Mac shell scaffold builds, decodes IPC contracts, exposes management models
+for approval evidence, runs/audit, scheduler, diagnostics, and voice
+degraded-mode state, and can supervise a configured local core process
+abstraction; it does not prove a signed packaged app bundles and launches the
+Rust core, nor that approval decisions or real speech recognition are
+implemented.

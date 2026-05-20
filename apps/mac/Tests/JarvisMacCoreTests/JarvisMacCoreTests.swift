@@ -50,6 +50,11 @@ struct JarvisMacCoreTests {
             {
               "status": "ok",
               "version": "0.1.0",
+              "contract": {
+                "name": "jarvis.local-ipc",
+                "version": 1,
+                "core_version": "0.1.0"
+              },
               "started_at": "2026-05-20T12:00:00Z",
               "emergency_paused": true,
               "emergency_pause_reason": "testing",
@@ -63,10 +68,38 @@ struct JarvisMacCoreTests {
         let health = try JSONDecoder().decode(JarvisHealth.self, from: data)
 
         #expect(health.status == "ok")
+        #expect(health.contract?.name == "jarvis.local-ipc")
         #expect(health.emergencyPaused)
         #expect(health.emergencyPauseReason == "testing")
         #expect(health.schedulerJobs == 2)
         #expect(health.commandRuntime == "fake-local-model")
+    }
+
+    @Test("Contract payload decodes endpoints and approval action exposure")
+    func decodesContract() throws {
+        let data = Data(
+            """
+            {
+              "contract": {
+                "name": "jarvis.local-ipc",
+                "version": 1,
+                "core_version": "0.1.0"
+              },
+              "endpoints": [
+                { "method": "GET", "path": "/health", "repository_required": false, "redacted": true },
+                { "method": "GET", "path": "/scheduler/jobs/:id", "repository_required": false, "redacted": false }
+              ],
+              "safe_inspection_paths": ["/health", "/diagnostics/export"]
+            }
+            """.utf8
+        )
+
+        let contract = try JSONDecoder().decode(JarvisContractResponse.self, from: data)
+
+        #expect(contract.contract.name == "jarvis.local-ipc")
+        #expect(contract.endpoints.map(\.id).contains("GET /scheduler/jobs/:id"))
+        #expect(contract.safeInspectionPaths.contains("/diagnostics/export"))
+        #expect(!contract.exposesApprovalActions)
     }
 
     @Test("Command response decodes task, route, steps, and message")
@@ -234,6 +267,8 @@ struct JarvisMacCoreTests {
             )!
 
             switch request.url?.path(percentEncoded: false) {
+            case "/contract":
+                return (response, contractJSON(exposesApprovalEndpoint: false))
             case "/memory":
                 if request.httpMethod == "GET" {
                     return (response, Data("[]".utf8))
@@ -246,6 +281,8 @@ struct JarvisMacCoreTests {
                     return (response, Data("[]".utf8))
                 }
                 return (response, schedulerJobJSON(id: jobId))
+            case "/scheduler/jobs/\(jobId.uuidString)":
+                return (response, schedulerJobJSON(id: jobId))
             case "/emergency-pause":
                 return (response, Data(#"{"paused":false,"reason":null,"paused_at":null,"resumed_at":"2026-05-20T12:00:00Z","cancelled_scheduler_jobs":0}"#.utf8))
             default:
@@ -254,6 +291,7 @@ struct JarvisMacCoreTests {
         }
         defer { IPCURLProtocol.handler = nil }
 
+        _ = try await client.contract()
         _ = try await client.listMemoryItems(includeDeleted: true)
         _ = try await client.createMemoryItem(
             JarvisCreateMemoryItemRequest(
@@ -273,12 +311,22 @@ struct JarvisMacCoreTests {
                 trigger: .manual
             )
         )
+        _ = try await client.schedulerJob(id: jobId)
         _ = try await client.pauseStatus()
 
-        #expect(requests.map(\.method) == ["GET", "POST", "GET", "GET", "POST", "GET"])
-        #expect(requests.map(\.path) == ["/memory", "/memory", "/plugins/manifests", "/scheduler/jobs", "/scheduler/jobs", "/emergency-pause"])
-        #expect(requests[1].body?["key"] as? String == "release-gate")
-        #expect(requests[4].body?["command"] as? String == "status check")
+        #expect(requests.map(\.method) == ["GET", "GET", "POST", "GET", "GET", "POST", "GET", "GET"])
+        #expect(requests.map(\.path) == [
+            "/contract",
+            "/memory",
+            "/memory",
+            "/plugins/manifests",
+            "/scheduler/jobs",
+            "/scheduler/jobs",
+            "/scheduler/jobs/\(jobId.uuidString)",
+            "/emergency-pause"
+        ])
+        #expect(requests[2].body?["key"] as? String == "release-gate")
+        #expect(requests[5].body?["command"] as? String == "status check")
     }
 
     @Test("Management payloads decode tasks and audit list")
@@ -571,6 +619,116 @@ struct JarvisMacCoreTests {
         #expect(export.health.status == "ok")
     }
 
+    @Test("Approval queue remains inspection-only when core has no approval endpoint")
+    func approvalQueueReflectsCoreContract() throws {
+        let taskId = UUID()
+        let auditId = UUID()
+        let task = JarvisTask(
+            id: taskId,
+            sessionId: UUID(),
+            userInput: "private model route",
+            status: "waiting_for_approval",
+            createdAt: "2026-05-20T12:00:00Z",
+            updatedAt: "2026-05-20T12:00:01Z"
+        )
+        let audit = JarvisAuditEntry(
+            id: auditId,
+            taskId: taskId,
+            eventType: "plugin_approval_required",
+            summary: "Tool execution requires approval before continuing.",
+            payload: .object(["approval_status": .string("pending")]),
+            createdAt: "2026-05-20T12:00:01Z"
+        )
+        let contract = try JSONDecoder().decode(
+            JarvisContractResponse.self,
+            from: contractJSON(exposesApprovalEndpoint: false)
+        )
+
+        let items = JarvisApprovalQueueItem.pendingItems(
+            tasks: [task],
+            auditEntries: [audit],
+            contract: contract
+        )
+
+        #expect(items.count == 2)
+        #expect(items.allSatisfy { !$0.actionAvailable })
+        #expect(items.contains { $0.id == taskId && $0.source == "task" })
+        #expect(items.contains { $0.id == auditId && $0.approvalStatus == "pending" })
+    }
+
+    @MainActor
+    @Test("Voice state model is explicit about text-only scaffold")
+    func voiceStateModelTracksDegradedMode() {
+        let model = VoiceStateModel()
+
+        #expect(model.statusText.contains("Text-only voice scaffold"))
+        model.setUnavailable(reason: "Microphone permission is missing.")
+        #expect(model.statusText.contains("Voice unavailable"))
+        #expect(!model.isPushToTalkEnabled)
+        model.resetTextOnly()
+        #expect(model.statusText.contains("Speech recognition is not implemented"))
+    }
+
+    @MainActor
+    @Test("Approval management model loads contract, tasks, and audit evidence")
+    func approvalManagementModelLoadsQueue() async {
+        let task = JarvisTask(
+            id: UUID(),
+            sessionId: UUID(),
+            userInput: "private tool",
+            status: "waiting_for_approval",
+            createdAt: nil,
+            updatedAt: nil
+        )
+        let client = FakeCoreClient(
+            tasks: [task],
+            auditEntries: [
+                JarvisAuditEntry(
+                    id: UUID(),
+                    taskId: task.id,
+                    eventType: "plugin_approval_required",
+                    summary: "approval required",
+                    payload: .object(["approval_status": .string("pending")]),
+                    createdAt: "2026-05-20T12:00:00Z"
+                )
+            ]
+        )
+        let model = ApprovalManagementModel(client: client)
+
+        await model.refresh()
+
+        #expect(model.pendingItems.count == 2)
+        #expect(!model.supportsApprovalActions)
+        #expect(model.limitationText?.contains("no approval decision endpoint") == true)
+    }
+
+    @MainActor
+    @Test("Run management model loads tasks and audit entries")
+    func runManagementModelLoadsRuns() async {
+        let task = JarvisTask(
+            id: UUID(),
+            sessionId: UUID(),
+            userInput: "status check",
+            status: "completed",
+            createdAt: nil,
+            updatedAt: nil
+        )
+        let audit = JarvisAuditEntry(
+            id: UUID(),
+            taskId: task.id,
+            eventType: "task_completed",
+            summary: "command completed",
+            payload: nil,
+            createdAt: "2026-05-20T12:00:00Z"
+        )
+        let model = RunManagementModel(client: FakeCoreClient(tasks: [task], auditEntries: [audit]))
+
+        await model.refresh()
+
+        #expect(model.tasks == [task])
+        #expect(model.auditEntries == [audit])
+    }
+
     @Test("Supervisor configuration builds jarvis-cli serve arguments")
     func supervisorConfigurationBuildsLaunchArguments() {
         let databaseURL = URL(fileURLWithPath: "/tmp/jarvis-test.sqlite")
@@ -638,6 +796,8 @@ struct JarvisMacCoreTests {
         #expect(launcher.launches.first?.executableURL.path == "/tmp/jarvis-cli")
         #expect(launcher.launches.first?.arguments == ["serve", "--bind", "127.0.0.1:9901"])
         #expect(supervisor.lastHealth?.status == "ok")
+        #expect(supervisor.smokeSnapshot.canAttemptPackagedCoreSmoke)
+        #expect(supervisor.smokeSnapshot.summary.contains("jarvis-cli"))
     }
 
     private func memoryItemJSON(id: UUID) -> Data {
@@ -672,6 +832,29 @@ struct JarvisMacCoreTests {
               "updated_at": "2026-05-20T12:00:01Z",
               "cancelled_at": null,
               "cancellation_reason": null
+            }
+            """.utf8
+        )
+    }
+
+    private func contractJSON(exposesApprovalEndpoint: Bool) -> Data {
+        let extra = exposesApprovalEndpoint
+            ? #",{ "method": "POST", "path": "/approvals/:id/approve", "repository_required": true, "redacted": false }"#
+            : ""
+        return Data(
+            """
+            {
+              "contract": {
+                "name": "jarvis.local-ipc",
+                "version": 1,
+                "core_version": "0.1.0"
+              },
+              "endpoints": [
+                { "method": "GET", "path": "/health", "repository_required": false, "redacted": true },
+                { "method": "GET", "path": "/scheduler/jobs/:id", "repository_required": false, "redacted": false }
+                \(extra)
+              ],
+              "safe_inspection_paths": ["/health", "/diagnostics/export"]
             }
             """.utf8
         )
@@ -744,9 +927,17 @@ private final class FakeProcessLauncher: JarvisCoreProcessLaunching, @unchecked 
 
 private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     private var healthResults: [Result<JarvisHealth, Error>]
+    private var tasks: [JarvisTask]
+    private var auditEntries: [JarvisAuditEntry]
 
-    init(healthResults: [Result<JarvisHealth, Error>] = [.success(sampleHealth())]) {
+    init(
+        healthResults: [Result<JarvisHealth, Error>] = [.success(sampleHealth())],
+        tasks: [JarvisTask] = [],
+        auditEntries: [JarvisAuditEntry] = []
+    ) {
         self.healthResults = healthResults
+        self.tasks = tasks
+        self.auditEntries = auditEntries
     }
 
     func health() async throws -> JarvisHealth {
@@ -755,6 +946,23 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         }
 
         return try healthResults.removeFirst().get()
+    }
+
+    func contract() async throws -> JarvisContractResponse {
+        try JSONDecoder().decode(
+            JarvisContractResponse.self,
+            from: Data(
+                """
+                {
+                  "contract": { "name": "jarvis.local-ipc", "version": 1, "core_version": "0.1.0" },
+                  "endpoints": [
+                    { "method": "GET", "path": "/health", "repository_required": false, "redacted": true }
+                  ],
+                  "safe_inspection_paths": ["/health"]
+                }
+                """.utf8
+            )
+        )
     }
 
     func submit(_ command: JarvisCommandRequest) async throws -> JarvisCommandResponse {
@@ -774,7 +982,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     }
 
     func listTasks() async throws -> [JarvisTask] {
-        []
+        tasks
     }
 
     func task(id: UUID) async throws -> JarvisTask {
@@ -782,7 +990,10 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     }
 
     func listAuditEntries(taskId: UUID?) async throws -> [JarvisAuditEntry] {
-        []
+        if let taskId {
+            return auditEntries.filter { $0.taskId == taskId }
+        }
+        return auditEntries
     }
 
     func listMemoryItems(includeDeleted: Bool) async throws -> [JarvisMemoryItem] {
@@ -815,6 +1026,10 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
 
     func listSchedulerJobs() async throws -> [JarvisSchedulerJob] {
         []
+    }
+
+    func schedulerJob(id: UUID) async throws -> JarvisSchedulerJob {
+        throw URLError(.unsupportedURL)
     }
 
     func createSchedulerJob(_ request: JarvisCreateSchedulerJobRequest) async throws -> JarvisSchedulerJob {
