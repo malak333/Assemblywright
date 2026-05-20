@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::routing::{delete, get, post};
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -25,10 +25,36 @@ use crate::{
     Sensitivity, TaskRecord, TaskStatus, TriggerKind,
 };
 
+pub const IPC_CONTRACT_VERSION: u16 = 1;
+pub const IPC_CONTRACT_NAME: &str = "jarvis.local-ipc";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContractMetadata {
+    pub name: String,
+    pub version: u16,
+    pub core_version: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContractEndpoint {
+    pub method: String,
+    pub path: String,
+    pub repository_required: bool,
+    pub redacted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContractResponse {
+    pub contract: ContractMetadata,
+    pub endpoints: Vec<ContractEndpoint>,
+    pub safe_inspection_paths: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HealthResponse {
     pub status: String,
     pub version: String,
+    pub contract: ContractMetadata,
     pub started_at: DateTime<Utc>,
     pub emergency_paused: bool,
     pub emergency_pause_reason: Option<String>,
@@ -231,17 +257,44 @@ impl IpcState {
         self.scheduler.clone()
     }
 
+    pub fn contract(&self) -> ContractResponse {
+        ContractResponse {
+            contract: self.contract_metadata(),
+            endpoints: contract_endpoints(),
+            safe_inspection_paths: vec![
+                "/health".to_string(),
+                "/contract".to_string(),
+                "/diagnostics/export".to_string(),
+                "/plugins/manifests".to_string(),
+                "/plugins/manifests/:id".to_string(),
+                "/scheduler/jobs".to_string(),
+                "/scheduler/jobs/:id".to_string(),
+                "/memory".to_string(),
+                "/memory/:id".to_string(),
+            ],
+        }
+    }
+
     pub fn health(&self) -> HealthResponse {
         let pause = self.pause_snapshot();
         HealthResponse {
             status: "ok".to_string(),
             version: self.version.clone(),
+            contract: self.contract_metadata(),
             started_at: self.started_at,
             emergency_paused: pause.paused,
             emergency_pause_reason: pause.reason.clone(),
             emergency_pause_updated_at: pause.updated_at(),
             scheduler_jobs: self.scheduler.list().len(),
             command_runtime: "routed-fake-local-model+first-party-plugins".to_string(),
+        }
+    }
+
+    fn contract_metadata(&self) -> ContractMetadata {
+        ContractMetadata {
+            name: IPC_CONTRACT_NAME.to_string(),
+            version: IPC_CONTRACT_VERSION,
+            core_version: self.version.clone(),
         }
     }
 
@@ -551,6 +604,14 @@ impl IpcState {
         Ok(job)
     }
 
+    pub fn get_scheduler_job(&self, id: Uuid) -> JarvisResult<SchedulerJob> {
+        self.scheduler
+            .list()
+            .into_iter()
+            .find(|job| job.id == id)
+            .ok_or_else(|| JarvisError::Storage(format!("scheduler job not found: {id}")))
+    }
+
     fn persist_scheduler_job(&self, job: &SchedulerJob) -> JarvisResult<()> {
         self.repository
             .as_ref()
@@ -672,6 +733,7 @@ fn first_party_plugin_request(input: &str) -> Option<PluginCallRequest> {
 pub fn router(state: IpcState) -> Router {
     Router::new()
         .route("/health", get(health))
+        .route("/contract", get(contract))
         .route("/diagnostics/export", get(diagnostics_export))
         .route("/commands", post(command))
         .route("/tasks", get(list_tasks))
@@ -687,6 +749,7 @@ pub fn router(state: IpcState) -> Router {
         )
         .route("/memory/:id/review", post(review_memory_item))
         .route("/plugins/manifests", get(list_plugin_manifests))
+        .route("/plugins/manifests/:id", get(get_plugin_manifest))
         .route(
             "/emergency-pause",
             get(pause_status).post(pause).delete(resume),
@@ -695,7 +758,10 @@ pub fn router(state: IpcState) -> Router {
             "/scheduler/jobs",
             get(list_scheduler_jobs).post(create_scheduler_job),
         )
-        .route("/scheduler/jobs/:id", delete(cancel_scheduler_job))
+        .route(
+            "/scheduler/jobs/:id",
+            get(get_scheduler_job).delete(cancel_scheduler_job),
+        )
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
@@ -712,6 +778,10 @@ pub async fn serve_listener(listener: TcpListener, state: IpcState) -> anyhow::R
 
 async fn health(State(state): State<IpcState>) -> Json<HealthResponse> {
     Json(state.health())
+}
+
+async fn contract(State(state): State<IpcState>) -> Json<ContractResponse> {
+    Json(state.contract())
 }
 
 async fn diagnostics_export(
@@ -870,6 +940,16 @@ async fn list_plugin_manifests(
         .map_err(error_response)
 }
 
+async fn get_plugin_manifest(
+    State(_state): State<IpcState>,
+    Path(id): Path<String>,
+) -> Result<Json<PluginManifest>, (StatusCode, Json<ErrorResponse>)> {
+    PluginHost::with_first_party_plugins()
+        .and_then(|host| host.manifest(&id))
+        .map(Json)
+        .map_err(error_response)
+}
+
 async fn pause_status(State(state): State<IpcState>) -> Json<EmergencyPauseResponse> {
     Json(state.pause_status())
 }
@@ -894,6 +974,16 @@ async fn list_scheduler_jobs(State(state): State<IpcState>) -> Json<Vec<Schedule
     Json(state.scheduler().list())
 }
 
+async fn get_scheduler_job(
+    State(state): State<IpcState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<SchedulerJob>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .get_scheduler_job(id)
+        .map(Json)
+        .map_err(error_response)
+}
+
 async fn create_scheduler_job(
     State(state): State<IpcState>,
     Json(request): Json<CreateSchedulerJobRequest>,
@@ -916,6 +1006,48 @@ async fn cancel_scheduler_job(
         .cancel_scheduler_job(id, "cancelled through IPC")
         .map(Json)
         .map_err(error_response)
+}
+
+fn contract_endpoints() -> Vec<ContractEndpoint> {
+    vec![
+        endpoint("GET", "/health", false, true),
+        endpoint("GET", "/contract", false, true),
+        endpoint("GET", "/diagnostics/export", false, true),
+        endpoint("POST", "/commands", false, false),
+        endpoint("GET", "/tasks", true, false),
+        endpoint("GET", "/tasks/:id", true, false),
+        endpoint("GET", "/tasks/:id/audit", true, false),
+        endpoint("GET", "/audit", true, false),
+        endpoint("GET", "/memory", true, false),
+        endpoint("POST", "/memory", true, false),
+        endpoint("GET", "/memory/:id", true, false),
+        endpoint("PATCH", "/memory/:id", true, false),
+        endpoint("DELETE", "/memory/:id", true, false),
+        endpoint("POST", "/memory/:id/review", true, false),
+        endpoint("GET", "/plugins/manifests", false, true),
+        endpoint("GET", "/plugins/manifests/:id", false, true),
+        endpoint("GET", "/emergency-pause", false, true),
+        endpoint("POST", "/emergency-pause", false, false),
+        endpoint("DELETE", "/emergency-pause", false, true),
+        endpoint("GET", "/scheduler/jobs", false, false),
+        endpoint("POST", "/scheduler/jobs", false, false),
+        endpoint("GET", "/scheduler/jobs/:id", false, false),
+        endpoint("DELETE", "/scheduler/jobs/:id", false, false),
+    ]
+}
+
+fn endpoint(
+    method: impl Into<String>,
+    path: impl Into<String>,
+    repository_required: bool,
+    redacted: bool,
+) -> ContractEndpoint {
+    ContractEndpoint {
+        method: method.into(),
+        path: path.into(),
+        repository_required,
+        redacted,
+    }
 }
 
 fn error_response(error: JarvisError) -> (StatusCode, Json<ErrorResponse>) {
@@ -954,6 +1086,8 @@ mod tests {
 
         let health = state.health();
         assert_eq!(health.status, "ok");
+        assert_eq!(health.contract.name, IPC_CONTRACT_NAME);
+        assert_eq!(health.contract.version, IPC_CONTRACT_VERSION);
         assert_eq!(health.scheduler_jobs, 1);
         assert!(!health.emergency_paused);
         assert_eq!(health.emergency_pause_reason, None);
@@ -962,6 +1096,27 @@ mod tests {
             health.command_runtime,
             "routed-fake-local-model+first-party-plugins"
         );
+    }
+
+    #[test]
+    fn contract_endpoint_documents_safe_inspection_paths() {
+        let state = IpcState::new();
+        let contract = state.contract();
+
+        assert_eq!(contract.contract.name, IPC_CONTRACT_NAME);
+        assert_eq!(contract.contract.version, IPC_CONTRACT_VERSION);
+        assert!(contract
+            .safe_inspection_paths
+            .contains(&"/diagnostics/export".to_string()));
+        assert!(contract
+            .safe_inspection_paths
+            .contains(&"/plugins/manifests/:id".to_string()));
+        assert!(contract
+            .endpoints
+            .iter()
+            .any(|endpoint| endpoint.method == "GET"
+                && endpoint.path == "/scheduler/jobs/:id"
+                && !endpoint.repository_required));
     }
 
     #[tokio::test]
@@ -1210,6 +1365,11 @@ mod tests {
         assert_eq!(jobs[0].id, created.id);
         assert_eq!(jobs[0].status, crate::SchedulerJobStatus::Scheduled);
 
+        let Json(fetched) = get_scheduler_job(State(restarted.clone()), Path(created.id))
+            .await
+            .expect("fetch scheduler job");
+        assert_eq!(fetched.id, created.id);
+
         let Json(cancelled) = cancel_scheduler_job(State(restarted), Path(created.id))
             .await
             .expect("cancel scheduler job");
@@ -1268,6 +1428,12 @@ mod tests {
         assert!(manifests
             .iter()
             .any(|manifest| manifest.id == "fake_status"));
+
+        let Json(manifest) =
+            get_plugin_manifest(State(IpcState::new()), Path("fake_echo".to_string()))
+                .await
+                .expect("fake_echo manifest");
+        assert_eq!(manifest.id, "fake_echo");
     }
 
     #[tokio::test]
