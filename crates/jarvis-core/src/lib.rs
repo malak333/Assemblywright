@@ -14,8 +14,9 @@ pub use ipc::{
     HealthResponse, IpcState, UpdateMemoryItemRequest,
 };
 pub use model::{
-    ChatGptProviderConfig, FakeLocalModel, LocalModelConfig, ModelExecutor, ModelProvider,
-    ModelRequest, ModelResponse, ModelRoute, ModelToolRequest, ModelToolResult, ProviderConfig,
+    redact_url_credentials, ChatGptProviderConfig, FakeLocalModel, LocalModelConfig,
+    LocalModelExecutor, LocalModelProviderKind, ModelExecutor, ModelProvider, ModelRequest,
+    ModelResponse, ModelRoute, ModelToolRequest, ModelToolResult, OllamaHttpModel, ProviderConfig,
     ProviderStatus,
 };
 pub use plugin::{

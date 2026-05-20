@@ -45,6 +45,18 @@ Terminal 1:
 cargo run -p jarvis-cli -- serve
 ```
 
+The default command runtime uses `FakeLocalModel` so local smoke tests stay
+deterministic. To exercise the production-shaped local HTTP provider boundary
+against an Ollama-compatible server:
+
+```sh
+JARVIS_LOCAL_MODEL_PROVIDER=ollama \
+JARVIS_LOCAL_MODEL=llama3.2 \
+JARVIS_OLLAMA_BASE_URL=http://127.0.0.1:11434 \
+JARVIS_LOCAL_MODEL_TIMEOUT_MS=15000 \
+cargo run -p jarvis-cli -- serve
+```
+
 For durable local task and audit state during manual inspection, pass a SQLite
 path:
 
@@ -82,12 +94,13 @@ cargo run -p jarvis-cli -- resume
 ```
 
 Current boundary: the command endpoint runs `ConversationRuntime` with
-`FakeLocalModel`, records local-first `ModelRouter` audit evidence, can execute
-deterministic first-party plugin commands such as `plugin echo ...` through the
-policy engine, honors `--dry-run` for plugin execution, and can persist
-task/audit state when configured with a repository-backed IPC state. It does
+`FakeLocalModel` by default or an opt-in Ollama-compatible local HTTP provider
+from typed env config. It records local-first `ModelRouter` audit evidence, can
+execute deterministic first-party plugin commands such as `plugin echo ...`
+through the policy engine, honors `--dry-run` for plugin execution, and can
+persist task/audit state when configured with a repository-backed IPC state. It
 also has deterministic coverage for bounded model-planned first-party tool
-calls. It does not yet implement real model providers, installed plugin
+calls. It does not yet implement ChatGPT execution, installed plugin
 sandboxing, or approval UI.
 
 When the server is started with `--db-path`, these inspection commands are also
@@ -123,10 +136,12 @@ persistence, redacted diagnostics export, memory create/update/review/delete
 and persistence, plugin manifests, and emergency-pause blocking/resume surfaces.
 Runtime unit tests additionally prove bounded fake-model first-party tool-call
 orchestration, including policy checks, approval stops, validation failures, and
-tool-result feedback into later model steps. They do not prove signed app
-packaging, real local model provider integration, installed plugin sandboxing,
-memory UX beyond the scaffold, approval UI, voice loop, or packaged Mac release
-smoke test until those surfaces exist and are covered. The current Swift gate
-proves the Mac shell scaffold builds, decodes IPC contracts, exposes management
-models, and can supervise a configured local core process abstraction; it does
-not prove a signed packaged app bundles and launches the Rust core.
+tool-result feedback into later model steps. Focused provider tests prove typed
+Ollama-compatible request/error behavior without requiring a live model during
+the default release gate. They do not prove signed app packaging, ChatGPT
+execution, installed plugin sandboxing, memory UX beyond the scaffold, approval
+UI, voice loop, or packaged Mac release smoke test until those surfaces exist
+and are covered. The current Swift gate proves the Mac shell scaffold builds,
+decodes IPC contracts, exposes management models, and can supervise a
+configured local core process abstraction; it does not prove a signed packaged
+app bundles and launches the Rust core.

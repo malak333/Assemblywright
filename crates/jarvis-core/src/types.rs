@@ -16,6 +16,8 @@ pub enum JarvisError {
     Storage(String),
     #[error("plugin error: {0}")]
     Plugin(String),
+    #[error("model error: {0}")]
+    Model(String),
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
