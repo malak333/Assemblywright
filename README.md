@@ -19,3 +19,12 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo build --workspace
 ```
+
+## Docs
+
+- [Architecture map](docs/architecture-map.md)
+- [Plugin contract](docs/plugin-contract.md)
+- [Safety rules](docs/safety-rules.md)
+- [Build and test commands](docs/build-test-commands.md)
+- [Release checklist](docs/release-checklist.md)
+- [Knowledge-base facts](docs/knowledge-base/jarvis-project-facts.md)
