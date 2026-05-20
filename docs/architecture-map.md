@@ -17,6 +17,7 @@ flowchart LR
     CLI -->|HTTP on 127.0.0.1 by default| IPC["jarvis-core::ipc Axum server"]
 
     IPC --> IpcState["IpcState"]
+    IPC --> Inspection["Task, audit, memory, plugin inspection routes"]
     IpcState --> RuntimePath["Command endpoint runtime path"]
     IpcState --> Pause["Emergency pause state"]
     IpcState --> Scheduler["In-memory Scheduler"]
@@ -58,6 +59,9 @@ results, and audit entries, and can persist task/audit state through
 also records local-first `ModelRouter` evidence and can execute deterministic
 first-party plugin commands through the policy engine. It does not yet support
 autonomous model-generated tool calls, real model providers, or user approval UI.
+Repository-backed IPC state also exposes task, audit, and memory inspection
+endpoints, plus first-party plugin manifest listing, so the CLI and Swift shell
+can inspect durable local state without reaching into SQLite directly.
 
 ## Current Command Flow
 
@@ -129,8 +133,9 @@ sequenceDiagram
 - `jarvis-core::types`: Stable shared records and enums for tasks, audit
   entries, sensitivity, risk, approval, task status, and errors.
 - `jarvis-core::ipc`: Axum loopback HTTP API for `/health`, `/commands`,
-  `/emergency-pause`, and `/scheduler/jobs`. The command endpoint runs the
-  runtime with `FakeLocalModel`, records local-first route evidence, can execute
+  `/tasks`, `/audit`, `/memory`, `/plugins/manifests`, `/emergency-pause`, and
+  `/scheduler/jobs`. The command endpoint runs the runtime with
+  `FakeLocalModel`, records local-first route evidence, can execute
   deterministic first-party plugin commands through policy, returns
   route/step/plugin/audit evidence, and obeys emergency-pause state.
 - `jarvis-core::runtime`: Command runtime scaffolding with max-step enforcement,
@@ -155,9 +160,9 @@ sequenceDiagram
   append-only audit entries, emergency pause, and memory items with provenance,
   sensitivity, review, and soft-delete fields.
 - `jarvis-cli`: Local CLI for serving the IPC API with optional `--db-path`
-  SQLite backing, calling health/command/pause endpoints,
-  listing/scheduling/cancelling scheduler jobs over HTTP, and running `jarvis
-  smoke` against an ephemeral local server.
+  SQLite backing, calling health/command/pause/task/audit/memory/plugin
+  endpoints, listing/scheduling/cancelling scheduler jobs over HTTP, and
+  running `jarvis smoke` against ephemeral local servers.
 - `apps/mac/JarvisMacCore`: Swift IPC client and command-console model that
   decode the Rust health/command/pause JSON contracts.
 - `apps/mac/JarvisMacApp`: SwiftUI command-console scaffold with health status,

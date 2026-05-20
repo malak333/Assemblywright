@@ -56,6 +56,9 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   persists runtime, route, and deterministic first-party plugin audit evidence
   when repository backing is used. Model-generated tool calls and user approval
   UI remain future gates.
+- Confirm task, audit, memory, and plugin manifest inspection endpoints still
+  require or use the correct repository/plugin backing and are covered by local
+  smoke or focused IPC tests.
 
 ## Documentation Gate
 
