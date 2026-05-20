@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::{
     collections::{HashMap, HashSet},
+    fs,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc, Arc,
@@ -14,6 +16,8 @@ use std::{
 };
 
 const DEFAULT_TIMEOUT_MS: u64 = 5_000;
+const MAX_TIMEOUT_MS: u64 = 60_000;
+const LOCAL_MANIFEST_SCHEMA_VERSION: u16 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -221,7 +225,7 @@ fn json_type_matches(expected_type: &str, actual: &Value) -> bool {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginActionManifest {
     pub name: String,
     pub description: String,
@@ -249,6 +253,12 @@ impl PluginActionManifest {
         if self.timeout.timeout_ms == 0 {
             return Err(JarvisError::Validation(format!(
                 "{plugin_id}.{} timeout must be greater than zero",
+                self.name
+            )));
+        }
+        if self.timeout.timeout_ms > MAX_TIMEOUT_MS {
+            return Err(JarvisError::Validation(format!(
+                "{plugin_id}.{} timeout cannot exceed {MAX_TIMEOUT_MS}ms",
                 self.name
             )));
         }
@@ -298,13 +308,17 @@ impl PluginActionManifest {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginManifest {
+    #[serde(default = "default_manifest_schema_version")]
+    pub manifest_schema_version: u16,
     pub id: String,
     pub name: String,
     pub version: String,
     pub source: PluginSource,
     pub author: String,
+    #[serde(default)]
+    pub source_path: Option<String>,
     pub actions: Vec<PluginActionManifest>,
 }
 
@@ -314,6 +328,13 @@ impl PluginManifest {
         validate_non_empty(&self.name, "plugin name")?;
         validate_non_empty(&self.version, "plugin version")?;
         validate_non_empty(&self.author, "plugin author")?;
+
+        if self.manifest_schema_version != LOCAL_MANIFEST_SCHEMA_VERSION {
+            return Err(JarvisError::Validation(format!(
+                "{} manifest_schema_version must be {}",
+                self.id, LOCAL_MANIFEST_SCHEMA_VERSION
+            )));
+        }
 
         if self.actions.is_empty() {
             return Err(JarvisError::Validation(format!(
@@ -336,8 +357,104 @@ impl PluginManifest {
         Ok(())
     }
 
+    pub fn validate_local_install(&self, manifest_path: &Path) -> JarvisResult<PathBuf> {
+        self.validate()?;
+
+        if self.source == PluginSource::FirstParty {
+            return Err(JarvisError::Validation(format!(
+                "{} local installs cannot claim first_party source",
+                self.id
+            )));
+        }
+
+        let source_path = self.source_path.as_deref().ok_or_else(|| {
+            JarvisError::Validation(format!("{} local install requires source_path", self.id))
+        })?;
+        let declared_source = Path::new(source_path);
+        if !declared_source.is_absolute() {
+            return Err(JarvisError::Validation(format!(
+                "{} source_path must be absolute",
+                self.id
+            )));
+        }
+        if declared_source
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+        {
+            return Err(JarvisError::Validation(format!(
+                "{} source_path cannot contain parent directory components",
+                self.id
+            )));
+        }
+
+        let canonical_source = fs::canonicalize(declared_source).map_err(|err| {
+            JarvisError::Validation(format!("{} source_path is not readable: {err}", self.id))
+        })?;
+        if !canonical_source.is_dir() {
+            return Err(JarvisError::Validation(format!(
+                "{} source_path must be a directory",
+                self.id
+            )));
+        }
+
+        let canonical_manifest = fs::canonicalize(manifest_path).map_err(|err| {
+            JarvisError::Validation(format!("{} manifest path is not readable: {err}", self.id))
+        })?;
+        if !canonical_manifest.is_file() {
+            return Err(JarvisError::Validation(format!(
+                "{} manifest path must be a file",
+                self.id
+            )));
+        }
+        if !canonical_manifest.starts_with(&canonical_source) {
+            return Err(JarvisError::Validation(format!(
+                "{} manifest must live under source_path",
+                self.id
+            )));
+        }
+
+        Ok(canonical_source)
+    }
+
     pub fn action(&self, name: &str) -> Option<&PluginActionManifest> {
         self.actions.iter().find(|action| action.name == name)
+    }
+}
+
+fn default_manifest_schema_version() -> u16 {
+    LOCAL_MANIFEST_SCHEMA_VERSION
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstalledPlugin {
+    pub manifest: PluginManifest,
+    pub source_path: String,
+    pub execution_enabled: bool,
+}
+
+impl InstalledPlugin {
+    pub fn from_local_manifest_path(manifest_path: impl AsRef<Path>) -> JarvisResult<Self> {
+        let manifest_path = manifest_path.as_ref();
+        if !manifest_path.is_absolute() {
+            return Err(JarvisError::Validation(
+                "manifest path must be absolute".to_string(),
+            ));
+        }
+        let content = fs::read_to_string(manifest_path).map_err(|err| {
+            JarvisError::Validation(format!(
+                "read plugin manifest {}: {err}",
+                manifest_path.display()
+            ))
+        })?;
+        let manifest: PluginManifest = serde_json::from_str(&content)
+            .map_err(|err| JarvisError::Validation(format!("parse plugin manifest: {err}")))?;
+        let source_path = manifest.validate_local_install(manifest_path)?;
+
+        Ok(Self {
+            manifest,
+            source_path: source_path.display().to_string(),
+            execution_enabled: false,
+        })
     }
 }
 
@@ -702,25 +819,55 @@ impl InProcessPlugin for EchoPlugin {
         output_properties.insert("message".to_string(), json!({ "type": "string" }));
 
         PluginManifest {
+            manifest_schema_version: LOCAL_MANIFEST_SCHEMA_VERSION,
             id: "fake_echo".to_string(),
             name: "Fake Echo".to_string(),
             version: "0.1.0".to_string(),
             source: PluginSource::FirstParty,
             author: "Jarvis".to_string(),
-            actions: vec![PluginActionManifest {
-                name: "echo".to_string(),
-                description: "Return the provided message for host contract testing.".to_string(),
-                permissions: Vec::new(),
-                risk_tier: RiskTier::Low,
-                input_schema: JsonSchema::object(input_properties, vec!["message".to_string()]),
-                output_schema: JsonSchema::object(output_properties, vec!["message".to_string()]),
-                proactive: false,
-                memory_access: PluginAccess::None,
-                model_access: PluginAccess::None,
-                audit_fields: vec!["message".to_string()],
-                timeout: PluginTimeout::default_for_action(),
-                cancellation: CancellationBehavior::Cooperative,
-            }],
+            source_path: None,
+            actions: vec![
+                PluginActionManifest {
+                    name: "echo".to_string(),
+                    description: "Return the provided message for host contract testing."
+                        .to_string(),
+                    permissions: Vec::new(),
+                    risk_tier: RiskTier::Low,
+                    input_schema: JsonSchema::object(
+                        input_properties.clone(),
+                        vec!["message".to_string()],
+                    ),
+                    output_schema: JsonSchema::object(
+                        output_properties.clone(),
+                        vec!["message".to_string()],
+                    ),
+                    proactive: false,
+                    memory_access: PluginAccess::None,
+                    model_access: PluginAccess::None,
+                    audit_fields: vec!["message".to_string()],
+                    timeout: PluginTimeout::default_for_action(),
+                    cancellation: CancellationBehavior::Cooperative,
+                },
+                PluginActionManifest {
+                    name: "approval_echo".to_string(),
+                    description:
+                        "Approval-gated echo scaffold for high-risk host contract testing."
+                            .to_string(),
+                    permissions: vec![PluginPermission::WriteWorkspace],
+                    risk_tier: RiskTier::Confirm,
+                    input_schema: JsonSchema::object(input_properties, vec!["message".to_string()]),
+                    output_schema: JsonSchema::object(
+                        output_properties,
+                        vec!["message".to_string()],
+                    ),
+                    proactive: false,
+                    memory_access: PluginAccess::None,
+                    model_access: PluginAccess::None,
+                    audit_fields: vec!["message".to_string()],
+                    timeout: PluginTimeout::default_for_action(),
+                    cancellation: CancellationBehavior::Cooperative,
+                },
+            ],
         }
     }
 
@@ -750,11 +897,13 @@ impl InProcessPlugin for StatusPlugin {
         output_properties.insert("plugin_count".to_string(), json!({ "type": "integer" }));
 
         PluginManifest {
+            manifest_schema_version: LOCAL_MANIFEST_SCHEMA_VERSION,
             id: "fake_status".to_string(),
             name: "Fake Status".to_string(),
             version: "0.1.0".to_string(),
             source: PluginSource::FirstParty,
             author: "Jarvis".to_string(),
+            source_path: None,
             actions: vec![PluginActionManifest {
                 name: "status".to_string(),
                 description: "Report deterministic first-party host status for contract testing."
@@ -796,7 +945,7 @@ impl InProcessPlugin for StatusPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{thread, time::Duration};
+    use std::{fs, thread, time::Duration};
 
     #[test]
     fn validates_first_party_manifests() {
@@ -822,12 +971,174 @@ mod tests {
     }
 
     #[test]
+    fn rejects_manifest_when_declared_flags_lack_permissions_or_safe_timeout() {
+        let mut proactive = EchoPlugin.manifest();
+        proactive.actions[0].proactive = true;
+        let error = proactive
+            .validate()
+            .expect_err("proactive flag must require permission");
+        assert!(error
+            .to_string()
+            .contains("proactive actions must request proactive_run permission"));
+
+        let mut model_access = EchoPlugin.manifest();
+        model_access.actions[0].model_access = PluginAccess::Read;
+        let error = model_access
+            .validate()
+            .expect_err("model access must require permission");
+        assert!(error
+            .to_string()
+            .contains("model access requires call_model permission"));
+
+        let mut blocked = EchoPlugin.manifest();
+        blocked.actions[0].risk_tier = RiskTier::Block;
+        let error = blocked.validate().expect_err("blocked action must fail");
+        assert!(error.to_string().contains("cannot register as blocked"));
+
+        let mut long_timeout = EchoPlugin.manifest();
+        long_timeout.actions[0].timeout.timeout_ms = MAX_TIMEOUT_MS + 1;
+        let error = long_timeout
+            .validate()
+            .expect_err("excessive timeout must fail");
+        assert!(error.to_string().contains("timeout cannot exceed"));
+    }
+
+    #[test]
     fn rejects_manifest_with_duplicate_action_names() {
         let mut manifest = EchoPlugin.manifest();
         manifest.actions.push(manifest.actions[0].clone());
 
         let error = manifest.validate().expect_err("manifest should fail");
         assert!(error.to_string().contains("duplicate action echo"));
+    }
+
+    #[test]
+    fn local_install_accepts_valid_metadata_without_enabling_execution() {
+        let dir = tempfile::tempdir().expect("temp plugin dir");
+        let manifest_path = dir.path().join("jarvis-plugin.json");
+        let source_path = dir.path().canonicalize().expect("canonical source");
+        fs::write(
+            &manifest_path,
+            json!({
+                "manifest_schema_version": 1,
+                "id": "local_notes",
+                "name": "Local Notes",
+                "version": "0.1.0",
+                "source": "local_development",
+                "author": "Local Tester",
+                "source_path": source_path.display().to_string(),
+                "actions": [{
+                    "name": "summarize",
+                    "description": "Summarize local notes metadata for validation.",
+                    "permissions": ["read_workspace"],
+                    "risk_tier": "low",
+                    "input_schema": {
+                        "schema": {
+                            "type": "object",
+                            "properties": { "path": { "type": "string" } },
+                            "required": ["path"],
+                            "additionalProperties": false
+                        }
+                    },
+                    "output_schema": {
+                        "schema": {
+                            "type": "object",
+                            "properties": { "summary": { "type": "string" } },
+                            "required": ["summary"],
+                            "additionalProperties": false
+                        }
+                    },
+                    "proactive": false,
+                    "memory_access": "none",
+                    "model_access": "none",
+                    "audit_fields": ["path"],
+                    "timeout": { "timeout_ms": 5000, "on_timeout": "cancel" },
+                    "cancellation": "cooperative"
+                }]
+            })
+            .to_string(),
+        )
+        .expect("write manifest");
+
+        let installed = InstalledPlugin::from_local_manifest_path(&manifest_path)
+            .expect("valid local metadata should install");
+
+        assert_eq!(installed.manifest.id, "local_notes");
+        assert_eq!(installed.manifest.source, PluginSource::LocalDevelopment);
+        assert!(!installed.execution_enabled);
+        assert_eq!(installed.source_path, source_path.display().to_string());
+    }
+
+    #[test]
+    fn local_install_rejects_first_party_claims_and_unsafe_paths() {
+        let dir = tempfile::tempdir().expect("temp plugin dir");
+        let manifest_path = dir.path().join("jarvis-plugin.json");
+        let source_path = dir.path().canonicalize().expect("canonical source");
+        fs::write(
+            &manifest_path,
+            json!({
+                "manifest_schema_version": 1,
+                "id": "fake_claim",
+                "name": "Fake Claim",
+                "version": "0.1.0",
+                "source": "first_party",
+                "author": "Local Tester",
+                "source_path": source_path.display().to_string(),
+                "actions": [{
+                    "name": "echo",
+                    "description": "Invalid first-party claim.",
+                    "permissions": [],
+                    "risk_tier": "low",
+                    "input_schema": { "schema": { "type": "object" } },
+                    "output_schema": { "schema": { "type": "object" } },
+                    "proactive": false,
+                    "memory_access": "none",
+                    "model_access": "none",
+                    "audit_fields": [],
+                    "timeout": { "timeout_ms": 5000, "on_timeout": "cancel" },
+                    "cancellation": "cooperative"
+                }]
+            })
+            .to_string(),
+        )
+        .expect("write manifest");
+
+        let error = InstalledPlugin::from_local_manifest_path(&manifest_path)
+            .expect_err("local install cannot claim first-party source");
+        assert!(error.to_string().contains("cannot claim first_party"));
+
+        fs::write(
+            &manifest_path,
+            json!({
+                "manifest_schema_version": 1,
+                "id": "relative_source",
+                "name": "Relative Source",
+                "version": "0.1.0",
+                "source": "local_development",
+                "author": "Local Tester",
+                "source_path": "../relative",
+                "actions": [{
+                    "name": "echo",
+                    "description": "Invalid relative source path.",
+                    "permissions": [],
+                    "risk_tier": "low",
+                    "input_schema": { "schema": { "type": "object" } },
+                    "output_schema": { "schema": { "type": "object" } },
+                    "proactive": false,
+                    "memory_access": "none",
+                    "model_access": "none",
+                    "audit_fields": [],
+                    "timeout": { "timeout_ms": 5000, "on_timeout": "cancel" },
+                    "cancellation": "cooperative"
+                }]
+            })
+            .to_string(),
+        )
+        .expect("write manifest");
+
+        let error = InstalledPlugin::from_local_manifest_path(&manifest_path)
+            .expect_err("local install source path must be absolute");
+        assert!(error.to_string().contains("source_path must be absolute"));
     }
 
     #[test]
@@ -1020,11 +1331,13 @@ mod tests {
             let mut properties = Map::new();
             properties.insert("message".to_string(), json!({ "type": "string" }));
             PluginManifest {
+                manifest_schema_version: LOCAL_MANIFEST_SCHEMA_VERSION,
                 id: "approval_plugin".to_string(),
                 name: "Approval Plugin".to_string(),
                 version: "0.1.0".to_string(),
                 source: PluginSource::FirstParty,
                 author: "Jarvis".to_string(),
+                source_path: None,
                 actions: vec![PluginActionManifest {
                     name: "needs_approval".to_string(),
                     description: "Requires approval before execution.".to_string(),
@@ -1060,11 +1373,13 @@ mod tests {
     impl InProcessPlugin for SlowPlugin {
         fn manifest(&self) -> PluginManifest {
             PluginManifest {
+                manifest_schema_version: LOCAL_MANIFEST_SCHEMA_VERSION,
                 id: "slow_plugin".to_string(),
                 name: "Slow Plugin".to_string(),
                 version: "0.1.0".to_string(),
                 source: PluginSource::FirstParty,
                 author: "Jarvis".to_string(),
+                source_path: None,
                 actions: vec![PluginActionManifest {
                     name: "sleep".to_string(),
                     description: "Sleeps longer than its timeout.".to_string(),

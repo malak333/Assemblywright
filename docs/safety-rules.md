@@ -55,6 +55,9 @@ policy:
 - Third-party plugin marketplace.
 - Cloud-first routing.
 - Plugin access outside declared scopes.
+- Executing locally installed plugin metadata. The current local install path is
+  registry-only and stores disabled manifest metadata until a sandboxed
+  execution path exists.
 
 ## Regression Tests
 
@@ -63,6 +66,9 @@ Safety regressions should fail release verification:
 - High-risk actions bypassing approval.
 - Cloud routing receiving restricted data without explicit approval.
 - Plugin actions executing outside their manifest.
+- Local plugin manifests installing with invalid schema, blocked risk tier,
+  missing proactive/memory/model permissions, unsafe source paths, or
+  `first_party` source claims.
 - Scheduled jobs running while emergency pause is active.
 - Audit entries missing route, policy, approval, or action evidence.
 - Diagnostics containing raw secrets.

@@ -82,6 +82,7 @@ fn policy_errors_are_human_readable_for_ipc_and_cli_boundaries() {
     let blocked = JarvisError::PolicyBlocked("restricted data cannot route to cloud".to_owned());
     let approval = JarvisError::ApprovalRequired("confirm file write".to_owned());
     let validation = JarvisError::Validation("missing plugin action schema".to_owned());
+    let model = JarvisError::Model("local provider timed out".to_owned());
 
     assert_eq!(
         blocked.to_string(),
@@ -95,6 +96,7 @@ fn policy_errors_are_human_readable_for_ipc_and_cli_boundaries() {
         validation.to_string(),
         "validation failed: missing plugin action schema"
     );
+    assert_eq!(model.to_string(), "model error: local provider timed out");
 }
 
 #[test]
@@ -166,11 +168,13 @@ fn command_pipeline_executes_confirm_tier_plugin_action_after_approval() {
 #[test]
 fn plugin_manifest_rejects_actions_outside_declared_scopes() {
     let manifest = PluginManifest {
+        manifest_schema_version: 1,
         id: "bad_scope_plugin".to_string(),
         name: "Bad Scope Plugin".to_string(),
         version: "0.1.0".to_string(),
         source: PluginSource::FirstParty,
         author: "Jarvis".to_string(),
+        source_path: None,
         actions: vec![PluginActionManifest {
             name: "write_memory_without_scope".to_string(),
             description: "Invalid action that claims write memory access without permission."
@@ -256,11 +260,13 @@ impl InProcessPlugin for ConfirmWritePlugin {
         }));
 
         PluginManifest {
+            manifest_schema_version: 1,
             id: "confirm_write".to_string(),
             name: "Confirm Write".to_string(),
             version: "0.1.0".to_string(),
             source: PluginSource::FirstParty,
             author: "Jarvis".to_string(),
+            source_path: None,
             actions: vec![PluginActionManifest {
                 name: "write_note".to_string(),
                 description: "A fake side-effecting action that must require approval.".to_string(),
