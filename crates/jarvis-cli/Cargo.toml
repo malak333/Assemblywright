@@ -1,6 +1,7 @@
 [package]
 name = "jarvis-cli"
 version = "0.1.0"
+description = "Command-line client and smoke runner for the local Jarvis core."
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -13,7 +14,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-jarvis-core = { path = "../jarvis-core" }
+jarvis-core = { path = "../jarvis-core", version = "0.1.0" }
 serde_json.workspace = true
 tokio.workspace = true
 tracing-subscriber.workspace = true

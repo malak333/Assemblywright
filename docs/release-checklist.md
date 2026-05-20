@@ -7,7 +7,11 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
 
 - Confirm `DESIGN.md` still matches the implementation scope.
 - Confirm release notes distinguish implemented Rust foundation behavior from
-  planned Swift shell, IPC, plugin, memory, scheduler, and packaging work.
+  planned Swift shell, real local model integration, approval UI, plugin
+  installation, and packaging work.
+- Confirm the current architecture map still matches the real module wiring,
+  especially the fact that `/commands` invokes the runtime/fake local model path
+  but does not yet compose autonomous model-router-to-plugin tool execution.
 - Confirm no Marvel branding, copyrighted visuals, or confusing product claims
   were introduced.
 
@@ -16,8 +20,18 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
 - `cargo fmt --check`
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - `cargo test --workspace`
+- `cargo test --workspace -- --ignored`
 - `cargo build --workspace`
-- `cargo run -p jarvis-cli -- health`
+- `cargo run -p jarvis-cli -- smoke`
+- `cargo package --workspace`
+- Optional manual CLI/IPC smoke against a running local server:
+  - Terminal 1: `cargo run -p jarvis-cli -- serve`
+  - Terminal 2: `cargo run -p jarvis-cli -- health`
+  - Terminal 2: `cargo run -p jarvis-cli -- command --dry-run "status check"`
+  - Terminal 2: `cargo run -p jarvis-cli -- scheduler list`
+  - Terminal 2: `cargo run -p jarvis-cli -- pause --reason "release smoke"`
+  - Terminal 2: `cargo run -p jarvis-cli -- pause-status`
+  - Terminal 2: `cargo run -p jarvis-cli -- resume`
 
 ## Safety Gate
 
@@ -26,11 +40,17 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   approved.
 - Confirm restricted and credential-adjacent data cannot route to cloud without
   explicit approval.
-- Confirm emergency pause behavior is tested once implemented.
-- Confirm plugin actions cannot run outside declared scopes once plugin APIs
-  exist.
-- Confirm audit logs include route, policy, approval, action, and failure
-  evidence once persistence exists.
+- Confirm emergency pause blocks IPC runtime command execution and cancels
+  active scheduler jobs.
+- Confirm runtime emergency pause and cancellation tests still cover active
+  command cancellation.
+- Confirm plugin manifests validate declared permissions, schemas, proactive
+  behavior, memory/model access, timeout behavior, and cancellation behavior.
+- Confirm persistent audit entries remain append-only in SQLite tests.
+- Confirm route, policy, approval, action, and failure evidence stay covered
+  before claiming an end-to-end assistant release. The current command path
+  persists runtime task/audit evidence when repository backing is used, while
+  plugin side effects remain separately gated by host/policy tests.
 
 ## Documentation Gate
 
@@ -40,6 +60,7 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
 - Build/test commands are current.
 - Knowledge-base notes capture durable workflow and proof-boundary facts.
 - README points to the active design and command gate.
+- Mermaid diagrams render in GitHub or the intended documentation viewer.
 
 ## Mac App Smoke Test
 

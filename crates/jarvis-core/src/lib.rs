@@ -9,7 +9,7 @@ pub mod storage;
 pub mod types;
 
 pub use ipc::{
-    router, serve, CommandRequest, CommandResponse, CreateSchedulerJobRequest,
+    router, serve, serve_listener, CommandRequest, CommandResponse, CreateSchedulerJobRequest,
     EmergencyPauseRequest, EmergencyPauseResponse, ErrorResponse, HealthResponse, IpcState,
 };
 pub use model::{
@@ -31,8 +31,8 @@ pub use router::{
 };
 pub use runtime::{
     CommandRequest as RuntimeCommandRequest, CommandResponse as RuntimeCommandResponse,
-    ConversationRuntime, NoopRuntimeHooks, RuntimeConfig, RuntimeControl, RuntimeHooks,
-    RuntimeStep,
+    ConversationRuntime, NoopRuntimeCommandStore, NoopRuntimeHooks, RuntimeCommandStore,
+    RuntimeConfig, RuntimeControl, RuntimeHooks, RuntimeStep,
 };
 pub use scheduler::{Scheduler, SchedulerJob, SchedulerJobSpec, SchedulerJobStatus, TriggerKind};
 pub use storage::{EmergencyPauseState, MemoryItem, NewMemoryItem, SqliteRepository};

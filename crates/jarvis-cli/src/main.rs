@@ -4,6 +4,7 @@ use std::net::ToSocketAddrs;
 
 use clap::{Parser, Subcommand};
 use jarvis_core::{CommandRequest, CreateSchedulerJobRequest, EmergencyPauseRequest, TriggerKind};
+use tokio::net::TcpListener;
 
 #[derive(Debug, Parser)]
 #[command(name = "jarvis")]
@@ -25,6 +26,8 @@ enum CliCommand {
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
+    /// Run a local IPC smoke test against an ephemeral core server.
+    Smoke,
     /// Submit a command to the core command endpoint.
     Command {
         input: String,
@@ -88,7 +91,13 @@ async fn main() -> anyhow::Result<()> {
             jarvis_core::serve(bind.parse()?, jarvis_core::IpcState::new()).await?;
         }
         CliCommand::Health { endpoint } => {
-            println!("{}", request(&endpoint, "GET", "/health", None)?);
+            println!(
+                "{}",
+                format_health(&request(&endpoint, "GET", "/health", None)?)?
+            );
+        }
+        CliCommand::Smoke => {
+            run_smoke().await?;
         }
         CliCommand::Command {
             input,
@@ -179,4 +188,146 @@ fn request(endpoint: &str, method: &str, path: &str, body: Option<&str>) -> anyh
     }
 
     Ok(response_body.to_string())
+}
+
+async fn run_smoke() -> anyhow::Result<()> {
+    let state = jarvis_core::IpcState::new();
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let endpoint = format!("http://{}", listener.local_addr()?);
+    let server = tokio::spawn(jarvis_core::serve_listener(listener, state));
+
+    let health = request_with_retry(&endpoint, "GET", "/health", None)?;
+    let health_json: serde_json::Value = serde_json::from_str(&health)?;
+    require_json_field(&health_json, "status", "ok")?;
+    require_json_field(&health_json, "command_runtime", "fake-local-model")?;
+
+    let command_body = serde_json::to_string(&CommandRequest {
+        input: "smoke command".to_string(),
+        session_id: None,
+        context: serde_json::json!({ "surface": "cli-smoke" }),
+        dry_run: true,
+    })?;
+    let command = request(&endpoint, "POST", "/commands", Some(&command_body))?;
+    let command_json: serde_json::Value = serde_json::from_str(&command)?;
+    require_bool_field(&command_json, "accepted", true)?;
+    require_nested_field(&command_json, &["task", "status"], "completed")?;
+    require_nested_field(&command_json, &["route", "model"], "fake-local-model")?;
+
+    let pause_body = serde_json::to_string(&EmergencyPauseRequest {
+        reason: "cli smoke".to_string(),
+    })?;
+    let pause = request(&endpoint, "POST", "/emergency-pause", Some(&pause_body))?;
+    let pause_json: serde_json::Value = serde_json::from_str(&pause)?;
+    require_bool_field(&pause_json, "paused", true)?;
+
+    let blocked = request(&endpoint, "POST", "/commands", Some(&command_body))?;
+    let blocked_json: serde_json::Value = serde_json::from_str(&blocked)?;
+    require_bool_field(&blocked_json, "accepted", false)?;
+    require_nested_field(&blocked_json, &["task", "status"], "blocked")?;
+
+    let resume = request(&endpoint, "DELETE", "/emergency-pause", None)?;
+    let resume_json: serde_json::Value = serde_json::from_str(&resume)?;
+    require_bool_field(&resume_json, "paused", false)?;
+
+    server.abort();
+    println!("jarvis smoke: ok");
+    Ok(())
+}
+
+fn request_with_retry(
+    endpoint: &str,
+    method: &str,
+    path: &str,
+    body: Option<&str>,
+) -> anyhow::Result<String> {
+    let mut last_error = None;
+    for _ in 0..20 {
+        match request(endpoint, method, path, body) {
+            Ok(response) => return Ok(response),
+            Err(error) => {
+                last_error = Some(error);
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("request did not run")))
+}
+
+fn format_health(response_body: &str) -> anyhow::Result<String> {
+    let health: serde_json::Value = serde_json::from_str(response_body)?;
+    let status = health
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown");
+    let runtime = health
+        .get("command_runtime")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown");
+    let paused = health
+        .get("emergency_paused")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let scheduler_jobs = health
+        .get("scheduler_jobs")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+
+    Ok(format!(
+        "jarvis-core: {status} (runtime: {runtime}, paused: {paused}, scheduler_jobs: {scheduler_jobs})"
+    ))
+}
+
+fn require_json_field(
+    value: &serde_json::Value,
+    field: &str,
+    expected: &str,
+) -> anyhow::Result<()> {
+    let actual = value
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing string field `{field}`"))?;
+    anyhow::ensure!(
+        actual == expected,
+        "expected `{field}` to be `{expected}`, got `{actual}`"
+    );
+    Ok(())
+}
+
+fn require_nested_field(
+    value: &serde_json::Value,
+    path: &[&str],
+    expected: &str,
+) -> anyhow::Result<()> {
+    let mut cursor = value;
+    for segment in path {
+        cursor = cursor
+            .get(segment)
+            .ok_or_else(|| anyhow::anyhow!("missing field `{}`", path.join(".")))?;
+    }
+    let actual = cursor
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("field `{}` is not a string", path.join(".")))?;
+    anyhow::ensure!(
+        actual == expected,
+        "expected `{}` to be `{expected}`, got `{actual}`",
+        path.join(".")
+    );
+    Ok(())
+}
+
+fn require_bool_field(
+    value: &serde_json::Value,
+    field: &str,
+    expected: bool,
+) -> anyhow::Result<()> {
+    let actual = value
+        .get(field)
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(|| anyhow::anyhow!("missing boolean field `{field}`"))?;
+    anyhow::ensure!(
+        actual == expected,
+        "expected `{field}` to be `{expected}`, got `{actual}`"
+    );
+    Ok(())
 }
