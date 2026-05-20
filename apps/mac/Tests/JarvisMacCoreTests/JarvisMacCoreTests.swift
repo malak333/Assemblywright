@@ -32,7 +32,7 @@ private final class IPCURLProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
-@Suite("Jarvis Mac core contracts")
+@Suite("Jarvis Mac core contracts", .serialized)
 struct JarvisMacCoreTests {
     @Test("Endpoint appends paths to the configured core URL")
     func endpointBuildsURL() {
@@ -489,6 +489,157 @@ struct JarvisMacCoreTests {
         #expect(response.cancelledSchedulerJobs == 3)
     }
 
+    @Test("Diagnostics export decodes redacted core contract")
+    func decodesDiagnosticsExport() throws {
+        let jobId = UUID()
+        let data = Data(
+            """
+            {
+              "generated_at": "2026-05-20T12:00:00Z",
+              "redaction": "diagnostics export omits command bodies",
+              "health": {
+                "status": "ok",
+                "version": "0.1.0",
+                "started_at": "2026-05-20T11:59:00Z",
+                "emergency_paused": false,
+                "emergency_pause_reason": null,
+                "emergency_pause_updated_at": null,
+                "scheduler_jobs": 1,
+                "command_runtime": "routed-fake-local-model+first-party-plugins"
+              },
+              "scheduler_jobs": [
+                {
+                  "id": "\(jobId.uuidString)",
+                  "name": "daily preview",
+                  "trigger": "manual",
+                  "status": "scheduled",
+                  "created_at": "2026-05-20T12:00:00Z",
+                  "updated_at": "2026-05-20T12:00:01Z",
+                  "cancelled_at": null,
+                  "cancellation_reason_present": false
+                }
+              ],
+              "repository_backed": true,
+              "schema_version": 1,
+              "task_count": 2,
+              "audit_entry_count": 4,
+              "active_memory_item_count": 3
+            }
+            """.utf8
+        )
+
+        let export = try JSONDecoder().decode(JarvisDiagnosticsExport.self, from: data)
+
+        #expect(export.generatedAt == "2026-05-20T12:00:00Z")
+        #expect(export.repositoryBacked)
+        #expect(export.schemaVersion == 1)
+        #expect(export.taskCount == 2)
+        #expect(export.auditEntryCount == 4)
+        #expect(export.activeMemoryItemCount == 3)
+        #expect(export.schedulerJobs.first?.id == jobId)
+        #expect(export.schedulerJobs.first?.trigger == .manual)
+    }
+
+    @Test("Diagnostics client method requests diagnostics export endpoint")
+    func diagnosticsClientMethodSendsSupportedRequest() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [IPCURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let client = JarvisIPCClient(
+            endpoint: JarvisEndpoint(baseURL: URL(string: "http://127.0.0.1:7787")!),
+            session: session
+        )
+        var requestPath: String?
+
+        IPCURLProtocol.handler = { request in
+            requestPath = request.url?.path(percentEncoded: false)
+            return (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!,
+                diagnosticsJSON()
+            )
+        }
+        defer { IPCURLProtocol.handler = nil }
+
+        let export = try await client.diagnosticsExport()
+
+        #expect(requestPath == "/diagnostics/export")
+        #expect(export.health.status == "ok")
+    }
+
+    @Test("Supervisor configuration builds jarvis-cli serve arguments")
+    func supervisorConfigurationBuildsLaunchArguments() {
+        let databaseURL = URL(fileURLWithPath: "/tmp/jarvis-test.sqlite")
+        let configuration = JarvisCoreSupervisorConfiguration(
+            bindAddress: "127.0.0.1:8899",
+            executableURL: URL(fileURLWithPath: "/tmp/jarvis-cli"),
+            databaseURL: databaseURL
+        )
+
+        #expect(configuration.launchArguments == [
+            "serve",
+            "--bind",
+            "127.0.0.1:8899",
+            "--db-path",
+            "/tmp/jarvis-test.sqlite"
+        ])
+    }
+
+    @MainActor
+    @Test("Supervisor enters degraded mode when no core executable is configured")
+    func supervisorDegradesWithoutExecutable() async {
+        let supervisor = JarvisCoreSupervisor(
+            configuration: JarvisCoreSupervisorConfiguration(
+                executableURL: nil,
+                databaseURL: nil,
+                startupTimeoutSeconds: 0.01,
+                healthPollIntervalNanoseconds: 1
+            ),
+            client: FakeCoreClient(healthResults: [.failure(URLError(.cannotConnectToHost))]),
+            processLauncher: FakeProcessLauncher()
+        )
+
+        await supervisor.start()
+
+        if case let .degraded(reason) = supervisor.mode {
+            #expect(reason.contains("executable"))
+        } else {
+            Issue.record("expected degraded mode, got \(supervisor.mode)")
+        }
+    }
+
+    @MainActor
+    @Test("Supervisor launches configured core and waits for health")
+    func supervisorLaunchesConfiguredCore() async {
+        let launcher = FakeProcessLauncher()
+        let supervisor = JarvisCoreSupervisor(
+            configuration: JarvisCoreSupervisorConfiguration(
+                bindAddress: "127.0.0.1:9901",
+                executableURL: URL(fileURLWithPath: "/tmp/jarvis-cli"),
+                databaseURL: nil,
+                startupTimeoutSeconds: 0.1,
+                healthPollIntervalNanoseconds: 1
+            ),
+            client: FakeCoreClient(healthResults: [
+                .failure(URLError(.cannotConnectToHost)),
+                .success(sampleHealth())
+            ]),
+            processLauncher: launcher
+        )
+
+        await supervisor.start()
+
+        #expect(supervisor.mode == .available)
+        #expect(launcher.launches.count == 1)
+        #expect(launcher.launches.first?.executableURL.path == "/tmp/jarvis-cli")
+        #expect(launcher.launches.first?.arguments == ["serve", "--bind", "127.0.0.1:9901"])
+        #expect(supervisor.lastHealth?.status == "ok")
+    }
+
     private func memoryItemJSON(id: UUID) -> Data {
         Data(
             """
@@ -524,6 +675,158 @@ struct JarvisMacCoreTests {
             }
             """.utf8
         )
+    }
+}
+
+private func sampleHealth() -> JarvisHealth {
+    JarvisHealth(
+        status: "ok",
+        version: "0.1.0",
+        emergencyPaused: false,
+        emergencyPauseReason: nil,
+        schedulerJobs: 0,
+        commandRuntime: "routed-fake-local-model+first-party-plugins"
+    )
+}
+
+private func diagnosticsJSON() -> Data {
+    Data(
+        """
+        {
+          "generated_at": "2026-05-20T12:00:00Z",
+          "redaction": "redacted",
+          "health": {
+            "status": "ok",
+            "version": "0.1.0",
+            "started_at": "2026-05-20T11:59:00Z",
+            "emergency_paused": false,
+            "emergency_pause_reason": null,
+            "emergency_pause_updated_at": null,
+            "scheduler_jobs": 0,
+            "command_runtime": "routed-fake-local-model+first-party-plugins"
+          },
+          "scheduler_jobs": [],
+          "repository_backed": false,
+          "schema_version": null,
+          "task_count": null,
+          "audit_entry_count": null,
+          "active_memory_item_count": null
+        }
+        """.utf8
+    )
+}
+
+private final class FakeProcess: JarvisCoreProcess, @unchecked Sendable {
+    private(set) var isRunning = true
+
+    func terminate() {
+        isRunning = false
+    }
+}
+
+private final class FakeProcessLauncher: JarvisCoreProcessLaunching, @unchecked Sendable {
+    struct Launch: Equatable {
+        var executableURL: URL
+        var arguments: [String]
+    }
+
+    private(set) var launches: [Launch] = []
+
+    func launch(
+        executableURL: URL,
+        arguments: [String],
+        environment: [String: String]
+    ) throws -> any JarvisCoreProcess {
+        launches.append(Launch(executableURL: executableURL, arguments: arguments))
+        return FakeProcess()
+    }
+}
+
+private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
+    private var healthResults: [Result<JarvisHealth, Error>]
+
+    init(healthResults: [Result<JarvisHealth, Error>] = [.success(sampleHealth())]) {
+        self.healthResults = healthResults
+    }
+
+    func health() async throws -> JarvisHealth {
+        guard !healthResults.isEmpty else {
+            return sampleHealth()
+        }
+
+        return try healthResults.removeFirst().get()
+    }
+
+    func submit(_ command: JarvisCommandRequest) async throws -> JarvisCommandResponse {
+        throw URLError(.unsupportedURL)
+    }
+
+    func pause(reason: String) async throws -> JarvisPauseResponse {
+        throw URLError(.unsupportedURL)
+    }
+
+    func resume() async throws -> JarvisPauseResponse {
+        throw URLError(.unsupportedURL)
+    }
+
+    func pauseStatus() async throws -> JarvisPauseResponse {
+        throw URLError(.unsupportedURL)
+    }
+
+    func listTasks() async throws -> [JarvisTask] {
+        []
+    }
+
+    func task(id: UUID) async throws -> JarvisTask {
+        throw URLError(.unsupportedURL)
+    }
+
+    func listAuditEntries(taskId: UUID?) async throws -> [JarvisAuditEntry] {
+        []
+    }
+
+    func listMemoryItems(includeDeleted: Bool) async throws -> [JarvisMemoryItem] {
+        []
+    }
+
+    func createMemoryItem(_ request: JarvisCreateMemoryItemRequest) async throws -> JarvisMemoryItem {
+        throw URLError(.unsupportedURL)
+    }
+
+    func memoryItem(id: UUID) async throws -> JarvisMemoryItem {
+        throw URLError(.unsupportedURL)
+    }
+
+    func updateMemoryItem(id: UUID, request: JarvisMemoryMutationRequest) async throws -> JarvisMemoryItem {
+        throw URLError(.unsupportedURL)
+    }
+
+    func reviewMemoryItem(id: UUID) async throws -> JarvisMemoryItem {
+        throw URLError(.unsupportedURL)
+    }
+
+    func deleteMemoryItem(id: UUID) async throws -> JarvisMemoryItem {
+        throw URLError(.unsupportedURL)
+    }
+
+    func listPluginManifests() async throws -> [JarvisPluginManifest] {
+        []
+    }
+
+    func listSchedulerJobs() async throws -> [JarvisSchedulerJob] {
+        []
+    }
+
+    func createSchedulerJob(_ request: JarvisCreateSchedulerJobRequest) async throws -> JarvisSchedulerJob {
+        throw URLError(.unsupportedURL)
+    }
+
+    func cancelSchedulerJob(id: UUID) async throws -> JarvisSchedulerJob {
+        throw URLError(.unsupportedURL)
+    }
+
+    func diagnosticsExport() async throws -> JarvisDiagnosticsExport {
+        try JSONDecoder().decode(JarvisDiagnosticsExport.self, from: diagnosticsJSON())
     }
 }
 
