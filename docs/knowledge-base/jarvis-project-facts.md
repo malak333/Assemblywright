@@ -28,7 +28,9 @@ These notes capture durable facts for future agents working on this repository.
 - The planned packaged app, approval UI, local model provider integration,
   plugin installation flow, and autonomous model-router to plugin execution loop
   are not yet implemented in this worktree. The first SwiftUI shell scaffold and
-  IPC client live under `apps/mac`.
+  IPC client live under `apps/mac`, including a command transcript and
+  activity/audit panel that renders command task, route, step, audit, and plugin
+  result evidence.
 - The IPC `/commands` endpoint still does not implement autonomous
   model-generated tool calls. Current plugin execution is deterministic and
   command-pattern driven.
@@ -45,8 +47,8 @@ These notes capture durable facts for future agents working on this repository.
   exist.
 - It is fair to describe the current repo as a Rust foundation with tested
   scaffolding for IPC, storage, policy, routing, runtime, scheduler, plugin
-  contracts, deterministic first-party plugin command execution, and CLI
-  behavior when the local gate passes.
+  contracts, deterministic first-party plugin command execution, CLI behavior,
+  and a Swift command/activity shell when the local gate passes.
 - Do not claim autonomous external communication, smart-home control, or
   third-party plugin marketplace readiness for v1.
 - Keep public-facing claims scoped to tested local behavior.

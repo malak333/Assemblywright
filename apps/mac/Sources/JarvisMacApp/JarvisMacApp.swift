@@ -31,15 +31,21 @@ struct CommandConsoleView: View {
         VStack(spacing: 0) {
             statusBar
 
-            List(model.transcript) { entry in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(entry.role.rawValue.capitalized)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text(entry.text)
-                        .textSelection(.enabled)
+            HSplitView {
+                List(model.transcript) { entry in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(entry.role.rawValue.capitalized)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(entry.text)
+                            .textSelection(.enabled)
+                    }
+                    .padding(.vertical, 4)
                 }
-                .padding(.vertical, 4)
+                .frame(minWidth: 390)
+
+                ActivityAuditView(entries: model.activity)
+                    .frame(minWidth: 280)
             }
 
             if let lastError = model.lastError {
@@ -103,6 +109,38 @@ struct CommandConsoleView: View {
         input = ""
         Task {
             await model.submit(input: command)
+        }
+    }
+}
+
+struct ActivityAuditView: View {
+    var entries: [ActivityEntry]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Activity")
+                .font(.headline)
+                .padding([.horizontal, .top])
+
+            List(entries) { entry in
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 6) {
+                        Text(entry.title)
+                            .font(.subheadline)
+                            .lineLimit(1)
+                        Spacer(minLength: 8)
+                        Text(entry.badge)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Text(entry.detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                        .textSelection(.enabled)
+                }
+                .padding(.vertical, 4)
+            }
         }
     }
 }

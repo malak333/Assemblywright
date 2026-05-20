@@ -6,7 +6,8 @@ primitives, policy-gated first-party plugin commands, local-first model routing
 evidence, plugin contracts, scheduler state, a loopback IPC surface, and CLI
 smoke paths for the Swift shell scaffold and future packaged app.
 It also includes the first buildable Swift/SwiftUI Mac shell scaffold under
-`apps/mac`, with a tested IPC client and command-console state model.
+`apps/mac`, with a tested IPC client, command-console state model, and
+activity/audit panel for command evidence.
 
 ## Current Scope
 
