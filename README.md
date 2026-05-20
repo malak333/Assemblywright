@@ -22,6 +22,15 @@ assistant: signed packaging, real model providers, approval UI, voice support,
 plugin installation, and packaged Mac smoke evidence are still target
 architecture.
 
+## Production Work Protocol
+
+This public repository is being advanced through isolated worktrees, topic
+branches, and reviewable PR slices. During the autonomous production sweep,
+agents should stay inside their assigned ownership, preserve unrelated edits,
+and treat cross-process E2E plus the local release gate as the evidence bar.
+Passing the local gate supports only the implemented Rust/Swift foundation
+claim; it is not proof of a finished packaged assistant.
+
 ## Build
 
 ```sh
