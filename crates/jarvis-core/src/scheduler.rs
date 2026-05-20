@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -59,6 +59,12 @@ impl SchedulerJob {
             ));
         }
 
+        if matches!(spec.trigger, TriggerKind::Interval { every_seconds: 0 }) {
+            return Err(JarvisError::Validation(
+                "scheduler interval must be greater than zero seconds".to_string(),
+            ));
+        }
+
         let now = Utc::now();
 
         Ok(Self {
@@ -81,6 +87,23 @@ impl SchedulerJob {
                 | SchedulerJobStatus::Cancelled
                 | SchedulerJobStatus::Failed
         )
+    }
+
+    fn is_due_at(&self, now: DateTime<Utc>) -> bool {
+        if self.status != SchedulerJobStatus::Scheduled {
+            return false;
+        }
+
+        match self.trigger {
+            TriggerKind::Manual => true,
+            TriggerKind::OnceAt { run_at } => run_at <= now,
+            TriggerKind::Interval { every_seconds } => {
+                let Ok(seconds) = i64::try_from(every_seconds) else {
+                    return false;
+                };
+                self.updated_at + Duration::seconds(seconds) <= now
+            }
+        }
     }
 }
 
@@ -116,6 +139,21 @@ impl Scheduler {
             .lock()
             .expect("scheduler jobs lock poisoned")
             .values()
+            .cloned()
+            .collect()
+    }
+
+    pub fn due_jobs(&self, now: DateTime<Utc>, limit: usize) -> Vec<SchedulerJob> {
+        if limit == 0 {
+            return Vec::new();
+        }
+
+        self.jobs
+            .lock()
+            .expect("scheduler jobs lock poisoned")
+            .values()
+            .filter(|job| job.is_due_at(now))
+            .take(limit)
             .cloned()
             .collect()
     }
@@ -180,6 +218,31 @@ impl Scheduler {
 
         let now = Utc::now();
         job.status = SchedulerJobStatus::Failed;
+        job.updated_at = now;
+
+        Ok(job.clone())
+    }
+
+    pub fn reschedule_interval(&self, id: Uuid) -> JarvisResult<SchedulerJob> {
+        let mut jobs = self.jobs.lock().expect("scheduler jobs lock poisoned");
+        let job = jobs
+            .get_mut(&id)
+            .ok_or_else(|| JarvisError::Validation(format!("unknown scheduler job: {id}")))?;
+
+        if !matches!(job.trigger, TriggerKind::Interval { .. }) {
+            return Err(JarvisError::Validation(format!(
+                "non-interval scheduler job cannot be rescheduled: {id}"
+            )));
+        }
+
+        if job.is_terminal() {
+            return Err(JarvisError::Validation(format!(
+                "terminal scheduler job cannot be rescheduled: {id}"
+            )));
+        }
+
+        let now = Utc::now();
+        job.status = SchedulerJobStatus::Scheduled;
         job.updated_at = now;
 
         Ok(job.clone())
@@ -352,5 +415,69 @@ mod tests {
         assert_eq!(failed.status, SchedulerJobStatus::Failed);
         assert!(scheduler.cancel(completed.id, "too late").is_err());
         assert!(scheduler.mark_running(failed.id).is_err());
+    }
+
+    #[test]
+    fn detects_due_manual_once_and_interval_jobs() {
+        let scheduler = Scheduler::new();
+        let now = Utc::now();
+        let manual = scheduler
+            .schedule(SchedulerJobSpec {
+                name: "manual".to_string(),
+                command: "status".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .expect("manual");
+        let past_once = scheduler
+            .schedule(SchedulerJobSpec {
+                name: "past once".to_string(),
+                command: "status".to_string(),
+                trigger: TriggerKind::OnceAt {
+                    run_at: now - Duration::seconds(1),
+                },
+            })
+            .expect("past once");
+        scheduler
+            .schedule(SchedulerJobSpec {
+                name: "future once".to_string(),
+                command: "status".to_string(),
+                trigger: TriggerKind::OnceAt {
+                    run_at: now + Duration::seconds(60),
+                },
+            })
+            .expect("future once");
+        let interval = scheduler
+            .schedule(SchedulerJobSpec {
+                name: "interval".to_string(),
+                command: "status".to_string(),
+                trigger: TriggerKind::Interval { every_seconds: 30 },
+            })
+            .expect("interval");
+
+        let due = scheduler.due_jobs(now + Duration::seconds(31), 10);
+        assert!(due.iter().any(|job| job.id == manual.id));
+        assert!(due.iter().any(|job| job.id == past_once.id));
+        assert!(due.iter().any(|job| job.id == interval.id));
+        assert_eq!(scheduler.due_jobs(now + Duration::seconds(31), 2).len(), 2);
+    }
+
+    #[test]
+    fn interval_jobs_can_be_rescheduled_after_running() {
+        let scheduler = Scheduler::new();
+        let job = scheduler
+            .schedule(SchedulerJobSpec {
+                name: "interval".to_string(),
+                command: "status".to_string(),
+                trigger: TriggerKind::Interval { every_seconds: 60 },
+            })
+            .expect("interval");
+
+        scheduler.mark_running(job.id).expect("running");
+        let rescheduled = scheduler
+            .reschedule_interval(job.id)
+            .expect("reschedule interval");
+
+        assert_eq!(rescheduled.status, SchedulerJobStatus::Scheduled);
+        assert!(rescheduled.updated_at >= job.updated_at);
     }
 }

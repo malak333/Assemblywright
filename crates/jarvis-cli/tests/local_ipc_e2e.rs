@@ -142,6 +142,8 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         "schedule",
         "local e2e job",
         "plugin status",
+        "--once-at",
+        "2999-01-01T00:00:00Z",
         "--endpoint",
         endpoint.as_str(),
     ]);
@@ -161,6 +163,51 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     ]);
     assert_eq!(scheduler_item["id"], scheduler_id);
     assert_eq!(scheduler_item["command"], "plugin status");
+
+    let due_once = run_cli_json([
+        "scheduler",
+        "schedule",
+        "due once e2e job",
+        "plugin status",
+        "--once-at",
+        "2020-01-01T00:00:00Z",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    let due_once_id = due_once["id"].as_str().expect("due once id").to_string();
+    let due_interval = run_cli_json([
+        "scheduler",
+        "schedule",
+        "due interval e2e job",
+        "plugin status",
+        "--interval-seconds",
+        "1",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    let due_interval_id = due_interval["id"]
+        .as_str()
+        .expect("due interval id")
+        .to_string();
+    std::thread::sleep(Duration::from_millis(1100));
+    let run_due = run_cli_json([
+        "scheduler",
+        "run-due",
+        "--limit",
+        "8",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(run_due["emergency_paused"], false);
+    assert!(run_due["executions"]
+        .as_array()
+        .expect("executions array")
+        .iter()
+        .any(|execution| execution["accepted"] == true));
+    assert_array_contains_nested(&run_due["executions"], &["job", "id"], &due_once_id);
+    assert_array_contains_nested(&run_due["executions"], &["job", "id"], &due_interval_id);
+    assert_array_contains_nested(&run_due["executions"], &["job", "status"], "completed");
+    assert_array_contains_nested(&run_due["executions"], &["job", "status"], "scheduled");
 
     let diagnostics = run_cli_json(["diagnostics", "export", "--endpoint", endpoint.as_str()]);
     assert_eq!(diagnostics["repository_backed"], true);
@@ -445,6 +492,26 @@ fn assert_array_contains(value: &Value, field: &str, expected: &str) {
             .iter()
             .any(|item| item.get(field).and_then(Value::as_str) == Some(expected)),
         "expected array to contain object with {field}={expected}, got {value}"
+    );
+}
+
+fn assert_array_contains_nested(value: &Value, path: &[&str], expected: &str) {
+    let array = value.as_array().unwrap_or_else(|| {
+        panic!("expected array, got {}", json!(value));
+    });
+    assert!(
+        array.iter().any(|item| {
+            let mut cursor = item;
+            for segment in path {
+                let Some(next) = cursor.get(segment) else {
+                    return false;
+                };
+                cursor = next;
+            }
+            cursor.as_str() == Some(expected)
+        }),
+        "expected array to contain object with {}={expected}, got {value}",
+        path.join(".")
     );
 }
 

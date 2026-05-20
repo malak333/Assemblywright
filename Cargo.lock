@@ -593,6 +593,7 @@ name = "jarvis-cli"
 version = "0.1.1"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "jarvis-core",
  "serde_json",

@@ -156,6 +156,23 @@ pub struct CreateSchedulerJobRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SchedulerRunResponse {
+    pub checked_at: DateTime<Utc>,
+    pub limit: usize,
+    pub emergency_paused: bool,
+    pub executions: Vec<SchedulerJobExecution>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SchedulerJobExecution {
+    pub job: SchedulerJob,
+    pub task: TaskRecord,
+    pub accepted: bool,
+    pub message: String,
+    pub audit_entries: Vec<AuditEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateMemoryItemRequest {
     pub category: String,
     pub key: String,
@@ -633,6 +650,128 @@ impl IpcState {
             .ok_or_else(|| JarvisError::Storage(format!("scheduler job not found: {id}")))
     }
 
+    pub async fn run_due_scheduler_jobs(&self, limit: usize) -> JarvisResult<SchedulerRunResponse> {
+        let checked_at = Utc::now();
+        let limit = limit.max(1);
+
+        if self.runtime_control.is_emergency_paused() {
+            return Ok(SchedulerRunResponse {
+                checked_at,
+                limit,
+                emergency_paused: true,
+                executions: Vec::new(),
+            });
+        }
+
+        let due_jobs = self.scheduler.due_jobs(checked_at, limit);
+        let mut executions = Vec::new();
+
+        for due_job in due_jobs {
+            if self.runtime_control.is_emergency_paused() {
+                break;
+            }
+
+            let running = self.mark_scheduler_job_running(due_job.id)?;
+            let command_response = self
+                .submit_command(CommandRequest {
+                    input: running.command.clone(),
+                    session_id: None,
+                    context: json!({
+                        "surface": "scheduler",
+                        "scheduler_job_id": running.id,
+                        "scheduler_job_name": running.name,
+                        "trigger": running.trigger,
+                        "sensitivity": "workspace",
+                    }),
+                    dry_run: false,
+                    sensitivity: Some(Sensitivity::Workspace),
+                })
+                .await?;
+
+            let mut audit_entries = Vec::new();
+            self.append_scheduler_execution_audit(
+                "scheduler_job_started",
+                "scheduler started due job command",
+                &running,
+                &command_response,
+                &mut audit_entries,
+            )?;
+
+            let final_job = if command_response.accepted {
+                if matches!(running.trigger, TriggerKind::Interval { .. }) {
+                    self.reschedule_interval_scheduler_job(running.id)?
+                } else {
+                    self.complete_scheduler_job(running.id)?
+                }
+            } else {
+                self.fail_scheduler_job(running.id)?
+            };
+
+            let event_type = match final_job.status {
+                SchedulerJobStatus::Scheduled => "scheduler_job_rescheduled",
+                SchedulerJobStatus::Completed => "scheduler_job_completed",
+                SchedulerJobStatus::Failed => "scheduler_job_failed",
+                SchedulerJobStatus::Cancelled => "scheduler_job_cancelled",
+                SchedulerJobStatus::Running => "scheduler_job_running",
+            };
+            self.append_scheduler_execution_audit(
+                event_type,
+                "scheduler finished due job command",
+                &final_job,
+                &command_response,
+                &mut audit_entries,
+            )?;
+
+            executions.push(SchedulerJobExecution {
+                job: final_job,
+                task: command_response.task,
+                accepted: command_response.accepted,
+                message: command_response.message,
+                audit_entries,
+            });
+        }
+
+        Ok(SchedulerRunResponse {
+            checked_at,
+            limit,
+            emergency_paused: false,
+            executions,
+        })
+    }
+
+    pub fn reschedule_interval_scheduler_job(&self, id: Uuid) -> JarvisResult<SchedulerJob> {
+        let job = self.scheduler.reschedule_interval(id)?;
+        self.persist_scheduler_transition(&job, |repository| {
+            repository.reschedule_interval_scheduler_job(id)
+        })
+    }
+
+    fn append_scheduler_execution_audit(
+        &self,
+        event_type: &str,
+        summary: &str,
+        job: &SchedulerJob,
+        command_response: &CommandResponse,
+        audit_entries: &mut Vec<AuditEntry>,
+    ) -> JarvisResult<()> {
+        let entry = AuditEntry::new(
+            Some(command_response.task.id),
+            event_type,
+            summary,
+            json!({
+                "scheduler_job_id": job.id,
+                "scheduler_job_name": job.name,
+                "trigger": job.trigger,
+                "job_status": job.status,
+                "task_status": command_response.task.status,
+                "accepted": command_response.accepted,
+            }),
+        );
+        self.command_store().append_audit_entry(&entry)?;
+        audit_entries.push(entry);
+        Ok(())
+    }
+
     fn persist_scheduler_job(&self, job: &SchedulerJob) -> JarvisResult<()> {
         self.repository
             .as_ref()
@@ -786,6 +925,7 @@ pub fn router(state: IpcState) -> Router {
             "/scheduler/jobs",
             get(list_scheduler_jobs).post(create_scheduler_job),
         )
+        .route("/scheduler/run-due", post(run_due_scheduler_jobs))
         .route(
             "/scheduler/jobs/:id",
             get(get_scheduler_job).delete(cancel_scheduler_job),
@@ -1026,6 +1166,21 @@ async fn create_scheduler_job(
         .map_err(error_response)
 }
 
+async fn run_due_scheduler_jobs(
+    State(state): State<IpcState>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Result<Json<SchedulerRunResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let limit = query
+        .get("limit")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(16);
+    state
+        .run_due_scheduler_jobs(limit)
+        .await
+        .map(Json)
+        .map_err(error_response)
+}
+
 async fn cancel_scheduler_job(
     State(state): State<IpcState>,
     Path(id): Path<Uuid>,
@@ -1059,6 +1214,7 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
         endpoint("DELETE", "/emergency-pause", false, true),
         endpoint("GET", "/scheduler/jobs", false, false),
         endpoint("POST", "/scheduler/jobs", false, false),
+        endpoint("POST", "/scheduler/run-due", false, false),
         endpoint("GET", "/scheduler/jobs/:id", false, false),
         endpoint("DELETE", "/scheduler/jobs/:id", false, false),
     ]
@@ -1460,6 +1616,114 @@ mod tests {
         assert!(jobs
             .iter()
             .any(|job| job.id == failed.id && job.status == SchedulerJobStatus::Failed));
+    }
+
+    #[tokio::test]
+    async fn run_due_scheduler_jobs_executes_and_persists_visible_tasks() {
+        let repository = SqliteRepository::in_memory().unwrap();
+        let scheduler = Scheduler::new();
+        let now = Utc::now();
+        let mut interval_job = scheduler
+            .schedule(SchedulerJobSpec {
+                name: "interval status".to_string(),
+                command: "plugin status".to_string(),
+                trigger: TriggerKind::Interval { every_seconds: 30 },
+            })
+            .expect("interval");
+        interval_job.updated_at = now - chrono::Duration::seconds(31);
+        repository
+            .upsert_scheduler_job(&interval_job)
+            .expect("persist interval");
+        let state = IpcState::with_repository(repository).expect("state");
+        let manual = state
+            .schedule_scheduler_job(SchedulerJobSpec {
+                name: "manual status".to_string(),
+                command: "plugin status".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .expect("manual");
+        let once = state
+            .schedule_scheduler_job(SchedulerJobSpec {
+                name: "once status".to_string(),
+                command: "plugin status".to_string(),
+                trigger: TriggerKind::OnceAt {
+                    run_at: now - chrono::Duration::seconds(1),
+                },
+            })
+            .expect("once");
+
+        let response = state.run_due_scheduler_jobs(10).await.expect("run due");
+
+        assert!(!response.emergency_paused);
+        assert_eq!(response.executions.len(), 3);
+        assert!(response
+            .executions
+            .iter()
+            .all(|execution| execution.accepted));
+        assert!(response.executions.iter().any(|execution| {
+            execution.job.id == manual.id && execution.job.status == SchedulerJobStatus::Completed
+        }));
+        assert!(response.executions.iter().any(|execution| {
+            execution.job.id == once.id && execution.job.status == SchedulerJobStatus::Completed
+        }));
+        assert!(response.executions.iter().any(|execution| {
+            execution.job.id == interval_job.id
+                && execution.job.status == SchedulerJobStatus::Scheduled
+        }));
+        assert!(response.executions.iter().all(|execution| execution
+            .audit_entries
+            .iter()
+            .any(|entry| entry.event_type == "scheduler_job_started")));
+        assert!(response.executions.iter().all(|execution| execution
+            .audit_entries
+            .iter()
+            .any(|entry| entry.event_type == "scheduler_job_completed"
+                || entry.event_type == "scheduler_job_rescheduled")));
+
+        let tasks = state
+            .using_repository(SqliteRepository::list_tasks)
+            .expect("tasks");
+        assert_eq!(tasks.len(), 3);
+        let audit = state
+            .using_repository(|repository| repository.list_audit_entries(None))
+            .expect("audit");
+        assert!(audit
+            .iter()
+            .any(|entry| entry.event_type == "scheduler_job_rescheduled"));
+        assert!(audit
+            .iter()
+            .any(|entry| entry.event_type == "plugin_completed"));
+    }
+
+    #[tokio::test]
+    async fn run_due_scheduler_jobs_is_blocked_by_persistent_emergency_pause() {
+        let repository = SqliteRepository::in_memory().unwrap();
+        repository
+            .set_emergency_pause(true, Some("paused before startup"), Some("test"))
+            .expect("pause");
+        let scheduler = Scheduler::new();
+        let job = scheduler
+            .schedule(SchedulerJobSpec {
+                name: "paused job".to_string(),
+                command: "plugin status".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .expect("job");
+        repository.upsert_scheduler_job(&job).expect("persist job");
+        let state = IpcState::with_repository(repository).expect("state");
+
+        let response = state.run_due_scheduler_jobs(10).await.expect("run due");
+
+        assert!(response.emergency_paused);
+        assert!(response.executions.is_empty());
+        assert_eq!(
+            state.get_scheduler_job(job.id).expect("job").status,
+            SchedulerJobStatus::Scheduled
+        );
+        let tasks = state
+            .using_repository(SqliteRepository::list_tasks)
+            .expect("tasks");
+        assert!(tasks.is_empty());
     }
 
     #[tokio::test]

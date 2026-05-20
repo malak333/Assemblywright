@@ -3,6 +3,7 @@ use std::net::TcpStream;
 use std::net::ToSocketAddrs;
 use std::path::PathBuf;
 
+use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 use jarvis_core::{
     CommandRequest, CreateMemoryItemRequest, CreateSchedulerJobRequest, EmergencyPauseRequest,
@@ -108,6 +109,17 @@ enum SchedulerCommand {
     Schedule {
         name: String,
         command: String,
+        #[arg(long, conflicts_with = "interval_seconds")]
+        once_at: Option<String>,
+        #[arg(long, conflicts_with = "once_at")]
+        interval_seconds: Option<u64>,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    /// Execute currently due scheduler jobs once.
+    RunDue {
+        #[arg(long, default_value_t = 16)]
+        limit: usize,
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
@@ -291,16 +303,29 @@ async fn main() -> anyhow::Result<()> {
             SchedulerCommand::Schedule {
                 name,
                 command,
+                once_at,
+                interval_seconds,
                 endpoint,
             } => {
                 let body = serde_json::to_string(&CreateSchedulerJobRequest {
                     name,
                     command,
-                    trigger: TriggerKind::Manual,
+                    trigger: parse_scheduler_trigger(once_at, interval_seconds)?,
                 })?;
                 println!(
                     "{}",
                     request(&endpoint, "POST", "/scheduler/jobs", Some(&body))?
+                );
+            }
+            SchedulerCommand::RunDue { limit, endpoint } => {
+                println!(
+                    "{}",
+                    request(
+                        &endpoint,
+                        "POST",
+                        &format!("/scheduler/run-due?limit={limit}"),
+                        None,
+                    )?
                 );
             }
             SchedulerCommand::Cancel { id, endpoint } => {
@@ -458,6 +483,26 @@ fn parse_sensitivity(value: &str) -> anyhow::Result<Sensitivity> {
         _ => Err(anyhow::anyhow!(
             "sensitivity must be one of public, workspace, personal, private, credential_adjacent, restricted"
         )),
+    }
+}
+
+fn parse_scheduler_trigger(
+    once_at: Option<String>,
+    interval_seconds: Option<u64>,
+) -> anyhow::Result<TriggerKind> {
+    match (once_at, interval_seconds) {
+        (Some(value), None) => {
+            let run_at = DateTime::parse_from_rfc3339(&value)
+                .map_err(|error| anyhow::anyhow!("--once-at must be RFC3339: {error}"))?
+                .with_timezone(&Utc);
+            Ok(TriggerKind::OnceAt { run_at })
+        }
+        (None, Some(0)) => Err(anyhow::anyhow!(
+            "--interval-seconds must be greater than zero"
+        )),
+        (None, Some(every_seconds)) => Ok(TriggerKind::Interval { every_seconds }),
+        (None, None) => Ok(TriggerKind::Manual),
+        (Some(_), Some(_)) => unreachable!("clap conflicts prevent both trigger flags"),
     }
 }
 
