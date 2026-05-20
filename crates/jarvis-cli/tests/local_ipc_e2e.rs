@@ -174,6 +174,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     let diagnostics_encoded = serde_json::to_string(&diagnostics).expect("diagnostics JSON");
     assert!(!diagnostics_encoded.contains("updated through jarvis-cli e2e"));
     assert!(!diagnostics_encoded.contains("plugin status"));
+    assert!(!diagnostics_encoded.contains("cross-process e2e"));
 
     let pause = run_cli_json([
         "pause",
@@ -289,8 +290,23 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     ]);
     assert_array_contains(&deleted_memory_list, "id", &memory_id);
 
+    let active_memory_after_delete =
+        run_cli_json(["memory", "list", "--endpoint", restarted_endpoint.as_str()]);
+    assert_array_lacks(&active_memory_after_delete, "id", &memory_id);
+
     restarted.stop();
     drop(temp_dir);
+}
+
+#[test]
+#[ignore = "opt-in release proof; spawns jarvis smoke and duplicates broader CLI coverage"]
+fn cli_smoke_command_is_release_gate_compatible() {
+    let output = run_cli(["smoke"]);
+    let stdout = String::from_utf8(output.stdout).expect("stdout is UTF-8");
+    assert!(
+        stdout.contains("jarvis smoke: ok"),
+        "unexpected smoke stdout: {stdout}"
+    );
 }
 
 struct JarvisServer {
@@ -439,6 +455,18 @@ fn assert_string_array_contains(value: &Value, expected: &str) {
     assert!(
         array.iter().any(|item| item.as_str() == Some(expected)),
         "expected array to contain {expected}, got {value}"
+    );
+}
+
+fn assert_array_lacks(value: &Value, field: &str, expected: &str) {
+    let array = value.as_array().unwrap_or_else(|| {
+        panic!("expected array, got {}", json!(value));
+    });
+    assert!(
+        !array
+            .iter()
+            .any(|item| item.get(field).and_then(Value::as_str) == Some(expected)),
+        "expected array not to contain object with {field}={expected}, got {value}"
     );
 }
 

@@ -4,6 +4,15 @@ Run commands from the repository root unless noted otherwise.
 
 ## Required Local Gate
 
+Run the full local release gate with:
+
+```sh
+./scripts/release-local.sh
+```
+
+The script is a wrapper around the commands below and intentionally stays
+local-only.
+
 ```sh
 cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
@@ -11,7 +20,7 @@ cargo test --workspace
 cargo test --workspace -- --ignored
 cargo build --workspace
 cargo run -p jarvis-cli -- smoke
-cargo package --workspace
+cargo package --workspace --allow-dirty
 swift test --package-path apps/mac
 swift build --package-path apps/mac
 ```
@@ -97,17 +106,23 @@ cargo run -p jarvis-cli -- diagnostics export
 cargo test -p jarvis-core
 cargo test -p jarvis-core --test e2e_scaffold
 cargo test -p jarvis-cli
+cargo test -p jarvis-cli --test local_ipc_e2e
+cargo test -p jarvis-cli --test local_ipc_e2e -- --ignored
 ```
 
 ## Release Evidence Boundary
 
-Passing these commands proves the current Rust workspace builds and its tests
-pass. The smoke commands prove the local server and CLI can exchange JSON for
-health, runtime-backed command execution, route/plugin audit evidence,
-scheduler, redacted diagnostics export, persisted task/memory inspection, plugin manifests, and
-emergency-pause surfaces. They do not prove app packaging, real local model
-provider integration, autonomous model-generated tool calls, memory UX,
-approval UI, voice loop, or packaged Mac release smoke test until those
-surfaces exist and are covered. The current Swift gate proves the Mac shell
-scaffold builds and its IPC contract decoding tests pass; it does not prove the
-Swift app starts, supervises, or packages the Rust core.
+Passing `./scripts/release-local.sh` proves the current Rust workspace builds,
+passes standard and ignored release-proof tests, runs the CLI smoke command,
+packages the Rust crates, and passes the Swift package build/test gate. The
+cross-process IPC E2E test proves the local server and CLI can exchange JSON for
+health, runtime-backed command execution, deterministic first-party plugin
+execution, route/policy/plugin audit evidence, scheduler schedule/cancel and
+persistence, redacted diagnostics export, memory create/update/review/delete
+and persistence, plugin manifests, and emergency-pause blocking/resume surfaces.
+They do not prove app packaging, real local model provider integration,
+autonomous model-generated tool calls, memory UX, approval UI, voice loop, or
+packaged Mac release smoke test until those surfaces exist and are covered. The
+current Swift gate proves the Mac shell scaffold builds and its IPC contract
+decoding tests pass; it does not prove the Swift app starts, supervises, or
+packages the Rust core.

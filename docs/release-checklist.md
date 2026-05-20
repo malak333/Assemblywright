@@ -22,13 +22,19 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
 
 ## Code Gate
 
+- `./scripts/release-local.sh`
+
+The script runs the full local gate below, including the opt-in ignored
+release-proof test. Run individual commands only when diagnosing a failing
+stage.
+
 - `cargo fmt --check`
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - `cargo test --workspace`
 - `cargo test --workspace -- --ignored`
 - `cargo build --workspace`
 - `cargo run -p jarvis-cli -- smoke`
-- `cargo package --workspace`
+- `cargo package --workspace --allow-dirty`
 - `swift test --package-path apps/mac`
 - `swift build --package-path apps/mac`
 - Optional manual CLI/IPC smoke against a running local server:
@@ -68,6 +74,10 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
 - Confirm diagnostics export remains redacted and does not include command
   bodies, scheduler commands, audit payloads, memory values, raw cancellation
   reasons, or credentials.
+- Confirm the cross-process CLI E2E still covers command, plugin, audit,
+  memory create/update/review/delete, scheduler schedule/get/list/cancel,
+  diagnostics redaction, persistence restart, and emergency-pause
+  blocking/resume behavior.
 - Confirm the Swift shell remains described as a scaffold until it starts and
   supervises the Rust core, handles approval prompts, and passes packaged app
   smoke checks.
