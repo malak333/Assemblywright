@@ -25,18 +25,84 @@ public struct JarvisEndpoint: Equatable, Sendable {
 public struct JarvisHealth: Decodable, Equatable, Sendable {
     public var status: String
     public var version: String
+    public var contract: JarvisContractMetadata?
     public var emergencyPaused: Bool
     public var emergencyPauseReason: String?
     public var schedulerJobs: Int
     public var commandRuntime: String
 
+    public init(
+        status: String,
+        version: String,
+        contract: JarvisContractMetadata? = nil,
+        emergencyPaused: Bool,
+        emergencyPauseReason: String?,
+        schedulerJobs: Int,
+        commandRuntime: String
+    ) {
+        self.status = status
+        self.version = version
+        self.contract = contract
+        self.emergencyPaused = emergencyPaused
+        self.emergencyPauseReason = emergencyPauseReason
+        self.schedulerJobs = schedulerJobs
+        self.commandRuntime = commandRuntime
+    }
+
     enum CodingKeys: String, CodingKey {
         case status
         case version
+        case contract
         case emergencyPaused = "emergency_paused"
         case emergencyPauseReason = "emergency_pause_reason"
         case schedulerJobs = "scheduler_jobs"
         case commandRuntime = "command_runtime"
+    }
+}
+
+public struct JarvisContractMetadata: Decodable, Equatable, Sendable {
+    public var name: String
+    public var version: Int
+    public var coreVersion: String
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case version
+        case coreVersion = "core_version"
+    }
+}
+
+public struct JarvisContractEndpoint: Decodable, Equatable, Identifiable, Sendable {
+    public var method: String
+    public var path: String
+    public var repositoryRequired: Bool
+    public var redacted: Bool
+
+    public var id: String { "\(method) \(path)" }
+
+    enum CodingKeys: String, CodingKey {
+        case method
+        case path
+        case repositoryRequired = "repository_required"
+        case redacted
+    }
+}
+
+public struct JarvisContractResponse: Decodable, Equatable, Sendable {
+    public var contract: JarvisContractMetadata
+    public var endpoints: [JarvisContractEndpoint]
+    public var safeInspectionPaths: [String]
+
+    public var exposesApprovalActions: Bool {
+        endpoints.contains { endpoint in
+            endpoint.path.localizedCaseInsensitiveContains("approval")
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case contract
+        case endpoints
+        case safeInspectionPaths = "safe_inspection_paths"
     }
 }
 
@@ -145,7 +211,7 @@ public enum JarvisJSONValue: Codable, Equatable, Sendable {
     }
 }
 
-public struct JarvisTask: Decodable, Equatable, Sendable {
+public struct JarvisTask: Decodable, Equatable, Identifiable, Sendable {
     public var id: UUID
     public var sessionId: UUID
     public var userInput: String
@@ -434,6 +500,81 @@ public struct JarvisCommandResponse: Decodable, Equatable, Sendable {
     }
 }
 
+public struct JarvisApprovalQueueItem: Equatable, Identifiable, Sendable {
+    public var id: UUID
+    public var taskId: UUID?
+    public var title: String
+    public var detail: String
+    public var source: String
+    public var approvalStatus: String
+    public var actionAvailable: Bool
+
+    public init(
+        id: UUID = UUID(),
+        taskId: UUID?,
+        title: String,
+        detail: String,
+        source: String,
+        approvalStatus: String,
+        actionAvailable: Bool
+    ) {
+        self.id = id
+        self.taskId = taskId
+        self.title = title
+        self.detail = detail
+        self.source = source
+        self.approvalStatus = approvalStatus
+        self.actionAvailable = actionAvailable
+    }
+
+    public static func pendingItems(
+        tasks: [JarvisTask],
+        auditEntries: [JarvisAuditEntry],
+        contract: JarvisContractResponse?
+    ) -> [JarvisApprovalQueueItem] {
+        let supportsApprovalActions = contract?.exposesApprovalActions == true
+        let taskItems = tasks
+            .filter { $0.status == "waiting_for_approval" }
+            .map { task in
+                JarvisApprovalQueueItem(
+                    id: task.id,
+                    taskId: task.id,
+                    title: "Task waiting for approval",
+                    detail: task.userInput,
+                    source: "task",
+                    approvalStatus: "pending",
+                    actionAvailable: supportsApprovalActions
+                )
+            }
+
+        let auditItems = auditEntries.compactMap { entry -> JarvisApprovalQueueItem? in
+            guard entry.eventType.localizedCaseInsensitiveContains("approval") else {
+                return nil
+            }
+
+            return JarvisApprovalQueueItem(
+                id: entry.id,
+                taskId: entry.taskId,
+                title: entry.eventType,
+                detail: entry.summary,
+                source: "audit",
+                approvalStatus: approvalStatus(from: entry.payload),
+                actionAvailable: supportsApprovalActions
+            )
+        }
+
+        return taskItems + auditItems
+    }
+
+    private static func approvalStatus(from payload: JarvisJSONValue?) -> String {
+        guard case let .object(object) = payload,
+              case let .string(status) = object["approval_status"] else {
+            return "pending"
+        }
+        return status
+    }
+}
+
 public struct JarvisPauseRequest: Encodable, Equatable, Sendable {
     public var reason: String
 
@@ -465,6 +606,7 @@ public enum JarvisIPCError: Error, Equatable {
 
 public protocol JarvisCoreClient: Sendable {
     func health() async throws -> JarvisHealth
+    func contract() async throws -> JarvisContractResponse
     func submit(_ command: JarvisCommandRequest) async throws -> JarvisCommandResponse
     func pause(reason: String) async throws -> JarvisPauseResponse
     func resume() async throws -> JarvisPauseResponse
@@ -480,6 +622,7 @@ public protocol JarvisCoreClient: Sendable {
     func deleteMemoryItem(id: UUID) async throws -> JarvisMemoryItem
     func listPluginManifests() async throws -> [JarvisPluginManifest]
     func listSchedulerJobs() async throws -> [JarvisSchedulerJob]
+    func schedulerJob(id: UUID) async throws -> JarvisSchedulerJob
     func createSchedulerJob(_ request: JarvisCreateSchedulerJobRequest) async throws -> JarvisSchedulerJob
     func cancelSchedulerJob(id: UUID) async throws -> JarvisSchedulerJob
     func diagnosticsExport() async throws -> JarvisDiagnosticsExport
@@ -500,6 +643,10 @@ public final class JarvisIPCClient: JarvisCoreClient {
 
     public func health() async throws -> JarvisHealth {
         try await send(path: "/health", method: "GET", body: Optional<Data>.none)
+    }
+
+    public func contract() async throws -> JarvisContractResponse {
+        try await send(path: "/contract", method: "GET", body: Optional<Data>.none)
     }
 
     public func submit(_ command: JarvisCommandRequest) async throws -> JarvisCommandResponse {
@@ -566,6 +713,10 @@ public final class JarvisIPCClient: JarvisCoreClient {
 
     public func listSchedulerJobs() async throws -> [JarvisSchedulerJob] {
         try await send(path: "/scheduler/jobs", method: "GET", body: Optional<Data>.none)
+    }
+
+    public func schedulerJob(id: UUID) async throws -> JarvisSchedulerJob {
+        try await send(path: "/scheduler/jobs/\(id.uuidString)", method: "GET", body: Optional<Data>.none)
     }
 
     public func createSchedulerJob(_ request: JarvisCreateSchedulerJobRequest) async throws -> JarvisSchedulerJob {

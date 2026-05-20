@@ -42,6 +42,11 @@ These notes capture durable facts for future agents working on this repository.
   questions.
 - The Swift shell is currently a scaffold with a core supervisor abstraction,
   not a signed packaged app with bundled-core smoke evidence.
+- The Swift shell now exposes production-facing scaffold tabs for approval
+  evidence, runs/audit, scheduler create/inspect/cancel, redacted diagnostics,
+  and voice degraded-mode state. Approval decisions remain inspection-only until
+  the Rust IPC contract exposes approval mutation endpoints, and voice remains a
+  text-only scaffold rather than real speech recognition.
 - The scheduler is currently inspectable and cancellable. Scheduler jobs are
   in-memory without repository backing and durable when the IPC state is started
   with `SqliteRepository`. Proactive production trigger execution remains target

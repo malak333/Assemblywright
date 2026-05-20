@@ -128,5 +128,8 @@ packaging, real local model provider integration, installed plugin sandboxing,
 memory UX beyond the scaffold, approval UI, voice loop, or packaged Mac release
 smoke test until those surfaces exist and are covered. The current Swift gate
 proves the Mac shell scaffold builds, decodes IPC contracts, exposes management
-models, and can supervise a configured local core process abstraction; it does
-not prove a signed packaged app bundles and launches the Rust core.
+models for approval evidence, runs/audit, scheduler, diagnostics, and voice
+degraded-mode state, and can supervise a configured local core process
+abstraction; it does not prove a signed packaged app bundles and launches the
+Rust core, nor that approval decisions or real speech recognition are
+implemented.

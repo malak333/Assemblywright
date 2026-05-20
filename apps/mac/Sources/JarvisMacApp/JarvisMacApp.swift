@@ -7,8 +7,11 @@ struct JarvisMacApp: App {
     @StateObject private var console: CommandConsoleModel
     @StateObject private var memory: MemoryManagerModel
     @StateObject private var plugins: PluginManagerModel
+    @StateObject private var approvals: ApprovalManagementModel
+    @StateObject private var runs: RunManagementModel
     @StateObject private var scheduler: SchedulerModel
     @StateObject private var diagnostics: DiagnosticsModel
+    @StateObject private var voice: VoiceStateModel
 
     init() {
         let client = JarvisIPCClient()
@@ -16,8 +19,11 @@ struct JarvisMacApp: App {
         _console = StateObject(wrappedValue: CommandConsoleModel(client: client))
         _memory = StateObject(wrappedValue: MemoryManagerModel(client: client))
         _plugins = StateObject(wrappedValue: PluginManagerModel(client: client))
+        _approvals = StateObject(wrappedValue: ApprovalManagementModel(client: client))
+        _runs = StateObject(wrappedValue: RunManagementModel(client: client))
         _scheduler = StateObject(wrappedValue: SchedulerModel(client: client))
         _diagnostics = StateObject(wrappedValue: DiagnosticsModel(client: client))
+        _voice = StateObject(wrappedValue: VoiceStateModel())
     }
 
     var body: some Scene {
@@ -27,8 +33,11 @@ struct JarvisMacApp: App {
                 console: console,
                 memory: memory,
                 plugins: plugins,
+                approvals: approvals,
+                runs: runs,
                 scheduler: scheduler,
-                diagnostics: diagnostics
+                diagnostics: diagnostics,
+                voice: voice
             )
                 .task {
                     await supervisor.start()
@@ -58,8 +67,11 @@ struct JarvisShellView: View {
     @ObservedObject var console: CommandConsoleModel
     @ObservedObject var memory: MemoryManagerModel
     @ObservedObject var plugins: PluginManagerModel
+    @ObservedObject var approvals: ApprovalManagementModel
+    @ObservedObject var runs: RunManagementModel
     @ObservedObject var scheduler: SchedulerModel
     @ObservedObject var diagnostics: DiagnosticsModel
+    @ObservedObject var voice: VoiceStateModel
 
     var body: some View {
         VStack(spacing: 0) {
@@ -72,10 +84,16 @@ struct JarvisShellView: View {
                     .tabItem { Text("Memory") }
                 PluginManagerView(model: plugins)
                     .tabItem { Text("Plugins") }
+                ApprovalCenterView(model: approvals)
+                    .tabItem { Text("Approvals") }
+                RunManagementView(model: runs)
+                    .tabItem { Text("Runs") }
                 SchedulerJobsView(model: scheduler)
                     .tabItem { Text("Scheduler") }
                 DiagnosticsExportView(model: diagnostics)
                     .tabItem { Text("Diagnostics") }
+                VoiceStateView(model: voice)
+                    .tabItem { Text("Voice") }
             }
         }
         .frame(minWidth: 860, minHeight: 560)
@@ -96,6 +114,10 @@ struct CoreStatusBanner: View {
             }
 
             Spacer()
+
+            Text(supervisor.smokeSnapshot.executableConfigured ? "Packaged core configured" : "Core binary not configured")
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
             Button("Start") {
                 Task { await supervisor.start() }
@@ -292,6 +314,11 @@ struct PluginManagerView: View {
 
 struct SchedulerJobsView: View {
     @ObservedObject var model: SchedulerModel
+    @State private var name = "manual check"
+    @State private var command = "status check"
+    @State private var runAt = "2026-05-20T13:00:00Z"
+    @State private var intervalSeconds = "3600"
+    @State private var triggerMode = "manual"
 
     var body: some View {
         ManagementListView(
@@ -300,18 +327,95 @@ struct SchedulerJobsView: View {
             lastError: model.lastError,
             refresh: { await model.refresh() }
         ) {
-            List(model.jobs) { job in
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(job.name)
-                        .font(.subheadline)
-                    Text(job.command)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text("\(job.status) | \(triggerDescription(job.trigger))")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+            VStack(spacing: 0) {
+                schedulerForm
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
+
+                List(model.jobs) { job in
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack {
+                            Text(job.name)
+                                .font(.subheadline)
+                            Spacer()
+                            Button("Inspect") {
+                                Task { await model.select(id: job.id) }
+                            }
+                            Button("Cancel") {
+                                Task { await model.cancel(id: job.id) }
+                            }
+                            .disabled(job.cancelledAt != nil)
+                        }
+                        Text(job.command)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text("\(job.status) | \(triggerDescription(job.trigger))")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 4)
                 }
-                .padding(.vertical, 4)
+            }
+        }
+    }
+
+    private var schedulerForm: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                TextField("Name", text: $name)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Command", text: $command)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            HStack {
+                Picker("Trigger", selection: $triggerMode) {
+                    Text("Manual").tag("manual")
+                    Text("Once").tag("once")
+                    Text("Interval").tag("interval")
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 260)
+
+                if triggerMode == "once" {
+                    TextField("Run at ISO-8601", text: $runAt)
+                        .textFieldStyle(.roundedBorder)
+                } else if triggerMode == "interval" {
+                    TextField("Seconds", text: $intervalSeconds)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 120)
+                }
+
+                Button("Schedule") {
+                    schedule()
+                }
+                .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+
+            if let selectedJob = model.selectedJob {
+                Text("Selected \(selectedJob.id.uuidString): \(selectedJob.status)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+        }
+    }
+
+    private func schedule() {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        Task {
+            switch triggerMode {
+            case "once":
+                await model.scheduleOnce(name: trimmedName, command: trimmedCommand, runAt: runAt)
+            case "interval":
+                await model.scheduleInterval(
+                    name: trimmedName,
+                    command: trimmedCommand,
+                    everySeconds: UInt64(intervalSeconds) ?? 3600
+                )
+            default:
+                await model.scheduleManual(name: trimmedName, command: trimmedCommand)
             }
         }
     }
@@ -324,6 +428,97 @@ struct SchedulerJobsView: View {
             return "once at \(runAt)"
         case let .interval(everySeconds):
             return "every \(everySeconds)s"
+        }
+    }
+}
+
+struct ApprovalCenterView: View {
+    @ObservedObject var model: ApprovalManagementModel
+
+    var body: some View {
+        ManagementListView(
+            title: "Approvals",
+            isLoading: model.isLoading,
+            lastError: model.lastError,
+            refresh: { await model.refresh() }
+        ) {
+            List {
+                if let limitation = model.limitationText {
+                    Text(limitation)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                ForEach(model.pendingItems) { item in
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack {
+                            Text(item.title)
+                                .font(.subheadline)
+                            Spacer()
+                            Text(item.approvalStatus)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Text(item.detail)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(3)
+                            .textSelection(.enabled)
+                        Text(item.actionAvailable ? "Core approval action exposed" : "Inspection only")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+    }
+}
+
+struct RunManagementView: View {
+    @ObservedObject var model: RunManagementModel
+
+    var body: some View {
+        ManagementListView(
+            title: "Runs",
+            isLoading: model.isLoading,
+            lastError: model.lastError,
+            refresh: { await model.refresh() }
+        ) {
+            HSplitView {
+                List(model.tasks) { task in
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(task.status)
+                            .font(.subheadline)
+                        Text(task.userInput)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                        Text(task.id.uuidString)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                    .padding(.vertical, 4)
+                }
+                .frame(minWidth: 300)
+
+                List(model.auditEntries) { entry in
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(entry.eventType)
+                            .font(.subheadline)
+                        Text(entry.summary)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(3)
+                        Text(entry.createdAt)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 4)
+                }
+                .frame(minWidth: 320)
+            }
         }
     }
 }
@@ -348,12 +543,50 @@ struct DiagnosticsExportView: View {
                     LabelValueRow(label: "Audit Entries", value: export.auditEntryCount.map(String.init) ?? "unknown")
                     LabelValueRow(label: "Active Memory", value: export.activeMemoryItemCount.map(String.init) ?? "unknown")
                     LabelValueRow(label: "Redaction", value: export.redaction)
+                    ForEach(export.schedulerJobs) { job in
+                        LabelValueRow(
+                            label: "Scheduler \(job.name)",
+                            value: "\(job.status), cancellation reason present: \(job.cancellationReasonPresent)"
+                        )
+                    }
                 } else {
                     Text("No diagnostics loaded")
                         .foregroundStyle(.secondary)
                 }
             }
         }
+    }
+}
+
+struct VoiceStateView: View {
+    @ObservedObject var model: VoiceStateModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Voice")
+                .font(.headline)
+            Text(model.statusText)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+
+            Toggle("Push to talk", isOn: .constant(model.isPushToTalkEnabled))
+                .disabled(true)
+            Text("This surface tracks voice readiness and degraded mode only; it does not claim speech recognition support.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack {
+                Button("Mark Mic Permission Missing") {
+                    model.setUnavailable(reason: "Microphone permission is missing or unavailable.")
+                }
+                Button("Reset Text Only") {
+                    model.resetTextOnly()
+                }
+            }
+
+            Spacer()
+        }
+        .padding()
     }
 }
 

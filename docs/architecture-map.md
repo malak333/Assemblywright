@@ -197,11 +197,14 @@ sequenceDiagram
   scheduler jobs over HTTP, and running `jarvis smoke` against ephemeral local
   servers.
 - `apps/mac/JarvisMacCore`: Swift IPC client, core supervisor, command-console
-  model, and management models that decode Rust health/contract/command/pause/
-  task/audit/memory/plugin/scheduler/diagnostics JSON contracts.
+  model, voice degraded-mode state, and management models that decode Rust
+  health/contract/command/pause/task/audit/memory/plugin/scheduler/diagnostics
+  JSON contracts. Approval management is inspection-only unless `/contract`
+  exposes an approval decision endpoint.
 - `apps/mac/JarvisMacApp`: SwiftUI shell scaffold with health status,
   degraded-mode banner, transcript, activity/audit panel, memory, plugin,
-  scheduler, diagnostics tabs, send, pause/resume, and refresh controls.
+  approval, run/audit, scheduler, diagnostics, voice-state tabs, send,
+  pause/resume, and refresh controls.
 
 ## End-Goal Production Architecture
 

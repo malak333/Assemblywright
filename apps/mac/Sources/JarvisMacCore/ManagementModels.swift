@@ -101,6 +101,7 @@ public final class PluginManagerModel: ObservableObject {
 @MainActor
 public final class SchedulerModel: ObservableObject {
     @Published public private(set) var jobs: [JarvisSchedulerJob]
+    @Published public private(set) var selectedJob: JarvisSchedulerJob?
     @Published public private(set) var isLoading: Bool
     @Published public private(set) var lastError: String?
 
@@ -109,6 +110,7 @@ public final class SchedulerModel: ObservableObject {
     public init(client: any JarvisCoreClient = JarvisIPCClient()) {
         self.client = client
         self.jobs = []
+        self.selectedJob = nil
         self.isLoading = false
         self.lastError = nil
     }
@@ -120,10 +122,29 @@ public final class SchedulerModel: ObservableObject {
     }
 
     public func scheduleManual(name: String, command: String) async {
+        await schedule(name: name, command: command, trigger: .manual)
+    }
+
+    public func scheduleOnce(name: String, command: String, runAt: String) async {
+        await schedule(name: name, command: command, trigger: .onceAt(runAt: runAt))
+    }
+
+    public func scheduleInterval(name: String, command: String, everySeconds: UInt64) async {
+        await schedule(name: name, command: command, trigger: .interval(everySeconds: everySeconds))
+    }
+
+    public func select(id: UUID) async {
+        await run {
+            self.selectedJob = try await self.client.schedulerJob(id: id)
+        }
+    }
+
+    public func schedule(name: String, command: String, trigger: JarvisSchedulerTrigger) async {
         await run {
             let job = try await self.client.createSchedulerJob(
-                JarvisCreateSchedulerJobRequest(name: name, command: command, trigger: .manual)
+                JarvisCreateSchedulerJobRequest(name: name, command: command, trigger: trigger)
             )
+            self.selectedJob = job
             self.jobs.insert(job, at: 0)
         }
     }
@@ -134,6 +155,111 @@ public final class SchedulerModel: ObservableObject {
             if let index = self.jobs.firstIndex(where: { $0.id == id }) {
                 self.jobs[index] = job
             }
+            if self.selectedJob?.id == id {
+                self.selectedJob = job
+            }
+        }
+    }
+
+    private func run(_ operation: @escaping () async throws -> Void) async {
+        isLoading = true
+        lastError = nil
+        defer { isLoading = false }
+
+        do {
+            try await operation()
+        } catch {
+            lastError = String(describing: error)
+        }
+    }
+}
+
+@MainActor
+public final class RunManagementModel: ObservableObject {
+    @Published public private(set) var tasks: [JarvisTask]
+    @Published public private(set) var auditEntries: [JarvisAuditEntry]
+    @Published public private(set) var isLoading: Bool
+    @Published public private(set) var lastError: String?
+
+    private let client: any JarvisCoreClient
+
+    public init(client: any JarvisCoreClient = JarvisIPCClient()) {
+        self.client = client
+        self.tasks = []
+        self.auditEntries = []
+        self.isLoading = false
+        self.lastError = nil
+    }
+
+    public func refresh() async {
+        await run {
+            async let tasks = self.client.listTasks()
+            async let audit = self.client.listAuditEntries(taskId: nil)
+            self.tasks = try await tasks
+            self.auditEntries = try await audit
+        }
+    }
+
+    public func refreshAudit(taskId: UUID?) async {
+        await run {
+            self.auditEntries = try await self.client.listAuditEntries(taskId: taskId)
+        }
+    }
+
+    private func run(_ operation: @escaping () async throws -> Void) async {
+        isLoading = true
+        lastError = nil
+        defer { isLoading = false }
+
+        do {
+            try await operation()
+        } catch {
+            lastError = String(describing: error)
+        }
+    }
+}
+
+@MainActor
+public final class ApprovalManagementModel: ObservableObject {
+    @Published public private(set) var contract: JarvisContractResponse?
+    @Published public private(set) var pendingItems: [JarvisApprovalQueueItem]
+    @Published public private(set) var isLoading: Bool
+    @Published public private(set) var lastError: String?
+
+    public var supportsApprovalActions: Bool {
+        contract?.exposesApprovalActions == true
+    }
+
+    public var limitationText: String? {
+        supportsApprovalActions
+            ? nil
+            : "Core exposes approval evidence, but no approval decision endpoint is available yet."
+    }
+
+    private let client: any JarvisCoreClient
+
+    public init(client: any JarvisCoreClient = JarvisIPCClient()) {
+        self.client = client
+        self.contract = nil
+        self.pendingItems = []
+        self.isLoading = false
+        self.lastError = nil
+    }
+
+    public func refresh() async {
+        await run {
+            async let contract = self.client.contract()
+            async let tasks = self.client.listTasks()
+            async let audit = self.client.listAuditEntries(taskId: nil)
+            let loadedContract = try await contract
+            let loadedTasks = try await tasks
+            let loadedAudit = try await audit
+            self.contract = loadedContract
+            self.pendingItems = JarvisApprovalQueueItem.pendingItems(
+                tasks: loadedTasks,
+                auditEntries: loadedAudit,
+                contract: loadedContract
+            )
         }
     }
 
@@ -175,5 +301,44 @@ public final class DiagnosticsModel: ObservableObject {
         } catch {
             lastError = String(describing: error)
         }
+    }
+}
+
+public enum JarvisVoiceCaptureState: Equatable, Sendable {
+    case textOnly(reason: String)
+    case unavailable(reason: String)
+}
+
+@MainActor
+public final class VoiceStateModel: ObservableObject {
+    @Published public private(set) var captureState: JarvisVoiceCaptureState
+    @Published public private(set) var isPushToTalkEnabled: Bool
+
+    public init(
+        captureState: JarvisVoiceCaptureState = .textOnly(
+            reason: "Speech recognition is not implemented in this Swift shell yet."
+        )
+    ) {
+        self.captureState = captureState
+        self.isPushToTalkEnabled = false
+    }
+
+    public var statusText: String {
+        switch captureState {
+        case let .textOnly(reason):
+            return "Text-only voice scaffold: \(reason)"
+        case let .unavailable(reason):
+            return "Voice unavailable: \(reason)"
+        }
+    }
+
+    public func setUnavailable(reason: String) {
+        captureState = .unavailable(reason: reason)
+        isPushToTalkEnabled = false
+    }
+
+    public func resetTextOnly() {
+        captureState = .textOnly(reason: "Speech recognition is not implemented in this Swift shell yet.")
+        isPushToTalkEnabled = false
     }
 }
