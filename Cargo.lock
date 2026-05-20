@@ -596,6 +596,7 @@ dependencies = [
  "clap",
  "jarvis-core",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing-subscriber",
 ]
