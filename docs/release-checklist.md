@@ -10,8 +10,10 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   scaffold behavior from planned real local model integration, approval UI,
   plugin installation, voice support, and packaging work.
 - Confirm the current architecture map still matches the real module wiring,
-  especially the fact that `/commands` invokes the runtime/fake local model path
-  but does not yet compose autonomous model-router-to-plugin tool execution.
+  especially the fact that `/commands` invokes the runtime/fake local model
+  path, records route/policy/plugin audit evidence for deterministic
+  first-party plugin commands, and does not yet compose autonomous
+  model-generated tool execution.
 - Confirm no Marvel branding, copyrighted visuals, or confusing product claims
   were introduced.
 
@@ -51,8 +53,9 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
 - Confirm persistent audit entries remain append-only in SQLite tests.
 - Confirm route, policy, approval, action, and failure evidence stay covered
   before claiming an end-to-end assistant release. The current command path
-  persists runtime task/audit evidence when repository backing is used, while
-  plugin side effects remain separately gated by host/policy tests.
+  persists runtime, route, and deterministic first-party plugin audit evidence
+  when repository backing is used. Model-generated tool calls and user approval
+  UI remain future gates.
 
 ## Documentation Gate
 

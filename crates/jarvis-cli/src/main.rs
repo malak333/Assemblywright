@@ -1,6 +1,7 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::net::ToSocketAddrs;
+use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use jarvis_core::{CommandRequest, CreateSchedulerJobRequest, EmergencyPauseRequest, TriggerKind};
@@ -20,6 +21,8 @@ enum CliCommand {
     Serve {
         #[arg(long, default_value = "127.0.0.1:7787")]
         bind: String,
+        #[arg(long, env = "JARVIS_DB_PATH")]
+        db_path: Option<PathBuf>,
     },
     /// Query core health over HTTP IPC.
     Health {
@@ -87,8 +90,19 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_env_filter("info").init();
 
     match Cli::parse().command {
-        CliCommand::Serve { bind } => {
-            jarvis_core::serve(bind.parse()?, jarvis_core::IpcState::new()).await?;
+        CliCommand::Serve { bind, db_path } => {
+            let state = match db_path {
+                Some(path) => {
+                    if let Some(parent) = path.parent() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                    jarvis_core::IpcState::with_repository(jarvis_core::SqliteRepository::open(
+                        path,
+                    )?)?
+                }
+                None => jarvis_core::IpcState::new(),
+            };
+            jarvis_core::serve(bind.parse()?, state).await?;
         }
         CliCommand::Health { endpoint } => {
             println!(
@@ -109,6 +123,7 @@ async fn main() -> anyhow::Result<()> {
                 session_id: None,
                 context: serde_json::Value::Null,
                 dry_run,
+                sensitivity: None,
             })?;
             println!("{}", request(&endpoint, "POST", "/commands", Some(&body))?);
         }
@@ -199,19 +214,25 @@ async fn run_smoke() -> anyhow::Result<()> {
     let health = request_with_retry(&endpoint, "GET", "/health", None)?;
     let health_json: serde_json::Value = serde_json::from_str(&health)?;
     require_json_field(&health_json, "status", "ok")?;
-    require_json_field(&health_json, "command_runtime", "fake-local-model")?;
+    require_json_field(
+        &health_json,
+        "command_runtime",
+        "routed-fake-local-model+first-party-plugins",
+    )?;
 
     let command_body = serde_json::to_string(&CommandRequest {
         input: "smoke command".to_string(),
         session_id: None,
         context: serde_json::json!({ "surface": "cli-smoke" }),
         dry_run: true,
+        sensitivity: None,
     })?;
     let command = request(&endpoint, "POST", "/commands", Some(&command_body))?;
     let command_json: serde_json::Value = serde_json::from_str(&command)?;
     require_bool_field(&command_json, "accepted", true)?;
     require_nested_field(&command_json, &["task", "status"], "completed")?;
     require_nested_field(&command_json, &["route", "model"], "fake-local-model")?;
+    require_array_field(&command_json, "audit_entries")?;
 
     let pause_body = serde_json::to_string(&EmergencyPauseRequest {
         reason: "cli smoke".to_string(),
@@ -329,5 +350,13 @@ fn require_bool_field(
         actual == expected,
         "expected `{field}` to be `{expected}`, got `{actual}`"
     );
+    Ok(())
+}
+
+fn require_array_field(value: &serde_json::Value, field: &str) -> anyhow::Result<()> {
+    value
+        .get(field)
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| anyhow::anyhow!("missing array field `{field}`"))?;
     Ok(())
 }

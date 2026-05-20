@@ -21,6 +21,8 @@ flowchart LR
     IpcState --> Pause["Emergency pause state"]
     IpcState --> Scheduler["In-memory Scheduler"]
     IpcState --> RepoState["Optional SqliteRepository"]
+    RuntimePath --> Router
+    RuntimePath --> PluginHost
 
     Runtime["ConversationRuntime"] --> ModelExec["ModelExecutor trait"]
     ModelExec --> FakeLocal["FakeLocalModel"]
@@ -33,6 +35,7 @@ flowchart LR
     Router --> ChatGPTGate["ChatGPT route gate with redaction"]
 
     PluginHost["PluginHost"] --> ManifestValidation["Manifest and JSON schema validation"]
+    PluginHost --> PluginPolicy["PermissionEngine policy check"]
     PluginHost --> FirstParty["fake_echo and fake_status plugins"]
     PluginHost --> TimeoutCancel["Timeout and cancellation handling"]
 
@@ -48,12 +51,45 @@ flowchart LR
     Types --> PluginHost
 ```
 
-The current IPC `/commands` endpoint now invokes `ConversationRuntime` with the
-deterministic `FakeLocalModel`, returns runtime steps, route metadata, and audit
-entries, and can persist task/audit state through `SqliteRepository` when the
-state is constructed with repository backing. The model router and plugin host
-are implemented and tested as separate safety surfaces, but they are not yet
-composed into the command endpoint as autonomous tool-calling behavior.
+The current IPC `/commands` endpoint invokes `ConversationRuntime` with the
+deterministic `FakeLocalModel`, returns runtime steps, route metadata, plugin
+results, and audit entries, and can persist task/audit state through
+`SqliteRepository` when the state is constructed with repository backing. It
+also records local-first `ModelRouter` evidence and can execute deterministic
+first-party plugin commands through the policy engine. It does not yet support
+autonomous model-generated tool calls, real model providers, or user approval UI.
+
+## Current Command Flow
+
+```mermaid
+sequenceDiagram
+    participant Client as CLI or Swift shell
+    participant IPC as jarvis-core IPC
+    participant Runtime as ConversationRuntime
+    participant Router as ModelRouter
+    participant Policy as PermissionEngine
+    participant Plugins as PluginHost
+    participant Store as Optional SqliteRepository
+
+    Client->>IPC: POST /commands
+    IPC->>Runtime: execute command with FakeLocalModel
+    Runtime->>Store: create task and append runtime audit when configured
+    Runtime-->>IPC: task, local route, steps, runtime audit
+    IPC->>Router: record local-first route decision
+    IPC->>Store: append model_route_selected when configured
+    alt first-party plugin command
+        IPC->>Policy: evaluate plugin scopes and risk
+        IPC->>Store: append plugin_policy_evaluated when configured
+        alt dry_run
+            IPC->>Store: append plugin_dry_run when configured
+        else allowed
+            IPC->>Plugins: execute fake_echo or fake_status
+            Plugins-->>IPC: schema-validated plugin result
+            IPC->>Store: append plugin result audit when configured
+        end
+    end
+    IPC-->>Client: command response with audit_entries and plugin_results
+```
 
 ## Current Workspace Layout
 
@@ -94,8 +130,9 @@ composed into the command endpoint as autonomous tool-calling behavior.
   entries, sensitivity, risk, approval, task status, and errors.
 - `jarvis-core::ipc`: Axum loopback HTTP API for `/health`, `/commands`,
   `/emergency-pause`, and `/scheduler/jobs`. The command endpoint runs the
-  runtime with `FakeLocalModel`, returns route/step/audit evidence, and obeys
-  emergency-pause state.
+  runtime with `FakeLocalModel`, records local-first route evidence, can execute
+  deterministic first-party plugin commands through policy, returns
+  route/step/plugin/audit evidence, and obeys emergency-pause state.
 - `jarvis-core::runtime`: Command runtime scaffolding with max-step enforcement,
   runtime hooks, task cancellation, emergency-pause blocking/cancellation, model
   step audit entries, a fake local model path, and a persistence hook for
@@ -117,9 +154,10 @@ composed into the command endpoint as autonomous tool-calling behavior.
 - `jarvis-core::storage`: SQLite schema migration version 1 for tasks,
   append-only audit entries, emergency pause, and memory items with provenance,
   sensitivity, review, and soft-delete fields.
-- `jarvis-cli`: Local CLI for serving the IPC API, calling health/command/pause
-  endpoints, listing/scheduling/cancelling scheduler jobs over HTTP, and running
-  `jarvis smoke` against an ephemeral local server.
+- `jarvis-cli`: Local CLI for serving the IPC API with optional `--db-path`
+  SQLite backing, calling health/command/pause endpoints,
+  listing/scheduling/cancelling scheduler jobs over HTTP, and running `jarvis
+  smoke` against an ephemeral local server.
 - `apps/mac/JarvisMacCore`: Swift IPC client and command-console model that
   decode the Rust health/command/pause JSON contracts.
 - `apps/mac/JarvisMacApp`: SwiftUI command-console scaffold with health status,
@@ -180,10 +218,55 @@ Rust and Swift scaffold surfaces listed above.
   bundles, local model configs, and attachments.
 - Any future vector index should remain rebuildable from canonical records.
 
+## Implemented SQLite Schema
+
+```mermaid
+erDiagram
+    TASKS ||--o{ AUDIT_ENTRIES : "task_id"
+    TASKS {
+        text id PK
+        text session_id
+        text user_input
+        text status
+        text created_at
+        text updated_at
+    }
+    AUDIT_ENTRIES {
+        text id PK
+        text task_id FK
+        text event_type
+        text summary
+        text payload_json
+        text created_at
+    }
+    MEMORY_ITEMS {
+        text id PK
+        text category
+        text key
+        text value
+        text provenance
+        text sensitivity
+        text reviewed_at
+        text deleted_at
+    }
+    EMERGENCY_PAUSE {
+        integer singleton PK
+        integer paused
+        text reason
+        text updated_at
+        text updated_by
+    }
+    SCHEMA_MIGRATIONS {
+        integer version PK
+        text applied_at
+    }
+```
+
 ## Readiness Boundary
 
 Current evidence supports a Rust foundation claim: the workspace has typed
 contracts and tested scaffolding for IPC, policy, routing, runtime, storage,
-plugins, scheduler, and CLI behavior. It does not support a claim that Jarvis is
-a finished voice assistant, autonomous agent, packaged Mac app, plugin
-marketplace, or production cloud-integrated system.
+plugins, scheduler, and CLI behavior, plus a first Swift command-console shell.
+It does not support a claim that Jarvis is a finished voice assistant, packaged
+Mac app, autonomous external-action agent, plugin marketplace, or production
+cloud-integrated system.

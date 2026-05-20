@@ -1,9 +1,10 @@
 # Jarvis
 
 Jarvis is a local-first macOS assistant foundation. The current repo implements
-the Rust core described in [DESIGN.md](DESIGN.md): durable tasks, auditability,
-policy-gated actions, local-first model routing, plugin contracts, scheduler
-state, a loopback IPC surface, and CLI smoke paths for a future Swift shell.
+the Rust core described in [DESIGN.md](DESIGN.md): durable task/audit
+primitives, policy-gated first-party plugin commands, local-first model routing
+evidence, plugin contracts, scheduler state, a loopback IPC surface, and CLI
+smoke paths for the Swift shell scaffold and future packaged app.
 It also includes the first buildable Swift/SwiftUI Mac shell scaffold under
 `apps/mac`, with a tested IPC client and command-console state model.
 
@@ -31,6 +32,9 @@ from a second terminal:
 cargo run -p jarvis-cli -- serve
 cargo run -p jarvis-cli -- health
 ```
+
+Use `cargo run -p jarvis-cli -- serve --db-path /tmp/jarvis.sqlite` when you
+want manual IPC commands to persist task and audit state locally.
 
 ## Docs
 

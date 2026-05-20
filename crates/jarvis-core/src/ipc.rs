@@ -14,9 +14,12 @@ use uuid::Uuid;
 
 use crate::storage::{EmergencyPauseState as StoredEmergencyPauseState, SqliteRepository};
 use crate::{
-    AuditEntry, ConversationRuntime, FakeLocalModel, JarvisError, JarvisResult, ModelRoute,
-    RuntimeCommandRequest, RuntimeConfig, RuntimeControl, RuntimeStep, Scheduler, SchedulerJob,
-    SchedulerJobSpec, Sensitivity, TaskRecord, TaskStatus, TriggerKind,
+    ApprovalDecision, ApprovalStatus, AuditEntry, CapabilityScope, ConversationRuntime,
+    FakeLocalModel, JarvisError, JarvisResult, ModelRoute, ModelRouteRequest, ModelRouter,
+    PermissionEngine, PluginCallRequest, PluginCallResult, PluginCallStatus, PluginHost,
+    PluginPermission, PolicyRequest, RuntimeCommandRequest, RuntimeCommandStore, RuntimeConfig,
+    RuntimeControl, RuntimeStep, Scheduler, SchedulerJob, SchedulerJobSpec, Sensitivity,
+    TaskRecord, TaskStatus, TriggerKind,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,6 +43,8 @@ pub struct CommandRequest {
     pub context: serde_json::Value,
     #[serde(default)]
     pub dry_run: bool,
+    #[serde(default)]
+    pub sensitivity: Option<Sensitivity>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,6 +55,7 @@ pub struct CommandResponse {
     pub audit_entries: Vec<AuditEntry>,
     pub route: Option<ModelRoute>,
     pub steps: Vec<RuntimeStep>,
+    pub plugin_results: Vec<PluginCallResult>,
     pub message: String,
 }
 
@@ -173,7 +179,7 @@ impl IpcState {
             emergency_pause_reason: pause.reason.clone(),
             emergency_pause_updated_at: pause.updated_at(),
             scheduler_jobs: self.scheduler.list().len(),
-            command_runtime: "fake-local-model".to_string(),
+            command_runtime: "routed-fake-local-model+first-party-plugins".to_string(),
         }
     }
 
@@ -184,46 +190,200 @@ impl IpcState {
             ));
         }
 
-        let runtime = ConversationRuntime::with_parts(
+        let command_store = self.command_store();
+        let runtime = ConversationRuntime::with_storage_parts(
             RuntimeConfig::default(),
             self.runtime_control.clone(),
             FakeLocalModel::default(),
             crate::NoopRuntimeHooks,
+            command_store.clone(),
         );
+        let sensitivity = request
+            .sensitivity
+            .or_else(|| sensitivity_from_context(&request.context))
+            .unwrap_or(Sensitivity::Personal);
         let runtime_response = runtime
             .execute_command(
                 RuntimeCommandRequest::new(request.input.clone())
                     .with_session_id(request.session_id.unwrap_or_else(Uuid::new_v4))
-                    .with_sensitivity(Sensitivity::Personal),
+                    .with_sensitivity(sensitivity),
             )
             .await?;
 
-        let accepted = runtime_response.task.status == TaskStatus::Completed;
-        let audit_entry = runtime_response
-            .audit_entries
-            .last()
-            .cloned()
-            .unwrap_or_else(|| {
-                AuditEntry::new(
-                    Some(runtime_response.task.id),
-                    "command_runtime_empty",
-                    "command runtime returned no audit entries",
-                    json!({
-                        "dry_run": request.dry_run,
-                        "context": request.context,
-                    }),
-                )
+        let mut audit_entries = runtime_response.audit_entries;
+        let plugin_results = if runtime_response.task.status == TaskStatus::Completed {
+            let route_record = ModelRouter::route(&ModelRouteRequest {
+                task_id: Some(runtime_response.task.id),
+                user_intent: request.input.clone(),
+                sensitivity,
+                required_scopes: vec![CapabilityScope::Conversation, CapabilityScope::LocalModel],
+                granted_scopes: vec![CapabilityScope::Conversation, CapabilityScope::LocalModel],
+                local_available: true,
+                local_sufficient: true,
+                chatgpt_enabled: false,
+                emergency_paused: self.runtime_control.is_emergency_paused(),
+                approval: None,
+                context_preview: context_preview(&request.context),
             });
+            let route_audit = AuditEntry::new(
+                Some(runtime_response.task.id),
+                "model_route_selected",
+                "model router selected the command route",
+                json!({
+                    "outcome": route_record.outcome,
+                    "selected_provider": route_record.selected_provider,
+                    "reason": route_record.reason,
+                    "sensitivity": route_record.sensitivity,
+                    "approval_status": route_record.approval_status,
+                    "redaction_applied": route_record.redaction_applied,
+                }),
+            );
+            command_store.append_audit_entry(&route_audit)?;
+            audit_entries.push(route_audit);
+            self.maybe_execute_first_party_plugin(
+                runtime_response.task.id,
+                &request.input,
+                sensitivity,
+                request.dry_run,
+                &mut audit_entries,
+                &command_store,
+            )?
+        } else {
+            Vec::new()
+        };
+
+        let accepted = runtime_response.task.status == TaskStatus::Completed;
+        let audit_entry = audit_entries.last().cloned().unwrap_or_else(|| {
+            AuditEntry::new(
+                Some(runtime_response.task.id),
+                "command_runtime_empty",
+                "command runtime returned no audit entries",
+                json!({
+                    "dry_run": request.dry_run,
+                    "context": request.context,
+                }),
+            )
+        });
 
         Ok(CommandResponse {
             accepted,
             task: runtime_response.task,
             audit_entry,
-            audit_entries: runtime_response.audit_entries,
+            audit_entries,
             route: runtime_response.route,
             steps: runtime_response.steps,
+            plugin_results,
             message: runtime_response.message,
         })
+    }
+
+    fn command_store(&self) -> SharedCommandStore {
+        SharedCommandStore {
+            repository: self.repository.clone(),
+        }
+    }
+
+    fn maybe_execute_first_party_plugin(
+        &self,
+        task_id: Uuid,
+        input: &str,
+        sensitivity: Sensitivity,
+        dry_run: bool,
+        audit_entries: &mut Vec<AuditEntry>,
+        command_store: &SharedCommandStore,
+    ) -> JarvisResult<Vec<PluginCallResult>> {
+        let Some(mut plugin_request) = first_party_plugin_request(input) else {
+            return Ok(Vec::new());
+        };
+        let host = PluginHost::with_first_party_plugins()?;
+        let manifest = host.manifest(&plugin_request.plugin_id)?;
+        let action = manifest.action(&plugin_request.action).ok_or_else(|| {
+            JarvisError::Plugin(format!(
+                "plugin {} does not declare action {}",
+                plugin_request.plugin_id, plugin_request.action
+            ))
+        })?;
+        let requested_scopes = plugin_scopes(&action.permissions);
+        let mut granted_scopes = requested_scopes.clone();
+        granted_scopes.push(CapabilityScope::Conversation);
+        let policy_request = PolicyRequest {
+            task_id: Some(task_id),
+            action: format!("{}.{}", plugin_request.plugin_id, plugin_request.action),
+            requested_scopes,
+            granted_scopes,
+            risk_tier: action.risk_tier,
+            sensitivity,
+            emergency_paused: self.runtime_control.is_emergency_paused(),
+            approval: None,
+        };
+        let policy = PermissionEngine::evaluate(&policy_request);
+        let policy_audit = AuditEntry::new(
+            Some(task_id),
+            "plugin_policy_evaluated",
+            "policy evaluated first-party plugin action",
+            json!({
+                "plugin_id": plugin_request.plugin_id,
+                "action": plugin_request.action,
+                "decision": policy.decision,
+                "reason": policy.reason,
+                "risk_tier": policy.risk_tier,
+                "approval_status": policy.approval_status,
+                "missing_scopes": policy.missing_scopes,
+                "dry_run": dry_run,
+            }),
+        );
+        command_store.append_audit_entry(&policy_audit)?;
+        audit_entries.push(policy_audit);
+
+        if policy.decision == ApprovalDecision::Blocked {
+            return Err(JarvisError::PolicyBlocked(policy.reason));
+        }
+
+        if policy.decision == ApprovalDecision::RequireConfirmation {
+            plugin_request.approval_status = ApprovalStatus::Pending;
+        }
+
+        if dry_run {
+            let dry_run_audit = AuditEntry::new(
+                Some(task_id),
+                "plugin_dry_run",
+                "dry run skipped first-party plugin execution",
+                json!({
+                    "plugin_id": plugin_request.plugin_id,
+                    "action": plugin_request.action,
+                    "approval_status": plugin_request.approval_status,
+                }),
+            );
+            command_store.append_audit_entry(&dry_run_audit)?;
+            audit_entries.push(dry_run_audit);
+            return Ok(Vec::new());
+        }
+
+        let result = host.execute(plugin_request)?;
+        let event_type = match result.status {
+            PluginCallStatus::Completed => "plugin_completed",
+            PluginCallStatus::ApprovalRequired => "plugin_approval_required",
+            PluginCallStatus::TimedOut => "plugin_timed_out",
+            PluginCallStatus::Cancelled => "plugin_cancelled",
+            PluginCallStatus::Failed => "plugin_failed",
+        };
+        let plugin_audit = AuditEntry::new(
+            Some(task_id),
+            event_type,
+            "first-party plugin action finished",
+            json!({
+                "plugin_id": result.metadata.plugin_id,
+                "action": result.metadata.action,
+                "status": result.status,
+                "risk_tier": result.metadata.risk_tier,
+                "approval_status": result.metadata.approval_status,
+                "proactive": result.metadata.proactive,
+                "timeout_ms": result.metadata.timeout_ms,
+            }),
+        );
+        command_store.append_audit_entry(&plugin_audit)?;
+        audit_entries.push(plugin_audit);
+        Ok(vec![result])
     }
 
     pub fn pause(&self, reason: impl Into<String>) -> JarvisResult<EmergencyPauseResponse> {
@@ -313,6 +473,111 @@ impl IpcState {
             .expect("emergency pause lock poisoned")
             .clone()
     }
+}
+
+#[derive(Clone)]
+struct SharedCommandStore {
+    repository: Option<Arc<Mutex<SqliteRepository>>>,
+}
+
+impl RuntimeCommandStore for SharedCommandStore {
+    fn create_task(&self, session_id: Uuid, user_input: String) -> JarvisResult<TaskRecord> {
+        match &self.repository {
+            Some(repository) => repository
+                .lock()
+                .expect("IPC repository lock poisoned")
+                .create_task(session_id, user_input),
+            None => crate::NoopRuntimeCommandStore.create_task(session_id, user_input),
+        }
+    }
+
+    fn update_task_status(&self, task: &mut TaskRecord, status: TaskStatus) -> JarvisResult<()> {
+        match &self.repository {
+            Some(repository) => {
+                *task = repository
+                    .lock()
+                    .expect("IPC repository lock poisoned")
+                    .update_task_status(task.id, status)?;
+                Ok(())
+            }
+            None => crate::NoopRuntimeCommandStore.update_task_status(task, status),
+        }
+    }
+
+    fn append_audit_entry(&self, entry: &AuditEntry) -> JarvisResult<()> {
+        match &self.repository {
+            Some(repository) => repository
+                .lock()
+                .expect("IPC repository lock poisoned")
+                .append_audit_entry(entry),
+            None => crate::NoopRuntimeCommandStore.append_audit_entry(entry),
+        }
+    }
+}
+
+fn sensitivity_from_context(context: &serde_json::Value) -> Option<Sensitivity> {
+    let value = context.get("sensitivity")?.as_str()?;
+    match value {
+        "public" => Some(Sensitivity::Public),
+        "workspace" => Some(Sensitivity::Workspace),
+        "personal" => Some(Sensitivity::Personal),
+        "private" => Some(Sensitivity::Private),
+        "credential_adjacent" => Some(Sensitivity::CredentialAdjacent),
+        "restricted" => Some(Sensitivity::Restricted),
+        _ => None,
+    }
+}
+
+fn context_preview(context: &serde_json::Value) -> String {
+    match context {
+        serde_json::Value::Null => String::new(),
+        serde_json::Value::String(value) => value.chars().take(512).collect(),
+        value => value.to_string().chars().take(512).collect(),
+    }
+}
+
+fn first_party_plugin_request(input: &str) -> Option<PluginCallRequest> {
+    let trimmed = input.trim();
+    if let Some(message) = trimmed.strip_prefix("plugin echo ") {
+        return Some(PluginCallRequest::reactive(
+            "fake_echo",
+            "echo",
+            json!({ "message": message.trim() }),
+        ));
+    }
+
+    if matches!(
+        trimmed,
+        "plugin status" | "core status" | "jarvis status" | "status"
+    ) {
+        return Some(PluginCallRequest::reactive(
+            "fake_status",
+            "status",
+            json!({}),
+        ));
+    }
+
+    None
+}
+
+fn plugin_scopes(permissions: &[PluginPermission]) -> Vec<CapabilityScope> {
+    let mut scopes = vec![CapabilityScope::PluginRun];
+    for permission in permissions {
+        let scope = match permission {
+            PluginPermission::ReadWorkspace => CapabilityScope::FileRead,
+            PluginPermission::WriteWorkspace => CapabilityScope::FileWrite,
+            PluginPermission::ReadMemory => CapabilityScope::MemoryRead,
+            PluginPermission::WriteMemory => CapabilityScope::MemoryWrite,
+            PluginPermission::CallModel => CapabilityScope::LocalModel,
+            PluginPermission::ProactiveRun => CapabilityScope::SchedulerRun,
+            PluginPermission::Network => CapabilityScope::NetworkAccess,
+            PluginPermission::SystemStatus => CapabilityScope::Conversation,
+        };
+        if !scopes.contains(&scope) {
+            scopes.push(scope);
+        }
+    }
+    scopes
 }
 
 pub fn router(state: IpcState) -> Router {
@@ -447,7 +712,10 @@ mod tests {
         assert!(!health.emergency_paused);
         assert_eq!(health.emergency_pause_reason, None);
         assert_eq!(health.emergency_pause_updated_at, None);
-        assert_eq!(health.command_runtime, "fake-local-model");
+        assert_eq!(
+            health.command_runtime,
+            "routed-fake-local-model+first-party-plugins"
+        );
     }
 
     #[tokio::test]
@@ -459,13 +727,14 @@ mod tests {
                 session_id: None,
                 context: json!({"surface": "test"}),
                 dry_run: true,
+                sensitivity: None,
             })
             .await
             .expect("command");
 
         assert!(response.accepted);
         assert_eq!(response.task.status, TaskStatus::Completed);
-        assert_eq!(response.audit_entry.event_type, "task_completed");
+        assert_eq!(response.audit_entry.event_type, "model_route_selected");
         assert_eq!(response.steps.len(), 1);
         assert!(response.message.contains("what is next"));
         assert_eq!(
@@ -476,6 +745,105 @@ mod tests {
             .audit_entries
             .iter()
             .any(|entry| entry.event_type == "model_step_completed"));
+        assert!(response
+            .audit_entries
+            .iter()
+            .any(|entry| entry.event_type == "model_route_selected"));
+    }
+
+    #[tokio::test]
+    async fn command_schema_executes_first_party_plugin_with_policy_audit() {
+        let state = IpcState::new();
+        let response = state
+            .submit_command(CommandRequest {
+                input: "plugin echo hello from ipc".to_string(),
+                session_id: None,
+                context: json!({"surface": "test", "sensitivity": "workspace"}),
+                dry_run: false,
+                sensitivity: None,
+            })
+            .await
+            .expect("plugin command");
+
+        assert!(response.accepted);
+        assert_eq!(response.plugin_results.len(), 1);
+        assert_eq!(
+            response.plugin_results[0].status,
+            PluginCallStatus::Completed
+        );
+        assert_eq!(
+            response.plugin_results[0].output,
+            json!({ "message": "hello from ipc" })
+        );
+        assert!(response
+            .audit_entries
+            .iter()
+            .any(|entry| entry.event_type == "plugin_policy_evaluated"));
+        assert_eq!(response.audit_entry.event_type, "plugin_completed");
+    }
+
+    #[tokio::test]
+    async fn command_dry_run_skips_first_party_plugin_execution() {
+        let state = IpcState::new();
+        let response = state
+            .submit_command(CommandRequest {
+                input: "plugin echo dry run".to_string(),
+                session_id: None,
+                context: json!({"surface": "test"}),
+                dry_run: true,
+                sensitivity: Some(Sensitivity::Workspace),
+            })
+            .await
+            .expect("dry run command");
+
+        assert!(response.accepted);
+        assert!(response.plugin_results.is_empty());
+        assert_eq!(response.audit_entry.event_type, "plugin_dry_run");
+        assert!(response
+            .audit_entries
+            .iter()
+            .any(|entry| entry.event_type == "plugin_policy_evaluated"));
+    }
+
+    #[tokio::test]
+    async fn repository_backed_command_persists_ipc_task_and_audit_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("jarvis.sqlite");
+        let repository = SqliteRepository::open(&db_path).unwrap();
+        let state = IpcState::with_repository(repository).expect("state");
+
+        let response = state
+            .submit_command(CommandRequest {
+                input: "plugin echo persist me".to_string(),
+                session_id: None,
+                context: json!({"surface": "test"}),
+                dry_run: false,
+                sensitivity: Some(Sensitivity::Workspace),
+            })
+            .await
+            .expect("persisted command");
+
+        assert_eq!(response.task.status, TaskStatus::Completed);
+        drop(state);
+
+        let repository = SqliteRepository::open(db_path).unwrap();
+        let task = repository
+            .get_task(response.task.id)
+            .expect("task query")
+            .expect("persisted task");
+        assert_eq!(task.status, TaskStatus::Completed);
+
+        let audit_entries = repository
+            .list_audit_entries(Some(response.task.id))
+            .expect("audit query");
+        let event_types = audit_entries
+            .iter()
+            .map(|entry| entry.event_type.as_str())
+            .collect::<Vec<_>>();
+        assert!(event_types.contains(&"task_created"));
+        assert!(event_types.contains(&"model_route_selected"));
+        assert!(event_types.contains(&"plugin_policy_evaluated"));
+        assert!(event_types.contains(&"plugin_completed"));
     }
 
     #[tokio::test]
@@ -505,6 +873,7 @@ mod tests {
                 session_id: None,
                 context: serde_json::Value::Null,
                 dry_run: false,
+                sensitivity: None,
             })
             .await
             .expect("blocked command is still represented");
@@ -557,6 +926,7 @@ mod tests {
                 session_id: None,
                 context: serde_json::Value::Null,
                 dry_run: false,
+                sensitivity: None,
             })
             .await
             .expect("blocked command");
