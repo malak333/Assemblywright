@@ -18,3 +18,6 @@ jarvis-core = { path = "../jarvis-core", version = "0.1.1" }
 serde_json.workspace = true
 tokio.workspace = true
 tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
