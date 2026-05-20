@@ -12,8 +12,8 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
 - Confirm the current architecture map still matches the real module wiring,
   especially the fact that `/commands` invokes the runtime/fake local model
   path, records route/policy/plugin audit evidence for deterministic
-  first-party plugin commands, and does not yet compose autonomous
-  model-generated tool execution.
+  first-party plugin commands, and supports bounded fake-model planned
+  first-party tool execution before any broader real-provider claim.
 - Confirm the current-vs-target implementation phase table is up to date before
   using any production-readiness language. Release notes may claim foundation
   readiness only for verified Rust/Swift surfaces, not full assistant readiness.
@@ -63,8 +63,9 @@ stage.
 - Confirm route, policy, approval, action, and failure evidence stay covered
   before claiming an end-to-end assistant release. The current command path
   persists runtime, route, and deterministic first-party plugin audit evidence
-  when repository backing is used. Model-generated tool calls and user approval
-  UI remain future gates.
+  when repository backing is used. Bounded fake-model first-party tool calls are
+  covered in runtime tests; real provider tool calls and user approval UI remain
+  future gates.
 - Confirm task, audit, memory, and plugin manifest inspection endpoints still
   require or use the correct repository/plugin backing and are covered by local
   smoke or focused IPC tests.
@@ -78,9 +79,9 @@ stage.
   memory create/update/review/delete, scheduler schedule/get/list/cancel,
   diagnostics redaction, persistence restart, and emergency-pause
   blocking/resume behavior.
-- Confirm the Swift shell remains described as a scaffold until it starts and
-  supervises the Rust core, handles approval prompts, and passes packaged app
-  smoke checks.
+- Confirm the Swift shell remains described as a scaffold until a signed
+  packaged app bundles/launches the Rust core, handles approval prompts, and
+  passes packaged app smoke checks.
 
 ## Documentation Gate
 

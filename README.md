@@ -2,13 +2,15 @@
 
 Jarvis is a local-first macOS assistant foundation. The current repo implements
 the Rust core described in [DESIGN.md](DESIGN.md): durable task/audit
-primitives, policy-gated first-party plugin commands, local-first model routing
-evidence, plugin contracts, scheduler state, redacted diagnostics export, a
-loopback IPC surface, and CLI smoke paths for the Swift shell scaffold and
-future packaged app.
+primitives, policy-gated first-party plugin commands, bounded model-planned
+first-party tool orchestration, local-first model routing evidence, plugin
+contracts, scheduler state, redacted diagnostics export, a loopback IPC
+surface, and CLI smoke paths for the Swift shell scaffold and future packaged
+app.
 It also includes the first buildable Swift/SwiftUI Mac shell scaffold under
-`apps/mac`, with a tested IPC client, command-console state model, and
-activity/audit panel for command evidence.
+`apps/mac`, with a tested IPC client, command-console state model,
+activity/audit panel for command evidence, management surfaces, degraded-mode
+handling, and a core supervisor abstraction.
 
 ## Current Scope
 
@@ -16,8 +18,8 @@ This repository is intentionally v1 foundation work, not a Marvel/JARVIS clone
 and not an autonomous external-communication system. Risky side effects must be
 blocked or require approval, and every meaningful decision should be auditable.
 The current implementation should not be described as a finished production
-assistant: packaged app supervision, real model providers, approval UI, voice
-support, plugin installation, and packaged Mac smoke evidence are still target
+assistant: signed packaging, real model providers, approval UI, voice support,
+plugin installation, and packaged Mac smoke evidence are still target
 architecture.
 
 ## Build
