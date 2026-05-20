@@ -16,13 +16,18 @@ These notes capture durable facts for future agents working on this repository.
   model routing policy, SQLite repository migrations, memory item persistence,
   append-only audit table triggers, plugin manifest validation, and
   deterministic first-party test plugins.
+- IPC `/commands` now uses repository-backed runtime storage when `IpcState` is
+  constructed with `SqliteRepository`, records a local-first model-router audit
+  entry, and can execute deterministic first-party plugin commands such as
+  `plugin echo ...` and `status` through policy. `dry_run` skips plugin
+  execution and records audit evidence.
 - The planned packaged app, approval UI, local model provider integration,
   plugin installation flow, and autonomous model-router to plugin execution loop
   are not yet implemented in this worktree. The first SwiftUI shell scaffold and
   IPC client live under `apps/mac`.
-- The IPC `/commands` endpoint calls `ConversationRuntime` and can persist
-  through `SqliteRepository` when repository-backed state is used. It does not
-  currently compose `ModelRouter` or `PluginHost` into the command pipeline.
+- The IPC `/commands` endpoint still does not implement autonomous
+  model-generated tool calls. Current plugin execution is deterministic and
+  command-pattern driven.
 
 ## Proof Boundaries
 
@@ -36,7 +41,8 @@ These notes capture durable facts for future agents working on this repository.
   exist.
 - It is fair to describe the current repo as a Rust foundation with tested
   scaffolding for IPC, storage, policy, routing, runtime, scheduler, plugin
-  contracts, and CLI behavior when the local gate passes.
+  contracts, deterministic first-party plugin command execution, and CLI
+  behavior when the local gate passes.
 - Do not claim autonomous external communication, smart-home control, or
   third-party plugin marketplace readiness for v1.
 - Keep public-facing claims scoped to tested local behavior.
@@ -49,6 +55,8 @@ These notes capture durable facts for future agents working on this repository.
 - Push the branch after local verification when requested.
 - Treat validation as a merge gate; if a command cannot run, record the blocker
   instead of implying coverage.
+- `jarvis-cli serve --db-path <path>` starts IPC with SQLite-backed task,
+  audit, memory, and emergency-pause state for manual persistence checks.
 
 ## Safety Guardrails
 

@@ -34,6 +34,13 @@ Terminal 1:
 cargo run -p jarvis-cli -- serve
 ```
 
+For durable local task and audit state during manual inspection, pass a SQLite
+path:
+
+```sh
+cargo run -p jarvis-cli -- serve --db-path /tmp/jarvis.sqlite
+```
+
 Terminal 2:
 
 ```sh
@@ -62,9 +69,12 @@ cargo run -p jarvis-cli -- resume
 ```
 
 Current boundary: the command endpoint runs `ConversationRuntime` with
-`FakeLocalModel` and can persist task/audit state when configured with a
-repository-backed IPC state. It does not yet compose `ModelRouter` and
-`PluginHost` into autonomous tool-calling behavior.
+`FakeLocalModel`, records local-first `ModelRouter` audit evidence, can execute
+deterministic first-party plugin commands such as `plugin echo ...` through the
+policy engine, honors `--dry-run` for plugin execution, and can persist
+task/audit state when configured with a repository-backed IPC state. It does
+not yet implement autonomous model-generated tool calls, real model providers,
+or approval UI.
 
 ## Useful Focused Commands
 
@@ -78,9 +88,9 @@ cargo test -p jarvis-cli
 
 Passing these commands proves the current Rust workspace builds and its tests
 pass. The smoke commands prove the local server and CLI can exchange JSON for
-health, runtime-backed command execution, scheduler, and emergency-pause
-surfaces. They do not prove the future Swift shell, app packaging, real local
-model provider integration, plugin side effects, memory UX, approval UI, voice
-loop, or packaged Mac release smoke test until those surfaces exist and are
-covered. The current Swift gate proves the Mac shell scaffold builds and its IPC
-contract decoding tests pass.
+health, runtime-backed command execution, route/plugin audit evidence,
+scheduler, and emergency-pause surfaces. They do not prove app packaging, real
+local model provider integration, autonomous model-generated tool calls, memory
+UX, approval UI, voice loop, or packaged Mac release smoke test until those
+surfaces exist and are covered. The current Swift gate proves the Mac shell
+scaffold builds and its IPC contract decoding tests pass.
