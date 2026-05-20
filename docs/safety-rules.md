@@ -1,0 +1,63 @@
+# Safety Rules
+
+Jarvis is designed for high autonomy with explicit boundaries. These rules are
+release requirements, not optional UX guidance.
+
+## Policy Defaults
+
+- Local models are the default route.
+- ChatGPT is the only approved cloud model and must be explicitly routed.
+- Restricted, credential-adjacent, private personal, and sensitive system data
+  cannot be sent to ChatGPT without explicit approval for that task.
+- Risky actions fail closed when policy, identity, plugin validation, route
+  checks, or permission state is uncertain.
+- Planning and acting are separate. Generating a plan does not grant permission
+  to execute side effects.
+
+## Risk Tiers
+
+| Tier | Meaning | Default behavior |
+| --- | --- | --- |
+| Low | Local, reversible, low-impact work | May run silently with audit logging |
+| Notify | Low-risk but user-visible or state-changing | May run with visible status |
+| Confirm | Meaningful side effects or sensitive context | Requires explicit approval |
+| Block | Not allowed in current policy or product scope | Must not run |
+
+## Required Controls
+
+- Emergency pause stops new actions, pauses scheduled and event-driven jobs,
+  cancels active non-critical tasks, and requires deliberate resume.
+- Cancellation must propagate across tasks, tool calls, scheduled jobs, and
+  proactive triggers.
+- Degraded modes must be visible when local models, microphone access, TTS,
+  ChatGPT, plugins, persistence, or IPC are unavailable.
+- Audit logs must explain model route, permission checks, tool calls,
+  approvals, denials, files touched, external actions attempted, failures, and
+  final state.
+- Memory writes must have provenance, timestamp, category, sensitivity label,
+  and review/delete controls.
+- Diagnostics exports must redact credentials and sensitive payloads.
+
+## V1 Blocks
+
+These are blocked in v1 unless `DESIGN.md` is revised and tests prove the new
+policy:
+
+- Full smart-home control.
+- Autonomous external communication.
+- Purchases, bookings, invites, or messages without approval.
+- Multi-user account sync.
+- Third-party plugin marketplace.
+- Cloud-first routing.
+- Plugin access outside declared scopes.
+
+## Regression Tests
+
+Safety regressions should fail release verification:
+
+- High-risk actions bypassing approval.
+- Cloud routing receiving restricted data without explicit approval.
+- Plugin actions executing outside their manifest.
+- Scheduled jobs running while emergency pause is active.
+- Audit entries missing route, policy, approval, or action evidence.
+- Diagnostics containing raw secrets.
