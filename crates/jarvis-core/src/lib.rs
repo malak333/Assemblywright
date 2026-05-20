@@ -17,10 +17,10 @@ pub use model::{
     FakeLocalModel, ModelExecutor, ModelProvider, ModelRequest, ModelResponse, ModelRoute,
 };
 pub use plugin::{
-    CancellationBehavior, CancellationSignal, EchoPlugin, InProcessPlugin, JsonSchema,
-    PluginAccess, PluginActionManifest, PluginCallMetadata, PluginCallRequest, PluginCallResult,
-    PluginCallStatus, PluginHost, PluginManifest, PluginPermission, PluginSource, PluginTimeout,
-    PluginTimeoutAction, StatusPlugin,
+    plugin_permission_scopes, CancellationBehavior, CancellationSignal, EchoPlugin,
+    InProcessPlugin, JsonSchema, PluginAccess, PluginActionManifest, PluginCallMetadata,
+    PluginCallRequest, PluginCallResult, PluginCallStatus, PluginHost, PluginManifest,
+    PluginPermission, PluginSource, PluginTimeout, PluginTimeoutAction, StatusPlugin,
 };
 pub use policy::{
     ApprovalDecision, ApprovalGrant, CapabilityScope, PermissionEngine, PolicyDecision,
