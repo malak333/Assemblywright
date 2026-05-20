@@ -3,10 +3,11 @@ use std::net::TcpStream;
 use std::net::ToSocketAddrs;
 use std::path::PathBuf;
 
+use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 use jarvis_core::{
-    CommandRequest, CreateMemoryItemRequest, CreateSchedulerJobRequest, EmergencyPauseRequest,
-    InstallPluginRequest, Sensitivity, TriggerKind, UpdateMemoryItemRequest,
+    ApprovalDecisionRequest, CommandRequest, CreateMemoryItemRequest, CreateSchedulerJobRequest,
+    EmergencyPauseRequest, InstallPluginRequest, Sensitivity, TriggerKind, UpdateMemoryItemRequest,
 };
 use tokio::net::TcpListener;
 
@@ -46,6 +47,8 @@ enum CliCommand {
         endpoint: String,
         #[arg(long)]
         dry_run: bool,
+        #[arg(long)]
+        sensitivity: Option<String>,
     },
     /// Activate emergency pause.
     Pause {
@@ -89,6 +92,11 @@ enum CliCommand {
         #[command(subcommand)]
         command: PluginsCommand,
     },
+    /// Inspect and decide approval-required actions.
+    Approvals {
+        #[command(subcommand)]
+        command: ApprovalsCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -108,6 +116,17 @@ enum SchedulerCommand {
     Schedule {
         name: String,
         command: String,
+        #[arg(long, conflicts_with = "interval_seconds")]
+        once_at: Option<String>,
+        #[arg(long, conflicts_with = "once_at")]
+        interval_seconds: Option<u64>,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    /// Execute currently due scheduler jobs once.
+    RunDue {
+        #[arg(long, default_value_t = 16)]
+        limit: usize,
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
@@ -234,22 +253,61 @@ enum PluginsCommand {
     },
 }
 
+#[derive(Debug, Subcommand)]
+enum ApprovalsCommand {
+    /// List approval decisions, optionally filtered by status.
+    List {
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    /// Fetch one approval decision by id.
+    Get {
+        id: String,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    /// Grant an approval decision without executing the side effect.
+    Approve {
+        id: String,
+        #[arg(long, default_value = "cli")]
+        decided_by: String,
+        #[arg(long)]
+        reason: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    /// Deny an approval decision.
+    Deny {
+        id: String,
+        #[arg(long, default_value = "cli")]
+        decided_by: String,
+        #[arg(long)]
+        reason: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_env_filter("info").init();
 
     match Cli::parse().command {
         CliCommand::Serve { bind, db_path } => {
+            let provider_config = jarvis_core::ProviderConfig::from_env()?;
             let state = match db_path {
                 Some(path) => {
                     if let Some(parent) = path.parent() {
                         std::fs::create_dir_all(parent)?;
                     }
-                    jarvis_core::IpcState::with_repository(jarvis_core::SqliteRepository::open(
-                        path,
-                    )?)?
+                    jarvis_core::IpcState::with_repository_and_provider_config(
+                        jarvis_core::SqliteRepository::open(path)?,
+                        provider_config,
+                    )?
                 }
-                None => jarvis_core::IpcState::new(),
+                None => jarvis_core::IpcState::with_provider_config(provider_config),
             };
             jarvis_core::serve(bind.parse()?, state).await?;
         }
@@ -269,13 +327,14 @@ async fn main() -> anyhow::Result<()> {
             input,
             endpoint,
             dry_run,
+            sensitivity,
         } => {
             let body = serde_json::to_string(&CommandRequest {
                 input,
                 session_id: None,
                 context: serde_json::Value::Null,
                 dry_run,
-                sensitivity: None,
+                sensitivity: sensitivity.as_deref().map(parse_sensitivity).transpose()?,
             })?;
             println!("{}", request(&endpoint, "POST", "/commands", Some(&body))?);
         }
@@ -308,16 +367,29 @@ async fn main() -> anyhow::Result<()> {
             SchedulerCommand::Schedule {
                 name,
                 command,
+                once_at,
+                interval_seconds,
                 endpoint,
             } => {
                 let body = serde_json::to_string(&CreateSchedulerJobRequest {
                     name,
                     command,
-                    trigger: TriggerKind::Manual,
+                    trigger: parse_scheduler_trigger(once_at, interval_seconds)?,
                 })?;
                 println!(
                     "{}",
                     request(&endpoint, "POST", "/scheduler/jobs", Some(&body))?
+                );
+            }
+            SchedulerCommand::RunDue { limit, endpoint } => {
+                println!(
+                    "{}",
+                    request(
+                        &endpoint,
+                        "POST",
+                        &format!("/scheduler/run-due?limit={limit}"),
+                        None,
+                    )?
                 );
             }
             SchedulerCommand::Cancel { id, endpoint } => {
@@ -450,6 +522,54 @@ async fn main() -> anyhow::Result<()> {
                 );
             }
         },
+        CliCommand::Approvals { command } => match command {
+            ApprovalsCommand::List { status, endpoint } => {
+                let path = status
+                    .map(|status| format!("/approvals?status={status}"))
+                    .unwrap_or_else(|| "/approvals".to_string());
+                println!("{}", request(&endpoint, "GET", &path, None)?);
+            }
+            ApprovalsCommand::Get { id, endpoint } => {
+                println!(
+                    "{}",
+                    request(&endpoint, "GET", &format!("/approvals/{id}"), None)?
+                );
+            }
+            ApprovalsCommand::Approve {
+                id,
+                decided_by,
+                reason,
+                endpoint,
+            } => {
+                let body = serde_json::to_string(&ApprovalDecisionRequest { decided_by, reason })?;
+                println!(
+                    "{}",
+                    request(
+                        &endpoint,
+                        "POST",
+                        &format!("/approvals/{id}/approve"),
+                        Some(&body)
+                    )?
+                );
+            }
+            ApprovalsCommand::Deny {
+                id,
+                decided_by,
+                reason,
+                endpoint,
+            } => {
+                let body = serde_json::to_string(&ApprovalDecisionRequest { decided_by, reason })?;
+                println!(
+                    "{}",
+                    request(
+                        &endpoint,
+                        "POST",
+                        &format!("/approvals/{id}/deny"),
+                        Some(&body)
+                    )?
+                );
+            }
+        },
     }
 
     Ok(())
@@ -497,6 +617,26 @@ fn parse_sensitivity(value: &str) -> anyhow::Result<Sensitivity> {
         _ => Err(anyhow::anyhow!(
             "sensitivity must be one of public, workspace, personal, private, credential_adjacent, restricted"
         )),
+    }
+}
+
+fn parse_scheduler_trigger(
+    once_at: Option<String>,
+    interval_seconds: Option<u64>,
+) -> anyhow::Result<TriggerKind> {
+    match (once_at, interval_seconds) {
+        (Some(value), None) => {
+            let run_at = DateTime::parse_from_rfc3339(&value)
+                .map_err(|error| anyhow::anyhow!("--once-at must be RFC3339: {error}"))?
+                .with_timezone(&Utc);
+            Ok(TriggerKind::OnceAt { run_at })
+        }
+        (None, Some(0)) => Err(anyhow::anyhow!(
+            "--interval-seconds must be greater than zero"
+        )),
+        (None, Some(every_seconds)) => Ok(TriggerKind::Interval { every_seconds }),
+        (None, None) => Ok(TriggerKind::Manual),
+        (Some(_), Some(_)) => unreachable!("clap conflicts prevent both trigger flags"),
     }
 }
 

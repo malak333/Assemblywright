@@ -14,16 +14,17 @@ use tower_http::trace::TraceLayer;
 use uuid::Uuid;
 
 use crate::storage::{
-    EmergencyPauseState as StoredEmergencyPauseState, NewMemoryItem, SqliteRepository,
+    EmergencyPauseState as StoredEmergencyPauseState, NewMemoryItem, NewPendingApproval,
+    PendingApproval, SqliteRepository,
 };
 use crate::{
     plugin_permission_scopes, ApprovalDecision, ApprovalStatus, AuditEntry, CapabilityScope,
     ConversationRuntime, FakeLocalModel, InstalledPlugin, InstalledPluginRecord, JarvisError,
-    JarvisResult, ModelRoute, ModelRouteRecord, PermissionEngine, PluginCallRequest,
-    PluginCallResult, PluginCallStatus, PluginHost, PluginManifest, PolicyRequest,
-    RuntimeCommandRequest, RuntimeCommandStore, RuntimeConfig, RuntimeControl, RuntimeStep,
-    Scheduler, SchedulerJob, SchedulerJobSpec, SchedulerJobStatus, Sensitivity, TaskRecord,
-    TaskStatus, TriggerKind,
+    JarvisResult, LocalModelExecutor, LocalModelProviderKind, ModelRoute, ModelRouteRecord,
+    PermissionEngine, PluginCallRequest, PluginCallResult, PluginCallStatus, PluginHost,
+    PluginManifest, PolicyRequest, ProviderConfig, RuntimeCommandRequest, RuntimeCommandStore,
+    RuntimeConfig, RuntimeControl, RuntimeStep, Scheduler, SchedulerJob, SchedulerJobSpec,
+    SchedulerJobStatus, Sensitivity, TaskRecord, TaskStatus, TriggerKind,
 };
 
 pub const IPC_CONTRACT_VERSION: u16 = 1;
@@ -62,6 +63,9 @@ pub struct HealthResponse {
     pub emergency_pause_updated_at: Option<DateTime<Utc>>,
     pub scheduler_jobs: usize,
     pub command_runtime: String,
+    pub local_model_provider: LocalModelProviderKind,
+    pub local_model: String,
+    pub local_endpoint_configured: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -131,6 +135,14 @@ pub struct CommandResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalDecisionRequest {
+    #[serde(default = "default_decided_by")]
+    pub decided_by: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorResponse {
     pub error: String,
 }
@@ -154,6 +166,23 @@ pub struct CreateSchedulerJobRequest {
     pub name: String,
     pub command: String,
     pub trigger: TriggerKind,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SchedulerRunResponse {
+    pub checked_at: DateTime<Utc>,
+    pub limit: usize,
+    pub emergency_paused: bool,
+    pub executions: Vec<SchedulerJobExecution>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SchedulerJobExecution {
+    pub job: SchedulerJob,
+    pub task: TaskRecord,
+    pub accepted: bool,
+    pub message: String,
+    pub audit_entries: Vec<AuditEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -208,6 +237,7 @@ pub struct IpcState {
     runtime_control: RuntimeControl,
     emergency_pause: Arc<Mutex<EmergencyPauseState>>,
     repository: Option<Arc<Mutex<SqliteRepository>>>,
+    provider_config: ProviderConfig,
 }
 
 impl Default for IpcState {
@@ -218,6 +248,10 @@ impl Default for IpcState {
 
 impl IpcState {
     pub fn new() -> Self {
+        Self::with_provider_config(ProviderConfig::default())
+    }
+
+    pub fn with_provider_config(provider_config: ProviderConfig) -> Self {
         Self {
             version: env!("CARGO_PKG_VERSION").to_string(),
             started_at: Utc::now(),
@@ -225,10 +259,18 @@ impl IpcState {
             runtime_control: RuntimeControl::default(),
             emergency_pause: Arc::new(Mutex::new(EmergencyPauseState::default())),
             repository: None,
+            provider_config,
         }
     }
 
     pub fn with_repository(repository: SqliteRepository) -> JarvisResult<Self> {
+        Self::with_repository_and_provider_config(repository, ProviderConfig::default())
+    }
+
+    pub fn with_repository_and_provider_config(
+        repository: SqliteRepository,
+        provider_config: ProviderConfig,
+    ) -> JarvisResult<Self> {
         let stored_pause = repository.emergency_pause_state()?;
         let stored_scheduler_jobs = repository.list_scheduler_jobs()?;
         let scheduler = Scheduler::with_jobs(stored_scheduler_jobs);
@@ -244,6 +286,7 @@ impl IpcState {
                     stored_pause,
                 ))),
                 repository: Some(Arc::new(Mutex::new(repository))),
+                provider_config,
             })
         } else {
             Ok(Self {
@@ -255,6 +298,7 @@ impl IpcState {
                     stored_pause,
                 ))),
                 repository: Some(Arc::new(Mutex::new(repository))),
+                provider_config,
             })
         }
     }
@@ -279,6 +323,8 @@ impl IpcState {
                 "/scheduler/jobs/:id".to_string(),
                 "/memory".to_string(),
                 "/memory/:id".to_string(),
+                "/approvals".to_string(),
+                "/approvals/:id".to_string(),
             ],
         }
     }
@@ -294,8 +340,19 @@ impl IpcState {
             emergency_pause_reason: pause.reason.clone(),
             emergency_pause_updated_at: pause.updated_at(),
             scheduler_jobs: self.scheduler.list().len(),
-            command_runtime: "routed-fake-local-model+first-party-plugins".to_string(),
+            command_runtime: self.command_runtime_label(),
+            local_model_provider: self.provider_config.local.provider,
+            local_model: self.provider_config.local.model.clone(),
+            local_endpoint_configured: self.provider_config.local.base_url.is_some(),
         }
+    }
+
+    fn command_runtime_label(&self) -> String {
+        match self.provider_config.local.provider {
+            LocalModelProviderKind::Fake => "routed-fake-local-model+first-party-plugins",
+            LocalModelProviderKind::Ollama => "routed-ollama-local-model+first-party-plugins",
+        }
+        .to_string()
     }
 
     fn contract_metadata(&self) -> ContractMetadata {
@@ -340,6 +397,73 @@ impl IpcState {
         })
     }
 
+    pub fn list_approvals(
+        &self,
+        status: Option<ApprovalStatus>,
+    ) -> JarvisResult<Vec<PendingApproval>> {
+        self.using_repository(|repository| repository.list_pending_approvals(status))
+    }
+
+    pub fn get_approval(&self, id: Uuid) -> JarvisResult<PendingApproval> {
+        self.using_repository(|repository| {
+            repository
+                .get_pending_approval(id)?
+                .ok_or_else(|| JarvisError::Storage(format!("pending approval not found: {id}")))
+        })
+    }
+
+    pub fn approve_approval(
+        &self,
+        id: Uuid,
+        decided_by: String,
+        reason: Option<String>,
+    ) -> JarvisResult<PendingApproval> {
+        self.decide_approval(id, ApprovalStatus::Approved, decided_by, reason)
+    }
+
+    pub fn deny_approval(
+        &self,
+        id: Uuid,
+        decided_by: String,
+        reason: Option<String>,
+    ) -> JarvisResult<PendingApproval> {
+        self.decide_approval(id, ApprovalStatus::Denied, decided_by, reason)
+    }
+
+    fn decide_approval(
+        &self,
+        id: Uuid,
+        status: ApprovalStatus,
+        decided_by: String,
+        reason: Option<String>,
+    ) -> JarvisResult<PendingApproval> {
+        self.using_repository(|repository| {
+            let approval = repository.decide_pending_approval(id, status, decided_by, reason)?;
+            let event_type = match status {
+                ApprovalStatus::Approved => "approval_granted",
+                ApprovalStatus::Denied => "approval_denied",
+                _ => "approval_decision",
+            };
+            repository.append_audit_entry(&AuditEntry::new(
+                Some(approval.task_id),
+                event_type,
+                "pending approval was decided; side effect remains unexecuted until retried with an approval grant",
+                json!({
+                    "approval_id": approval.id,
+                    "action": approval.action,
+                    "status": approval.status,
+                    "risk_tier": approval.risk_tier,
+                    "sensitivity": approval.sensitivity,
+                    "requested_scopes": approval.requested_scopes,
+                    "decided_by": approval.decided_by,
+                    "decision_reason": approval.decision_reason,
+                    "side_effect_executed": false,
+                }),
+            ))?;
+            Ok(approval)
+        })
+    }
+
     pub async fn submit_command(&self, request: CommandRequest) -> JarvisResult<CommandResponse> {
         if request.input.trim().is_empty() {
             return Err(JarvisError::Validation(
@@ -348,10 +472,15 @@ impl IpcState {
         }
 
         let command_store = self.command_store();
+        let local_model = if self.provider_config.local.enabled {
+            LocalModelExecutor::from_config(&self.provider_config.local)?
+        } else {
+            LocalModelExecutor::Fake(FakeLocalModel::default())
+        };
         let runtime = ConversationRuntime::with_storage_parts(
-            RuntimeConfig::default(),
+            RuntimeConfig::default().with_provider_config(self.provider_config.clone()),
             self.runtime_control.clone(),
-            FakeLocalModel::default(),
+            local_model,
             crate::NoopRuntimeHooks,
             command_store.clone(),
         );
@@ -368,7 +497,7 @@ impl IpcState {
             .await?;
 
         let mut audit_entries = runtime_response.audit_entries;
-        let plugin_results = if runtime_response.task.status == TaskStatus::Completed {
+        let plugin_dispatch = if runtime_response.task.status == TaskStatus::Completed {
             self.maybe_execute_first_party_plugin(
                 runtime_response.task.id,
                 &request.input,
@@ -378,13 +507,18 @@ impl IpcState {
                 &command_store,
             )?
         } else {
-            Vec::new()
+            PluginDispatch::default()
         };
 
-        let accepted = runtime_response.task.status == TaskStatus::Completed;
+        let mut task = runtime_response.task;
+        if plugin_dispatch.waiting_for_approval {
+            command_store.update_task_status(&mut task, TaskStatus::WaitingForApproval)?;
+        }
+
+        let accepted = task.status == TaskStatus::Completed;
         let audit_entry = audit_entries.last().cloned().unwrap_or_else(|| {
             AuditEntry::new(
-                Some(runtime_response.task.id),
+                Some(task.id),
                 "command_runtime_empty",
                 "command runtime returned no audit entries",
                 json!({
@@ -396,13 +530,13 @@ impl IpcState {
 
         Ok(CommandResponse {
             accepted,
-            task: runtime_response.task,
+            task,
             audit_entry,
             audit_entries,
             route: runtime_response.route,
             route_evidence: runtime_response.route_evidence,
             steps: runtime_response.steps,
-            plugin_results,
+            plugin_results: plugin_dispatch.results,
             message: runtime_response.message,
         })
     }
@@ -421,9 +555,9 @@ impl IpcState {
         dry_run: bool,
         audit_entries: &mut Vec<AuditEntry>,
         command_store: &SharedCommandStore,
-    ) -> JarvisResult<Vec<PluginCallResult>> {
+    ) -> JarvisResult<PluginDispatch> {
         let Some(mut plugin_request) = first_party_plugin_request(input) else {
-            return Ok(Vec::new());
+            return Ok(PluginDispatch::default());
         };
         let host = PluginHost::with_first_party_plugins()?;
         let manifest = host.manifest(&plugin_request.plugin_id)?;
@@ -473,6 +607,31 @@ impl IpcState {
 
         if policy.decision == ApprovalDecision::RequireConfirmation {
             plugin_request.approval_status = ApprovalStatus::Pending;
+            let approval = self.persist_pending_approval(NewPendingApproval {
+                task_id,
+                action: format!("{}.{}", plugin_request.plugin_id, plugin_request.action),
+                requested_scopes: policy_request.requested_scopes,
+                risk_tier: action.risk_tier,
+                sensitivity,
+                reason: policy.reason.clone(),
+            })?;
+            let approval_audit = AuditEntry::new(
+                Some(task_id),
+                "approval_pending",
+                "first-party plugin action is pending explicit approval and did not execute",
+                json!({
+                    "approval_id": approval.id,
+                    "plugin_id": plugin_request.plugin_id,
+                    "action": plugin_request.action,
+                    "risk_tier": approval.risk_tier,
+                    "sensitivity": approval.sensitivity,
+                    "requested_scopes": approval.requested_scopes,
+                    "approval_status": approval.status,
+                    "side_effect_executed": false,
+                }),
+            );
+            command_store.append_audit_entry(&approval_audit)?;
+            audit_entries.push(approval_audit);
         }
 
         if dry_run {
@@ -488,7 +647,7 @@ impl IpcState {
             );
             command_store.append_audit_entry(&dry_run_audit)?;
             audit_entries.push(dry_run_audit);
-            return Ok(Vec::new());
+            return Ok(PluginDispatch::default());
         }
 
         let result = host.execute(plugin_request)?;
@@ -515,7 +674,17 @@ impl IpcState {
         );
         command_store.append_audit_entry(&plugin_audit)?;
         audit_entries.push(plugin_audit);
-        Ok(vec![result])
+        Ok(PluginDispatch {
+            waiting_for_approval: result.status == PluginCallStatus::ApprovalRequired,
+            results: vec![result],
+        })
+    }
+
+    fn persist_pending_approval(
+        &self,
+        approval: NewPendingApproval,
+    ) -> JarvisResult<PendingApproval> {
+        self.using_repository(|repository| repository.create_pending_approval(approval))
     }
 
     pub fn pause(&self, reason: impl Into<String>) -> JarvisResult<EmergencyPauseResponse> {
@@ -641,6 +810,128 @@ impl IpcState {
             .ok_or_else(|| JarvisError::Storage(format!("scheduler job not found: {id}")))
     }
 
+    pub async fn run_due_scheduler_jobs(&self, limit: usize) -> JarvisResult<SchedulerRunResponse> {
+        let checked_at = Utc::now();
+        let limit = limit.max(1);
+
+        if self.runtime_control.is_emergency_paused() {
+            return Ok(SchedulerRunResponse {
+                checked_at,
+                limit,
+                emergency_paused: true,
+                executions: Vec::new(),
+            });
+        }
+
+        let due_jobs = self.scheduler.due_jobs(checked_at, limit);
+        let mut executions = Vec::new();
+
+        for due_job in due_jobs {
+            if self.runtime_control.is_emergency_paused() {
+                break;
+            }
+
+            let running = self.mark_scheduler_job_running(due_job.id)?;
+            let command_response = self
+                .submit_command(CommandRequest {
+                    input: running.command.clone(),
+                    session_id: None,
+                    context: json!({
+                        "surface": "scheduler",
+                        "scheduler_job_id": running.id,
+                        "scheduler_job_name": running.name,
+                        "trigger": running.trigger,
+                        "sensitivity": "workspace",
+                    }),
+                    dry_run: false,
+                    sensitivity: Some(Sensitivity::Workspace),
+                })
+                .await?;
+
+            let mut audit_entries = Vec::new();
+            self.append_scheduler_execution_audit(
+                "scheduler_job_started",
+                "scheduler started due job command",
+                &running,
+                &command_response,
+                &mut audit_entries,
+            )?;
+
+            let final_job = if command_response.accepted {
+                if matches!(running.trigger, TriggerKind::Interval { .. }) {
+                    self.reschedule_interval_scheduler_job(running.id)?
+                } else {
+                    self.complete_scheduler_job(running.id)?
+                }
+            } else {
+                self.fail_scheduler_job(running.id)?
+            };
+
+            let event_type = match final_job.status {
+                SchedulerJobStatus::Scheduled => "scheduler_job_rescheduled",
+                SchedulerJobStatus::Completed => "scheduler_job_completed",
+                SchedulerJobStatus::Failed => "scheduler_job_failed",
+                SchedulerJobStatus::Cancelled => "scheduler_job_cancelled",
+                SchedulerJobStatus::Running => "scheduler_job_running",
+            };
+            self.append_scheduler_execution_audit(
+                event_type,
+                "scheduler finished due job command",
+                &final_job,
+                &command_response,
+                &mut audit_entries,
+            )?;
+
+            executions.push(SchedulerJobExecution {
+                job: final_job,
+                task: command_response.task,
+                accepted: command_response.accepted,
+                message: command_response.message,
+                audit_entries,
+            });
+        }
+
+        Ok(SchedulerRunResponse {
+            checked_at,
+            limit,
+            emergency_paused: false,
+            executions,
+        })
+    }
+
+    pub fn reschedule_interval_scheduler_job(&self, id: Uuid) -> JarvisResult<SchedulerJob> {
+        let job = self.scheduler.reschedule_interval(id)?;
+        self.persist_scheduler_transition(&job, |repository| {
+            repository.reschedule_interval_scheduler_job(id)
+        })
+    }
+
+    fn append_scheduler_execution_audit(
+        &self,
+        event_type: &str,
+        summary: &str,
+        job: &SchedulerJob,
+        command_response: &CommandResponse,
+        audit_entries: &mut Vec<AuditEntry>,
+    ) -> JarvisResult<()> {
+        let entry = AuditEntry::new(
+            Some(command_response.task.id),
+            event_type,
+            summary,
+            json!({
+                "scheduler_job_id": job.id,
+                "scheduler_job_name": job.name,
+                "trigger": job.trigger,
+                "job_status": job.status,
+                "task_status": command_response.task.status,
+                "accepted": command_response.accepted,
+            }),
+        );
+        self.command_store().append_audit_entry(&entry)?;
+        audit_entries.push(entry);
+        Ok(())
+    }
+
     fn persist_scheduler_job(&self, job: &SchedulerJob) -> JarvisResult<()> {
         self.repository
             .as_ref()
@@ -694,6 +985,12 @@ struct SharedCommandStore {
     repository: Option<Arc<Mutex<SqliteRepository>>>,
 }
 
+#[derive(Default)]
+struct PluginDispatch {
+    waiting_for_approval: bool,
+    results: Vec<PluginCallResult>,
+}
+
 impl RuntimeCommandStore for SharedCommandStore {
     fn create_task(&self, session_id: Uuid, user_input: String) -> JarvisResult<TaskRecord> {
         match &self.repository {
@@ -742,8 +1039,31 @@ fn sensitivity_from_context(context: &serde_json::Value) -> Option<Sensitivity> 
     }
 }
 
+fn parse_approval_status(value: &str) -> JarvisResult<ApprovalStatus> {
+    match value {
+        "pending" => Ok(ApprovalStatus::Pending),
+        "approved" => Ok(ApprovalStatus::Approved),
+        "denied" => Ok(ApprovalStatus::Denied),
+        _ => Err(JarvisError::Validation(
+            "approval status must be pending, approved, or denied".to_string(),
+        )),
+    }
+}
+
+fn default_decided_by() -> String {
+    "cli".to_string()
+}
+
 fn first_party_plugin_request(input: &str) -> Option<PluginCallRequest> {
     let trimmed = input.trim();
+    if let Some(message) = trimmed.strip_prefix("plugin approval echo ") {
+        return Some(PluginCallRequest::reactive(
+            "fake_echo",
+            "approval_echo",
+            json!({ "message": message.trim() }),
+        ));
+    }
+
     if let Some(message) = trimmed.strip_prefix("plugin echo ") {
         return Some(PluginCallRequest::reactive(
             "fake_echo",
@@ -784,6 +1104,10 @@ pub fn router(state: IpcState) -> Router {
                 .delete(delete_memory_item),
         )
         .route("/memory/:id/review", post(review_memory_item))
+        .route("/approvals", get(list_approvals))
+        .route("/approvals/:id", get(get_approval))
+        .route("/approvals/:id/approve", post(approve_approval))
+        .route("/approvals/:id/deny", post(deny_approval))
         .route("/plugins/manifests", get(list_plugin_manifests))
         .route("/plugins/manifests/:id", get(get_plugin_manifest))
         .route(
@@ -799,6 +1123,7 @@ pub fn router(state: IpcState) -> Router {
             "/scheduler/jobs",
             get(list_scheduler_jobs).post(create_scheduler_job),
         )
+        .route("/scheduler/run-due", post(run_due_scheduler_jobs))
         .route(
             "/scheduler/jobs/:id",
             get(get_scheduler_job).delete(cancel_scheduler_job),
@@ -972,6 +1297,50 @@ async fn delete_memory_item(
         .map_err(error_response)
 }
 
+async fn list_approvals(
+    State(state): State<IpcState>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Result<Json<Vec<PendingApproval>>, (StatusCode, Json<ErrorResponse>)> {
+    let status = query
+        .get("status")
+        .map(|value| parse_approval_status(value))
+        .transpose()
+        .map_err(error_response)?;
+    state
+        .list_approvals(status)
+        .map(Json)
+        .map_err(error_response)
+}
+
+async fn get_approval(
+    State(state): State<IpcState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<PendingApproval>, (StatusCode, Json<ErrorResponse>)> {
+    state.get_approval(id).map(Json).map_err(error_response)
+}
+
+async fn approve_approval(
+    State(state): State<IpcState>,
+    Path(id): Path<Uuid>,
+    Json(request): Json<ApprovalDecisionRequest>,
+) -> Result<Json<PendingApproval>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .approve_approval(id, request.decided_by, request.reason)
+        .map(Json)
+        .map_err(error_response)
+}
+
+async fn deny_approval(
+    State(state): State<IpcState>,
+    Path(id): Path<Uuid>,
+    Json(request): Json<ApprovalDecisionRequest>,
+) -> Result<Json<PendingApproval>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .deny_approval(id, request.decided_by, request.reason)
+        .map(Json)
+        .map_err(error_response)
+}
+
 async fn list_plugin_manifests(
     State(_state): State<IpcState>,
 ) -> Result<Json<Vec<PluginManifest>>, (StatusCode, Json<ErrorResponse>)> {
@@ -1074,6 +1443,21 @@ async fn create_scheduler_job(
         .map_err(error_response)
 }
 
+async fn run_due_scheduler_jobs(
+    State(state): State<IpcState>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Result<Json<SchedulerRunResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let limit = query
+        .get("limit")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(16);
+    state
+        .run_due_scheduler_jobs(limit)
+        .await
+        .map(Json)
+        .map_err(error_response)
+}
+
 async fn cancel_scheduler_job(
     State(state): State<IpcState>,
     Path(id): Path<Uuid>,
@@ -1100,6 +1484,10 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
         endpoint("PATCH", "/memory/:id", true, false),
         endpoint("DELETE", "/memory/:id", true, false),
         endpoint("POST", "/memory/:id/review", true, false),
+        endpoint("GET", "/approvals", true, false),
+        endpoint("GET", "/approvals/:id", true, false),
+        endpoint("POST", "/approvals/:id/approve", true, false),
+        endpoint("POST", "/approvals/:id/deny", true, false),
         endpoint("GET", "/plugins/manifests", false, true),
         endpoint("GET", "/plugins/manifests/:id", false, true),
         endpoint("GET", "/plugins/installed", true, true),
@@ -1110,6 +1498,7 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
         endpoint("DELETE", "/emergency-pause", false, true),
         endpoint("GET", "/scheduler/jobs", false, false),
         endpoint("POST", "/scheduler/jobs", false, false),
+        endpoint("POST", "/scheduler/run-due", false, false),
         endpoint("GET", "/scheduler/jobs/:id", false, false),
         endpoint("DELETE", "/scheduler/jobs/:id", false, false),
     ]
@@ -1134,6 +1523,7 @@ fn error_response(error: JarvisError) -> (StatusCode, Json<ErrorResponse>) {
         JarvisError::Validation(_) => StatusCode::BAD_REQUEST,
         JarvisError::PolicyBlocked(_) => StatusCode::FORBIDDEN,
         JarvisError::ApprovalRequired(_) => StatusCode::ACCEPTED,
+        JarvisError::Model(_) => StatusCode::BAD_GATEWAY,
         JarvisError::Storage(_) | JarvisError::Plugin(_) | JarvisError::Other(_) => {
             StatusCode::INTERNAL_SERVER_ERROR
         }
@@ -1517,6 +1907,114 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_due_scheduler_jobs_executes_and_persists_visible_tasks() {
+        let repository = SqliteRepository::in_memory().unwrap();
+        let scheduler = Scheduler::new();
+        let now = Utc::now();
+        let mut interval_job = scheduler
+            .schedule(SchedulerJobSpec {
+                name: "interval status".to_string(),
+                command: "plugin status".to_string(),
+                trigger: TriggerKind::Interval { every_seconds: 30 },
+            })
+            .expect("interval");
+        interval_job.updated_at = now - chrono::Duration::seconds(31);
+        repository
+            .upsert_scheduler_job(&interval_job)
+            .expect("persist interval");
+        let state = IpcState::with_repository(repository).expect("state");
+        let manual = state
+            .schedule_scheduler_job(SchedulerJobSpec {
+                name: "manual status".to_string(),
+                command: "plugin status".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .expect("manual");
+        let once = state
+            .schedule_scheduler_job(SchedulerJobSpec {
+                name: "once status".to_string(),
+                command: "plugin status".to_string(),
+                trigger: TriggerKind::OnceAt {
+                    run_at: now - chrono::Duration::seconds(1),
+                },
+            })
+            .expect("once");
+
+        let response = state.run_due_scheduler_jobs(10).await.expect("run due");
+
+        assert!(!response.emergency_paused);
+        assert_eq!(response.executions.len(), 3);
+        assert!(response
+            .executions
+            .iter()
+            .all(|execution| execution.accepted));
+        assert!(response.executions.iter().any(|execution| {
+            execution.job.id == manual.id && execution.job.status == SchedulerJobStatus::Completed
+        }));
+        assert!(response.executions.iter().any(|execution| {
+            execution.job.id == once.id && execution.job.status == SchedulerJobStatus::Completed
+        }));
+        assert!(response.executions.iter().any(|execution| {
+            execution.job.id == interval_job.id
+                && execution.job.status == SchedulerJobStatus::Scheduled
+        }));
+        assert!(response.executions.iter().all(|execution| execution
+            .audit_entries
+            .iter()
+            .any(|entry| entry.event_type == "scheduler_job_started")));
+        assert!(response.executions.iter().all(|execution| execution
+            .audit_entries
+            .iter()
+            .any(|entry| entry.event_type == "scheduler_job_completed"
+                || entry.event_type == "scheduler_job_rescheduled")));
+
+        let tasks = state
+            .using_repository(SqliteRepository::list_tasks)
+            .expect("tasks");
+        assert_eq!(tasks.len(), 3);
+        let audit = state
+            .using_repository(|repository| repository.list_audit_entries(None))
+            .expect("audit");
+        assert!(audit
+            .iter()
+            .any(|entry| entry.event_type == "scheduler_job_rescheduled"));
+        assert!(audit
+            .iter()
+            .any(|entry| entry.event_type == "plugin_completed"));
+    }
+
+    #[tokio::test]
+    async fn run_due_scheduler_jobs_is_blocked_by_persistent_emergency_pause() {
+        let repository = SqliteRepository::in_memory().unwrap();
+        repository
+            .set_emergency_pause(true, Some("paused before startup"), Some("test"))
+            .expect("pause");
+        let scheduler = Scheduler::new();
+        let job = scheduler
+            .schedule(SchedulerJobSpec {
+                name: "paused job".to_string(),
+                command: "plugin status".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .expect("job");
+        repository.upsert_scheduler_job(&job).expect("persist job");
+        let state = IpcState::with_repository(repository).expect("state");
+
+        let response = state.run_due_scheduler_jobs(10).await.expect("run due");
+
+        assert!(response.emergency_paused);
+        assert!(response.executions.is_empty());
+        assert_eq!(
+            state.get_scheduler_job(job.id).expect("job").status,
+            SchedulerJobStatus::Scheduled
+        );
+        let tasks = state
+            .using_repository(SqliteRepository::list_tasks)
+            .expect("tasks");
+        assert!(tasks.is_empty());
+    }
+
+    #[tokio::test]
     async fn diagnostics_export_is_redacted_and_counts_repository_state() {
         let repository = SqliteRepository::in_memory().unwrap();
         let state = IpcState::with_repository(repository).expect("state");
@@ -1543,7 +2041,7 @@ mod tests {
             .expect("diagnostics export");
         assert_eq!(export.health.status, "ok");
         assert!(export.repository_backed);
-        assert_eq!(export.schema_version, Some(3));
+        assert_eq!(export.schema_version, Some(4));
         assert_eq!(export.task_count, Some(1));
         assert!(export.audit_entry_count.unwrap_or_default() >= 2);
         assert_eq!(export.scheduler_jobs.len(), 1);

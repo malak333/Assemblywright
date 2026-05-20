@@ -28,7 +28,9 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_eq!(contract["contract"]["name"], "jarvis.local-ipc");
     assert_eq!(contract["contract"]["version"], 1);
     assert_array_contains(&contract["endpoints"], "path", "/diagnostics/export");
+    assert_array_contains(&contract["endpoints"], "path", "/approvals/:id/approve");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/scheduler/jobs/:id");
+    assert_string_array_contains(&contract["safe_inspection_paths"], "/approvals/:id");
 
     let command = run_cli_json([
         "command",
@@ -138,6 +140,135 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     let all_audit = run_cli_json(["tasks", "audit", "--endpoint", endpoint.as_str()]);
     assert_array_contains(&all_audit, "event_type", "plugin_completed");
 
+    let approval_command = run_cli_json([
+        "command",
+        "plugin approval echo needs user approval",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(approval_command["accepted"], false);
+    assert_eq!(approval_command["task"]["status"], "waiting_for_approval");
+    assert_eq!(
+        approval_command["plugin_results"][0]["status"],
+        "approval_required"
+    );
+    assert_eq!(
+        approval_command["plugin_results"][0]["metadata"]["approval_status"],
+        "pending"
+    );
+    assert_array_contains(
+        &approval_command["audit_entries"],
+        "event_type",
+        "approval_pending",
+    );
+    assert_array_contains(
+        &approval_command["audit_entries"],
+        "event_type",
+        "plugin_approval_required",
+    );
+    let approval_task_id = approval_command["task"]["id"]
+        .as_str()
+        .expect("approval task id")
+        .to_string();
+
+    let pending_approvals = run_cli_json([
+        "approvals",
+        "list",
+        "--status",
+        "pending",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_array_contains(&pending_approvals, "task_id", &approval_task_id);
+    let approval_id = pending_approvals[0]["id"]
+        .as_str()
+        .expect("approval id")
+        .to_string();
+    assert_eq!(pending_approvals[0]["status"], "pending");
+    assert_eq!(pending_approvals[0]["action"], "fake_echo.approval_echo");
+    assert_eq!(pending_approvals[0]["risk_tier"], "confirm");
+
+    let approval_detail = run_cli_json([
+        "approvals",
+        "get",
+        approval_id.as_str(),
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(approval_detail["id"], approval_id);
+    assert_eq!(approval_detail["task_id"], approval_task_id);
+
+    let approved = run_cli_json([
+        "approvals",
+        "approve",
+        approval_id.as_str(),
+        "--decided-by",
+        "local_ipc_e2e",
+        "--reason",
+        "reviewed deterministic approval scaffold",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(approved["status"], "approved");
+    assert_eq!(approved["decided_by"], "local_ipc_e2e");
+
+    let approval_audit = run_cli_json([
+        "tasks",
+        "audit",
+        "--task-id",
+        approval_task_id.as_str(),
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_array_contains(&approval_audit, "event_type", "approval_granted");
+    let approval_audit_encoded =
+        serde_json::to_string(&approval_audit).expect("approval audit JSON");
+    assert!(
+        approval_audit_encoded.contains("\"side_effect_executed\":false"),
+        "{approval_audit_encoded}"
+    );
+
+    let deny_command = run_cli_json([
+        "command",
+        "plugin approval echo deny this approval",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(deny_command["task"]["status"], "waiting_for_approval");
+    let deny_task_id = deny_command["task"]["id"]
+        .as_str()
+        .expect("deny approval task id")
+        .to_string();
+    let deny_pending = run_cli_json([
+        "approvals",
+        "list",
+        "--status",
+        "pending",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_array_contains(&deny_pending, "task_id", &deny_task_id);
+    let deny_approval_id = deny_pending
+        .as_array()
+        .expect("pending approvals array")
+        .iter()
+        .find(|approval| approval["task_id"].as_str() == Some(deny_task_id.as_str()))
+        .and_then(|approval| approval["id"].as_str())
+        .expect("deny approval id")
+        .to_string();
+    let denied = run_cli_json([
+        "approvals",
+        "deny",
+        deny_approval_id.as_str(),
+        "--decided-by",
+        "local_ipc_e2e",
+        "--reason",
+        "not safe enough",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(denied["status"], "denied");
+
     let memory = run_cli_json([
         "memory",
         "create",
@@ -200,6 +331,8 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         "schedule",
         "local e2e job",
         "plugin status",
+        "--once-at",
+        "2999-01-01T00:00:00Z",
         "--endpoint",
         endpoint.as_str(),
     ]);
@@ -220,9 +353,54 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_eq!(scheduler_item["id"], scheduler_id);
     assert_eq!(scheduler_item["command"], "plugin status");
 
+    let due_once = run_cli_json([
+        "scheduler",
+        "schedule",
+        "due once e2e job",
+        "plugin status",
+        "--once-at",
+        "2020-01-01T00:00:00Z",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    let due_once_id = due_once["id"].as_str().expect("due once id").to_string();
+    let due_interval = run_cli_json([
+        "scheduler",
+        "schedule",
+        "due interval e2e job",
+        "plugin status",
+        "--interval-seconds",
+        "1",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    let due_interval_id = due_interval["id"]
+        .as_str()
+        .expect("due interval id")
+        .to_string();
+    std::thread::sleep(Duration::from_millis(1100));
+    let run_due = run_cli_json([
+        "scheduler",
+        "run-due",
+        "--limit",
+        "8",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(run_due["emergency_paused"], false);
+    assert!(run_due["executions"]
+        .as_array()
+        .expect("executions array")
+        .iter()
+        .any(|execution| execution["accepted"] == true));
+    assert_array_contains_nested(&run_due["executions"], &["job", "id"], &due_once_id);
+    assert_array_contains_nested(&run_due["executions"], &["job", "id"], &due_interval_id);
+    assert_array_contains_nested(&run_due["executions"], &["job", "status"], "completed");
+    assert_array_contains_nested(&run_due["executions"], &["job", "status"], "scheduled");
+
     let diagnostics = run_cli_json(["diagnostics", "export", "--endpoint", endpoint.as_str()]);
     assert_eq!(diagnostics["repository_backed"], true);
-    assert_eq!(diagnostics["schema_version"], 3);
+    assert_eq!(diagnostics["schema_version"], 4);
     assert_eq!(
         diagnostics["health"]["contract"]["name"],
         "jarvis.local-ipc"
@@ -300,6 +478,16 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     let persisted_audit =
         run_cli_json(["tasks", "audit", "--endpoint", restarted_endpoint.as_str()]);
     assert_array_contains(&persisted_audit, "event_type", "plugin_completed");
+    assert_array_contains(&persisted_audit, "event_type", "approval_granted");
+
+    let persisted_approvals = run_cli_json([
+        "approvals",
+        "list",
+        "--endpoint",
+        restarted_endpoint.as_str(),
+    ]);
+    assert_array_contains(&persisted_approvals, "id", &approval_id);
+    assert_array_contains(&persisted_approvals, "id", &deny_approval_id);
 
     let persisted_memory =
         run_cli_json(["memory", "list", "--endpoint", restarted_endpoint.as_str()]);
@@ -511,6 +699,26 @@ fn assert_array_contains(value: &Value, field: &str, expected: &str) {
             .iter()
             .any(|item| item.get(field).and_then(Value::as_str) == Some(expected)),
         "expected array to contain object with {field}={expected}, got {value}"
+    );
+}
+
+fn assert_array_contains_nested(value: &Value, path: &[&str], expected: &str) {
+    let array = value.as_array().unwrap_or_else(|| {
+        panic!("expected array, got {}", json!(value));
+    });
+    assert!(
+        array.iter().any(|item| {
+            let mut cursor = item;
+            for segment in path {
+                let Some(next) = cursor.get(segment) else {
+                    return false;
+                };
+                cursor = next;
+            }
+            cursor.as_str() == Some(expected)
+        }),
+        "expected array to contain object with {}={expected}, got {value}",
+        path.join(".")
     );
 }
 

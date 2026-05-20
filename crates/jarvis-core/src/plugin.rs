@@ -826,20 +826,48 @@ impl InProcessPlugin for EchoPlugin {
             source: PluginSource::FirstParty,
             author: "Jarvis".to_string(),
             source_path: None,
-            actions: vec![PluginActionManifest {
-                name: "echo".to_string(),
-                description: "Return the provided message for host contract testing.".to_string(),
-                permissions: Vec::new(),
-                risk_tier: RiskTier::Low,
-                input_schema: JsonSchema::object(input_properties, vec!["message".to_string()]),
-                output_schema: JsonSchema::object(output_properties, vec!["message".to_string()]),
-                proactive: false,
-                memory_access: PluginAccess::None,
-                model_access: PluginAccess::None,
-                audit_fields: vec!["message".to_string()],
-                timeout: PluginTimeout::default_for_action(),
-                cancellation: CancellationBehavior::Cooperative,
-            }],
+            actions: vec![
+                PluginActionManifest {
+                    name: "echo".to_string(),
+                    description: "Return the provided message for host contract testing."
+                        .to_string(),
+                    permissions: Vec::new(),
+                    risk_tier: RiskTier::Low,
+                    input_schema: JsonSchema::object(
+                        input_properties.clone(),
+                        vec!["message".to_string()],
+                    ),
+                    output_schema: JsonSchema::object(
+                        output_properties.clone(),
+                        vec!["message".to_string()],
+                    ),
+                    proactive: false,
+                    memory_access: PluginAccess::None,
+                    model_access: PluginAccess::None,
+                    audit_fields: vec!["message".to_string()],
+                    timeout: PluginTimeout::default_for_action(),
+                    cancellation: CancellationBehavior::Cooperative,
+                },
+                PluginActionManifest {
+                    name: "approval_echo".to_string(),
+                    description:
+                        "Approval-gated echo scaffold for high-risk host contract testing."
+                            .to_string(),
+                    permissions: vec![PluginPermission::WriteWorkspace],
+                    risk_tier: RiskTier::Confirm,
+                    input_schema: JsonSchema::object(input_properties, vec!["message".to_string()]),
+                    output_schema: JsonSchema::object(
+                        output_properties,
+                        vec!["message".to_string()],
+                    ),
+                    proactive: false,
+                    memory_access: PluginAccess::None,
+                    model_access: PluginAccess::None,
+                    audit_fields: vec!["message".to_string()],
+                    timeout: PluginTimeout::default_for_action(),
+                    cancellation: CancellationBehavior::Cooperative,
+                },
+            ],
         }
     }
 

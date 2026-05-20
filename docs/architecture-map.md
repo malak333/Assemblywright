@@ -28,7 +28,8 @@ flowchart TB
 
         Commands --> Runtime["ConversationRuntime"]
         Runtime --> ModelExec["ModelExecutor trait"]
-        ModelExec --> FakeLocal["FakeLocalModel only"]
+        ModelExec --> FakeLocal["FakeLocalModel default"]
+        ModelExec --> OllamaLocal["Ollama-compatible local HTTP provider"]
         Runtime --> ToolPlan["bounded model-planned tool requests"]
         ToolPlan --> PluginPolicy
         Runtime --> RuntimeControl["RuntimeControl pause/cancel flags"]
@@ -60,6 +61,7 @@ flowchart TB
     RepoState --> Memory["memory_items"]
     RepoState --> StoredPause["emergency_pause"]
     RepoState --> StoredScheduler["scheduler_jobs"]
+    RepoState --> StoredApprovals["pending_approvals"]
 
     Types["shared contract types"] --> Runtime
     Types --> IPC
@@ -69,14 +71,19 @@ flowchart TB
 ```
 
 The current IPC `/commands` endpoint invokes `ConversationRuntime` with the
-deterministic `FakeLocalModel`, returns runtime steps, route metadata, plugin
-results, and audit entries, and can persist task/audit state through
-`SqliteRepository` when the state is constructed with repository backing. It
-also records local-first `ModelRouter` evidence and can execute deterministic
-first-party plugin commands through the policy engine. The runtime also supports
-bounded model-planned first-party tool calls with schema validation, policy
-checks, approval stops, and audit evidence. It does not yet support real model
-providers, installed plugin sandboxing, or user approval UI.
+deterministic `FakeLocalModel` by default or an opt-in Ollama-compatible local
+HTTP provider selected from typed env config. It returns runtime steps, route
+metadata, plugin results, and audit entries, and can persist task/audit state
+through `SqliteRepository` when the state is constructed with repository
+backing. It also records local-first `ModelRouter` evidence and can execute
+deterministic first-party plugin commands through the policy engine. The
+runtime also supports bounded model-planned first-party tool calls with schema
+validation, policy checks, approval stops, and audit evidence.
+Repository-backed IPC state stores approval-required plugin command decisions
+in `pending_approvals`, exposes them through CLI/IPC inspection endpoints, and
+lets a user grant or deny the pending record without executing the side effect.
+It does not yet support ChatGPT execution, installed plugin sandboxing, or
+Swift user approval UI.
 Repository-backed IPC state also exposes task, audit, and memory inspection
 endpoints, plus first-party plugin manifest listing, so the CLI and Swift shell
 can inspect durable local state without reaching into SQLite directly.
@@ -94,7 +101,7 @@ sequenceDiagram
     participant Store as Optional SqliteRepository
 
     Client->>IPC: POST /commands
-    IPC->>Runtime: execute command with FakeLocalModel
+    IPC->>Runtime: execute command with configured local model executor
     Runtime->>Store: create task and append runtime audit when configured
     alt model plans first-party tool call
         Runtime->>Policy: validate declared scopes, risk, sensitivity
@@ -114,6 +121,9 @@ sequenceDiagram
         IPC->>Store: append plugin_policy_evaluated when configured
         alt dry_run
             IPC->>Store: append plugin_dry_run when configured
+        else approval required
+            IPC->>Store: persist pending_approvals row and approval audit
+            IPC-->>Client: waiting_for_approval with approval_required result
         else allowed
             IPC->>Plugins: execute fake_echo or fake_status
             Plugins-->>IPC: schema-validated plugin result
@@ -162,8 +172,9 @@ sequenceDiagram
   entries, sensitivity, risk, approval, task status, and errors.
 - `jarvis-core::ipc`: Axum loopback HTTP API for `/health`, `/commands`,
   `/tasks`, `/audit`, `/memory`, `/plugins/manifests`, `/plugins/installed`,
-  `/emergency-pause`, and `/scheduler/jobs`. The command endpoint runs the runtime with
-  `FakeLocalModel`, records local-first route evidence, can execute
+  `/emergency-pause`, and `/scheduler/jobs`. The command endpoint runs the
+  runtime with the configured local model executor, records local-first route
+  evidence, can execute
   deterministic first-party plugin commands through policy, returns
   route/step/plugin/audit evidence, and obeys emergency-pause state.
 - `jarvis-core::runtime`: Command runtime scaffolding with max-step enforcement,
@@ -172,8 +183,9 @@ sequenceDiagram
   entries, a fake local model path, and a persistence hook for SQLite-backed
   task/audit durability.
 - `jarvis-core::model`: `ModelExecutor` trait, model request/response/tool
-  contracts, route metadata, and deterministic `FakeLocalModel` test
-  implementation.
+  contracts, route metadata, deterministic `FakeLocalModel`, typed provider
+  env config, redacted provider errors, and an Ollama-compatible local HTTP
+  provider.
 - `jarvis-core::router`: Local-first model route selection, ChatGPT opt-in gate,
   restricted-data blocking, approval delegation to `PermissionEngine`, and
   simple secret-token redaction before ChatGPT routing.
@@ -255,30 +267,31 @@ flowchart TB
 ```
 
 Production readiness for that end-state still requires a packaged `.app`
-release, real local model provider integration, approval UI, plugin
-installation/runtime hardening, voice support, packaged app smoke tests, and
-operational release evidence. The current repository proves only the implemented
-Rust and Swift scaffold surfaces listed above.
+release, approval UI, plugin installation/runtime hardening, voice support,
+packaged app smoke tests, and operational release evidence. The current
+repository proves only the implemented Rust and Swift scaffold surfaces listed
+above; the local HTTP provider boundary is implemented, but ChatGPT execution
+and full assistant behavior are not.
 
 ## Current Vs Target Implementation Phases
 
 | Area | Current implementation | Target production state | Phase |
 | --- | --- | --- | --- |
 | Mac shell | Buildable Swift/SwiftUI scaffold with health, command transcript, pause/resume, activity/audit rendering, memory/plugin/scheduler/diagnostics tabs, degraded-mode handling, and a `JarvisCoreSupervisor` abstraction for configured or bundled local core binaries. It is not signed or packaged as a release app. | Packaged `Jarvis.app` supervises the core, owns voice/text UX, settings, memory and permission surfaces, diagnostics export, and recovery states. | Shell supervision scaffold implemented; signed packaging and packaged smoke pending. |
-| IPC boundary | Axum loopback HTTP JSON API for health, commands, task/audit/memory inspection, plugin manifests, emergency pause, and scheduler jobs. | Versioned, compatibility-tested app/core API with packaged app smoke coverage and clear degraded-mode handling. | Core IPC implemented; production app contract hardening pending. |
-| Command runtime | `ConversationRuntime` creates tasks, runs `FakeLocalModel`, records structured audit entries, handles pause/cancel, enforces max steps, can persist task/audit state through `RuntimeCommandStore`, and can execute bounded model-planned first-party tool calls after schema and policy checks. | Multi-step assistant runtime with real model responses, installed plugin/tool orchestration, streaming progress, approval UI handoff, and robust recovery. | Bounded fake-model tool orchestration implemented; real providers, installed plugins, streaming, and approval UI pending. |
-| Model routing | Local-first `ModelRouter` exists with sensitivity checks, ChatGPT opt-in gate, approval delegation, and redaction logic. The active `/commands` path still uses `FakeLocalModel`; no real provider call is wired. | Real local model provider integration, explicit ChatGPT escalation, minimized cloud context, user approval where required, and route evidence in every relevant task. | Policy/routing scaffolding implemented; provider integration pending. |
-| Plugins and tools | Deterministic in-process first-party plugins (`fake_echo`, `fake_status`) execute through command-pattern dispatch and bounded model-planned runtime calls, with manifest validation, policy checks, timeout, cancellation, approval stops, and audit evidence. Local plugin installation validates manifest metadata and safe source paths, then stores disabled registry records; installed metadata is not executable. | First-party production plugins plus installed local plugins behind manifests, sandboxing, user grants, UI approval, proactive gating, and real model-generated tool-call execution. | Contract, deterministic first-party paths, and metadata-only local install implemented; production plugin runtime pending. |
+| IPC boundary | Axum loopback HTTP JSON API for health, commands, task/audit/memory/approval inspection, plugin manifests, emergency pause, and scheduler jobs. | Versioned, compatibility-tested app/core API with packaged app smoke coverage and clear degraded-mode handling. | Core IPC implemented; production app contract hardening pending. |
+| Command runtime | `ConversationRuntime` creates tasks, runs a configured local `ModelExecutor` (`FakeLocalModel` by default, Ollama-compatible HTTP when enabled), records structured audit entries, handles pause/cancel, enforces max steps, can persist task/audit state through `RuntimeCommandStore`, and can execute bounded model-planned first-party tool calls after schema and policy checks. | Multi-step assistant runtime with production model responses, installed plugin/tool orchestration, streaming progress, approval UI handoff, and robust recovery. | Bounded fake-model tool orchestration, opt-in local HTTP provider, and CLI/IPC approval scaffold implemented; installed plugins, streaming, and Swift approval UI pending. |
+| Model routing | Local-first `ModelRouter` exists with sensitivity checks, provider-status route evidence, ChatGPT opt-in gate, approval delegation, and redaction logic. The active `/commands` path can call the configured local provider but does not execute ChatGPT. | Local provider integration, explicit ChatGPT escalation, minimized cloud context, user approval where required, and route evidence in every relevant task. | Local provider boundary implemented; ChatGPT execution and approval UI pending. |
+| Plugins and tools | Deterministic in-process first-party plugins (`fake_echo`, `fake_status`) execute through command-pattern dispatch and bounded model-planned runtime calls, with manifest validation, policy checks, timeout, cancellation, approval stops, pending approval persistence for approval-gated command scaffolds, and audit evidence. Local plugin installation validates manifest metadata and safe source paths, then stores disabled registry records; installed metadata is not executable. | First-party production plugins plus installed local plugins behind manifests, sandboxing, user grants, UI approval, proactive gating, and real model-generated tool-call execution. | Contract, deterministic first-party paths, and metadata-only local install implemented; production plugin runtime pending. |
 | Scheduler | Inspectable scheduler jobs with manual, one-time, interval trigger contracts and cancellation support. Repository-backed IPC state restores and updates jobs through SQLite. Emergency pause cancels active scheduler jobs. It does not yet run proactive jobs on a clock or create visible task records from triggers. | Durable scheduler and trigger engine for approved proactive routines, persisted job state, visible task records, and policy-gated execution. | Durable job state implemented; proactive execution engine pending. |
-| Storage and memory | SQLite migrations store tasks, append-only audit entries, emergency pause, memory items with provenance/sensitivity/review/soft-delete fields, scheduler jobs, and disabled installed-plugin registry metadata. CLI/IPC can inspect and mutate memory items and inspect/install plugin metadata when repository backing is enabled. | SQLite also owns permissions, executable plugin grants, model-route records, migrations with backup/rollback, and memory UX review flows; vector indexes remain rebuildable. | Core local state and plugin metadata registry implemented; broader production schema pending. |
-| Safety and approvals | Capability scopes, risk tiers, emergency-pause fail-closed behavior, audit-required flags, and approval-required decisions exist in Rust. There is no user approval UI yet. | Human approval prompts, permission center, grants history, policy review, and no bypass for high-risk side effects. | Policy engine implemented; human approval product surface pending. |
+| Storage and memory | SQLite migrations store tasks, append-only audit entries, emergency pause, memory items with provenance/sensitivity/review/soft-delete fields, scheduler jobs, pending approval records, and disabled installed-plugin registry metadata. CLI/IPC can inspect and mutate memory items, approval decisions, and plugin metadata when repository backing is enabled. | SQLite also owns permissions, executable plugin grants, model-route records, migrations with backup/rollback, and memory UX review flows; vector indexes remain rebuildable. | Core local state and plugin metadata registry implemented; broader production schema pending. |
+| Safety and approvals | Capability scopes, risk tiers, emergency-pause fail-closed behavior, audit-required flags, and approval-required decisions exist in Rust. Repository-backed IPC persists inspectable pending approvals and supports CLI grant/deny decisions without executing side effects. There is no Swift user approval UI yet. | Human approval prompts, permission center, grants history, policy review, and no bypass for high-risk side effects. | Policy engine and CLI/IPC approval scaffold implemented; human approval product surface pending. |
 | Voice and diagnostics | Voice is not implemented beyond design docs. Redacted diagnostics export exists over CLI/IPC and omits command bodies, scheduler commands, audit payloads, memory values, and cancellation reason text. | Voice input/output loop, interruption/cancel behavior, microphone degraded modes, and local diagnostics export integrated into the packaged app. | Diagnostics foundation implemented; voice and packaged UX pending. |
 | Release proof | Local Rust and Swift build/test/smoke commands document the current proof boundary. | Signed/packaged app release with clean-profile Mac smoke, app-supervised core, command, audit, pause, restart, migration, and diagnostics checks. | Local foundation proof only. |
 
 ## Data Ownership
 
 - SQLite is the implemented structured-state backend for tasks, audit entries,
-  emergency pause, and memory items.
+  emergency pause, memory items, scheduler jobs, and pending approvals.
 - Audit entries are protected by SQLite triggers that reject update and delete
   operations.
 - Memory items carry provenance, sensitivity, review timestamps, and soft-delete
