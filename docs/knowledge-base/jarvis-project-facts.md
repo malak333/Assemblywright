@@ -11,11 +11,12 @@ These notes capture durable facts for future agents working on this repository.
   `jarvis-cli`, plus a Swift package scaffold under `apps/mac`.
 - Implemented `jarvis-core` surfaces include shared task/audit/safety types,
   an Axum loopback IPC server, runtime-backed command execution with
-  `FakeLocalModel`, emergency-pause state, inspectable scheduler state, a
-  conversation runtime with SQLite task/audit persistence hooks, local-first
-  model routing policy, SQLite repository migrations, memory item persistence,
-  append-only audit table triggers, plugin manifest validation, and
-  deterministic first-party test plugins.
+  `FakeLocalModel` by default or an opt-in Ollama-compatible local HTTP
+  provider, emergency-pause state, inspectable scheduler state, a conversation
+  runtime with SQLite task/audit persistence hooks, local-first model routing
+  policy, SQLite repository migrations, memory item persistence, append-only
+  audit table triggers, plugin manifest validation, and deterministic
+  first-party test plugins.
 - IPC `/commands` now uses repository-backed runtime storage when `IpcState` is
   constructed with `SqliteRepository`, records a local-first model-router audit
   entry, and can execute deterministic first-party plugin commands such as
@@ -23,19 +24,20 @@ These notes capture durable facts for future agents working on this repository.
   execution and records audit evidence.
 - `ConversationRuntime` supports bounded fake-model planned first-party tool
   calls with schema validation, policy checks, approval stops, tool-result audit
-  entries, and feedback of tool results into later model steps. This is not yet
-  real-provider or installed-plugin orchestration.
+  entries, and feedback of tool results into later model steps. The local HTTP
+  provider does not yet make real model-planned tool calls; installed-plugin
+  orchestration remains target architecture.
 - Repository-backed IPC state exposes task, audit, and memory inspection routes,
   persists scheduler jobs, restores them at startup, and all IPC states expose
   `/plugins/manifests` for deterministic first-party plugin manifests. The CLI
   has matching `tasks`, `memory`, `scheduler`, `diagnostics`, and `plugins`
   subcommands.
-- The planned signed packaged app, approval UI, local model provider
-  integration, plugin installation flow, and production real-provider tool
-  orchestration are not yet implemented in this worktree. The first SwiftUI
-  shell scaffold and IPC client live under `apps/mac`, including a command
-  transcript, activity/audit panel, management tabs, degraded-mode handling, and
-  a core supervisor abstraction for configured or bundled local core binaries.
+- The planned signed packaged app, approval UI, ChatGPT execution, plugin
+  installation flow, and production real-provider tool orchestration are not
+  yet implemented in this worktree. The first SwiftUI shell scaffold and IPC
+  client live under `apps/mac`, including a command transcript, activity/audit
+  panel, management tabs, degraded-mode handling, and a core supervisor
+  abstraction for configured or bundled local core binaries.
 - The architecture docs must preserve two diagrams: the current implemented
   Rust/Swift scaffold and the end-goal production architecture. Keep the
   current-vs-target phase table aligned with code before answering readiness
@@ -56,18 +58,18 @@ These notes capture durable facts for future agents working on this repository.
   jarvis-cli -- smoke`, `cargo package --workspace --allow-dirty`, `swift test
   --package-path apps/mac`, and `swift build --package-path apps/mac`.
 - Do not describe Jarvis as a finished desktop assistant until the Swift shell,
-  packaged app, approval UI, real model providers, and Mac release smoke test
-  exist.
+  packaged app, approval UI, ChatGPT execution where claimed, and Mac release
+  smoke test exist.
 - Do not describe Jarvis as production assistant ready based only on the Rust
   and Swift local gates. The stronger claim requires packaged-app evidence,
-  real provider integration, approval UI, voice or text UX parity as scoped,
-  diagnostics/recovery checks, and release smoke proof.
+  ChatGPT execution where claimed, approval UI, voice or text UX parity as
+  scoped, diagnostics/recovery checks, and release smoke proof.
 - It is fair to describe the current repo as a Rust foundation with tested
   scaffolding for IPC, storage, policy, routing, runtime, scheduler, plugin
   contracts, deterministic first-party plugin command execution, bounded
-  fake-model planned first-party tool orchestration, CLI behavior, and a Swift
-  command/management shell with supervisor abstraction when the local gate
-  passes.
+  fake-model planned first-party tool orchestration, opt-in Ollama-compatible
+  local HTTP provider behavior, CLI behavior, and a Swift command/management
+  shell with supervisor abstraction when the local gate passes.
 - Do not claim autonomous external communication, smart-home control, or
   third-party plugin marketplace readiness for v1.
 - Keep public-facing claims scoped to tested local behavior.

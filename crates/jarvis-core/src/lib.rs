@@ -9,13 +9,15 @@ pub mod storage;
 pub mod types;
 
 pub use ipc::{
-    router, serve, serve_listener, CommandRequest, CommandResponse, CreateMemoryItemRequest,
-    CreateSchedulerJobRequest, EmergencyPauseRequest, EmergencyPauseResponse, ErrorResponse,
-    HealthResponse, IpcState, SchedulerJobExecution, SchedulerRunResponse, UpdateMemoryItemRequest,
+    router, serve, serve_listener, ApprovalDecisionRequest, CommandRequest, CommandResponse,
+    CreateMemoryItemRequest, CreateSchedulerJobRequest, EmergencyPauseRequest,
+    EmergencyPauseResponse, ErrorResponse, HealthResponse, IpcState, SchedulerJobExecution,
+    SchedulerRunResponse, UpdateMemoryItemRequest,
 };
 pub use model::{
-    ChatGptProviderConfig, FakeLocalModel, LocalModelConfig, ModelExecutor, ModelProvider,
-    ModelRequest, ModelResponse, ModelRoute, ModelToolRequest, ModelToolResult, ProviderConfig,
+    redact_url_credentials, ChatGptProviderConfig, FakeLocalModel, LocalModelConfig,
+    LocalModelExecutor, LocalModelProviderKind, ModelExecutor, ModelProvider, ModelRequest,
+    ModelResponse, ModelRoute, ModelToolRequest, ModelToolResult, OllamaHttpModel, ProviderConfig,
     ProviderStatus,
 };
 pub use plugin::{
@@ -38,7 +40,10 @@ pub use runtime::{
     RuntimeConfig, RuntimeControl, RuntimeHooks, RuntimeStep,
 };
 pub use scheduler::{Scheduler, SchedulerJob, SchedulerJobSpec, SchedulerJobStatus, TriggerKind};
-pub use storage::{EmergencyPauseState, MemoryItem, NewMemoryItem, SqliteRepository};
+pub use storage::{
+    EmergencyPauseState, MemoryItem, NewMemoryItem, NewPendingApproval, PendingApproval,
+    SqliteRepository,
+};
 pub use types::{
     ApprovalStatus, AuditEntry, JarvisError, JarvisResult, RiskTier, Sensitivity, TaskRecord,
     TaskStatus,

@@ -7,11 +7,11 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
-    AuditEntry, JarvisError, JarvisResult, SchedulerJob, SchedulerJobStatus, Sensitivity,
-    TaskRecord, TaskStatus, TriggerKind,
+    ApprovalStatus, AuditEntry, CapabilityScope, JarvisError, JarvisResult, RiskTier, SchedulerJob,
+    SchedulerJobStatus, Sensitivity, TaskRecord, TaskStatus, TriggerKind,
 };
 
-const CURRENT_SCHEMA_VERSION: i64 = 2;
+const CURRENT_SCHEMA_VERSION: i64 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EmergencyPauseState {
@@ -42,6 +42,32 @@ pub struct NewMemoryItem {
     pub value: String,
     pub provenance: String,
     pub sensitivity: Sensitivity,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PendingApproval {
+    pub id: Uuid,
+    pub task_id: Uuid,
+    pub action: String,
+    pub requested_scopes: Vec<CapabilityScope>,
+    pub risk_tier: RiskTier,
+    pub sensitivity: Sensitivity,
+    pub status: ApprovalStatus,
+    pub reason: String,
+    pub requested_at: DateTime<Utc>,
+    pub decided_at: Option<DateTime<Utc>>,
+    pub decided_by: Option<String>,
+    pub decision_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NewPendingApproval {
+    pub task_id: Uuid,
+    pub action: String,
+    pub requested_scopes: Vec<CapabilityScope>,
+    pub risk_tier: RiskTier,
+    pub sensitivity: Sensitivity,
+    pub reason: String,
 }
 
 pub struct SqliteRepository {
@@ -544,6 +570,144 @@ impl SqliteRepository {
         collect_rows(rows)
     }
 
+    pub fn create_pending_approval(
+        &self,
+        approval: NewPendingApproval,
+    ) -> JarvisResult<PendingApproval> {
+        if self.get_task(approval.task_id)?.is_none() {
+            return Err(JarvisError::Storage(format!(
+                "task not found for approval: {}",
+                approval.task_id
+            )));
+        }
+
+        let pending = PendingApproval {
+            id: Uuid::new_v4(),
+            task_id: approval.task_id,
+            action: approval.action,
+            requested_scopes: approval.requested_scopes,
+            risk_tier: approval.risk_tier,
+            sensitivity: approval.sensitivity,
+            status: ApprovalStatus::Pending,
+            reason: approval.reason,
+            requested_at: Utc::now(),
+            decided_at: None,
+            decided_by: None,
+            decision_reason: None,
+        };
+
+        self.conn
+            .execute(
+                "INSERT INTO pending_approvals
+                 (id, task_id, action, requested_scopes, risk_tier, sensitivity, status, reason, requested_at, decided_at, decided_by, decision_reason)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, NULL, NULL)",
+                params![
+                    pending.id.to_string(),
+                    pending.task_id.to_string(),
+                    &pending.action,
+                    scopes_to_json(&pending.requested_scopes)?,
+                    risk_tier_to_str(pending.risk_tier),
+                    sensitivity_to_str(pending.sensitivity),
+                    approval_status_to_str(pending.status),
+                    &pending.reason,
+                    to_db_time(pending.requested_at),
+                ],
+            )
+            .map_err(storage_error)?;
+
+        Ok(pending)
+    }
+
+    pub fn get_pending_approval(&self, id: Uuid) -> JarvisResult<Option<PendingApproval>> {
+        self.conn
+            .query_row(
+                "SELECT id, task_id, action, requested_scopes, risk_tier, sensitivity, status, reason, requested_at, decided_at, decided_by, decision_reason
+                 FROM pending_approvals
+                 WHERE id = ?1",
+                params![id.to_string()],
+                pending_approval_from_row,
+            )
+            .optional()
+            .map_err(storage_error)
+    }
+
+    pub fn list_pending_approvals(
+        &self,
+        status: Option<ApprovalStatus>,
+    ) -> JarvisResult<Vec<PendingApproval>> {
+        let sql = match status {
+            Some(_) => {
+                "SELECT id, task_id, action, requested_scopes, risk_tier, sensitivity, status, reason, requested_at, decided_at, decided_by, decision_reason
+                 FROM pending_approvals
+                 WHERE status = ?1
+                 ORDER BY requested_at ASC, id ASC"
+            }
+            None => {
+                "SELECT id, task_id, action, requested_scopes, risk_tier, sensitivity, status, reason, requested_at, decided_at, decided_by, decision_reason
+                 FROM pending_approvals
+                 ORDER BY requested_at ASC, id ASC"
+            }
+        };
+        let mut stmt = self.conn.prepare(sql).map_err(storage_error)?;
+        let rows = match status {
+            Some(status) => stmt
+                .query_map(
+                    params![approval_status_to_str(status)],
+                    pending_approval_from_row,
+                )
+                .map_err(storage_error)?,
+            None => stmt
+                .query_map([], pending_approval_from_row)
+                .map_err(storage_error)?,
+        };
+
+        collect_rows(rows)
+    }
+
+    pub fn decide_pending_approval(
+        &self,
+        id: Uuid,
+        status: ApprovalStatus,
+        decided_by: impl Into<String>,
+        decision_reason: Option<String>,
+    ) -> JarvisResult<PendingApproval> {
+        if !matches!(status, ApprovalStatus::Approved | ApprovalStatus::Denied) {
+            return Err(JarvisError::Validation(
+                "approval decision must be approved or denied".to_string(),
+            ));
+        }
+
+        let current = self
+            .get_pending_approval(id)?
+            .ok_or_else(|| JarvisError::Storage(format!("pending approval not found: {id}")))?;
+        if current.status != ApprovalStatus::Pending {
+            return Err(JarvisError::Validation(format!(
+                "approval is already {}: {id}",
+                approval_status_to_str(current.status)
+            )));
+        }
+
+        let decided_at = Utc::now();
+        self.conn
+            .execute(
+                "UPDATE pending_approvals
+                 SET status = ?1, decided_at = ?2, decided_by = ?3, decision_reason = ?4
+                 WHERE id = ?5 AND status = 'pending'",
+                params![
+                    approval_status_to_str(status),
+                    to_db_time(decided_at),
+                    decided_by.into(),
+                    decision_reason,
+                    id.to_string()
+                ],
+            )
+            .map_err(storage_error)?;
+
+        self.get_pending_approval(id)?.ok_or_else(|| {
+            JarvisError::Storage(format!("pending approval not found after decision: {id}"))
+        })
+    }
+
     fn update_scheduler_job_status(
         &self,
         id: Uuid,
@@ -640,6 +804,9 @@ impl SqliteRepository {
         }
         if version < 2 {
             self.apply_migration_2()?;
+        }
+        if version < 3 {
+            self.apply_migration_3()?;
         }
 
         let migrated = self.schema_version()?;
@@ -798,6 +965,61 @@ impl SqliteRepository {
         tx.commit().map_err(storage_error)?;
         Ok(())
     }
+
+    fn apply_migration_3(&self) -> JarvisResult<()> {
+        let now = to_db_time(Utc::now());
+        let tx = self.conn.unchecked_transaction().map_err(storage_error)?;
+
+        tx.execute_batch(
+            "
+                CREATE TABLE pending_approvals (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                    action TEXT NOT NULL,
+                    requested_scopes TEXT NOT NULL,
+                    risk_tier TEXT NOT NULL CHECK (risk_tier IN (
+                        'low',
+                        'notify',
+                        'confirm',
+                        'block'
+                    )),
+                    sensitivity TEXT NOT NULL CHECK (sensitivity IN (
+                        'public',
+                        'workspace',
+                        'personal',
+                        'private',
+                        'credential_adjacent',
+                        'restricted'
+                    )),
+                    status TEXT NOT NULL CHECK (status IN (
+                        'pending',
+                        'approved',
+                        'denied'
+                    )),
+                    reason TEXT NOT NULL,
+                    requested_at TEXT NOT NULL,
+                    decided_at TEXT NULL,
+                    decided_by TEXT NULL,
+                    decision_reason TEXT NULL
+                );
+
+                CREATE INDEX idx_pending_approvals_task
+                    ON pending_approvals (task_id, requested_at);
+                CREATE INDEX idx_pending_approvals_status_requested
+                    ON pending_approvals (status, requested_at);
+                ",
+        )
+        .map_err(storage_error)?;
+
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+            params![3, now],
+        )
+        .map_err(storage_error)?;
+
+        tx.commit().map_err(storage_error)?;
+        Ok(())
+    }
 }
 
 fn task_from_row(row: &Row<'_>) -> rusqlite::Result<TaskRecord> {
@@ -865,6 +1087,26 @@ fn scheduler_job_from_row(row: &Row<'_>) -> rusqlite::Result<SchedulerJob> {
     })
 }
 
+fn pending_approval_from_row(row: &Row<'_>) -> rusqlite::Result<PendingApproval> {
+    Ok(PendingApproval {
+        id: parse_uuid(&row.get::<_, String>(0)?)?,
+        task_id: parse_uuid(&row.get::<_, String>(1)?)?,
+        action: row.get(2)?,
+        requested_scopes: scopes_from_json(&row.get::<_, String>(3)?)?,
+        risk_tier: risk_tier_from_str(&row.get::<_, String>(4)?)?,
+        sensitivity: sensitivity_from_str(&row.get::<_, String>(5)?)?,
+        status: approval_status_from_str(&row.get::<_, String>(6)?)?,
+        reason: row.get(7)?,
+        requested_at: parse_db_time(&row.get::<_, String>(8)?)?,
+        decided_at: row
+            .get::<_, Option<String>>(9)?
+            .map(|time| parse_db_time(&time))
+            .transpose()?,
+        decided_by: row.get(10)?,
+        decision_reason: row.get(11)?,
+    })
+}
+
 fn collect_rows<T>(rows: impl Iterator<Item = rusqlite::Result<T>>) -> JarvisResult<Vec<T>> {
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(storage_error)
@@ -922,12 +1164,53 @@ fn scheduler_status_from_str(value: &str) -> rusqlite::Result<SchedulerJobStatus
     })
 }
 
+fn risk_tier_to_str(risk_tier: RiskTier) -> &'static str {
+    match risk_tier {
+        RiskTier::Low => "low",
+        RiskTier::Notify => "notify",
+        RiskTier::Confirm => "confirm",
+        RiskTier::Block => "block",
+    }
+}
+
+fn risk_tier_from_str(value: &str) -> rusqlite::Result<RiskTier> {
+    serde_json::from_value(json!(value)).map_err(|err| {
+        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(err))
+    })
+}
+
+fn approval_status_to_str(status: ApprovalStatus) -> &'static str {
+    match status {
+        ApprovalStatus::NotRequired => "not_required",
+        ApprovalStatus::Pending => "pending",
+        ApprovalStatus::Approved => "approved",
+        ApprovalStatus::Denied => "denied",
+    }
+}
+
+fn approval_status_from_str(value: &str) -> rusqlite::Result<ApprovalStatus> {
+    serde_json::from_value(json!(value)).map_err(|err| {
+        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(err))
+    })
+}
+
 fn trigger_to_json(trigger: &TriggerKind) -> JarvisResult<String> {
     serde_json::to_string(trigger)
         .map_err(|err| JarvisError::Storage(format!("serialize scheduler trigger: {err}")))
 }
 
 fn trigger_from_json(value: &str) -> rusqlite::Result<TriggerKind> {
+    serde_json::from_str(value).map_err(|err| {
+        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(err))
+    })
+}
+
+fn scopes_to_json(scopes: &[CapabilityScope]) -> JarvisResult<String> {
+    serde_json::to_string(scopes)
+        .map_err(|err| JarvisError::Storage(format!("serialize approval scopes: {err}")))
+}
+
+fn scopes_from_json(value: &str) -> rusqlite::Result<Vec<CapabilityScope>> {
     serde_json::from_str(value).map_err(|err| {
         rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(err))
     })
@@ -1230,5 +1513,60 @@ mod tests {
             TriggerKind::Interval { every_seconds: 60 }
         );
         assert!(rescheduled.updated_at >= job.updated_at);
+    }
+
+    #[test]
+    fn pending_approvals_persist_and_can_be_decided_once() {
+        let repo = SqliteRepository::in_memory().unwrap();
+        let task = repo
+            .create_task(Uuid::new_v4(), "plugin echo private context")
+            .unwrap();
+
+        let pending = repo
+            .create_pending_approval(NewPendingApproval {
+                task_id: task.id,
+                action: "fake_echo.echo".to_string(),
+                requested_scopes: vec![CapabilityScope::PluginRun],
+                risk_tier: RiskTier::Confirm,
+                sensitivity: Sensitivity::Private,
+                reason: "action requires explicit user confirmation".to_string(),
+            })
+            .unwrap();
+
+        assert_eq!(pending.task_id, task.id);
+        assert_eq!(pending.status, ApprovalStatus::Pending);
+        assert_eq!(repo.list_pending_approvals(None).unwrap().len(), 1);
+        assert_eq!(
+            repo.list_pending_approvals(Some(ApprovalStatus::Pending))
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let approved = repo
+            .decide_pending_approval(
+                pending.id,
+                ApprovalStatus::Approved,
+                "cli",
+                Some("approved after review".to_string()),
+            )
+            .unwrap();
+
+        assert_eq!(approved.status, ApprovalStatus::Approved);
+        assert_eq!(approved.decided_by.as_deref(), Some("cli"));
+        assert_eq!(
+            approved.decision_reason.as_deref(),
+            Some("approved after review")
+        );
+        assert!(approved.decided_at.is_some());
+        assert_eq!(
+            repo.list_pending_approvals(Some(ApprovalStatus::Pending))
+                .unwrap()
+                .len(),
+            0
+        );
+        assert!(repo
+            .decide_pending_approval(pending.id, ApprovalStatus::Denied, "cli", None)
+            .is_err());
     }
 }

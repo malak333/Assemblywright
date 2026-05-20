@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    ApprovalDecision, ApprovalGrant, ApprovalStatus, CapabilityScope, PermissionEngine,
-    PolicyRequest, ProviderStatus, RiskTier, Sensitivity,
+    ApprovalDecision, ApprovalGrant, ApprovalStatus, CapabilityScope, LocalModelProviderKind,
+    PermissionEngine, PolicyRequest, ProviderStatus, RiskTier, Sensitivity,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -59,6 +59,9 @@ impl ModelRouteRequest {
 pub struct RouteEvidence {
     pub local_available: bool,
     pub local_sufficient: bool,
+    pub local_provider: LocalModelProviderKind,
+    pub local_model: String,
+    pub local_endpoint_configured: bool,
     pub chatgpt_enabled: bool,
     pub chatgpt_requires_approval: bool,
     pub required_scopes: Vec<CapabilityScope>,
@@ -224,6 +227,9 @@ impl ModelRouter {
         RouteEvidence {
             local_available: request.local_available,
             local_sufficient: request.local_sufficient,
+            local_provider: request.provider_status.local_provider,
+            local_model: request.provider_status.local_model.clone(),
+            local_endpoint_configured: request.provider_status.local_endpoint_configured,
             chatgpt_enabled: request.provider_status.chatgpt_enabled,
             chatgpt_requires_approval: request.provider_status.chatgpt_requires_approval,
             required_scopes: request.required_scopes.clone(),
