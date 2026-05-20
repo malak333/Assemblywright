@@ -4,7 +4,7 @@ Jarvis is a local-first macOS assistant foundation. The current repository
 contains a Rust workspace with the core contracts, loopback IPC server,
 SQLite-backed repository primitives, policy/model-routing rules, in-process
 plugin contracts, scheduler state, CLI client, and a first Swift/SwiftUI Mac
-shell scaffold under `apps/mac`.
+shell scaffold with core supervision under `apps/mac`.
 
 ## Current Implementation Diagram
 
@@ -13,7 +13,9 @@ flowchart TB
     User["User or local test operator"]
     User --> CLI["jarvis-cli"]
     User --> MacShell["JarvisMacApp SwiftUI scaffold"]
-    MacShell --> MacCore["JarvisMacCore IPC client and command console model"]
+    MacShell --> MacCore["JarvisMacCore IPC client, supervisor, and view models"]
+    MacCore --> Supervisor["JarvisCoreSupervisor configured or bundled process"]
+    Supervisor --> CLI
     MacCore -->|"HTTP JSON on configured core URL"| IPC["jarvis-core::ipc Axum loopback server"]
     CLI -->|"HTTP JSON on 127.0.0.1:7787 by default"| IPC
 
@@ -27,6 +29,8 @@ flowchart TB
         Commands --> Runtime["ConversationRuntime"]
         Runtime --> ModelExec["ModelExecutor trait"]
         ModelExec --> FakeLocal["FakeLocalModel only"]
+        Runtime --> ToolPlan["bounded model-planned tool requests"]
+        ToolPlan --> PluginPolicy
         Runtime --> RuntimeControl["RuntimeControl pause/cancel flags"]
         Runtime --> RuntimeStore["RuntimeCommandStore persistence hook"]
         Runtime --> RuntimeAudit["runtime AuditEntry list"]
@@ -69,8 +73,10 @@ deterministic `FakeLocalModel`, returns runtime steps, route metadata, plugin
 results, and audit entries, and can persist task/audit state through
 `SqliteRepository` when the state is constructed with repository backing. It
 also records local-first `ModelRouter` evidence and can execute deterministic
-first-party plugin commands through the policy engine. It does not yet support
-autonomous model-generated tool calls, real model providers, or user approval UI.
+first-party plugin commands through the policy engine. The runtime also supports
+bounded model-planned first-party tool calls with schema validation, policy
+checks, approval stops, and audit evidence. It does not yet support real model
+providers, installed plugin sandboxing, or user approval UI.
 Repository-backed IPC state also exposes task, audit, and memory inspection
 endpoints, plus first-party plugin manifest listing, so the CLI and Swift shell
 can inspect durable local state without reaching into SQLite directly.
@@ -90,7 +96,17 @@ sequenceDiagram
     Client->>IPC: POST /commands
     IPC->>Runtime: execute command with FakeLocalModel
     Runtime->>Store: create task and append runtime audit when configured
-    Runtime-->>IPC: task, local route, steps, runtime audit
+    alt model plans first-party tool call
+        Runtime->>Policy: validate declared scopes, risk, sensitivity
+        alt approval required or blocked
+            Runtime->>Store: append approval/block audit when configured
+        else allowed
+            Runtime->>Plugins: execute schema-validated first-party tool
+            Plugins-->>Runtime: tool result
+            Runtime->>Store: append tool result audit when configured
+        end
+    end
+    Runtime-->>IPC: task, local route, steps, tool results, runtime audit
     IPC->>Router: record local-first route decision
     IPC->>Store: append model_route_selected when configured
     alt first-party plugin command
@@ -151,11 +167,13 @@ sequenceDiagram
   deterministic first-party plugin commands through policy, returns
   route/step/plugin/audit evidence, and obeys emergency-pause state.
 - `jarvis-core::runtime`: Command runtime scaffolding with max-step enforcement,
-  runtime hooks, task cancellation, emergency-pause blocking/cancellation, model
-  step audit entries, a fake local model path, and a persistence hook for
-  SQLite-backed task/audit durability.
-- `jarvis-core::model`: `ModelExecutor` trait, model request/response contracts,
-  route metadata, and deterministic `FakeLocalModel` test implementation.
+  bounded model-planned first-party tool orchestration, runtime hooks, task
+  cancellation, emergency-pause blocking/cancellation, model/tool step audit
+  entries, a fake local model path, and a persistence hook for SQLite-backed
+  task/audit durability.
+- `jarvis-core::model`: `ModelExecutor` trait, model request/response/tool
+  contracts, route metadata, and deterministic `FakeLocalModel` test
+  implementation.
 - `jarvis-core::router`: Local-first model route selection, ChatGPT opt-in gate,
   restricted-data blocking, approval delegation to `PermissionEngine`, and
   simple secret-token redaction before ChatGPT routing.
@@ -178,11 +196,12 @@ sequenceDiagram
   endpoints, exporting redacted diagnostics, listing/scheduling/cancelling
   scheduler jobs over HTTP, and running `jarvis smoke` against ephemeral local
   servers.
-- `apps/mac/JarvisMacCore`: Swift IPC client and command-console model that
-  decode the Rust health/command/pause JSON contracts, including task, route,
-  step, audit, and plugin-result evidence from command responses.
-- `apps/mac/JarvisMacApp`: SwiftUI command-console scaffold with health status,
-  transcript, activity/audit panel, send, pause/resume, and refresh controls.
+- `apps/mac/JarvisMacCore`: Swift IPC client, core supervisor, command-console
+  model, and management models that decode Rust health/contract/command/pause/
+  task/audit/memory/plugin/scheduler/diagnostics JSON contracts.
+- `apps/mac/JarvisMacApp`: SwiftUI shell scaffold with health status,
+  degraded-mode banner, transcript, activity/audit panel, memory, plugin,
+  scheduler, diagnostics tabs, send, pause/resume, and refresh controls.
 
 ## End-Goal Production Architecture
 
@@ -245,11 +264,11 @@ Rust and Swift scaffold surfaces listed above.
 
 | Area | Current implementation | Target production state | Phase |
 | --- | --- | --- | --- |
-| Mac shell | Buildable Swift/SwiftUI scaffold with health, command transcript, pause/resume, and activity/audit rendering over IPC. It does not start or supervise the Rust process. | Packaged `Jarvis.app` supervises the core, owns voice/text UX, settings, memory and permission surfaces, diagnostics export, and recovery states. | Scaffold implemented; packaging and supervision pending. |
+| Mac shell | Buildable Swift/SwiftUI scaffold with health, command transcript, pause/resume, activity/audit rendering, memory/plugin/scheduler/diagnostics tabs, degraded-mode handling, and a `JarvisCoreSupervisor` abstraction for configured or bundled local core binaries. It is not signed or packaged as a release app. | Packaged `Jarvis.app` supervises the core, owns voice/text UX, settings, memory and permission surfaces, diagnostics export, and recovery states. | Shell supervision scaffold implemented; signed packaging and packaged smoke pending. |
 | IPC boundary | Axum loopback HTTP JSON API for health, commands, task/audit/memory inspection, plugin manifests, emergency pause, and scheduler jobs. | Versioned, compatibility-tested app/core API with packaged app smoke coverage and clear degraded-mode handling. | Core IPC implemented; production app contract hardening pending. |
-| Command runtime | `ConversationRuntime` creates tasks, runs `FakeLocalModel`, records structured audit entries, handles pause/cancel, enforces max steps, and can persist task/audit state through `RuntimeCommandStore`. | Multi-step assistant runtime with real model responses, autonomous model-generated tool-call orchestration, streaming progress, approval handoff, and robust recovery. | Runtime foundation implemented; autonomous tool orchestration pending. |
+| Command runtime | `ConversationRuntime` creates tasks, runs `FakeLocalModel`, records structured audit entries, handles pause/cancel, enforces max steps, can persist task/audit state through `RuntimeCommandStore`, and can execute bounded model-planned first-party tool calls after schema and policy checks. | Multi-step assistant runtime with real model responses, installed plugin/tool orchestration, streaming progress, approval UI handoff, and robust recovery. | Bounded fake-model tool orchestration implemented; real providers, installed plugins, streaming, and approval UI pending. |
 | Model routing | Local-first `ModelRouter` exists with sensitivity checks, ChatGPT opt-in gate, approval delegation, and redaction logic. The active `/commands` path still uses `FakeLocalModel`; no real provider call is wired. | Real local model provider integration, explicit ChatGPT escalation, minimized cloud context, user approval where required, and route evidence in every relevant task. | Policy/routing scaffolding implemented; provider integration pending. |
-| Plugins and tools | Deterministic in-process first-party plugins (`fake_echo`, `fake_status`) execute only through command-pattern dispatch, manifest validation, policy checks, timeout, cancellation, and audit evidence. | First-party production plugins plus installed local plugins behind manifests, sandboxing, user grants, UI approval, proactive gating, and model-generated tool-call execution. | Contract and deterministic plugin path implemented; production plugin runtime pending. |
+| Plugins and tools | Deterministic in-process first-party plugins (`fake_echo`, `fake_status`) execute through command-pattern dispatch and bounded model-planned runtime calls, with manifest validation, policy checks, timeout, cancellation, approval stops, and audit evidence. | First-party production plugins plus installed local plugins behind manifests, sandboxing, user grants, UI approval, proactive gating, and real model-generated tool-call execution. | Contract and deterministic first-party paths implemented; production plugin runtime pending. |
 | Scheduler | Inspectable scheduler jobs with manual, one-time, interval trigger contracts and cancellation support. Repository-backed IPC state restores and updates jobs through SQLite. Emergency pause cancels active scheduler jobs. It does not yet run proactive jobs on a clock or create visible task records from triggers. | Durable scheduler and trigger engine for approved proactive routines, persisted job state, visible task records, and policy-gated execution. | Durable job state implemented; proactive execution engine pending. |
 | Storage and memory | SQLite migrations store tasks, append-only audit entries, emergency pause, memory items with provenance/sensitivity/review/soft-delete fields, and scheduler jobs. CLI/IPC can inspect and mutate memory items when repository backing is enabled. | SQLite also owns permissions, plugin registry, model-route records, migrations with backup/rollback, and memory UX review flows; vector indexes remain rebuildable. | Core local state implemented; broader production schema pending. |
 | Safety and approvals | Capability scopes, risk tiers, emergency-pause fail-closed behavior, audit-required flags, and approval-required decisions exist in Rust. There is no user approval UI yet. | Human approval prompts, permission center, grants history, policy review, and no bypass for high-risk side effects. | Policy engine implemented; human approval product surface pending. |
@@ -326,9 +345,10 @@ erDiagram
 
 ## Readiness Boundary
 
-Current evidence supports a Rust foundation claim: the workspace has typed
+Current evidence supports a local foundation claim: the workspace has typed
 contracts and tested scaffolding for IPC, policy, routing, runtime, storage,
-plugins, scheduler, and CLI behavior, plus a first Swift command-console and
-activity/audit shell. It does not support a claim that Jarvis is a finished
+plugins, scheduler, CLI behavior, bounded fake-model first-party tool
+orchestration, and a first Swift command/management shell with core supervision
+abstractions. It does not support a claim that Jarvis is a finished
 voice assistant, packaged Mac app, autonomous external-action agent, plugin
 marketplace, or production cloud-integrated system.

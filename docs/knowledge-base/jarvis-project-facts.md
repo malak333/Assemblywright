@@ -21,26 +21,27 @@ These notes capture durable facts for future agents working on this repository.
   entry, and can execute deterministic first-party plugin commands such as
   `plugin echo ...` and `status` through policy. `dry_run` skips plugin
   execution and records audit evidence.
+- `ConversationRuntime` supports bounded fake-model planned first-party tool
+  calls with schema validation, policy checks, approval stops, tool-result audit
+  entries, and feedback of tool results into later model steps. This is not yet
+  real-provider or installed-plugin orchestration.
 - Repository-backed IPC state exposes task, audit, and memory inspection routes,
   persists scheduler jobs, restores them at startup, and all IPC states expose
   `/plugins/manifests` for deterministic first-party plugin manifests. The CLI
   has matching `tasks`, `memory`, `scheduler`, `diagnostics`, and `plugins`
   subcommands.
-- The planned packaged app, approval UI, local model provider integration,
-  plugin installation flow, and autonomous model-router to plugin execution loop
-  are not yet implemented in this worktree. The first SwiftUI shell scaffold and
-  IPC client live under `apps/mac`, including a command transcript and
-  activity/audit panel that renders command task, route, step, audit, and plugin
-  result evidence.
-- The IPC `/commands` endpoint still does not implement autonomous
-  model-generated tool calls. Current plugin execution is deterministic and
-  command-pattern driven.
+- The planned signed packaged app, approval UI, local model provider
+  integration, plugin installation flow, and production real-provider tool
+  orchestration are not yet implemented in this worktree. The first SwiftUI
+  shell scaffold and IPC client live under `apps/mac`, including a command
+  transcript, activity/audit panel, management tabs, degraded-mode handling, and
+  a core supervisor abstraction for configured or bundled local core binaries.
 - The architecture docs must preserve two diagrams: the current implemented
   Rust/Swift scaffold and the end-goal production architecture. Keep the
   current-vs-target phase table aligned with code before answering readiness
   questions.
-- The Swift shell is currently a client/scaffold, not a packaged app that
-  starts or supervises `jarvis-core`.
+- The Swift shell is currently a scaffold with a core supervisor abstraction,
+  not a signed packaged app with bundled-core smoke evidence.
 - The scheduler is currently inspectable and cancellable. Scheduler jobs are
   in-memory without repository backing and durable when the IPC state is started
   with `SqliteRepository`. Proactive production trigger execution remains target
@@ -48,10 +49,11 @@ These notes capture durable facts for future agents working on this repository.
 
 ## Proof Boundaries
 
-- Local Rust proof currently means `cargo fmt --check`, `cargo clippy
+- Local release proof currently means `./scripts/release-local.sh`, which wraps
+  `cargo fmt --check`, `cargo clippy
   --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `cargo
   test --workspace -- --ignored`, `cargo build --workspace`, `cargo run -p
-  jarvis-cli -- smoke`, `cargo package --workspace`, `swift test
+  jarvis-cli -- smoke`, `cargo package --workspace --allow-dirty`, `swift test
   --package-path apps/mac`, and `swift build --package-path apps/mac`.
 - Do not describe Jarvis as a finished desktop assistant until the Swift shell,
   packaged app, approval UI, real model providers, and Mac release smoke test
@@ -62,8 +64,10 @@ These notes capture durable facts for future agents working on this repository.
   diagnostics/recovery checks, and release smoke proof.
 - It is fair to describe the current repo as a Rust foundation with tested
   scaffolding for IPC, storage, policy, routing, runtime, scheduler, plugin
-  contracts, deterministic first-party plugin command execution, CLI behavior,
-  and a Swift command/activity shell when the local gate passes.
+  contracts, deterministic first-party plugin command execution, bounded
+  fake-model planned first-party tool orchestration, CLI behavior, and a Swift
+  command/management shell with supervisor abstraction when the local gate
+  passes.
 - Do not claim autonomous external communication, smart-home control, or
   third-party plugin marketplace readiness for v1.
 - Keep public-facing claims scoped to tested local behavior.

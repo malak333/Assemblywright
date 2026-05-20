@@ -86,8 +86,9 @@ Current boundary: the command endpoint runs `ConversationRuntime` with
 deterministic first-party plugin commands such as `plugin echo ...` through the
 policy engine, honors `--dry-run` for plugin execution, and can persist
 task/audit state when configured with a repository-backed IPC state. It does
-not yet implement autonomous model-generated tool calls, real model providers,
-or approval UI.
+also has deterministic coverage for bounded model-planned first-party tool
+calls. It does not yet implement real model providers, installed plugin
+sandboxing, or approval UI.
 
 When the server is started with `--db-path`, these inspection commands are also
 available:
@@ -120,9 +121,12 @@ health, runtime-backed command execution, deterministic first-party plugin
 execution, route/policy/plugin audit evidence, scheduler schedule/cancel and
 persistence, redacted diagnostics export, memory create/update/review/delete
 and persistence, plugin manifests, and emergency-pause blocking/resume surfaces.
-They do not prove app packaging, real local model provider integration,
-autonomous model-generated tool calls, memory UX, approval UI, voice loop, or
-packaged Mac release smoke test until those surfaces exist and are covered. The
-current Swift gate proves the Mac shell scaffold builds and its IPC contract
-decoding tests pass; it does not prove the Swift app starts, supervises, or
-packages the Rust core.
+Runtime unit tests additionally prove bounded fake-model first-party tool-call
+orchestration, including policy checks, approval stops, validation failures, and
+tool-result feedback into later model steps. They do not prove signed app
+packaging, real local model provider integration, installed plugin sandboxing,
+memory UX beyond the scaffold, approval UI, voice loop, or packaged Mac release
+smoke test until those surfaces exist and are covered. The current Swift gate
+proves the Mac shell scaffold builds, decodes IPC contracts, exposes management
+models, and can supervise a configured local core process abstraction; it does
+not prove a signed packaged app bundles and launches the Rust core.
