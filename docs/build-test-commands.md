@@ -61,6 +61,7 @@ Run these while `cargo run -p jarvis-cli -- serve` is active:
 
 ```sh
 cargo run -p jarvis-cli -- command --dry-run "status check"
+cargo run -p jarvis-cli -- plugins list
 cargo run -p jarvis-cli -- scheduler list
 cargo run -p jarvis-cli -- scheduler schedule "manual check" "status check"
 cargo run -p jarvis-cli -- pause --reason "manual smoke"
@@ -76,6 +77,16 @@ task/audit state when configured with a repository-backed IPC state. It does
 not yet implement autonomous model-generated tool calls, real model providers,
 or approval UI.
 
+When the server is started with `--db-path`, these inspection commands are also
+available:
+
+```sh
+cargo run -p jarvis-cli -- tasks list
+cargo run -p jarvis-cli -- tasks audit
+cargo run -p jarvis-cli -- memory list
+cargo run -p jarvis-cli -- memory create workflow release-gate "run local gate before PR" --provenance "manual note" --sensitivity workspace
+```
+
 ## Useful Focused Commands
 
 ```sh
@@ -89,8 +100,9 @@ cargo test -p jarvis-cli
 Passing these commands proves the current Rust workspace builds and its tests
 pass. The smoke commands prove the local server and CLI can exchange JSON for
 health, runtime-backed command execution, route/plugin audit evidence,
-scheduler, and emergency-pause surfaces. They do not prove app packaging, real
-local model provider integration, autonomous model-generated tool calls, memory
-UX, approval UI, voice loop, or packaged Mac release smoke test until those
+scheduler, persisted task/memory inspection, plugin manifests, and
+emergency-pause surfaces. They do not prove app packaging, real local model
+provider integration, autonomous model-generated tool calls, memory UX,
+approval UI, voice loop, or packaged Mac release smoke test until those
 surfaces exist and are covered. The current Swift gate proves the Mac shell
 scaffold builds and its IPC contract decoding tests pass.

@@ -21,6 +21,10 @@ These notes capture durable facts for future agents working on this repository.
   entry, and can execute deterministic first-party plugin commands such as
   `plugin echo ...` and `status` through policy. `dry_run` skips plugin
   execution and records audit evidence.
+- Repository-backed IPC state exposes task, audit, and memory inspection routes,
+  and all IPC states expose `/plugins/manifests` for deterministic first-party
+  plugin manifests. The CLI has matching `tasks`, `memory`, and `plugins`
+  subcommands.
 - The planned packaged app, approval UI, local model provider integration,
   plugin installation flow, and autonomous model-router to plugin execution loop
   are not yet implemented in this worktree. The first SwiftUI shell scaffold and
@@ -57,6 +61,9 @@ These notes capture durable facts for future agents working on this repository.
   instead of implying coverage.
 - `jarvis-cli serve --db-path <path>` starts IPC with SQLite-backed task,
   audit, memory, and emergency-pause state for manual persistence checks.
+- `cargo run -p jarvis-cli -- smoke` now covers baseline command/pause smoke,
+  plugin manifest listing, and repository-backed task plus memory inspection
+  paths.
 
 ## Safety Guardrails
 

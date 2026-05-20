@@ -1,7 +1,8 @@
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
@@ -12,14 +13,16 @@ use tokio::net::TcpListener;
 use tower_http::trace::TraceLayer;
 use uuid::Uuid;
 
-use crate::storage::{EmergencyPauseState as StoredEmergencyPauseState, SqliteRepository};
+use crate::storage::{
+    EmergencyPauseState as StoredEmergencyPauseState, NewMemoryItem, SqliteRepository,
+};
 use crate::{
     ApprovalDecision, ApprovalStatus, AuditEntry, CapabilityScope, ConversationRuntime,
     FakeLocalModel, JarvisError, JarvisResult, ModelRoute, ModelRouteRequest, ModelRouter,
     PermissionEngine, PluginCallRequest, PluginCallResult, PluginCallStatus, PluginHost,
-    PluginPermission, PolicyRequest, RuntimeCommandRequest, RuntimeCommandStore, RuntimeConfig,
-    RuntimeControl, RuntimeStep, Scheduler, SchedulerJob, SchedulerJobSpec, Sensitivity,
-    TaskRecord, TaskStatus, TriggerKind,
+    PluginManifest, PluginPermission, PolicyRequest, RuntimeCommandRequest, RuntimeCommandStore,
+    RuntimeConfig, RuntimeControl, RuntimeStep, Scheduler, SchedulerJob, SchedulerJobSpec,
+    Sensitivity, TaskRecord, TaskStatus, TriggerKind,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -83,6 +86,22 @@ pub struct CreateSchedulerJobRequest {
     pub name: String,
     pub command: String,
     pub trigger: TriggerKind,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateMemoryItemRequest {
+    pub category: String,
+    pub key: String,
+    pub value: String,
+    pub provenance: String,
+    pub sensitivity: Sensitivity,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateMemoryItemRequest {
+    pub value: String,
+    pub provenance: String,
+    pub sensitivity: Sensitivity,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -473,6 +492,19 @@ impl IpcState {
             .expect("emergency pause lock poisoned")
             .clone()
     }
+
+    fn using_repository<T>(
+        &self,
+        operation: impl FnOnce(&SqliteRepository) -> JarvisResult<T>,
+    ) -> JarvisResult<T> {
+        let repository = self.repository.as_ref().ok_or_else(|| {
+            JarvisError::Storage(
+                "this endpoint requires IpcState with SqliteRepository backing".to_string(),
+            )
+        })?;
+        let repository = repository.lock().expect("IPC repository lock poisoned");
+        operation(&repository)
+    }
 }
 
 #[derive(Clone)]
@@ -584,6 +616,19 @@ pub fn router(state: IpcState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/commands", post(command))
+        .route("/tasks", get(list_tasks))
+        .route("/tasks/:id", get(get_task))
+        .route("/tasks/:id/audit", get(list_task_audit_entries))
+        .route("/audit", get(list_audit_entries))
+        .route("/memory", get(list_memory_items).post(create_memory_item))
+        .route(
+            "/memory/:id",
+            get(get_memory_item)
+                .patch(update_memory_item)
+                .delete(delete_memory_item),
+        )
+        .route("/memory/:id/review", post(review_memory_item))
+        .route("/plugins/manifests", get(list_plugin_manifests))
         .route(
             "/emergency-pause",
             get(pause_status).post(pause).delete(resume),
@@ -618,6 +663,145 @@ async fn command(
     state
         .submit_command(request)
         .await
+        .map(Json)
+        .map_err(error_response)
+}
+
+async fn list_tasks(
+    State(state): State<IpcState>,
+) -> Result<Json<Vec<TaskRecord>>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .using_repository(SqliteRepository::list_tasks)
+        .map(Json)
+        .map_err(error_response)
+}
+
+async fn get_task(
+    State(state): State<IpcState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<TaskRecord>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .using_repository(|repository| {
+            repository
+                .get_task(id)?
+                .ok_or_else(|| JarvisError::Storage(format!("task not found: {id}")))
+        })
+        .map(Json)
+        .map_err(error_response)
+}
+
+async fn list_task_audit_entries(
+    State(state): State<IpcState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<AuditEntry>>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .using_repository(|repository| {
+            if repository.get_task(id)?.is_none() {
+                return Err(JarvisError::Storage(format!("task not found: {id}")));
+            }
+            repository.list_audit_entries(Some(id))
+        })
+        .map(Json)
+        .map_err(error_response)
+}
+
+async fn list_audit_entries(
+    State(state): State<IpcState>,
+) -> Result<Json<Vec<AuditEntry>>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .using_repository(|repository| repository.list_audit_entries(None))
+        .map(Json)
+        .map_err(error_response)
+}
+
+async fn list_memory_items(
+    State(state): State<IpcState>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Result<Json<Vec<crate::MemoryItem>>, (StatusCode, Json<ErrorResponse>)> {
+    let include_deleted = query
+        .get("include_deleted")
+        .is_some_and(|value| value == "true" || value == "1");
+    state
+        .using_repository(|repository| repository.list_memory_items(include_deleted))
+        .map(Json)
+        .map_err(error_response)
+}
+
+async fn create_memory_item(
+    State(state): State<IpcState>,
+    Json(request): Json<CreateMemoryItemRequest>,
+) -> Result<Json<crate::MemoryItem>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .using_repository(|repository| {
+            repository.create_memory_item(NewMemoryItem {
+                category: request.category,
+                key: request.key,
+                value: request.value,
+                provenance: request.provenance,
+                sensitivity: request.sensitivity,
+            })
+        })
+        .map(Json)
+        .map_err(error_response)
+}
+
+async fn get_memory_item(
+    State(state): State<IpcState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<crate::MemoryItem>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .using_repository(|repository| {
+            repository
+                .get_memory_item(id)?
+                .ok_or_else(|| JarvisError::Storage(format!("memory item not found: {id}")))
+        })
+        .map(Json)
+        .map_err(error_response)
+}
+
+async fn update_memory_item(
+    State(state): State<IpcState>,
+    Path(id): Path<Uuid>,
+    Json(request): Json<UpdateMemoryItemRequest>,
+) -> Result<Json<crate::MemoryItem>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .using_repository(|repository| {
+            repository.update_memory_item(
+                id,
+                request.value,
+                request.provenance,
+                request.sensitivity,
+            )
+        })
+        .map(Json)
+        .map_err(error_response)
+}
+
+async fn review_memory_item(
+    State(state): State<IpcState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<crate::MemoryItem>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .using_repository(|repository| repository.mark_memory_reviewed(id))
+        .map(Json)
+        .map_err(error_response)
+}
+
+async fn delete_memory_item(
+    State(state): State<IpcState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<crate::MemoryItem>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .using_repository(|repository| repository.delete_memory_item(id))
+        .map(Json)
+        .map_err(error_response)
+}
+
+async fn list_plugin_manifests(
+    State(_state): State<IpcState>,
+) -> Result<Json<Vec<PluginManifest>>, (StatusCode, Json<ErrorResponse>)> {
+    PluginHost::with_first_party_plugins()
+        .and_then(|host| host.manifests())
         .map(Json)
         .map_err(error_response)
 }
@@ -844,6 +1028,106 @@ mod tests {
         assert!(event_types.contains(&"model_route_selected"));
         assert!(event_types.contains(&"plugin_policy_evaluated"));
         assert!(event_types.contains(&"plugin_completed"));
+    }
+
+    #[tokio::test]
+    async fn repository_backed_state_endpoints_expose_tasks_and_audit() {
+        let repository = SqliteRepository::in_memory().unwrap();
+        let state = IpcState::with_repository(repository).expect("state");
+        let response = state
+            .submit_command(CommandRequest {
+                input: "plugin echo inspect state".to_string(),
+                session_id: None,
+                context: json!({"surface": "test"}),
+                dry_run: false,
+                sensitivity: Some(Sensitivity::Workspace),
+            })
+            .await
+            .expect("command");
+
+        let Json(tasks) = list_tasks(State(state.clone())).await.expect("tasks");
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].id, response.task.id);
+
+        let Json(task) = get_task(State(state.clone()), Path(response.task.id))
+            .await
+            .expect("task");
+        assert_eq!(task.status, TaskStatus::Completed);
+
+        let Json(entries) = list_task_audit_entries(State(state.clone()), Path(response.task.id))
+            .await
+            .expect("task audit");
+        assert!(entries
+            .iter()
+            .any(|entry| entry.event_type == "plugin_completed"));
+
+        let Json(all_entries) = list_audit_entries(State(state)).await.expect("audit");
+        assert_eq!(all_entries.len(), entries.len());
+    }
+
+    #[tokio::test]
+    async fn repository_backed_memory_endpoints_cover_create_update_review_delete() {
+        let repository = SqliteRepository::in_memory().unwrap();
+        let state = IpcState::with_repository(repository).expect("state");
+
+        let Json(created) = create_memory_item(
+            State(state.clone()),
+            Json(CreateMemoryItemRequest {
+                category: "workflow".to_string(),
+                key: "release-gate".to_string(),
+                value: "run local gate before PR".to_string(),
+                provenance: "test".to_string(),
+                sensitivity: Sensitivity::Workspace,
+            }),
+        )
+        .await
+        .expect("create memory");
+        assert_eq!(created.key, "release-gate");
+
+        let Json(listed) = list_memory_items(State(state.clone()), Query(HashMap::new()))
+            .await
+            .expect("list memory");
+        assert_eq!(listed.len(), 1);
+
+        let Json(updated) = update_memory_item(
+            State(state.clone()),
+            Path(created.id),
+            Json(UpdateMemoryItemRequest {
+                value: "run full local gate before PR".to_string(),
+                provenance: "test update".to_string(),
+                sensitivity: Sensitivity::Workspace,
+            }),
+        )
+        .await
+        .expect("update memory");
+        assert_eq!(updated.value, "run full local gate before PR");
+
+        let Json(reviewed) = review_memory_item(State(state.clone()), Path(created.id))
+            .await
+            .expect("review memory");
+        assert!(reviewed.reviewed_at.is_some());
+
+        let Json(deleted) = delete_memory_item(State(state.clone()), Path(created.id))
+            .await
+            .expect("delete memory");
+        assert!(deleted.deleted_at.is_some());
+
+        let Json(active) = list_memory_items(State(state), Query(HashMap::new()))
+            .await
+            .expect("list active memory");
+        assert!(active.is_empty());
+    }
+
+    #[tokio::test]
+    async fn plugin_manifest_endpoint_lists_first_party_plugins() {
+        let Json(manifests) = list_plugin_manifests(State(IpcState::new()))
+            .await
+            .expect("plugin manifests");
+
+        assert!(manifests.iter().any(|manifest| manifest.id == "fake_echo"));
+        assert!(manifests
+            .iter()
+            .any(|manifest| manifest.id == "fake_status"));
     }
 
     #[tokio::test]

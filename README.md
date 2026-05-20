@@ -36,6 +36,10 @@ cargo run -p jarvis-cli -- health
 Use `cargo run -p jarvis-cli -- serve --db-path /tmp/jarvis.sqlite` when you
 want manual IPC commands to persist task and audit state locally.
 
+With a repository-backed server running, `jarvis tasks`, `jarvis memory`, and
+`jarvis plugins` expose the current durable state and first-party plugin
+manifests over IPC.
+
 ## Docs
 
 - [Architecture map](docs/architecture-map.md)

@@ -4,7 +4,10 @@ use std::net::ToSocketAddrs;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use jarvis_core::{CommandRequest, CreateSchedulerJobRequest, EmergencyPauseRequest, TriggerKind};
+use jarvis_core::{
+    CommandRequest, CreateMemoryItemRequest, CreateSchedulerJobRequest, EmergencyPauseRequest,
+    Sensitivity, TriggerKind, UpdateMemoryItemRequest,
+};
 use tokio::net::TcpListener;
 
 #[derive(Debug, Parser)]
@@ -61,6 +64,21 @@ enum CliCommand {
         #[command(subcommand)]
         command: SchedulerCommand,
     },
+    /// Inspect persisted tasks and audit entries.
+    Tasks {
+        #[command(subcommand)]
+        command: TasksCommand,
+    },
+    /// Inspect or update persisted memory items.
+    Memory {
+        #[command(subcommand)]
+        command: MemoryCommand,
+    },
+    /// Inspect registered first-party plugin manifests.
+    Plugins {
+        #[command(subcommand)]
+        command: PluginsCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -80,6 +98,83 @@ enum SchedulerCommand {
     /// Cancel a scheduler job by id.
     Cancel {
         id: String,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum TasksCommand {
+    /// List persisted tasks.
+    List {
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    /// Fetch one persisted task by id.
+    Get {
+        id: String,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    /// List audit entries, optionally scoped to one task id.
+    Audit {
+        #[arg(long)]
+        task_id: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum MemoryCommand {
+    /// List persisted memory items.
+    List {
+        #[arg(long)]
+        include_deleted: bool,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    /// Create a persisted memory item.
+    Create {
+        category: String,
+        key: String,
+        value: String,
+        #[arg(long)]
+        provenance: String,
+        #[arg(long, default_value = "personal")]
+        sensitivity: String,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    /// Update a persisted memory item.
+    Update {
+        id: String,
+        value: String,
+        #[arg(long)]
+        provenance: String,
+        #[arg(long, default_value = "personal")]
+        sensitivity: String,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    /// Mark a memory item reviewed.
+    Review {
+        id: String,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    /// Soft-delete a memory item.
+    Delete {
+        id: String,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum PluginsCommand {
+    /// List registered plugin manifests.
+    List {
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
@@ -169,6 +264,87 @@ async fn main() -> anyhow::Result<()> {
                 );
             }
         },
+        CliCommand::Tasks { command } => match command {
+            TasksCommand::List { endpoint } => {
+                println!("{}", request(&endpoint, "GET", "/tasks", None)?);
+            }
+            TasksCommand::Get { id, endpoint } => {
+                println!(
+                    "{}",
+                    request(&endpoint, "GET", &format!("/tasks/{id}"), None)?
+                );
+            }
+            TasksCommand::Audit { task_id, endpoint } => {
+                let path = task_id
+                    .map(|id| format!("/tasks/{id}/audit"))
+                    .unwrap_or_else(|| "/audit".to_string());
+                println!("{}", request(&endpoint, "GET", &path, None)?);
+            }
+        },
+        CliCommand::Memory { command } => match command {
+            MemoryCommand::List {
+                include_deleted,
+                endpoint,
+            } => {
+                let path = if include_deleted {
+                    "/memory?include_deleted=true"
+                } else {
+                    "/memory"
+                };
+                println!("{}", request(&endpoint, "GET", path, None)?);
+            }
+            MemoryCommand::Create {
+                category,
+                key,
+                value,
+                provenance,
+                sensitivity,
+                endpoint,
+            } => {
+                let body = serde_json::to_string(&CreateMemoryItemRequest {
+                    category,
+                    key,
+                    value,
+                    provenance,
+                    sensitivity: parse_sensitivity(&sensitivity)?,
+                })?;
+                println!("{}", request(&endpoint, "POST", "/memory", Some(&body))?);
+            }
+            MemoryCommand::Update {
+                id,
+                value,
+                provenance,
+                sensitivity,
+                endpoint,
+            } => {
+                let body = serde_json::to_string(&UpdateMemoryItemRequest {
+                    value,
+                    provenance,
+                    sensitivity: parse_sensitivity(&sensitivity)?,
+                })?;
+                println!(
+                    "{}",
+                    request(&endpoint, "PATCH", &format!("/memory/{id}"), Some(&body))?
+                );
+            }
+            MemoryCommand::Review { id, endpoint } => {
+                println!(
+                    "{}",
+                    request(&endpoint, "POST", &format!("/memory/{id}/review"), None)?
+                );
+            }
+            MemoryCommand::Delete { id, endpoint } => {
+                println!(
+                    "{}",
+                    request(&endpoint, "DELETE", &format!("/memory/{id}"), None)?
+                );
+            }
+        },
+        CliCommand::Plugins { command } => match command {
+            PluginsCommand::List { endpoint } => {
+                println!("{}", request(&endpoint, "GET", "/plugins/manifests", None)?);
+            }
+        },
     }
 
     Ok(())
@@ -205,6 +381,20 @@ fn request(endpoint: &str, method: &str, path: &str, body: Option<&str>) -> anyh
     Ok(response_body.to_string())
 }
 
+fn parse_sensitivity(value: &str) -> anyhow::Result<Sensitivity> {
+    match value {
+        "public" => Ok(Sensitivity::Public),
+        "workspace" => Ok(Sensitivity::Workspace),
+        "personal" => Ok(Sensitivity::Personal),
+        "private" => Ok(Sensitivity::Private),
+        "credential_adjacent" => Ok(Sensitivity::CredentialAdjacent),
+        "restricted" => Ok(Sensitivity::Restricted),
+        _ => Err(anyhow::anyhow!(
+            "sensitivity must be one of public, workspace, personal, private, credential_adjacent, restricted"
+        )),
+    }
+}
+
 async fn run_smoke() -> anyhow::Result<()> {
     let state = jarvis_core::IpcState::new();
     let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -234,6 +424,10 @@ async fn run_smoke() -> anyhow::Result<()> {
     require_nested_field(&command_json, &["route", "model"], "fake-local-model")?;
     require_array_field(&command_json, "audit_entries")?;
 
+    let manifests = request(&endpoint, "GET", "/plugins/manifests", None)?;
+    let manifests_json: serde_json::Value = serde_json::from_str(&manifests)?;
+    require_array_contains_object_field(&manifests_json, "id", "fake_echo")?;
+
     let pause_body = serde_json::to_string(&EmergencyPauseRequest {
         reason: "cli smoke".to_string(),
     })?;
@@ -251,6 +445,51 @@ async fn run_smoke() -> anyhow::Result<()> {
     require_bool_field(&resume_json, "paused", false)?;
 
     server.abort();
+
+    let db_path = std::env::temp_dir().join(format!(
+        "jarvis-smoke-{}.sqlite",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos()
+    ));
+    let state =
+        jarvis_core::IpcState::with_repository(jarvis_core::SqliteRepository::open(&db_path)?)?;
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let persistent_endpoint = format!("http://{}", listener.local_addr()?);
+    let persistent_server = tokio::spawn(jarvis_core::serve_listener(listener, state));
+
+    request_with_retry(&persistent_endpoint, "GET", "/health", None)?;
+    let persisted_command = request(
+        &persistent_endpoint,
+        "POST",
+        "/commands",
+        Some(&command_body),
+    )?;
+    let persisted_command_json: serde_json::Value = serde_json::from_str(&persisted_command)?;
+    require_nested_field(&persisted_command_json, &["task", "status"], "completed")?;
+
+    let tasks = request(&persistent_endpoint, "GET", "/tasks", None)?;
+    let tasks_json: serde_json::Value = serde_json::from_str(&tasks)?;
+    require_array_field(&tasks_json, "root")?;
+
+    let memory_body = serde_json::to_string(&CreateMemoryItemRequest {
+        category: "smoke".to_string(),
+        key: "release-gate".to_string(),
+        value: "local smoke covers persisted state".to_string(),
+        provenance: "jarvis-cli smoke".to_string(),
+        sensitivity: Sensitivity::Workspace,
+    })?;
+    let memory = request(&persistent_endpoint, "POST", "/memory", Some(&memory_body))?;
+    let memory_json: serde_json::Value = serde_json::from_str(&memory)?;
+    require_json_field(&memory_json, "key", "release-gate")?;
+
+    let memory_list = request(&persistent_endpoint, "GET", "/memory", None)?;
+    let memory_list_json: serde_json::Value = serde_json::from_str(&memory_list)?;
+    require_array_contains_object_field(&memory_list_json, "key", "release-gate")?;
+
+    persistent_server.abort();
+    let _ = std::fs::remove_file(db_path);
+
     println!("jarvis smoke: ok");
     Ok(())
 }
@@ -354,9 +593,32 @@ fn require_bool_field(
 }
 
 fn require_array_field(value: &serde_json::Value, field: &str) -> anyhow::Result<()> {
-    value
-        .get(field)
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| anyhow::anyhow!("missing array field `{field}`"))?;
+    if field == "root" {
+        value
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("response root is not an array"))?;
+    } else {
+        value
+            .get(field)
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| anyhow::anyhow!("missing array field `{field}`"))?;
+    }
+    Ok(())
+}
+
+fn require_array_contains_object_field(
+    value: &serde_json::Value,
+    field: &str,
+    expected: &str,
+) -> anyhow::Result<()> {
+    let array = value
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("response root is not an array"))?;
+    anyhow::ensure!(
+        array
+            .iter()
+            .any(|item| item.get(field).and_then(serde_json::Value::as_str) == Some(expected)),
+        "expected array to contain object with `{field}` = `{expected}`"
+    );
     Ok(())
 }

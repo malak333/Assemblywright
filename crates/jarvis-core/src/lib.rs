@@ -9,8 +9,9 @@ pub mod storage;
 pub mod types;
 
 pub use ipc::{
-    router, serve, serve_listener, CommandRequest, CommandResponse, CreateSchedulerJobRequest,
-    EmergencyPauseRequest, EmergencyPauseResponse, ErrorResponse, HealthResponse, IpcState,
+    router, serve, serve_listener, CommandRequest, CommandResponse, CreateMemoryItemRequest,
+    CreateSchedulerJobRequest, EmergencyPauseRequest, EmergencyPauseResponse, ErrorResponse,
+    HealthResponse, IpcState, UpdateMemoryItemRequest,
 };
 pub use model::{
     FakeLocalModel, ModelExecutor, ModelProvider, ModelRequest, ModelResponse, ModelRoute,
