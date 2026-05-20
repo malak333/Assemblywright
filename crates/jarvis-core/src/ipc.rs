@@ -21,8 +21,8 @@ use crate::{
     ConversationRuntime, FakeLocalModel, JarvisError, JarvisResult, ModelRoute, ModelRouteRecord,
     PermissionEngine, PluginCallRequest, PluginCallResult, PluginCallStatus, PluginHost,
     PluginManifest, PolicyRequest, RuntimeCommandRequest, RuntimeCommandStore, RuntimeConfig,
-    RuntimeControl, RuntimeStep, Scheduler, SchedulerJob, SchedulerJobSpec, Sensitivity,
-    TaskRecord, TaskStatus, TriggerKind,
+    RuntimeControl, RuntimeStep, Scheduler, SchedulerJob, SchedulerJobSpec, SchedulerJobStatus,
+    Sensitivity, TaskRecord, TaskStatus, TriggerKind,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,6 +35,46 @@ pub struct HealthResponse {
     pub emergency_pause_updated_at: Option<DateTime<Utc>>,
     pub scheduler_jobs: usize,
     pub command_runtime: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiagnosticsExport {
+    pub generated_at: DateTime<Utc>,
+    pub redaction: String,
+    pub health: HealthResponse,
+    pub scheduler_jobs: Vec<DiagnosticSchedulerJob>,
+    pub repository_backed: bool,
+    pub schema_version: Option<i64>,
+    pub task_count: Option<usize>,
+    pub audit_entry_count: Option<usize>,
+    pub active_memory_item_count: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiagnosticSchedulerJob {
+    pub id: Uuid,
+    pub name: String,
+    pub trigger: TriggerKind,
+    pub status: SchedulerJobStatus,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub cancelled_at: Option<DateTime<Utc>>,
+    pub cancellation_reason_present: bool,
+}
+
+impl From<SchedulerJob> for DiagnosticSchedulerJob {
+    fn from(job: SchedulerJob) -> Self {
+        Self {
+            id: job.id,
+            name: job.name,
+            trigger: job.trigger,
+            status: job.status,
+            created_at: job.created_at,
+            updated_at: job.updated_at,
+            cancelled_at: job.cancelled_at,
+            cancellation_reason_present: job.cancellation_reason.is_some(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -158,13 +198,15 @@ impl IpcState {
 
     pub fn with_repository(repository: SqliteRepository) -> JarvisResult<Self> {
         let stored_pause = repository.emergency_pause_state()?;
+        let stored_scheduler_jobs = repository.list_scheduler_jobs()?;
+        let scheduler = Scheduler::with_jobs(stored_scheduler_jobs);
         if stored_pause.paused {
             let control = RuntimeControl::default();
             control.emergency_pause();
             Ok(Self {
                 version: env!("CARGO_PKG_VERSION").to_string(),
                 started_at: Utc::now(),
-                scheduler: Scheduler::new(),
+                scheduler,
                 runtime_control: control,
                 emergency_pause: Arc::new(Mutex::new(EmergencyPauseState::from_stored(
                     stored_pause,
@@ -175,7 +217,7 @@ impl IpcState {
             Ok(Self {
                 version: env!("CARGO_PKG_VERSION").to_string(),
                 started_at: Utc::now(),
-                scheduler: Scheduler::new(),
+                scheduler,
                 runtime_control: RuntimeControl::default(),
                 emergency_pause: Arc::new(Mutex::new(EmergencyPauseState::from_stored(
                     stored_pause,
@@ -201,6 +243,40 @@ impl IpcState {
             scheduler_jobs: self.scheduler.list().len(),
             command_runtime: "routed-fake-local-model+first-party-plugins".to_string(),
         }
+    }
+
+    pub fn diagnostics_export(&self) -> JarvisResult<DiagnosticsExport> {
+        let (schema_version, task_count, audit_entry_count, active_memory_item_count) =
+            match &self.repository {
+                Some(_) => self.using_repository(|repository| {
+                    Ok((
+                        Some(repository.schema_version()?),
+                        Some(repository.list_tasks()?.len()),
+                        Some(repository.list_audit_entries(None)?.len()),
+                        Some(repository.list_memory_items(false)?.len()),
+                    ))
+                })?,
+                None => (None, None, None, None),
+            };
+
+        Ok(DiagnosticsExport {
+            generated_at: Utc::now(),
+            redaction:
+                "diagnostics export omits command bodies, scheduler commands, audit payloads, memory values, and cancellation reason text"
+                    .to_string(),
+            health: self.health(),
+            scheduler_jobs: self
+                .scheduler
+                .list()
+                .into_iter()
+                .map(DiagnosticSchedulerJob::from)
+                .collect(),
+            repository_backed: self.repository.is_some(),
+            schema_version,
+            task_count,
+            audit_entry_count,
+            active_memory_item_count,
+        })
     }
 
     pub async fn submit_command(&self, request: CommandRequest) -> JarvisResult<CommandResponse> {
@@ -387,6 +463,7 @@ impl IpcState {
         let cancelled = self
             .scheduler
             .cancel_active(format!("emergency pause: {reason}"));
+        self.persist_scheduler_snapshot()?;
         self.runtime_control.emergency_pause();
         let paused_at = stored_pause
             .as_ref()
@@ -460,6 +537,38 @@ impl IpcState {
                     .set_emergency_pause(paused, reason, Some("ipc"))
             })
             .transpose()
+    }
+
+    pub fn schedule_scheduler_job(&self, spec: SchedulerJobSpec) -> JarvisResult<SchedulerJob> {
+        let job = self.scheduler.schedule(spec)?;
+        self.persist_scheduler_job(&job)?;
+        Ok(job)
+    }
+
+    pub fn cancel_scheduler_job(&self, id: Uuid, reason: &str) -> JarvisResult<SchedulerJob> {
+        let job = self.scheduler.cancel(id, reason)?;
+        self.persist_scheduler_job(&job)?;
+        Ok(job)
+    }
+
+    fn persist_scheduler_job(&self, job: &SchedulerJob) -> JarvisResult<()> {
+        self.repository
+            .as_ref()
+            .map(|repository| {
+                repository
+                    .lock()
+                    .expect("IPC repository lock poisoned")
+                    .upsert_scheduler_job(job)
+            })
+            .transpose()
+            .map(|_| ())
+    }
+
+    fn persist_scheduler_snapshot(&self) -> JarvisResult<()> {
+        for job in self.scheduler.list() {
+            self.persist_scheduler_job(&job)?;
+        }
+        Ok(())
     }
 
     fn pause_snapshot(&self) -> EmergencyPauseState {
@@ -563,6 +672,7 @@ fn first_party_plugin_request(input: &str) -> Option<PluginCallRequest> {
 pub fn router(state: IpcState) -> Router {
     Router::new()
         .route("/health", get(health))
+        .route("/diagnostics/export", get(diagnostics_export))
         .route("/commands", post(command))
         .route("/tasks", get(list_tasks))
         .route("/tasks/:id", get(get_task))
@@ -602,6 +712,12 @@ pub async fn serve_listener(listener: TcpListener, state: IpcState) -> anyhow::R
 
 async fn health(State(state): State<IpcState>) -> Json<HealthResponse> {
     Json(state.health())
+}
+
+async fn diagnostics_export(
+    State(state): State<IpcState>,
+) -> Result<Json<DiagnosticsExport>, (StatusCode, Json<ErrorResponse>)> {
+    state.diagnostics_export().map(Json).map_err(error_response)
 }
 
 async fn command(
@@ -783,8 +899,7 @@ async fn create_scheduler_job(
     Json(request): Json<CreateSchedulerJobRequest>,
 ) -> Result<Json<SchedulerJob>, (StatusCode, Json<ErrorResponse>)> {
     state
-        .scheduler()
-        .schedule(SchedulerJobSpec {
+        .schedule_scheduler_job(SchedulerJobSpec {
             name: request.name,
             command: request.command,
             trigger: request.trigger,
@@ -798,8 +913,7 @@ async fn cancel_scheduler_job(
     Path(id): Path<Uuid>,
 ) -> Result<Json<SchedulerJob>, (StatusCode, Json<ErrorResponse>)> {
     state
-        .scheduler()
-        .cancel(id, "cancelled through IPC")
+        .cancel_scheduler_job(id, "cancelled through IPC")
         .map(Json)
         .map_err(error_response)
 }
@@ -1067,6 +1181,81 @@ mod tests {
             .await
             .expect("list active memory");
         assert!(active.is_empty());
+    }
+
+    #[tokio::test]
+    async fn repository_backed_scheduler_jobs_survive_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("jarvis.sqlite");
+        let repository = SqliteRepository::open(&db_path).unwrap();
+        let state = IpcState::with_repository(repository).expect("state");
+
+        let Json(created) = create_scheduler_job(
+            State(state.clone()),
+            Json(CreateSchedulerJobRequest {
+                name: "durable check".to_string(),
+                command: "status check".to_string(),
+                trigger: TriggerKind::Manual,
+            }),
+        )
+        .await
+        .expect("create scheduler job");
+        assert_eq!(state.health().scheduler_jobs, 1);
+        drop(state);
+
+        let repository = SqliteRepository::open(&db_path).unwrap();
+        let restarted = IpcState::with_repository(repository).expect("restarted state");
+        let Json(jobs) = list_scheduler_jobs(State(restarted.clone())).await;
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].id, created.id);
+        assert_eq!(jobs[0].status, crate::SchedulerJobStatus::Scheduled);
+
+        let Json(cancelled) = cancel_scheduler_job(State(restarted), Path(created.id))
+            .await
+            .expect("cancel scheduler job");
+        assert_eq!(cancelled.status, crate::SchedulerJobStatus::Cancelled);
+
+        let repository = SqliteRepository::open(db_path).unwrap();
+        let stored = repository.list_scheduler_jobs().expect("stored jobs");
+        assert_eq!(stored[0].status, crate::SchedulerJobStatus::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn diagnostics_export_is_redacted_and_counts_repository_state() {
+        let repository = SqliteRepository::in_memory().unwrap();
+        let state = IpcState::with_repository(repository).expect("state");
+        state
+            .schedule_scheduler_job(SchedulerJobSpec {
+                name: "diagnostic schedule".to_string(),
+                command: "do not redact scheduler command".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .expect("schedule");
+        state
+            .submit_command(CommandRequest {
+                input: "private command body should stay out of diagnostics".to_string(),
+                session_id: None,
+                context: json!({"surface": "test"}),
+                dry_run: true,
+                sensitivity: Some(Sensitivity::Private),
+            })
+            .await
+            .expect("command");
+
+        let Json(export) = diagnostics_export(State(state))
+            .await
+            .expect("diagnostics export");
+        assert_eq!(export.health.status, "ok");
+        assert!(export.repository_backed);
+        assert_eq!(export.schema_version, Some(2));
+        assert_eq!(export.task_count, Some(1));
+        assert!(export.audit_entry_count.unwrap_or_default() >= 2);
+        assert_eq!(export.scheduler_jobs.len(), 1);
+        assert!(export.redaction.contains("omits command bodies"));
+
+        let encoded = serde_json::to_string(&export).unwrap();
+        assert!(!encoded.contains("private command body"));
+        assert!(!encoded.contains("do not redact scheduler command"));
     }
 
     #[tokio::test]

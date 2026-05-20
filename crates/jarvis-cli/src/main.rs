@@ -64,6 +64,11 @@ enum CliCommand {
         #[command(subcommand)]
         command: SchedulerCommand,
     },
+    /// Export redacted local diagnostics.
+    Diagnostics {
+        #[command(subcommand)]
+        command: DiagnosticsCommand,
+    },
     /// Inspect persisted tasks and audit entries.
     Tasks {
         #[command(subcommand)]
@@ -98,6 +103,15 @@ enum SchedulerCommand {
     /// Cancel a scheduler job by id.
     Cancel {
         id: String,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum DiagnosticsCommand {
+    /// Export redacted health, scheduler, and persistence counters.
+    Export {
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
@@ -261,6 +275,14 @@ async fn main() -> anyhow::Result<()> {
                 println!(
                     "{}",
                     request(&endpoint, "DELETE", &format!("/scheduler/jobs/{id}"), None)?
+                );
+            }
+        },
+        CliCommand::Diagnostics { command } => match command {
+            DiagnosticsCommand::Export { endpoint } => {
+                println!(
+                    "{}",
+                    request(&endpoint, "GET", "/diagnostics/export", None)?
                 );
             }
         },
@@ -428,6 +450,15 @@ async fn run_smoke() -> anyhow::Result<()> {
     let manifests_json: serde_json::Value = serde_json::from_str(&manifests)?;
     require_array_contains_object_field(&manifests_json, "id", "fake_echo")?;
 
+    let diagnostics = request(&endpoint, "GET", "/diagnostics/export", None)?;
+    let diagnostics_json: serde_json::Value = serde_json::from_str(&diagnostics)?;
+    require_json_field(
+        &diagnostics_json,
+        "redaction",
+        "diagnostics export omits command bodies, scheduler commands, audit payloads, memory values, and cancellation reason text",
+    )?;
+    require_nested_field(&diagnostics_json, &["health", "status"], "ok")?;
+
     let pause_body = serde_json::to_string(&EmergencyPauseRequest {
         reason: "cli smoke".to_string(),
     })?;
@@ -486,6 +517,12 @@ async fn run_smoke() -> anyhow::Result<()> {
     let memory_list = request(&persistent_endpoint, "GET", "/memory", None)?;
     let memory_list_json: serde_json::Value = serde_json::from_str(&memory_list)?;
     require_array_contains_object_field(&memory_list_json, "key", "release-gate")?;
+
+    let persistent_diagnostics = request(&persistent_endpoint, "GET", "/diagnostics/export", None)?;
+    let persistent_diagnostics_json: serde_json::Value =
+        serde_json::from_str(&persistent_diagnostics)?;
+    require_bool_field(&persistent_diagnostics_json, "repository_backed", true)?;
+    require_number_at_least(&persistent_diagnostics_json, "task_count", 1)?;
 
     persistent_server.abort();
     let _ = std::fs::remove_file(db_path);
@@ -619,6 +656,22 @@ fn require_array_contains_object_field(
             .iter()
             .any(|item| item.get(field).and_then(serde_json::Value::as_str) == Some(expected)),
         "expected array to contain object with `{field}` = `{expected}`"
+    );
+    Ok(())
+}
+
+fn require_number_at_least(
+    value: &serde_json::Value,
+    field: &str,
+    minimum: u64,
+) -> anyhow::Result<()> {
+    let actual = value
+        .get(field)
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| anyhow::anyhow!("missing numeric field `{field}`"))?;
+    anyhow::ensure!(
+        actual >= minimum,
+        "expected `{field}` to be at least `{minimum}`, got `{actual}`"
     );
     Ok(())
 }

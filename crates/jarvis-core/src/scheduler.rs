@@ -85,6 +85,14 @@ impl Scheduler {
         Self::default()
     }
 
+    pub fn with_jobs(jobs: Vec<SchedulerJob>) -> Self {
+        Self {
+            jobs: Arc::new(Mutex::new(
+                jobs.into_iter().map(|job| (job.id, job)).collect(),
+            )),
+        }
+    }
+
     pub fn schedule(&self, spec: SchedulerJobSpec) -> JarvisResult<SchedulerJob> {
         let job = SchedulerJob::new(spec)?;
         self.jobs
