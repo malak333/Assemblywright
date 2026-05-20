@@ -71,23 +71,12 @@ pub struct CreateSchedulerJobRequest {
     pub trigger: TriggerKind,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct EmergencyPauseState {
     paused: bool,
     reason: Option<String>,
     paused_at: Option<DateTime<Utc>>,
     resumed_at: Option<DateTime<Utc>>,
-}
-
-impl Default for EmergencyPauseState {
-    fn default() -> Self {
-        Self {
-            paused: false,
-            reason: None,
-            paused_at: None,
-            resumed_at: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]

@@ -10,11 +10,11 @@ use jarvis_core::{CommandRequest, CreateSchedulerJobRequest, EmergencyPauseReque
 #[command(about = "Local-first Jarvis core CLI")]
 struct Cli {
     #[command(subcommand)]
-    command: Command,
+    command: CliCommand,
 }
 
 #[derive(Debug, Subcommand)]
-enum Command {
+enum CliCommand {
     /// Start the local HTTP IPC server.
     Serve {
         #[arg(long, default_value = "127.0.0.1:7787")]
@@ -84,13 +84,13 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_env_filter("info").init();
 
     match Cli::parse().command {
-        Command::Serve { bind } => {
+        CliCommand::Serve { bind } => {
             jarvis_core::serve(bind.parse()?, jarvis_core::IpcState::new()).await?;
         }
-        Command::Health { endpoint } => {
+        CliCommand::Health { endpoint } => {
             println!("{}", request(&endpoint, "GET", "/health", None)?);
         }
-        Command::Command {
+        CliCommand::Command {
             input,
             endpoint,
             dry_run,
@@ -103,23 +103,23 @@ async fn main() -> anyhow::Result<()> {
             })?;
             println!("{}", request(&endpoint, "POST", "/commands", Some(&body))?);
         }
-        Command::Pause { reason, endpoint } => {
+        CliCommand::Pause { reason, endpoint } => {
             let body = serde_json::to_string(&EmergencyPauseRequest { reason })?;
             println!(
                 "{}",
                 request(&endpoint, "POST", "/emergency-pause", Some(&body))?
             );
         }
-        Command::Resume { endpoint } => {
+        CliCommand::Resume { endpoint } => {
             println!(
                 "{}",
                 request(&endpoint, "DELETE", "/emergency-pause", None)?
             );
         }
-        Command::PauseStatus { endpoint } => {
+        CliCommand::PauseStatus { endpoint } => {
             println!("{}", request(&endpoint, "GET", "/emergency-pause", None)?);
         }
-        Command::Scheduler { command } => match command {
+        CliCommand::Scheduler { command } => match command {
             SchedulerCommand::List { endpoint } => {
                 println!("{}", request(&endpoint, "GET", "/scheduler/jobs", None)?);
             }
