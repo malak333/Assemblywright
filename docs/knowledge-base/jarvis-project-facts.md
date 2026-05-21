@@ -120,8 +120,13 @@ These notes capture durable facts for future agents working on this repository.
 
 - Work in isolated worktrees and branches for reviewable slices.
 - Use topic branches and PRs for production work. The docs production slice is
-  currently `codex/production-docs-sync` in
-  `/Users/michaelnobile/Antigravity/jarvis-worktrees/production-docs-sync`.
+  currently `codex/phase3-docs-architecture` in
+  `/Users/michaelnobile/Antigravity/jarvis-worktrees-phase3/phase3-docs-architecture`.
+- Phase-3 work is split across separate worktrees and `codex/` branches:
+  `model-route-persistence`, `plugin-subprocess-sandbox`,
+  `voice-adapter-production`, `packaged-app-release-smoke`,
+  `permission-grants-ux`, and `phase3-docs-architecture`. Treat those names as
+  coordination context until each slice is merged and verified on main.
 - When multiple agents are active, stay inside assigned ownership. For docs-only
   architecture work, use `apply_patch` and do not touch implementation files.
 - Do not revert or overwrite unrelated work from other agents.
@@ -138,8 +143,10 @@ These notes capture durable facts for future agents working on this repository.
   worktrees and `codex/` topic branches, PRs should be reviewable and
   evidence-backed, docs-only workers must not edit Rust or Swift code, and
   readiness language must stay scoped to verified local foundation surfaces
-  until the packaged app, real voice, executable plugin sandbox, proactive
-  background scheduler, recovery, and release smoke gates exist.
+  until the packaged app, real voice, executable plugin sandbox, recovery, and
+  release smoke gates exist. Phase-3 work may reduce those gaps, but it is not
+  production-readiness evidence until the relevant branch is merged and its
+  E2E or focused integration proof is recorded.
 - The user explicitly expects each feature/phase to follow docs and
   documentation, add useful conversation-derived knowledge-base facts, and add
   or confirm end-to-end testing for the discussed scope.

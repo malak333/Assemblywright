@@ -42,6 +42,13 @@ and treat cross-process E2E plus the local release gate as the evidence bar.
 Passing the local gate supports only the implemented Rust/Swift foundation
 claim; it is not proof of a finished packaged assistant.
 
+Phase 3 is being prepared in separate worktrees for model route persistence,
+plugin subprocess sandboxing, voice adapter production, packaged app release
+smoke, permission grants UX, and docs architecture alignment. Until those
+slices merge and their focused E2E or integration proof is recorded, README and
+release language should describe them as active phase-3 work rather than
+implemented production readiness.
+
 ## Build
 
 ```sh

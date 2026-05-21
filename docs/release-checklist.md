@@ -30,6 +30,11 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
 - Confirm any autonomous sweep summary names the active ownership slices and
   states which evidence came from commands, tests, or manual checks. A
   six-agent sweep is coordination context, not proof of readiness.
+- For phase 3, confirm the active worktree/branch lanes are named separately
+  from merged implementation evidence: `model-route-persistence`,
+  `plugin-subprocess-sandbox`, `voice-adapter-production`,
+  `packaged-app-release-smoke`, `permission-grants-ux`, and
+  `phase3-docs-architecture`.
 - For each feature/phase, confirm the relevant docs were updated, durable
   knowledge-base facts were added, and matching E2E or focused integration
   coverage exists. If coverage does not exist, add it for behavior changes or
@@ -147,8 +152,8 @@ stage or when a PR needs focused evidence for one ownership slice.
 - Build/test commands are current.
 - Knowledge-base notes capture durable workflow and proof-boundary facts.
 - Knowledge-base notes include public-repo status, worktree/branch/PR workflow,
-  six-agent autonomous sweep expectations, E2E expectations, and proof
-  boundaries without overclaiming production readiness.
+  six-agent autonomous sweep expectations, phase-3 worktree names, E2E
+  expectations, and proof boundaries without overclaiming production readiness.
 - Every phase summary records whether docs, KB facts, and E2E coverage were
   followed; unresolved gaps are blockers for stronger production claims.
 - README points to the active design and command gate.
