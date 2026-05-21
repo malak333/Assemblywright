@@ -58,10 +58,14 @@ These notes capture durable facts for future agents working on this repository.
   and voice state. Voice supports typed transcript staging and hands the
   transcript to the same text command path, but remains a text-only scaffold
   rather than real microphone capture or speech recognition.
-- The scheduler is currently inspectable and cancellable. Scheduler jobs are
-  in-memory without repository backing and durable when the IPC state is started
-  with `SqliteRepository`. Proactive production trigger execution remains target
-  architecture.
+- The scheduler is inspectable, cancellable, explicitly runnable through
+  `scheduler run-due`, and opt-in runnable as a bounded background loop with
+  `jarvis serve --scheduler-background`. Scheduler jobs are in-memory without
+  repository backing and durable when the IPC state is started with
+  `SqliteRepository`. The background loop uses the same audited run-due path,
+  per-tick limit, deterministic due ordering, and fail-closed emergency-pause
+  behavior as manual execution. Richer proactive trigger policy and app
+  notification handoff remain target architecture.
 
 ## Proof Boundaries
 
