@@ -747,6 +747,80 @@ struct JarvisMacCoreTests {
         ])
     }
 
+    @Test("Supervisor resolves configured executable before packaged candidates")
+    func supervisorResolvesConfiguredExecutableFirst() {
+        let configuredURL = JarvisCoreSupervisorConfiguration.configuredExecutableURL(
+            environment: [
+                "JARVIS_MAC_CORE_EXECUTABLE": "/opt/jarvis/bin/jarvis-cli",
+                "JARVIS_CORE_EXECUTABLE": "/other/jarvis-core"
+            ]
+        )
+
+        #expect(configuredURL?.path == "/opt/jarvis/bin/jarvis-cli")
+    }
+
+    @Test("Supervisor packaged discovery prefers Resources bin before loose resources")
+    func supervisorPackagedDiscoveryPrefersResourcesBin() throws {
+        let root = try temporaryDirectory(name: "jarvis-packaged-discovery")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let resourcesBin = root
+            .appending(path: "Contents", directoryHint: .isDirectory)
+            .appending(path: "Resources", directoryHint: .isDirectory)
+            .appending(path: "bin", directoryHint: .isDirectory)
+        let resources = root
+            .appending(path: "Contents", directoryHint: .isDirectory)
+            .appending(path: "Resources", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: resourcesBin, withIntermediateDirectories: true)
+        let binExecutable = resourcesBin.appending(path: "jarvis-cli")
+        let looseExecutable = resources.appending(path: "jarvis-core")
+        try writeExecutableStub(at: binExecutable)
+        try writeExecutableStub(at: looseExecutable)
+
+        let resolvedURL = JarvisCoreSupervisorConfiguration.firstExecutableURL(
+            named: ["jarvis-cli", "jarvis-core"],
+            in: [resourcesBin, resources]
+        )
+
+        #expect(resolvedURL?.path == binExecutable.path)
+    }
+
+    @Test("Supervisor packaged discovery ignores non executable files")
+    func supervisorPackagedDiscoveryRequiresExecutableBit() throws {
+        let root = try temporaryDirectory(name: "jarvis-non-executable-discovery")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let resourcesBin = root.appending(path: "Resources/bin", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: resourcesBin, withIntermediateDirectories: true)
+        let nonExecutable = resourcesBin.appending(path: "jarvis-cli")
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: nonExecutable)
+
+        let resolvedURL = JarvisCoreSupervisorConfiguration.firstExecutableURL(
+            named: ["jarvis-cli"],
+            in: [resourcesBin]
+        )
+
+        #expect(resolvedURL == nil)
+    }
+
+    @Test("Supervisor packaged discovery accepts cargo binary name")
+    func supervisorPackagedDiscoveryAcceptsCargoBinaryName() throws {
+        let root = try temporaryDirectory(name: "jarvis-cargo-binary-discovery")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let resourcesBin = root.appending(path: "Resources/bin", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: resourcesBin, withIntermediateDirectories: true)
+        let cargoExecutable = resourcesBin.appending(path: "jarvis")
+        try writeExecutableStub(at: cargoExecutable)
+
+        let resolvedURL = JarvisCoreSupervisorConfiguration.firstExecutableURL(
+            named: ["jarvis-cli", "jarvis", "jarvis-core"],
+            in: [resourcesBin]
+        )
+
+        #expect(resolvedURL?.path == cargoExecutable.path)
+    }
+
     @MainActor
     @Test("Supervisor enters degraded mode when no core executable is configured")
     func supervisorDegradesWithoutExecutable() async {
@@ -859,6 +933,18 @@ struct JarvisMacCoreTests {
             """.utf8
         )
     }
+}
+
+private func temporaryDirectory(name: String) throws -> URL {
+    let directory = FileManager.default.temporaryDirectory
+        .appending(path: "\(name)-\(UUID().uuidString)", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    return directory
+}
+
+private func writeExecutableStub(at url: URL) throws {
+    try Data("#!/bin/sh\nexit 0\n".utf8).write(to: url)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
 }
 
 private func sampleHealth() -> JarvisHealth {

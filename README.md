@@ -58,6 +58,19 @@ cargo run -p jarvis-cli -- health
 Use `cargo run -p jarvis-cli -- serve --db-path /tmp/jarvis.sqlite` when you
 want manual IPC commands to persist task and audit state locally.
 
+For branches that touch Swift supervision or core binary discovery, run the
+focused packaged-supervision proof:
+
+```sh
+./scripts/packaged-supervision-proof.sh
+```
+
+That script builds `jarvis-cli`, places it in a temporary
+`Jarvis.app/Contents/Resources/bin/` layout, runs the Swift coverage against
+the configured packaged-style executable, and runs `jarvis smoke`.
+It is branch evidence for app-supervised core discovery, not a signed packaged
+app release smoke.
+
 With a repository-backed server running, `jarvis tasks`, `jarvis memory`,
 `jarvis scheduler`, `jarvis diagnostics`, and `jarvis plugins` expose the
 current durable state, redacted diagnostics, first-party plugin manifests, and

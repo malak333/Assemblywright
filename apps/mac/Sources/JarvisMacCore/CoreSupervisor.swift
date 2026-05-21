@@ -72,25 +72,77 @@ public struct JarvisCoreSupervisorConfiguration: Equatable, Sendable {
         bundle: Bundle = .main,
         fileManager: FileManager = .default
     ) -> URL? {
+        if let configuredURL = configuredExecutableURL(environment: environment) {
+            return configuredURL
+        }
+
+        if let bundledURL = bundledExecutableURL(bundle: bundle, fileManager: fileManager) {
+            return bundledURL
+        }
+
+        return developmentExecutableURL(fileManager: fileManager)
+    }
+
+    static func configuredExecutableURL(environment: [String: String]) -> URL? {
         for key in ["JARVIS_MAC_CORE_EXECUTABLE", "JARVIS_CORE_EXECUTABLE", "JARVIS_CLI_EXECUTABLE"] {
             if let value = environment[key], !value.isEmpty {
                 return URL(fileURLWithPath: value)
             }
         }
 
-        for name in ["jarvis-cli", "jarvis-core"] {
-            if let url = bundle.url(forResource: name, withExtension: nil) {
-                return url
-            }
+        return nil
+    }
+
+    static func bundledExecutableURL(
+        bundle: Bundle,
+        fileManager: FileManager = .default
+    ) -> URL? {
+        var roots: [URL] = []
+
+        if let resourceURL = bundle.resourceURL {
+            roots.append(resourceURL.appending(path: "bin", directoryHint: .isDirectory))
+            roots.append(resourceURL)
         }
 
+        if let executableDirectory = bundle.executableURL?.deletingLastPathComponent() {
+            roots.append(executableDirectory)
+        }
+
+        return firstExecutableURL(
+            named: ["jarvis-cli", "jarvis", "jarvis-core"],
+            in: roots,
+            fileManager: fileManager
+        )
+    }
+
+    static func developmentExecutableURL(fileManager: FileManager = .default) -> URL? {
         let current = URL(fileURLWithPath: fileManager.currentDirectoryPath)
         let candidates = [
             current.appending(path: "target/debug/jarvis-cli"),
+            current.appending(path: "target/debug/jarvis"),
             current.appending(path: "../../target/debug/jarvis-cli").standardizedFileURL,
-            current.appending(path: "../../../target/debug/jarvis-cli").standardizedFileURL
+            current.appending(path: "../../target/debug/jarvis").standardizedFileURL,
+            current.appending(path: "../../../target/debug/jarvis-cli").standardizedFileURL,
+            current.appending(path: "../../../target/debug/jarvis").standardizedFileURL
         ]
         return candidates.first { fileManager.isExecutableFile(atPath: $0.path) }
+    }
+
+    static func firstExecutableURL(
+        named names: [String],
+        in roots: [URL],
+        fileManager: FileManager = .default
+    ) -> URL? {
+        for root in roots {
+            for name in names {
+                let candidate = root.appending(path: name)
+                if fileManager.isExecutableFile(atPath: candidate.path) {
+                    return candidate
+                }
+            }
+        }
+
+        return nil
     }
 
     public static func defaultDatabaseURL(fileManager: FileManager = .default) -> URL? {

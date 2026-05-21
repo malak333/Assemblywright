@@ -135,11 +135,16 @@ cargo test -p jarvis-core --test e2e_scaffold
 cargo test -p jarvis-cli
 cargo test -p jarvis-cli --test local_ipc_e2e
 cargo test -p jarvis-cli --test local_ipc_e2e -- --ignored
+./scripts/packaged-supervision-proof.sh
 ```
 
 The non-ignored `local_ipc_e2e` test is the current cross-process E2E
 expectation for Rust/CLI changes. The ignored variant includes the opt-in
 release-proof smoke command and is run by `./scripts/release-local.sh`.
+`./scripts/packaged-supervision-proof.sh` is the focused Swift/Rust bridge
+proof for supervision changes: it builds `jarvis-cli`, copies it into a
+temporary `Jarvis.app/Contents/Resources/bin/` layout, runs the Swift supervisor
+coverage against that configured executable, and runs the CLI smoke command.
 Docs-only branches should at least run a render/lint-oriented documentation
 check when available, plus `cargo fmt --check` if the branch also touches Rust
 examples or scripts. Record any skipped full-gate stage as a blocker, not as
@@ -167,9 +172,10 @@ test until those surfaces exist and are covered. The current Swift gate proves
 the Mac shell scaffold builds, decodes IPC contracts, exposes management models
 for approval evidence, runs/audit, scheduler, diagnostics, and voice
 degraded-mode state, and can supervise a configured local core process
-abstraction; it does not prove a signed packaged app bundles and launches the
-Rust core, nor that approval decisions or real speech recognition are
-implemented.
+abstraction. The packaged supervision proof additionally checks the expected
+`Resources/bin/jarvis-cli` bundle layout with a locally built core binary; it
+does not prove a signed packaged app release, clean-profile launch, approval
+decisions, or real speech recognition.
 
 The public-repo production workflow expects isolated worktrees, topic branches,
 reviewable PRs, and clear ownership. A six-agent autonomous sweep can reduce
