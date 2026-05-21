@@ -79,6 +79,18 @@ path:
 cargo run -p jarvis-cli -- serve --db-path /tmp/jarvis.sqlite
 ```
 
+To exercise the bounded background scheduler loop, opt in explicitly on the
+server. Each tick calls the same audited run-due path and clamps the per-tick
+limit to the core scheduler maximum:
+
+```sh
+cargo run -p jarvis-cli -- serve \
+  --db-path /tmp/jarvis.sqlite \
+  --scheduler-background \
+  --scheduler-interval-ms 30000 \
+  --scheduler-limit 16
+```
+
 Terminal 2:
 
 ```sh
@@ -130,6 +142,9 @@ Swift approval decision controls are covered by the Swift contract/model tests.
 Local plugin install is metadata-only:
 `jarvis plugins install /absolute/path/to/jarvis-plugin.json` validates and
 stores a disabled registry record when repository backing is enabled.
+Background scheduler execution is opt-in on `jarvis serve`; it does not start
+for default smoke or manual inspection sessions unless `--scheduler-background`
+is passed.
 
 When the server is started with `--db-path`, these inspection commands are also
 available:

@@ -37,7 +37,10 @@ These notes capture durable facts for future agents working on this repository.
   `/plugins/manifests` for deterministic first-party plugin manifests.
   Repository-backed IPC also exposes `/plugins/installed` for metadata-only
   local plugin installation. Installed records are persisted with
-  `execution_enabled: false`; they are not executable.
+  `execution_enabled: false` and `execution_grant: metadata_only`; they are not
+  executable. Installed plugin run requests can perform contract-only dry runs
+  that validate manifest/action/input schema and audit
+  `side_effect_executed: false` without loading or executing plugin code.
 - The CLI has matching `tasks`, `memory`, `scheduler`, `diagnostics`, and
   `plugins` subcommands, including `plugins install`, `plugins installed`, and
   `plugins installed-get` for disabled local manifest metadata.
@@ -56,12 +59,18 @@ These notes capture durable facts for future agents working on this repository.
 - The Swift shell now exposes production-facing scaffold tabs for approval
   evidence, runs/audit, scheduler create/inspect/cancel, redacted diagnostics,
   and voice state. Voice supports typed transcript staging and hands the
-  transcript to the same text command path, but remains a text-only scaffold
-  rather than real microphone capture or speech recognition.
-- The scheduler is currently inspectable and cancellable. Scheduler jobs are
-  in-memory without repository backing and durable when the IPC state is started
-  with `SqliteRepository`. Proactive production trigger execution remains target
-  architecture.
+  transcript to the same text command path. The scaffold now models
+  interruption, resume/cancel, unavailable, and degraded typed-fallback states,
+  but remains a text-only scaffold rather than real microphone capture, speech
+  recognition, AVFoundation playback, or text-to-speech.
+- The scheduler is inspectable, cancellable, explicitly runnable through
+  `scheduler run-due`, and opt-in runnable as a bounded background loop with
+  `jarvis serve --scheduler-background`. Scheduler jobs are in-memory without
+  repository backing and durable when the IPC state is started with
+  `SqliteRepository`. The background loop uses the same audited run-due path,
+  per-tick limit, deterministic due ordering, and fail-closed emergency-pause
+  behavior as manual execution. Richer proactive trigger policy and app
+  notification handoff remain target architecture.
 
 ## Proof Boundaries
 
@@ -136,3 +145,8 @@ These notes capture durable facts for future agents working on this repository.
 - Plugins must declare capabilities, scopes, risk tiers, schemas, proactive
   behavior, memory access, model access, audit fields, timeout behavior, and
   cancellation behavior before execution.
+- Installed plugin execution remains disabled by default and must not be
+  expanded into arbitrary local code execution. The current safe boundary is
+  metadata persistence plus contract-only dry runs; any future executable path
+  needs a sandboxed runner, explicit grant state beyond `metadata_only`, policy
+  checks, timeout/cancellation behavior, and E2E audit coverage.
