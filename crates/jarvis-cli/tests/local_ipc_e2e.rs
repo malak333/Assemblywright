@@ -29,6 +29,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_eq!(contract["contract"]["version"], 1);
     assert_array_contains(&contract["endpoints"], "path", "/diagnostics/export");
     assert_array_contains(&contract["endpoints"], "path", "/approvals/:id/approve");
+    assert_array_contains(&contract["endpoints"], "path", "/plugins/installed/:id/run");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/scheduler/jobs/:id");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/approvals/:id");
 
@@ -123,6 +124,26 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_eq!(installed_plugin_get["id"], "local_e2e_plugin");
     assert_eq!(installed_plugin_get["execution_enabled"], false);
 
+    let blocked_installed_run = run_cli_json([
+        "plugins",
+        "run-installed",
+        "local_e2e_plugin",
+        "inspect",
+        "--input",
+        r#"{"path":"README.md"}"#,
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(blocked_installed_run["status"], "blocked");
+    assert_eq!(blocked_installed_run["execution_enabled"], false);
+    assert_eq!(blocked_installed_run["manifest_valid"], true);
+    assert_eq!(blocked_installed_run["action_declared"], true);
+    assert_eq!(blocked_installed_run["side_effect_executed"], false);
+    assert_eq!(
+        blocked_installed_run["audit_entry"]["event_type"],
+        "installed_plugin_execution_blocked"
+    );
+
     let tasks = run_cli_json(["tasks", "list", "--endpoint", endpoint.as_str()]);
     assert_array_contains(&tasks, "id", &task_id);
 
@@ -139,6 +160,11 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
 
     let all_audit = run_cli_json(["tasks", "audit", "--endpoint", endpoint.as_str()]);
     assert_array_contains(&all_audit, "event_type", "plugin_completed");
+    assert_array_contains(
+        &all_audit,
+        "event_type",
+        "installed_plugin_execution_blocked",
+    );
 
     let approval_command = run_cli_json([
         "command",
