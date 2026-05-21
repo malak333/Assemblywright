@@ -90,6 +90,8 @@ cargo run -p jarvis-cli -- plugins list
 cargo run -p jarvis-cli -- diagnostics export
 cargo run -p jarvis-cli -- scheduler list
 cargo run -p jarvis-cli -- scheduler schedule "manual check" "status check"
+cargo run -p jarvis-cli -- scheduler schedule "approval fail closed" "plugin approval echo scheduler pause"
+cargo run -p jarvis-cli -- scheduler run-due --limit 1
 cargo run -p jarvis-cli -- plugins installed
 cargo run -p jarvis-cli -- pause --reason "manual smoke"
 cargo run -p jarvis-cli -- pause-status
@@ -155,7 +157,9 @@ health, runtime-backed command execution, deterministic first-party plugin
 execution, route/policy/plugin audit evidence, approval-required persistence and
 grant/deny decisions, scheduler schedule/cancel and persistence, redacted
 diagnostics export, memory create/update/review/delete and persistence, plugin
-manifests, and emergency-pause blocking/resume surfaces.
+manifests, scheduler due-job execution/reschedule audit evidence, scheduler
+fail-closed emergency pause on non-accepted due jobs, and emergency-pause
+blocking/resume surfaces.
 Runtime unit tests additionally prove bounded fake-model first-party tool-call
 orchestration, including policy checks, approval stops, validation failures, and
 tool-result feedback into later model steps. Focused provider tests prove typed

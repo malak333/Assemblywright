@@ -689,6 +689,7 @@ impl IpcState {
 
     pub fn pause(&self, reason: impl Into<String>) -> JarvisResult<EmergencyPauseResponse> {
         let reason = reason.into();
+        let reason_present = !reason.trim().is_empty();
         let stored_pause = self.persist_pause(true, Some(&reason))?;
         let cancelled_jobs = self
             .scheduler
@@ -711,13 +712,26 @@ impl IpcState {
         pause.paused_at = Some(paused_at);
         pause.resumed_at = None;
 
-        Ok(EmergencyPauseResponse {
+        let response = EmergencyPauseResponse {
             paused: pause.paused,
             reason: pause.reason.clone(),
             paused_at: pause.paused_at,
             resumed_at: pause.resumed_at,
             cancelled_scheduler_jobs: cancelled_jobs.len(),
-        })
+        };
+
+        self.append_scheduler_audit_entry(
+            None,
+            "emergency_pause_activated",
+            "emergency pause activated and open scheduler jobs were cancelled",
+            json!({
+                "reason_present": reason_present,
+                "cancelled_scheduler_jobs": response.cancelled_scheduler_jobs,
+                "paused": response.paused,
+            }),
+        )?;
+
+        Ok(response)
     }
 
     pub fn resume(&self) -> JarvisResult<EmergencyPauseResponse> {
@@ -828,10 +842,33 @@ impl IpcState {
 
         for due_job in due_jobs {
             if self.runtime_control.is_emergency_paused() {
+                self.append_scheduler_audit_entry(
+                    None,
+                    "scheduler_run_stopped_by_emergency_pause",
+                    "scheduler stopped before executing remaining due jobs because emergency pause is active",
+                    json!({
+                        "checked_at": checked_at,
+                        "limit": limit,
+                        "scheduler_job_id": due_job.id,
+                    }),
+                )?;
                 break;
             }
 
             let running = self.mark_scheduler_job_running(due_job.id)?;
+            self.append_scheduler_audit_entry(
+                None,
+                "scheduler_job_due",
+                "scheduler selected due job for execution",
+                json!({
+                    "checked_at": checked_at,
+                    "limit": limit,
+                    "scheduler_job_id": running.id,
+                    "scheduler_job_name": running.name,
+                    "trigger": running.trigger,
+                    "job_status": running.status,
+                }),
+            )?;
             let command_response = self
                 .submit_command(CommandRequest {
                     input: running.command.clone(),
@@ -882,6 +919,30 @@ impl IpcState {
                 &mut audit_entries,
             )?;
 
+            if !command_response.accepted {
+                let pause_reason = format!(
+                    "scheduler job {} did not complete accepted task",
+                    final_job.id
+                );
+                let pause_response = self.pause(pause_reason.clone())?;
+                let fail_closed_audit = self.append_scheduler_audit_entry(
+                    Some(command_response.task.id),
+                    "scheduler_fail_closed_emergency_pause",
+                    "scheduler activated emergency pause after a due job failed closed",
+                    json!({
+                        "scheduler_job_id": final_job.id,
+                        "scheduler_job_name": final_job.name,
+                        "trigger": final_job.trigger,
+                        "job_status": final_job.status,
+                        "task_status": command_response.task.status,
+                        "accepted": command_response.accepted,
+                        "pause_reason_present": !pause_reason.is_empty(),
+                        "cancelled_scheduler_jobs": pause_response.cancelled_scheduler_jobs,
+                    }),
+                )?;
+                audit_entries.push(fail_closed_audit);
+            }
+
             executions.push(SchedulerJobExecution {
                 job: final_job,
                 task: command_response.task,
@@ -889,12 +950,16 @@ impl IpcState {
                 message: command_response.message,
                 audit_entries,
             });
+
+            if self.runtime_control.is_emergency_paused() {
+                break;
+            }
         }
 
         Ok(SchedulerRunResponse {
             checked_at,
             limit,
-            emergency_paused: false,
+            emergency_paused: self.runtime_control.is_emergency_paused(),
             executions,
         })
     }
@@ -930,6 +995,18 @@ impl IpcState {
         self.command_store().append_audit_entry(&entry)?;
         audit_entries.push(entry);
         Ok(())
+    }
+
+    fn append_scheduler_audit_entry(
+        &self,
+        task_id: Option<Uuid>,
+        event_type: &str,
+        summary: &str,
+        payload: serde_json::Value,
+    ) -> JarvisResult<AuditEntry> {
+        let entry = AuditEntry::new(task_id, event_type, summary, payload);
+        self.command_store().append_audit_entry(&entry)?;
+        Ok(entry)
     }
 
     fn persist_scheduler_job(&self, job: &SchedulerJob) -> JarvisResult<()> {
@@ -2012,6 +2089,74 @@ mod tests {
             .using_repository(SqliteRepository::list_tasks)
             .expect("tasks");
         assert!(tasks.is_empty());
+    }
+
+    #[tokio::test]
+    async fn run_due_scheduler_jobs_fail_closed_persists_pause_jobs_and_audit() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("jarvis.sqlite");
+        let repository = SqliteRepository::open(&db_path).unwrap();
+        let state = IpcState::with_repository(repository).expect("state");
+
+        let approval_job = state
+            .schedule_scheduler_job(SchedulerJobSpec {
+                name: "approval required".to_string(),
+                command: "plugin approval echo proactive stop".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .expect("schedule approval job");
+        let later_job = state
+            .schedule_scheduler_job(SchedulerJobSpec {
+                name: "cancel after fail closed".to_string(),
+                command: "plugin status".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .expect("schedule later job");
+
+        let response = state.run_due_scheduler_jobs(1).await.expect("run due");
+
+        assert!(response.emergency_paused);
+        assert_eq!(response.executions.len(), 1);
+        assert!(!response.executions[0].accepted);
+        assert_eq!(response.executions[0].job.id, approval_job.id);
+        assert_eq!(
+            response.executions[0].job.status,
+            SchedulerJobStatus::Failed
+        );
+        assert!(response.executions[0]
+            .audit_entries
+            .iter()
+            .any(|entry| entry.event_type == "scheduler_fail_closed_emergency_pause"));
+        assert_eq!(
+            state
+                .get_scheduler_job(later_job.id)
+                .expect("later job")
+                .status,
+            SchedulerJobStatus::Cancelled
+        );
+        assert!(state.pause_status().paused);
+        drop(state);
+
+        let repository = SqliteRepository::open(&db_path).unwrap();
+        let pause = repository.emergency_pause_state().expect("pause state");
+        assert!(pause.paused);
+        let jobs = repository.list_scheduler_jobs().expect("jobs");
+        assert!(jobs
+            .iter()
+            .any(|job| job.id == approval_job.id && job.status == SchedulerJobStatus::Failed));
+        assert!(jobs
+            .iter()
+            .any(|job| job.id == later_job.id && job.status == SchedulerJobStatus::Cancelled));
+        let audit = repository.list_audit_entries(None).expect("audit");
+        assert!(audit
+            .iter()
+            .any(|entry| entry.event_type == "scheduler_job_due"));
+        assert!(audit
+            .iter()
+            .any(|entry| entry.event_type == "scheduler_fail_closed_emergency_pause"));
+        assert!(audit
+            .iter()
+            .any(|entry| entry.event_type == "emergency_pause_activated"));
     }
 
     #[tokio::test]
