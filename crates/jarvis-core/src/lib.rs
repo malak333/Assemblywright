@@ -23,10 +23,10 @@ pub use model::{
 };
 pub use plugin::{
     plugin_permission_scopes, CancellationBehavior, CancellationSignal, EchoPlugin,
-    InProcessPlugin, InstalledPlugin, JsonSchema, PluginAccess, PluginActionManifest,
-    PluginCallMetadata, PluginCallRequest, PluginCallResult, PluginCallStatus, PluginHost,
-    PluginManifest, PluginPermission, PluginSource, PluginTimeout, PluginTimeoutAction,
-    StatusPlugin,
+    InProcessPlugin, InstalledPlugin, InstalledPluginExecutionGrant, JsonSchema, PluginAccess,
+    PluginActionManifest, PluginCallMetadata, PluginCallRequest, PluginCallResult,
+    PluginCallStatus, PluginHost, PluginManifest, PluginPermission, PluginSource, PluginTimeout,
+    PluginTimeoutAction, StatusPlugin,
 };
 pub use policy::{
     ApprovalDecision, ApprovalGrant, CapabilityScope, PermissionEngine, PolicyDecision,
