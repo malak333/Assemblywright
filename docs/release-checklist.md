@@ -45,6 +45,8 @@ stage or when a PR needs focused evidence for one ownership slice.
 - `cargo build --workspace`
 - `cargo run -p jarvis-cli -- smoke`
 - `cargo package --workspace --allow-dirty`
+- Focused supervision proof for branches that touch Swift core launch or bundle
+  discovery: `./scripts/packaged-supervision-proof.sh`
 - `swift test --package-path apps/mac`
 - `swift build --package-path apps/mac`
 - Optional manual CLI/IPC smoke against a running local server:
@@ -116,7 +118,9 @@ stage or when a PR needs focused evidence for one ownership slice.
   path while installed plugin execution remains disabled.
 - Confirm the Swift shell remains described as a scaffold until a signed
   packaged app bundles/launches the Rust core, handles approval prompts, and
-  passes packaged app smoke checks.
+  passes packaged app smoke checks. A temporary `Resources/bin/jarvis-cli`
+  supervision proof is useful branch evidence, but it is not signed packaged
+  app release evidence.
 
 ## Documentation Gate
 

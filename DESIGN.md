@@ -255,8 +255,10 @@ Current branch status: the repo structure, IPC health/command surface, durable
 task/audit/emergency-pause/memory/scheduler schema, fake local model, first-party
 plugin contracts, CLI smoke path, redacted diagnostics export, and buildable
 Swift command/activity shell scaffold are implemented. The Swift app still does
-not start or supervise `jarvis-core`, and the product still lacks real model
-providers, approval UI, voice, plugin installation, packaged app release smoke
-evidence, and proactive trigger execution.
+not have signed packaged-app release smoke evidence, and the product still lacks
+real model providers, approval UI, voice, installed plugin execution, packaged
+app release smoke evidence, and proactive trigger execution. Swift supervision
+is covered only as a scaffold for configured or packaged-style local core
+binaries.
 
 Before implementation, the design should be reviewed through a multi-agent brainstorming pass because Jarvis is high-autonomy, security-sensitive, and product-grade.
