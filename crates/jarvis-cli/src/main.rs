@@ -7,8 +7,7 @@ use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 use jarvis_core::{
     ApprovalDecisionRequest, CommandRequest, CreateMemoryItemRequest, CreateSchedulerJobRequest,
-    EmergencyPauseRequest, InstallPluginRequest, InstalledPluginRunRequest, Sensitivity,
-    TriggerKind, UpdateMemoryItemRequest,
+    EmergencyPauseRequest, InstallPluginRequest, Sensitivity, TriggerKind, UpdateMemoryItemRequest,
 };
 use tokio::net::TcpListener;
 
@@ -537,12 +536,12 @@ async fn main() -> anyhow::Result<()> {
                 input,
                 endpoint,
             } => {
-                let input = serde_json::from_str(&input)?;
-                let body = serde_json::to_string(&InstalledPluginRunRequest {
-                    action,
-                    input,
-                    session_id: None,
-                })?;
+                let input: serde_json::Value = serde_json::from_str(&input)?;
+                let body = serde_json::to_string(&serde_json::json!({
+                    "action": action,
+                    "input": input,
+                    "session_id": null,
+                }))?;
                 println!(
                     "{}",
                     request(
