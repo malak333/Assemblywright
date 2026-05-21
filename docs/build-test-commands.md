@@ -113,6 +113,7 @@ Run these while `cargo run -p jarvis-cli -- serve` is active:
 cargo run -p jarvis-cli -- command --dry-run "status check"
 cargo run -p jarvis-cli -- plugins list
 cargo run -p jarvis-cli -- diagnostics export
+cargo run -p jarvis-cli -- permissions grants
 cargo run -p jarvis-cli -- scheduler list
 cargo run -p jarvis-cli -- scheduler schedule "manual check" "status check"
 cargo run -p jarvis-cli -- scheduler schedule "approval fail closed" "plugin approval echo scheduler pause"
@@ -136,7 +137,10 @@ Approval-required command scaffolds such as `plugin approval echo ...` fail
 closed by returning `waiting_for_approval`, persisting an inspectable pending
 approval when repository backing is enabled, and requiring a separate CLI/IPC
 grant or denial. Granting an approval records the decision but does not execute
-the side effect. It does not yet implement installed plugin sandboxing,
+the side effect. `jarvis permissions grants` reads the combined local grant
+surface: approval counts/history, high-risk pending count, installed-plugin
+`metadata_only` grant records, and the invariant that side effects still
+require approval. It does not yet implement installed plugin sandboxing,
 installed plugin execution, real voice capture, or signed packaged-app smoke.
 Swift approval decision controls are covered by the Swift contract/model tests.
 Local plugin install is metadata-only:

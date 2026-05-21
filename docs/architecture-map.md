@@ -33,7 +33,7 @@ flowchart TB
         IPC --> Contract["/contract"]
         IPC --> Diagnostics["/diagnostics/export"]
         IPC --> Commands["/commands"]
-        IPC --> Inspection["/tasks, /audit, /memory, /plugins/manifests, /plugins/installed"]
+        IPC --> Inspection["/tasks, /audit, /memory, /permissions/grants, /plugins/manifests, /plugins/installed"]
         IPC --> InstalledRunner["/plugins/installed/:id/run fail-closed boundary"]
         IPC --> PauseApi["/emergency-pause"]
         IPC --> SchedulerApi["/scheduler/jobs"]
@@ -97,6 +97,9 @@ validation, policy checks, approval stops, and audit evidence.
 Repository-backed IPC state stores approval-required plugin command decisions
 in `pending_approvals`, exposes them through CLI/IPC inspection endpoints, and
 lets a user grant or deny the pending record without executing the side effect.
+The read-only `/permissions/grants` endpoint combines approval history,
+high-risk pending counts, and installed-plugin execution-grant state into one
+permission-center surface for CLI and Swift inspection.
 Installed plugin run requests have an explicit fail-closed boundary that
 revalidates stored manifest metadata, checks the requested action, validates
 input schema, honors `execution_enabled` plus the `metadata_only` execution
