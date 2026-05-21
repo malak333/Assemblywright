@@ -662,11 +662,58 @@ struct JarvisMacCoreTests {
         let model = VoiceStateModel()
 
         #expect(model.statusText.contains("Text-only voice scaffold"))
+        model.apply(.beginTranscript)
+        #expect(model.statusText.contains("Voice transcript staging"))
+        model.apply(.updateTranscript(" status check "))
+        let handoff = model.apply(.submitTranscript)
+        #expect(handoff?.text == "status check")
+        #expect(handoff?.source == "voice-transcript-scaffold")
+        #expect(handoff?.dryRun == true)
+        #expect(model.transcriptDraft.isEmpty)
         model.setUnavailable(reason: "Microphone permission is missing.")
         #expect(model.statusText.contains("Voice unavailable"))
         #expect(!model.isPushToTalkEnabled)
+        model.apply(.updateTranscript("ignored"))
+        #expect(model.transcriptDraft.isEmpty)
+        #expect(model.lastError?.contains("unavailable") == true)
         model.resetTextOnly()
         #expect(model.statusText.contains("Speech recognition is not implemented"))
+    }
+
+    @MainActor
+    @Test("Voice transcript handoff uses the same console command submit path")
+    func voiceTranscriptHandoffUsesTextCommandPath() async throws {
+        let client = FakeCoreClient()
+        let console = CommandConsoleModel(client: client)
+        let voice = VoiceStateModel()
+
+        voice.apply(.beginTranscript)
+        voice.apply(.updateTranscript("  plugin echo hello  "))
+        let handoff = try #require(voice.apply(.submitTranscript))
+        await console.submit(input: handoff.text)
+
+        #expect(client.submittedCommands == [
+            JarvisCommandRequest(input: "plugin echo hello", dryRun: true)
+        ])
+        #expect(console.transcript.map(\.text) == [
+            "plugin echo hello",
+            "local response: plugin echo hello"
+        ])
+        #expect(console.activity.contains { $0.title == "Task completed" })
+    }
+
+    @MainActor
+    @Test("Voice transcript handoff rejects empty transcript")
+    func voiceTranscriptHandoffRejectsEmptyTranscript() {
+        let model = VoiceStateModel()
+
+        model.apply(.beginTranscript)
+        model.apply(.updateTranscript(" \n\t "))
+        let handoff = model.apply(.submitTranscript)
+
+        #expect(handoff == nil)
+        #expect(model.lastError == "Transcript is empty.")
+        #expect(model.lastHandoff == nil)
     }
 
     @MainActor
@@ -899,6 +946,46 @@ private func diagnosticsJSON() -> Data {
     )
 }
 
+private func commandResponseJSON(input: String) -> Data {
+    let taskId = UUID()
+    let sessionId = UUID()
+    let auditId = UUID()
+    return Data(
+        """
+        {
+          "accepted": true,
+          "task": {
+            "id": "\(taskId.uuidString)",
+            "session_id": "\(sessionId.uuidString)",
+            "user_input": "\(input)",
+            "status": "completed",
+            "created_at": "2026-05-20T12:00:00Z",
+            "updated_at": "2026-05-20T12:00:01Z"
+          },
+          "audit_entry": {
+            "id": "\(auditId.uuidString)",
+            "task_id": "\(taskId.uuidString)",
+            "event_type": "task_completed",
+            "summary": "command completed",
+            "payload": {},
+            "created_at": "2026-05-20T12:00:01Z"
+          },
+          "audit_entries": [],
+          "route": {
+            "provider": "local",
+            "model": "fake-local-model",
+            "reason": "local model is the default route for v1 commands"
+          },
+          "steps": [
+            { "index": 0, "message": "local response: \(input)", "complete": true }
+          ],
+          "plugin_results": [],
+          "message": "local response: \(input)"
+        }
+        """.utf8
+    )
+}
+
 private final class FakeProcess: JarvisCoreProcess, @unchecked Sendable {
     private(set) var isRunning = true
 
@@ -929,6 +1016,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     private var healthResults: [Result<JarvisHealth, Error>]
     private var tasks: [JarvisTask]
     private var auditEntries: [JarvisAuditEntry]
+    private(set) var submittedCommands: [JarvisCommandRequest]
 
     init(
         healthResults: [Result<JarvisHealth, Error>] = [.success(sampleHealth())],
@@ -938,6 +1026,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         self.healthResults = healthResults
         self.tasks = tasks
         self.auditEntries = auditEntries
+        self.submittedCommands = []
     }
 
     func health() async throws -> JarvisHealth {
@@ -966,7 +1055,8 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     }
 
     func submit(_ command: JarvisCommandRequest) async throws -> JarvisCommandResponse {
-        throw URLError(.unsupportedURL)
+        submittedCommands.append(command)
+        return try JSONDecoder().decode(JarvisCommandResponse.self, from: commandResponseJSON(input: command.input))
     }
 
     func pause(reason: String) async throws -> JarvisPauseResponse {

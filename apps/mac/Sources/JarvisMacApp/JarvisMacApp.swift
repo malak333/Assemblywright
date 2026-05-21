@@ -92,7 +92,7 @@ struct JarvisShellView: View {
                     .tabItem { Text("Scheduler") }
                 DiagnosticsExportView(model: diagnostics)
                     .tabItem { Text("Diagnostics") }
-                VoiceStateView(model: voice)
+                VoiceStateView(model: voice, console: console)
                     .tabItem { Text("Voice") }
             }
         }
@@ -560,6 +560,7 @@ struct DiagnosticsExportView: View {
 
 struct VoiceStateView: View {
     @ObservedObject var model: VoiceStateModel
+    @ObservedObject var console: CommandConsoleModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -571,11 +572,31 @@ struct VoiceStateView: View {
 
             Toggle("Push to talk", isOn: .constant(model.isPushToTalkEnabled))
                 .disabled(true)
-            Text("This surface tracks voice readiness and degraded mode only; it does not claim speech recognition support.")
+            Text("This surface stages typed transcripts only; it does not claim microphone capture, speech recognition, or text-to-speech support.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
+            TextField(
+                "Typed transcript",
+                text: Binding(
+                    get: { model.transcriptDraft },
+                    set: { model.apply(.updateTranscript($0)) }
+                )
+            )
+            .textFieldStyle(.roundedBorder)
+            .onSubmit(sendTranscript)
+
             HStack {
+                Button("Start Transcript") {
+                    model.apply(.beginTranscript)
+                }
+                Button("Send as Command") {
+                    sendTranscript()
+                }
+                .disabled(console.isWorking || model.transcriptDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button("Cancel") {
+                    model.apply(.cancelTranscript)
+                }
                 Button("Mark Mic Permission Missing") {
                     model.setUnavailable(reason: "Microphone permission is missing or unavailable.")
                 }
@@ -584,9 +605,29 @@ struct VoiceStateView: View {
                 }
             }
 
+            if let handoff = model.lastHandoff {
+                Text("Last handoff: \(handoff.source), dry-run \(handoff.dryRun ? "enabled" : "disabled")")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+
+            if let lastError = model.lastError {
+                Text(lastError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
             Spacer()
         }
         .padding()
+    }
+
+    private func sendTranscript() {
+        guard let handoff = model.apply(.submitTranscript) else { return }
+        Task {
+            await console.submit(input: handoff.text)
+        }
     }
 }
 

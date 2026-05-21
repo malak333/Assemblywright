@@ -131,7 +131,9 @@ This is a future gate once a packaged `Jarvis.app` exists:
 - Packaged app launches on a clean Mac user profile.
 - App starts and supervises `jarvis-core`.
 - Text command reaches the Rust core.
-- Voice command parity is verified where microphone access is available.
+- Text-transcript voice command parity is verified through the scaffold.
+- Real microphone voice command parity is verified only after the macOS
+  Speech/AVFoundation adapter is implemented and available.
 - Activity view shows current task state.
 - Audit entry is written for the command.
 - Emergency pause stops new actions.
