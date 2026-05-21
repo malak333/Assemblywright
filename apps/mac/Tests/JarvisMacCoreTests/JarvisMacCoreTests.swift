@@ -814,6 +814,79 @@ struct JarvisMacCoreTests {
     }
 
     @MainActor
+    @Test("Voice transcript interruption blocks submit until resume or cancel")
+    func voiceTranscriptInterruptionBlocksSubmitUntilResumeOrCancel() {
+        let model = VoiceStateModel()
+
+        model.apply(.beginTranscript)
+        model.apply(.updateTranscript("open diagnostics"))
+        model.interruptTranscript(reason: "User started another request.")
+
+        #expect(model.statusText.contains("interrupted"))
+        #expect(model.transcriptDraft == "open diagnostics")
+        #expect(!model.isPushToTalkEnabled)
+        #expect(model.apply(.submitTranscript) == nil)
+        #expect(model.lastError == "Voice transcript is interrupted; resume or cancel before submitting.")
+
+        model.apply(.resumeInterruptedTranscript)
+        let handoff = model.apply(.submitTranscript)
+
+        #expect(handoff?.text == "open diagnostics")
+        #expect(model.lastError == nil)
+
+        model.apply(.beginTranscript)
+        model.apply(.updateTranscript("cancel me"))
+        model.interruptTranscript(reason: "User cancelled.")
+        model.apply(.cancelTranscript)
+
+        #expect(model.transcriptDraft.isEmpty)
+        #expect(model.lastHandoff == nil)
+        #expect(model.statusText.contains("Text-only voice scaffold"))
+    }
+
+    @MainActor
+    @Test("Voice degraded mode keeps typed transcript fallback without speech claims")
+    func voiceDegradedModeKeepsTypedTranscriptFallbackWithoutSpeechClaims() {
+        let model = VoiceStateModel()
+
+        model.markDegraded(reason: "Text-to-speech playback is unavailable.")
+        #expect(model.statusText == "Voice degraded to typed transcript fallback: Text-to-speech playback is unavailable.")
+        #expect(model.transcriptDraft.isEmpty)
+        #expect(model.lastHandoff == nil)
+        #expect(!model.isPushToTalkEnabled)
+
+        model.apply(.updateTranscript("status check"))
+        #expect(model.statusText.contains("Voice transcript staging"))
+        let handoff = model.apply(.submitTranscript)
+
+        #expect(handoff?.text == "status check")
+        #expect(handoff?.source == "voice-transcript-scaffold")
+        #expect(handoff?.dryRun == true)
+        #expect(model.statusText.contains("Text-only voice scaffold"))
+        #expect(!model.statusText.contains("speech recognition coverage"))
+    }
+
+    @MainActor
+    @Test("Voice unavailable mode rejects typed transcript handoff until reset")
+    func voiceUnavailableModeRejectsTypedTranscriptHandoffUntilReset() {
+        let model = VoiceStateModel()
+
+        model.setUnavailable(reason: "Microphone permission is missing.")
+        model.apply(.beginTranscript)
+        #expect(model.lastError == "Voice input is unavailable; reset to text-only before staging a transcript.")
+        model.apply(.updateTranscript("ignored"))
+        #expect(model.transcriptDraft.isEmpty)
+        #expect(model.apply(.submitTranscript) == nil)
+        #expect(model.lastError == "Voice input is unavailable; transcript cannot be submitted.")
+
+        model.resetTextOnly()
+        model.apply(.updateTranscript("typed fallback after reset"))
+        let handoff = model.apply(.submitTranscript)
+
+        #expect(handoff?.text == "typed fallback after reset")
+    }
+
+    @MainActor
     @Test("Approval management model loads contract, tasks, and audit evidence")
     func approvalManagementModelLoadsQueue() async {
         let task = JarvisTask(
@@ -844,6 +917,9 @@ struct JarvisMacCoreTests {
         #expect(model.pendingItems.count == 2)
         #expect(!model.supportsApprovalActions)
         #expect(model.limitationText?.contains("no approval decision endpoint") == true)
+        #expect(model.permissionSurface.status == .inspectionOnly)
+        #expect(model.permissionSurface.pendingApprovalCount == 2)
+        #expect(model.permissionSurface.inspectionOnlyApprovalCount == 2)
     }
 
     @MainActor
@@ -866,6 +942,8 @@ struct JarvisMacCoreTests {
         #expect(client.approvalDecisions == [
             FakeCoreClient.ApprovalDecision(id: approval.id, approved: true, reason: "reviewed in app")
         ])
+        #expect(model.permissionSurface.status == .clear)
+        #expect(model.permissionSurface.pendingApprovalCount == 0)
     }
 
     @MainActor
@@ -887,6 +965,32 @@ struct JarvisMacCoreTests {
         #expect(client.approvalDecisions == [
             FakeCoreClient.ApprovalDecision(id: approval.id, approved: false, reason: "not safe enough")
         ])
+    }
+
+    @MainActor
+    @Test("Permission surface summarizes plugin scopes and risk tiers")
+    func permissionSurfaceSummarizesPluginScopeState() async {
+        let approval = samplePendingApproval()
+        let client = FakeCoreClient(
+            contractResponse: fullApprovalContract(),
+            approvals: [approval],
+            pluginManifests: [samplePluginManifest()]
+        )
+        let model = ApprovalManagementModel(client: client)
+
+        await model.refresh()
+
+        #expect(model.permissionSurface.status == .reviewRequired)
+        #expect(model.permissionSurface.approvalActionsAvailable)
+        #expect(model.permissionSurface.pendingApprovalCount == 1)
+        #expect(model.permissionSurface.actionableApprovalCount == 1)
+        #expect(model.permissionSurface.declaredScopes == ["calendar_write", "conversation", "file_read"])
+        #expect(model.permissionSurface.riskTierCounts == [
+            JarvisPermissionRiskCount(riskTier: "allow", count: 1),
+            JarvisPermissionRiskCount(riskTier: "confirm", count: 1)
+        ])
+        #expect(model.permissionSurface.proactiveActionCount == 1)
+        #expect(model.permissionSurface.summaryText.contains("need a decision"))
     }
 
     @MainActor
@@ -1248,6 +1352,46 @@ private func diagnosticsJSON() -> Data {
     )
 }
 
+private func samplePluginManifest() -> JarvisPluginManifest {
+    JarvisPluginManifest(
+        id: "calendar",
+        name: "Calendar",
+        version: "0.1.0",
+        source: "first-party",
+        author: "Jarvis",
+        actions: [
+            JarvisPluginActionManifest(
+                name: "inspect_events",
+                description: "Inspect calendar events",
+                permissions: ["conversation", "file_read"],
+                riskTier: "allow",
+                inputSchema: .object([:]),
+                outputSchema: .object([:]),
+                proactive: false,
+                memoryAccess: "none",
+                modelAccess: "local",
+                auditFields: ["calendar_id"],
+                timeout: JarvisPluginTimeout(timeoutMilliseconds: 1_000),
+                cancellation: "supported"
+            ),
+            JarvisPluginActionManifest(
+                name: "create_event",
+                description: "Create a calendar event",
+                permissions: ["calendar_write", "conversation"],
+                riskTier: "confirm",
+                inputSchema: .object([:]),
+                outputSchema: .object([:]),
+                proactive: true,
+                memoryAccess: "read",
+                modelAccess: "local",
+                auditFields: ["calendar_id", "event_id"],
+                timeout: JarvisPluginTimeout(timeoutMilliseconds: 2_000),
+                cancellation: "supported"
+            )
+        ]
+    )
+}
+
 private func commandResponseJSON(input: String) -> Data {
     let taskId = UUID()
     let sessionId = UUID()
@@ -1327,6 +1471,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     private(set) var submittedCommands: [JarvisCommandRequest]
     private var contractResponse: JarvisContractResponse?
     private var approvals: [JarvisPendingApproval]
+    private var pluginManifests: [JarvisPluginManifest]
     private(set) var approvalDecisions: [ApprovalDecision]
 
     init(
@@ -1334,7 +1479,8 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         tasks: [JarvisTask] = [],
         auditEntries: [JarvisAuditEntry] = [],
         contractResponse: JarvisContractResponse? = nil,
-        approvals: [JarvisPendingApproval] = []
+        approvals: [JarvisPendingApproval] = [],
+        pluginManifests: [JarvisPluginManifest] = []
     ) {
         self.healthResults = healthResults
         self.tasks = tasks
@@ -1342,6 +1488,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         self.submittedCommands = []
         self.contractResponse = contractResponse
         self.approvals = approvals
+        self.pluginManifests = pluginManifests
         self.approvalDecisions = []
     }
 
@@ -1431,7 +1578,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     }
 
     func listPluginManifests() async throws -> [JarvisPluginManifest] {
-        []
+        pluginManifests
     }
 
     func listSchedulerJobs() async throws -> [JarvisSchedulerJob] {

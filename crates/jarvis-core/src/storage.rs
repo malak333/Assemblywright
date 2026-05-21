@@ -7,12 +7,12 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
-    ApprovalStatus, AuditEntry, CapabilityScope, InstalledPlugin, JarvisError, JarvisResult,
-    PluginManifest, RiskTier, SchedulerJob, SchedulerJobStatus, Sensitivity, TaskRecord,
-    TaskStatus, TriggerKind,
+    ApprovalStatus, AuditEntry, CapabilityScope, InstalledPlugin, InstalledPluginExecutionGrant,
+    JarvisError, JarvisResult, PluginManifest, RiskTier, SchedulerJob, SchedulerJobStatus,
+    Sensitivity, TaskRecord, TaskStatus, TriggerKind,
 };
 
-const CURRENT_SCHEMA_VERSION: i64 = 4;
+const CURRENT_SCHEMA_VERSION: i64 = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EmergencyPauseState {
@@ -51,6 +51,7 @@ pub struct InstalledPluginRecord {
     pub manifest: PluginManifest,
     pub source_path: String,
     pub execution_enabled: bool,
+    pub execution_grant: InstalledPluginExecutionGrant,
     pub installed_at: DateTime<Utc>,
 }
 
@@ -594,18 +595,20 @@ impl SqliteRepository {
         self.conn
             .execute(
                 "INSERT INTO installed_plugins
-                 (id, manifest_json, source_path, execution_enabled, installed_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 (id, manifest_json, source_path, execution_enabled, execution_grant, installed_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                  ON CONFLICT(id) DO UPDATE SET
                     manifest_json = excluded.manifest_json,
                     source_path = excluded.source_path,
                     execution_enabled = 0,
+                    execution_grant = 'metadata_only',
                     installed_at = excluded.installed_at",
                 params![
                     &installed.manifest.id,
                     manifest_json,
                     &installed.source_path,
                     if installed.execution_enabled { 1 } else { 0 },
+                    installed.execution_grant.as_str(),
                     to_db_time(now),
                 ],
             )
@@ -623,7 +626,7 @@ impl SqliteRepository {
     pub fn get_installed_plugin(&self, id: &str) -> JarvisResult<Option<InstalledPluginRecord>> {
         self.conn
             .query_row(
-                "SELECT id, manifest_json, source_path, execution_enabled, installed_at
+                "SELECT id, manifest_json, source_path, execution_enabled, execution_grant, installed_at
                  FROM installed_plugins
                  WHERE id = ?1",
                 params![id],
@@ -637,7 +640,7 @@ impl SqliteRepository {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT id, manifest_json, source_path, execution_enabled, installed_at
+                "SELECT id, manifest_json, source_path, execution_enabled, execution_grant, installed_at
                  FROM installed_plugins
                  ORDER BY installed_at DESC, id ASC",
             )
@@ -889,6 +892,9 @@ impl SqliteRepository {
         if version < 4 {
             self.apply_migration_4()?;
         }
+        if version < 5 {
+            self.apply_migration_5()?;
+        }
 
         let migrated = self.schema_version()?;
         if migrated != CURRENT_SCHEMA_VERSION {
@@ -1131,6 +1137,28 @@ impl SqliteRepository {
         tx.commit().map_err(storage_error)?;
         Ok(())
     }
+
+    fn apply_migration_5(&self) -> JarvisResult<()> {
+        let now = to_db_time(Utc::now());
+        let tx = self.conn.unchecked_transaction().map_err(storage_error)?;
+
+        tx.execute(
+            "ALTER TABLE installed_plugins
+             ADD COLUMN execution_grant TEXT NOT NULL DEFAULT 'metadata_only'
+             CHECK (execution_grant = 'metadata_only')",
+            [],
+        )
+        .map_err(storage_error)?;
+
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+            params![5, now],
+        )
+        .map_err(storage_error)?;
+
+        tx.commit().map_err(storage_error)?;
+        Ok(())
+    }
 }
 
 fn task_from_row(row: &Row<'_>) -> rusqlite::Result<TaskRecord> {
@@ -1209,7 +1237,16 @@ fn installed_plugin_from_row(row: &Row<'_>) -> rusqlite::Result<InstalledPluginR
         manifest,
         source_path: row.get(2)?,
         execution_enabled: row.get::<_, i64>(3)? != 0,
-        installed_at: parse_db_time(&row.get::<_, String>(4)?)?,
+        execution_grant: InstalledPluginExecutionGrant::parse(&row.get::<_, String>(4)?).map_err(
+            |err| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    4,
+                    rusqlite::types::Type::Text,
+                    Box::new(err),
+                )
+            },
+        )?,
+        installed_at: parse_db_time(&row.get::<_, String>(5)?)?,
     })
 }
 
@@ -1630,12 +1667,17 @@ mod tests {
             manifest: local_test_manifest(&source_path),
             source_path: source_path.clone(),
             execution_enabled: false,
+            execution_grant: InstalledPluginExecutionGrant::MetadataOnly,
         };
         let record = repo.install_plugin_metadata(installed).unwrap();
 
         assert_eq!(record.id, "local_registry_test");
         assert_eq!(record.source_path, source_path);
         assert!(!record.execution_enabled);
+        assert_eq!(
+            record.execution_grant,
+            InstalledPluginExecutionGrant::MetadataOnly
+        );
         assert_eq!(record.manifest.actions[0].name, "inspect");
         assert_eq!(repo.list_installed_plugins().unwrap().len(), 1);
 
@@ -1648,6 +1690,10 @@ mod tests {
             .unwrap();
         assert_eq!(persisted.id, "local_registry_test");
         assert!(!persisted.execution_enabled);
+        assert_eq!(
+            persisted.execution_grant,
+            InstalledPluginExecutionGrant::MetadataOnly
+        );
         assert_eq!(
             persisted.manifest.source_path.as_deref(),
             Some(source_path.as_str())

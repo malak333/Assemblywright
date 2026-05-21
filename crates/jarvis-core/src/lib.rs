@@ -12,8 +12,10 @@ pub use ipc::{
     router, serve, serve_listener, ApprovalDecisionRequest, CommandRequest, CommandResponse,
     CreateMemoryItemRequest, CreateSchedulerJobRequest, EmergencyPauseRequest,
     EmergencyPauseResponse, ErrorResponse, HealthResponse, InstallPluginRequest,
-    InstalledPluginRunRequest, InstalledPluginRunResponse, IpcState, SchedulerJobExecution,
-    SchedulerRunResponse, UpdateMemoryItemRequest,
+    InstalledPluginRunRequest, InstalledPluginRunResponse, IpcState, SchedulerBackgroundConfig,
+    SchedulerJobExecution, SchedulerRunResponse, UpdateMemoryItemRequest,
+    DEFAULT_SCHEDULER_BACKGROUND_INTERVAL_MS, DEFAULT_SCHEDULER_BACKGROUND_LIMIT,
+    MAX_SCHEDULER_BACKGROUND_LIMIT,
 };
 pub use model::{
     redact_url_credentials, ChatGptHttpModel, ChatGptProviderConfig, FakeLocalModel,
@@ -23,10 +25,10 @@ pub use model::{
 };
 pub use plugin::{
     plugin_permission_scopes, CancellationBehavior, CancellationSignal, EchoPlugin,
-    InProcessPlugin, InstalledPlugin, JsonSchema, PluginAccess, PluginActionManifest,
-    PluginCallMetadata, PluginCallRequest, PluginCallResult, PluginCallStatus, PluginHost,
-    PluginManifest, PluginPermission, PluginSource, PluginTimeout, PluginTimeoutAction,
-    StatusPlugin,
+    InProcessPlugin, InstalledPlugin, InstalledPluginExecutionGrant, JsonSchema, PluginAccess,
+    PluginActionManifest, PluginCallMetadata, PluginCallRequest, PluginCallResult,
+    PluginCallStatus, PluginHost, PluginManifest, PluginPermission, PluginSource, PluginTimeout,
+    PluginTimeoutAction, StatusPlugin,
 };
 pub use policy::{
     ApprovalDecision, ApprovalGrant, CapabilityScope, PermissionEngine, PolicyDecision,

@@ -430,6 +430,32 @@ pub struct InstalledPlugin {
     pub manifest: PluginManifest,
     pub source_path: String,
     pub execution_enabled: bool,
+    #[serde(default)]
+    pub execution_grant: InstalledPluginExecutionGrant,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstalledPluginExecutionGrant {
+    #[default]
+    MetadataOnly,
+}
+
+impl InstalledPluginExecutionGrant {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::MetadataOnly => "metadata_only",
+        }
+    }
+
+    pub fn parse(value: &str) -> JarvisResult<Self> {
+        match value {
+            "metadata_only" => Ok(Self::MetadataOnly),
+            _ => Err(JarvisError::Validation(format!(
+                "unknown installed plugin execution grant: {value}"
+            ))),
+        }
+    }
 }
 
 impl InstalledPlugin {
@@ -454,6 +480,7 @@ impl InstalledPlugin {
             manifest,
             source_path: source_path.display().to_string(),
             execution_enabled: false,
+            execution_grant: InstalledPluginExecutionGrant::MetadataOnly,
         })
     }
 }

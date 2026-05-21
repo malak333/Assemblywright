@@ -223,6 +223,7 @@ public final class RunManagementModel: ObservableObject {
 public final class ApprovalManagementModel: ObservableObject {
     @Published public private(set) var contract: JarvisContractResponse?
     @Published public private(set) var pendingItems: [JarvisApprovalQueueItem]
+    @Published public private(set) var permissionSurface: JarvisPermissionSurfaceState
     @Published public private(set) var lastDecision: JarvisPendingApproval?
     @Published public private(set) var isLoading: Bool
     @Published public private(set) var lastError: String?
@@ -238,20 +239,24 @@ public final class ApprovalManagementModel: ObservableObject {
     }
 
     private let client: any JarvisCoreClient
+    private var pluginManifests: [JarvisPluginManifest]
 
     public init(client: any JarvisCoreClient = JarvisIPCClient()) {
         self.client = client
         self.contract = nil
         self.pendingItems = []
+        self.permissionSurface = .empty
         self.lastDecision = nil
         self.isLoading = false
         self.lastError = nil
+        self.pluginManifests = []
     }
 
     public func refresh() async {
         await run {
             let loadedContract = try await self.client.contract()
             self.contract = loadedContract
+            self.pluginManifests = try await self.client.listPluginManifests()
 
             if loadedContract.exposesApprovalList {
                 let approvals = try await self.client.listApprovals(status: "pending")
@@ -270,6 +275,12 @@ public final class ApprovalManagementModel: ObservableObject {
                     contract: loadedContract
                 )
             }
+
+            self.permissionSurface = JarvisPermissionSurfaceState.current(
+                pendingItems: self.pendingItems,
+                pluginManifests: self.pluginManifests,
+                contract: loadedContract
+            )
         }
     }
 
@@ -304,6 +315,11 @@ public final class ApprovalManagementModel: ObservableObject {
             let decision = try await operation()
             self.lastDecision = decision
             self.pendingItems.removeAll { $0.id == id }
+            self.permissionSurface = JarvisPermissionSurfaceState.current(
+                pendingItems: self.pendingItems,
+                pluginManifests: self.pluginManifests,
+                contract: self.contract
+            )
         }
     }
 
@@ -356,6 +372,8 @@ public final class DiagnosticsModel: ObservableObject {
 public enum JarvisVoiceCaptureState: Equatable, Sendable {
     case textOnly(reason: String)
     case stagingTranscript(source: String)
+    case interrupted(reason: String)
+    case degraded(reason: String)
     case unavailable(reason: String)
 }
 
@@ -363,7 +381,10 @@ public enum JarvisVoiceAction: Equatable, Sendable {
     case beginTranscript
     case updateTranscript(String)
     case submitTranscript
+    case interruptTranscript(String)
+    case resumeInterruptedTranscript
     case cancelTranscript
+    case markDegraded(String)
     case markUnavailable(String)
     case resetTextOnly
 }
@@ -410,6 +431,10 @@ public final class VoiceStateModel: ObservableObject {
             return "Text-only voice scaffold: \(reason)"
         case let .stagingTranscript(source):
             return "Voice transcript staging: \(source)"
+        case let .interrupted(reason):
+            return "Voice transcript interrupted: \(reason)"
+        case let .degraded(reason):
+            return "Voice degraded to typed transcript fallback: \(reason)"
         case let .unavailable(reason):
             return "Voice unavailable: \(reason)"
         }
@@ -446,6 +471,10 @@ public final class VoiceStateModel: ObservableObject {
                 lastError = "Voice input is unavailable; transcript cannot be submitted."
                 return nil
             }
+            guard !isInterrupted else {
+                lastError = "Voice transcript is interrupted; resume or cancel before submitting."
+                return nil
+            }
             let trimmed = transcriptDraft.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else {
                 lastError = "Transcript is empty."
@@ -456,12 +485,34 @@ public final class VoiceStateModel: ObservableObject {
             transcriptDraft = ""
             captureState = .textOnly(reason: Self.textOnlyReason)
             return handoff
+        case let .interruptTranscript(reason):
+            guard case .stagingTranscript = captureState else {
+                lastError = "No active transcript is available to interrupt."
+                return nil
+            }
+            lastHandoff = nil
+            captureState = .interrupted(reason: reason)
+            isPushToTalkEnabled = false
+            return nil
+        case .resumeInterruptedTranscript:
+            guard isInterrupted else {
+                lastError = "No interrupted transcript is available to resume."
+                return nil
+            }
+            captureState = .stagingTranscript(source: "typed transcript parity path")
+            return nil
         case .cancelTranscript:
             transcriptDraft = ""
             lastHandoff = nil
             if !isUnavailable {
                 captureState = .textOnly(reason: Self.textOnlyReason)
             }
+            return nil
+        case let .markDegraded(reason):
+            transcriptDraft = ""
+            lastHandoff = nil
+            captureState = .degraded(reason: reason)
+            isPushToTalkEnabled = false
             return nil
         case let .markUnavailable(reason):
             transcriptDraft = ""
@@ -478,6 +529,14 @@ public final class VoiceStateModel: ObservableObject {
         }
     }
 
+    public func interruptTranscript(reason: String) {
+        apply(.interruptTranscript(reason))
+    }
+
+    public func markDegraded(reason: String) {
+        apply(.markDegraded(reason))
+    }
+
     public func setUnavailable(reason: String) {
         apply(.markUnavailable(reason))
     }
@@ -488,6 +547,13 @@ public final class VoiceStateModel: ObservableObject {
 
     private var isUnavailable: Bool {
         if case .unavailable = captureState {
+            return true
+        }
+        return false
+    }
+
+    private var isInterrupted: Bool {
+        if case .interrupted = captureState {
             return true
         }
         return false

@@ -79,6 +79,18 @@ path:
 cargo run -p jarvis-cli -- serve --db-path /tmp/jarvis.sqlite
 ```
 
+To exercise the bounded background scheduler loop, opt in explicitly on the
+server. Each tick calls the same audited run-due path and clamps the per-tick
+limit to the core scheduler maximum:
+
+```sh
+cargo run -p jarvis-cli -- serve \
+  --db-path /tmp/jarvis.sqlite \
+  --scheduler-background \
+  --scheduler-interval-ms 30000 \
+  --scheduler-limit 16
+```
+
 Terminal 2:
 
 ```sh
@@ -130,6 +142,9 @@ Swift approval decision controls are covered by the Swift contract/model tests.
 Local plugin install is metadata-only:
 `jarvis plugins install /absolute/path/to/jarvis-plugin.json` validates and
 stores a disabled registry record when repository backing is enabled.
+Background scheduler execution is opt-in on `jarvis serve`; it does not start
+for default smoke or manual inspection sessions unless `--scheduler-background`
+is passed.
 
 When the server is started with `--db-path`, these inspection commands are also
 available:
@@ -162,7 +177,10 @@ release-proof smoke command and is run by `./scripts/release-local.sh`.
 `./scripts/packaged-supervision-proof.sh` is the focused Swift/Rust bridge
 proof for supervision changes: it builds `jarvis-cli`, copies it into a
 temporary `Jarvis.app/Contents/Resources/bin/` layout, runs the Swift supervisor
-coverage against that configured executable, and runs the CLI smoke command.
+coverage against that configured executable, starts the copied binary with a
+repository-backed database, verifies packaged-layout health, command, audit,
+diagnostics, emergency pause, blocked command, pause status, and resume
+surfaces, and then runs the CLI smoke command.
 Docs-only branches should at least run a render/lint-oriented documentation
 check when available, plus `cargo fmt --check` if the branch also touches Rust
 examples or scripts. Record any skipped full-gate stage as a blocker, not as
@@ -207,9 +225,10 @@ transcript handoff state, and can supervise a configured local core process
 abstraction. It also covers Swift approval decision calls against the Rust IPC
 approval endpoints. The packaged supervision proof additionally checks the
 expected `Resources/bin/jarvis-cli` bundle layout with a locally built core
-binary. These gates still do not prove a signed packaged app release,
-clean-profile launch, microphone permissions, live speech-to-text, or
-text-to-speech.
+binary and exercises repository-backed command, audit, diagnostics, and
+emergency-pause IPC through that copied binary. These gates still do not prove
+a signed packaged app release, notarization, clean-profile launch, microphone
+permissions, live speech-to-text, or text-to-speech.
 
 The public-repo production workflow expects isolated worktrees, topic branches,
 reviewable PRs, and clear ownership. A six-agent autonomous sweep can reduce

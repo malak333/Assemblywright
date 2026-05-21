@@ -27,6 +27,12 @@ enum CliCommand {
         bind: String,
         #[arg(long, env = "JARVIS_DB_PATH")]
         db_path: Option<PathBuf>,
+        #[arg(long)]
+        scheduler_background: bool,
+        #[arg(long, default_value_t = jarvis_core::DEFAULT_SCHEDULER_BACKGROUND_INTERVAL_MS)]
+        scheduler_interval_ms: u64,
+        #[arg(long, default_value_t = jarvis_core::DEFAULT_SCHEDULER_BACKGROUND_LIMIT)]
+        scheduler_limit: usize,
     },
     /// Query core health over HTTP IPC.
     Health {
@@ -257,6 +263,8 @@ enum PluginsCommand {
         action: String,
         #[arg(long, default_value = "null")]
         input: String,
+        #[arg(long)]
+        dry_run: bool,
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
@@ -304,7 +312,13 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_env_filter("info").init();
 
     match Cli::parse().command {
-        CliCommand::Serve { bind, db_path } => {
+        CliCommand::Serve {
+            bind,
+            db_path,
+            scheduler_background,
+            scheduler_interval_ms,
+            scheduler_limit,
+        } => {
             let provider_config = jarvis_core::ProviderConfig::from_env()?;
             let state = match db_path {
                 Some(path) => {
@@ -317,6 +331,15 @@ async fn main() -> anyhow::Result<()> {
                     )?
                 }
                 None => jarvis_core::IpcState::with_provider_config(provider_config),
+            };
+            let _scheduler_loop = if scheduler_background {
+                let config = jarvis_core::SchedulerBackgroundConfig::new(
+                    std::time::Duration::from_millis(scheduler_interval_ms),
+                    scheduler_limit,
+                )?;
+                Some(state.spawn_scheduler_background_loop(config))
+            } else {
+                None
             };
             jarvis_core::serve(bind.parse()?, state).await?;
         }
@@ -534,6 +557,7 @@ async fn main() -> anyhow::Result<()> {
                 id,
                 action,
                 input,
+                dry_run,
                 endpoint,
             } => {
                 let input: serde_json::Value = serde_json::from_str(&input)?;
@@ -541,6 +565,7 @@ async fn main() -> anyhow::Result<()> {
                     "action": action,
                     "input": input,
                     "session_id": null,
+                    "dry_run": dry_run,
                 }))?;
                 println!(
                     "{}",
