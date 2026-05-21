@@ -656,6 +656,103 @@ struct JarvisMacCoreTests {
         #expect(items.contains { $0.id == auditId && $0.approvalStatus == "pending" })
     }
 
+    @Test("Pending approval payload decodes Rust IPC contract names")
+    func decodesPendingApproval() throws {
+        let approvalId = UUID()
+        let taskId = UUID()
+        let data = pendingApprovalJSON(
+            id: approvalId,
+            taskId: taskId,
+            status: "pending",
+            decidedBy: nil,
+            decisionReason: nil
+        )
+
+        let approval = try JSONDecoder().decode(JarvisPendingApproval.self, from: data)
+        let item = JarvisApprovalQueueItem(approval: approval, actionAvailable: true)
+
+        #expect(approval.id == approvalId)
+        #expect(approval.taskId == taskId)
+        #expect(approval.action == "fake_echo.approval_echo")
+        #expect(approval.requestedScopes == ["conversation", "file_write"])
+        #expect(approval.riskTier == "confirm")
+        #expect(approval.status == "pending")
+        #expect(approval.decisionReason == nil)
+        #expect(item.id == approvalId)
+        #expect(item.actionAvailable)
+        #expect(item.title == "fake_echo.approval_echo")
+        #expect(item.detail == "Tool execution requires approval before continuing.")
+    }
+
+    @Test("Approval client methods send Rust IPC decision requests")
+    func approvalClientMethodsSendDecisionRequests() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [IPCURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let client = JarvisIPCClient(
+            endpoint: JarvisEndpoint(baseURL: URL(string: "http://127.0.0.1:7787")!),
+            session: session
+        )
+        let approvalId = UUID()
+        let taskId = UUID()
+        var requests: [(method: String, path: String, query: String?, body: [String: Any]?)] = []
+
+        IPCURLProtocol.handler = { request in
+            requests.append((
+                request.httpMethod ?? "",
+                request.url?.path(percentEncoded: false) ?? "",
+                request.url?.query(percentEncoded: false),
+                decodeRequestBody(request)
+            ))
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+
+            switch request.url?.path(percentEncoded: false) {
+            case "/approvals":
+                return (response, Data("[\(String(decoding: pendingApprovalJSON(id: approvalId, taskId: taskId), as: UTF8.self))]".utf8))
+            case "/approvals/\(approvalId.uuidString)":
+                return (response, pendingApprovalJSON(id: approvalId, taskId: taskId))
+            case "/approvals/\(approvalId.uuidString)/approve":
+                return (response, pendingApprovalJSON(id: approvalId, taskId: taskId, status: "approved", decidedBy: "mac-ui", decisionReason: "reviewed"))
+            case "/approvals/\(approvalId.uuidString)/deny":
+                return (response, pendingApprovalJSON(id: approvalId, taskId: taskId, status: "denied", decidedBy: "mac-ui", decisionReason: "too risky"))
+            default:
+                return (response, Data("{}".utf8))
+            }
+        }
+        defer { IPCURLProtocol.handler = nil }
+
+        let pending = try await client.listApprovals(status: "pending")
+        _ = try await client.approval(id: approvalId)
+        let approved = try await client.approveApproval(
+            id: approvalId,
+            request: JarvisApprovalDecisionRequest(decidedBy: "mac-ui", reason: "reviewed")
+        )
+        let denied = try await client.denyApproval(
+            id: approvalId,
+            request: JarvisApprovalDecisionRequest(decidedBy: "mac-ui", reason: "too risky")
+        )
+
+        #expect(pending.first?.id == approvalId)
+        #expect(approved.status == "approved")
+        #expect(denied.status == "denied")
+        #expect(requests.map(\.method) == ["GET", "GET", "POST", "POST"])
+        #expect(requests.map(\.path) == [
+            "/approvals",
+            "/approvals/\(approvalId.uuidString)",
+            "/approvals/\(approvalId.uuidString)/approve",
+            "/approvals/\(approvalId.uuidString)/deny"
+        ])
+        #expect(requests[0].query == "status=pending")
+        #expect(requests[2].body?["decided_by"] as? String == "mac-ui")
+        #expect(requests[2].body?["reason"] as? String == "reviewed")
+        #expect(requests[3].body?["reason"] as? String == "too risky")
+    }
+
     @MainActor
     @Test("Voice state model is explicit about text-only scaffold")
     func voiceStateModelTracksDegradedMode() {
@@ -700,6 +797,49 @@ struct JarvisMacCoreTests {
         #expect(model.pendingItems.count == 2)
         #expect(!model.supportsApprovalActions)
         #expect(model.limitationText?.contains("no approval decision endpoint") == true)
+    }
+
+    @MainActor
+    @Test("Approval management model approves and removes pending approval")
+    func approvalManagementModelApprovesPendingApproval() async {
+        let approval = samplePendingApproval()
+        let client = FakeCoreClient(
+            contractResponse: fullApprovalContract(),
+            approvals: [approval]
+        )
+        let model = ApprovalManagementModel(client: client)
+
+        await model.refresh()
+        await model.approve(id: approval.id, reason: "reviewed in app")
+
+        #expect(model.supportsApprovalActions)
+        #expect(model.pendingItems.isEmpty)
+        #expect(model.lastDecision?.status == "approved")
+        #expect(model.lastDecision?.decidedBy == "mac-ui")
+        #expect(client.approvalDecisions == [
+            FakeCoreClient.ApprovalDecision(id: approval.id, approved: true, reason: "reviewed in app")
+        ])
+    }
+
+    @MainActor
+    @Test("Approval management model denies pending approval")
+    func approvalManagementModelDeniesPendingApproval() async {
+        let approval = samplePendingApproval()
+        let client = FakeCoreClient(
+            contractResponse: fullApprovalContract(),
+            approvals: [approval]
+        )
+        let model = ApprovalManagementModel(client: client)
+
+        await model.refresh()
+        await model.deny(id: approval.id, reason: "not safe enough")
+
+        #expect(model.pendingItems.isEmpty)
+        #expect(model.lastDecision?.status == "denied")
+        #expect(model.lastDecision?.decisionReason == "not safe enough")
+        #expect(client.approvalDecisions == [
+            FakeCoreClient.ApprovalDecision(id: approval.id, approved: false, reason: "not safe enough")
+        ])
     }
 
     @MainActor
@@ -839,7 +979,12 @@ struct JarvisMacCoreTests {
 
     private func contractJSON(exposesApprovalEndpoint: Bool) -> Data {
         let extra = exposesApprovalEndpoint
-            ? #",{ "method": "POST", "path": "/approvals/:id/approve", "repository_required": true, "redacted": false }"#
+            ? """
+            ,{ "method": "GET", "path": "/approvals", "repository_required": true, "redacted": false },
+                { "method": "GET", "path": "/approvals/:id", "repository_required": true, "redacted": false },
+                { "method": "POST", "path": "/approvals/:id/approve", "repository_required": true, "redacted": false },
+                { "method": "POST", "path": "/approvals/:id/deny", "repository_required": true, "redacted": false }
+            """
             : ""
         return Data(
             """
@@ -869,6 +1014,77 @@ private func sampleHealth() -> JarvisHealth {
         emergencyPauseReason: nil,
         schedulerJobs: 0,
         commandRuntime: "routed-fake-local-model+first-party-plugins"
+    )
+}
+
+private func fullApprovalContract() -> JarvisContractResponse {
+    try! JSONDecoder().decode(
+        JarvisContractResponse.self,
+        from: Data(
+            """
+            {
+              "contract": { "name": "jarvis.local-ipc", "version": 1, "core_version": "0.1.0" },
+              "endpoints": [
+                { "method": "GET", "path": "/health", "repository_required": false, "redacted": true },
+                { "method": "GET", "path": "/approvals", "repository_required": true, "redacted": false },
+                { "method": "GET", "path": "/approvals/:id", "repository_required": true, "redacted": false },
+                { "method": "POST", "path": "/approvals/:id/approve", "repository_required": true, "redacted": false },
+                { "method": "POST", "path": "/approvals/:id/deny", "repository_required": true, "redacted": false }
+              ],
+              "safe_inspection_paths": ["/health", "/approvals"]
+            }
+            """.utf8
+        )
+    )
+}
+
+private func samplePendingApproval(
+    id: UUID = UUID(),
+    taskId: UUID = UUID(),
+    status: String = "pending",
+    decidedBy: String? = nil,
+    decisionReason: String? = nil
+) -> JarvisPendingApproval {
+    try! JSONDecoder().decode(
+        JarvisPendingApproval.self,
+        from: pendingApprovalJSON(
+            id: id,
+            taskId: taskId,
+            status: status,
+            decidedBy: decidedBy,
+            decisionReason: decisionReason
+        )
+    )
+}
+
+private func pendingApprovalJSON(
+    id: UUID,
+    taskId: UUID,
+    status: String = "pending",
+    decidedBy: String? = nil,
+    decisionReason: String? = nil
+) -> Data {
+    let decidedAt = decidedBy == nil ? "null" : #""2026-05-20T12:01:00Z""#
+    let encodedDecidedBy = decidedBy.map { #""\#($0)""# } ?? "null"
+    let encodedDecisionReason = decisionReason.map { #""\#($0)""# } ?? "null"
+
+    return Data(
+        """
+        {
+          "id": "\(id.uuidString)",
+          "task_id": "\(taskId.uuidString)",
+          "action": "fake_echo.approval_echo",
+          "requested_scopes": ["conversation", "file_write"],
+          "risk_tier": "confirm",
+          "sensitivity": "workspace",
+          "status": "\(status)",
+          "reason": "Tool execution requires approval before continuing.",
+          "requested_at": "2026-05-20T12:00:00Z",
+          "decided_at": \(decidedAt),
+          "decided_by": \(encodedDecidedBy),
+          "decision_reason": \(encodedDecisionReason)
+        }
+        """.utf8
     )
 }
 
@@ -926,18 +1142,32 @@ private final class FakeProcessLauncher: JarvisCoreProcessLaunching, @unchecked 
 }
 
 private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
+    struct ApprovalDecision: Equatable {
+        var id: UUID
+        var approved: Bool
+        var reason: String?
+    }
+
     private var healthResults: [Result<JarvisHealth, Error>]
     private var tasks: [JarvisTask]
     private var auditEntries: [JarvisAuditEntry]
+    private var contractResponse: JarvisContractResponse?
+    private var approvals: [JarvisPendingApproval]
+    private(set) var approvalDecisions: [ApprovalDecision]
 
     init(
         healthResults: [Result<JarvisHealth, Error>] = [.success(sampleHealth())],
         tasks: [JarvisTask] = [],
-        auditEntries: [JarvisAuditEntry] = []
+        auditEntries: [JarvisAuditEntry] = [],
+        contractResponse: JarvisContractResponse? = nil,
+        approvals: [JarvisPendingApproval] = []
     ) {
         self.healthResults = healthResults
         self.tasks = tasks
         self.auditEntries = auditEntries
+        self.contractResponse = contractResponse
+        self.approvals = approvals
+        self.approvalDecisions = []
     }
 
     func health() async throws -> JarvisHealth {
@@ -949,7 +1179,11 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     }
 
     func contract() async throws -> JarvisContractResponse {
-        try JSONDecoder().decode(
+        if let contractResponse {
+            return contractResponse
+        }
+
+        return try JSONDecoder().decode(
             JarvisContractResponse.self,
             from: Data(
                 """
@@ -1042,6 +1276,53 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
 
     func diagnosticsExport() async throws -> JarvisDiagnosticsExport {
         try JSONDecoder().decode(JarvisDiagnosticsExport.self, from: diagnosticsJSON())
+    }
+
+    func listApprovals(status: String?) async throws -> [JarvisPendingApproval] {
+        guard let status else {
+            return approvals
+        }
+        return approvals.filter { $0.status == status }
+    }
+
+    func approval(id: UUID) async throws -> JarvisPendingApproval {
+        guard let approval = approvals.first(where: { $0.id == id }) else {
+            throw URLError(.badServerResponse)
+        }
+        return approval
+    }
+
+    func approveApproval(
+        id: UUID,
+        request: JarvisApprovalDecisionRequest
+    ) async throws -> JarvisPendingApproval {
+        try decideApproval(id: id, approved: true, request: request)
+    }
+
+    func denyApproval(
+        id: UUID,
+        request: JarvisApprovalDecisionRequest
+    ) async throws -> JarvisPendingApproval {
+        try decideApproval(id: id, approved: false, request: request)
+    }
+
+    private func decideApproval(
+        id: UUID,
+        approved: Bool,
+        request: JarvisApprovalDecisionRequest
+    ) throws -> JarvisPendingApproval {
+        guard let approval = approvals.first(where: { $0.id == id }) else {
+            throw URLError(.badServerResponse)
+        }
+
+        approvalDecisions.append(ApprovalDecision(id: id, approved: approved, reason: request.reason))
+        return samplePendingApproval(
+            id: approval.id,
+            taskId: approval.taskId,
+            status: approved ? "approved" : "denied",
+            decidedBy: request.decidedBy,
+            decisionReason: request.reason
+        )
     }
 }
 

@@ -94,8 +94,24 @@ public struct JarvisContractResponse: Decodable, Equatable, Sendable {
     public var safeInspectionPaths: [String]
 
     public var exposesApprovalActions: Bool {
+        exposesApprovalApproveAction || exposesApprovalDenyAction
+    }
+
+    public var exposesApprovalList: Bool {
         endpoints.contains { endpoint in
-            endpoint.path.localizedCaseInsensitiveContains("approval")
+            endpoint.method.uppercased() == "GET" && endpoint.path == "/approvals"
+        }
+    }
+
+    public var exposesApprovalApproveAction: Bool {
+        endpoints.contains { endpoint in
+            endpoint.method.uppercased() == "POST" && endpoint.path == "/approvals/:id/approve"
+        }
+    }
+
+    public var exposesApprovalDenyAction: Bool {
+        endpoints.contains { endpoint in
+            endpoint.method.uppercased() == "POST" && endpoint.path == "/approvals/:id/deny"
         }
     }
 
@@ -508,6 +524,11 @@ public struct JarvisApprovalQueueItem: Equatable, Identifiable, Sendable {
     public var source: String
     public var approvalStatus: String
     public var actionAvailable: Bool
+    public var action: String?
+    public var requestedScopes: [String]
+    public var riskTier: String?
+    public var sensitivity: String?
+    public var requestedAt: String?
 
     public init(
         id: UUID = UUID(),
@@ -516,7 +537,12 @@ public struct JarvisApprovalQueueItem: Equatable, Identifiable, Sendable {
         detail: String,
         source: String,
         approvalStatus: String,
-        actionAvailable: Bool
+        actionAvailable: Bool,
+        action: String? = nil,
+        requestedScopes: [String] = [],
+        riskTier: String? = nil,
+        sensitivity: String? = nil,
+        requestedAt: String? = nil
     ) {
         self.id = id
         self.taskId = taskId
@@ -525,6 +551,28 @@ public struct JarvisApprovalQueueItem: Equatable, Identifiable, Sendable {
         self.source = source
         self.approvalStatus = approvalStatus
         self.actionAvailable = actionAvailable
+        self.action = action
+        self.requestedScopes = requestedScopes
+        self.riskTier = riskTier
+        self.sensitivity = sensitivity
+        self.requestedAt = requestedAt
+    }
+
+    public init(approval: JarvisPendingApproval, actionAvailable: Bool) {
+        self.init(
+            id: approval.id,
+            taskId: approval.taskId,
+            title: approval.action,
+            detail: approval.reason,
+            source: "approval",
+            approvalStatus: approval.status,
+            actionAvailable: actionAvailable && approval.status == "pending",
+            action: approval.action,
+            requestedScopes: approval.requestedScopes,
+            riskTier: approval.riskTier,
+            sensitivity: approval.sensitivity,
+            requestedAt: approval.requestedAt
+        )
     }
 
     public static func pendingItems(
@@ -566,12 +614,67 @@ public struct JarvisApprovalQueueItem: Equatable, Identifiable, Sendable {
         return taskItems + auditItems
     }
 
+    public static func pendingItems(
+        approvals: [JarvisPendingApproval],
+        contract: JarvisContractResponse?
+    ) -> [JarvisApprovalQueueItem] {
+        let supportsApprovalActions = contract?.exposesApprovalActions == true
+        return approvals.map {
+            JarvisApprovalQueueItem(approval: $0, actionAvailable: supportsApprovalActions)
+        }
+    }
+
     private static func approvalStatus(from payload: JarvisJSONValue?) -> String {
         guard case let .object(object) = payload,
               case let .string(status) = object["approval_status"] else {
             return "pending"
         }
         return status
+    }
+}
+
+public struct JarvisPendingApproval: Decodable, Equatable, Identifiable, Sendable {
+    public var id: UUID
+    public var taskId: UUID
+    public var action: String
+    public var requestedScopes: [String]
+    public var riskTier: String
+    public var sensitivity: String
+    public var status: String
+    public var reason: String
+    public var requestedAt: String
+    public var decidedAt: String?
+    public var decidedBy: String?
+    public var decisionReason: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case taskId = "task_id"
+        case action
+        case requestedScopes = "requested_scopes"
+        case riskTier = "risk_tier"
+        case sensitivity
+        case status
+        case reason
+        case requestedAt = "requested_at"
+        case decidedAt = "decided_at"
+        case decidedBy = "decided_by"
+        case decisionReason = "decision_reason"
+    }
+}
+
+public struct JarvisApprovalDecisionRequest: Encodable, Equatable, Sendable {
+    public var decidedBy: String
+    public var reason: String?
+
+    public init(decidedBy: String, reason: String?) {
+        self.decidedBy = decidedBy
+        self.reason = reason
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case decidedBy = "decided_by"
+        case reason
     }
 }
 
@@ -626,6 +729,10 @@ public protocol JarvisCoreClient: Sendable {
     func createSchedulerJob(_ request: JarvisCreateSchedulerJobRequest) async throws -> JarvisSchedulerJob
     func cancelSchedulerJob(id: UUID) async throws -> JarvisSchedulerJob
     func diagnosticsExport() async throws -> JarvisDiagnosticsExport
+    func listApprovals(status: String?) async throws -> [JarvisPendingApproval]
+    func approval(id: UUID) async throws -> JarvisPendingApproval
+    func approveApproval(id: UUID, request: JarvisApprovalDecisionRequest) async throws -> JarvisPendingApproval
+    func denyApproval(id: UUID, request: JarvisApprovalDecisionRequest) async throws -> JarvisPendingApproval
 }
 
 public final class JarvisIPCClient: JarvisCoreClient {
@@ -729,6 +836,29 @@ public final class JarvisIPCClient: JarvisCoreClient {
 
     public func diagnosticsExport() async throws -> JarvisDiagnosticsExport {
         try await send(path: "/diagnostics/export", method: "GET", body: Optional<Data>.none)
+    }
+
+    public func listApprovals(status: String? = nil) async throws -> [JarvisPendingApproval] {
+        let path = status.map { "/approvals?status=\($0)" } ?? "/approvals"
+        return try await send(path: path, method: "GET", body: Optional<Data>.none)
+    }
+
+    public func approval(id: UUID) async throws -> JarvisPendingApproval {
+        try await send(path: "/approvals/\(id.uuidString)", method: "GET", body: Optional<Data>.none)
+    }
+
+    public func approveApproval(
+        id: UUID,
+        request: JarvisApprovalDecisionRequest
+    ) async throws -> JarvisPendingApproval {
+        try await send(path: "/approvals/\(id.uuidString)/approve", method: "POST", body: encoder.encode(request))
+    }
+
+    public func denyApproval(
+        id: UUID,
+        request: JarvisApprovalDecisionRequest
+    ) async throws -> JarvisPendingApproval {
+        try await send(path: "/approvals/\(id.uuidString)/deny", method: "POST", body: encoder.encode(request))
     }
 
     private func send<Response: Decodable>(
