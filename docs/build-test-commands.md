@@ -125,8 +125,9 @@ closed by returning `waiting_for_approval`, persisting an inspectable pending
 approval when repository backing is enabled, and requiring a separate CLI/IPC
 grant or denial. Granting an approval records the decision but does not execute
 the side effect. It does not yet implement installed plugin sandboxing,
-installed plugin execution, or Swift approval UI. Local plugin install is
-metadata-only:
+installed plugin execution, real voice capture, or signed packaged-app smoke.
+Swift approval decision controls are covered by the Swift contract/model tests.
+Local plugin install is metadata-only:
 `jarvis plugins install /absolute/path/to/jarvis-plugin.json` validates and
 stores a disabled registry record when repository backing is enabled.
 

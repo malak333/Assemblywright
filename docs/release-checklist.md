@@ -12,8 +12,9 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
 - Confirm release notes distinguish implemented Rust foundation and Swift shell
   scaffold behavior from the implemented opt-in Ollama-compatible local
   provider boundary, implemented opt-in ChatGPT/OpenAI-compatible provider
-  boundary, metadata-only local plugin installation, and planned Swift approval
-  UI, installed plugin execution, voice support, and packaging work.
+  boundary, metadata-only local plugin installation, implemented Swift approval
+  decision surface, and planned installed plugin execution, real voice support,
+  and packaging work.
 - Confirm the current architecture map still matches the real module wiring,
   especially the fact that `/commands` invokes the configured routed
   `ModelExecutor` (`FakeLocalModel` by default, Ollama-compatible HTTP or
@@ -92,8 +93,8 @@ stage or when a PR needs focused evidence for one ownership slice.
   scaffolds persist inspectable pending approvals and record CLI/IPC grant or
   denial decisions without executing side effects. Bounded fake-model
   first-party tool calls and Ollama-compatible plus ChatGPT/OpenAI-compatible
-  provider request/error behavior are covered in focused tests; Swift user
-  approval UI remains a future gate.
+  provider request/error behavior are covered in focused tests; Swift approval
+  decision controls are covered by contract/model tests.
 - Confirm task, audit, memory, and plugin manifest inspection endpoints still
   require or use the correct repository/plugin backing and are covered by local
   smoke or focused IPC tests.

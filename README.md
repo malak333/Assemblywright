@@ -19,8 +19,9 @@ This repository is intentionally v1 foundation work, not a Marvel/JARVIS clone
 and not an autonomous external-communication system. Risky side effects must be
 blocked or require approval, and every meaningful decision should be auditable.
 The current implementation should not be described as a finished production
-assistant: signed packaging, Swift approval UI, voice support, installed plugin
-execution, and packaged Mac smoke evidence are still target architecture. The
+assistant: signed packaging, real voice support, installed plugin execution,
+richer permission-center UX, and packaged Mac smoke evidence are still target
+architecture. The
 default command path still uses `FakeLocalModel`; set
 `JARVIS_LOCAL_MODEL_PROVIDER=ollama`, `JARVIS_LOCAL_MODEL`, and optionally
 `JARVIS_OLLAMA_BASE_URL`/`JARVIS_LOCAL_MODEL_TIMEOUT_MS` to exercise the local

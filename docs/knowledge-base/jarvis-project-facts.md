@@ -41,12 +41,12 @@ These notes capture durable facts for future agents working on this repository.
 - The CLI has matching `tasks`, `memory`, `scheduler`, `diagnostics`, and
   `plugins` subcommands, including `plugins install`, `plugins installed`, and
   `plugins installed-get` for disabled local manifest metadata.
-- The planned signed packaged app, Swift approval UI, installed plugin
-  execution, and production real-provider tool orchestration are not yet
-  implemented in this worktree. The first SwiftUI shell scaffold and IPC client
-  live under `apps/mac`, including a command transcript, activity/audit panel,
-  management tabs, degraded-mode handling, and a core supervisor abstraction for
-  configured or bundled local core binaries.
+- The planned signed packaged app, installed plugin execution, real voice loop,
+  and broader production operations are not yet implemented in this worktree.
+  The SwiftUI shell scaffold and IPC client live under `apps/mac`, including a
+  command transcript, activity/audit panel, approval decision controls,
+  management tabs, degraded-mode handling, text-only voice command handoff, and
+  a core supervisor abstraction for configured or bundled local core binaries.
 - The architecture docs must preserve two diagrams: the current implemented
   Rust/Swift scaffold and the end-goal production architecture. Keep the
   current-vs-target phase table aligned with code before answering readiness
@@ -75,18 +75,19 @@ These notes capture durable facts for future agents working on this repository.
   `cargo test -p jarvis-cli --test local_ipc_e2e`; the ignored variant is
   release-proof coverage and is included by `./scripts/release-local.sh`.
 - Do not describe Jarvis as a finished desktop assistant until the Swift shell,
-  packaged app, approval UI, and Mac release smoke test exist.
+  packaged app, richer permission UX, and Mac release smoke test exist.
 - Do not describe Jarvis as production assistant ready based only on the Rust
   and Swift local gates. The stronger claim requires packaged-app evidence,
-  ChatGPT execution where claimed, approval UI, voice or text UX parity as
-  scoped, diagnostics/recovery checks, and release smoke proof.
+  richer permission UX, real voice where claimed, diagnostics/recovery checks,
+  and release smoke proof.
 - It is fair to describe the current repo as a Rust foundation with tested
   scaffolding for IPC, storage, policy, routing, runtime, scheduler, plugin
   contracts, deterministic first-party plugin command execution, bounded
   fake-model planned first-party tool orchestration, opt-in Ollama-compatible
   local HTTP provider behavior, opt-in ChatGPT/OpenAI-compatible provider
   behavior, CLI behavior, and a Swift command/management shell with supervisor
-  abstraction when the local gate passes.
+  abstraction, approval decisions, and text-only voice handoff when the local
+  gate passes.
 - Do not claim autonomous external communication, smart-home control, or
   third-party plugin marketplace readiness for v1.
 - Keep public-facing claims scoped to tested local behavior.
