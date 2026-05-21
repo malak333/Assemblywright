@@ -92,7 +92,7 @@ struct JarvisShellView: View {
                     .tabItem { Text("Scheduler") }
                 DiagnosticsExportView(model: diagnostics)
                     .tabItem { Text("Diagnostics") }
-                VoiceStateView(model: voice)
+                VoiceStateView(model: voice, console: console)
                     .tabItem { Text("Voice") }
             }
         }
@@ -434,6 +434,7 @@ struct SchedulerJobsView: View {
 
 struct ApprovalCenterView: View {
     @ObservedObject var model: ApprovalManagementModel
+    @State private var decisionReasons: [UUID: String] = [:]
 
     var body: some View {
         ManagementListView(
@@ -445,6 +446,12 @@ struct ApprovalCenterView: View {
             List {
                 if let limitation = model.limitationText {
                     Text(limitation)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                if let decision = model.lastDecision {
+                    Text("\(decision.action) marked \(decision.status)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -464,12 +471,67 @@ struct ApprovalCenterView: View {
                             .foregroundStyle(.secondary)
                             .lineLimit(3)
                             .textSelection(.enabled)
-                        Text(item.actionAvailable ? "Core approval action exposed" : "Inspection only")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                        approvalMetadata(for: item)
+                        if item.actionAvailable {
+                            TextField("Decision reason", text: reasonBinding(for: item.id))
+                                .textFieldStyle(.roundedBorder)
+                            HStack {
+                                Button {
+                                    decide(item.id, approved: true)
+                                } label: {
+                                    Label("Approve", systemImage: "checkmark.circle")
+                                }
+                                Button(role: .destructive) {
+                                    decide(item.id, approved: false)
+                                } label: {
+                                    Label("Deny", systemImage: "xmark.circle")
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(model.isLoading)
+                        } else {
+                            Text("Inspection only")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     .padding(.vertical, 4)
                 }
+            }
+        }
+    }
+
+    private func approvalMetadata(for item: JarvisApprovalQueueItem) -> some View {
+        let metadata = [
+            item.riskTier.map { "risk: \($0)" },
+            item.sensitivity.map { "sensitivity: \($0)" },
+            item.requestedScopes.isEmpty ? nil : "scopes: \(item.requestedScopes.joined(separator: ", "))",
+            item.requestedAt.map { "requested: \($0)" }
+        ].compactMap { $0 }
+
+        return Text(metadata.isEmpty ? "Core approval action exposed" : metadata.joined(separator: " | "))
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .textSelection(.enabled)
+    }
+
+    private func reasonBinding(for id: UUID) -> Binding<String> {
+        Binding(
+            get: { decisionReasons[id, default: ""] },
+            set: { decisionReasons[id] = $0 }
+        )
+    }
+
+    private func decide(_ id: UUID, approved: Bool) {
+        let reason = decisionReasons[id]
+        Task {
+            if approved {
+                await model.approve(id: id, reason: reason)
+            } else {
+                await model.deny(id: id, reason: reason)
+            }
+            if model.lastError == nil {
+                decisionReasons[id] = nil
             }
         }
     }
@@ -560,6 +622,7 @@ struct DiagnosticsExportView: View {
 
 struct VoiceStateView: View {
     @ObservedObject var model: VoiceStateModel
+    @ObservedObject var console: CommandConsoleModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -571,11 +634,31 @@ struct VoiceStateView: View {
 
             Toggle("Push to talk", isOn: .constant(model.isPushToTalkEnabled))
                 .disabled(true)
-            Text("This surface tracks voice readiness and degraded mode only; it does not claim speech recognition support.")
+            Text("This surface stages typed transcripts only; it does not claim microphone capture, speech recognition, or text-to-speech support.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
+            TextField(
+                "Typed transcript",
+                text: Binding(
+                    get: { model.transcriptDraft },
+                    set: { model.apply(.updateTranscript($0)) }
+                )
+            )
+            .textFieldStyle(.roundedBorder)
+            .onSubmit(sendTranscript)
+
             HStack {
+                Button("Start Transcript") {
+                    model.apply(.beginTranscript)
+                }
+                Button("Send as Command") {
+                    sendTranscript()
+                }
+                .disabled(console.isWorking || model.transcriptDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button("Cancel") {
+                    model.apply(.cancelTranscript)
+                }
                 Button("Mark Mic Permission Missing") {
                     model.setUnavailable(reason: "Microphone permission is missing or unavailable.")
                 }
@@ -584,9 +667,29 @@ struct VoiceStateView: View {
                 }
             }
 
+            if let handoff = model.lastHandoff {
+                Text("Last handoff: \(handoff.source), dry-run \(handoff.dryRun ? "enabled" : "disabled")")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+
+            if let lastError = model.lastError {
+                Text(lastError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
             Spacer()
         }
         .padding()
+    }
+
+    private func sendTranscript() {
+        guard let handoff = model.apply(.submitTranscript) else { return }
+        Task {
+            await console.submit(input: handoff.text)
+        }
     }
 }
 

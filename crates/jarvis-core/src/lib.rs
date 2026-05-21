@@ -11,14 +11,15 @@ pub mod types;
 pub use ipc::{
     router, serve, serve_listener, ApprovalDecisionRequest, CommandRequest, CommandResponse,
     CreateMemoryItemRequest, CreateSchedulerJobRequest, EmergencyPauseRequest,
-    EmergencyPauseResponse, ErrorResponse, HealthResponse, InstallPluginRequest, IpcState,
-    SchedulerJobExecution, SchedulerRunResponse, UpdateMemoryItemRequest,
+    EmergencyPauseResponse, ErrorResponse, HealthResponse, InstallPluginRequest,
+    InstalledPluginRunRequest, InstalledPluginRunResponse, IpcState, SchedulerJobExecution,
+    SchedulerRunResponse, UpdateMemoryItemRequest,
 };
 pub use model::{
-    redact_url_credentials, ChatGptProviderConfig, FakeLocalModel, LocalModelConfig,
-    LocalModelExecutor, LocalModelProviderKind, ModelExecutor, ModelProvider, ModelRequest,
-    ModelResponse, ModelRoute, ModelToolRequest, ModelToolResult, OllamaHttpModel, ProviderConfig,
-    ProviderStatus,
+    redact_url_credentials, ChatGptHttpModel, ChatGptProviderConfig, FakeLocalModel,
+    LocalModelConfig, LocalModelExecutor, LocalModelProviderKind, ModelExecutor, ModelProvider,
+    ModelRequest, ModelResponse, ModelRoute, ModelToolRequest, ModelToolResult, OllamaHttpModel,
+    ProviderConfig, ProviderStatus, RoutedModelExecutor,
 };
 pub use plugin::{
     plugin_permission_scopes, CancellationBehavior, CancellationSignal, EchoPlugin,

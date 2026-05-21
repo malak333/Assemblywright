@@ -29,6 +29,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_eq!(contract["contract"]["version"], 1);
     assert_array_contains(&contract["endpoints"], "path", "/diagnostics/export");
     assert_array_contains(&contract["endpoints"], "path", "/approvals/:id/approve");
+    assert_array_contains(&contract["endpoints"], "path", "/plugins/installed/:id/run");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/scheduler/jobs/:id");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/approvals/:id");
 
@@ -123,6 +124,26 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_eq!(installed_plugin_get["id"], "local_e2e_plugin");
     assert_eq!(installed_plugin_get["execution_enabled"], false);
 
+    let blocked_installed_run = run_cli_json([
+        "plugins",
+        "run-installed",
+        "local_e2e_plugin",
+        "inspect",
+        "--input",
+        r#"{"path":"README.md"}"#,
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(blocked_installed_run["status"], "blocked");
+    assert_eq!(blocked_installed_run["execution_enabled"], false);
+    assert_eq!(blocked_installed_run["manifest_valid"], true);
+    assert_eq!(blocked_installed_run["action_declared"], true);
+    assert_eq!(blocked_installed_run["side_effect_executed"], false);
+    assert_eq!(
+        blocked_installed_run["audit_entry"]["event_type"],
+        "installed_plugin_execution_blocked"
+    );
+
     let tasks = run_cli_json(["tasks", "list", "--endpoint", endpoint.as_str()]);
     assert_array_contains(&tasks, "id", &task_id);
 
@@ -139,6 +160,11 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
 
     let all_audit = run_cli_json(["tasks", "audit", "--endpoint", endpoint.as_str()]);
     assert_array_contains(&all_audit, "event_type", "plugin_completed");
+    assert_array_contains(
+        &all_audit,
+        "event_type",
+        "installed_plugin_execution_blocked",
+    );
 
     let approval_command = run_cli_json([
         "command",
@@ -411,6 +437,77 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert!(!diagnostics_encoded.contains("updated through jarvis-cli e2e"));
     assert!(!diagnostics_encoded.contains("plugin status"));
     assert!(!diagnostics_encoded.contains("cross-process e2e"));
+
+    let fail_closed_job = run_cli_json([
+        "scheduler",
+        "schedule",
+        "fail closed approval e2e job",
+        "plugin approval echo scheduler should pause",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    let fail_closed_id = fail_closed_job["id"]
+        .as_str()
+        .expect("fail closed scheduler id")
+        .to_string();
+    let fail_closed_cancelled_job = run_cli_json([
+        "scheduler",
+        "schedule",
+        "cancelled by fail closed e2e job",
+        "plugin status",
+        "--once-at",
+        "2999-01-01T00:00:00Z",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    let fail_closed_cancelled_id = fail_closed_cancelled_job["id"]
+        .as_str()
+        .expect("fail closed cancelled scheduler id")
+        .to_string();
+    let fail_closed_run = run_cli_json([
+        "scheduler",
+        "run-due",
+        "--limit",
+        "1",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(fail_closed_run["emergency_paused"], true);
+    assert_eq!(fail_closed_run["executions"][0]["accepted"], false);
+    assert_eq!(
+        fail_closed_run["executions"][0]["job"]["id"],
+        fail_closed_id
+    );
+    assert_eq!(fail_closed_run["executions"][0]["job"]["status"], "failed");
+    assert_array_contains(
+        &fail_closed_run["executions"][0]["audit_entries"],
+        "event_type",
+        "scheduler_fail_closed_emergency_pause",
+    );
+    let fail_closed_pause_status = run_cli_json(["pause-status", "--endpoint", endpoint.as_str()]);
+    assert_eq!(fail_closed_pause_status["paused"], true);
+    let cancelled_by_fail_closed = run_cli_json([
+        "scheduler",
+        "get",
+        fail_closed_cancelled_id.as_str(),
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(cancelled_by_fail_closed["status"], "cancelled");
+    let fail_closed_audit = run_cli_json(["tasks", "audit", "--endpoint", endpoint.as_str()]);
+    assert_array_contains(
+        &fail_closed_audit,
+        "event_type",
+        "scheduler_fail_closed_emergency_pause",
+    );
+    assert_array_contains(
+        &fail_closed_audit,
+        "event_type",
+        "emergency_pause_activated",
+    );
+
+    let resume_after_fail_closed = run_cli_json(["resume", "--endpoint", endpoint.as_str()]);
+    assert_eq!(resume_after_fail_closed["paused"], false);
 
     let pause = run_cli_json([
         "pause",

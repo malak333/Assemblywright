@@ -68,6 +68,11 @@ to explain what happened:
 - Local installed manifests do not create executable plugins. Runtime execution
   remains limited to registered first-party in-process plugins until a safe
   sandboxed runtime is explicitly implemented and tested.
+- Installed plugin run requests go through an explicit fail-closed runner
+  boundary. The boundary revalidates the stored manifest/version metadata,
+  checks the requested action is declared, honors `execution_enabled`, appends
+  audit evidence with `side_effect_executed: false`, and returns `blocked`
+  without dispatching plugin code.
 - Local manifest validation rejects invalid schemas, blocked action risk tiers,
   missing proactive/memory/model permissions, zero or excessive timeouts,
   first-party source claims, relative source paths, unreadable source
@@ -93,3 +98,5 @@ contract testing. Release verification should keep covering:
 - Proactive action gating.
 - Local manifest install acceptance/rejection and disabled registry
   persistence.
+- Installed plugin run attempts fail closed with manifest/action validation,
+  disabled execution semantics, and durable audit evidence.

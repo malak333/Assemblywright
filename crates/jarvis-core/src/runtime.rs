@@ -14,10 +14,7 @@ use crate::plugin::{
     plugin_permission_scopes, PluginCallRequest, PluginCallResult, PluginCallStatus, PluginHost,
     PluginSource,
 };
-use crate::router::{
-    ModelProvider as RoutedModelProvider, ModelRouteRecord, ModelRouteRequest, ModelRouter,
-    RouteOutcome,
-};
+use crate::router::{ModelRouteRecord, ModelRouteRequest, ModelRouter, RouteOutcome};
 use crate::storage::SqliteRepository;
 use crate::types::{AuditEntry, JarvisResult, Sensitivity, TaskRecord, TaskStatus};
 use crate::CapabilityScope;
@@ -355,12 +352,16 @@ where
             ));
         }
 
+        let mut granted_scopes = vec![CapabilityScope::Conversation, CapabilityScope::LocalModel];
+        if self.config.provider_config.chatgpt.enabled {
+            granted_scopes.push(CapabilityScope::CloudModel);
+        }
         let route_record = ModelRouter::route(&ModelRouteRequest {
             task_id: Some(task.id),
             user_intent: task.user_input.clone(),
             sensitivity: request.sensitivity,
             required_scopes: vec![CapabilityScope::Conversation, CapabilityScope::LocalModel],
-            granted_scopes: vec![CapabilityScope::Conversation, CapabilityScope::LocalModel],
+            granted_scopes,
             local_available: self.config.provider_config.local.enabled,
             local_sufficient: self.config.provider_config.local.enabled,
             provider_status: crate::ProviderStatus::from_config(&self.config.provider_config),
@@ -385,9 +386,7 @@ where
             ));
         }
 
-        if route_record.outcome == RouteOutcome::Blocked
-            || route_record.selected_provider != Some(RoutedModelProvider::Local)
-        {
+        if route_record.outcome == RouteOutcome::Blocked {
             self.update_task_status(&mut task, TaskStatus::Blocked)?;
             return Ok(self.finish(
                 task,
@@ -408,7 +407,7 @@ where
                 "command entered model execution",
                 json!({
                     "max_steps": self.config.max_steps,
-                    "provider": "local",
+                    "provider": route_record.selected_provider,
                 }),
             ),
         )?;
@@ -508,13 +507,18 @@ where
 
             let model_response = match self
                 .model
-                .execute(ModelRequest {
-                    task_id: task.id,
-                    session_id: task.session_id,
-                    user_input: task.user_input.clone(),
-                    step_index,
-                    tool_results: tool_results.clone(),
-                })
+                .execute_route(
+                    ModelRequest {
+                        task_id: task.id,
+                        session_id: task.session_id,
+                        user_input: task.user_input.clone(),
+                        step_index,
+                        tool_results: tool_results.clone(),
+                    },
+                    route_evidence
+                        .as_ref()
+                        .expect("route evidence is set before execution"),
+                )
                 .await
             {
                 Ok(response) => response,
@@ -982,10 +986,16 @@ mod tests {
     };
 
     use super::*;
-    use crate::model::{FakeLocalModel, ModelProvider, ModelToolRequest, ProviderConfig};
-    use crate::router::RouteOutcome;
+    use crate::model::{
+        ChatGptProviderConfig, FakeLocalModel, LocalModelConfig, ModelProvider, ModelToolRequest,
+        ProviderConfig, RoutedModelExecutor,
+    };
+    use crate::router::{ModelProvider as RoutedModelProvider, RouteOutcome};
     use crate::types::TaskStatus;
+    use axum::routing::post;
+    use axum::{Json, Router};
     use serde_json::json;
+    use tokio::net::TcpListener;
 
     #[tokio::test]
     async fn executes_command_with_fake_local_model() {
@@ -1141,6 +1151,81 @@ mod tests {
         assert!(route.reason.contains("restricted data"));
         assert!(route.evidence.chatgpt_enabled);
         assert!(route.evidence.restricted_cloud_block);
+    }
+
+    #[tokio::test]
+    async fn chatgpt_route_executes_only_after_opt_in_and_records_audited_evidence() {
+        async fn chat(Json(body): Json<serde_json::Value>) -> Json<serde_json::Value> {
+            let user_content = body["messages"][1]["content"]
+                .as_str()
+                .expect("user content");
+            assert!(user_content.contains("Redacted task context: summarize [REDACTED]"));
+            assert!(!user_content.contains("api_key=abc123"));
+            Json(json!({
+                "choices": [
+                    { "message": { "content": "cloud route answer" } }
+                ]
+            }))
+        }
+
+        let app = Router::new().route("/v1/chat/completions", post(chat));
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let address = listener.local_addr().expect("address");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("test server");
+        });
+
+        let provider_config = ProviderConfig {
+            local: LocalModelConfig {
+                enabled: false,
+                ..LocalModelConfig::default()
+            },
+            chatgpt: ChatGptProviderConfig {
+                enabled: true,
+                model: "gpt-test".to_string(),
+                base_url: format!("http://{address}/v1"),
+                api_key: Some("test-token-value".to_string()),
+                requires_approval: true,
+                timeout_ms: 2_000,
+            },
+        };
+        let runtime = ConversationRuntime::with_parts(
+            RuntimeConfig::default().with_provider_config(provider_config.clone()),
+            RuntimeControl::default(),
+            RoutedModelExecutor::from_config(&provider_config).expect("routed model"),
+            NoopRuntimeHooks,
+        );
+
+        let response = runtime
+            .execute_command(
+                CommandRequest::new("summarize api_key=abc123")
+                    .with_sensitivity(Sensitivity::Workspace),
+            )
+            .await
+            .expect("ChatGPT route should execute");
+
+        assert_eq!(response.task.status, TaskStatus::Completed);
+        assert_eq!(response.message, "cloud route answer");
+        assert_eq!(
+            response.route.as_ref().expect("route").provider,
+            ModelProvider::ChatGpt
+        );
+        let route = response.route_evidence.as_ref().expect("route evidence");
+        assert_eq!(route.outcome, RouteOutcome::Selected);
+        assert_eq!(
+            route.context_for_model.as_deref(),
+            Some("summarize [REDACTED]")
+        );
+        assert!(route.redaction_applied);
+        assert!(response.audit_entries.iter().any(|entry| {
+            entry.event_type == "model_route_selected"
+                && entry.payload["evidence"]["chatgpt_enabled"] == true
+                && entry.payload["redaction_applied"] == true
+        }));
+
+        let encoded = serde_json::to_string(&response.audit_entries).expect("audit JSON");
+        assert!(!encoded.contains("test-token-value"));
+        assert!(!encoded.contains("api_key=abc123"));
     }
 
     #[tokio::test]

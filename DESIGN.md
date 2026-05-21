@@ -99,7 +99,12 @@ A compact, always-available text and voice interface. It supports typed commands
 
 ### Voice Layer
 
-Handles wake/listen mode, speech-to-text, text-to-speech, interruption, low-latency acknowledgement, and handoff to background execution.
+Target production behavior handles wake/listen mode, speech-to-text,
+text-to-speech, interruption, low-latency acknowledgement, and handoff to
+background execution. The current Swift scaffold does not use microphone,
+Speech, or AVFoundation APIs. It models voice actions and degraded states, then
+hands a typed transcript to the same text command submit path so voice parity
+can be tested before real capture exists.
 
 ### Activity And Audit View
 
@@ -214,7 +219,7 @@ Version and test shared schemas between Swift and Rust. Breaking the app/core AP
 
 ### Voice Loop Tests
 
-Cover text input parity, wake/listen state transitions, interruption/cancel behavior, and degraded-mode behavior when mic or TTS permissions fail.
+Cover text input parity, wake/listen state transitions, interruption/cancel behavior, and degraded-mode behavior when mic or TTS permissions fail. Until the real voice adapter exists, these tests must stay explicit about the typed-transcript scaffold and must not imply actual speech recognition coverage.
 
 ### Safety Regression Tests
 

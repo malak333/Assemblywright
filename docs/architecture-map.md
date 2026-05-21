@@ -33,6 +33,7 @@ flowchart TB
         IPC --> Diagnostics["/diagnostics/export"]
         IPC --> Commands["/commands"]
         IPC --> Inspection["/tasks, /audit, /memory, /plugins/manifests, /plugins/installed"]
+        IPC --> InstalledRunner["/plugins/installed/:id/run fail-closed boundary"]
         IPC --> PauseApi["/emergency-pause"]
         IPC --> SchedulerApi["/scheduler/jobs"]
 
@@ -56,6 +57,8 @@ flowchart TB
         PluginHost --> ManifestValidation["manifest and JSON schema validation"]
         PluginHost --> FirstParty["fake_echo and fake_status plugins"]
         PluginHost --> TimeoutCancel["timeout and cancellation handling"]
+        InstalledRunner --> InstalledValidation["stored manifest/version and action validation"]
+        InstalledRunner --> InstalledAudit["blocked audit evidence, side_effect_executed=false"]
 
         SchedulerApi --> Scheduler["Scheduler"]
         PauseApi --> RuntimeControl
@@ -92,8 +95,11 @@ validation, policy checks, approval stops, and audit evidence.
 Repository-backed IPC state stores approval-required plugin command decisions
 in `pending_approvals`, exposes them through CLI/IPC inspection endpoints, and
 lets a user grant or deny the pending record without executing the side effect.
-It does not yet support ChatGPT execution, installed plugin sandboxing, or
-Swift user approval UI.
+Installed plugin run requests have an explicit fail-closed boundary that
+revalidates stored manifest metadata, checks the requested action, honors
+`execution_enabled`, appends audit evidence, and returns `blocked` without
+dispatching plugin code. It does not yet support ChatGPT execution, installed
+plugin sandboxing, or Swift user approval UI.
 Repository-backed IPC state also exposes task, audit, and memory inspection
 endpoints, plus first-party plugin manifest listing, so the CLI and Swift shell
 can inspect durable local state without reaching into SQLite directly.
@@ -186,11 +192,13 @@ sequenceDiagram
   entries, sensitivity, risk, approval, task status, and errors.
 - `jarvis-core::ipc`: Axum loopback HTTP API for `/health`, `/commands`,
   `/tasks`, `/audit`, `/memory`, `/plugins/manifests`, `/plugins/installed`,
-  `/emergency-pause`, and `/scheduler/jobs`. The command endpoint runs the
-  runtime with the configured local model executor, records local-first route
-  evidence, can execute
+  `/plugins/installed/:id/run`, `/emergency-pause`, and `/scheduler/jobs`.
+  The command endpoint runs the runtime with the configured local model
+  executor, records local-first route evidence, can execute
   deterministic first-party plugin commands through policy, returns
   route/step/plugin/audit evidence, and obeys emergency-pause state.
+  Installed-plugin run attempts fail closed with manifest/action validation,
+  disabled execution semantics, and durable audit evidence.
 - `jarvis-core::runtime`: Command runtime scaffolding with max-step enforcement,
   bounded model-planned first-party tool orchestration, runtime hooks, task
   cancellation, emergency-pause blocking/cancellation, model/tool step audit
@@ -223,7 +231,7 @@ sequenceDiagram
   scheduler jobs over HTTP, and running `jarvis smoke` against ephemeral local
   servers.
 - `apps/mac/JarvisMacCore`: Swift IPC client, core supervisor, command-console
-  model, voice degraded-mode state, and management models that decode Rust
+  model, text-only voice state/action scaffold, and management models that decode Rust
   health/contract/command/pause/task/audit/memory/plugin/scheduler/diagnostics
   JSON contracts. Approval management is inspection-only unless `/contract`
   exposes an approval decision endpoint.
@@ -309,7 +317,7 @@ external action.
 | Scheduler | Inspectable scheduler jobs with manual, one-time, interval trigger contracts and cancellation support. Repository-backed IPC state restores and updates jobs through SQLite. Emergency pause cancels active scheduler jobs. It does not yet run proactive jobs on a clock or create visible task records from triggers. | Durable scheduler and trigger engine for approved proactive routines, persisted job state, visible task records, and policy-gated execution. | Durable job state implemented; proactive execution engine pending. |
 | Storage and memory | SQLite migrations store tasks, append-only audit entries, emergency pause, memory items with provenance/sensitivity/review/soft-delete fields, scheduler jobs, pending approval records, and disabled installed-plugin registry metadata. CLI/IPC can inspect and mutate memory items, approval decisions, and plugin metadata when repository backing is enabled. | SQLite also owns permissions, executable plugin grants, model-route records, migrations with backup/rollback, and memory UX review flows; vector indexes remain rebuildable. | Core local state and plugin metadata registry implemented; broader production schema pending. |
 | Safety and approvals | Capability scopes, risk tiers, emergency-pause fail-closed behavior, audit-required flags, and approval-required decisions exist in Rust. Repository-backed IPC persists inspectable pending approvals and supports CLI grant/deny decisions without executing side effects. There is no Swift user approval UI yet. | Human approval prompts, permission center, grants history, policy review, and no bypass for high-risk side effects. | Policy engine and CLI/IPC approval scaffold implemented; human approval product surface pending. |
-| Voice and diagnostics | Voice is not implemented beyond design docs. Redacted diagnostics export exists over CLI/IPC and omits command bodies, scheduler commands, audit payloads, memory values, and cancellation reason text. | Voice input/output loop, interruption/cancel behavior, microphone degraded modes, and local diagnostics export integrated into the packaged app. | Diagnostics foundation implemented; voice and packaged UX pending. |
+| Voice and diagnostics | Swift now has a text-only voice state/action scaffold with typed transcript staging, unavailable/degraded states, and handoff into the same `CommandConsoleModel.submit` path used by text commands. It does not use microphone, Speech, AVFoundation, or TTS APIs. Redacted diagnostics export exists over CLI/IPC and omits command bodies, scheduler commands, audit payloads, memory values, and cancellation reason text. | Voice input/output loop, interruption/cancel behavior, microphone degraded modes, and local diagnostics export integrated into the packaged app. | Text-parity voice scaffold and diagnostics foundation implemented; real voice and packaged UX pending. |
 | Release proof | Local Rust and Swift build/test/smoke commands plus the ignored cross-process `local_ipc_e2e` release-proof test document the current proof boundary. | Signed/packaged app release with clean-profile Mac smoke, app-supervised core, command, audit, pause, restart, migration, recovery, diagnostics, and real-provider checks. | Local foundation proof only. |
 | Production workflow | Current production effort uses isolated worktrees, topic branches, reviewable PRs, and parallel ownership slices; this docs slice is branch `codex/production-docs`. | Public repo release train with PR evidence, reproducible local gates, owner-reviewed release notes, and no hidden readiness claims. | Workflow documented; release governance still manual. |
 
