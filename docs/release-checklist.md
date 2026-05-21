@@ -119,9 +119,14 @@ stage or when a PR needs focused evidence for one ownership slice.
   path while installed plugin execution remains disabled.
 - Confirm the Swift shell remains described as a scaffold until a signed
   packaged app bundles/launches the Rust core, handles approval prompts, and
-  passes packaged app smoke checks. A temporary `Resources/bin/jarvis-cli`
-  supervision proof is useful branch evidence, but it is not signed packaged
-  app release evidence.
+  passes packaged app smoke checks. `./scripts/packaged-supervision-proof.sh`
+  builds the Rust CLI, copies it into a temporary
+  `Jarvis.app/Contents/Resources/bin/jarvis-cli` layout, points Swift
+  supervisor tests at that executable, and starts the copied binary with a
+  repository-backed database to verify health, command, audit, diagnostics,
+  emergency pause, blocked command, pause status, and resume surfaces. This is
+  stronger packaged-layout branch evidence, but it is not signed, notarized,
+  clean-profile packaged app release evidence.
 
 ## Documentation Gate
 
@@ -153,6 +158,12 @@ This is a future gate once a packaged `Jarvis.app` exists:
 - Audit entry is written for the command.
 - Emergency pause stops new actions.
 - App exits cleanly and restarts with recoverable state.
+
+Until that packaged app gate exists, use
+`./scripts/packaged-supervision-proof.sh` only as local packaged-layout proof.
+It does not exercise Finder launch, code signing, notarization, entitlement
+validation, installer behavior, launch services, or clean-profile macOS
+permissions.
 
 ## Release Notes
 
