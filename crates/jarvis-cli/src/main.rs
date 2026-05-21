@@ -257,6 +257,8 @@ enum PluginsCommand {
         action: String,
         #[arg(long, default_value = "null")]
         input: String,
+        #[arg(long)]
+        dry_run: bool,
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
@@ -534,6 +536,7 @@ async fn main() -> anyhow::Result<()> {
                 id,
                 action,
                 input,
+                dry_run,
                 endpoint,
             } => {
                 let input: serde_json::Value = serde_json::from_str(&input)?;
@@ -541,6 +544,7 @@ async fn main() -> anyhow::Result<()> {
                     "action": action,
                     "input": input,
                     "session_id": null,
+                    "dry_run": dry_run,
                 }))?;
                 println!(
                     "{}",
