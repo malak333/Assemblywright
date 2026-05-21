@@ -75,6 +75,9 @@ stage or when a PR needs focused evidence for one ownership slice.
   `execution_enabled: false`.
 - Confirm installed plugin metadata does not become executable; execution is
   still limited to deterministic first-party in-process plugins.
+- Confirm installed plugin run attempts fail closed with manifest/version and
+  action validation, `execution_enabled: false` semantics, durable audit
+  evidence, and `side_effect_executed: false`.
 - Confirm persistent audit entries remain append-only in SQLite tests.
 - Confirm route, policy, approval, action, and failure evidence stay covered
   before claiming an end-to-end assistant release. The current command path

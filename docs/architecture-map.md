@@ -33,6 +33,7 @@ flowchart TB
         IPC --> Diagnostics["/diagnostics/export"]
         IPC --> Commands["/commands"]
         IPC --> Inspection["/tasks, /audit, /memory, /plugins/manifests, /plugins/installed"]
+        IPC --> InstalledRunner["/plugins/installed/:id/run fail-closed boundary"]
         IPC --> PauseApi["/emergency-pause"]
         IPC --> SchedulerApi["/scheduler/jobs"]
 
@@ -56,6 +57,8 @@ flowchart TB
         PluginHost --> ManifestValidation["manifest and JSON schema validation"]
         PluginHost --> FirstParty["fake_echo and fake_status plugins"]
         PluginHost --> TimeoutCancel["timeout and cancellation handling"]
+        InstalledRunner --> InstalledValidation["stored manifest/version and action validation"]
+        InstalledRunner --> InstalledAudit["blocked audit evidence, side_effect_executed=false"]
 
         SchedulerApi --> Scheduler["Scheduler"]
         PauseApi --> RuntimeControl
@@ -92,8 +95,11 @@ validation, policy checks, approval stops, and audit evidence.
 Repository-backed IPC state stores approval-required plugin command decisions
 in `pending_approvals`, exposes them through CLI/IPC inspection endpoints, and
 lets a user grant or deny the pending record without executing the side effect.
-It does not yet support ChatGPT execution, installed plugin sandboxing, or
-Swift user approval UI.
+Installed plugin run requests have an explicit fail-closed boundary that
+revalidates stored manifest metadata, checks the requested action, honors
+`execution_enabled`, appends audit evidence, and returns `blocked` without
+dispatching plugin code. It does not yet support ChatGPT execution, installed
+plugin sandboxing, or Swift user approval UI.
 Repository-backed IPC state also exposes task, audit, and memory inspection
 endpoints, plus first-party plugin manifest listing, so the CLI and Swift shell
 can inspect durable local state without reaching into SQLite directly.
@@ -186,11 +192,13 @@ sequenceDiagram
   entries, sensitivity, risk, approval, task status, and errors.
 - `jarvis-core::ipc`: Axum loopback HTTP API for `/health`, `/commands`,
   `/tasks`, `/audit`, `/memory`, `/plugins/manifests`, `/plugins/installed`,
-  `/emergency-pause`, and `/scheduler/jobs`. The command endpoint runs the
-  runtime with the configured local model executor, records local-first route
-  evidence, can execute
+  `/plugins/installed/:id/run`, `/emergency-pause`, and `/scheduler/jobs`.
+  The command endpoint runs the runtime with the configured local model
+  executor, records local-first route evidence, can execute
   deterministic first-party plugin commands through policy, returns
   route/step/plugin/audit evidence, and obeys emergency-pause state.
+  Installed-plugin run attempts fail closed with manifest/action validation,
+  disabled execution semantics, and durable audit evidence.
 - `jarvis-core::runtime`: Command runtime scaffolding with max-step enforcement,
   bounded model-planned first-party tool orchestration, runtime hooks, task
   cancellation, emergency-pause blocking/cancellation, model/tool step audit

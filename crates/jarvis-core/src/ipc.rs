@@ -206,6 +206,28 @@ pub struct InstallPluginRequest {
     pub manifest_path: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstalledPluginRunRequest {
+    pub action: String,
+    #[serde(default)]
+    pub input: serde_json::Value,
+    #[serde(default)]
+    pub session_id: Option<Uuid>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstalledPluginRunResponse {
+    pub plugin_id: String,
+    pub action: String,
+    pub status: String,
+    pub reason: String,
+    pub execution_enabled: bool,
+    pub manifest_valid: bool,
+    pub action_declared: bool,
+    pub side_effect_executed: bool,
+    pub audit_entry: AuditEntry,
+}
+
 #[derive(Debug, Clone, Default)]
 struct EmergencyPauseState {
     paused: bool,
@@ -687,6 +709,82 @@ impl IpcState {
         self.using_repository(|repository| repository.create_pending_approval(approval))
     }
 
+    pub fn run_installed_plugin(
+        &self,
+        id: &str,
+        request: InstalledPluginRunRequest,
+    ) -> JarvisResult<InstalledPluginRunResponse> {
+        if request.action.trim().is_empty() {
+            return Err(JarvisError::Validation(
+                "installed plugin action cannot be empty".to_string(),
+            ));
+        }
+
+        self.using_repository(|repository| {
+            let record = repository
+                .get_installed_plugin(id)?
+                .ok_or_else(|| JarvisError::Storage(format!("installed plugin not found: {id}")))?;
+            let manifest_validation = validate_installed_plugin_record(&record);
+            let manifest_valid = manifest_validation.is_ok();
+            let action_declared =
+                manifest_valid && record.manifest.action(&request.action).is_some();
+            let reason = if let Err(error) = &manifest_validation {
+                error.to_string()
+            } else if !action_declared {
+                format!(
+                    "installed plugin {} does not declare action {}",
+                    record.id, request.action
+                )
+            } else if !record.execution_enabled {
+                "installed plugin execution is disabled until a sandboxed runner is implemented"
+                    .to_string()
+            } else {
+                "installed plugin execution is blocked because no sandboxed runner is implemented"
+                    .to_string()
+            };
+            let event_type = if manifest_valid && action_declared {
+                "installed_plugin_execution_blocked"
+            } else if manifest_valid {
+                "installed_plugin_action_blocked"
+            } else {
+                "installed_plugin_manifest_invalid"
+            };
+            let audit_entry = AuditEntry::new(
+                None,
+                event_type,
+                "installed plugin run request failed closed before execution",
+                json!({
+                    "plugin_id": record.id,
+                    "action": request.action,
+                    "session_id": request.session_id,
+                    "manifest_schema_version": record.manifest.manifest_schema_version,
+                    "manifest_version": record.manifest.version,
+                    "source": record.manifest.source,
+                    "source_path": record.source_path,
+                    "execution_enabled": record.execution_enabled,
+                    "manifest_valid": manifest_valid,
+                    "action_declared": action_declared,
+                    "input_provided": !request.input.is_null(),
+                    "side_effect_executed": false,
+                    "reason": reason,
+                }),
+            );
+            repository.append_audit_entry(&audit_entry)?;
+
+            Ok(InstalledPluginRunResponse {
+                plugin_id: record.id,
+                action: request.action,
+                status: "blocked".to_string(),
+                reason,
+                execution_enabled: record.execution_enabled,
+                manifest_valid,
+                action_declared,
+                side_effect_executed: false,
+                audit_entry,
+            })
+        })
+    }
+
     pub fn pause(&self, reason: impl Into<String>) -> JarvisResult<EmergencyPauseResponse> {
         let reason = reason.into();
         let stored_pause = self.persist_pause(true, Some(&reason))?;
@@ -1086,6 +1184,41 @@ fn first_party_plugin_request(input: &str) -> Option<PluginCallRequest> {
     None
 }
 
+fn validate_installed_plugin_record(record: &InstalledPluginRecord) -> JarvisResult<()> {
+    if record.id != record.manifest.id {
+        return Err(JarvisError::Validation(format!(
+            "installed plugin id {} does not match manifest id {}",
+            record.id, record.manifest.id
+        )));
+    }
+    record.manifest.validate()?;
+    if record.manifest.source == crate::PluginSource::FirstParty {
+        return Err(JarvisError::Validation(format!(
+            "{} installed plugins cannot claim first_party source",
+            record.id
+        )));
+    }
+    let Some(source_path) = record.manifest.source_path.as_deref() else {
+        return Err(JarvisError::Validation(format!(
+            "{} installed plugin requires manifest source_path",
+            record.id
+        )));
+    };
+    if source_path != record.source_path {
+        return Err(JarvisError::Validation(format!(
+            "{} installed plugin source_path does not match manifest source_path",
+            record.id
+        )));
+    }
+    if !std::path::Path::new(&record.source_path).is_absolute() {
+        return Err(JarvisError::Validation(format!(
+            "{} installed plugin source_path must be absolute",
+            record.id
+        )));
+    }
+    Ok(())
+}
+
 pub fn router(state: IpcState) -> Router {
     Router::new()
         .route("/health", get(health))
@@ -1115,6 +1248,7 @@ pub fn router(state: IpcState) -> Router {
             get(list_installed_plugins).post(install_plugin),
         )
         .route("/plugins/installed/:id", get(get_installed_plugin))
+        .route("/plugins/installed/:id/run", post(run_installed_plugin))
         .route(
             "/emergency-pause",
             get(pause_status).post(pause).delete(resume),
@@ -1395,6 +1529,17 @@ async fn install_plugin(
         .map_err(error_response)
 }
 
+async fn run_installed_plugin(
+    State(state): State<IpcState>,
+    Path(id): Path<String>,
+    Json(request): Json<InstalledPluginRunRequest>,
+) -> Result<Json<InstalledPluginRunResponse>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .run_installed_plugin(&id, request)
+        .map(Json)
+        .map_err(error_response)
+}
+
 async fn pause_status(State(state): State<IpcState>) -> Json<EmergencyPauseResponse> {
     Json(state.pause_status())
 }
@@ -1493,6 +1638,7 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
         endpoint("GET", "/plugins/installed", true, true),
         endpoint("POST", "/plugins/installed", true, false),
         endpoint("GET", "/plugins/installed/:id", true, true),
+        endpoint("POST", "/plugins/installed/:id/run", true, false),
         endpoint("GET", "/emergency-pause", false, true),
         endpoint("POST", "/emergency-pause", false, false),
         endpoint("DELETE", "/emergency-pause", false, true),
@@ -1589,6 +1735,109 @@ mod tests {
             .any(|endpoint| endpoint.method == "GET"
                 && endpoint.path == "/scheduler/jobs/:id"
                 && !endpoint.repository_required));
+        assert!(contract
+            .endpoints
+            .iter()
+            .any(|endpoint| endpoint.method == "POST"
+                && endpoint.path == "/plugins/installed/:id/run"
+                && endpoint.repository_required));
+    }
+
+    #[test]
+    fn installed_plugin_runner_fails_closed_and_audits_request() {
+        let repository = SqliteRepository::in_memory().unwrap();
+        let source_dir = tempfile::tempdir().unwrap();
+        let source_path = source_dir
+            .path()
+            .canonicalize()
+            .unwrap()
+            .display()
+            .to_string();
+        let installed = InstalledPlugin {
+            manifest: local_installed_manifest(&source_path),
+            source_path: source_path.clone(),
+            execution_enabled: false,
+        };
+        repository.install_plugin_metadata(installed).unwrap();
+        let state = IpcState::with_repository(repository).expect("state");
+
+        let response = state
+            .run_installed_plugin(
+                "local_runner_test",
+                InstalledPluginRunRequest {
+                    action: "inspect".to_string(),
+                    input: json!({ "path": "README.md" }),
+                    session_id: Some(Uuid::new_v4()),
+                },
+            )
+            .expect("fail-closed response");
+
+        assert_eq!(response.status, "blocked");
+        assert!(!response.execution_enabled);
+        assert!(response.manifest_valid);
+        assert!(response.action_declared);
+        assert!(!response.side_effect_executed);
+        assert_eq!(
+            response.reason,
+            "installed plugin execution is disabled until a sandboxed runner is implemented"
+        );
+        assert_eq!(
+            response.audit_entry.event_type,
+            "installed_plugin_execution_blocked"
+        );
+        assert_eq!(
+            response.audit_entry.payload["plugin_id"],
+            "local_runner_test"
+        );
+        assert_eq!(response.audit_entry.payload["manifest_schema_version"], 1);
+        assert_eq!(response.audit_entry.payload["execution_enabled"], false);
+        assert_eq!(response.audit_entry.payload["side_effect_executed"], false);
+
+        let audit_entries = state
+            .using_repository(|repository| repository.list_audit_entries(None))
+            .expect("audit entries");
+        assert!(audit_entries
+            .iter()
+            .any(|entry| entry.id == response.audit_entry.id));
+    }
+
+    #[test]
+    fn installed_plugin_runner_blocks_undeclared_actions_before_execution() {
+        let repository = SqliteRepository::in_memory().unwrap();
+        let source_dir = tempfile::tempdir().unwrap();
+        let source_path = source_dir
+            .path()
+            .canonicalize()
+            .unwrap()
+            .display()
+            .to_string();
+        let installed = InstalledPlugin {
+            manifest: local_installed_manifest(&source_path),
+            source_path,
+            execution_enabled: false,
+        };
+        repository.install_plugin_metadata(installed).unwrap();
+        let state = IpcState::with_repository(repository).expect("state");
+
+        let response = state
+            .run_installed_plugin(
+                "local_runner_test",
+                InstalledPluginRunRequest {
+                    action: "missing".to_string(),
+                    input: json!({}),
+                    session_id: None,
+                },
+            )
+            .expect("fail-closed response");
+
+        assert_eq!(response.status, "blocked");
+        assert!(response.manifest_valid);
+        assert!(!response.action_declared);
+        assert!(!response.side_effect_executed);
+        assert_eq!(
+            response.audit_entry.event_type,
+            "installed_plugin_action_blocked"
+        );
     }
 
     #[tokio::test]
@@ -1625,6 +1874,32 @@ mod tests {
             .audit_entries
             .iter()
             .any(|entry| entry.event_type == "model_route_selected"));
+    }
+
+    fn local_installed_manifest(source_path: &str) -> PluginManifest {
+        PluginManifest {
+            manifest_schema_version: 1,
+            id: "local_runner_test".to_string(),
+            name: "Local Runner Test".to_string(),
+            version: "0.1.0".to_string(),
+            source: crate::PluginSource::LocalDevelopment,
+            author: "Jarvis Test".to_string(),
+            source_path: Some(source_path.to_string()),
+            actions: vec![crate::PluginActionManifest {
+                name: "inspect".to_string(),
+                description: "Validate installed runner boundary.".to_string(),
+                permissions: vec![crate::PluginPermission::ReadWorkspace],
+                risk_tier: crate::RiskTier::Low,
+                input_schema: crate::JsonSchema::empty_object(),
+                output_schema: crate::JsonSchema::empty_object(),
+                proactive: false,
+                memory_access: crate::PluginAccess::None,
+                model_access: crate::PluginAccess::None,
+                audit_fields: vec!["path".to_string()],
+                timeout: crate::PluginTimeout::default_for_action(),
+                cancellation: crate::CancellationBehavior::Cooperative,
+            }],
+        }
     }
 
     #[tokio::test]

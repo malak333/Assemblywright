@@ -57,7 +57,8 @@ policy:
 - Plugin access outside declared scopes.
 - Executing locally installed plugin metadata. The current local install path is
   registry-only and stores disabled manifest metadata until a sandboxed
-  execution path exists.
+  execution path exists. Any installed-plugin run request must fail closed,
+  append audit evidence, and report `side_effect_executed: false`.
 
 ## Regression Tests
 
@@ -66,6 +67,8 @@ Safety regressions should fail release verification:
 - High-risk actions bypassing approval.
 - Cloud routing receiving restricted data without explicit approval.
 - Plugin actions executing outside their manifest.
+- Installed plugin run attempts that execute while `execution_enabled` is
+  false, omit manifest/action validation, or skip audit evidence.
 - Local plugin manifests installing with invalid schema, blocked risk tier,
   missing proactive/memory/model permissions, unsafe source paths, or
   `first_party` source claims.
