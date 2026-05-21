@@ -633,6 +633,112 @@ public struct JarvisApprovalQueueItem: Equatable, Identifiable, Sendable {
     }
 }
 
+public enum JarvisPermissionSurfaceStatus: String, Equatable, Sendable {
+    case clear
+    case reviewRequired
+    case inspectionOnly
+}
+
+public struct JarvisPermissionRiskCount: Equatable, Sendable {
+    public var riskTier: String
+    public var count: Int
+
+    public init(riskTier: String, count: Int) {
+        self.riskTier = riskTier
+        self.count = count
+    }
+}
+
+public struct JarvisPermissionSurfaceState: Equatable, Sendable {
+    public var status: JarvisPermissionSurfaceStatus
+    public var approvalActionsAvailable: Bool
+    public var pendingApprovalCount: Int
+    public var actionableApprovalCount: Int
+    public var inspectionOnlyApprovalCount: Int
+    public var declaredScopes: [String]
+    public var riskTierCounts: [JarvisPermissionRiskCount]
+    public var proactiveActionCount: Int
+
+    public var summaryText: String {
+        switch status {
+        case .clear:
+            return "No pending approvals. \(declaredScopes.count) declared permission scope(s) are visible."
+        case .reviewRequired:
+            return "\(actionableApprovalCount) approval request(s) need a decision before Jarvis can continue."
+        case .inspectionOnly:
+            return "\(pendingApprovalCount) approval signal(s) are visible, but this core cannot accept decisions yet."
+        }
+    }
+
+    public init(
+        status: JarvisPermissionSurfaceStatus,
+        approvalActionsAvailable: Bool,
+        pendingApprovalCount: Int,
+        actionableApprovalCount: Int,
+        inspectionOnlyApprovalCount: Int,
+        declaredScopes: [String],
+        riskTierCounts: [JarvisPermissionRiskCount],
+        proactiveActionCount: Int
+    ) {
+        self.status = status
+        self.approvalActionsAvailable = approvalActionsAvailable
+        self.pendingApprovalCount = pendingApprovalCount
+        self.actionableApprovalCount = actionableApprovalCount
+        self.inspectionOnlyApprovalCount = inspectionOnlyApprovalCount
+        self.declaredScopes = declaredScopes
+        self.riskTierCounts = riskTierCounts
+        self.proactiveActionCount = proactiveActionCount
+    }
+
+    public static let empty = JarvisPermissionSurfaceState(
+        status: .clear,
+        approvalActionsAvailable: false,
+        pendingApprovalCount: 0,
+        actionableApprovalCount: 0,
+        inspectionOnlyApprovalCount: 0,
+        declaredScopes: [],
+        riskTierCounts: [],
+        proactiveActionCount: 0
+    )
+
+    public static func current(
+        pendingItems: [JarvisApprovalQueueItem],
+        pluginManifests: [JarvisPluginManifest],
+        contract: JarvisContractResponse?
+    ) -> JarvisPermissionSurfaceState {
+        let approvalActionsAvailable = contract?.exposesApprovalActions == true
+        let pendingApprovalCount = pendingItems.filter { $0.approvalStatus == "pending" }.count
+        let actionableApprovalCount = pendingItems.filter { $0.approvalStatus == "pending" && $0.actionAvailable }.count
+        let inspectionOnlyApprovalCount = pendingApprovalCount - actionableApprovalCount
+        let actions = pluginManifests.flatMap(\.actions)
+        let declaredScopes = Array(Set(actions.flatMap(\.permissions))).sorted()
+        let riskTierCounts = Dictionary(grouping: actions, by: \.riskTier)
+            .map { JarvisPermissionRiskCount(riskTier: $0.key, count: $0.value.count) }
+            .sorted { lhs, rhs in lhs.riskTier < rhs.riskTier }
+        let proactiveActionCount = actions.filter(\.proactive).count
+        let status: JarvisPermissionSurfaceStatus
+
+        if actionableApprovalCount > 0 {
+            status = .reviewRequired
+        } else if pendingApprovalCount > 0 {
+            status = .inspectionOnly
+        } else {
+            status = .clear
+        }
+
+        return JarvisPermissionSurfaceState(
+            status: status,
+            approvalActionsAvailable: approvalActionsAvailable,
+            pendingApprovalCount: pendingApprovalCount,
+            actionableApprovalCount: actionableApprovalCount,
+            inspectionOnlyApprovalCount: inspectionOnlyApprovalCount,
+            declaredScopes: declaredScopes,
+            riskTierCounts: riskTierCounts,
+            proactiveActionCount: proactiveActionCount
+        )
+    }
+}
+
 public struct JarvisPendingApproval: Decodable, Equatable, Identifiable, Sendable {
     public var id: UUID
     public var taskId: UUID

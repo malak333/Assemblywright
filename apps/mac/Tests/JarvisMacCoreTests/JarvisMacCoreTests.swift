@@ -844,6 +844,9 @@ struct JarvisMacCoreTests {
         #expect(model.pendingItems.count == 2)
         #expect(!model.supportsApprovalActions)
         #expect(model.limitationText?.contains("no approval decision endpoint") == true)
+        #expect(model.permissionSurface.status == .inspectionOnly)
+        #expect(model.permissionSurface.pendingApprovalCount == 2)
+        #expect(model.permissionSurface.inspectionOnlyApprovalCount == 2)
     }
 
     @MainActor
@@ -866,6 +869,8 @@ struct JarvisMacCoreTests {
         #expect(client.approvalDecisions == [
             FakeCoreClient.ApprovalDecision(id: approval.id, approved: true, reason: "reviewed in app")
         ])
+        #expect(model.permissionSurface.status == .clear)
+        #expect(model.permissionSurface.pendingApprovalCount == 0)
     }
 
     @MainActor
@@ -887,6 +892,32 @@ struct JarvisMacCoreTests {
         #expect(client.approvalDecisions == [
             FakeCoreClient.ApprovalDecision(id: approval.id, approved: false, reason: "not safe enough")
         ])
+    }
+
+    @MainActor
+    @Test("Permission surface summarizes plugin scopes and risk tiers")
+    func permissionSurfaceSummarizesPluginScopeState() async {
+        let approval = samplePendingApproval()
+        let client = FakeCoreClient(
+            contractResponse: fullApprovalContract(),
+            approvals: [approval],
+            pluginManifests: [samplePluginManifest()]
+        )
+        let model = ApprovalManagementModel(client: client)
+
+        await model.refresh()
+
+        #expect(model.permissionSurface.status == .reviewRequired)
+        #expect(model.permissionSurface.approvalActionsAvailable)
+        #expect(model.permissionSurface.pendingApprovalCount == 1)
+        #expect(model.permissionSurface.actionableApprovalCount == 1)
+        #expect(model.permissionSurface.declaredScopes == ["calendar_write", "conversation", "file_read"])
+        #expect(model.permissionSurface.riskTierCounts == [
+            JarvisPermissionRiskCount(riskTier: "allow", count: 1),
+            JarvisPermissionRiskCount(riskTier: "confirm", count: 1)
+        ])
+        #expect(model.permissionSurface.proactiveActionCount == 1)
+        #expect(model.permissionSurface.summaryText.contains("need a decision"))
     }
 
     @MainActor
@@ -1248,6 +1279,46 @@ private func diagnosticsJSON() -> Data {
     )
 }
 
+private func samplePluginManifest() -> JarvisPluginManifest {
+    JarvisPluginManifest(
+        id: "calendar",
+        name: "Calendar",
+        version: "0.1.0",
+        source: "first-party",
+        author: "Jarvis",
+        actions: [
+            JarvisPluginActionManifest(
+                name: "inspect_events",
+                description: "Inspect calendar events",
+                permissions: ["conversation", "file_read"],
+                riskTier: "allow",
+                inputSchema: .object([:]),
+                outputSchema: .object([:]),
+                proactive: false,
+                memoryAccess: "none",
+                modelAccess: "local",
+                auditFields: ["calendar_id"],
+                timeout: JarvisPluginTimeout(timeoutMilliseconds: 1_000),
+                cancellation: "supported"
+            ),
+            JarvisPluginActionManifest(
+                name: "create_event",
+                description: "Create a calendar event",
+                permissions: ["calendar_write", "conversation"],
+                riskTier: "confirm",
+                inputSchema: .object([:]),
+                outputSchema: .object([:]),
+                proactive: true,
+                memoryAccess: "read",
+                modelAccess: "local",
+                auditFields: ["calendar_id", "event_id"],
+                timeout: JarvisPluginTimeout(timeoutMilliseconds: 2_000),
+                cancellation: "supported"
+            )
+        ]
+    )
+}
+
 private func commandResponseJSON(input: String) -> Data {
     let taskId = UUID()
     let sessionId = UUID()
@@ -1327,6 +1398,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     private(set) var submittedCommands: [JarvisCommandRequest]
     private var contractResponse: JarvisContractResponse?
     private var approvals: [JarvisPendingApproval]
+    private var pluginManifests: [JarvisPluginManifest]
     private(set) var approvalDecisions: [ApprovalDecision]
 
     init(
@@ -1334,7 +1406,8 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         tasks: [JarvisTask] = [],
         auditEntries: [JarvisAuditEntry] = [],
         contractResponse: JarvisContractResponse? = nil,
-        approvals: [JarvisPendingApproval] = []
+        approvals: [JarvisPendingApproval] = [],
+        pluginManifests: [JarvisPluginManifest] = []
     ) {
         self.healthResults = healthResults
         self.tasks = tasks
@@ -1342,6 +1415,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         self.submittedCommands = []
         self.contractResponse = contractResponse
         self.approvals = approvals
+        self.pluginManifests = pluginManifests
         self.approvalDecisions = []
     }
 
@@ -1431,7 +1505,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     }
 
     func listPluginManifests() async throws -> [JarvisPluginManifest] {
-        []
+        pluginManifests
     }
 
     func listSchedulerJobs() async throws -> [JarvisSchedulerJob] {
