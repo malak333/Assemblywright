@@ -28,8 +28,11 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_eq!(contract["contract"]["name"], "jarvis.local-ipc");
     assert_eq!(contract["contract"]["version"], 1);
     assert_array_contains(&contract["endpoints"], "path", "/diagnostics/export");
+    assert_array_contains(&contract["endpoints"], "path", "/model-routes");
     assert_array_contains(&contract["endpoints"], "path", "/approvals/:id/approve");
     assert_array_contains(&contract["endpoints"], "path", "/plugins/installed/:id/run");
+    assert_string_array_contains(&contract["safe_inspection_paths"], "/model-routes");
+    assert_string_array_contains(&contract["safe_inspection_paths"], "/model-routes/:id");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/scheduler/jobs/:id");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/approvals/:id");
 
@@ -52,6 +55,33 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         .as_str()
         .expect("command task id")
         .to_string();
+    let route_id = command["route_evidence"]["id"]
+        .as_str()
+        .expect("command route id")
+        .to_string();
+
+    let routes = run_cli_json(["routes", "list", "--endpoint", endpoint.as_str()]);
+    assert_array_contains(&routes, "id", &route_id);
+    assert_array_contains(&routes, "task_id", &task_id);
+    assert_eq!(routes[0]["context_for_model"], Value::Null);
+    let scoped_routes = run_cli_json([
+        "routes",
+        "list",
+        "--task-id",
+        task_id.as_str(),
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_array_contains(&scoped_routes, "id", &route_id);
+    let route = run_cli_json([
+        "routes",
+        "get",
+        route_id.as_str(),
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(route["id"], route_id);
+    assert_eq!(route["context_for_model"], Value::Null);
 
     let manifests = run_cli_json(["plugins", "list", "--endpoint", endpoint.as_str()]);
     assert_array_contains(&manifests, "id", "fake_echo");
@@ -459,12 +489,18 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
 
     let diagnostics = run_cli_json(["diagnostics", "export", "--endpoint", endpoint.as_str()]);
     assert_eq!(diagnostics["repository_backed"], true);
-    assert_eq!(diagnostics["schema_version"], 5);
+    assert_eq!(diagnostics["schema_version"], 6);
     assert_eq!(
         diagnostics["health"]["contract"]["name"],
         "jarvis.local-ipc"
     );
     assert_eq!(diagnostics["active_memory_item_count"], 1);
+    assert!(
+        diagnostics["model_route_record_count"]
+            .as_u64()
+            .unwrap_or(0)
+            >= 1
+    );
     assert_array_contains(&diagnostics["scheduler_jobs"], "id", &scheduler_id);
     let diagnostics_encoded = serde_json::to_string(&diagnostics).expect("diagnostics JSON");
     assert!(!diagnostics_encoded.contains("updated through jarvis-cli e2e"));
@@ -609,6 +645,24 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         run_cli_json(["tasks", "audit", "--endpoint", restarted_endpoint.as_str()]);
     assert_array_contains(&persisted_audit, "event_type", "plugin_completed");
     assert_array_contains(&persisted_audit, "event_type", "approval_granted");
+
+    let persisted_routes =
+        run_cli_json(["routes", "list", "--endpoint", restarted_endpoint.as_str()]);
+    assert_array_contains(&persisted_routes, "id", &route_id);
+    assert_array_contains(&persisted_routes, "task_id", &task_id);
+    let persisted_route = run_cli_json([
+        "routes",
+        "get",
+        route_id.as_str(),
+        "--endpoint",
+        restarted_endpoint.as_str(),
+    ]);
+    assert_eq!(persisted_route["id"], route_id);
+    assert_eq!(persisted_route["task_id"], task_id);
+    assert_eq!(persisted_route["context_for_model"], Value::Null);
+    let persisted_route_encoded =
+        serde_json::to_string(&persisted_route).expect("persisted route JSON");
+    assert!(!persisted_route_encoded.contains("cross-process e2e"));
 
     let persisted_approvals = run_cli_json([
         "approvals",

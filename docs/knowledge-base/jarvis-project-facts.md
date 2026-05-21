@@ -27,23 +27,28 @@ These notes capture durable facts for future agents working on this repository.
   entry, and can execute deterministic first-party plugin commands such as
   `plugin echo ...` and `status` through policy. `dry_run` skips plugin
   execution and records audit evidence.
+- Repository-backed `/commands` also persists append-only SQLite model-route
+  records. The stored and inspectable route copy keeps provider/outcome/policy
+  evidence but omits `context_for_model`, so restart recovery can prove route
+  selection without retaining raw command bodies or route context.
 - `ConversationRuntime` supports bounded fake-model planned first-party tool
   calls with schema validation, policy checks, approval stops, tool-result audit
   entries, and feedback of tool results into later model steps. The local HTTP
   provider does not yet make real model-planned tool calls; installed-plugin
   orchestration remains target architecture.
-- Repository-backed IPC state exposes task, audit, and memory inspection routes,
-  persists scheduler jobs, restores them at startup, and all IPC states expose
-  `/plugins/manifests` for deterministic first-party plugin manifests.
+- Repository-backed IPC state exposes task, audit, model-route, and memory
+  inspection routes, persists scheduler jobs, restores them at startup, and all
+  IPC states expose `/plugins/manifests` for deterministic first-party plugin
+  manifests.
   Repository-backed IPC also exposes `/plugins/installed` for metadata-only
   local plugin installation. Installed records are persisted with
   `execution_enabled: false` and `execution_grant: metadata_only`; they are not
   executable. Installed plugin run requests can perform contract-only dry runs
   that validate manifest/action/input schema and audit
   `side_effect_executed: false` without loading or executing plugin code.
-- The CLI has matching `tasks`, `memory`, `scheduler`, `diagnostics`, and
-  `plugins` subcommands, including `plugins install`, `plugins installed`, and
-  `plugins installed-get` for disabled local manifest metadata.
+- The CLI has matching `tasks`, `routes`, `memory`, `scheduler`, `diagnostics`,
+  and `plugins` subcommands, including `plugins install`, `plugins installed`,
+  and `plugins installed-get` for disabled local manifest metadata.
 - The planned signed packaged app, installed plugin execution, real voice loop,
   and broader production operations are not yet implemented in this worktree.
   The SwiftUI shell scaffold and IPC client live under `apps/mac`, including a
@@ -146,9 +151,9 @@ These notes capture durable facts for future agents working on this repository.
 - `jarvis-cli serve --db-path <path>` starts IPC with SQLite-backed task,
   audit, memory, and emergency-pause state for manual persistence checks.
 - `cargo run -p jarvis-cli -- smoke` now covers baseline command/pause smoke,
-  plugin manifest listing, and repository-backed task plus memory inspection
-  paths, diagnostics redaction, and repository-backed scheduler/job state
-  surfaces.
+  plugin manifest listing, and repository-backed task, model-route, and memory
+  inspection paths, diagnostics redaction, and repository-backed scheduler/job
+  state surfaces.
 
 ## Safety Guardrails
 
