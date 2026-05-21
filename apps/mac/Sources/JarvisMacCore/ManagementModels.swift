@@ -355,20 +355,52 @@ public final class DiagnosticsModel: ObservableObject {
 
 public enum JarvisVoiceCaptureState: Equatable, Sendable {
     case textOnly(reason: String)
+    case stagingTranscript(source: String)
     case unavailable(reason: String)
+}
+
+public enum JarvisVoiceAction: Equatable, Sendable {
+    case beginTranscript
+    case updateTranscript(String)
+    case submitTranscript
+    case cancelTranscript
+    case markUnavailable(String)
+    case resetTextOnly
+}
+
+public struct JarvisVoiceCommandHandoff: Equatable, Identifiable, Sendable {
+    public var id: UUID
+    public var text: String
+    public var source: String
+    public var dryRun: Bool
+
+    public init(id: UUID = UUID(), text: String, source: String = "voice-transcript-scaffold", dryRun: Bool = true) {
+        self.id = id
+        self.text = text
+        self.source = source
+        self.dryRun = dryRun
+    }
 }
 
 @MainActor
 public final class VoiceStateModel: ObservableObject {
+    public static let textOnlyReason = "Speech recognition is not implemented in this Swift shell yet."
+
     @Published public private(set) var captureState: JarvisVoiceCaptureState
+    @Published public private(set) var transcriptDraft: String
+    @Published public private(set) var lastHandoff: JarvisVoiceCommandHandoff?
+    @Published public private(set) var lastError: String?
+    @Published public private(set) var actionHistory: [JarvisVoiceAction]
     @Published public private(set) var isPushToTalkEnabled: Bool
 
     public init(
-        captureState: JarvisVoiceCaptureState = .textOnly(
-            reason: "Speech recognition is not implemented in this Swift shell yet."
-        )
+        captureState: JarvisVoiceCaptureState = .textOnly(reason: VoiceStateModel.textOnlyReason)
     ) {
         self.captureState = captureState
+        self.transcriptDraft = ""
+        self.lastHandoff = nil
+        self.lastError = nil
+        self.actionHistory = []
         self.isPushToTalkEnabled = false
     }
 
@@ -376,18 +408,88 @@ public final class VoiceStateModel: ObservableObject {
         switch captureState {
         case let .textOnly(reason):
             return "Text-only voice scaffold: \(reason)"
+        case let .stagingTranscript(source):
+            return "Voice transcript staging: \(source)"
         case let .unavailable(reason):
             return "Voice unavailable: \(reason)"
         }
     }
 
+    @discardableResult
+    public func apply(_ action: JarvisVoiceAction) -> JarvisVoiceCommandHandoff? {
+        actionHistory.append(action)
+        lastError = nil
+
+        switch action {
+        case .beginTranscript:
+            guard !isUnavailable else {
+                lastError = "Voice input is unavailable; reset to text-only before staging a transcript."
+                return nil
+            }
+            transcriptDraft = ""
+            lastHandoff = nil
+            captureState = .stagingTranscript(source: "typed transcript parity path")
+            return nil
+        case let .updateTranscript(text):
+            guard !isUnavailable else {
+                lastError = "Voice input is unavailable; transcript update ignored."
+                return nil
+            }
+            transcriptDraft = text
+            if case .stagingTranscript = captureState {
+                return nil
+            }
+            captureState = .stagingTranscript(source: "typed transcript parity path")
+            return nil
+        case .submitTranscript:
+            guard !isUnavailable else {
+                lastError = "Voice input is unavailable; transcript cannot be submitted."
+                return nil
+            }
+            let trimmed = transcriptDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                lastError = "Transcript is empty."
+                return nil
+            }
+            let handoff = JarvisVoiceCommandHandoff(text: trimmed)
+            lastHandoff = handoff
+            transcriptDraft = ""
+            captureState = .textOnly(reason: Self.textOnlyReason)
+            return handoff
+        case .cancelTranscript:
+            transcriptDraft = ""
+            lastHandoff = nil
+            if !isUnavailable {
+                captureState = .textOnly(reason: Self.textOnlyReason)
+            }
+            return nil
+        case let .markUnavailable(reason):
+            transcriptDraft = ""
+            lastHandoff = nil
+            captureState = .unavailable(reason: reason)
+            isPushToTalkEnabled = false
+            return nil
+        case .resetTextOnly:
+            transcriptDraft = ""
+            lastHandoff = nil
+            captureState = .textOnly(reason: Self.textOnlyReason)
+            isPushToTalkEnabled = false
+            return nil
+        }
+    }
+
     public func setUnavailable(reason: String) {
-        captureState = .unavailable(reason: reason)
-        isPushToTalkEnabled = false
+        apply(.markUnavailable(reason))
     }
 
     public func resetTextOnly() {
-        captureState = .textOnly(reason: "Speech recognition is not implemented in this Swift shell yet.")
-        isPushToTalkEnabled = false
+        apply(.resetTextOnly)
+    }
+
+    private var isUnavailable: Bool {
+        if case .unavailable = captureState {
+            return true
+        }
+        return false
     }
 }

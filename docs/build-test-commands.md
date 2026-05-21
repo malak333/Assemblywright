@@ -184,11 +184,13 @@ execution, installed plugin sandboxing/execution, memory UX beyond the
 scaffold, Swift approval decision UI, voice loop, or packaged Mac release smoke
 test until those surfaces exist and are covered. The current Swift gate proves
 the Mac shell scaffold builds, decodes IPC contracts, exposes management models
-for approval evidence, runs/audit, scheduler, diagnostics, and voice
-degraded-mode state, and can supervise a configured local core process
+for approval evidence, runs/audit, scheduler, diagnostics, and text-only voice
+transcript handoff state, and can supervise a configured local core process
 abstraction; it does not prove a signed packaged app bundles and launches the
 Rust core, nor that approval decisions or real speech recognition are
-implemented.
+implemented. The Swift voice tests cover the text-only transcript handoff into
+the command console path; they do not cover microphone permissions, live
+speech-to-text, or text-to-speech.
 
 The public-repo production workflow expects isolated worktrees, topic branches,
 reviewable PRs, and clear ownership. A six-agent autonomous sweep can reduce
