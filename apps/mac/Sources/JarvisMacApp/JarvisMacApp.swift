@@ -434,6 +434,7 @@ struct SchedulerJobsView: View {
 
 struct ApprovalCenterView: View {
     @ObservedObject var model: ApprovalManagementModel
+    @State private var decisionReasons: [UUID: String] = [:]
 
     var body: some View {
         ManagementListView(
@@ -445,6 +446,12 @@ struct ApprovalCenterView: View {
             List {
                 if let limitation = model.limitationText {
                     Text(limitation)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                if let decision = model.lastDecision {
+                    Text("\(decision.action) marked \(decision.status)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -464,12 +471,67 @@ struct ApprovalCenterView: View {
                             .foregroundStyle(.secondary)
                             .lineLimit(3)
                             .textSelection(.enabled)
-                        Text(item.actionAvailable ? "Core approval action exposed" : "Inspection only")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                        approvalMetadata(for: item)
+                        if item.actionAvailable {
+                            TextField("Decision reason", text: reasonBinding(for: item.id))
+                                .textFieldStyle(.roundedBorder)
+                            HStack {
+                                Button {
+                                    decide(item.id, approved: true)
+                                } label: {
+                                    Label("Approve", systemImage: "checkmark.circle")
+                                }
+                                Button(role: .destructive) {
+                                    decide(item.id, approved: false)
+                                } label: {
+                                    Label("Deny", systemImage: "xmark.circle")
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(model.isLoading)
+                        } else {
+                            Text("Inspection only")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     .padding(.vertical, 4)
                 }
+            }
+        }
+    }
+
+    private func approvalMetadata(for item: JarvisApprovalQueueItem) -> some View {
+        let metadata = [
+            item.riskTier.map { "risk: \($0)" },
+            item.sensitivity.map { "sensitivity: \($0)" },
+            item.requestedScopes.isEmpty ? nil : "scopes: \(item.requestedScopes.joined(separator: ", "))",
+            item.requestedAt.map { "requested: \($0)" }
+        ].compactMap { $0 }
+
+        return Text(metadata.isEmpty ? "Core approval action exposed" : metadata.joined(separator: " | "))
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .textSelection(.enabled)
+    }
+
+    private func reasonBinding(for id: UUID) -> Binding<String> {
+        Binding(
+            get: { decisionReasons[id, default: ""] },
+            set: { decisionReasons[id] = $0 }
+        )
+    }
+
+    private func decide(_ id: UUID, approved: Bool) {
+        let reason = decisionReasons[id]
+        Task {
+            if approved {
+                await model.approve(id: id, reason: reason)
+            } else {
+                await model.deny(id: id, reason: reason)
+            }
+            if model.lastError == nil {
+                decisionReasons[id] = nil
             }
         }
     }

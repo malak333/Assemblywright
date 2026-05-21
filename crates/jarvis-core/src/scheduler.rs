@@ -148,14 +148,17 @@ impl Scheduler {
             return Vec::new();
         }
 
-        self.jobs
+        let mut due = self
+            .jobs
             .lock()
             .expect("scheduler jobs lock poisoned")
             .values()
             .filter(|job| job.is_due_at(now))
-            .take(limit)
             .cloned()
-            .collect()
+            .collect::<Vec<_>>();
+        due.sort_by_key(|job| (job.updated_at, job.created_at, job.id));
+        due.truncate(limit);
+        due
     }
 
     pub fn get(&self, id: Uuid) -> Option<SchedulerJob> {

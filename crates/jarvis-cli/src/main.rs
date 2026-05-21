@@ -7,7 +7,8 @@ use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 use jarvis_core::{
     ApprovalDecisionRequest, CommandRequest, CreateMemoryItemRequest, CreateSchedulerJobRequest,
-    EmergencyPauseRequest, InstallPluginRequest, Sensitivity, TriggerKind, UpdateMemoryItemRequest,
+    EmergencyPauseRequest, InstallPluginRequest, InstalledPluginRunRequest, Sensitivity,
+    TriggerKind, UpdateMemoryItemRequest,
 };
 use tokio::net::TcpListener;
 
@@ -248,6 +249,15 @@ enum PluginsCommand {
     /// Fetch one locally installed plugin metadata record by id.
     InstalledGet {
         id: String,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    /// Request an installed plugin run through the fail-closed runner boundary.
+    RunInstalled {
+        id: String,
+        action: String,
+        #[arg(long, default_value = "null")]
+        input: String,
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
@@ -519,6 +529,28 @@ async fn main() -> anyhow::Result<()> {
                 println!(
                     "{}",
                     request(&endpoint, "GET", &format!("/plugins/installed/{id}"), None)?
+                );
+            }
+            PluginsCommand::RunInstalled {
+                id,
+                action,
+                input,
+                endpoint,
+            } => {
+                let input = serde_json::from_str(&input)?;
+                let body = serde_json::to_string(&InstalledPluginRunRequest {
+                    action,
+                    input,
+                    session_id: None,
+                })?;
+                println!(
+                    "{}",
+                    request(
+                        &endpoint,
+                        "POST",
+                        &format!("/plugins/installed/{id}/run"),
+                        Some(&body)
+                    )?
                 );
             }
         },

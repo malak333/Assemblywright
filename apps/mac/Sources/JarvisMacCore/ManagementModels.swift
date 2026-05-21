@@ -223,6 +223,7 @@ public final class RunManagementModel: ObservableObject {
 public final class ApprovalManagementModel: ObservableObject {
     @Published public private(set) var contract: JarvisContractResponse?
     @Published public private(set) var pendingItems: [JarvisApprovalQueueItem]
+    @Published public private(set) var lastDecision: JarvisPendingApproval?
     @Published public private(set) var isLoading: Bool
     @Published public private(set) var lastError: String?
 
@@ -242,24 +243,67 @@ public final class ApprovalManagementModel: ObservableObject {
         self.client = client
         self.contract = nil
         self.pendingItems = []
+        self.lastDecision = nil
         self.isLoading = false
         self.lastError = nil
     }
 
     public func refresh() async {
         await run {
-            async let contract = self.client.contract()
-            async let tasks = self.client.listTasks()
-            async let audit = self.client.listAuditEntries(taskId: nil)
-            let loadedContract = try await contract
-            let loadedTasks = try await tasks
-            let loadedAudit = try await audit
+            let loadedContract = try await self.client.contract()
             self.contract = loadedContract
-            self.pendingItems = JarvisApprovalQueueItem.pendingItems(
-                tasks: loadedTasks,
-                auditEntries: loadedAudit,
-                contract: loadedContract
+
+            if loadedContract.exposesApprovalList {
+                let approvals = try await self.client.listApprovals(status: "pending")
+                self.pendingItems = JarvisApprovalQueueItem.pendingItems(
+                    approvals: approvals,
+                    contract: loadedContract
+                )
+            } else {
+                async let tasks = self.client.listTasks()
+                async let audit = self.client.listAuditEntries(taskId: nil)
+                let loadedTasks = try await tasks
+                let loadedAudit = try await audit
+                self.pendingItems = JarvisApprovalQueueItem.pendingItems(
+                    tasks: loadedTasks,
+                    auditEntries: loadedAudit,
+                    contract: loadedContract
+                )
+            }
+        }
+    }
+
+    public func approve(id: UUID, reason: String?) async {
+        await decide(id: id) {
+            try await self.client.approveApproval(
+                id: id,
+                request: JarvisApprovalDecisionRequest(decidedBy: "mac-ui", reason: normalizedReason(reason))
             )
+        }
+    }
+
+    public func deny(id: UUID, reason: String?) async {
+        await decide(id: id) {
+            try await self.client.denyApproval(
+                id: id,
+                request: JarvisApprovalDecisionRequest(decidedBy: "mac-ui", reason: normalizedReason(reason))
+            )
+        }
+    }
+
+    private func decide(
+        id: UUID,
+        operation: @escaping () async throws -> JarvisPendingApproval
+    ) async {
+        guard supportsApprovalActions else {
+            lastError = "Core does not expose approval decision endpoints."
+            return
+        }
+
+        await run {
+            let decision = try await operation()
+            self.lastDecision = decision
+            self.pendingItems.removeAll { $0.id == id }
         }
     }
 
@@ -274,6 +318,11 @@ public final class ApprovalManagementModel: ObservableObject {
             lastError = String(describing: error)
         }
     }
+}
+
+private func normalizedReason(_ reason: String?) -> String? {
+    let trimmed = reason?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return trimmed.isEmpty ? nil : trimmed
 }
 
 @MainActor
