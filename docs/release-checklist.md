@@ -162,8 +162,10 @@ This is a future gate once a packaged `Jarvis.app` exists:
 - App starts and supervises `jarvis-core`.
 - Text command reaches the Rust core.
 - Text-transcript voice command parity is verified through the scaffold.
-- Real microphone voice command parity is verified only after the macOS
-  Speech/AVFoundation adapter is implemented and available.
+- The macOS Speech/AVFoundation adapter boundary compiles and has deterministic
+  fake-adapter state/error tests.
+- Real microphone voice command parity is verified only after the packaged app
+  has the required entitlements and manual device validation.
 - Activity view shows current task state.
 - Audit entry is written for the command.
 - Emergency pause stops new actions.
