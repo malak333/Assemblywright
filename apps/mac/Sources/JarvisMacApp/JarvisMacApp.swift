@@ -444,6 +444,8 @@ struct ApprovalCenterView: View {
             refresh: { await model.refresh() }
         ) {
             List {
+                PermissionSurfaceSummaryView(surface: model.permissionSurface)
+
                 if let limitation = model.limitationText {
                     Text(limitation)
                         .font(.caption)
@@ -534,6 +536,65 @@ struct ApprovalCenterView: View {
                 decisionReasons[id] = nil
             }
         }
+    }
+}
+
+struct PermissionSurfaceSummaryView: View {
+    let surface: JarvisPermissionSurfaceState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Label(statusTitle, systemImage: statusIcon)
+                    .font(.subheadline)
+                Spacer()
+                Text(surface.approvalActionsAvailable ? "Decisions enabled" : "Inspection only")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(surface.summaryText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Text(permissionDetails)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var statusTitle: String {
+        switch surface.status {
+        case .clear:
+            return "Permission surface clear"
+        case .reviewRequired:
+            return "Approval review required"
+        case .inspectionOnly:
+            return "Approval evidence visible"
+        }
+    }
+
+    private var statusIcon: String {
+        switch surface.status {
+        case .clear:
+            return "checkmark.shield"
+        case .reviewRequired:
+            return "exclamationmark.shield"
+        case .inspectionOnly:
+            return "eye"
+        }
+    }
+
+    private var permissionDetails: String {
+        let scopes = surface.declaredScopes.isEmpty
+            ? "scopes: none declared"
+            : "scopes: \(surface.declaredScopes.joined(separator: ", "))"
+        let risks = surface.riskTierCounts.isEmpty
+            ? "risk tiers: none declared"
+            : "risk tiers: \(surface.riskTierCounts.map { "\($0.riskTier) \($0.count)" }.joined(separator: ", "))"
+        return "\(scopes) | \(risks) | proactive actions: \(surface.proactiveActionCount)"
     }
 }
 

@@ -64,15 +64,21 @@ to explain what happened:
 - Unknown manifest fields are allowed only when versioned and ignored safely.
 - Missing required fields fail validation.
 - Local plugin installation is metadata-only in the current implementation.
-  Validated installed manifests are stored as `execution_enabled: false`.
+  Validated installed manifests are stored as `execution_enabled: false` with
+  `execution_grant: metadata_only`.
 - Local installed manifests do not create executable plugins. Runtime execution
   remains limited to registered first-party in-process plugins until a safe
   sandboxed runtime is explicitly implemented and tested.
 - Installed plugin run requests go through an explicit fail-closed runner
   boundary. The boundary revalidates the stored manifest/version metadata,
-  checks the requested action is declared, honors `execution_enabled`, appends
-  audit evidence with `side_effect_executed: false`, and returns `blocked`
-  without dispatching plugin code.
+  checks the requested action is declared, validates input schema, honors
+  `execution_enabled` and `execution_grant`, appends audit evidence with
+  `side_effect_executed: false`, and returns `blocked` without dispatching
+  plugin code.
+- Installed plugin dry runs are contract-only. `dry_run: true` validates the
+  stored manifest, action name, and input schema, then returns `dry_run` with
+  `contract_validated: true` and `side_effect_executed: false`; it never loads
+  or executes plugin code.
 - Local manifest validation rejects invalid schemas, blocked action risk tiers,
   missing proactive/memory/model permissions, zero or excessive timeouts,
   first-party source claims, relative source paths, unreadable source
@@ -98,5 +104,6 @@ contract testing. Release verification should keep covering:
 - Proactive action gating.
 - Local manifest install acceptance/rejection and disabled registry
   persistence.
-- Installed plugin run attempts fail closed with manifest/action validation,
-  disabled execution semantics, and durable audit evidence.
+- Installed plugin run attempts fail closed with manifest/action/input
+  validation, disabled `metadata_only` execution-grant semantics, contract-only
+  dry-run evidence, and durable audit evidence.
