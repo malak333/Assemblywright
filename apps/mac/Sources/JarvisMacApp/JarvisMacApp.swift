@@ -656,8 +656,17 @@ struct VoiceStateView: View {
                     sendTranscript()
                 }
                 .disabled(console.isWorking || model.transcriptDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button("Interrupt") {
+                    model.interruptTranscript(reason: "User interrupted typed transcript staging.")
+                }
+                Button("Resume") {
+                    model.apply(.resumeInterruptedTranscript)
+                }
                 Button("Cancel") {
                     model.apply(.cancelTranscript)
+                }
+                Button("Mark Voice Degraded") {
+                    model.markDegraded(reason: "Voice capture or playback is degraded; typed transcript fallback remains available.")
                 }
                 Button("Mark Mic Permission Missing") {
                     model.setUnavailable(reason: "Microphone permission is missing or unavailable.")

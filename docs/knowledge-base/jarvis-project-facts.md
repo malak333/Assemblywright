@@ -56,8 +56,10 @@ These notes capture durable facts for future agents working on this repository.
 - The Swift shell now exposes production-facing scaffold tabs for approval
   evidence, runs/audit, scheduler create/inspect/cancel, redacted diagnostics,
   and voice state. Voice supports typed transcript staging and hands the
-  transcript to the same text command path, but remains a text-only scaffold
-  rather than real microphone capture or speech recognition.
+  transcript to the same text command path. The scaffold now models
+  interruption, resume/cancel, unavailable, and degraded typed-fallback states,
+  but remains a text-only scaffold rather than real microphone capture, speech
+  recognition, AVFoundation playback, or text-to-speech.
 - The scheduler is currently inspectable and cancellable. Scheduler jobs are
   in-memory without repository backing and durable when the IPC state is started
   with `SqliteRepository`. Proactive production trigger execution remains target

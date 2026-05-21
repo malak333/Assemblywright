@@ -814,6 +814,79 @@ struct JarvisMacCoreTests {
     }
 
     @MainActor
+    @Test("Voice transcript interruption blocks submit until resume or cancel")
+    func voiceTranscriptInterruptionBlocksSubmitUntilResumeOrCancel() {
+        let model = VoiceStateModel()
+
+        model.apply(.beginTranscript)
+        model.apply(.updateTranscript("open diagnostics"))
+        model.interruptTranscript(reason: "User started another request.")
+
+        #expect(model.statusText.contains("interrupted"))
+        #expect(model.transcriptDraft == "open diagnostics")
+        #expect(!model.isPushToTalkEnabled)
+        #expect(model.apply(.submitTranscript) == nil)
+        #expect(model.lastError == "Voice transcript is interrupted; resume or cancel before submitting.")
+
+        model.apply(.resumeInterruptedTranscript)
+        let handoff = model.apply(.submitTranscript)
+
+        #expect(handoff?.text == "open diagnostics")
+        #expect(model.lastError == nil)
+
+        model.apply(.beginTranscript)
+        model.apply(.updateTranscript("cancel me"))
+        model.interruptTranscript(reason: "User cancelled.")
+        model.apply(.cancelTranscript)
+
+        #expect(model.transcriptDraft.isEmpty)
+        #expect(model.lastHandoff == nil)
+        #expect(model.statusText.contains("Text-only voice scaffold"))
+    }
+
+    @MainActor
+    @Test("Voice degraded mode keeps typed transcript fallback without speech claims")
+    func voiceDegradedModeKeepsTypedTranscriptFallbackWithoutSpeechClaims() {
+        let model = VoiceStateModel()
+
+        model.markDegraded(reason: "Text-to-speech playback is unavailable.")
+        #expect(model.statusText == "Voice degraded to typed transcript fallback: Text-to-speech playback is unavailable.")
+        #expect(model.transcriptDraft.isEmpty)
+        #expect(model.lastHandoff == nil)
+        #expect(!model.isPushToTalkEnabled)
+
+        model.apply(.updateTranscript("status check"))
+        #expect(model.statusText.contains("Voice transcript staging"))
+        let handoff = model.apply(.submitTranscript)
+
+        #expect(handoff?.text == "status check")
+        #expect(handoff?.source == "voice-transcript-scaffold")
+        #expect(handoff?.dryRun == true)
+        #expect(model.statusText.contains("Text-only voice scaffold"))
+        #expect(!model.statusText.contains("speech recognition coverage"))
+    }
+
+    @MainActor
+    @Test("Voice unavailable mode rejects typed transcript handoff until reset")
+    func voiceUnavailableModeRejectsTypedTranscriptHandoffUntilReset() {
+        let model = VoiceStateModel()
+
+        model.setUnavailable(reason: "Microphone permission is missing.")
+        model.apply(.beginTranscript)
+        #expect(model.lastError == "Voice input is unavailable; reset to text-only before staging a transcript.")
+        model.apply(.updateTranscript("ignored"))
+        #expect(model.transcriptDraft.isEmpty)
+        #expect(model.apply(.submitTranscript) == nil)
+        #expect(model.lastError == "Voice input is unavailable; transcript cannot be submitted.")
+
+        model.resetTextOnly()
+        model.apply(.updateTranscript("typed fallback after reset"))
+        let handoff = model.apply(.submitTranscript)
+
+        #expect(handoff?.text == "typed fallback after reset")
+    }
+
+    @MainActor
     @Test("Approval management model loads contract, tasks, and audit evidence")
     func approvalManagementModelLoadsQueue() async {
         let task = JarvisTask(
