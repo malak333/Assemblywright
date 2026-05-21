@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+use std::time::Duration as StdDuration;
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -29,6 +30,9 @@ use crate::{
 
 pub const IPC_CONTRACT_VERSION: u16 = 1;
 pub const IPC_CONTRACT_NAME: &str = "jarvis.local-ipc";
+pub const DEFAULT_SCHEDULER_BACKGROUND_INTERVAL_MS: u64 = 30_000;
+pub const DEFAULT_SCHEDULER_BACKGROUND_LIMIT: usize = 16;
+pub const MAX_SCHEDULER_BACKGROUND_LIMIT: usize = 64;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContractMetadata {
@@ -104,6 +108,36 @@ impl From<SchedulerJob> for DiagnosticSchedulerJob {
             updated_at: job.updated_at,
             cancelled_at: job.cancelled_at,
             cancellation_reason_present: job.cancellation_reason.is_some(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SchedulerBackgroundConfig {
+    pub interval: StdDuration,
+    pub limit: usize,
+}
+
+impl SchedulerBackgroundConfig {
+    pub fn new(interval: StdDuration, limit: usize) -> JarvisResult<Self> {
+        if interval.is_zero() {
+            return Err(JarvisError::Validation(
+                "scheduler background interval must be greater than zero".to_string(),
+            ));
+        }
+
+        Ok(Self {
+            interval,
+            limit: limit.clamp(1, MAX_SCHEDULER_BACKGROUND_LIMIT),
+        })
+    }
+}
+
+impl Default for SchedulerBackgroundConfig {
+    fn default() -> Self {
+        Self {
+            interval: StdDuration::from_millis(DEFAULT_SCHEDULER_BACKGROUND_INTERVAL_MS),
+            limit: DEFAULT_SCHEDULER_BACKGROUND_LIMIT,
         }
     }
 }
@@ -1102,6 +1136,36 @@ impl IpcState {
             emergency_paused: self.runtime_control.is_emergency_paused(),
             executions,
         })
+    }
+
+    pub fn spawn_scheduler_background_loop(
+        &self,
+        config: SchedulerBackgroundConfig,
+    ) -> tokio::task::JoinHandle<()> {
+        let state = self.clone();
+        tokio::spawn(async move {
+            state.run_scheduler_background_loop(config).await;
+        })
+    }
+
+    async fn run_scheduler_background_loop(&self, config: SchedulerBackgroundConfig) {
+        let mut ticker = tokio::time::interval(config.interval);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+        loop {
+            ticker.tick().await;
+            if let Err(error) = self.run_due_scheduler_jobs(config.limit).await {
+                let _ = self.append_scheduler_audit_entry(
+                    None,
+                    "scheduler_background_tick_failed",
+                    "background scheduler tick failed while running due jobs",
+                    json!({
+                        "limit": config.limit,
+                        "error": error.to_string(),
+                    }),
+                );
+            }
+        }
     }
 
     pub fn reschedule_interval_scheduler_job(&self, id: Uuid) -> JarvisResult<SchedulerJob> {
@@ -2512,6 +2576,102 @@ mod tests {
 
         assert!(response.emergency_paused);
         assert!(response.executions.is_empty());
+        assert_eq!(
+            state.get_scheduler_job(job.id).expect("job").status,
+            SchedulerJobStatus::Scheduled
+        );
+        let tasks = state
+            .using_repository(SqliteRepository::list_tasks)
+            .expect("tasks");
+        assert!(tasks.is_empty());
+    }
+
+    #[tokio::test]
+    async fn background_scheduler_loop_runs_due_jobs_with_bounded_ticks() {
+        let repository = SqliteRepository::in_memory().unwrap();
+        let state = IpcState::with_repository(repository).expect("state");
+        let first = state
+            .schedule_scheduler_job(SchedulerJobSpec {
+                name: "first background job".to_string(),
+                command: "plugin status".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .expect("first job");
+        let second = state
+            .schedule_scheduler_job(SchedulerJobSpec {
+                name: "second background job".to_string(),
+                command: "plugin status".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .expect("second job");
+        let loop_handle = state.spawn_scheduler_background_loop(
+            SchedulerBackgroundConfig::new(std::time::Duration::from_millis(25), 1)
+                .expect("config"),
+        );
+
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let tasks = state
+                    .using_repository(SqliteRepository::list_tasks)
+                    .expect("tasks");
+                if tasks.len() >= 2 {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("background scheduler should run both bounded ticks");
+        loop_handle.abort();
+
+        assert_eq!(
+            state.get_scheduler_job(first.id).expect("first").status,
+            SchedulerJobStatus::Completed
+        );
+        assert_eq!(
+            state.get_scheduler_job(second.id).expect("second").status,
+            SchedulerJobStatus::Completed
+        );
+        let audit = state
+            .using_repository(|repository| repository.list_audit_entries(None))
+            .expect("audit");
+        assert!(
+            audit
+                .iter()
+                .filter(|entry| entry.event_type == "scheduler_job_due")
+                .count()
+                >= 2
+        );
+        assert!(audit
+            .iter()
+            .any(|entry| entry.event_type == "scheduler_job_completed"));
+    }
+
+    #[tokio::test]
+    async fn background_scheduler_loop_preserves_emergency_pause_blocking() {
+        let repository = SqliteRepository::in_memory().unwrap();
+        repository
+            .set_emergency_pause(true, Some("paused before startup"), Some("test"))
+            .expect("pause");
+        let scheduler = Scheduler::new();
+        let job = scheduler
+            .schedule(SchedulerJobSpec {
+                name: "paused background job".to_string(),
+                command: "plugin status".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .expect("job");
+        repository.upsert_scheduler_job(&job).expect("persist job");
+        let state = IpcState::with_repository(repository).expect("state");
+        let loop_handle = state.spawn_scheduler_background_loop(
+            SchedulerBackgroundConfig::new(std::time::Duration::from_millis(25), 8)
+                .expect("config"),
+        );
+
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        loop_handle.abort();
+
+        assert!(state.pause_status().paused);
         assert_eq!(
             state.get_scheduler_job(job.id).expect("job").status,
             SchedulerJobStatus::Scheduled

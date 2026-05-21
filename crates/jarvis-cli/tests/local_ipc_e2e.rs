@@ -683,6 +683,77 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
 }
 
 #[test]
+fn serve_background_scheduler_runs_due_jobs_and_honors_pause() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let db_path = temp_dir.path().join("jarvis-background-e2e.sqlite");
+    let mut server = JarvisServer::start_with_background(&db_path, 50, 1);
+    let endpoint = server.endpoint();
+
+    let first = run_cli_json([
+        "scheduler",
+        "schedule",
+        "background first e2e job",
+        "plugin status",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    let first_id = first["id"].as_str().expect("first id").to_string();
+    let second = run_cli_json([
+        "scheduler",
+        "schedule",
+        "background second e2e job",
+        "plugin status",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    let second_id = second["id"].as_str().expect("second id").to_string();
+
+    wait_for_json(Duration::from_secs(3), || {
+        let jobs = run_cli_json(["scheduler", "list", "--endpoint", endpoint.as_str()]);
+        array_has_job_status(&jobs, &first_id, "completed")
+            && array_has_job_status(&jobs, &second_id, "completed")
+    });
+
+    let tasks = run_cli_json(["tasks", "list", "--endpoint", endpoint.as_str()]);
+    assert!(
+        tasks.as_array().expect("tasks").len() >= 2,
+        "expected background scheduler tasks, got {tasks}"
+    );
+    let audit = run_cli_json(["tasks", "audit", "--endpoint", endpoint.as_str()]);
+    assert_array_contains(&audit, "event_type", "scheduler_job_due");
+    assert_array_contains(&audit, "event_type", "scheduler_job_completed");
+
+    let pause = run_cli_json([
+        "pause",
+        "--reason",
+        "background e2e pause",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(pause["paused"], true);
+    let paused_job = run_cli_json([
+        "scheduler",
+        "schedule",
+        "background paused e2e job",
+        "plugin status",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    let paused_id = paused_job["id"].as_str().expect("paused id").to_string();
+    std::thread::sleep(Duration::from_millis(160));
+    let paused_status = run_cli_json([
+        "scheduler",
+        "get",
+        paused_id.as_str(),
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(paused_status["status"], "scheduled");
+
+    server.stop();
+}
+
+#[test]
 #[ignore = "opt-in release proof; spawns jarvis smoke and duplicates broader CLI coverage"]
 fn cli_smoke_command_is_release_gate_compatible() {
     let output = run_cli(["smoke"]);
@@ -701,17 +772,40 @@ struct JarvisServer {
 
 impl JarvisServer {
     fn start(db_path: &Path) -> Self {
+        Self::start_inner(db_path, None)
+    }
+
+    fn start_with_background(db_path: &Path, interval_ms: u64, limit: usize) -> Self {
+        Self::start_inner(db_path, Some((interval_ms, limit)))
+    }
+
+    fn start_inner(db_path: &Path, scheduler_background: Option<(u64, usize)>) -> Self {
         let bind = unused_loopback_addr();
         let endpoint = format!("http://{bind}");
         let temp_dir = tempfile::tempdir().expect("server temp dir");
+        let bind_arg = bind.to_string();
+        let db_path_arg = db_path
+            .to_str()
+            .expect("db path is valid UTF-8")
+            .to_string();
+        let mut args = vec![
+            "serve".to_string(),
+            "--bind".to_string(),
+            bind_arg,
+            "--db-path".to_string(),
+            db_path_arg,
+        ];
+        if let Some((interval_ms, limit)) = scheduler_background {
+            args.extend([
+                "--scheduler-background".to_string(),
+                "--scheduler-interval-ms".to_string(),
+                interval_ms.to_string(),
+                "--scheduler-limit".to_string(),
+                limit.to_string(),
+            ]);
+        }
         let child = Command::new(BIN)
-            .args([
-                "serve",
-                "--bind",
-                &bind.to_string(),
-                "--db-path",
-                db_path.to_str().expect("db path is valid UTF-8"),
-            ])
+            .args(args)
             .current_dir(temp_dir.path())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -778,6 +872,28 @@ impl Drop for JarvisServer {
     fn drop(&mut self) {
         self.stop();
     }
+}
+
+fn wait_for_json(timeout: Duration, mut condition: impl FnMut() -> bool) {
+    let started = std::time::Instant::now();
+    while started.elapsed() < timeout {
+        if condition() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    panic!("condition did not become true within {:?}", timeout);
+}
+
+fn array_has_job_status(value: &Value, id: &str, status: &str) -> bool {
+    value
+        .as_array()
+        .expect("expected array")
+        .iter()
+        .any(|item| {
+            item.get("id").and_then(Value::as_str) == Some(id)
+                && item.get("status").and_then(Value::as_str) == Some(status)
+        })
 }
 
 fn unused_loopback_addr() -> SocketAddr {
