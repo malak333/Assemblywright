@@ -19,12 +19,12 @@ use crate::storage::{
 };
 use crate::{
     plugin_permission_scopes, ApprovalDecision, ApprovalStatus, AuditEntry, CapabilityScope,
-    ConversationRuntime, FakeLocalModel, InstalledPlugin, InstalledPluginRecord, JarvisError,
-    JarvisResult, LocalModelExecutor, LocalModelProviderKind, ModelRoute, ModelRouteRecord,
-    PermissionEngine, PluginCallRequest, PluginCallResult, PluginCallStatus, PluginHost,
-    PluginManifest, PolicyRequest, ProviderConfig, RuntimeCommandRequest, RuntimeCommandStore,
-    RuntimeConfig, RuntimeControl, RuntimeStep, Scheduler, SchedulerJob, SchedulerJobSpec,
-    SchedulerJobStatus, Sensitivity, TaskRecord, TaskStatus, TriggerKind,
+    ConversationRuntime, InstalledPlugin, InstalledPluginRecord, JarvisError, JarvisResult,
+    LocalModelProviderKind, ModelRoute, ModelRouteRecord, PermissionEngine, PluginCallRequest,
+    PluginCallResult, PluginCallStatus, PluginHost, PluginManifest, PolicyRequest, ProviderConfig,
+    RoutedModelExecutor, RuntimeCommandRequest, RuntimeCommandStore, RuntimeConfig, RuntimeControl,
+    RuntimeStep, Scheduler, SchedulerJob, SchedulerJobSpec, SchedulerJobStatus, Sensitivity,
+    TaskRecord, TaskStatus, TriggerKind,
 };
 
 pub const IPC_CONTRACT_VERSION: u16 = 1;
@@ -472,15 +472,11 @@ impl IpcState {
         }
 
         let command_store = self.command_store();
-        let local_model = if self.provider_config.local.enabled {
-            LocalModelExecutor::from_config(&self.provider_config.local)?
-        } else {
-            LocalModelExecutor::Fake(FakeLocalModel::default())
-        };
+        let model = RoutedModelExecutor::from_config(&self.provider_config)?;
         let runtime = ConversationRuntime::with_storage_parts(
             RuntimeConfig::default().with_provider_config(self.provider_config.clone()),
             self.runtime_control.clone(),
-            local_model,
+            model,
             crate::NoopRuntimeHooks,
             command_store.clone(),
         );
