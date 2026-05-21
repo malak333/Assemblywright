@@ -11,15 +11,16 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
 - Confirm `DESIGN.md` still matches the implementation scope.
 - Confirm release notes distinguish implemented Rust foundation and Swift shell
   scaffold behavior from the implemented opt-in Ollama-compatible local
-  provider boundary, metadata-only local plugin installation, and planned
-  ChatGPT execution, Swift approval UI, installed plugin execution, voice
-  support, and packaging work.
+  provider boundary, implemented opt-in ChatGPT/OpenAI-compatible provider
+  boundary, metadata-only local plugin installation, and planned Swift approval
+  UI, installed plugin execution, voice support, and packaging work.
 - Confirm the current architecture map still matches the real module wiring,
-  especially the fact that `/commands` invokes the configured local
-  `ModelExecutor` (`FakeLocalModel` by default, Ollama-compatible HTTP when
-  enabled), records route/policy/plugin audit evidence for deterministic
-  first-party plugin commands, and supports bounded fake-model planned
-  first-party tool execution before any broader assistant claim.
+  especially the fact that `/commands` invokes the configured routed
+  `ModelExecutor` (`FakeLocalModel` by default, Ollama-compatible HTTP or
+  ChatGPT/OpenAI-compatible HTTP only when explicitly enabled), records
+  route/policy/plugin audit evidence for deterministic first-party plugin
+  commands, and supports bounded fake-model planned first-party tool execution
+  before any broader assistant claim.
 - Confirm the current-vs-target implementation phase table is up to date before
   using any production-readiness language. Release notes may claim foundation
   readiness only for verified Rust/Swift surfaces, not full assistant readiness.
@@ -60,10 +61,10 @@ stage or when a PR needs focused evidence for one ownership slice.
 - Confirm high-risk actions require approval or are blocked.
 - Confirm cloud routing is local-first and ChatGPT-only when cloud use is
   approved.
-- Confirm restricted and credential-adjacent data cannot route to cloud without
-  explicit approval.
-- Confirm local provider errors and route evidence do not include raw command
-  bodies or unredacted endpoint credentials.
+- Confirm restricted data cannot route to cloud, and credential-adjacent or
+  private cloud routes require explicit approval.
+- Confirm local and ChatGPT provider errors and route evidence do not include
+  raw command bodies, API keys, or unredacted endpoint credentials.
 - Confirm emergency pause blocks IPC runtime command execution and cancels
   active scheduler jobs.
 - Confirm runtime emergency pause and cancellation tests still cover active
@@ -82,9 +83,9 @@ stage or when a PR needs focused evidence for one ownership slice.
   when repository backing is used. Approval-required first-party command
   scaffolds persist inspectable pending approvals and record CLI/IPC grant or
   denial decisions without executing side effects. Bounded fake-model
-  first-party tool calls and Ollama-compatible provider request/error behavior
-  are covered in focused tests; ChatGPT execution and Swift user approval UI
-  remain future gates.
+  first-party tool calls and Ollama-compatible plus ChatGPT/OpenAI-compatible
+  provider request/error behavior are covered in focused tests; Swift user
+  approval UI remains a future gate.
 - Confirm task, audit, memory, and plugin manifest inspection endpoints still
   require or use the correct repository/plugin backing and are covered by local
   smoke or focused IPC tests.

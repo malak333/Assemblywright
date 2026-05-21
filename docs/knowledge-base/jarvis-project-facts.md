@@ -14,12 +14,14 @@ These notes capture durable facts for future agents working on this repository.
   `jarvis-cli`, plus a Swift package scaffold under `apps/mac`.
 - Implemented `jarvis-core` surfaces include shared task/audit/safety types,
   an Axum loopback IPC server, runtime-backed command execution with
-  `FakeLocalModel` by default or an opt-in Ollama-compatible local HTTP
-  provider, emergency-pause state, inspectable scheduler state, a conversation
-  runtime with SQLite task/audit persistence hooks, local-first model routing
-  policy, SQLite repository migrations, memory item persistence, append-only
-  audit table triggers, plugin manifest validation, and deterministic
-  first-party test plugins.
+  `FakeLocalModel` by default, an opt-in Ollama-compatible local HTTP provider,
+  or an opt-in ChatGPT/OpenAI-compatible HTTP provider behind explicit
+  env/config, sensitivity, redaction, and audit guardrails, emergency-pause
+  state, inspectable scheduler state, a conversation runtime with SQLite
+  task/audit persistence hooks, local-first model routing policy, SQLite
+  repository migrations, memory item persistence, append-only audit table
+  triggers, plugin manifest validation, and deterministic first-party test
+  plugins.
 - IPC `/commands` now uses repository-backed runtime storage when `IpcState` is
   constructed with `SqliteRepository`, records a local-first model-router audit
   entry, and can execute deterministic first-party plugin commands such as
@@ -39,7 +41,7 @@ These notes capture durable facts for future agents working on this repository.
 - The CLI has matching `tasks`, `memory`, `scheduler`, `diagnostics`, and
   `plugins` subcommands, including `plugins install`, `plugins installed`, and
   `plugins installed-get` for disabled local manifest metadata.
-- The planned signed packaged app, approval UI, ChatGPT execution, plugin
+- The planned signed packaged app, Swift approval UI, installed plugin
   execution, and production real-provider tool orchestration are not yet
   implemented in this worktree. The first SwiftUI shell scaffold and IPC client
   live under `apps/mac`, including a command transcript, activity/audit panel,
@@ -73,8 +75,7 @@ These notes capture durable facts for future agents working on this repository.
   `cargo test -p jarvis-cli --test local_ipc_e2e`; the ignored variant is
   release-proof coverage and is included by `./scripts/release-local.sh`.
 - Do not describe Jarvis as a finished desktop assistant until the Swift shell,
-  packaged app, approval UI, ChatGPT execution where claimed, and Mac release
-  smoke test exist.
+  packaged app, approval UI, and Mac release smoke test exist.
 - Do not describe Jarvis as production assistant ready based only on the Rust
   and Swift local gates. The stronger claim requires packaged-app evidence,
   ChatGPT execution where claimed, approval UI, voice or text UX parity as
@@ -83,8 +84,9 @@ These notes capture durable facts for future agents working on this repository.
   scaffolding for IPC, storage, policy, routing, runtime, scheduler, plugin
   contracts, deterministic first-party plugin command execution, bounded
   fake-model planned first-party tool orchestration, opt-in Ollama-compatible
-  local HTTP provider behavior, CLI behavior, and a Swift command/management
-  shell with supervisor abstraction when the local gate passes.
+  local HTTP provider behavior, opt-in ChatGPT/OpenAI-compatible provider
+  behavior, CLI behavior, and a Swift command/management shell with supervisor
+  abstraction when the local gate passes.
 - Do not claim autonomous external communication, smart-home control, or
   third-party plugin marketplace readiness for v1.
 - Keep public-facing claims scoped to tested local behavior.
@@ -116,8 +118,9 @@ These notes capture durable facts for future agents working on this repository.
 ## Safety Guardrails
 
 - Local model routing is the default.
-- ChatGPT is the only approved cloud model and requires explicit routing,
-  sensitivity checks, minimized context, and audit evidence.
+- ChatGPT is the only approved cloud model and requires explicit env opt-in,
+  explicit routing, sensitivity checks, minimized redacted context, and audit
+  evidence.
 - Side effects pass through capability scopes plus risk tiers.
 - High-risk or uncertain actions fail closed.
 - Emergency pause, cancellation, and auditability are architectural

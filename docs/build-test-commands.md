@@ -59,6 +59,19 @@ JARVIS_LOCAL_MODEL_TIMEOUT_MS=15000 \
 cargo run -p jarvis-cli -- serve
 ```
 
+To exercise the opt-in ChatGPT/OpenAI-compatible provider boundary, disable
+the local provider and provide an API key. The key is never serialized in
+provider config, provider status, route evidence, diagnostics, or structured
+provider errors:
+
+```sh
+JARVIS_LOCAL_MODEL_ENABLED=false \
+JARVIS_CHATGPT_ENABLED=true \
+JARVIS_OPENAI_API_KEY=... \
+JARVIS_CHATGPT_MODEL=gpt-4.1-mini \
+cargo run -p jarvis-cli -- serve
+```
+
 For durable local task and audit state during manual inspection, pass a SQLite
 path:
 
@@ -97,19 +110,21 @@ cargo run -p jarvis-cli -- resume
 ```
 
 Current boundary: the command endpoint runs `ConversationRuntime` with
-`FakeLocalModel` by default or an opt-in Ollama-compatible local HTTP provider
-from typed env config. It records local-first `ModelRouter` audit evidence, can
-execute deterministic first-party plugin commands such as `plugin echo ...`
-through the policy engine, honors `--dry-run` for plugin execution, and can
-persist task/audit state when configured with a repository-backed IPC state. It
-also has deterministic coverage for bounded model-planned first-party tool
-calls. Approval-required command scaffolds such as `plugin approval echo ...`
-fail closed by returning `waiting_for_approval`, persisting an inspectable
-pending approval when repository backing is enabled, and requiring a separate
-CLI/IPC grant or denial. Granting an approval records the decision but does not
-execute the side effect. It does not yet implement ChatGPT execution, installed
-plugin sandboxing, installed plugin execution, or Swift approval UI. Local
-plugin install is metadata-only:
+`FakeLocalModel` by default, an opt-in Ollama-compatible local HTTP provider, or
+an opt-in ChatGPT/OpenAI-compatible HTTP provider from typed env config. It
+records local-first `ModelRouter` audit evidence, sends ChatGPT only minimized
+redacted route context after policy selection, can execute deterministic
+first-party plugin commands such as `plugin echo ...` through the policy
+engine, honors `--dry-run` for plugin execution, and can persist task/audit
+state when configured with a repository-backed IPC state. It also has
+deterministic coverage for bounded model-planned first-party tool calls.
+Approval-required command scaffolds such as `plugin approval echo ...` fail
+closed by returning `waiting_for_approval`, persisting an inspectable pending
+approval when repository backing is enabled, and requiring a separate CLI/IPC
+grant or denial. Granting an approval records the decision but does not execute
+the side effect. It does not yet implement installed plugin sandboxing,
+installed plugin execution, or Swift approval UI. Local plugin install is
+metadata-only:
 `jarvis plugins install /absolute/path/to/jarvis-plugin.json` validates and
 stores a disabled registry record when repository backing is enabled.
 
