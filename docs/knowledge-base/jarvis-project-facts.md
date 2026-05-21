@@ -54,6 +54,9 @@ These notes capture durable facts for future agents working on this repository.
   Rust/Swift scaffold and the end-goal production architecture. Keep the
   current-vs-target phase table aligned with code before answering readiness
   questions.
+- The active architecture docs should also describe the current production
+  sweep structure, but that workflow context must remain separate from
+  readiness proof.
 - The Swift shell is currently a scaffold with a core supervisor abstraction,
   not a signed packaged app with bundled-core smoke evidence.
 - The Swift shell now exposes production-facing scaffold tabs for approval
@@ -83,6 +86,11 @@ These notes capture durable facts for future agents working on this repository.
 - The current E2E expectation for Rust/CLI foundation changes is
   `cargo test -p jarvis-cli --test local_ipc_e2e`; the ignored variant is
   release-proof coverage and is included by `./scripts/release-local.sh`.
+- Every feature or phase should identify the relevant E2E or focused
+  integration coverage before a readiness claim is made. If behavior changes
+  and no coverage exists, add the coverage or record the blocker. Docs-only
+  phases should at least preserve the architecture diagrams, release checklist,
+  build/test commands, and KB proof-boundary notes.
 - Do not describe Jarvis as a finished desktop assistant until the Swift shell,
   packaged app, richer permission UX, and Mac release smoke test exist.
 - Do not describe Jarvis as production assistant ready based only on the Rust
@@ -112,8 +120,8 @@ These notes capture durable facts for future agents working on this repository.
 
 - Work in isolated worktrees and branches for reviewable slices.
 - Use topic branches and PRs for production work. The docs production slice is
-  `codex/production-docs` in
-  `/Users/michaelnobile/Antigravity/jarvis-worktrees/production-docs`.
+  currently `codex/production-docs-sync` in
+  `/Users/michaelnobile/Antigravity/jarvis-worktrees/production-docs-sync`.
 - When multiple agents are active, stay inside assigned ownership. For docs-only
   architecture work, use `apply_patch` and do not touch implementation files.
 - Do not revert or overwrite unrelated work from other agents.
@@ -125,6 +133,16 @@ These notes capture durable facts for future agents working on this repository.
   a coordination model for parallel ownership slices. It is not itself
   readiness evidence; only checked-in code/docs, reviewed PRs, and verification
   output count as proof.
+- Durable facts from the May 21, 2026 production sweep: the repo is public at
+  `https://github.com/malak333/Jarvis`, work should be split across isolated
+  worktrees and `codex/` topic branches, PRs should be reviewable and
+  evidence-backed, docs-only workers must not edit Rust or Swift code, and
+  readiness language must stay scoped to verified local foundation surfaces
+  until the packaged app, real voice, executable plugin sandbox, proactive
+  background scheduler, recovery, and release smoke gates exist.
+- The user explicitly expects each feature/phase to follow docs and
+  documentation, add useful conversation-derived knowledge-base facts, and add
+  or confirm end-to-end testing for the discussed scope.
 - `jarvis-cli serve --db-path <path>` starts IPC with SQLite-backed task,
   audit, memory, and emergency-pause state for manual persistence checks.
 - `cargo run -p jarvis-cli -- smoke` now covers baseline command/pause smoke,

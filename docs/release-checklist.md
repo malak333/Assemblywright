@@ -30,6 +30,10 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
 - Confirm any autonomous sweep summary names the active ownership slices and
   states which evidence came from commands, tests, or manual checks. A
   six-agent sweep is coordination context, not proof of readiness.
+- For each feature/phase, confirm the relevant docs were updated, durable
+  knowledge-base facts were added, and matching E2E or focused integration
+  coverage exists. If coverage does not exist, add it for behavior changes or
+  record the blocker before using broader readiness language.
 
 ## Code Gate
 
@@ -117,6 +121,10 @@ stage or when a PR needs focused evidence for one ownership slice.
   future release gate.
 - Confirm local plugin metadata install/list/get coverage remains in that E2E
   path while installed plugin execution remains disabled.
+- For each new executable feature phase, confirm E2E coverage is either part of
+  `local_ipc_e2e`, Swift package tests, a focused integration proof, or the
+  future packaged Mac smoke lane. Docs-only changes should still name the
+  existing proof boundary they preserve.
 - Confirm the Swift shell remains described as a scaffold until a signed
   packaged app bundles/launches the Rust core, handles approval prompts, and
   passes packaged app smoke checks. `./scripts/packaged-supervision-proof.sh`
@@ -141,6 +149,8 @@ stage or when a PR needs focused evidence for one ownership slice.
 - Knowledge-base notes include public-repo status, worktree/branch/PR workflow,
   six-agent autonomous sweep expectations, E2E expectations, and proof
   boundaries without overclaiming production readiness.
+- Every phase summary records whether docs, KB facts, and E2E coverage were
+  followed; unresolved gaps are blockers for stronger production claims.
 - README points to the active design and command gate.
 - Mermaid diagrams render in GitHub or the intended documentation viewer.
 
