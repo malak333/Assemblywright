@@ -162,7 +162,10 @@ release-proof smoke command and is run by `./scripts/release-local.sh`.
 `./scripts/packaged-supervision-proof.sh` is the focused Swift/Rust bridge
 proof for supervision changes: it builds `jarvis-cli`, copies it into a
 temporary `Jarvis.app/Contents/Resources/bin/` layout, runs the Swift supervisor
-coverage against that configured executable, and runs the CLI smoke command.
+coverage against that configured executable, starts the copied binary with a
+repository-backed database, verifies packaged-layout health, command, audit,
+diagnostics, emergency pause, blocked command, pause status, and resume
+surfaces, and then runs the CLI smoke command.
 Docs-only branches should at least run a render/lint-oriented documentation
 check when available, plus `cargo fmt --check` if the branch also touches Rust
 examples or scripts. Record any skipped full-gate stage as a blocker, not as
@@ -195,9 +198,10 @@ transcript handoff state, and can supervise a configured local core process
 abstraction. It also covers Swift approval decision calls against the Rust IPC
 approval endpoints. The packaged supervision proof additionally checks the
 expected `Resources/bin/jarvis-cli` bundle layout with a locally built core
-binary. These gates still do not prove a signed packaged app release,
-clean-profile launch, microphone permissions, live speech-to-text, or
-text-to-speech.
+binary and exercises repository-backed command, audit, diagnostics, and
+emergency-pause IPC through that copied binary. These gates still do not prove
+a signed packaged app release, notarization, clean-profile launch, microphone
+permissions, live speech-to-text, or text-to-speech.
 
 The public-repo production workflow expects isolated worktrees, topic branches,
 reviewable PRs, and clear ownership. A six-agent autonomous sweep can reduce

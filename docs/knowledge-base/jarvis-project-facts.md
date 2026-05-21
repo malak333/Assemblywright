@@ -80,6 +80,13 @@ These notes capture durable facts for future agents working on this repository.
   and Swift local gates. The stronger claim requires packaged-app evidence,
   richer permission UX, real voice where claimed, diagnostics/recovery checks,
   and release smoke proof.
+- `./scripts/packaged-supervision-proof.sh` is local packaged-layout evidence:
+  it builds the Rust CLI, copies it into
+  `Jarvis.app/Contents/Resources/bin/jarvis-cli`, runs Swift supervisor tests
+  against that executable, starts the copied binary with repository-backed
+  state, and verifies health, command, audit, diagnostics, emergency pause,
+  blocked command, pause status, and resume over IPC. It is not signed,
+  notarized, clean-profile packaged app release evidence.
 - It is fair to describe the current repo as a Rust foundation with tested
   scaffolding for IPC, storage, policy, routing, runtime, scheduler, plugin
   contracts, deterministic first-party plugin command execution, bounded
