@@ -37,7 +37,10 @@ These notes capture durable facts for future agents working on this repository.
   `/plugins/manifests` for deterministic first-party plugin manifests.
   Repository-backed IPC also exposes `/plugins/installed` for metadata-only
   local plugin installation. Installed records are persisted with
-  `execution_enabled: false`; they are not executable.
+  `execution_enabled: false` and `execution_grant: metadata_only`; they are not
+  executable. Installed plugin run requests can perform contract-only dry runs
+  that validate manifest/action/input schema and audit
+  `side_effect_executed: false` without loading or executing plugin code.
 - The CLI has matching `tasks`, `memory`, `scheduler`, `diagnostics`, and
   `plugins` subcommands, including `plugins install`, `plugins installed`, and
   `plugins installed-get` for disabled local manifest metadata.
@@ -133,3 +136,8 @@ These notes capture durable facts for future agents working on this repository.
 - Plugins must declare capabilities, scopes, risk tiers, schemas, proactive
   behavior, memory access, model access, audit fields, timeout behavior, and
   cancellation behavior before execution.
+- Installed plugin execution remains disabled by default and must not be
+  expanded into arbitrary local code execution. The current safe boundary is
+  metadata persistence plus contract-only dry runs; any future executable path
+  needs a sandboxed runner, explicit grant state beyond `metadata_only`, policy
+  checks, timeout/cancellation behavior, and E2E audit coverage.

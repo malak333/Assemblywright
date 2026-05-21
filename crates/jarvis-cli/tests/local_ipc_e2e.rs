@@ -86,7 +86,14 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
                 "description": "Validate local install metadata.",
                 "permissions": ["read_workspace"],
                 "risk_tier": "low",
-                "input_schema": { "schema": { "type": "object" } },
+                "input_schema": {
+                    "schema": {
+                        "type": "object",
+                        "properties": { "path": { "type": "string" } },
+                        "required": ["path"],
+                        "additionalProperties": false
+                    }
+                },
                 "output_schema": { "schema": { "type": "object" } },
                 "proactive": false,
                 "memory_access": "none",
@@ -109,6 +116,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     ]);
     assert_eq!(installed_plugin["id"], "local_e2e_plugin");
     assert_eq!(installed_plugin["execution_enabled"], false);
+    assert_eq!(installed_plugin["execution_grant"], "metadata_only");
     assert_eq!(installed_plugin["manifest"]["source"], "local_development");
 
     let installed_plugins = run_cli_json(["plugins", "installed", "--endpoint", endpoint.as_str()]);
@@ -123,6 +131,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     ]);
     assert_eq!(installed_plugin_get["id"], "local_e2e_plugin");
     assert_eq!(installed_plugin_get["execution_enabled"], false);
+    assert_eq!(installed_plugin_get["execution_grant"], "metadata_only");
 
     let blocked_installed_run = run_cli_json([
         "plugins",
@@ -136,12 +145,36 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     ]);
     assert_eq!(blocked_installed_run["status"], "blocked");
     assert_eq!(blocked_installed_run["execution_enabled"], false);
+    assert_eq!(blocked_installed_run["execution_grant"], "metadata_only");
     assert_eq!(blocked_installed_run["manifest_valid"], true);
     assert_eq!(blocked_installed_run["action_declared"], true);
+    assert_eq!(blocked_installed_run["input_valid"], true);
+    assert_eq!(blocked_installed_run["contract_validated"], true);
     assert_eq!(blocked_installed_run["side_effect_executed"], false);
     assert_eq!(
         blocked_installed_run["audit_entry"]["event_type"],
         "installed_plugin_execution_blocked"
+    );
+
+    let contract_dry_run = run_cli_json([
+        "plugins",
+        "run-installed",
+        "local_e2e_plugin",
+        "inspect",
+        "--input",
+        r#"{"path":"README.md"}"#,
+        "--dry-run",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(contract_dry_run["status"], "dry_run");
+    assert_eq!(contract_dry_run["execution_grant"], "metadata_only");
+    assert_eq!(contract_dry_run["input_valid"], true);
+    assert_eq!(contract_dry_run["contract_validated"], true);
+    assert_eq!(contract_dry_run["side_effect_executed"], false);
+    assert_eq!(
+        contract_dry_run["audit_entry"]["event_type"],
+        "installed_plugin_contract_dry_run"
     );
 
     let tasks = run_cli_json(["tasks", "list", "--endpoint", endpoint.as_str()]);
@@ -426,7 +459,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
 
     let diagnostics = run_cli_json(["diagnostics", "export", "--endpoint", endpoint.as_str()]);
     assert_eq!(diagnostics["repository_backed"], true);
-    assert_eq!(diagnostics["schema_version"], 4);
+    assert_eq!(diagnostics["schema_version"], 5);
     assert_eq!(
         diagnostics["health"]["contract"]["name"],
         "jarvis.local-ipc"

@@ -247,6 +247,8 @@ pub struct InstalledPluginRunRequest {
     pub input: serde_json::Value,
     #[serde(default)]
     pub session_id: Option<Uuid>,
+    #[serde(default)]
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -256,8 +258,11 @@ pub struct InstalledPluginRunResponse {
     pub status: String,
     pub reason: String,
     pub execution_enabled: bool,
+    pub execution_grant: crate::InstalledPluginExecutionGrant,
     pub manifest_valid: bool,
     pub action_declared: bool,
+    pub input_valid: bool,
+    pub contract_validated: bool,
     pub side_effect_executed: bool,
     pub audit_entry: AuditEntry,
 }
@@ -756,23 +761,57 @@ impl IpcState {
                 .ok_or_else(|| JarvisError::Storage(format!("installed plugin not found: {id}")))?;
             let manifest_validation = validate_installed_plugin_record(&record);
             let manifest_valid = manifest_validation.is_ok();
-            let action_declared =
-                manifest_valid && record.manifest.action(&request.action).is_some();
-            let reason = if let Err(error) = &manifest_validation {
-                error.to_string()
+            let action_manifest = if manifest_valid {
+                record.manifest.action(&request.action)
+            } else {
+                None
+            };
+            let action_declared = action_manifest.is_some();
+            let input_validation = if let Some(action) = action_manifest {
+                action
+                    .input_schema
+                    .validate_value("installed plugin input", &request.input)
+            } else {
+                Ok(())
+            };
+            let input_valid = action_declared && input_validation.is_ok();
+            let contract_validated = manifest_valid && action_declared && input_valid;
+            let (status, reason) = if let Err(error) = &manifest_validation {
+                ("blocked".to_string(), error.to_string())
             } else if !action_declared {
-                format!(
-                    "installed plugin {} does not declare action {}",
-                    record.id, request.action
+                (
+                    "blocked".to_string(),
+                    format!(
+                        "installed plugin {} does not declare action {}",
+                        record.id, request.action
+                    ),
+                )
+            } else if let Err(error) = &input_validation {
+                ("blocked".to_string(), error.to_string())
+            } else if request.dry_run {
+                (
+                    "dry_run".to_string(),
+                    "installed plugin contract dry run validated manifest, action, and input schema without executing plugin code"
+                        .to_string(),
                 )
             } else if !record.execution_enabled {
-                "installed plugin execution is disabled until a sandboxed runner is implemented"
-                    .to_string()
+                (
+                    "blocked".to_string(),
+                    "installed plugin execution grant is metadata_only; only contract dry runs are allowed until a sandboxed runner is implemented"
+                        .to_string(),
+                )
             } else {
-                "installed plugin execution is blocked because no sandboxed runner is implemented"
-                    .to_string()
+                (
+                    "blocked".to_string(),
+                    "installed plugin execution is blocked because no sandboxed runner is implemented"
+                        .to_string(),
+                )
             };
-            let event_type = if manifest_valid && action_declared {
+            let event_type = if request.dry_run && contract_validated {
+                "installed_plugin_contract_dry_run"
+            } else if manifest_valid && action_declared && !input_valid {
+                "installed_plugin_input_invalid"
+            } else if manifest_valid && action_declared {
                 "installed_plugin_execution_blocked"
             } else if manifest_valid {
                 "installed_plugin_action_blocked"
@@ -792,8 +831,12 @@ impl IpcState {
                     "source": record.manifest.source,
                     "source_path": record.source_path,
                     "execution_enabled": record.execution_enabled,
+                    "execution_grant": record.execution_grant,
+                    "dry_run": request.dry_run,
                     "manifest_valid": manifest_valid,
                     "action_declared": action_declared,
+                    "input_valid": input_valid,
+                    "contract_validated": contract_validated,
                     "input_provided": !request.input.is_null(),
                     "side_effect_executed": false,
                     "reason": reason,
@@ -804,11 +847,14 @@ impl IpcState {
             Ok(InstalledPluginRunResponse {
                 plugin_id: record.id,
                 action: request.action,
-                status: "blocked".to_string(),
+                status,
                 reason,
                 execution_enabled: record.execution_enabled,
+                execution_grant: record.execution_grant,
                 manifest_valid,
                 action_declared,
+                input_valid,
+                contract_validated,
                 side_effect_executed: false,
                 audit_entry,
             })
@@ -1894,6 +1940,7 @@ mod tests {
             manifest: local_installed_manifest(&source_path),
             source_path: source_path.clone(),
             execution_enabled: false,
+            execution_grant: crate::InstalledPluginExecutionGrant::MetadataOnly,
         };
         repository.install_plugin_metadata(installed).unwrap();
         let state = IpcState::with_repository(repository).expect("state");
@@ -1905,18 +1952,25 @@ mod tests {
                     action: "inspect".to_string(),
                     input: json!({ "path": "README.md" }),
                     session_id: Some(Uuid::new_v4()),
+                    dry_run: false,
                 },
             )
             .expect("fail-closed response");
 
         assert_eq!(response.status, "blocked");
         assert!(!response.execution_enabled);
+        assert_eq!(
+            response.execution_grant,
+            crate::InstalledPluginExecutionGrant::MetadataOnly
+        );
         assert!(response.manifest_valid);
         assert!(response.action_declared);
+        assert!(response.input_valid);
+        assert!(response.contract_validated);
         assert!(!response.side_effect_executed);
         assert_eq!(
             response.reason,
-            "installed plugin execution is disabled until a sandboxed runner is implemented"
+            "installed plugin execution grant is metadata_only; only contract dry runs are allowed until a sandboxed runner is implemented"
         );
         assert_eq!(
             response.audit_entry.event_type,
@@ -1928,6 +1982,11 @@ mod tests {
         );
         assert_eq!(response.audit_entry.payload["manifest_schema_version"], 1);
         assert_eq!(response.audit_entry.payload["execution_enabled"], false);
+        assert_eq!(
+            response.audit_entry.payload["execution_grant"],
+            "metadata_only"
+        );
+        assert_eq!(response.audit_entry.payload["contract_validated"], true);
         assert_eq!(response.audit_entry.payload["side_effect_executed"], false);
 
         let audit_entries = state
@@ -1952,6 +2011,7 @@ mod tests {
             manifest: local_installed_manifest(&source_path),
             source_path,
             execution_enabled: false,
+            execution_grant: crate::InstalledPluginExecutionGrant::MetadataOnly,
         };
         repository.install_plugin_metadata(installed).unwrap();
         let state = IpcState::with_repository(repository).expect("state");
@@ -1963,6 +2023,7 @@ mod tests {
                     action: "missing".to_string(),
                     input: json!({}),
                     session_id: None,
+                    dry_run: false,
                 },
             )
             .expect("fail-closed response");
@@ -1970,11 +2031,107 @@ mod tests {
         assert_eq!(response.status, "blocked");
         assert!(response.manifest_valid);
         assert!(!response.action_declared);
+        assert!(!response.input_valid);
+        assert!(!response.contract_validated);
         assert!(!response.side_effect_executed);
         assert_eq!(
             response.audit_entry.event_type,
             "installed_plugin_action_blocked"
         );
+    }
+
+    #[test]
+    fn installed_plugin_runner_supports_contract_only_dry_run() {
+        let repository = SqliteRepository::in_memory().unwrap();
+        let source_dir = tempfile::tempdir().unwrap();
+        let source_path = source_dir
+            .path()
+            .canonicalize()
+            .unwrap()
+            .display()
+            .to_string();
+        let installed = InstalledPlugin {
+            manifest: local_installed_manifest(&source_path),
+            source_path,
+            execution_enabled: false,
+            execution_grant: crate::InstalledPluginExecutionGrant::MetadataOnly,
+        };
+        repository.install_plugin_metadata(installed).unwrap();
+        let state = IpcState::with_repository(repository).expect("state");
+
+        let response = state
+            .run_installed_plugin(
+                "local_runner_test",
+                InstalledPluginRunRequest {
+                    action: "inspect".to_string(),
+                    input: json!({ "path": "README.md" }),
+                    session_id: None,
+                    dry_run: true,
+                },
+            )
+            .expect("dry-run response");
+
+        assert_eq!(response.status, "dry_run");
+        assert_eq!(
+            response.execution_grant,
+            crate::InstalledPluginExecutionGrant::MetadataOnly
+        );
+        assert!(!response.execution_enabled);
+        assert!(response.manifest_valid);
+        assert!(response.action_declared);
+        assert!(response.input_valid);
+        assert!(response.contract_validated);
+        assert!(!response.side_effect_executed);
+        assert_eq!(
+            response.audit_entry.event_type,
+            "installed_plugin_contract_dry_run"
+        );
+        assert_eq!(response.audit_entry.payload["dry_run"], true);
+        assert_eq!(response.audit_entry.payload["side_effect_executed"], false);
+    }
+
+    #[test]
+    fn installed_plugin_runner_rejects_invalid_input_before_dry_run() {
+        let repository = SqliteRepository::in_memory().unwrap();
+        let source_dir = tempfile::tempdir().unwrap();
+        let source_path = source_dir
+            .path()
+            .canonicalize()
+            .unwrap()
+            .display()
+            .to_string();
+        let installed = InstalledPlugin {
+            manifest: local_installed_manifest(&source_path),
+            source_path,
+            execution_enabled: false,
+            execution_grant: crate::InstalledPluginExecutionGrant::MetadataOnly,
+        };
+        repository.install_plugin_metadata(installed).unwrap();
+        let state = IpcState::with_repository(repository).expect("state");
+
+        let response = state
+            .run_installed_plugin(
+                "local_runner_test",
+                InstalledPluginRunRequest {
+                    action: "inspect".to_string(),
+                    input: json!({ "path": "README.md", "extra": true }),
+                    session_id: None,
+                    dry_run: true,
+                },
+            )
+            .expect("blocked response");
+
+        assert_eq!(response.status, "blocked");
+        assert!(response.manifest_valid);
+        assert!(response.action_declared);
+        assert!(!response.input_valid);
+        assert!(!response.contract_validated);
+        assert!(!response.side_effect_executed);
+        assert_eq!(
+            response.audit_entry.event_type,
+            "installed_plugin_input_invalid"
+        );
+        assert!(response.reason.contains("undeclared field extra"));
     }
 
     #[tokio::test]
@@ -2027,7 +2184,10 @@ mod tests {
                 description: "Validate installed runner boundary.".to_string(),
                 permissions: vec![crate::PluginPermission::ReadWorkspace],
                 risk_tier: crate::RiskTier::Low,
-                input_schema: crate::JsonSchema::empty_object(),
+                input_schema: crate::JsonSchema::object(
+                    serde_json::Map::from_iter([("path".to_string(), json!({ "type": "string" }))]),
+                    vec!["path".to_string()],
+                ),
                 output_schema: crate::JsonSchema::empty_object(),
                 proactive: false,
                 memory_access: crate::PluginAccess::None,

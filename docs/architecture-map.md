@@ -57,8 +57,9 @@ flowchart TB
         PluginHost --> ManifestValidation["manifest and JSON schema validation"]
         PluginHost --> FirstParty["fake_echo and fake_status plugins"]
         PluginHost --> TimeoutCancel["timeout and cancellation handling"]
-        InstalledRunner --> InstalledValidation["stored manifest/version and action validation"]
-        InstalledRunner --> InstalledAudit["blocked audit evidence, side_effect_executed=false"]
+        InstalledRunner --> InstalledValidation["stored manifest/action/input validation"]
+        InstalledRunner --> InstalledGrant["metadata_only execution grant"]
+        InstalledRunner --> InstalledAudit["blocked or dry-run audit evidence, side_effect_executed=false"]
 
         SchedulerApi --> Scheduler["Scheduler"]
         PauseApi --> RuntimeControl
@@ -96,11 +97,14 @@ Repository-backed IPC state stores approval-required plugin command decisions
 in `pending_approvals`, exposes them through CLI/IPC inspection endpoints, and
 lets a user grant or deny the pending record without executing the side effect.
 Installed plugin run requests have an explicit fail-closed boundary that
-revalidates stored manifest metadata, checks the requested action, honors
-`execution_enabled`, appends audit evidence, and returns `blocked` without
-dispatching plugin code. It supports opt-in ChatGPT/OpenAI-compatible execution
-only after route policy allows it. It does not yet support installed plugin
-sandboxing or a signed packaged Mac approval flow.
+revalidates stored manifest metadata, checks the requested action, validates
+input schema, honors `execution_enabled` plus the `metadata_only` execution
+grant, appends audit evidence, and returns `blocked` without dispatching plugin
+code. Contract-only dry runs can return `dry_run` after manifest/action/input
+validation with `side_effect_executed=false`. It supports opt-in
+ChatGPT/OpenAI-compatible execution only after route policy allows it. It does
+not yet support installed plugin sandboxing or a signed packaged Mac approval
+flow.
 Repository-backed IPC state also exposes task, audit, and memory inspection
 endpoints, plus first-party plugin manifest listing, so the CLI and Swift shell
 can inspect durable local state without reaching into SQLite directly.
@@ -314,7 +318,7 @@ operation.
 | IPC boundary | Axum loopback HTTP JSON API for health, commands, task/audit/memory/approval inspection, plugin manifests, emergency pause, and scheduler jobs. | Versioned, compatibility-tested app/core API with packaged app smoke coverage and clear degraded-mode handling. | Core IPC implemented; production app contract hardening pending. |
 | Command runtime | `ConversationRuntime` creates tasks, runs a routed `ModelExecutor` (`FakeLocalModel` by default, Ollama-compatible HTTP or ChatGPT/OpenAI-compatible HTTP when explicitly enabled), records structured audit entries, handles pause/cancel, enforces max steps, can persist task/audit state through `RuntimeCommandStore`, and can execute bounded model-planned first-party tool calls after schema and policy checks. | Multi-step assistant runtime with production model responses, installed plugin/tool orchestration, streaming progress, approval UI handoff, and robust recovery. | Bounded fake-model tool orchestration, opt-in local and ChatGPT provider boundaries, and CLI/IPC/Swift approval scaffold implemented; installed plugins and streaming pending. |
 | Model routing | Local-first `ModelRouter` exists with sensitivity checks, provider-status route evidence, ChatGPT opt-in gate, approval delegation, and redaction logic. The active `/commands` path can call a configured local provider or opt-in ChatGPT/OpenAI-compatible provider after policy allows the route. | Local provider integration, explicit ChatGPT escalation, minimized cloud context, user approval where required, and route evidence in every relevant task. | Local and ChatGPT provider boundaries implemented with tests; broader production model operations pending. |
-| Plugins and tools | Deterministic in-process first-party plugins (`fake_echo`, `fake_status`) execute through command-pattern dispatch and bounded model-planned runtime calls, with manifest validation, policy checks, timeout, cancellation, approval stops, pending approval persistence for approval-gated command scaffolds, and audit evidence. Local plugin installation validates manifest metadata and safe source paths, then stores disabled registry records; installed metadata is not executable. | First-party production plugins plus installed local plugins behind manifests, sandboxing, user grants, UI approval, proactive gating, and real model-generated tool-call execution. | Contract, deterministic first-party paths, and metadata-only local install implemented; production plugin runtime pending. |
+| Plugins and tools | Deterministic in-process first-party plugins (`fake_echo`, `fake_status`) execute through command-pattern dispatch and bounded model-planned runtime calls, with manifest validation, policy checks, timeout, cancellation, approval stops, pending approval persistence for approval-gated command scaffolds, and audit evidence. Local plugin installation validates manifest metadata and safe source paths, then stores disabled registry records with `execution_enabled=false` and `execution_grant=metadata_only`; installed metadata is not executable, but contract-only dry runs validate manifest/action/input and audit `side_effect_executed=false`. | First-party production plugins plus installed local plugins behind manifests, sandboxing, user grants, UI approval, proactive gating, and real model-generated tool-call execution. | Contract, deterministic first-party paths, metadata-only local install, and installed-plugin contract dry runs implemented; production plugin runtime pending. |
 | Scheduler | Inspectable scheduler jobs with manual, one-time, interval trigger contracts, explicit run-due execution, and an opt-in bounded background trigger loop on `jarvis serve --scheduler-background`. Each tick uses the same visible task/audit records, deterministic due ordering, per-tick limit, and fail-closed emergency-pause behavior as manual run-due. Repository-backed IPC state restores and updates jobs through SQLite. Emergency pause cancels active scheduler jobs, and unsafe due commands fail closed by pausing and cancelling remaining open jobs. | Durable scheduler and trigger engine for approved proactive routines, persisted job state, visible task records, and policy-gated execution. | Durable job state, explicit run-due execution, and opt-in bounded background loop implemented; richer production trigger policy and app notification handoff pending. |
 | Storage and memory | SQLite migrations store tasks, append-only audit entries, emergency pause, memory items with provenance/sensitivity/review/soft-delete fields, scheduler jobs, pending approval records, and disabled installed-plugin registry metadata. CLI/IPC can inspect and mutate memory items, approval decisions, and plugin metadata when repository backing is enabled. | SQLite also owns permissions, executable plugin grants, model-route records, migrations with backup/rollback, and memory UX review flows; vector indexes remain rebuildable. | Core local state and plugin metadata registry implemented; broader production schema pending. |
 | Safety and approvals | Capability scopes, risk tiers, emergency-pause fail-closed behavior, audit-required flags, and approval-required decisions exist in Rust. Repository-backed IPC persists pending approvals and supports CLI and Swift grant/deny decisions without executing side effects. | Human approval prompts, permission center, grants history, policy review, and no bypass for high-risk side effects. | Policy engine plus CLI/IPC/Swift approval decision surface implemented; richer permission center pending. |
