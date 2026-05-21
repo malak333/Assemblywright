@@ -223,6 +223,7 @@ public final class RunManagementModel: ObservableObject {
 public final class ApprovalManagementModel: ObservableObject {
     @Published public private(set) var contract: JarvisContractResponse?
     @Published public private(set) var pendingItems: [JarvisApprovalQueueItem]
+    @Published public private(set) var permissionSurface: JarvisPermissionSurfaceState
     @Published public private(set) var lastDecision: JarvisPendingApproval?
     @Published public private(set) var isLoading: Bool
     @Published public private(set) var lastError: String?
@@ -238,20 +239,24 @@ public final class ApprovalManagementModel: ObservableObject {
     }
 
     private let client: any JarvisCoreClient
+    private var pluginManifests: [JarvisPluginManifest]
 
     public init(client: any JarvisCoreClient = JarvisIPCClient()) {
         self.client = client
         self.contract = nil
         self.pendingItems = []
+        self.permissionSurface = .empty
         self.lastDecision = nil
         self.isLoading = false
         self.lastError = nil
+        self.pluginManifests = []
     }
 
     public func refresh() async {
         await run {
             let loadedContract = try await self.client.contract()
             self.contract = loadedContract
+            self.pluginManifests = try await self.client.listPluginManifests()
 
             if loadedContract.exposesApprovalList {
                 let approvals = try await self.client.listApprovals(status: "pending")
@@ -270,6 +275,12 @@ public final class ApprovalManagementModel: ObservableObject {
                     contract: loadedContract
                 )
             }
+
+            self.permissionSurface = JarvisPermissionSurfaceState.current(
+                pendingItems: self.pendingItems,
+                pluginManifests: self.pluginManifests,
+                contract: loadedContract
+            )
         }
     }
 
@@ -304,6 +315,11 @@ public final class ApprovalManagementModel: ObservableObject {
             let decision = try await operation()
             self.lastDecision = decision
             self.pendingItems.removeAll { $0.id == id }
+            self.permissionSurface = JarvisPermissionSurfaceState.current(
+                pendingItems: self.pendingItems,
+                pluginManifests: self.pluginManifests,
+                contract: self.contract
+            )
         }
     }
 
