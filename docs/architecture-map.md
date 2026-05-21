@@ -13,8 +13,9 @@ flowchart TB
     User["User or local test operator"]
     User --> CLI["jarvis-cli"]
     User --> MacShell["JarvisMacApp SwiftUI scaffold"]
-    DocsAgent["Docs/release agent"] --> Docs["README, docs, knowledge-base"]
-    DocsAgent --> LocalGate["./scripts/release-local.sh"]
+    DocsAgent["Worker 6 docs sync"] --> Docs["DESIGN, architecture map, release checklist, build/test commands, knowledge-base"]
+    DocsAgent --> Sweep["six worktree/branch production sweep"]
+    Sweep --> LocalGate["./scripts/release-local.sh"]
     LocalGate --> E2E["local_ipc_e2e ignored release proof"]
     LocalGate --> Smoke["jarvis-cli smoke"]
     LocalGate --> SwiftGate["Swift package build/test"]
@@ -108,6 +109,15 @@ The release-proof path remains local: `./scripts/release-local.sh` runs Rust
 formatting, linting, tests, ignored release-proof tests, build/package, CLI
 smoke, and Swift package build/test. That evidence proves only the current
 implemented foundation surfaces.
+
+The current production sweep is coordinated through isolated worktrees and
+topic branches against the public repository
+`https://github.com/malak333/Jarvis`. This docs-only slice is
+`codex/production-docs-sync` in
+`/Users/michaelnobile/Antigravity/jarvis-worktrees/production-docs-sync`.
+The six-worker structure is implementation coordination, not release evidence;
+each phase still needs matching docs, knowledge-base facts, and E2E or focused
+verification evidence for the surface it changes.
 
 ## Current Command Flow
 
@@ -320,7 +330,8 @@ operation.
 | Safety and approvals | Capability scopes, risk tiers, emergency-pause fail-closed behavior, audit-required flags, and approval-required decisions exist in Rust. Repository-backed IPC persists pending approvals and supports CLI and Swift grant/deny decisions without executing side effects. | Human approval prompts, permission center, grants history, policy review, and no bypass for high-risk side effects. | Policy engine plus CLI/IPC/Swift approval decision surface implemented; richer permission center pending. |
 | Voice and diagnostics | Swift now has a text-only voice state/action scaffold with typed transcript staging, unavailable/degraded states, and handoff into the same `CommandConsoleModel.submit` path used by text commands. It does not use microphone, Speech, AVFoundation, or TTS APIs. Redacted diagnostics export exists over CLI/IPC and omits command bodies, scheduler commands, audit payloads, memory values, and cancellation reason text. | Voice input/output loop, interruption/cancel behavior, microphone degraded modes, and local diagnostics export integrated into the packaged app. | Text-parity voice scaffold and diagnostics foundation implemented; real voice and packaged UX pending. |
 | Release proof | Local Rust and Swift build/test/smoke commands plus the ignored cross-process `local_ipc_e2e` release-proof test document the current proof boundary. | Signed/packaged app release with clean-profile Mac smoke, app-supervised core, command, audit, pause, restart, migration, recovery, diagnostics, and real-provider checks. | Local foundation proof only. |
-| Production workflow | Current production effort uses isolated worktrees, topic branches, reviewable PRs, and parallel ownership slices; this docs slice is branch `codex/production-docs`. | Public repo release train with PR evidence, reproducible local gates, owner-reviewed release notes, and no hidden readiness claims. | Workflow documented; release governance still manual. |
+| Production workflow | Current production effort uses isolated worktrees, topic branches, reviewable PRs, and parallel ownership slices; this docs slice is branch `codex/production-docs-sync` in `/Users/michaelnobile/Antigravity/jarvis-worktrees/production-docs-sync`. | Public repo release train with PR evidence, reproducible local gates, owner-reviewed release notes, and no hidden readiness claims. | Workflow documented; release governance still manual. |
+| Docs, KB, and E2E discipline | Docs and knowledge-base files record implementation boundaries, the current/end-goal diagrams, and local proof commands. Current E2E evidence is Rust/CLI cross-process plus Swift package contract/model coverage; packaged Mac E2E remains pending. | Every feature phase updates docs and durable KB facts, adds or names the relevant E2E coverage, and blocks broader readiness claims when coverage is missing. | Phase discipline documented; broader packaged-app E2E pending. |
 
 ## Data Ownership
 
@@ -401,4 +412,8 @@ voice assistant, packaged Mac app, autonomous external-action agent, plugin
 marketplace, or production cloud-integrated system.
 The six-agent autonomous sweep model is a workflow convention, not proof by
 itself. Only checked-in implementation, documented commands, and captured local
-verification output should be used as release evidence.
+verification output should be used as release evidence. For each new feature
+or phase, the architecture map, release checklist, build/test commands, and
+knowledge-base notes should either name the relevant E2E coverage or document
+the remaining blocker before any stronger production-readiness language is
+used.

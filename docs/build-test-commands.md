@@ -168,6 +168,18 @@ check when available, plus `cargo fmt --check` if the branch also touches Rust
 examples or scripts. Record any skipped full-gate stage as a blocker, not as
 implicit coverage.
 
+For documentation-only production-sweep slices, use focused repository checks
+that prove the required docs and diagrams are still present:
+
+```sh
+rg -n "Current Implementation Diagram|End-Goal Production Architecture" docs/architecture-map.md
+rg -n "six-agent|worktree|E2E|production-readiness|proof" docs/knowledge-base/jarvis-project-facts.md docs/release-checklist.md docs/build-test-commands.md
+git diff --check
+```
+
+These checks do not replace `./scripts/release-local.sh` for executable
+changes. They only support docs-only PR evidence and should be reported as such.
+
 ## Release Evidence Boundary
 
 Passing `./scripts/release-local.sh` proves the current Rust workspace builds,
@@ -202,4 +214,7 @@ text-to-speech.
 The public-repo production workflow expects isolated worktrees, topic branches,
 reviewable PRs, and clear ownership. A six-agent autonomous sweep can reduce
 elapsed time, but readiness claims still depend on checked-in implementation
-and the verification commands above.
+and the verification commands above. Each feature phase should name the E2E or
+focused integration coverage it relies on; when a phase changes behavior and no
+such coverage exists, adding coverage is part of the phase rather than a
+follow-up readiness claim.

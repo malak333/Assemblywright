@@ -18,6 +18,10 @@
 - The UI can be polished and high-tech, but must remain practical, inspectable, and legally distinct from Marvel/JARVIS assets.
 - Smart-home control, autonomous external communication, and multi-user sync are deferred or heavily gated in v1.
 - ChatGPT usage is explicit, routed, minimized, policy-checked, and audited.
+- Production-readiness claims are evidence-scoped. A green local foundation
+  gate is not the same as finished assistant readiness until packaged-app,
+  permission UX, voice, recovery, diagnostics, and release-smoke evidence
+  exists for the claimed surface.
 
 ## Non-Goals For v1
 
@@ -237,7 +241,12 @@ The packaged Mac app launches, starts the Rust core, handles a command, writes a
 - SQLite migrations run predictably with backup or rollback behavior.
 - Crash and failure reporting is local-first initially. External reporting is deferred and user-approved only.
 - Releases use version numbers, changelog, migration notes, and smoke-test checklist.
-- Repo docs should include build/test commands, architecture map, plugin contract, safety rules, and release checklist so agents can maintain the project.
+- Repo docs should include build/test commands, architecture map, plugin
+  contract, safety rules, release checklist, and durable knowledge-base facts so
+  agents can maintain the project.
+- Each feature or phase should update docs and knowledge-base facts, identify
+  the relevant end-to-end coverage, add missing E2E coverage when the feature
+  changes executable behavior, and clearly record any skipped or blocked gate.
 
 ## Initial Implementation Handoff Outline
 
@@ -251,16 +260,24 @@ Implementation should begin with the smallest product-grade foundation:
 6. Add SQLite migrations and app support directory layout.
 7. Add the first release smoke test.
 
-Current branch status: the repo structure, IPC health/command surface, durable
-task/audit/emergency-pause/memory/scheduler schema, fake local model, first-party
-plugin contracts, CLI smoke path, redacted diagnostics export, and buildable
-Swift command/activity shell scaffold are implemented. The command runtime can
-route to fake local, Ollama-compatible local HTTP, or explicitly enabled
-ChatGPT/OpenAI-compatible HTTP providers. The Swift app includes approval
-decision controls and text-only voice command handoff, but still does not have
-signed packaged-app release smoke evidence. The product still lacks real voice,
-installed plugin execution, packaged app release smoke evidence, and background
-proactive trigger execution. Swift supervision is covered only as a scaffold for
-configured or packaged-style local core binaries.
+Current implementation status: the repo structure, IPC health/command surface,
+durable task/audit/emergency-pause/memory/scheduler schema, fake local model,
+first-party plugin contracts, metadata-only local plugin installation, CLI
+smoke path, redacted diagnostics export, and buildable Swift command/activity
+shell scaffold are implemented. The command runtime can route to fake local,
+Ollama-compatible local HTTP, or explicitly enabled ChatGPT/OpenAI-compatible
+HTTP providers. The Swift app includes approval decision controls, management
+surfaces, text-only voice command handoff, and core supervision abstractions,
+but still does not have signed packaged-app release smoke evidence. The product
+still lacks real voice, executable installed-plugin sandboxing, packaged app
+release smoke evidence, and background proactive trigger execution. Swift
+supervision is covered only as a scaffold for configured or packaged-style
+local core binaries.
+
+The active production sweep uses isolated worktrees, topic branches, reviewable
+PR slices, and docs-only synchronization work on `codex/production-docs-sync`.
+That workflow improves reviewability but is not readiness evidence by itself.
+Readiness language must be tied to checked-in code, documented diagrams,
+knowledge-base updates, and the specific local/E2E checks that passed.
 
 Before implementation, the design should be reviewed through a multi-agent brainstorming pass because Jarvis is high-autonomy, security-sensitive, and product-grade.
