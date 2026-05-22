@@ -32,7 +32,8 @@ flowchart TB
     ReleaseReadiness["/release/readiness and jarvis release readiness"] --> Docs
     ReleaseReadinessFallback["serverless CLI readiness fallback"] --> ReleaseReadiness
     EvidenceStatus["/release/evidence-status and jarvis release evidence-status"] --> EvidenceDoctor
-    EvidenceStatus --> ReleaseReadiness
+    EvidenceStatus --> LiveQASemanticValidator["live QA semantic validator: bundle/version/timestamp/self-test checks"]
+    LiveQASemanticValidator --> ReleaseReadiness
     subgraph ManualExternal["Manual external evidence, not local gate proof"]
         LiveDeviceAssert["release-live-device-qa.sh assert-complete"] --> LiveDeviceQAReport["target/release-live-device-qa-report.json owner-recorded voice evidence"]
         PluginTrustAssert["release-plugin-trust-qa.sh assert-complete"] --> PluginTrustQAReport["target/release-plugin-trust-qa-report.json owner-recorded plugin trust evidence"]
@@ -208,7 +209,10 @@ enabled release evidence status. By default it treats standard `target/`
 evidence files as inventory only so stale local reports cannot silently clear
 manual blockers; with `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external`, a
 valid live-device QA report can clear only the live voice/audio readiness item
-and related owner-recorded live-device blockers. It still keeps
+and related owner-recorded live-device blockers. The live report must pass the
+same semantic validator used by `/release/evidence-status`: schema/type,
+`self_test_fixture=false`, expected bundle ID, matching short/build version,
+UTC `Z` timestamps, and completion not earlier than start. It still keeps
 `production_ready: false` until signed artifacts, notarization/stapling,
 plugin-trust evidence, and the final evidence bundle are present and valid.
 `jarvis release readiness` prefers that IPC endpoint and falls back to the same
@@ -384,6 +388,7 @@ payload validate. Production bundle creation keeps local signature validation
 mandatory, parses every required live-device/plugin-trust report flag, requires
 non-empty owner-recorded evidence fields in both QA reports, confirms the
 live-device QA bundle id/version/build metadata matches the expected release,
+checks live-device voice-check timestamps are ordered UTC values,
 and records SHA-256 digests for distribution artifacts and QA reports before
 writing evidence.
 The `./scripts/release-evidence-doctor.sh --check` command inventories the

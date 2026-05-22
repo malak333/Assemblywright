@@ -85,6 +85,12 @@ These notes capture durable facts for future agents working on this repository.
   plugin-trust QA report, and final evidence bundle. This is file/report
   inventory only; it does not prove signing, notarization, installation, Finder
   launch, live-device QA, marketplace review, malware scanning, or OS sandboxing.
+- The live-device QA evidence item is stricter than generic JSON presence:
+  `/release/evidence-status` validates schema/type, rejects `self_test_fixture`,
+  checks the expected bundle identifier plus short/build version, requires UTC
+  voice-check timestamps ending in `Z`, and requires completion to be at or
+  after start. Invalid or stale hand-written reports stay `invalid` and cannot
+  clear `live_voice_loop` in evidence-aware readiness mode.
 - The Swift shell also decodes `/release/readiness` through
   `ReleaseReadinessModel` and renders a Release tab with blocking manual gates,
   recommended commands, implemented proofs, pending features, the proof

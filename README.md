@@ -122,6 +122,10 @@ actually completed.
 Readiness stays conservative by default; only set
 `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external` after owner-recorded external
 QA reports and signed-distribution evidence have been collected.
+In external evidence mode, the live-device QA report must still pass semantic
+validation for the expected bundle identifier, short/build version, non-self-test
+identity, and ordered UTC voice-check timestamps before it can clear the live
+voice blocker.
 Opt-in final-transcript auto-submit is text-path parity only; it does not clear
 live microphone/Speech/audio-output validation or manual release QA.
 

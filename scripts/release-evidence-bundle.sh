@@ -266,6 +266,70 @@ if not isinstance(cursor, str) or not cursor.strip():
 PY
 }
 
+require_json_utc_timestamp() {
+  local label="$1"
+  local path="$2"
+  local dotted_key="$3"
+  require_file "$label" "$path"
+  python3 - "$path" "$dotted_key" "$label" <<'PY'
+from datetime import datetime
+import json
+import sys
+
+path, dotted_key, label = sys.argv[1:4]
+with open(path, encoding="utf-8") as handle:
+    data = json.load(handle)
+
+cursor = data
+for segment in dotted_key.split("."):
+    if not isinstance(cursor, dict) or segment not in cursor:
+        raise SystemExit(f"{label} is missing required evidence field: {dotted_key}")
+    cursor = cursor[segment]
+
+if not isinstance(cursor, str) or not cursor.endswith("Z"):
+    raise SystemExit(f"{label} required evidence field must be a UTC timestamp ending in Z: {dotted_key}")
+try:
+    datetime.fromisoformat(cursor.replace("Z", "+00:00"))
+except ValueError as exc:
+    raise SystemExit(f"{label} required evidence field must be a UTC RFC3339 timestamp: {dotted_key}") from exc
+PY
+}
+
+require_json_timestamp_order() {
+  local label="$1"
+  local path="$2"
+  local start_key="$3"
+  local completed_key="$4"
+  require_file "$label" "$path"
+  python3 - "$path" "$start_key" "$completed_key" "$label" <<'PY'
+from datetime import datetime
+import json
+import sys
+
+path, start_key, completed_key, label = sys.argv[1:5]
+with open(path, encoding="utf-8") as handle:
+    data = json.load(handle)
+
+def get_timestamp(dotted_key):
+    cursor = data
+    for segment in dotted_key.split("."):
+        if not isinstance(cursor, dict) or segment not in cursor:
+            raise SystemExit(f"{label} is missing required evidence field: {dotted_key}")
+        cursor = cursor[segment]
+    if not isinstance(cursor, str) or not cursor.endswith("Z"):
+        raise SystemExit(f"{label} required evidence field must be a UTC timestamp ending in Z: {dotted_key}")
+    try:
+        return datetime.fromisoformat(cursor.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise SystemExit(f"{label} required evidence field must be a UTC RFC3339 timestamp: {dotted_key}") from exc
+
+started = get_timestamp(start_key)
+completed = get_timestamp(completed_key)
+if completed < started:
+    raise SystemExit(f"{label} {completed_key} must be greater than or equal to {start_key}")
+PY
+}
+
 file_sha256() {
   local path="$1"
   shasum -a 256 "$path" | awk '{print $1}'
@@ -778,6 +842,9 @@ require_json_bool_false "live-device QA report" "$LIVE_QA_REPORT" "self_test_fix
 for field in owner_name device_label profile_label voice_check_started_at voice_check_completed_at microphone_evidence_note speech_permission_evidence_note transcript_handoff_evidence_note audio_output_evidence_note; do
   require_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.$field"
 done
+require_json_utc_timestamp "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.voice_check_started_at"
+require_json_utc_timestamp "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.voice_check_completed_at"
+require_json_timestamp_order "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.voice_check_started_at" "owner_recorded_live_voice_evidence.voice_check_completed_at"
 for field in test_phrase observed_transcript observed_command_text command_result_evidence_id audio_output_device_label; do
   require_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "voice_command_observation.$field"
 done

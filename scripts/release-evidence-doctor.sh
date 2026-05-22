@@ -195,6 +195,70 @@ raise SystemExit(0 if isinstance(cursor, str) and bool(cursor.strip()) else 1)
 PY
 }
 
+json_utc_timestamp() {
+  local path="$1"
+  local dotted_key="$2"
+  python3 - "$path" "$dotted_key" <<'PY'
+from datetime import datetime
+import json
+import sys
+
+path, dotted_key = sys.argv[1:3]
+try:
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+except Exception:
+    raise SystemExit(1)
+
+cursor = data
+for segment in dotted_key.split("."):
+    if not isinstance(cursor, dict) or segment not in cursor:
+        raise SystemExit(1)
+    cursor = cursor[segment]
+
+if not isinstance(cursor, str) or not cursor.endswith("Z"):
+    raise SystemExit(1)
+try:
+    datetime.fromisoformat(cursor.replace("Z", "+00:00"))
+except ValueError:
+    raise SystemExit(1)
+raise SystemExit(0)
+PY
+}
+
+json_timestamp_order() {
+  local path="$1"
+  local start_key="$2"
+  local completed_key="$3"
+  python3 - "$path" "$start_key" "$completed_key" <<'PY'
+from datetime import datetime
+import json
+import sys
+
+path, start_key, completed_key = sys.argv[1:4]
+try:
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+except Exception:
+    raise SystemExit(1)
+
+def get_timestamp(dotted_key):
+    cursor = data
+    for segment in dotted_key.split("."):
+        if not isinstance(cursor, dict) or segment not in cursor:
+            raise SystemExit(1)
+        cursor = cursor[segment]
+    if not isinstance(cursor, str) or not cursor.endswith("Z"):
+        raise SystemExit(1)
+    try:
+        return datetime.fromisoformat(cursor.replace("Z", "+00:00"))
+    except ValueError:
+        raise SystemExit(1)
+
+raise SystemExit(0 if get_timestamp(completed_key) >= get_timestamp(start_key) else 1)
+PY
+}
+
 valid_json_file() {
   local path="$1"
   [[ -f "$path" ]] && python3 -m json.tool "$path" >/dev/null 2>&1
@@ -283,6 +347,31 @@ check_json_nonempty_string() {
   fi
 }
 
+check_json_utc_timestamp() {
+  local label="$1"
+  local path="$2"
+  local dotted_key="$3"
+
+  if json_utc_timestamp "$path" "$dotted_key"; then
+    record_satisfied "$label: $dotted_key is UTC"
+  else
+    record_missing "$label invalid UTC timestamp: $dotted_key in $path"
+  fi
+}
+
+check_json_timestamp_order() {
+  local label="$1"
+  local path="$2"
+  local start_key="$3"
+  local completed_key="$4"
+
+  if json_timestamp_order "$path" "$start_key" "$completed_key"; then
+    record_satisfied "$label: $completed_key >= $start_key"
+  else
+    record_missing "$label timestamp order invalid: $completed_key must be greater than or equal to $start_key in $path"
+  fi
+}
+
 check_release_evidence() {
   check_path "app bundle path" "$APP_PATH" dir
   check_path "app executable" "$APP_PATH/Contents/MacOS/JarvisMacApp" executable
@@ -305,6 +394,9 @@ check_release_evidence() {
     for field in owner_name device_label profile_label voice_check_started_at voice_check_completed_at microphone_evidence_note speech_permission_evidence_note transcript_handoff_evidence_note audio_output_evidence_note; do
       check_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.$field"
     done
+    check_json_utc_timestamp "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.voice_check_started_at"
+    check_json_utc_timestamp "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.voice_check_completed_at"
+    check_json_timestamp_order "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.voice_check_started_at" "owner_recorded_live_voice_evidence.voice_check_completed_at"
     for field in test_phrase observed_transcript observed_command_text command_result_evidence_id audio_output_device_label; do
       check_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "voice_command_observation.$field"
     done
