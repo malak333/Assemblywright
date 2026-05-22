@@ -190,7 +190,9 @@ stage or when a PR needs focused evidence for one ownership slice.
   exposing memory values, and diagnostics export exposes only aggregate active,
   unreviewed, and sensitive memory counts.
 - Confirm the Swift Approval Center renders permission policy review status
-  alongside grant history when the IPC contract exposes the endpoint.
+  alongside grant history when the IPC contract exposes the endpoint, stages
+  approved-unexecuted first-party approvals for Run Approved, and hides
+  approvals that already have `approval_executed` task-audit evidence.
 - Confirm scheduler job create/list/cancel and due-run execution state is
   restored and updated when repository backing is enabled. Due-run coverage
   proves explicit CLI/IPC runner behavior, including interval reschedule and

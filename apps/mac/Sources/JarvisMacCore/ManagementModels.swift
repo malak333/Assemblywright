@@ -294,11 +294,16 @@ public final class ApprovalManagementModel: ObservableObject {
     @Published public private(set) var policyReview: JarvisPermissionPolicyReview?
     @Published public private(set) var permissionSurface: JarvisPermissionSurfaceState
     @Published public private(set) var lastDecision: JarvisPendingApproval?
+    @Published public private(set) var lastExecution: JarvisApprovalExecutionResponse?
     @Published public private(set) var isLoading: Bool
     @Published public private(set) var lastError: String?
 
     public var supportsApprovalActions: Bool {
         contract?.exposesApprovalActions == true
+    }
+
+    public var supportsApprovalExecution: Bool {
+        contract?.exposesApprovalExecuteAction == true
     }
 
     public var limitationText: String? {
@@ -318,6 +323,7 @@ public final class ApprovalManagementModel: ObservableObject {
         self.policyReview = nil
         self.permissionSurface = .empty
         self.lastDecision = nil
+        self.lastExecution = nil
         self.isLoading = false
         self.lastError = nil
         self.pluginManifests = []
@@ -336,11 +342,7 @@ public final class ApprovalManagementModel: ObservableObject {
                 : nil
 
             if loadedContract.exposesApprovalList {
-                let approvals = try await self.client.listApprovals(status: "pending")
-                self.pendingItems = JarvisApprovalQueueItem.pendingItems(
-                    approvals: approvals,
-                    contract: loadedContract
-                )
+                self.pendingItems = try await self.loadApprovalItems(contract: loadedContract)
             } else {
                 async let tasks = self.client.listTasks()
                 async let audit = self.client.listAuditEntries(taskId: nil)
@@ -380,18 +382,15 @@ public final class ApprovalManagementModel: ObservableObject {
         }
     }
 
-    private func decide(
-        id: UUID,
-        operation: @escaping () async throws -> JarvisPendingApproval
-    ) async {
-        guard supportsApprovalActions else {
-            lastError = "Core does not expose approval decision endpoints."
+    public func execute(id: UUID) async {
+        guard supportsApprovalExecution else {
+            lastError = "Core does not expose approved approval execution."
             return
         }
 
         await run {
-            let decision = try await operation()
-            self.lastDecision = decision
+            let execution = try await self.client.executeApproval(id: id)
+            self.lastExecution = execution
             self.pendingItems.removeAll { $0.id == id }
             if self.contract?.exposesPermissionGrantSummary == true {
                 self.grantSummary = try await self.client.permissionGrantSummary()
@@ -405,6 +404,70 @@ public final class ApprovalManagementModel: ObservableObject {
                 contract: self.contract,
                 grantSummary: self.grantSummary
             )
+        }
+    }
+
+    private func decide(
+        id: UUID,
+        operation: @escaping () async throws -> JarvisPendingApproval
+    ) async {
+        guard supportsApprovalActions else {
+            lastError = "Core does not expose approval decision endpoints."
+            return
+        }
+
+        await run {
+            let decision = try await operation()
+            self.lastDecision = decision
+            if let contract = self.contract, contract.exposesApprovalList {
+                self.pendingItems = try await self.loadApprovalItems(contract: contract)
+            } else {
+                self.pendingItems.removeAll { $0.id == id }
+            }
+            if self.contract?.exposesPermissionGrantSummary == true {
+                self.grantSummary = try await self.client.permissionGrantSummary()
+            }
+            if self.contract?.exposesPermissionPolicyReview == true {
+                self.policyReview = try await self.client.permissionPolicyReview()
+            }
+            self.permissionSurface = JarvisPermissionSurfaceState.current(
+                pendingItems: self.pendingItems,
+                pluginManifests: self.pluginManifests,
+                contract: self.contract,
+                grantSummary: self.grantSummary
+            )
+        }
+    }
+
+    private func loadApprovalItems(contract: JarvisContractResponse) async throws -> [JarvisApprovalQueueItem] {
+        let approvals = try await client.listApprovals(status: nil)
+        var visibleApprovals: [JarvisPendingApproval] = []
+        for approval in approvals
+        where approval.status == "pending"
+            || (approval.status == "approved" && contract.exposesApprovalExecuteAction)
+        {
+            if approval.status == "approved",
+               contract.exposesApprovalExecuteAction,
+               try await approvalHasExecutionAudit(approval) {
+                continue
+            }
+            visibleApprovals.append(approval)
+        }
+        return JarvisApprovalQueueItem.pendingItems(
+            approvals: visibleApprovals,
+            contract: contract
+        )
+    }
+
+    private func approvalHasExecutionAudit(_ approval: JarvisPendingApproval) async throws -> Bool {
+        let entries = try await client.listAuditEntries(taskId: approval.taskId)
+        return entries.contains { entry in
+            guard entry.eventType == "approval_executed",
+                  case let .object(payload)? = entry.payload,
+                  case let .string(approvalId)? = payload["approval_id"] else {
+                return false
+            }
+            return approvalId.caseInsensitiveCompare(approval.id.uuidString) == .orderedSame
         }
     }
 

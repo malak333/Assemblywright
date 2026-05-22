@@ -148,6 +148,11 @@ These notes capture durable facts for future agents working on this repository.
   the task out of `waiting_for_approval` on completion, and records
   `approval_executed` plus plugin completion audit evidence with
   `side_effect_executed: true`.
+- The Swift Approval Center loads pending approvals for grant/deny controls and
+  approved-unexecuted approvals for a Run Approved action when the IPC contract
+  exposes `/approvals/:id/execute`. It checks the approval task audit for
+  `approval_executed` and hides records that already have execution evidence,
+  so a refresh does not invite duplicate approved replay.
 - The CLI has matching `tasks`, `memory`, `scheduler`, `diagnostics`, and
   `plugins` subcommands, including `plugins install`, `plugins installed`,
   `plugins installed-get`, `plugins enable-installed`, `plugins
@@ -163,7 +168,8 @@ These notes capture durable facts for future agents working on this repository.
   analysis, and broader production operations are not yet implemented in this
   worktree.
   The SwiftUI shell scaffold and IPC client live under `apps/mac`, including a
-  command transcript, activity/audit panel, approval decision controls,
+  command transcript, activity/audit panel, approval decision and approved-run
+  controls,
   management tabs, permission grant-history summary, degraded-mode handling,
   text-only voice command handoff, and a core supervisor abstraction for
   configured or bundled local core binaries.
