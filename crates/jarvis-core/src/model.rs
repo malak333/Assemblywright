@@ -876,8 +876,11 @@ fn ollama_prompt(request: &ModelRequest) -> JarvisResult<String> {
     };
 
     Ok(format!(
-        "You are Jarvis, a local-first assistant. Answer the user directly. Do not claim cloud access. If a first-party tool is needed, reply only with JSON: {{\"message\":\"short reason\",\"complete\":false,\"tool_requests\":[{{\"plugin_id\":\"fake_status\",\"action\":\"status\",\"input\":{{}}}}]}}. Task: {}\nStep: {}\nTool results: {}",
-        request.user_input, request.step_index, tool_results
+        "You are Jarvis, a local-first assistant. Answer the user directly. Do not claim cloud access. Registered first-party tools are exactly: {}. Never invent plugin_id or action values. If a first-party tool is needed, reply only with JSON: {{\"message\":\"short reason\",\"complete\":false,\"tool_requests\":[{{\"plugin_id\":\"fake_status\",\"action\":\"status\",\"input\":{{}}}}]}}. If no registered tool fits, answer directly without tool_requests. Task: {}\nStep: {}\nTool results: {}",
+        first_party_tool_inventory_text(),
+        request.user_input,
+        request.step_index,
+        tool_results
     ))
 }
 
@@ -1020,6 +1023,22 @@ fn openai_first_party_tools() -> Vec<Value> {
         .into_iter()
         .flat_map(openai_tools_for_manifest)
         .collect()
+}
+
+fn first_party_tool_inventory_text() -> String {
+    let mut tools = [EchoPlugin.manifest(), StatusPlugin.manifest()]
+        .into_iter()
+        .flat_map(|manifest| {
+            let plugin_id = manifest.id;
+            manifest.actions.into_iter().map(move |action| {
+                let input = serde_json::to_string(&action.input_schema.schema)
+                    .unwrap_or_else(|_| "{}".to_string());
+                format!("{}.{} input_schema={}", plugin_id, action.name, input)
+            })
+        })
+        .collect::<Vec<_>>();
+    tools.sort();
+    tools.join("; ")
 }
 
 fn openai_tools_for_manifest(manifest: PluginManifest) -> Vec<Value> {
@@ -1263,10 +1282,12 @@ mod tests {
         async fn generate(Json(body): Json<Value>) -> Json<Value> {
             assert_eq!(body["model"], "test-local-model");
             assert_eq!(body["stream"], false);
-            assert!(body["prompt"]
-                .as_str()
-                .expect("prompt")
-                .contains("hello local"));
+            let prompt = body["prompt"].as_str().expect("prompt");
+            assert!(prompt.contains("hello local"));
+            assert!(prompt.contains("Registered first-party tools are exactly"));
+            assert!(prompt.contains("fake_status.status"));
+            assert!(prompt.contains("fake_echo.echo"));
+            assert!(prompt.contains("Never invent plugin_id or action values"));
             Json(json!({ "response": "local answer", "done": true }))
         }
 

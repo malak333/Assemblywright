@@ -734,6 +734,8 @@ where
             let manifest = match self.validate_tool_request(task.id, step_index, tool_request) {
                 Ok(manifest) => manifest,
                 Err(error) => {
+                    let registered_tools = self.registered_first_party_tool_names();
+                    let guidance = tool_rejection_message(&error, &registered_tools);
                     self.update_task_status(task, TaskStatus::Failed)?;
                     self.record_audit(
                         audit_entries,
@@ -747,13 +749,11 @@ where
                                 "plugin_id": tool_request.plugin_id,
                                 "action": tool_request.action,
                                 "error": error.to_string(),
+                                "registered_tools": registered_tools,
                             }),
                         ),
                     )?;
-                    return Ok(ToolPlanOutcome::Blocked(
-                        results,
-                        format!("Tool request rejected: {error}"),
-                    ));
+                    return Ok(ToolPlanOutcome::Blocked(results, guidance));
                 }
             };
             let action = manifest
@@ -878,6 +878,25 @@ where
         )?;
 
         Ok(manifest)
+    }
+
+    fn registered_first_party_tool_names(&self) -> Vec<String> {
+        let mut tools = self
+            .plugin_host
+            .manifests()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|manifest| manifest.source == PluginSource::FirstParty)
+            .flat_map(|manifest| {
+                let plugin_id = manifest.id;
+                manifest
+                    .actions
+                    .into_iter()
+                    .map(move |action| format!("{}.{}", plugin_id, action.name))
+            })
+            .collect::<Vec<_>>();
+        tools.sort();
+        tools
     }
 
     fn finish(
@@ -1012,6 +1031,19 @@ fn model_error_kind(error: &crate::JarvisError) -> &'static str {
         crate::JarvisError::Model(_) => "model",
         crate::JarvisError::Other(_) => "other",
     }
+}
+
+fn tool_rejection_message(error: &crate::JarvisError, registered_tools: &[String]) -> String {
+    if registered_tools.is_empty() {
+        return format!(
+            "Tool request rejected: {error}. No first-party model tools are registered."
+        );
+    }
+
+    format!(
+        "Tool request rejected: {error}. Registered first-party model tools are: {}. Retry with one of those exact plugin.action names or answer without a tool.",
+        registered_tools.join(", ")
+    )
 }
 
 fn redacted_model_error(error: &crate::JarvisError) -> String {
@@ -1495,12 +1527,100 @@ mod tests {
         assert_eq!(response.task.status, TaskStatus::Failed);
         assert!(response.tool_results.is_empty());
         assert!(response.message.contains("Tool request rejected"));
+        assert!(response
+            .message
+            .contains("Registered first-party model tools are: fake_echo.approval_echo, fake_echo.echo, fake_status.status"));
         assert!(response.audit_entries.iter().any(|entry| entry.event_type
             == "tool_request_rejected"
             && entry.payload["error"]
                 .as_str()
                 .expect("error")
-                .contains("input must be an object")));
+                .contains("input must be an object")
+            && entry.payload["registered_tools"]
+                .as_array()
+                .expect("registered tools")
+                .iter()
+                .any(|tool| tool == "fake_status.status")));
+        assert!(!response.audit_entries.iter().any(|entry| {
+            entry.event_type == "tool_policy_check" || entry.event_type == "tool_execution_result"
+        }));
+    }
+
+    #[tokio::test]
+    async fn rejects_hallucinated_model_planned_plugin_with_registered_tool_guidance() {
+        let runtime = ConversationRuntime::new(
+            FakeLocalModel::default().with_tool_request(ModelToolRequest::new(
+                "status",
+                "status",
+                json!({}),
+            )),
+        );
+
+        let response = runtime
+            .execute_command(CommandRequest::new("use invented status tool"))
+            .await
+            .expect("validation failure should return structured response");
+
+        assert_eq!(response.task.status, TaskStatus::Failed);
+        assert!(response.tool_results.is_empty());
+        assert!(response
+            .message
+            .contains("plugin error: plugin status is not registered"));
+        assert!(response
+            .message
+            .contains("Registered first-party model tools are: fake_echo.approval_echo, fake_echo.echo, fake_status.status"));
+        let rejection = response
+            .audit_entries
+            .iter()
+            .find(|entry| entry.event_type == "tool_request_rejected")
+            .expect("rejection audit");
+        assert_eq!(rejection.payload["plugin_id"], "status");
+        assert_eq!(rejection.payload["action"], "status");
+        assert!(rejection.payload["registered_tools"]
+            .as_array()
+            .expect("registered tools")
+            .iter()
+            .any(|tool| tool == "fake_status.status"));
+        assert!(!response.audit_entries.iter().any(|entry| {
+            entry.event_type == "tool_policy_check" || entry.event_type == "tool_execution_result"
+        }));
+    }
+
+    #[tokio::test]
+    async fn rejects_hallucinated_model_planned_action_with_registered_tool_guidance() {
+        let runtime = ConversationRuntime::new(
+            FakeLocalModel::default().with_tool_request(ModelToolRequest::new(
+                "fake_status",
+                "list",
+                json!({}),
+            )),
+        );
+
+        let response = runtime
+            .execute_command(CommandRequest::new("use invented status action"))
+            .await
+            .expect("validation failure should return structured response");
+
+        assert_eq!(response.task.status, TaskStatus::Failed);
+        assert!(response.tool_results.is_empty());
+        assert!(response
+            .message
+            .contains("plugin fake_status does not declare action list"));
+        assert!(response
+            .message
+            .contains("Registered first-party model tools are: fake_echo.approval_echo, fake_echo.echo, fake_status.status"));
+        let rejection = response
+            .audit_entries
+            .iter()
+            .find(|entry| entry.event_type == "tool_request_rejected")
+            .expect("rejection audit");
+        assert_eq!(rejection.payload["plugin_id"], "fake_status");
+        assert_eq!(rejection.payload["action"], "list");
+        assert!(rejection.payload["registered_tools"]
+            .as_array()
+            .expect("registered tools")
+            .iter()
+            .any(|tool| tool == "fake_status.status"));
     }
 
     #[tokio::test]

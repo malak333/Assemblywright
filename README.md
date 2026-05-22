@@ -60,7 +60,13 @@ and audit path. ChatGPT/OpenAI-compatible responses may also return native
 OpenAI `tool_calls` for the advertised first-party tool definitions; those are
 translated into the same bounded first-party path. Plain text remains
 supported, and this is not installed-plugin orchestration or broad third-party
-tool execution. Local plugin
+tool execution. Local-model prompts now include the exact registered
+first-party plugin/action inventory, and hallucinated or invalid model-planned
+plugin IDs/actions fail closed with registered-tool guidance plus
+`tool_request_rejected` audit evidence before policy checks or tool execution.
+Live Ollama testing has proven the opt-in local HTTP route can complete real
+model commands; model-specific tool discipline can still vary, so the runtime
+boundary remains authoritative. Local plugin
 installation stores validated manifest metadata disabled by default and captures
 a local source-tree provenance snapshot, including manifest and subprocess
 entrypoint hashes. Executable local subprocess plugins require the snapshot to

@@ -106,6 +106,12 @@ to explain what happened:
   local source-tree provenance snapshot, honors `execution_enabled` and
   `execution_grant`, checks that the stored source path is canonical, and
   appends audit evidence.
+- Model-originated tool requests are stricter than direct plugin registry
+  inspection. They may target only registered first-party plugin actions
+  advertised to the provider. Unknown plugin IDs, undeclared actions,
+  non-object or schema-invalid inputs, non-first-party requests, and oversized
+  tool plans fail closed before policy checks or execution, with
+  `tool_request_rejected` audit evidence and registered-tool guidance.
 - Enabled installed plugin execution is limited to `local_subprocess` manifests
   with the `subprocess_stdio` grant for non-network actions and
   `subprocess_stdio_network` for network-declaring actions. The command must
