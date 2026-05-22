@@ -125,8 +125,10 @@ stage or when a PR needs focused evidence for one ownership slice.
 - Confirm installed plugin run attempts fail closed with manifest/version and
   action validation, default `execution_enabled: false` semantics, local
   provenance verification, safe command path checks, JSON stdin/stdout, timeout
-  enforcement, output schema validation, durable audit evidence, and
-  `side_effect_executed: false` when no side effect is allowed.
+  enforcement, output schema validation, minimal subprocess environment
+  isolation that prevents inherited app/core secrets from reaching plugins,
+  durable audit evidence, and `side_effect_executed: false` when no side effect
+  is allowed.
 - Confirm installed subprocess progress frames are bounded to parsed
   sequence/stage/message events, append `installed_plugin_progress` audit
   evidence, and do not expose raw stderr in responses or audit payloads.

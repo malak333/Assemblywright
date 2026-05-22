@@ -123,6 +123,12 @@ These notes capture durable facts for future agents working on this repository.
   `subprocess_stdio_network`. This is runtime grant gating plus manifest
   governance and review evidence, not OS-level network sandboxing or host-level
   egress filtering.
+- Enabled `local_subprocess` plugins run with an environment boundary: Jarvis
+  clears the inherited app/core process environment before spawn and provides
+  only a deterministic `PATH` plus `JARVIS_PLUGIN_ID`,
+  `JARVIS_PLUGIN_ACTION`, and `JARVIS_PLUGIN_SOURCE_PATH`. Rust unit coverage
+  and CLI IPC E2E assert that a secret inherited by the core process is not
+  visible inside the plugin subprocess.
 - Repository-backed IPC exposes `/permissions/grants`, and the CLI exposes
   `jarvis permissions grants`, as a read-only permission-center summary. It
   combines approval status counts/history, high-risk pending approval count,
@@ -439,10 +445,11 @@ These notes capture durable facts for future agents working on this repository.
   use a command canonicalized under `source_path`, are explicitly enabled with
   `execution_grant: subprocess_stdio` for non-network actions or
   `subprocess_stdio_network` for network-declaring actions, validate input and
-  output schemas, run with the declared timeout, and emit audit evidence
-  including whether the subprocess started. Subprocess stderr may contain
-  bounded progress frames, but raw stderr remains redacted from response and
-  audit payloads. Any broader executable path or real-time plugin progress
+  output schemas, run with the declared timeout, clear inherited environment
+  variables, and emit audit evidence including whether the subprocess started.
+  Subprocess stderr may contain bounded progress frames, but raw stderr remains
+  redacted from response and audit payloads. Any broader executable path or
+  real-time plugin progress
   stream needs a stronger sandbox,
   explicit grant state beyond `metadata_only`, policy checks,
   timeout/cancellation behavior, and E2E audit coverage.
