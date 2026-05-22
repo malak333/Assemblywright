@@ -25,7 +25,7 @@ flowchart TB
     LiveDeviceAssert["release-live-device-qa.sh assert-complete"] --> LiveDeviceQAReport["target/release-live-device-qa-report.json owner-recorded voice evidence"]
     LocalGate --> PluginTrustQA["release-plugin-trust-qa.sh check/self-test preflight"]
     PluginTrustAssert["release-plugin-trust-qa.sh assert-complete"] --> PluginTrustQAReport["target/release-plugin-trust-qa-report.json owner-recorded plugin trust evidence"]
-    LocalGate --> EvidenceBundle["release-evidence-bundle.sh check/self-test and signed-artifact validation path"]
+    LocalGate --> EvidenceBundle["release-evidence-bundle.sh check/self-test and bundle validation path"]
     LiveDeviceQAReport --> EvidenceBundle
     PluginTrustQAReport --> EvidenceBundle
     LocalGate --> EvidenceDoctor["release-evidence-doctor.sh check/self-test evidence inventory"]
@@ -210,7 +210,7 @@ operator triage only and does not claim server-backed runtime evidence.
 `/release/evidence-status` and `jarvis release evidence-status` expose the
 standard signed artifact, live-device QA report, plugin-trust QA report, and
 final evidence bundle inventory as structured JSON with present, missing, or
-invalid item status. This mirrors release-evidence-doctor inspection only; it
+invalid item status. This mirrors release-evidence-doctor inventory only; it
 does not perform signing, notarization, installation, Finder launch,
 live-device QA, marketplace review, malware scanning, or OS sandboxing.
 Repository-backed IPC state stores approval-required plugin command decisions
@@ -364,22 +364,26 @@ marketplace, malware-analysis, signed-publisher-policy, OS sandbox, and
 host-level egress checks on the release path; `--assert-complete` writes a
 manual JSON evidence report only after owner validation flags are true and
 owner/timestamp/evidence-note fields are populated.
-The `./scripts/release-evidence-bundle.sh --check` command ties the signed
-distribution artifacts, live-device QA report, plugin-trust QA report, and
-owner validation flags into a final bundle manifest path. `--self-test` uses
-fake artifacts/reports only; `--bundle` writes a manifest after the referenced
-evidence exists, the owner flags are true, and the local app signature,
-app stapling ticket, installer signature, installer stapling ticket, and app
-zip payload validate. Production bundle creation keeps local signature
-validation mandatory, parses every required live-device/plugin-trust report
-flag, requires non-empty owner-recorded evidence fields in both QA reports,
-confirms the live-device QA bundle id/version/build metadata matches the
-expected release, and records SHA-256 digests for distribution artifacts and QA
-reports before writing evidence.
+The `./scripts/release-evidence-bundle.sh --check` command ties the expected
+signed distribution artifact paths, live-device QA report, plugin-trust QA
+report, and owner validation flags into a final bundle manifest path. `--check`,
+`release-evidence-doctor.sh`, and `/release/evidence-status` are path/JSON
+inventory surfaces only; they do not validate signing, notarization, stapling,
+installation, live-device QA, or plugin-trust QA. `--self-test` uses fake
+artifacts/reports only; `--bundle` writes a manifest after the referenced
+evidence exists, the owner flags are true, and the local app signature, app
+stapling ticket, installer signature, installer stapling ticket, and app zip
+payload validate. Production bundle creation keeps local signature validation
+mandatory, parses every required live-device/plugin-trust report flag, requires
+non-empty owner-recorded evidence fields in both QA reports, confirms the
+live-device QA bundle id/version/build metadata matches the expected release,
+and records SHA-256 digests for distribution artifacts and QA reports before
+writing evidence.
 The `./scripts/release-evidence-doctor.sh --check` command inventories the
 standard signed-artifact, live-device QA, plugin-trust QA, and final bundle
-manifest paths so operators can see present and missing evidence before
-`--bundle`; it is a diagnostic inventory, not release proof by itself.
+manifest paths so operators can see present, missing, or invalid evidence before
+`--bundle`; it is a diagnostic inventory, not release proof or signing/notary
+validation by itself.
 
 The production-readiness sweep is coordinated through isolated worktrees and
 topic branches against the public repository

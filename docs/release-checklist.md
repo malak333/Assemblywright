@@ -50,7 +50,7 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
 - Confirm `jarvis release evidence-status` or `/release/evidence-status` reports
   the standard signed artifact, live-device QA report, plugin-trust QA report,
   and final evidence bundle inventory as structured JSON. Treat it as
-  file/report inspection only, not proof that signing, notarization,
+  file/report inventory only, not proof that signing, notarization,
   installation, Finder launch, live-device QA, marketplace review, malware
   scanning, or OS sandboxing was performed.
 - Confirm `jarvis release --help`, `jarvis release readiness --help`, and
@@ -295,25 +295,22 @@ stage or when a PR needs focused evidence for one ownership slice.
 - Confirm `./scripts/release-evidence-bundle.sh --check` is included in
   release readiness recommendations and the local release gate, and that
   `./scripts/release-evidence-bundle.sh --self-test` proves only final bundle
-  manifest mechanics with fake artifacts/reports. Treat `--bundle` output as a
-  manifest of referenced signed/notarized artifacts and owner-recorded QA
-  evidence. The bundle path also verifies local artifact evidence by checking
+  manifest mechanics with fake artifacts/reports. Treat `--check`,
+  `release-evidence-doctor.sh`, `/release/evidence-status`, and
+  `jarvis release evidence-status` as present/missing/invalid inventory for
+  expected paths, JSON flags, and release metadata only; those paths do not
+  validate Developer ID signing, notarization, stapling, installation,
+  live-device QA, plugin-trust QA, owner assertions, or final bundle creation.
+  Treat `--bundle` output as a manifest of referenced signed/notarized artifacts
+  and owner-recorded QA evidence. The production `--bundle` path, unlike
+  doctor/status inventory, must keep local signature validation enabled, check
   the app signature, app stapling ticket, installer signature, installer
-  stapling ticket, and app zip payload before writing the manifest; it still
-  does not perform those external validations locally. Production bundle
-  creation must keep local signature validation enabled, parse every required
-  live-device/plugin-trust report flag, require owner-recorded evidence fields
-  in both QA reports, confirm the live-device QA report matches the expected
-  bundle id/version/build, and write SHA-256 digests for the signed distribution
-  artifacts plus QA reports before writing evidence;
-  the disabled-signature path is reserved for the fake self-test fixture.
-- Confirm `./scripts/release-evidence-doctor.sh --check` is included in
-  release readiness recommendations and the local release gate, and that
-  `./scripts/release-evidence-doctor.sh --self-test` proves only evidence
-  inventory mechanics with fake artifacts/reports. Treat a complete doctor run
-  as a present/missing inventory of expected files, JSON flags, and release
-  metadata only; it does not perform signing, notarization, live-device QA,
-  plugin-trust QA, owner assertions, or final bundle creation.
+  stapling ticket, and app zip payload before writing the manifest, parse every
+  required live-device/plugin-trust report flag, require owner-recorded evidence
+  fields in both QA reports, confirm the live-device QA report matches the
+  expected bundle id/version/build, and write SHA-256 digests for the signed
+  distribution artifacts plus QA reports before writing evidence. The
+  disabled-signature path is reserved for the fake self-test fixture.
 - Confirm `/release/evidence-status` and `jarvis release evidence-status` expose
   the same standard release evidence inventory as structured, redacted status
   items with `present`, `missing`, or `invalid` state, including JSON-report

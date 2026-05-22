@@ -3992,7 +3992,7 @@ fn release_evidence_status_from_env() -> ReleaseEvidenceStatusResponse {
         invalid_count,
         items,
         proof_boundary:
-            "File/report inspection only; this endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
+            "File/report inventory only; complete means expected paths and required JSON fields are present. This endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
                 .to_string(),
     }
 }
@@ -4054,6 +4054,8 @@ fn inspect_release_path(
     path: &FsPath,
     kind: ReleaseEvidenceKind,
 ) -> (ReleaseEvidenceItemStatus, String) {
+    const PRESENCE_ONLY_DETAIL: &str =
+        "presence only; signing, notarization, and stapling are not validated by evidence-status";
     let metadata = match fs::metadata(path) {
         Ok(metadata) => metadata,
         Err(_) => {
@@ -4067,15 +4069,15 @@ fn inspect_release_path(
     match kind {
         ReleaseEvidenceKind::Directory if metadata.is_dir() => (
             ReleaseEvidenceItemStatus::Present,
-            "directory exists".to_string(),
+            format!("directory exists; {PRESENCE_ONLY_DETAIL}"),
         ),
         ReleaseEvidenceKind::File if metadata.is_file() => (
             ReleaseEvidenceItemStatus::Present,
-            "file exists".to_string(),
+            format!("file exists; {PRESENCE_ONLY_DETAIL}"),
         ),
         ReleaseEvidenceKind::Executable if metadata.is_file() && is_executable(&metadata) => (
             ReleaseEvidenceItemStatus::Present,
-            "executable file exists".to_string(),
+            format!("executable file exists; {PRESENCE_ONLY_DETAIL}"),
         ),
         ReleaseEvidenceKind::Executable if metadata.is_file() => (
             ReleaseEvidenceItemStatus::Invalid,
@@ -4149,7 +4151,7 @@ fn inspect_release_json_report(
         }
         (
             ReleaseEvidenceItemStatus::Present,
-            "JSON report exists and required fields are present".to_string(),
+            release_json_present_detail(key),
         )
     } else {
         (
@@ -4159,6 +4161,13 @@ fn inspect_release_json_report(
                 missing.join(", ")
             ),
         )
+    }
+}
+
+fn release_json_present_detail(key: &str) -> String {
+    match key {
+        "release_evidence_bundle" => "JSON report exists and required owner-recorded fields are present; signed_distribution and notarization are report flags and are not revalidated by evidence-status".to_string(),
+        _ => "JSON report exists and required owner-recorded fields are present; external claims are not revalidated by evidence-status".to_string(),
     }
 }
 
@@ -4860,6 +4869,55 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 && item.required_for_production
                 && item.manual_gate
         }));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn release_evidence_path_presence_details_do_not_claim_signature_validation() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = tempfile::tempdir().expect("temp release evidence path dir");
+        let app_dir = temp_dir.path().join("Jarvis.app");
+        let app_zip = temp_dir.path().join("Jarvis.app.zip");
+        let executable = temp_dir.path().join("jarvis");
+        std::fs::create_dir(&app_dir).expect("create app dir");
+        std::fs::write(&app_zip, "placeholder zip").expect("write app zip");
+        std::fs::write(&executable, "#!/bin/sh\nexit 0\n").expect("write executable");
+        let mut permissions = std::fs::metadata(&executable)
+            .expect("executable metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&executable, permissions).expect("chmod executable");
+
+        for (path, kind) in [
+            (&app_dir, ReleaseEvidenceKind::Directory),
+            (&app_zip, ReleaseEvidenceKind::File),
+            (&executable, ReleaseEvidenceKind::Executable),
+        ] {
+            let (status, detail) = inspect_release_path(path, kind);
+            assert_eq!(status, ReleaseEvidenceItemStatus::Present);
+            assert!(detail.contains("presence only"), "{detail}");
+            assert!(detail.contains("signing"), "{detail}");
+            assert!(detail.contains("notarization"), "{detail}");
+            assert!(detail.contains("stapling"), "{detail}");
+            assert!(
+                detail.contains("not validated by evidence-status"),
+                "{detail}"
+            );
+        }
+    }
+
+    #[test]
+    fn release_evidence_json_report_details_distinguish_presence_from_revalidation() {
+        let generic_detail = release_json_present_detail("live_device_qa_report");
+        assert!(generic_detail.contains("required owner-recorded fields"));
+        assert!(generic_detail.contains("external claims are not revalidated"));
+
+        let bundle_detail = release_json_present_detail("release_evidence_bundle");
+        assert!(bundle_detail.contains("signed_distribution"));
+        assert!(bundle_detail.contains("notarization"));
+        assert!(bundle_detail.contains("report flags"));
+        assert!(bundle_detail.contains("not revalidated by evidence-status"));
     }
 
     #[test]

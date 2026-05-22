@@ -1149,6 +1149,7 @@ struct JarvisMacCoreTests {
         #expect(model.readiness?.productionReady == false)
         #expect(model.evidenceStatus?.complete == false)
         #expect(model.evidenceStatus?.items.map(\.key).contains("live_device_qa_report") == true)
+        #expect(model.evidenceStatus?.items.first { $0.key == "signed_app_bundle" }?.detail.contains("presence only") == true)
         #expect(model.readiness?.implementedFeatures.map(\.key).contains("repository_state") == true)
         #expect(model.readiness?.implementedFeatures.map(\.key).contains("release_evidence_bundle") == true)
         #expect(model.readiness?.pendingFeatures.map(\.key).contains("live_voice_loop") == true)
@@ -2772,7 +2773,7 @@ private func releaseEvidenceStatusJSON() -> Data {
               "status": "present",
               "required_for_production": true,
               "manual_gate": true,
-              "detail": "directory exists"
+              "detail": "directory exists; presence only; signing, notarization, and stapling are not validated by evidence-status"
             },
             {
               "key": "live_device_qa_report",
@@ -2785,7 +2786,7 @@ private func releaseEvidenceStatusJSON() -> Data {
               "detail": "expected JSON report is missing"
             }
           ],
-          "proof_boundary": "File/report inspection only; this endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
+          "proof_boundary": "File/report inventory only; complete means expected paths and required JSON fields are present. This endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
         }
         """.utf8
     )

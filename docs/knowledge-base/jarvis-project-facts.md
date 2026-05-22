@@ -80,7 +80,7 @@ These notes capture durable facts for future agents working on this repository.
   standard release evidence doctor inventory as structured JSON with present,
   missing, or invalid status for signed artifact paths, live-device QA report,
   plugin-trust QA report, and final evidence bundle. This is file/report
-  inspection only; it does not prove signing, notarization, installation, Finder
+  inventory only; it does not prove signing, notarization, installation, Finder
   launch, live-device QA, marketplace review, malware scanning, or OS sandboxing.
 - The Swift shell also decodes `/release/readiness` through
   `ReleaseReadinessModel` and renders a Release tab with blocking manual gates,
@@ -201,26 +201,30 @@ These notes capture durable facts for future agents working on this repository.
   are populated; it is manual external release evidence, not repo-local proof of
   those systems.
 - `./scripts/release-evidence-bundle.sh` is the final release evidence
-  manifest gate. `--check` prints the required signed distribution artifacts,
-  live-device QA report, plugin-trust QA report, and owner validation flags.
-  `--self-test` uses fake artifacts/reports to prove bundle mechanics only.
-  `--bundle` writes `target/release-evidence-bundle.json` after referenced
-  artifacts/reports exist, every `JARVIS_EVIDENCE_*` flag is true, and local
-  artifact checks validate the app signature, app stapling ticket, installer
-  signature, installer stapling ticket, and app zip payload. Production
-  bundles must keep local signature validation enabled; the script parses
-  every required live-device and plugin-trust report flag, requires non-empty
-  owner-recorded evidence fields in both QA reports, requires the live-device QA
-  report's app bundle identifier/version/build metadata to match the expected
-  release, and records SHA-256 digests for the distribution zip, installer
-  package, live-device QA report, and plugin-trust QA report before writing the
-  bundle manifest.
+  manifest gate. `--check` prints the required signed distribution artifact
+  paths, live-device QA report, plugin-trust QA report, and owner validation
+  flags. `--check`, `release-evidence-doctor.sh`, and `/release/evidence-status`
+  are presence/JSON inventory surfaces only; they do not validate Developer ID
+  signing, notarization, stapling, installation, live-device QA, plugin-trust QA,
+  owner assertions, or final bundle creation. `--self-test` uses fake
+  artifacts/reports to prove bundle mechanics only. `--bundle` writes
+  `target/release-evidence-bundle.json` after referenced artifacts/reports exist,
+  every `JARVIS_EVIDENCE_*` flag is true, and local artifact checks validate the
+  app signature, app stapling ticket, installer signature, installer stapling
+  ticket, and app zip payload. Production bundles must keep local signature
+  validation enabled; the script parses every required live-device and
+  plugin-trust report flag, requires non-empty owner-recorded evidence fields in
+  both QA reports, requires the live-device QA report's app bundle
+  identifier/version/build metadata to match the expected release, and records
+  SHA-256 digests for the distribution zip, installer package, live-device QA
+  report, and plugin-trust QA report before writing the bundle manifest.
 - `./scripts/release-evidence-doctor.sh` inventories release evidence readiness
-  before final bundling. `--check` reports present and missing signed-artifact,
-  live-device QA, plugin-trust QA, and final bundle evidence without failing
-  the default local gate; `--self-test` uses fake artifacts/reports to prove the
-  inventory mechanics only. A complete doctor run is diagnostic status, not
-  proof that external validation happened.
+  before final bundling. `--check` reports present, missing, or invalid
+  signed-artifact, live-device QA, plugin-trust QA, and final bundle evidence
+  without failing the default local gate; `--self-test` uses fake
+  artifacts/reports to prove the inventory mechanics only. A complete doctor run
+  is diagnostic status, not proof that signing, notarization, stapling,
+  installation, or external validation happened.
 - The structured release evidence status endpoint mirrors the doctor inventory
   for app/installer artifacts and JSON reports, including required owner-recorded
   live-device and plugin-trust evidence fields, so the CLI and Swift Release tab
