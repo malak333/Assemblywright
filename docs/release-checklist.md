@@ -14,9 +14,9 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   provider boundary, implemented opt-in ChatGPT/OpenAI-compatible provider
   boundary, metadata-only local plugin installation, explicit installed-plugin
   subprocess execution grant, implemented Swift approval decision surface,
-  adapter-backed Swift voice controls, local packaged smoke, and distribution
-  packaging lane. Keep real microphone/TTS support and distribution readiness
-  scoped to the manual gates below.
+  adapter-backed Swift voice input/output controls, local packaged smoke, and
+  distribution packaging lane. Keep real microphone, live audio output, and
+  distribution readiness scoped to the manual gates below.
 - Confirm the current architecture map still matches the real module wiring,
   especially the fact that `/commands` invokes the configured routed
   `ModelExecutor` (`FakeLocalModel` by default, Ollama-compatible HTTP or
@@ -97,11 +97,13 @@ stage or when a PR needs focused evidence for one ownership slice.
 - Confirm local plugin installation accepts only validated manifest metadata
   with safe absolute source paths and stores installed records with
   `execution_enabled: false`.
-- Confirm installed plugin metadata does not become executable; execution is
-  still limited to deterministic first-party in-process plugins.
+- Confirm installed plugin metadata remains disabled by default and becomes
+  executable only after an explicit `subprocess_stdio` execution grant.
 - Confirm installed plugin run attempts fail closed with manifest/version and
-  action validation, `execution_enabled: false` semantics, durable audit
-  evidence, and `side_effect_executed: false`.
+  action validation, default `execution_enabled: false` semantics, safe command
+  path checks, JSON stdin/stdout, timeout enforcement, output schema
+  validation, durable audit evidence, and `side_effect_executed: false` when no
+  side effect is allowed.
 - Confirm persistent audit entries remain append-only in SQLite tests.
 - Confirm route, policy, approval, action, and failure evidence stay covered
   before claiming an end-to-end assistant release. The current command path
@@ -141,7 +143,8 @@ stage or when a PR needs focused evidence for one ownership slice.
   `./scripts/packaged-app-release-smoke.sh` for the local assembled app
   boundary.
 - Confirm local plugin metadata install/list/get coverage remains in that E2E
-  path while installed plugin execution remains disabled.
+  path, and installed plugin execution coverage applies only after an explicit
+  `subprocess_stdio` grant.
 - For each new executable feature phase, confirm E2E coverage is either part of
   `local_ipc_e2e`, Swift package tests, a focused integration proof, or the
   future packaged Mac smoke lane. Docs-only changes should still name the
@@ -202,8 +205,12 @@ Still future gates for production distribution:
 - Text-transcript voice command parity is verified through the scaffold.
 - The macOS Speech/AVFoundation adapter boundary compiles and has deterministic
   fake-adapter state/error tests.
+- The AVFoundation speech-output adapter boundary compiles and has
+  deterministic fake-adapter state/error tests.
 - Real microphone voice command parity is verified only after the packaged app
   has the required entitlements and manual device validation.
+- Live text-to-speech playback is verified only after packaged app audio-output
+  validation on a real device.
 - Activity view shows current task state.
 - Audit entry is written for the command.
 - Emergency pause stops new actions.

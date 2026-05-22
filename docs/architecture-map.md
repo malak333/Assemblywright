@@ -13,8 +13,8 @@ flowchart TB
     User["User or local test operator"]
     User --> CLI["jarvis-cli"]
     User --> MacShell["JarvisMacApp SwiftUI scaffold"]
-    DocsAgent["Worker F phase-3 docs sync"] --> Docs["DESIGN, README, architecture map, release checklist, build/test commands, knowledge-base"]
-    DocsAgent --> Sweep["phase-3 worktree/branch production sweep"]
+    DocsAgent["six-agent production-readiness audit"] --> Docs["DESIGN, README, architecture map, release checklist, build/test commands, knowledge-base"]
+    DocsAgent --> Sweep["isolated worktree/branch production sweep"]
     Sweep --> LocalGate["./scripts/release-local.sh"]
     LocalGate --> E2E["local_ipc_e2e ignored release proof"]
     LocalGate --> Smoke["jarvis-cli smoke"]
@@ -25,6 +25,10 @@ flowchart TB
     LocalApp --> BundledCLI["Contents/Resources/bin/jarvis-cli"]
     AppReleaseSmoke --> CleanProfile["temporary HOME and SQLite app state"]
     MacShell --> MacCore["JarvisMacCore IPC client, supervisor, and view models"]
+    MacShell --> VoiceInput["Speech/AVFoundation input controls"]
+    MacShell --> SpeechOutput["AVFoundation speech-output preview controls"]
+    VoiceInput --> MacCore
+    SpeechOutput --> MacCore
     MacCore --> Supervisor["JarvisCoreSupervisor configured or bundled process"]
     Supervisor --> CLI
     MacCore -->|"HTTP JSON on configured core URL"| IPC["jarvis-core::ipc Axum loopback server"]
@@ -95,9 +99,10 @@ flowchart TB
 The current IPC `/commands` endpoint invokes `ConversationRuntime` with the
 deterministic `FakeLocalModel` by default or an opt-in Ollama-compatible local
 HTTP provider selected from typed env config. It returns runtime steps, route
-metadata, plugin results, and audit entries, and can persist task/audit state
-through `SqliteRepository` when the state is constructed with repository
-backing. It also records local-first `ModelRouter` evidence and can execute
+metadata, plugin results, and audit entries, and can persist task, audit, and
+redacted append-only model-route state through `SqliteRepository` when the
+state is constructed with repository backing. It also records local-first
+`ModelRouter` evidence and can execute
 deterministic first-party plugin commands through the policy engine. The
 runtime also supports bounded model-planned first-party tool calls with schema
 validation, policy checks, approval stops, and audit evidence.
@@ -121,9 +126,10 @@ It supports opt-in
 ChatGPT/OpenAI-compatible execution only after route policy allows it. It does
 not yet support a broader WASM/network/plugin-marketplace sandbox or a signed
 packaged Mac approval flow.
-Repository-backed IPC state also exposes task, audit, and memory inspection
-endpoints, plus first-party plugin manifest listing, so the CLI and Swift shell
-can inspect durable local state without reaching into SQLite directly.
+Repository-backed IPC state also exposes task, audit, model-route, memory,
+permission-grant, scheduler, plugin manifest, installed-plugin, and
+installed-plugin execution-grant inspection endpoints, so the CLI and Swift
+shell can inspect durable local state without reaching into SQLite directly.
 The release-proof path remains local: `./scripts/release-local.sh` runs Rust
 formatting, linting, tests, ignored release-proof tests, build/package, CLI
 smoke, and Swift package build/test. That evidence proves only the current
@@ -136,17 +142,17 @@ not prove Developer ID signing, notarization, installer behavior,
 entitlements, Finder/LaunchServices validation, App Store distribution, or real
 voice permissions.
 
-The current phase-3 production sweep is coordinated through isolated worktrees
-and topic branches against the public repository
-`https://github.com/malak333/Jarvis`. The active phase-3 worktree set is:
-`model-route-persistence`, `plugin-subprocess-sandbox`,
-`voice-adapter-production`, `packaged-app-release-smoke`,
-`permission-grants-ux`, and `phase3-docs-architecture`. This docs-only slice
-is `codex/phase3-docs-architecture` in
-`/Users/michaelnobile/Antigravity/jarvis-worktrees-phase3/phase3-docs-architecture`.
-Those worktrees are preparation lanes until their code lands on main. The
-six-worker structure is implementation coordination, not release evidence; each
-phase still needs matching docs, knowledge-base facts, and E2E or focused
+The production-readiness sweep is coordinated through isolated worktrees and
+topic branches against the public repository
+`https://github.com/malak333/Jarvis`. Phase-3 slices have landed for model-route
+persistence, plugin subprocess sandboxing, voice input controls, packaged app
+release smoke, permission grants UX, docs architecture alignment, versioning,
+distribution packaging, and Keychain credential launch injection. Follow-on
+slices continue in separate worktrees, including `codex/speech-output-adapter`
+in
+`/Users/michaelnobile/Antigravity/jarvis-worktrees-continuation/speech-output-adapter`.
+The six-worker structure is implementation coordination, not release evidence;
+each phase still needs matching docs, knowledge-base facts, and E2E or focused
 verification evidence for the surface it changes.
 
 ## Current Command Flow
@@ -164,6 +170,8 @@ sequenceDiagram
     Client->>IPC: POST /commands
     IPC->>Runtime: execute command with configured local model executor
     Runtime->>Store: create task and append runtime audit when configured
+    Runtime->>Router: select local-first route and provider evidence
+    Runtime->>Store: append redacted model_route_records when configured
     alt model plans first-party tool call
         Runtime->>Policy: validate declared scopes, risk, sensitivity
         alt approval required or blocked
@@ -175,8 +183,6 @@ sequenceDiagram
         end
     end
     Runtime-->>IPC: task, local route, steps, tool results, runtime audit
-    IPC->>Router: record local-first route decision
-    IPC->>Store: append model_route_selected when configured
     alt first-party plugin command
         IPC->>Policy: evaluate plugin scopes and risk
         IPC->>Store: append plugin_policy_evaluated when configured
@@ -232,8 +238,10 @@ sequenceDiagram
 - `jarvis-core::types`: Stable shared records and enums for tasks, audit
   entries, sensitivity, risk, approval, task status, and errors.
 - `jarvis-core::ipc`: Axum loopback HTTP API for `/health`, `/commands`,
-  `/tasks`, `/audit`, `/memory`, `/plugins/manifests`, `/plugins/installed`,
-  `/plugins/installed/:id/run`, `/emergency-pause`, and `/scheduler/jobs`.
+  `/tasks`, `/audit`, `/model-routes`, `/memory`, `/permissions/grants`,
+  `/plugins/manifests`, `/plugins/installed`,
+  `/plugins/installed/:id/execution`, `/plugins/installed/:id/run`,
+  `/emergency-pause`, `/scheduler/jobs`, and `/scheduler/run-due`.
   The command endpoint runs the runtime with the configured local model
   executor, records local-first route evidence, can execute
   deterministic first-party plugin commands through policy, returns
@@ -264,22 +272,24 @@ sequenceDiagram
   when the IPC state has no repository and restored/updated through SQLite
   when repository backing is enabled.
 - `jarvis-core::storage`: SQLite schema migrations for tasks, append-only
-  audit entries, emergency pause, memory items with provenance/sensitivity/
-  review/soft-delete fields, and scheduler jobs.
+  audit entries, append-only redacted model-route records, emergency pause,
+  memory items with provenance/sensitivity/review/soft-delete fields,
+  scheduler jobs, pending approvals, and installed plugin metadata/grants.
 - `jarvis-cli`: Local CLI for serving the IPC API with optional `--db-path`
   SQLite backing, calling health/command/pause/task/audit/memory/plugin
   endpoints, exporting redacted diagnostics, listing/scheduling/cancelling
   scheduler jobs over HTTP, and running `jarvis smoke` against ephemeral local
   servers.
 - `apps/mac/JarvisMacCore`: Swift IPC client, core supervisor, command-console
-  model, text-only voice state/action scaffold, and management models that decode Rust
+  model, voice state/action scaffold, Speech/AVFoundation input adapter,
+  AVFoundation speech-output adapter, and management models that decode Rust
   health/contract/command/pause/task/audit/memory/plugin/scheduler/diagnostics
   JSON contracts. Approval management is inspection-only unless `/contract`
   exposes an approval decision endpoint.
 - `apps/mac/JarvisMacApp`: SwiftUI shell scaffold with health status,
   degraded-mode banner, transcript, activity/audit panel, memory, plugin,
   approval, run/audit, scheduler, diagnostics, voice-state tabs, send,
-  pause/resume, and refresh controls.
+  voice input/output controls, pause/resume, and refresh controls.
 
 ## End-Goal Production Architecture
 
@@ -321,12 +331,15 @@ flowchart TB
 
     RepoProd --> TaskStore["task lifecycle"]
     RepoProd --> AuditStore["append-only audit log"]
+    RepoProd --> ModelRouteStore["redacted append-only model route records"]
     RepoProd --> MemoryStore["memory with provenance, sensitivity, review, delete"]
     RepoProd --> PauseStore["emergency pause state"]
-    RepoProd --> PluginRegistry["plugin registry and grants"]
+    RepoProd --> PluginRegistry["plugin registry metadata"]
+    RepoProd --> PermissionGrantStore["approval history and execution grants"]
     RepoProd --> SchedulerStore["durable scheduler jobs"]
+    RepoProd --> SchemaMigrations["schema migrations and recovery points"]
 
-    MacKeychain["macOS Keychain"] --> RuntimeProd
+    MacKeychain["macOS Keychain"] --> Supervisor
     AppFiles["app-owned files and plugin bundles"] --> RuntimeProd
     DiagnosticsProd --> Diagnostics["local diagnostics export"]
     Diagnostics --> MacApp
@@ -352,21 +365,22 @@ operation.
 | --- | --- | --- | --- |
 | Mac shell | Buildable Swift/SwiftUI scaffold with health, command transcript, pause/resume, activity/audit rendering, memory/plugin/scheduler/diagnostics tabs, degraded-mode handling, and a `JarvisCoreSupervisor` abstraction for configured or bundled local core binaries. The local packaged app smoke assembles and ad-hoc signs a deterministic `Jarvis.app` for temp-profile launch proof. | Packaged `Jarvis.app` supervises the core, owns voice/text UX, settings, memory and permission surfaces, diagnostics export, and recovery states. | Shell supervision scaffold and local assembled-app smoke implemented; Developer ID signing, notarization, installer/restart proof, and production release QA pending. |
 | IPC boundary | Axum loopback HTTP JSON API for health, commands, task/audit/model-route/memory/approval inspection, plugin manifests, emergency pause, and scheduler jobs. | Versioned, compatibility-tested app/core API with packaged app smoke coverage and clear degraded-mode handling. | Core IPC implemented; production app contract hardening pending. |
-| Command runtime | `ConversationRuntime` creates tasks, runs a routed `ModelExecutor` (`FakeLocalModel` by default, Ollama-compatible HTTP or ChatGPT/OpenAI-compatible HTTP when explicitly enabled), records structured audit entries, handles pause/cancel, enforces max steps, can persist task/audit state through `RuntimeCommandStore`, and can execute bounded model-planned first-party tool calls after schema and policy checks. | Multi-step assistant runtime with production model responses, installed plugin/tool orchestration, streaming progress, approval UI handoff, and robust recovery. | Bounded fake-model tool orchestration, opt-in local and ChatGPT provider boundaries, and CLI/IPC/Swift approval scaffold implemented; installed plugins and streaming pending. |
+| Command runtime | `ConversationRuntime` creates tasks, runs a routed `ModelExecutor` (`FakeLocalModel` by default, Ollama-compatible HTTP or ChatGPT/OpenAI-compatible HTTP when explicitly enabled), records structured audit entries, handles pause/cancel, enforces max steps, can persist task/audit/model-route state through `RuntimeCommandStore`, and can execute bounded model-planned first-party tool calls after schema and policy checks. | Multi-step assistant runtime with production model responses, installed plugin/tool orchestration, streaming progress, approval UI handoff, and robust recovery. | Bounded fake-model tool orchestration, opt-in local and ChatGPT provider boundaries, explicit installed-plugin subprocess runner, and CLI/IPC/Swift approval scaffold implemented; streaming pending. |
 | Model routing | Local-first `ModelRouter` exists with sensitivity checks, provider-status route evidence, ChatGPT opt-in gate, approval delegation, and redaction logic. The active `/commands` path can call a configured local provider or opt-in ChatGPT/OpenAI-compatible provider after policy allows the route. Repository-backed command execution persists append-only SQLite model-route records and exposes redacted IPC/CLI inspection without storing route context. | Local provider integration, explicit ChatGPT escalation, minimized cloud context, user approval where required, and durable route evidence in every relevant task. | Local and ChatGPT provider boundaries plus SQLite route recovery evidence implemented with tests; broader production model operations pending. |
 | Plugins and tools | Deterministic in-process first-party plugins (`fake_echo`, `fake_status`) execute through command-pattern dispatch and bounded model-planned runtime calls, with manifest validation, policy checks, timeout, cancellation, approval stops, pending approval persistence for approval-gated command scaffolds, and audit evidence. Local plugin installation validates manifest metadata and safe source paths, stores disabled registry records with `execution_enabled=false` and `execution_grant=metadata_only`, supports contract-only dry runs with `side_effect_executed=false`, and can run `local_subprocess` plugins only after an explicit `subprocess_stdio` grant through the constrained JSON stdin/stdout runner. | First-party production plugins plus installed local plugins behind manifests, sandboxing, user grants, UI approval, proactive gating, and real model-generated tool-call execution. | Contract, deterministic first-party paths, metadata-only local install, explicit subprocess execution grant, and constrained installed-plugin runner implemented; broader WASM/network/plugin-marketplace trust pending. |
 | Scheduler | Inspectable scheduler jobs with manual, one-time, interval trigger contracts, explicit run-due execution, and an opt-in bounded background trigger loop on `jarvis serve --scheduler-background`. Each tick uses the same visible task/audit records, deterministic due ordering, per-tick limit, and fail-closed emergency-pause behavior as manual run-due. Repository-backed IPC state restores and updates jobs through SQLite. Emergency pause cancels active scheduler jobs, and unsafe due commands fail closed by pausing and cancelling remaining open jobs. | Durable scheduler and trigger engine for approved proactive routines, persisted job state, visible task records, and policy-gated execution. | Durable job state, explicit run-due execution, and opt-in bounded background loop implemented; richer production trigger policy and app notification handoff pending. |
 | Storage and memory | SQLite migrations store tasks, append-only audit entries, append-only redacted model-route records, emergency pause, memory items with provenance/sensitivity/review/soft-delete fields, scheduler jobs, pending approval records, and disabled installed-plugin registry metadata. CLI/IPC can inspect model routes, memory items, approval decisions, and plugin metadata when repository backing is enabled. The Mac shell can read provider credentials from Keychain at supervised-core launch and inject missing secret env vars without storing them in SQLite or diagnostics. | SQLite also owns permissions, executable plugin grants, migrations with backup/rollback, and memory UX review flows; Keychain owns secrets; vector indexes remain rebuildable. | Core local state, route recovery evidence, plugin metadata registry, and Keychain launch credential boundary implemented; broader migration backup/rollback and memory UX pending. |
 | Safety and approvals | Capability scopes, risk tiers, emergency-pause fail-closed behavior, audit-required flags, and approval-required decisions exist in Rust. Repository-backed IPC persists pending approvals and supports CLI and Swift grant/deny decisions without executing side effects. | Human approval prompts, permission center, grants history, policy review, and no bypass for high-risk side effects. | Policy engine plus CLI/IPC/Swift approval decision surface implemented; richer permission center pending. |
-| Voice and diagnostics | Swift has a text-transcript voice state/action scaffold with typed transcript staging, unavailable/degraded/interrupted states, and handoff into the same `CommandConsoleModel.submit` path used by text commands. The Voice tab now owns the protocol-backed macOS Speech/AVFoundation adapter model and exposes permission request, start/stop capture, and interruption controls, with deterministic fake-adapter tests for permission, capture, transcript, interruption, and error states. Live microphone capture is still a release claim only after entitlement packaging and manual device validation. Redacted diagnostics export exists over CLI/IPC and omits command bodies, scheduler commands, model route contexts, audit payloads, memory values, and cancellation reason text. | Voice input/output loop, interruption/cancel behavior, microphone degraded modes, and local diagnostics export integrated into the packaged app. | Adapter-backed SwiftUI voice controls and text-parity scaffold implemented; live microphone/TTS validation pending. |
+| Voice and diagnostics | Swift has a text-transcript voice state/action scaffold with typed transcript staging, unavailable/degraded/interrupted states, and handoff into the same `CommandConsoleModel.submit` path used by text commands. The Voice tab now owns the protocol-backed macOS Speech/AVFoundation input adapter model and exposes permission request, start/stop capture, and interruption controls, with deterministic fake-adapter tests for permission, capture, transcript, interruption, and error states. It also owns a protocol-backed AVFoundation speech-output adapter with preview, stop, and interrupt controls, plus deterministic fake-adapter tests for playback state and failures. Live microphone capture and live audio output are still release claims only after entitlement packaging and manual device validation. Redacted diagnostics export exists over CLI/IPC and omits command bodies, scheduler commands, model route contexts, audit payloads, memory values, and cancellation reason text. | Voice input/output loop, interruption/cancel behavior, microphone degraded modes, and local diagnostics export integrated into the packaged app. | Adapter-backed SwiftUI voice input/output controls and text-parity scaffold implemented; live microphone/audio validation pending. |
 | Release proof | Local Rust and Swift build/test/smoke commands plus the ignored cross-process `local_ipc_e2e` release-proof test document the foundation boundary. `packaged-app-release-smoke.sh` adds local assembled-app launch evidence for app-supervised core health, command, audit, diagnostics, pause, blocked command, resume, and temp SQLite state. | Developer ID signed and notarized packaged app release with clean-profile Mac smoke, app-supervised core, command, audit, pause, restart, migration, recovery, diagnostics, and real-provider checks. | Local foundation proof and assembled-app smoke implemented; distribution-grade signing/notarization/restart/manual QA pending. |
-| Production workflow | Phase 3 was split into isolated branches/worktrees for model route persistence, plugin subprocess sandboxing, voice adapter production, packaged app release smoke, permission grants UX, and docs architecture alignment. This docs slice is branch `codex/phase3-docs-architecture` in `/Users/michaelnobile/Antigravity/jarvis-worktrees-phase3/phase3-docs-architecture`. | Public repo release train with PR evidence, reproducible local gates, owner-reviewed release notes, and no hidden readiness claims. | Phase-3 workflow documented; release governance still manual. |
+| Production workflow | Phase 3 was split into isolated branches/worktrees for model route persistence, plugin subprocess sandboxing, voice adapter production, packaged app release smoke, permission grants UX, and docs architecture alignment. Follow-on slices continue in isolated worktrees, including `codex/speech-output-adapter` in `/Users/michaelnobile/Antigravity/jarvis-worktrees-continuation/speech-output-adapter`. | Public repo release train with PR evidence, reproducible local gates, owner-reviewed release notes, and no hidden readiness claims. | Phase-3 workflow documented; release governance still manual. |
 | Docs, KB, and E2E discipline | Docs and knowledge-base files record implementation boundaries, the current/end-goal diagrams, and local proof commands. Current E2E evidence is Rust/CLI cross-process, Swift package contract/model coverage, packaged-layout supervision proof, and local assembled-app smoke. | Every feature phase updates docs and durable KB facts, adds or names the relevant E2E coverage, and blocks broader readiness claims when coverage is missing. | Phase discipline documented; broader distribution E2E pending. |
 
 ## Data Ownership
 
 - SQLite is the implemented structured-state backend for tasks, audit entries,
-  emergency pause, memory items, scheduler jobs, and pending approvals.
+  redacted model-route records, emergency pause, memory items, scheduler jobs,
+  pending approvals, and installed plugin registry/grant metadata.
 - Audit entries are protected by SQLite triggers that reject update and delete
   operations.
 - Memory items carry provenance, sensitivity, review timestamps, and soft-delete
@@ -385,6 +399,8 @@ operation.
 ```mermaid
 erDiagram
     TASKS ||--o{ AUDIT_ENTRIES : "task_id"
+    TASKS ||--o{ MODEL_ROUTE_RECORDS : "task_id"
+    TASKS ||--o{ PENDING_APPROVALS : "task_id"
     TASKS {
         text id PK
         text session_id
@@ -399,6 +415,19 @@ erDiagram
         text event_type
         text summary
         text payload_json
+        text created_at
+    }
+    MODEL_ROUTE_RECORDS {
+        integer sequence PK
+        text id
+        text task_id FK
+        text outcome
+        text selected_provider
+        text reason
+        text sensitivity
+        text approval_status
+        integer redaction_applied
+        text evidence_json
         text created_at
     }
     MEMORY_ITEMS {
@@ -428,6 +457,27 @@ erDiagram
         text updated_at
         text cancelled_at
         text cancellation_reason
+    }
+    PENDING_APPROVALS {
+        text id PK
+        text task_id FK
+        text action
+        text requested_scopes
+        text risk_tier
+        text sensitivity
+        text status
+        text reason
+        text requested_at
+        text decided_at
+        text decided_by
+    }
+    INSTALLED_PLUGINS {
+        text id PK
+        text manifest_json
+        text source_path
+        integer execution_enabled
+        text execution_grant
+        text installed_at
     }
     SCHEMA_MIGRATIONS {
         integer version PK

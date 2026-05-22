@@ -105,10 +105,12 @@ A compact, always-available text and voice interface. It supports typed commands
 
 Target production behavior handles wake/listen mode, speech-to-text,
 text-to-speech, interruption, low-latency acknowledgement, and handoff to
-background execution. The current Swift scaffold does not use microphone,
-Speech, or AVFoundation APIs. It models voice actions and degraded states, then
-hands a typed transcript to the same text command submit path so voice parity
-can be tested before real capture exists.
+background execution. The current Swift shell has a protocol-backed
+Speech/AVFoundation input adapter, a protocol-backed AVFoundation speech-output
+adapter, visible degraded/interrupted states, and typed transcript handoff to
+the same text command submit path. Automated tests use fakes for input/output
+adapter behavior; live microphone, Speech permission, audio output, and
+signed-app validation remain release gates.
 
 ### Activity And Audit View
 
@@ -223,7 +225,7 @@ Version and test shared schemas between Swift and Rust. Breaking the app/core AP
 
 ### Voice Loop Tests
 
-Cover text input parity, wake/listen state transitions, interruption/cancel behavior, and degraded-mode behavior when mic or TTS permissions fail. Adapter tests use fakes and must stay explicit about what is covered; they do not imply live microphone, Speech permission, or TTS coverage until those checks run against a signed app on a real device.
+Cover text input parity, wake/listen state transitions, speech-output state, interruption/cancel behavior, and degraded-mode behavior when mic or TTS permissions fail. Adapter tests use fakes and must stay explicit about what is covered; they do not imply live microphone, Speech permission, or live audio output coverage until those checks run against a signed app on a real device.
 
 ### Safety Regression Tests
 
@@ -267,12 +269,12 @@ smoke path, redacted diagnostics export, and buildable Swift command/activity
 shell scaffold are implemented. The command runtime can route to fake local,
 Ollama-compatible local HTTP, or explicitly enabled ChatGPT/OpenAI-compatible
 HTTP providers. The Swift app includes approval decision controls, management
-surfaces, text-only voice command handoff, and core supervision abstractions,
-but still does not have signed packaged-app release smoke evidence. The product
-still lacks real voice, executable installed-plugin sandboxing, packaged app
-release smoke evidence, richer proactive trigger policy, and app notification
-handoff. Swift supervision is covered only as a scaffold for configured or
-packaged-style local core binaries.
+surfaces, voice input/output adapter controls, text-transcript command handoff,
+and core supervision abstractions. The product still lacks signed/notarized
+release evidence, live microphone and audio-output validation, broader
+production plugin trust boundaries, richer proactive trigger policy, and app
+notification handoff. Swift supervision is covered only as a scaffold for
+configured or packaged-style local core binaries.
 
 The active phase-3 production sweep uses isolated worktrees, topic branches,
 reviewable PR slices, and docs-only synchronization work on

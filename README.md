@@ -43,12 +43,12 @@ and treat cross-process E2E plus the local release gate as the evidence bar.
 Passing the local gate supports only the implemented Rust/Swift foundation
 claim; it is not proof of a finished packaged assistant.
 
-Phase 3 is being prepared in separate worktrees for model route persistence,
-plugin subprocess sandboxing, voice adapter production, packaged app release
-smoke, permission grants UX, and docs architecture alignment. Until those
-slices merge and their focused E2E or integration proof is recorded, README and
-release language should describe them as active phase-3 work rather than
-implemented production readiness.
+Phase 3 landed through separate worktrees for model route persistence, plugin
+subprocess sandboxing, voice input controls, packaged app release smoke,
+permission grants UX, docs architecture alignment, distribution packaging, and
+Keychain launch credential injection. Follow-on slices continue the same
+branch/PR discipline; release language should describe only the merged
+repo-owned surfaces with recorded focused E2E or integration proof.
 
 ## Build
 
@@ -94,7 +94,7 @@ For distribution packaging work, run:
 The full `package-distribution.sh` lane owns Developer ID signing,
 notarization, stapling, and microphone entitlement packaging when Apple
 credentials are provided. It still does not replace clean-profile Finder
-launch, installer/App Store validation, or live microphone/Speech/TTS
+launch, installer/App Store validation, or live microphone/Speech/audio-output
 validation.
 
 With a repository-backed server running, `jarvis tasks`, `jarvis memory`,

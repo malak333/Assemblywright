@@ -111,6 +111,59 @@ private final class FakeVoiceAdapter: JarvisVoiceAdapter {
     }
 }
 
+@MainActor
+private final class FakeSpeechOutputAdapter: JarvisSpeechOutputAdapter {
+    var phase: JarvisSpeechOutputPhase
+    var speakResult: Result<Void, JarvisSpeechOutputError>
+    var stopResult: Result<Void, JarvisSpeechOutputError>
+    var interruptResult: Result<Void, JarvisSpeechOutputError>
+    private(set) var spokenTexts: [String]
+
+    init(
+        phase: JarvisSpeechOutputPhase = .idle,
+        speakResult: Result<Void, JarvisSpeechOutputError> = .success(()),
+        stopResult: Result<Void, JarvisSpeechOutputError> = .success(()),
+        interruptResult: Result<Void, JarvisSpeechOutputError> = .success(())
+    ) {
+        self.phase = phase
+        self.speakResult = speakResult
+        self.stopResult = stopResult
+        self.interruptResult = interruptResult
+        self.spokenTexts = []
+    }
+
+    func speak(_ text: String) async -> Result<Void, JarvisSpeechOutputError> {
+        switch speakResult {
+        case .success:
+            spokenTexts.append(text)
+            phase = .speaking
+        case let .failure(error):
+            phase = .unavailable(reason: error.description)
+        }
+        return speakResult
+    }
+
+    func stop() async -> Result<Void, JarvisSpeechOutputError> {
+        switch stopResult {
+        case .success:
+            phase = .idle
+        case let .failure(error):
+            phase = .unavailable(reason: error.description)
+        }
+        return stopResult
+    }
+
+    func interrupt(reason: String) async -> Result<Void, JarvisSpeechOutputError> {
+        switch interruptResult {
+        case .success:
+            phase = .interrupted(reason: reason)
+        case let .failure(error):
+            phase = .unavailable(reason: error.description)
+        }
+        return interruptResult
+    }
+}
+
 private final class FakeCredentialStore: JarvisCredentialStore, @unchecked Sendable {
     var values: [JarvisCredentialKey: String]
 
@@ -1117,6 +1170,73 @@ struct JarvisMacCoreTests {
         #expect(model.lastError == .recognitionFailed("Recognition task cancelled."))
         #expect(voice.statusText.contains("Voice unavailable"))
         #expect(voice.statusText.contains("Recognition task cancelled"))
+    }
+
+    @MainActor
+    @Test("Speech output model speaks trimmed preview text")
+    func speechOutputModelSpeaksTrimmedPreviewText() async {
+        let adapter = FakeSpeechOutputAdapter()
+        let model = SpeechOutputStateModel(adapter: adapter)
+
+        await model.speak("  Jarvis is ready.  ")
+
+        #expect(adapter.spokenTexts == ["Jarvis is ready."])
+        #expect(model.lastSpokenText == "Jarvis is ready.")
+        #expect(model.phase == .speaking)
+        #expect(model.isSpeaking)
+        #expect(!model.canSpeak)
+        #expect(model.statusText == "Speech output speaking.")
+    }
+
+    @MainActor
+    @Test("Speech output model rejects empty utterances before adapter playback")
+    func speechOutputModelRejectsEmptyUtterances() async {
+        let adapter = FakeSpeechOutputAdapter()
+        let model = SpeechOutputStateModel(adapter: adapter)
+
+        await model.speak("   ")
+
+        #expect(adapter.spokenTexts.isEmpty)
+        #expect(model.phase == .unavailable(reason: JarvisSpeechOutputError.emptyUtterance.description))
+        #expect(model.lastError == .emptyUtterance)
+        #expect(model.statusText.contains("Speech output unavailable"))
+    }
+
+    @MainActor
+    @Test("Speech output model exposes playback failures")
+    func speechOutputModelExposesPlaybackFailures() async {
+        let adapter = FakeSpeechOutputAdapter(
+            speakResult: .failure(.playbackUnavailable("No output device was available."))
+        )
+        let model = SpeechOutputStateModel(adapter: adapter)
+
+        await model.speak("read this aloud")
+
+        #expect(adapter.spokenTexts.isEmpty)
+        #expect(model.lastError == .playbackUnavailable("No output device was available."))
+        #expect(model.phase == .unavailable(reason: JarvisSpeechOutputError.playbackUnavailable("No output device was available.").description))
+    }
+
+    @MainActor
+    @Test("Speech output model stops and interrupts active playback")
+    func speechOutputModelStopsAndInterruptsActivePlayback() async {
+        let adapter = FakeSpeechOutputAdapter()
+        let model = SpeechOutputStateModel(adapter: adapter)
+
+        await model.speak("status update")
+        await model.stop()
+
+        #expect(model.phase == .idle)
+        #expect(!model.isSpeaking)
+        #expect(model.canSpeak)
+
+        await model.speak("status update")
+        await model.interrupt(reason: "User interrupted speech output.")
+
+        #expect(model.phase == .interrupted(reason: "User interrupted speech output."))
+        #expect(!model.isSpeaking)
+        #expect(model.canSpeak)
+        #expect(model.statusText.contains("interrupted"))
     }
 
     @MainActor
