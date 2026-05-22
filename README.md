@@ -54,9 +54,11 @@ return failed command responses with redacted diagnostics instead of becoming
 IPC transport errors. Provider text responses may also use a strict JSON
 envelope with `message`, `complete`, and `tool_requests`; accepted tool
 requests still pass through the existing first-party schema, policy, approval,
-and audit path. Plain text remains supported, and this is not native OpenAI
-function calling, installed-plugin orchestration, or broad third-party tool
-execution. Local plugin
+and audit path. ChatGPT/OpenAI-compatible responses may also return native
+OpenAI `tool_calls` for the advertised first-party tool definitions; those are
+translated into the same bounded first-party path. Plain text remains
+supported, and this is not installed-plugin orchestration or broad third-party
+tool execution. Local plugin
 installation stores validated manifest metadata disabled by default and captures
 a local manifest/subprocess hash snapshot. Executable local subprocess plugins
 require the snapshot to verify as unchanged plus an explicit

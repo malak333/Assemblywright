@@ -101,8 +101,8 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         "--endpoint",
         endpoint.as_str(),
     ]);
-    assert_eq!(command["accepted"], true);
-    assert_eq!(command["task"]["status"], "completed");
+    assert_eq!(command["accepted"], true, "{command}");
+    assert_eq!(command["task"]["status"], "completed", "{command}");
     assert_eq!(command["route"]["model"], "fake-local-model");
     assert_eq!(command["plugin_results"][0]["status"], "completed");
     assert_eq!(
@@ -1771,8 +1771,8 @@ fn serve_executes_ollama_provider_tool_request_envelope() {
         endpoint.as_str(),
     ]);
 
-    assert_eq!(command["accepted"], true);
-    assert_eq!(command["task"]["status"], "completed");
+    assert_eq!(command["accepted"], true, "{command}");
+    assert_eq!(command["task"]["status"], "completed", "{command}");
     assert_eq!(command["route"]["model"], "provider-envelope-test");
     assert_eq!(
         command["steps"][0]["tool_results"][0]["plugin_id"],
@@ -1799,6 +1799,65 @@ fn serve_executes_ollama_provider_tool_request_envelope() {
 
     server.stop();
     server_thread.join().expect("ollama stub thread");
+    drop(temp_dir);
+}
+
+#[test]
+fn serve_executes_chatgpt_native_tool_call() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let db_path = temp_dir
+        .path()
+        .join("jarvis-chatgpt-native-tool-e2e.sqlite");
+    let (chatgpt_base_url, server_thread) = start_chatgpt_native_tool_server();
+    let mut server = JarvisServer::start_with_env(
+        &db_path,
+        &[
+            ("JARVIS_LOCAL_MODEL_ENABLED", "false"),
+            ("JARVIS_CHATGPT_ENABLED", "true"),
+            ("JARVIS_CHATGPT_MODEL", "gpt-native-tool-test"),
+            ("JARVIS_OPENAI_API_KEY", "test-openai-token"),
+            ("JARVIS_OPENAI_BASE_URL", chatgpt_base_url.as_str()),
+        ],
+    );
+    let endpoint = server.endpoint();
+
+    let command = run_cli_json([
+        "command",
+        "ask chatgpt provider for status",
+        "--sensitivity",
+        "workspace",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+
+    assert_eq!(command["accepted"], true, "{command}");
+    assert_eq!(command["task"]["status"], "completed", "{command}");
+    assert_eq!(command["route"]["provider"], "chat_gpt");
+    assert_eq!(
+        command["steps"][0]["tool_results"][0]["plugin_id"],
+        "fake_status"
+    );
+    assert_eq!(
+        command["steps"][0]["tool_results"][0]["status"],
+        "completed"
+    );
+    assert_eq!(command["message"], "native tool result observed");
+    assert_array_contains(
+        &command["audit_entries"],
+        "event_type",
+        "tool_plan_received",
+    );
+    assert_array_contains(
+        &command["audit_entries"],
+        "event_type",
+        "tool_execution_result",
+    );
+    let encoded = serde_json::to_string(&command).expect("command JSON");
+    assert!(!encoded.contains("test-openai-token"));
+    assert!(!encoded.contains("JARVIS_OPENAI_API_KEY"));
+
+    server.stop();
+    server_thread.join().expect("chatgpt stub thread");
     drop(temp_dir);
 }
 
@@ -1986,6 +2045,69 @@ fn start_ollama_envelope_server() -> (String, thread::JoinHandle<()>) {
             let (mut stream, _) = listener.accept().expect("ollama request");
             let mut buffer = [0_u8; 4096];
             let _ = stream.read(&mut buffer).expect("read request");
+            let http = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                response.len(),
+                response
+            );
+            stream.write_all(http.as_bytes()).expect("write response");
+        }
+    });
+
+    (format!("http://{address}"), handle)
+}
+
+fn start_chatgpt_native_tool_server() -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind chatgpt stub");
+    let address = listener.local_addr().expect("chatgpt stub address");
+    let handle = thread::spawn(move || {
+        let responses = [
+            json!({
+                "choices": [
+                    {
+                        "message": {
+                            "content": null,
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "fake_status__status",
+                                        "arguments": "{}"
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                ]
+            })
+            .to_string(),
+            json!({
+                "choices": [
+                    { "message": { "content": "native tool result observed" } }
+                ]
+            })
+            .to_string(),
+        ];
+
+        for (index, response) in responses.into_iter().enumerate() {
+            let (mut stream, _) = listener.accept().expect("chatgpt request");
+            let mut buffer = [0_u8; 8192];
+            let read = stream.read(&mut buffer).expect("read request");
+            let request = String::from_utf8_lossy(&buffer[..read]);
+            let request_lower = request.to_ascii_lowercase();
+            assert!(request.contains("POST /chat/completions"), "{request}");
+            assert!(
+                request_lower.contains("authorization: bearer test-openai-token"),
+                "{request}"
+            );
+            if index == 0 {
+                assert!(request.contains("\"tools\""), "{request}");
+                assert!(request.contains("fake_status__status"), "{request}");
+                assert!(request.contains("\"tool_choice\":\"auto\""), "{request}");
+            } else {
+                assert!(request.contains("fake_status"), "{request}");
+            }
             let http = format!(
                 "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
                 response.len(),
