@@ -82,8 +82,9 @@ cargo run -p jarvis-cli -- serve
 
 Live local testing with `llama3.2` has proven this Ollama route can complete
 real model commands. Local model behavior is still model-dependent, so the
-runtime advertises the exact first-party tool inventory in the prompt and
-keeps validating every model-planned tool request before execution.
+runtime derives the provider-visible tool inventory from the registered
+first-party `PluginHost` manifests, advertises that exact inventory in the
+prompt, and keeps validating every model-planned tool request before execution.
 
 To exercise the opt-in ChatGPT/OpenAI-compatible provider boundary, disable
 the local provider and provide an API key. The key is never serialized in
@@ -112,9 +113,9 @@ malformed inputs fail closed before policy check or tool execution, emit
 `tool_request_rejected` audit evidence, and are returned to the model as
 `rejected` tool results for bounded recovery. Oversized tool plans still fail
 the task. ChatGPT/OpenAI-compatible responses may also return native OpenAI
-`tool_calls` for the advertised first-party tools; these are translated into
-the same bounded first-party path. This is provider tool compatibility, not
-installed-plugin orchestration.
+`tool_calls` for the same runtime-derived first-party tool inventory; these
+are translated into the same bounded first-party path. This is provider tool
+compatibility, not installed-plugin orchestration.
 
 For durable local task and audit state during manual inspection, pass a SQLite
 path:
@@ -325,6 +326,8 @@ cargo test -p jarvis-core automatic_stale_scheduler_recovery_marks_audit_without
 cargo test -p jarvis-core ollama_http_provider_parses_tool_request_envelope -- --nocapture
 cargo test -p jarvis-core chatgpt_http_provider_parses_tool_request_envelope -- --nocapture
 cargo test -p jarvis-core chatgpt_http_provider_parses_native_tool_calls -- --nocapture
+cargo test -p jarvis-core request_supplied_first_party_tool_inventory -- --nocapture
+cargo test -p jarvis-core model_request_advertises_registered_first_party_tools_only -- --nocapture
 cargo test -p jarvis-core provider_tool_request_envelope_rejects_malformed_tool_requests_without_leaking_prompt -- --nocapture
 cargo test -p jarvis-core provider_tool_request_envelope_rejects_mixed_prose_and_tool_json -- --nocapture
 cargo test -p jarvis-core provider_originated_tool_request_executes_first_party_tool_and_feeds_result -- --nocapture
@@ -482,15 +485,17 @@ emergency pause on non-accepted due jobs, and emergency-pause blocking/resume
 surfaces.
 Runtime unit tests additionally prove bounded fake-model and provider-envelope
 first-party tool-call orchestration, including policy checks, approval stops,
-validation failures, and tool-result feedback into later model steps. Focused
-provider tests prove typed Ollama-compatible request/error behavior, strict
+validation failures, runtime-derived provider-visible first-party inventory,
+and tool-result feedback into later model steps. Focused provider tests prove
+typed Ollama-compatible request/error behavior, strict
 Ollama-compatible and ChatGPT/OpenAI-compatible response-envelope parsing,
 malformed envelope redaction, and structured failed command responses for
 selected model-provider failures without requiring a live model during the
 default release gate. The cross-process local IPC E2E includes an
 Ollama-compatible stub that emits a provider tool-request envelope and proves
-the runtime executes the first-party tool before returning the provider's final
-message. They do not prove live ChatGPT service execution,
+the runtime advertises the registered first-party tools, executes the selected
+first-party tool, and returns the provider's final message. They do not prove
+live ChatGPT service execution,
 advanced memory classification policy beyond the current summary surface, live
 microphone capture, or live audio output until those surfaces are manually
 validated. The current Swift gate proves the

@@ -2633,8 +2633,15 @@ fn start_ollama_envelope_server() -> (String, thread::JoinHandle<()>) {
 
         for response in responses {
             let (mut stream, _) = listener.accept().expect("ollama request");
-            let mut buffer = [0_u8; 4096];
-            let _ = stream.read(&mut buffer).expect("read request");
+            let mut buffer = [0_u8; 8192];
+            let read = stream.read(&mut buffer).expect("read request");
+            let request = String::from_utf8_lossy(&buffer[..read]);
+            assert!(request.contains("POST /api/generate"), "{request}");
+            assert!(request.contains("Registered first-party tools are exactly"));
+            assert!(request.contains("fake_echo.approval_echo"), "{request}");
+            assert!(request.contains("fake_echo.echo"), "{request}");
+            assert!(request.contains("fake_status.status"), "{request}");
+            assert!(!request.contains("chrome_extension"), "{request}");
             let http = format!(
                 "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
                 response.len(),
@@ -2774,8 +2781,11 @@ fn start_chatgpt_native_tool_server() -> (String, thread::JoinHandle<()>) {
             );
             if index == 0 {
                 assert!(request.contains("\"tools\""), "{request}");
+                assert!(request.contains("fake_echo__approval_echo"), "{request}");
+                assert!(request.contains("fake_echo__echo"), "{request}");
                 assert!(request.contains("fake_status__status"), "{request}");
                 assert!(request.contains("\"tool_choice\":\"auto\""), "{request}");
+                assert!(!request.contains("chrome_extension"), "{request}");
             } else {
                 assert!(request.contains("fake_status"), "{request}");
             }

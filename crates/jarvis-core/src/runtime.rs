@@ -7,8 +7,8 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::model::{
-    ModelExecutor, ModelRequest, ModelResponse, ModelRoute, ModelToolRequest, ModelToolResult,
-    ProviderConfig,
+    model_tool_definitions_from_manifests, ModelExecutor, ModelRequest, ModelResponse, ModelRoute,
+    ModelToolRequest, ModelToolResult, ProviderConfig,
 };
 use crate::plugin::{
     plugin_permission_scopes, PluginCallRequest, PluginCallResult, PluginCallStatus, PluginHost,
@@ -529,6 +529,7 @@ where
                         user_input: task.user_input.clone(),
                         step_index,
                         tool_results: tool_results.clone(),
+                        first_party_tools: self.registered_first_party_model_tools(),
                     },
                     route_evidence
                         .as_ref()
@@ -886,22 +887,20 @@ where
     }
 
     fn registered_first_party_tool_names(&self) -> Vec<String> {
-        let mut tools = self
-            .plugin_host
-            .manifests()
-            .unwrap_or_default()
+        self.registered_first_party_model_tools()
             .into_iter()
-            .filter(|manifest| manifest.source == PluginSource::FirstParty)
-            .flat_map(|manifest| {
-                let plugin_id = manifest.id;
-                manifest
-                    .actions
-                    .into_iter()
-                    .map(move |action| format!("{}.{}", plugin_id, action.name))
-            })
-            .collect::<Vec<_>>();
-        tools.sort();
-        tools
+            .map(|tool| format!("{}.{}", tool.plugin_id, tool.action))
+            .collect()
+    }
+
+    fn registered_first_party_model_tools(&self) -> Vec<crate::model::ModelToolDefinition> {
+        model_tool_definitions_from_manifests(
+            self.plugin_host
+                .manifests()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|manifest| manifest.source == PluginSource::FirstParty),
+        )
     }
 
     fn finish(
@@ -1134,6 +1133,10 @@ mod tests {
         ChatGptProviderConfig, FakeLocalModel, LocalModelConfig, ModelProvider, ModelToolRequest,
         ProviderConfig, RoutedModelExecutor,
     };
+    use crate::plugin::{
+        CancellationBehavior, CancellationSignal, InProcessPlugin, JsonSchema, PluginAccess,
+        PluginActionManifest, PluginManifest, PluginPermission, PluginTimeout,
+    };
     use crate::router::{ModelProvider as RoutedModelProvider, RouteOutcome};
     use crate::types::TaskStatus;
     use axum::routing::post;
@@ -1234,6 +1237,37 @@ mod tests {
                 .len(),
             5
         );
+    }
+
+    #[tokio::test]
+    async fn model_request_advertises_registered_first_party_tools_only() {
+        let captured_tools = Arc::new(Mutex::new(Vec::new()));
+        let model = InventoryCaptureModel {
+            captured_tools: captured_tools.clone(),
+        };
+        let mut plugin_host = PluginHost::new();
+        plugin_host
+            .register(InventoryPlugin {
+                plugin_id: "runtime_status",
+                source: PluginSource::FirstParty,
+            })
+            .expect("first-party plugin registers");
+        plugin_host
+            .register(InventoryPlugin {
+                plugin_id: "local_dev_status",
+                source: PluginSource::LocalDevelopment,
+            })
+            .expect("local development plugin registers");
+        let runtime = ConversationRuntime::new(model).with_plugin_host(plugin_host);
+
+        let response = runtime
+            .execute_command(CommandRequest::new("check registered tools"))
+            .await
+            .expect("command should execute");
+
+        assert_eq!(response.task.status, TaskStatus::Completed);
+        let tools = captured_tools.lock().expect("captured tools").clone();
+        assert_eq!(tools, vec![vec!["runtime_status.inspect".to_string()]]);
     }
 
     #[tokio::test]
@@ -1817,6 +1851,76 @@ mod tests {
                 complete: true,
                 tool_requests: Vec::new(),
             })
+        }
+    }
+
+    struct InventoryCaptureModel {
+        captured_tools: Arc<Mutex<Vec<Vec<String>>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl ModelExecutor for InventoryCaptureModel {
+        async fn execute(&self, request: ModelRequest) -> JarvisResult<ModelResponse> {
+            let tool_names = request
+                .first_party_tools
+                .iter()
+                .map(|tool| format!("{}.{}", tool.plugin_id, tool.action))
+                .collect::<Vec<_>>();
+            self.captured_tools
+                .lock()
+                .expect("captured tools")
+                .push(tool_names);
+            Ok(ModelResponse {
+                route: ModelRoute::fake_local("inventory capture model"),
+                message: "captured inventory".to_string(),
+                complete: true,
+                tool_requests: Vec::new(),
+            })
+        }
+    }
+
+    struct InventoryPlugin {
+        plugin_id: &'static str,
+        source: PluginSource,
+    }
+
+    impl InProcessPlugin for InventoryPlugin {
+        fn manifest(&self) -> PluginManifest {
+            PluginManifest {
+                manifest_schema_version: 1,
+                id: self.plugin_id.to_string(),
+                name: self.plugin_id.to_string(),
+                version: "0.1.0".to_string(),
+                source: self.source,
+                author: "Jarvis Tests".to_string(),
+                source_path: None,
+                subprocess: None,
+                publisher_signature: None,
+                actions: vec![PluginActionManifest {
+                    name: "inspect".to_string(),
+                    description: "Inspect runtime state for inventory tests.".to_string(),
+                    permissions: vec![PluginPermission::SystemStatus],
+                    risk_tier: crate::RiskTier::Low,
+                    input_schema: JsonSchema::empty_object(),
+                    output_schema: JsonSchema::empty_object(),
+                    proactive: false,
+                    memory_access: PluginAccess::None,
+                    model_access: PluginAccess::None,
+                    network_access: Default::default(),
+                    audit_fields: Vec::new(),
+                    timeout: PluginTimeout::default_for_action(),
+                    cancellation: CancellationBehavior::Cooperative,
+                }],
+            }
+        }
+
+        fn execute(
+            &self,
+            _action: &PluginActionManifest,
+            _input: serde_json::Value,
+            _cancellation: CancellationSignal,
+        ) -> JarvisResult<serde_json::Value> {
+            Ok(json!({}))
         }
     }
 
