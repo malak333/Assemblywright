@@ -418,6 +418,12 @@ sequenceDiagram
     Runtime->>Plugins: derive registered first-party model tool inventory
     Runtime->>Runtime: advertise exact inventory to Ollama prompt or OpenAI tools
     alt model envelope plans first-party tool call
+        Runtime->>Plugins: look up exact registered plugin_id and action
+        alt plugin/action/input invalid
+            Runtime->>Store: append tool_request_rejected when configured
+            Runtime-->>Runtime: rejected tool result with registered-tool guidance
+            Runtime->>Runtime: feed rejection into the next bounded model step
+        else valid first-party tool request
         Runtime->>Policy: validate declared scopes, risk, sensitivity
         alt approval required or blocked
             Runtime->>Store: append approval/block audit when configured
@@ -425,6 +431,7 @@ sequenceDiagram
             Runtime->>Plugins: execute schema-validated first-party tool
             Plugins-->>Runtime: tool result
             Runtime->>Store: append tool result audit when configured
+        end
         end
     end
     Runtime-->>IPC: task, local route, steps, tool results, runtime audit

@@ -83,6 +83,14 @@ JARVIS_LOCAL_MODEL_TIMEOUT_MS=15000 \
 cargo run -p jarvis-cli -- serve
 ```
 
+For a cold Ollama model, warm it before starting Jarvis or increase the local
+provider timeout:
+
+```sh
+ollama run llama3.2 "Say hello in one short sentence."
+JARVIS_LOCAL_MODEL_TIMEOUT_MS=60000 cargo run -p jarvis-cli -- serve
+```
+
 Live local testing with `llama3.2` has proven this Ollama route can complete
 real model commands. Local model behavior is still model-dependent, so the
 runtime derives the provider-visible tool catalog from validated first-party
@@ -90,6 +98,17 @@ manifests, exposes the same redacted catalog through `jarvis tools list`,
 advertises it as an Ollama JSON allowlist and ChatGPT/OpenAI-compatible native
 tool definitions, and keeps validating every model-planned tool request before
 execution.
+
+Provider tool troubleshooting: if Ollama or a ChatGPT/OpenAI-compatible provider
+requests `plugin_id: "status"` or `plugin_id: "chrome_extension"`, that is a
+provider hallucination, not a missing installed plugin. Inspect the exact
+model-visible catalog with `cargo run -q -p jarvis-cli -- tools list`,
+`cargo run -q -p jarvis-cli -- tools model`, or
+`cargo run -q -p jarvis-cli -- tools catalog`. Current valid first-party
+model-visible pairs are `fake_echo.approval_echo`, `fake_echo.echo`, and
+`fake_status.status`; installed plugins can be inspected or explicitly run
+through `jarvis plugins ...` commands, but they are not exposed to
+model-originated tool planning.
 
 To exercise the opt-in ChatGPT/OpenAI-compatible provider boundary, disable
 the local provider and provide an API key. The key is never serialized in
