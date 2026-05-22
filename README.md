@@ -126,6 +126,18 @@ the configured packaged-style executable, and runs `jarvis smoke`.
 It is branch evidence for app-supervised core discovery, not a signed packaged
 app release smoke.
 
+For local packaged app smoke evidence, run:
+
+```sh
+./scripts/packaged-app-release-smoke.sh
+```
+
+That script assembles a temporary `Jarvis.app`, verifies microphone/Speech usage
+strings, ad-hoc signs with the packaged audio-input entitlement when `codesign`
+is available, and launches the app against an isolated temp profile. It is
+still not Developer ID signing, notarization, installer validation, or live
+voice-device validation.
+
 For distribution packaging work, run:
 
 ```sh

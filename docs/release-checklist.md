@@ -209,11 +209,13 @@ stage or when a PR needs focused evidence for one ownership slice.
   `./scripts/packaged-app-release-smoke.sh` goes further by assembling a
   deterministic SwiftPM-built `Jarvis.app`, writing release-smoke `Info.plist`
   metadata, bundling `jarvis-cli`, ad-hoc signing with `codesign -` when
-  available, launching the app executable under a temporary HOME/profile, and
-  verifying app-supervised core health, command, audit, diagnostics, emergency
-  pause, blocked command, pause status, resume, and clean-profile SQLite state.
-  This is local packaged app evidence only; it is not Developer ID signing,
-  notarization, installer validation, entitlement validation, or App Store
+  available using `packaging/Jarvis.entitlements`, verifying microphone/Speech
+  usage strings plus the packaged app audio-input entitlement, launching the app
+  executable under a temporary HOME/profile, and verifying app-supervised core
+  health, command, audit, diagnostics, emergency pause, blocked command, pause
+  status, resume, and clean-profile SQLite state. This is local packaged app
+  evidence only; it is not Developer ID signing, notarization, installer
+  validation, live microphone/Speech/audio-output validation, or App Store
   release evidence.
 
 ## Documentation Gate

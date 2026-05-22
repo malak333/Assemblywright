@@ -52,6 +52,7 @@ CLEAN_HOME="$TMP_DIR/home"
 APP_DB="$CLEAN_HOME/Library/Application Support/Jarvis/jarvis.sqlite"
 APP_LOG="$TMP_DIR/JarvisMacApp.log"
 SIGNING_STATUS="not attempted"
+ENTITLEMENTS="$ROOT_DIR/packaging/Jarvis.entitlements"
 
 cleanup() {
   if [[ -n "$APP_PID" ]] && kill -0 "$APP_PID" 2>/dev/null; then
@@ -116,6 +117,10 @@ cat >"$CONTENTS_DIR/Info.plist" <<'PLIST'
   <string>14.0</string>
   <key>NSHighResolutionCapable</key>
   <true/>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Jarvis uses microphone input only when you explicitly start local voice capture.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>Jarvis uses speech recognition only to turn your spoken command into a local assistant request.</string>
 </dict>
 </plist>
 PLIST
@@ -123,13 +128,25 @@ PLIST
 if command -v plutil >/dev/null 2>&1; then
   run plutil -lint "$CONTENTS_DIR/Info.plist"
 fi
+INFO_PLIST_CONTENTS="$(cat "$CONTENTS_DIR/Info.plist")"
+require_output_contains "packaged app Info.plist" "$INFO_PLIST_CONTENTS" "NSMicrophoneUsageDescription"
+require_output_contains "packaged app Info.plist" "$INFO_PLIST_CONTENTS" "NSSpeechRecognitionUsageDescription"
 
 if command -v codesign >/dev/null 2>&1; then
-  run codesign --force --sign - "$BUNDLED_CORE"
-  run codesign --force --sign - "$APP_EXECUTABLE"
-  run codesign --force --sign - "$APP_PATH"
+  [[ -f "$ENTITLEMENTS" ]] || {
+    printf 'error: missing entitlements file: %s\n' "$ENTITLEMENTS" >&2
+    exit 1
+  }
+  run codesign --force --sign - --entitlements "$ENTITLEMENTS" "$BUNDLED_CORE"
+  run codesign --force --sign - --entitlements "$ENTITLEMENTS" "$APP_EXECUTABLE"
+  run codesign --force --sign - --entitlements "$ENTITLEMENTS" "$APP_PATH"
   run codesign --verify --deep --strict "$APP_PATH"
-  SIGNING_STATUS="ad-hoc signed with codesign -"
+  APP_ENTITLEMENTS_OUTPUT="$(codesign -d --entitlements :- "$APP_PATH" 2>/dev/null)"
+  require_output_contains \
+    "packaged app entitlements" \
+    "$APP_ENTITLEMENTS_OUTPUT" \
+    "com.apple.security.device.audio-input"
+  SIGNING_STATUS="ad-hoc signed with codesign - and packaging/Jarvis.entitlements"
 else
   SIGNING_STATUS="codesign unavailable; unsigned local bundle"
 fi
@@ -201,4 +218,4 @@ printf '\nJarvis packaged app release smoke: ok\n'
 printf 'Bundle: %s\n' "$APP_PATH"
 printf 'Signing: %s\n' "$SIGNING_STATUS"
 printf 'Clean HOME database: %s\n' "$APP_DB"
-printf 'Proof boundary: locally assembled SwiftPM Jarvis.app with bundled jarvis-cli; no Developer ID signing, notarization, installer, entitlement, or Finder/LaunchServices validation.\n'
+printf 'Proof boundary: locally assembled SwiftPM Jarvis.app with bundled jarvis-cli, usage strings, and ad-hoc entitlement evidence; no Developer ID signing, notarization, installer, live microphone/Speech/audio-output, or Finder/LaunchServices validation.\n'

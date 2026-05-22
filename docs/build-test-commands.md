@@ -241,13 +241,15 @@ surfaces, and then runs the CLI smoke command.
 proof for packaging/release changes: it builds the Swift app executable,
 assembles a deterministic `Jarvis.app`, writes `Info.plist`, bundles
 `jarvis-cli` in `Contents/Resources/bin/`, ad-hoc signs with `codesign -` when
-available, launches the app executable under a temporary HOME/profile with an
-isolated endpoint and database path, and verifies app-supervised core health,
-command, audit, diagnostics, emergency pause, blocked command, pause status,
-resume, and temp-profile SQLite state. It is still local evidence only, not
-Developer ID signing, notarization, installer validation, entitlement
-validation, App Store distribution, Finder/LaunchServices validation, or real
-microphone/Speech/live audio-output coverage.
+available using `packaging/Jarvis.entitlements`, verifies microphone usage
+strings and the `com.apple.security.device.audio-input` entitlement, launches
+the app executable under a temporary HOME/profile with an isolated endpoint and
+database path, and verifies app-supervised core health, command, audit,
+diagnostics, emergency pause, blocked command, pause status, resume, and
+temp-profile SQLite state. It is still local evidence only, not Developer ID
+signing, notarization, installer validation, App Store distribution,
+Finder/LaunchServices validation, or real microphone/Speech/live audio-output
+coverage.
 `swift test --package-path apps/mac --filter JarvisMacCoreTests` is the focused
 Swift contract/model proof for Mac app model changes, including scheduler
 notification authorization, due/failed request creation, duplicate suppression,
