@@ -428,6 +428,10 @@ struct JarvisMacCoreTests {
                     return (response, Data("[]".utf8))
                 }
                 return (response, memoryItemJSON(id: memoryId))
+            case "/memory/\(memoryId.uuidString)":
+                return (response, memoryItemJSON(id: memoryId))
+            case "/memory/\(memoryId.uuidString)/review":
+                return (response, memoryItemJSON(id: memoryId))
             case "/plugins/manifests":
                 return (response, Data("[]".utf8))
             case "/scheduler/jobs":
@@ -456,6 +460,17 @@ struct JarvisMacCoreTests {
                 sensitivity: "workspace"
             )
         )
+        _ = try await client.memoryItem(id: memoryId)
+        _ = try await client.updateMemoryItem(
+            id: memoryId,
+            request: JarvisMemoryMutationRequest(
+                value: "preview then sync",
+                provenance: "operator correction",
+                sensitivity: "private"
+            )
+        )
+        _ = try await client.reviewMemoryItem(id: memoryId)
+        _ = try await client.deleteMemoryItem(id: memoryId)
         _ = try await client.listPluginManifests()
         _ = try await client.listSchedulerJobs()
         _ = try await client.createSchedulerJob(
@@ -468,11 +483,28 @@ struct JarvisMacCoreTests {
         _ = try await client.schedulerJob(id: jobId)
         _ = try await client.pauseStatus()
 
-        #expect(requests.map(\.method) == ["GET", "GET", "POST", "GET", "GET", "POST", "GET", "GET"])
+        #expect(requests.map(\.method) == [
+            "GET",
+            "GET",
+            "POST",
+            "GET",
+            "PATCH",
+            "POST",
+            "DELETE",
+            "GET",
+            "GET",
+            "POST",
+            "GET",
+            "GET"
+        ])
         #expect(requests.map(\.path) == [
             "/contract",
             "/memory",
             "/memory",
+            "/memory/\(memoryId.uuidString)",
+            "/memory/\(memoryId.uuidString)",
+            "/memory/\(memoryId.uuidString)/review",
+            "/memory/\(memoryId.uuidString)",
             "/plugins/manifests",
             "/scheduler/jobs",
             "/scheduler/jobs",
@@ -480,7 +512,8 @@ struct JarvisMacCoreTests {
             "/emergency-pause"
         ])
         #expect(requests[2].body?["key"] as? String == "release-gate")
-        #expect(requests[5].body?["command"] as? String == "status check")
+        #expect(requests[4].body?["value"] as? String == "preview then sync")
+        #expect(requests[9].body?["command"] as? String == "status check")
     }
 
     @Test("Management payloads decode tasks and audit list")
@@ -1240,6 +1273,53 @@ struct JarvisMacCoreTests {
     }
 
     @MainActor
+    @Test("Memory manager model supports create, update, review, and soft delete")
+    func memoryManagerModelSupportsCrudAndIncludeDeleted() async {
+        let active = sampleMemoryItem(category: "workflow", key: "release-gate")
+        let deleted = sampleMemoryItem(category: "archive", key: "old-note", deletedAt: "2026-05-20T12:05:00Z")
+        let client = FakeCoreClient(memoryItems: [active, deleted])
+        let model = MemoryManagerModel(client: client)
+
+        await model.refresh()
+        #expect(model.items.map(\.id) == [active.id])
+        #expect(client.includeDeletedMemoryRequests == [false])
+
+        await model.refresh(includeDeleted: true)
+        #expect(model.includeDeleted)
+        #expect(model.items.map(\.id) == [active.id, deleted.id])
+        #expect(client.includeDeletedMemoryRequests == [false, true])
+
+        await model.create(
+            category: "release",
+            key: "gate",
+            value: "Run local release verification before opening a PR.",
+            provenance: "manual",
+            sensitivity: "workspace"
+        )
+        let created = try! #require(model.selectedItem)
+        #expect(created.category == "release")
+        #expect(client.createdMemoryRequests.last?.key == "gate")
+
+        await model.update(
+            id: created.id,
+            value: "Run release verification, then open the PR.",
+            provenance: "operator correction",
+            sensitivity: "private"
+        )
+        #expect(client.updatedMemoryRequests.last?.id == created.id)
+        #expect(client.updatedMemoryRequests.last?.request.value == "Run release verification, then open the PR.")
+        #expect(model.selectedItem?.sensitivity == "private")
+
+        await model.review(id: created.id)
+        #expect(model.selectedItem?.reviewedAt != nil)
+
+        await model.refresh()
+        await model.delete(id: created.id)
+        #expect(!model.items.contains { $0.id == created.id })
+        #expect(model.selectedItem == nil)
+    }
+
+    @MainActor
     @Test("Approval management model loads contract, tasks, and audit evidence")
     func approvalManagementModelLoadsQueue() async {
         let task = JarvisTask(
@@ -1894,6 +1974,30 @@ private final class FakeProcessLauncher: JarvisCoreProcessLaunching, @unchecked 
     }
 }
 
+private func sampleMemoryItem(
+    id: UUID = UUID(),
+    category: String,
+    key: String,
+    value: String = "preview before write",
+    provenance: String = "manual",
+    sensitivity: String = "workspace",
+    reviewedAt: String? = nil,
+    deletedAt: String? = nil
+) -> JarvisMemoryItem {
+    JarvisMemoryItem(
+        id: id,
+        category: category,
+        key: key,
+        value: value,
+        provenance: provenance,
+        sensitivity: sensitivity,
+        createdAt: "2026-05-20T12:00:00Z",
+        updatedAt: "2026-05-20T12:00:01Z",
+        reviewedAt: reviewedAt,
+        deletedAt: deletedAt
+    )
+}
+
 private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     struct ApprovalDecision: Equatable {
         var id: UUID
@@ -1908,8 +2012,12 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     private var contractResponse: JarvisContractResponse?
     private var approvals: [JarvisPendingApproval]
     private var pluginManifests: [JarvisPluginManifest]
+    private var memoryItems: [JarvisMemoryItem]
     private var permissionGrantSummaryResult: JarvisPermissionGrantSummary?
     private(set) var approvalDecisions: [ApprovalDecision]
+    private(set) var includeDeletedMemoryRequests: [Bool]
+    private(set) var createdMemoryRequests: [JarvisCreateMemoryItemRequest]
+    private(set) var updatedMemoryRequests: [(id: UUID, request: JarvisMemoryMutationRequest)]
 
     init(
         healthResults: [Result<JarvisHealth, Error>] = [.success(sampleHealth())],
@@ -1918,6 +2026,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         contractResponse: JarvisContractResponse? = nil,
         approvals: [JarvisPendingApproval] = [],
         pluginManifests: [JarvisPluginManifest] = [],
+        memoryItems: [JarvisMemoryItem] = [],
         permissionGrantSummary: JarvisPermissionGrantSummary? = nil
     ) {
         self.healthResults = healthResults
@@ -1927,8 +2036,12 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         self.contractResponse = contractResponse
         self.approvals = approvals
         self.pluginManifests = pluginManifests
+        self.memoryItems = memoryItems
         self.permissionGrantSummaryResult = permissionGrantSummary
         self.approvalDecisions = []
+        self.includeDeletedMemoryRequests = []
+        self.createdMemoryRequests = []
+        self.updatedMemoryRequests = []
     }
 
     func health() async throws -> JarvisHealth {
@@ -1993,27 +2106,67 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     }
 
     func listMemoryItems(includeDeleted: Bool) async throws -> [JarvisMemoryItem] {
-        []
+        includeDeletedMemoryRequests.append(includeDeleted)
+        if includeDeleted {
+            return memoryItems
+        }
+        return memoryItems.filter { $0.deletedAt == nil }
     }
 
     func createMemoryItem(_ request: JarvisCreateMemoryItemRequest) async throws -> JarvisMemoryItem {
-        throw URLError(.unsupportedURL)
+        createdMemoryRequests.append(request)
+        let item = sampleMemoryItem(
+            category: request.category,
+            key: request.key,
+            value: request.value,
+            provenance: request.provenance,
+            sensitivity: request.sensitivity
+        )
+        memoryItems.insert(item, at: 0)
+        return item
     }
 
     func memoryItem(id: UUID) async throws -> JarvisMemoryItem {
-        throw URLError(.unsupportedURL)
+        guard let item = memoryItems.first(where: { $0.id == id }) else {
+            throw URLError(.fileDoesNotExist)
+        }
+        return item
     }
 
     func updateMemoryItem(id: UUID, request: JarvisMemoryMutationRequest) async throws -> JarvisMemoryItem {
-        throw URLError(.unsupportedURL)
+        updatedMemoryRequests.append((id: id, request: request))
+        guard let index = memoryItems.firstIndex(where: { $0.id == id }) else {
+            throw URLError(.fileDoesNotExist)
+        }
+        var item = memoryItems[index]
+        item.value = request.value
+        item.provenance = request.provenance
+        item.sensitivity = request.sensitivity
+        item.updatedAt = "2026-05-20T12:10:00Z"
+        memoryItems[index] = item
+        return item
     }
 
     func reviewMemoryItem(id: UUID) async throws -> JarvisMemoryItem {
-        throw URLError(.unsupportedURL)
+        guard let index = memoryItems.firstIndex(where: { $0.id == id }) else {
+            throw URLError(.fileDoesNotExist)
+        }
+        var item = memoryItems[index]
+        item.reviewedAt = "2026-05-20T12:11:00Z"
+        item.updatedAt = "2026-05-20T12:11:00Z"
+        memoryItems[index] = item
+        return item
     }
 
     func deleteMemoryItem(id: UUID) async throws -> JarvisMemoryItem {
-        throw URLError(.unsupportedURL)
+        guard let index = memoryItems.firstIndex(where: { $0.id == id }) else {
+            throw URLError(.fileDoesNotExist)
+        }
+        var item = memoryItems[index]
+        item.deletedAt = "2026-05-20T12:12:00Z"
+        item.updatedAt = "2026-05-20T12:12:00Z"
+        memoryItems[index] = item
+        return item
     }
 
     func listPluginManifests() async throws -> [JarvisPluginManifest] {

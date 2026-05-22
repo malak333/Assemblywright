@@ -260,12 +260,14 @@ orchestration, including policy checks, approval stops, validation failures, and
 tool-result feedback into later model steps. Focused provider tests prove typed
 Ollama-compatible request/error behavior without requiring a live model during
 the default release gate. They do not prove live ChatGPT service execution,
-memory UX beyond the scaffold, live microphone capture, or live audio output
-until those surfaces are manually validated. The current Swift gate proves the
+memory classification/restore UX beyond the current CRUD/review surface, live
+microphone capture, or live audio output until those surfaces are manually
+validated. The current Swift gate proves the
 Mac shell scaffold builds, decodes IPC contracts, exposes management models for
-approval evidence, runs/audit, scheduler, diagnostics, text-transcript voice
-handoff state, adapter-backed voice input controls, adapter-backed speech-output
-preview controls, and Keychain-backed supervised-core credential injection
+approval evidence, memory create/update/review/delete state, runs/audit,
+scheduler, diagnostics, text-transcript voice handoff state, adapter-backed
+voice input controls, adapter-backed speech-output preview controls, and
+Keychain-backed supervised-core credential injection
 without requiring live microphone access, live audio output, or real credentials
 in tests. It can supervise a configured local core process
 abstraction. It also covers Swift approval decision calls against the Rust IPC

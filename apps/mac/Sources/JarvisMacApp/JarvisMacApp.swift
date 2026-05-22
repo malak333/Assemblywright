@@ -267,29 +267,195 @@ struct CommandConsoleView: View {
 
 struct MemoryManagerView: View {
     @ObservedObject var model: MemoryManagerModel
+    @State private var includeDeleted = false
+    @State private var category = "workflow"
+    @State private var key = "release-gate"
+    @State private var value = "Run local release verification before opening a PR."
+    @State private var provenance = "manual"
+    @State private var sensitivity = "workspace"
+    @State private var selectedId: UUID?
+    @State private var categoryFilter = ""
+    @State private var sensitivityFilter = "all"
+
+    private let sensitivities = [
+        "public",
+        "workspace",
+        "personal",
+        "private",
+        "credential_adjacent",
+        "restricted"
+    ]
 
     var body: some View {
         ManagementListView(
             title: "Memory",
             isLoading: model.isLoading,
             lastError: model.lastError,
-            refresh: { await model.refresh() }
+            refresh: { await model.refresh(includeDeleted: includeDeleted) }
         ) {
-            List(model.items) { item in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("\(item.category) / \(item.key)")
-                        .font(.subheadline)
-                    Text(item.value)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                    Text("\(item.sensitivity) | \(item.provenance)")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 10) {
+                memoryForm
+                    .padding(.horizontal)
+
+                HStack {
+                    Toggle("Include deleted", isOn: $includeDeleted)
+                        .onChange(of: includeDeleted) { _, newValue in
+                            Task { await model.refresh(includeDeleted: newValue) }
+                        }
+                    TextField("Category filter", text: $categoryFilter)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 180)
+                    Picker("Sensitivity", selection: $sensitivityFilter) {
+                        Text("All").tag("all")
+                        ForEach(sensitivities, id: \.self) { sensitivity in
+                            Text(sensitivity).tag(sensitivity)
+                        }
+                    }
+                    .frame(maxWidth: 210)
+                    Spacer()
                 }
-                .padding(.vertical, 4)
+                .padding(.horizontal)
+
+                List(filteredItems) { item in
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text("\(item.category) / \(item.key)")
+                                .font(.subheadline)
+                            Spacer()
+                            if item.reviewedAt != nil {
+                                Text("reviewed")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            if item.deletedAt != nil {
+                                Text("deleted")
+                                    .font(.caption2)
+                                    .foregroundStyle(.red)
+                            }
+                        }
+                        Text(item.value)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                        Text("\(item.sensitivity) | \(item.provenance)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        HStack {
+                            Button("Edit") {
+                                loadIntoForm(item)
+                            }
+                            Button("Review") {
+                                Task { await model.review(id: item.id) }
+                            }
+                            .disabled(item.reviewedAt != nil || item.deletedAt != nil)
+                            Button("Delete") {
+                                Task { await model.delete(id: item.id) }
+                            }
+                            .disabled(item.deletedAt != nil)
+                        }
+                        .font(.caption)
+                    }
+                    .padding(.vertical, 4)
+                }
             }
         }
+    }
+
+    private var filteredItems: [JarvisMemoryItem] {
+        model.items.filter { item in
+            let categoryMatches = categoryFilter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || item.category.localizedCaseInsensitiveContains(categoryFilter)
+            let sensitivityMatches = sensitivityFilter == "all" || item.sensitivity == sensitivityFilter
+            return categoryMatches && sensitivityMatches
+        }
+    }
+
+    private var canSubmit: Bool {
+        !category.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !provenance.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var memoryForm: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                TextField("Category", text: $category)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(selectedId != nil)
+                TextField("Key", text: $key)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(selectedId != nil)
+                Picker("Sensitivity", selection: $sensitivity) {
+                    ForEach(sensitivities, id: \.self) { sensitivity in
+                        Text(sensitivity).tag(sensitivity)
+                    }
+                }
+                .frame(maxWidth: 220)
+            }
+            TextField("Value", text: $value)
+                .textFieldStyle(.roundedBorder)
+            HStack {
+                TextField("Provenance", text: $provenance)
+                    .textFieldStyle(.roundedBorder)
+                Button(selectedId == nil ? "Create" : "Update") {
+                    submit()
+                }
+                .disabled(!canSubmit || model.isLoading)
+                if selectedId != nil {
+                    Button("Clear") {
+                        clearForm()
+                    }
+                }
+            }
+        }
+    }
+
+    private func submit() {
+        let trimmedCategory = category.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedProvenance = provenance.trimmingCharacters(in: .whitespacesAndNewlines)
+        let selectedSensitivity = sensitivity
+
+        Task {
+            if let selectedId {
+                await model.update(
+                    id: selectedId,
+                    value: trimmedValue,
+                    provenance: trimmedProvenance,
+                    sensitivity: selectedSensitivity
+                )
+            } else {
+                await model.create(
+                    category: trimmedCategory,
+                    key: trimmedKey,
+                    value: trimmedValue,
+                    provenance: trimmedProvenance,
+                    sensitivity: selectedSensitivity
+                )
+            }
+            clearForm()
+        }
+    }
+
+    private func loadIntoForm(_ item: JarvisMemoryItem) {
+        selectedId = item.id
+        category = item.category
+        key = item.key
+        value = item.value
+        provenance = item.provenance
+        sensitivity = item.sensitivity
+        Task { await model.load(id: item.id) }
+    }
+
+    private func clearForm() {
+        selectedId = nil
+        category = "workflow"
+        key = ""
+        value = ""
+        provenance = "manual"
+        sensitivity = "workspace"
     }
 }
 

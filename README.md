@@ -10,8 +10,8 @@ redacted diagnostics export, a loopback IPC surface, and CLI smoke paths for
 the Swift shell scaffold and future packaged app.
 It also includes the first buildable Swift/SwiftUI Mac shell scaffold under
 `apps/mac`, with a tested IPC client, command-console state model,
-activity/audit panel for command evidence, management surfaces, degraded-mode
-handling, and a core supervisor abstraction.
+activity/audit panel for command evidence, memory create/update/review/delete
+management, degraded-mode handling, and a core supervisor abstraction.
 
 ## Current Scope
 
