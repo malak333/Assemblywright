@@ -270,11 +270,12 @@ smoke path, redacted diagnostics export, and buildable Swift command/activity
 shell scaffold are implemented. The command runtime can route to fake local,
 Ollama-compatible local HTTP, or explicitly enabled ChatGPT/OpenAI-compatible
 HTTP providers. The Swift app includes approval decision controls, management
-surfaces, voice input/output adapter controls, text-transcript command handoff,
-and core supervision abstractions. The product still lacks signed/notarized
-release evidence, live microphone and audio-output validation, broader
-production plugin trust boundaries, richer proactive trigger policy, and app
-notification handoff. Swift supervision is covered only as a scaffold for
+surfaces, memory create/update/review/delete controls over the existing Rust
+IPC contract, voice input/output adapter controls, text-transcript command
+handoff, and core supervision abstractions. The product still lacks
+signed/notarized release evidence, live microphone and audio-output validation,
+broader production plugin trust boundaries, richer proactive trigger policy,
+and app notification handoff. Swift supervision is covered only as a scaffold for
 configured or packaged-style local core binaries.
 
 The active phase-3 production sweep uses isolated worktrees, topic branches,

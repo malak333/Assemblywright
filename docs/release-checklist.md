@@ -134,6 +134,9 @@ stage or when a PR needs focused evidence for one ownership slice.
 - Confirm diagnostics export remains redacted and does not include command
   bodies, scheduler commands, model route contexts, audit payloads, memory
   values, raw cancellation reasons, or credentials.
+- Confirm the Swift Memory tab still uses the Rust IPC memory contract for
+  create, load, update of mutable fields, review, soft-delete, include-deleted
+  refresh, and filtering, with deterministic Swift package coverage.
 - Confirm the cross-process CLI E2E still covers command, plugin, audit,
   redacted model-route inspection and restart recovery, memory
   create/update/review/delete, scheduler schedule/get/list/cancel, scheduler
@@ -217,6 +220,8 @@ Still future gates for production distribution:
 - Live text-to-speech playback is verified only after packaged app audio-output
   validation on a real device.
 - Activity view shows current task state.
+- Memory tab can create, edit mutable fields, mark reviewed, soft-delete, and
+  include deleted items through the supervised core IPC contract.
 - Audit entry is written for the command.
 - Emergency pause stops new actions.
 - App exits cleanly and restarts with recoverable state.

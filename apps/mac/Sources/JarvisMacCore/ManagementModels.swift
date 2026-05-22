@@ -3,6 +3,8 @@ import Foundation
 @MainActor
 public final class MemoryManagerModel: ObservableObject {
     @Published public private(set) var items: [JarvisMemoryItem]
+    @Published public private(set) var selectedItem: JarvisMemoryItem?
+    @Published public private(set) var includeDeleted: Bool
     @Published public private(set) var isLoading: Bool
     @Published public private(set) var lastError: String?
 
@@ -11,13 +13,22 @@ public final class MemoryManagerModel: ObservableObject {
     public init(client: any JarvisCoreClient = JarvisIPCClient()) {
         self.client = client
         self.items = []
+        self.selectedItem = nil
+        self.includeDeleted = false
         self.isLoading = false
         self.lastError = nil
     }
 
     public func refresh(includeDeleted: Bool = false) async {
+        self.includeDeleted = includeDeleted
         await run {
             self.items = try await self.client.listMemoryItems(includeDeleted: includeDeleted)
+            if let selectedItem = self.selectedItem,
+               let refreshed = self.items.first(where: { $0.id == selectedItem.id }) {
+                self.selectedItem = refreshed
+            } else if !includeDeleted, self.selectedItem?.deletedAt != nil {
+                self.selectedItem = nil
+            }
         }
     }
 
@@ -33,6 +44,26 @@ public final class MemoryManagerModel: ObservableObject {
                 )
             )
             self.items.insert(item, at: 0)
+            self.selectedItem = item
+        }
+    }
+
+    public func load(id: UUID) async {
+        await replace(id: id) {
+            try await self.client.memoryItem(id: id)
+        }
+    }
+
+    public func update(id: UUID, value: String, provenance: String, sensitivity: String) async {
+        await replace(id: id) {
+            try await self.client.updateMemoryItem(
+                id: id,
+                request: JarvisMemoryMutationRequest(
+                    value: value,
+                    provenance: provenance,
+                    sensitivity: sensitivity
+                )
+            )
         }
     }
 
@@ -52,7 +83,19 @@ public final class MemoryManagerModel: ObservableObject {
         await run {
             let item = try await operation()
             if let index = self.items.firstIndex(where: { $0.id == id }) {
-                self.items[index] = item
+                if item.deletedAt == nil || self.includeDeleted {
+                    self.items[index] = item
+                } else {
+                    self.items.remove(at: index)
+                }
+            } else if item.deletedAt == nil || self.includeDeleted {
+                self.items.insert(item, at: 0)
+            }
+
+            if item.deletedAt == nil || self.includeDeleted {
+                self.selectedItem = item
+            } else if self.selectedItem?.id == id {
+                self.selectedItem = nil
             }
         }
     }

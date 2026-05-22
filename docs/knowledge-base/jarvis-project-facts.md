@@ -80,6 +80,10 @@ These notes capture durable facts for future agents working on this repository.
 - The Swift shell is currently a scaffold with a core supervisor abstraction
   and local packaged-app smoke evidence. It is not a Developer ID signed or
   notarized packaged app.
+- The Swift Memory tab now uses the Rust IPC memory contract for list,
+  include-deleted refresh, create, load, update of mutable fields, review, and
+  soft-delete. Category and key remain creation-time fields in the current IPC
+  contract; the Swift edit path updates value, provenance, and sensitivity.
 - The Swift shell has a Keychain-backed launch credential boundary for
   app-supervised model provider secrets. `JarvisCoreCredentialProvider` reads
   known credentials such as the OpenAI API key from Keychain and injects only
