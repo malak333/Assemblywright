@@ -157,7 +157,9 @@ These notes capture durable facts for future agents working on this repository.
   live-device QA report, plugin-trust QA report, and owner validation flags.
   `--self-test` uses fake artifacts/reports to prove bundle mechanics only.
   `--bundle` writes `target/release-evidence-bundle.json` after referenced
-  artifacts/reports exist and every `JARVIS_EVIDENCE_*` flag is true.
+  artifacts/reports exist, every `JARVIS_EVIDENCE_*` flag is true, and local
+  artifact checks validate the app signature, app stapling ticket, installer
+  signature, installer stapling ticket, and app zip payload.
 - Enabled `local_subprocess` plugins run with an environment boundary: Jarvis
   clears the inherited app/core process environment before spawn and provides
   only a deterministic `PATH` plus `JARVIS_PLUGIN_ID`,

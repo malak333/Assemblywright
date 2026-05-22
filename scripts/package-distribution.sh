@@ -73,6 +73,17 @@ require_output_contains() {
   fi
 }
 
+assert_app_audio_input_entitlement() {
+  local label="$1"
+  local output
+  output="$(codesign -d --entitlements :- "$APP_PATH" 2>/dev/null)"
+  if [[ "$output" != *"com.apple.security.device.audio-input"* ]]; then
+    printf 'error: %s entitlements do not include microphone access\n' "$label" >&2
+    printf '%s\n' "$output" >&2
+    exit 1
+  fi
+}
+
 select_port() {
   if [[ -n "${JARVIS_DISTRIBUTION_LAUNCH_CHECK_PORT:-}" ]]; then
     printf '%s\n' "$JARVIS_DISTRIBUTION_LAUNCH_CHECK_PORT"
@@ -236,6 +247,7 @@ run_unsigned_structure_check() {
     run codesign --force --sign - --entitlements "$ENTITLEMENTS" "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME"
     run codesign --force --sign - --entitlements "$ENTITLEMENTS" "$APP_PATH"
     run codesign --verify --deep --strict "$APP_PATH"
+    assert_app_audio_input_entitlement "unsigned structure app"
     SIGNING_STATUS="ad-hoc signed with codesign -"
   fi
 
@@ -269,6 +281,7 @@ run_unsigned_launch_check() {
     run codesign --force --sign - --entitlements "$ENTITLEMENTS" "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME"
     run codesign --force --sign - --entitlements "$ENTITLEMENTS" "$APP_PATH"
     run codesign --verify --deep --strict "$APP_PATH"
+    assert_app_audio_input_entitlement "unsigned launch app"
     SIGNING_STATUS="ad-hoc signed with codesign -"
   fi
 
@@ -413,12 +426,7 @@ run codesign --force --timestamp --options runtime \
   --sign "$JARVIS_DEVELOPER_ID_APPLICATION" \
   "$APP_PATH"
 run codesign --verify --deep --strict --verbose=2 "$APP_PATH"
-APP_ENTITLEMENTS_OUTPUT="$(codesign -d --entitlements :- "$APP_PATH" 2>/dev/null)"
-if [[ "$APP_ENTITLEMENTS_OUTPUT" != *"com.apple.security.device.audio-input"* ]]; then
-  printf 'error: signed app entitlements do not include microphone access\n' >&2
-  printf '%s\n' "$APP_ENTITLEMENTS_OUTPUT" >&2
-  exit 1
-fi
+assert_app_audio_input_entitlement "signed app"
 
 rm -f "$ZIP_PATH"
 run ditto -c -k --keepParent "$APP_PATH" "$ZIP_PATH"
