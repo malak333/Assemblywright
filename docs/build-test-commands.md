@@ -423,13 +423,21 @@ restart, and manual QA steps. `--assert-complete` is for the release machine
 after those checks are actually performed and all required `JARVIS_QA_*` flags
 are explicitly set to `true`, including
 `JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true` for the spoken
-transcript handoff into the same command path.
+transcript handoff into the same command path. The assertion command also
+requires non-empty owner-recorded evidence fields:
+`JARVIS_QA_OWNER_NAME`, `JARVIS_QA_DEVICE_LABEL`, `JARVIS_QA_PROFILE_LABEL`,
+`JARVIS_QA_VOICE_CHECK_STARTED_AT`, `JARVIS_QA_VOICE_CHECK_COMPLETED_AT`,
+`JARVIS_QA_MICROPHONE_EVIDENCE_NOTE`,
+`JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE`,
+`JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE`, and
+`JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE`.
 On success, `--assert-complete` writes a JSON evidence report to
 `JARVIS_QA_REPORT_PATH` or `target/release-live-device-qa-report.json` by
 default. The report includes installed-app metadata, voice-loop evidence fields,
-and the proof boundary. Preserve that report with release notes when making a
-production-ready claim. `--self-test` uses a fake app fixture to exercise only
-the assertion/report mechanics and is included in `./scripts/release-local.sh`.
+owner/device/profile/timestamp/evidence-note fields, and the proof boundary.
+Preserve that report with release notes when making a production-ready claim.
+`--self-test` uses a fake app fixture to exercise only the assertion/report
+mechanics and is included in `./scripts/release-local.sh`.
 Docs-only branches should at least run a render/lint-oriented documentation
 check when available, plus `cargo fmt --check` if the branch also touches Rust
 examples or scripts. Record any skipped full-gate stage as a blocker, not as

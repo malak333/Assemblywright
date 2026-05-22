@@ -3672,7 +3672,7 @@ fn release_verification_commands() -> Vec<String> {
         "./scripts/packaged-app-release-smoke.sh".to_string(),
         "./scripts/package-distribution.sh --unsigned-launch-check".to_string(),
         "./scripts/release-live-device-qa.sh --check".to_string(),
-        "JARVIS_QA_CLEAN_PROFILE_VALIDATED=true JARVIS_QA_FINDER_LAUNCH_VALIDATED=true JARVIS_QA_MICROPHONE_VALIDATED=true JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true JARVIS_QA_NOTIFICATION_VALIDATED=true JARVIS_QA_RESTART_VALIDATED=true JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true ./scripts/release-live-device-qa.sh --assert-complete".to_string(),
+        "JARVIS_QA_CLEAN_PROFILE_VALIDATED=true JARVIS_QA_FINDER_LAUNCH_VALIDATED=true JARVIS_QA_MICROPHONE_VALIDATED=true JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true JARVIS_QA_NOTIFICATION_VALIDATED=true JARVIS_QA_RESTART_VALIDATED=true JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true JARVIS_QA_OWNER_NAME='Release Operator' JARVIS_QA_DEVICE_LABEL='Clean-profile release Mac' JARVIS_QA_PROFILE_LABEL='Clean macOS QA profile' JARVIS_QA_VOICE_CHECK_STARTED_AT='2026-05-22T16:00:00Z' JARVIS_QA_VOICE_CHECK_COMPLETED_AT='2026-05-22T16:05:00Z' JARVIS_QA_MICROPHONE_EVIDENCE_NOTE='Microphone prompt and capture observed' JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE='Speech prompt and recognition observed' JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE='Spoken transcript reached the command path' JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE='Speech output playback observed' ./scripts/release-live-device-qa.sh --assert-complete".to_string(),
         "./scripts/release-plugin-trust-qa.sh --check".to_string(),
         "JARVIS_PLUGIN_QA_MARKETPLACE_REVIEW_VALIDATED=true JARVIS_PLUGIN_QA_MALWARE_SCAN_VALIDATED=true JARVIS_PLUGIN_QA_OS_SANDBOX_VALIDATED=true JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED=true JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_POLICY_VALIDATED=true JARVIS_PLUGIN_QA_MANUAL_TRUST_REVIEW_VALIDATED=true ./scripts/release-plugin-trust-qa.sh --assert-complete".to_string(),
         "./scripts/release-evidence-bundle.sh --check".to_string(),
@@ -4132,6 +4132,8 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .iter()
             .any(
                 |command| command.contains("JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true")
+                    && command.contains("JARVIS_QA_OWNER_NAME=")
+                    && command.contains("JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE=")
                     && command.contains("./scripts/release-live-device-qa.sh --assert-complete")
             ));
         assert!(readiness

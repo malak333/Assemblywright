@@ -215,6 +215,14 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         &release_readiness["recommended_verification_commands"],
         "JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true",
     );
+    assert_string_array_contains_substring(
+        &release_readiness["recommended_verification_commands"],
+        "JARVIS_QA_OWNER_NAME=",
+    );
+    assert_string_array_contains_substring(
+        &release_readiness["recommended_verification_commands"],
+        "JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE=",
+    );
     assert_string_array_contains(
         &release_readiness["recommended_verification_commands"],
         "./scripts/release-plugin-trust-qa.sh --check",

@@ -240,11 +240,12 @@ For those live checks, `./scripts/release-live-device-qa.sh --check` prints the
 required manual runbook and is part of the default local release gate. After the
 owner validates a signed installed app on a real Mac profile, rerun the script
 with `--assert-complete` and all required `JARVIS_QA_*` flags set to `true`,
-including explicit transcript handoff validation. That assertion writes a JSON
-report, defaulting to `target/release-live-device-qa-report.json`, with
-installed-app metadata, microphone/Speech permission prompt evidence, spoken
-transcript handoff into the command path, speech-output playback evidence, and
-the proof boundary. The local release gate also runs
+including explicit transcript handoff validation plus owner/device/profile,
+timestamp, and voice evidence-note fields. That assertion writes a JSON report,
+defaulting to `target/release-live-device-qa-report.json`, with installed-app
+metadata, microphone/Speech permission prompt evidence, spoken transcript
+handoff into the command path, speech-output playback evidence, owner-recorded
+live voice evidence notes, and the proof boundary. The local release gate also runs
 `./scripts/release-live-device-qa.sh --self-test` against a fake app fixture to
 prove the assertion/report mechanics without claiming real device validation.
 For plugin trust checks, `./scripts/release-plugin-trust-qa.sh --check` prints
