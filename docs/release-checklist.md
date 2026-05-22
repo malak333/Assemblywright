@@ -97,14 +97,17 @@ stage or when a PR needs focused evidence for one ownership slice.
   behavior, memory/model access, timeout behavior, and cancellation behavior.
 - Confirm local plugin installation accepts only validated manifest metadata
   with safe absolute source paths and stores installed records with
-  `execution_enabled: false`.
+  `execution_enabled: false`, `execution_grant: metadata_only`, and local
+  provenance snapshot metadata.
 - Confirm installed plugin metadata remains disabled by default and becomes
-  executable only after an explicit `subprocess_stdio` execution grant.
+  executable only after local provenance verification reports
+  `matches_install_snapshot` and an explicit `subprocess_stdio` execution
+  grant is set.
 - Confirm installed plugin run attempts fail closed with manifest/version and
-  action validation, default `execution_enabled: false` semantics, safe command
-  path checks, JSON stdin/stdout, timeout enforcement, output schema
-  validation, durable audit evidence, and `side_effect_executed: false` when no
-  side effect is allowed.
+  action validation, default `execution_enabled: false` semantics, local
+  provenance verification, safe command path checks, JSON stdin/stdout, timeout
+  enforcement, output schema validation, durable audit evidence, and
+  `side_effect_executed: false` when no side effect is allowed.
 - Confirm persistent audit entries remain append-only in SQLite tests.
 - Confirm route, policy, approval, action, and failure evidence stay covered
   before claiming an end-to-end assistant release. The current command path

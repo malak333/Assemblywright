@@ -2,8 +2,10 @@ use crate::{
     ApprovalDecision, ApprovalGrant, ApprovalStatus, CapabilityScope, JarvisError, JarvisResult,
     PermissionEngine, PolicyRequest, RiskTier, Sensitivity,
 };
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -514,9 +516,177 @@ fn default_manifest_schema_version() -> u16 {
 pub struct InstalledPlugin {
     pub manifest: PluginManifest,
     pub source_path: String,
+    pub provenance: InstalledPluginProvenance,
     pub execution_enabled: bool,
     #[serde(default)]
     pub execution_grant: InstalledPluginExecutionGrant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstalledPluginProvenance {
+    pub provenance_schema_version: u16,
+    pub capture_method: String,
+    pub manifest_path: String,
+    pub manifest_sha256: String,
+    pub source_path: String,
+    pub source_path_canonicalized: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subprocess_command_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subprocess_command_sha256: Option<String>,
+    pub captured_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_verified_at: Option<DateTime<Utc>>,
+    pub integrity_status: InstalledPluginIntegrityStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin_claim: Option<String>,
+    pub origin_claim_verified: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstalledPluginIntegrityStatus {
+    NotVerified,
+    MatchesInstallSnapshot,
+    ChangedSinceInstall,
+    MissingFile,
+    InvalidManifest,
+}
+
+impl InstalledPluginIntegrityStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NotVerified => "not_verified",
+            Self::MatchesInstallSnapshot => "matches_install_snapshot",
+            Self::ChangedSinceInstall => "changed_since_install",
+            Self::MissingFile => "missing_file",
+            Self::InvalidManifest => "invalid_manifest",
+        }
+    }
+}
+
+impl InstalledPluginProvenance {
+    pub fn legacy_unverified(source_path: impl Into<String>, captured_at: DateTime<Utc>) -> Self {
+        Self {
+            provenance_schema_version: 1,
+            capture_method: "legacy_migration".to_string(),
+            manifest_path: String::new(),
+            manifest_sha256: String::new(),
+            source_path: source_path.into(),
+            source_path_canonicalized: false,
+            subprocess_command_path: None,
+            subprocess_command_sha256: None,
+            captured_at,
+            last_verified_at: None,
+            integrity_status: InstalledPluginIntegrityStatus::NotVerified,
+            origin_claim: None,
+            origin_claim_verified: false,
+        }
+    }
+
+    pub fn capture(
+        manifest_path: &Path,
+        manifest: &PluginManifest,
+        source_path: &Path,
+        captured_at: DateTime<Utc>,
+    ) -> JarvisResult<Self> {
+        let manifest_path = fs::canonicalize(manifest_path).map_err(|err| {
+            JarvisError::Validation(format!("manifest path is not readable: {err}"))
+        })?;
+        let source_path = fs::canonicalize(source_path).map_err(|err| {
+            JarvisError::Validation(format!("source_path is not readable: {err}"))
+        })?;
+        let mut provenance = Self {
+            provenance_schema_version: 1,
+            capture_method: "local_manifest_snapshot".to_string(),
+            manifest_path: manifest_path.display().to_string(),
+            manifest_sha256: sha256_file(&manifest_path)?,
+            source_path: source_path.display().to_string(),
+            source_path_canonicalized: true,
+            subprocess_command_path: None,
+            subprocess_command_sha256: None,
+            captured_at,
+            last_verified_at: None,
+            integrity_status: InstalledPluginIntegrityStatus::NotVerified,
+            origin_claim: Some(manifest.author.clone()),
+            origin_claim_verified: false,
+        };
+
+        if manifest.source == PluginSource::LocalSubprocess {
+            let subprocess = manifest.subprocess.as_ref().ok_or_else(|| {
+                JarvisError::Validation(format!(
+                    "{} local_subprocess manifests must declare subprocess",
+                    manifest.id
+                ))
+            })?;
+            let command_path = subprocess.validate(&manifest.id, &source_path)?;
+            provenance.subprocess_command_sha256 = Some(sha256_file(&command_path)?);
+            provenance.subprocess_command_path = Some(command_path.display().to_string());
+        }
+
+        Ok(provenance)
+    }
+
+    pub fn verify_snapshot(&self, manifest: &PluginManifest, verified_at: DateTime<Utc>) -> Self {
+        let status = match self.verify_status(manifest) {
+            Ok(()) => InstalledPluginIntegrityStatus::MatchesInstallSnapshot,
+            Err(PluginProvenanceVerificationError::Changed) => {
+                InstalledPluginIntegrityStatus::ChangedSinceInstall
+            }
+            Err(PluginProvenanceVerificationError::MissingFile) => {
+                InstalledPluginIntegrityStatus::MissingFile
+            }
+            Err(PluginProvenanceVerificationError::InvalidManifest) => {
+                InstalledPluginIntegrityStatus::InvalidManifest
+            }
+        };
+        let mut verified = self.clone();
+        verified.integrity_status = status;
+        verified.last_verified_at = Some(verified_at);
+        verified
+    }
+
+    fn verify_status(
+        &self,
+        manifest: &PluginManifest,
+    ) -> Result<(), PluginProvenanceVerificationError> {
+        let manifest_path = Path::new(&self.manifest_path);
+        if !manifest_path.exists() {
+            return Err(PluginProvenanceVerificationError::MissingFile);
+        }
+        let manifest_sha = sha256_file(manifest_path)
+            .map_err(|_| PluginProvenanceVerificationError::MissingFile)?;
+        if manifest_sha != self.manifest_sha256 {
+            return Err(PluginProvenanceVerificationError::Changed);
+        }
+
+        let source_path = Path::new(&self.source_path);
+        if !source_path.exists() {
+            return Err(PluginProvenanceVerificationError::MissingFile);
+        }
+        if let Some(expected_sha) = self.subprocess_command_sha256.as_deref() {
+            let subprocess = manifest
+                .subprocess
+                .as_ref()
+                .ok_or(PluginProvenanceVerificationError::InvalidManifest)?;
+            let command_path = subprocess
+                .validate(&manifest.id, source_path)
+                .map_err(|_| PluginProvenanceVerificationError::InvalidManifest)?;
+            let command_sha = sha256_file(&command_path)
+                .map_err(|_| PluginProvenanceVerificationError::MissingFile)?;
+            if command_sha != expected_sha {
+                return Err(PluginProvenanceVerificationError::Changed);
+            }
+        }
+
+        Ok(())
+    }
+}
+
+enum PluginProvenanceVerificationError {
+    Changed,
+    MissingFile,
+    InvalidManifest,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -667,13 +837,24 @@ impl InstalledPlugin {
             .map_err(|err| JarvisError::Validation(format!("parse plugin manifest: {err}")))?;
         let source_path = manifest.validate_local_install(manifest_path)?;
 
+        let provenance =
+            InstalledPluginProvenance::capture(manifest_path, &manifest, &source_path, Utc::now())?;
+
         Ok(Self {
             manifest,
             source_path: source_path.display().to_string(),
+            provenance,
             execution_enabled: false,
             execution_grant: InstalledPluginExecutionGrant::MetadataOnly,
         })
     }
+}
+
+fn sha256_file(path: &Path) -> JarvisResult<String> {
+    let bytes = fs::read(path)
+        .map_err(|err| JarvisError::Validation(format!("hash {}: {err}", path.display())))?;
+    let digest = Sha256::digest(&bytes);
+    Ok(format!("{digest:x}"))
 }
 
 fn validate_identifier(value: &str, label: &str) -> JarvisResult<()> {

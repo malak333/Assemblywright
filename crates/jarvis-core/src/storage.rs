@@ -12,11 +12,11 @@ use crate::router::{
 };
 use crate::{
     ApprovalStatus, AuditEntry, CapabilityScope, InstalledPlugin, InstalledPluginExecutionGrant,
-    JarvisError, JarvisResult, PluginManifest, RiskTier, SchedulerJob, SchedulerJobStatus,
-    Sensitivity, TaskRecord, TaskStatus, TriggerKind,
+    InstalledPluginProvenance, JarvisError, JarvisResult, PluginManifest, RiskTier, SchedulerJob,
+    SchedulerJobStatus, Sensitivity, TaskRecord, TaskStatus, TriggerKind,
 };
 
-const CURRENT_SCHEMA_VERSION: i64 = 7;
+const CURRENT_SCHEMA_VERSION: i64 = 8;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EmergencyPauseState {
@@ -54,6 +54,7 @@ pub struct InstalledPluginRecord {
     pub id: String,
     pub manifest: PluginManifest,
     pub source_path: String,
+    pub provenance: InstalledPluginProvenance,
     pub execution_enabled: bool,
     pub execution_grant: InstalledPluginExecutionGrant,
     pub installed_at: DateTime<Utc>,
@@ -687,14 +688,21 @@ impl SqliteRepository {
                 installed.manifest.id
             ))
         })?;
+        let provenance_json = serde_json::to_string(&installed.provenance).map_err(|err| {
+            JarvisError::Storage(format!(
+                "serialize plugin provenance {}: {err}",
+                installed.manifest.id
+            ))
+        })?;
         self.conn
             .execute(
                 "INSERT INTO installed_plugins
-                 (id, manifest_json, source_path, execution_enabled, execution_grant, installed_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 (id, manifest_json, source_path, provenance_json, execution_enabled, execution_grant, installed_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
                  ON CONFLICT(id) DO UPDATE SET
                     manifest_json = excluded.manifest_json,
                     source_path = excluded.source_path,
+                    provenance_json = excluded.provenance_json,
                     execution_enabled = 0,
                     execution_grant = 'metadata_only',
                     installed_at = excluded.installed_at",
@@ -702,6 +710,7 @@ impl SqliteRepository {
                     &installed.manifest.id,
                     manifest_json,
                     &installed.source_path,
+                    provenance_json,
                     if installed.execution_enabled { 1 } else { 0 },
                     installed.execution_grant.as_str(),
                     to_db_time(now),
@@ -721,7 +730,7 @@ impl SqliteRepository {
     pub fn get_installed_plugin(&self, id: &str) -> JarvisResult<Option<InstalledPluginRecord>> {
         self.conn
             .query_row(
-                "SELECT id, manifest_json, source_path, execution_enabled, execution_grant, installed_at
+                "SELECT id, manifest_json, source_path, provenance_json, execution_enabled, execution_grant, installed_at
                  FROM installed_plugins
                  WHERE id = ?1",
                 params![id],
@@ -735,7 +744,7 @@ impl SqliteRepository {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT id, manifest_json, source_path, execution_enabled, execution_grant, installed_at
+                "SELECT id, manifest_json, source_path, provenance_json, execution_enabled, execution_grant, installed_at
                  FROM installed_plugins
                  ORDER BY installed_at DESC, id ASC",
             )
@@ -776,6 +785,31 @@ impl SqliteRepository {
                 "installed plugin not found: {id}"
             )));
         }
+        self.get_installed_plugin(id)?
+            .ok_or_else(|| JarvisError::Storage(format!("installed plugin not found: {id}")))
+    }
+
+    pub fn verify_installed_plugin_provenance(
+        &self,
+        id: &str,
+    ) -> JarvisResult<InstalledPluginRecord> {
+        let record = self
+            .get_installed_plugin(id)?
+            .ok_or_else(|| JarvisError::Storage(format!("installed plugin not found: {id}")))?;
+        let provenance = record
+            .provenance
+            .verify_snapshot(&record.manifest, Utc::now());
+        let provenance_json = serde_json::to_string(&provenance).map_err(|err| {
+            JarvisError::Storage(format!("serialize plugin provenance {id}: {err}"))
+        })?;
+        self.conn
+            .execute(
+                "UPDATE installed_plugins
+                 SET provenance_json = ?2
+                 WHERE id = ?1",
+                params![id, provenance_json],
+            )
+            .map_err(storage_error)?;
         self.get_installed_plugin(id)?
             .ok_or_else(|| JarvisError::Storage(format!("installed plugin not found: {id}")))
     }
@@ -1034,6 +1068,9 @@ impl SqliteRepository {
         }
         if version < 7 {
             self.apply_migration_7()?;
+        }
+        if version < 8 {
+            self.apply_migration_8()?;
         }
 
         let migrated = self.schema_version()?;
@@ -1414,6 +1451,68 @@ impl SqliteRepository {
         tx.commit().map_err(storage_error)?;
         Ok(())
     }
+
+    fn apply_migration_8(&self) -> JarvisResult<()> {
+        let now = to_db_time(Utc::now());
+        let tx = self.conn.unchecked_transaction().map_err(storage_error)?;
+
+        tx.execute_batch(
+            "
+                ALTER TABLE installed_plugins RENAME TO installed_plugins_v7;
+
+                CREATE TABLE installed_plugins (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    manifest_json TEXT NOT NULL,
+                    source_path TEXT NOT NULL,
+                    provenance_json TEXT NOT NULL,
+                    execution_enabled INTEGER NOT NULL CHECK (execution_enabled IN (0, 1)),
+                    execution_grant TEXT NOT NULL CHECK (
+                        execution_grant IN ('metadata_only', 'subprocess_stdio')
+                    ),
+                    installed_at TEXT NOT NULL
+                );
+
+                INSERT INTO installed_plugins
+                    (id, manifest_json, source_path, provenance_json, execution_enabled, execution_grant, installed_at)
+                SELECT
+                    id,
+                    manifest_json,
+                    source_path,
+                    json_object(
+                        'provenance_schema_version', 1,
+                        'capture_method', 'legacy_migration',
+                        'manifest_path', '',
+                        'manifest_sha256', '',
+                        'source_path', source_path,
+                        'source_path_canonicalized', 1,
+                        'captured_at', installed_at,
+                        'last_verified_at', NULL,
+                        'integrity_status', 'not_verified',
+                        'origin_claim', NULL,
+                        'origin_claim_verified', 0
+                    ),
+                    execution_enabled,
+                    execution_grant,
+                    installed_at
+                FROM installed_plugins_v7;
+
+                DROP TABLE installed_plugins_v7;
+
+                CREATE INDEX idx_installed_plugins_installed_at
+                    ON installed_plugins (installed_at);
+                ",
+        )
+        .map_err(storage_error)?;
+
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+            params![8, now],
+        )
+        .map_err(storage_error)?;
+
+        tx.commit().map_err(storage_error)?;
+        Ok(())
+    }
 }
 
 fn open_with_migration_backup_dir_and_hook(
@@ -1666,22 +1765,28 @@ fn installed_plugin_from_row(row: &Row<'_>) -> rusqlite::Result<InstalledPluginR
     let manifest = serde_json::from_str::<PluginManifest>(&manifest_json).map_err(|err| {
         rusqlite::Error::FromSqlConversionFailure(1, rusqlite::types::Type::Text, Box::new(err))
     })?;
+    let provenance_json: String = row.get(3)?;
+    let provenance =
+        serde_json::from_str::<InstalledPluginProvenance>(&provenance_json).map_err(|err| {
+            rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(err))
+        })?;
 
     Ok(InstalledPluginRecord {
         id: row.get(0)?,
         manifest,
         source_path: row.get(2)?,
-        execution_enabled: row.get::<_, i64>(3)? != 0,
-        execution_grant: InstalledPluginExecutionGrant::parse(&row.get::<_, String>(4)?).map_err(
+        provenance,
+        execution_enabled: row.get::<_, i64>(4)? != 0,
+        execution_grant: InstalledPluginExecutionGrant::parse(&row.get::<_, String>(5)?).map_err(
             |err| {
                 rusqlite::Error::FromSqlConversionFailure(
-                    4,
+                    5,
                     rusqlite::types::Type::Text,
                     Box::new(err),
                 )
             },
         )?,
-        installed_at: parse_db_time(&row.get::<_, String>(5)?)?,
+        installed_at: parse_db_time(&row.get::<_, String>(6)?)?,
     })
 }
 
@@ -1902,7 +2007,7 @@ mod tests {
                 DROP TRIGGER model_route_records_no_delete;
                 DROP TRIGGER model_route_records_no_update;
                 DROP TABLE model_route_records;
-                DELETE FROM schema_migrations WHERE version = 7;
+                DELETE FROM schema_migrations WHERE version IN (7, 8);
                 ",
             )
             .unwrap();
@@ -1969,7 +2074,7 @@ mod tests {
                 DROP TRIGGER model_route_records_no_delete;
                 DROP TRIGGER model_route_records_no_update;
                 DROP TABLE model_route_records;
-                DELETE FROM schema_migrations WHERE version = 7;
+                DELETE FROM schema_migrations WHERE version IN (7, 8);
                 ",
             )
             .unwrap();
@@ -2301,6 +2406,10 @@ mod tests {
         let installed = InstalledPlugin {
             manifest: local_test_manifest(&source_path),
             source_path: source_path.clone(),
+            provenance: InstalledPluginProvenance::legacy_unverified(
+                source_path.clone(),
+                Utc::now(),
+            ),
             execution_enabled: false,
             execution_grant: InstalledPluginExecutionGrant::MetadataOnly,
         };
@@ -2314,6 +2423,10 @@ mod tests {
             InstalledPluginExecutionGrant::MetadataOnly
         );
         assert_eq!(record.manifest.actions[0].name, "inspect");
+        assert_eq!(
+            record.provenance.integrity_status,
+            crate::InstalledPluginIntegrityStatus::NotVerified
+        );
         assert_eq!(repo.list_installed_plugins().unwrap().len(), 1);
 
         drop(repo);
@@ -2328,6 +2441,10 @@ mod tests {
         assert_eq!(
             persisted.execution_grant,
             InstalledPluginExecutionGrant::MetadataOnly
+        );
+        assert_eq!(
+            persisted.provenance.integrity_status,
+            crate::InstalledPluginIntegrityStatus::NotVerified
         );
         assert_eq!(
             persisted.manifest.source_path.as_deref(),

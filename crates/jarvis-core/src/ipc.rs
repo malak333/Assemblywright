@@ -21,12 +21,13 @@ use crate::storage::{
 use crate::{
     execute_installed_subprocess_plugin, plugin_permission_scopes, ApprovalDecision,
     ApprovalStatus, AuditEntry, CapabilityScope, ConversationRuntime, InstalledPlugin,
-    InstalledPluginExecutionGrant, InstalledPluginRecord, JarvisError, JarvisResult,
-    LocalModelProviderKind, ModelRoute, ModelRouteRecord, PermissionEngine, PluginCallRequest,
-    PluginCallResult, PluginCallStatus, PluginHost, PluginManifest, PluginSource, PolicyRequest,
-    ProviderConfig, RoutedModelExecutor, RuntimeCommandRequest, RuntimeCommandStore, RuntimeConfig,
-    RuntimeControl, RuntimeStep, Scheduler, SchedulerJob, SchedulerJobSpec, SchedulerJobStatus,
-    Sensitivity, TaskRecord, TaskStatus, TriggerKind,
+    InstalledPluginExecutionGrant, InstalledPluginIntegrityStatus, InstalledPluginProvenance,
+    InstalledPluginRecord, JarvisError, JarvisResult, LocalModelProviderKind, ModelRoute,
+    ModelRouteRecord, PermissionEngine, PluginCallRequest, PluginCallResult, PluginCallStatus,
+    PluginHost, PluginManifest, PluginSource, PolicyRequest, ProviderConfig, RoutedModelExecutor,
+    RuntimeCommandRequest, RuntimeCommandStore, RuntimeConfig, RuntimeControl, RuntimeStep,
+    Scheduler, SchedulerJob, SchedulerJobSpec, SchedulerJobStatus, Sensitivity, TaskRecord,
+    TaskStatus, TriggerKind,
 };
 
 pub const IPC_CONTRACT_VERSION: u16 = 1;
@@ -269,6 +270,7 @@ pub struct InstalledPluginRunResponse {
     pub reason: String,
     pub execution_enabled: bool,
     pub execution_grant: crate::InstalledPluginExecutionGrant,
+    pub provenance: InstalledPluginProvenance,
     pub manifest_valid: bool,
     pub action_declared: bool,
     pub input_valid: bool,
@@ -426,7 +428,6 @@ impl IpcState {
                 "/plugins/manifests/:id".to_string(),
                 "/plugins/installed".to_string(),
                 "/plugins/installed/:id".to_string(),
-                "/plugins/installed/:id/execution".to_string(),
                 "/scheduler/jobs".to_string(),
                 "/scheduler/jobs/:id".to_string(),
                 "/model-routes".to_string(),
@@ -899,9 +900,7 @@ impl IpcState {
         }
 
         self.using_repository(|repository| {
-            let record = repository
-                .get_installed_plugin(id)?
-                .ok_or_else(|| JarvisError::Storage(format!("installed plugin not found: {id}")))?;
+            let record = repository.verify_installed_plugin_provenance(id)?;
             let manifest_validation = validate_installed_plugin_record(&record);
             let manifest_valid = manifest_validation.is_ok();
             let action_manifest = if manifest_valid {
@@ -922,6 +921,8 @@ impl IpcState {
             let execution_ready = contract_validated
                 && record.execution_enabled
                 && record.execution_grant == InstalledPluginExecutionGrant::SubprocessStdio
+                && record.provenance.integrity_status
+                    == InstalledPluginIntegrityStatus::MatchesInstallSnapshot
                 && record.manifest.source == PluginSource::LocalSubprocess
                 && record.manifest.subprocess.is_some();
             let mut output = None;
@@ -958,6 +959,14 @@ impl IpcState {
                 (
                     "blocked".to_string(),
                     "installed plugin execution is disabled; enable execution with an explicit non-metadata grant"
+                        .to_string(),
+                )
+            } else if record.provenance.integrity_status
+                != InstalledPluginIntegrityStatus::MatchesInstallSnapshot
+            {
+                (
+                    "blocked".to_string(),
+                    "installed plugin provenance is not verified against the local install snapshot"
                         .to_string(),
                 )
             } else if record.manifest.source != PluginSource::LocalSubprocess {
@@ -1026,6 +1035,7 @@ impl IpcState {
                     "manifest_version": record.manifest.version,
                     "source": record.manifest.source,
                     "source_path": record.source_path,
+                    "provenance": record.provenance,
                     "execution_enabled": record.execution_enabled,
                     "execution_grant": record.execution_grant,
                     "dry_run": request.dry_run,
@@ -1051,6 +1061,7 @@ impl IpcState {
                 reason,
                 execution_enabled: record.execution_enabled,
                 execution_grant: record.execution_grant,
+                provenance: record.provenance,
                 manifest_valid,
                 action_declared,
                 input_valid,
@@ -1094,6 +1105,13 @@ impl IpcState {
                     )
                 })?;
                 subprocess.validate(&record.id, source_path)?;
+                if record.provenance.integrity_status
+                    != InstalledPluginIntegrityStatus::MatchesInstallSnapshot
+                {
+                    return Err(JarvisError::Validation(
+                        "installed plugin execution requires local provenance verification to match the install snapshot".to_string(),
+                    ));
+                }
             }
 
             repository.set_installed_plugin_execution(
@@ -1101,6 +1119,30 @@ impl IpcState {
                 request.execution_enabled,
                 request.execution_grant,
             )
+        })
+    }
+
+    pub fn verify_installed_plugin_provenance(
+        &self,
+        id: &str,
+    ) -> JarvisResult<InstalledPluginRecord> {
+        self.using_repository(|repository| {
+            let record = repository.verify_installed_plugin_provenance(id)?;
+            let audit_entry = AuditEntry::new(
+                None,
+                "installed_plugin_provenance_verified",
+                "installed plugin local provenance snapshot was checked",
+                json!({
+                    "plugin_id": record.id,
+                    "manifest_version": record.manifest.version,
+                    "source": record.manifest.source,
+                    "source_path": record.source_path,
+                    "integrity_status": record.provenance.integrity_status,
+                    "origin_claim_verified": record.provenance.origin_claim_verified,
+                }),
+            );
+            repository.append_audit_entry(&audit_entry)?;
+            Ok(record)
         })
     }
 
@@ -1703,6 +1745,10 @@ pub fn router(state: IpcState) -> Router {
             "/plugins/installed/:id/execution",
             post(set_installed_plugin_execution),
         )
+        .route(
+            "/plugins/installed/:id/provenance/verify",
+            post(verify_installed_plugin_provenance),
+        )
         .route("/plugins/installed/:id/run", post(run_installed_plugin))
         .route(
             "/emergency-pause",
@@ -2037,6 +2083,16 @@ async fn set_installed_plugin_execution(
         .map_err(error_response)
 }
 
+async fn verify_installed_plugin_provenance(
+    State(state): State<IpcState>,
+    Path(id): Path<String>,
+) -> Result<Json<InstalledPluginRecord>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .verify_installed_plugin_provenance(&id)
+        .map(Json)
+        .map_err(error_response)
+}
+
 async fn run_installed_plugin(
     State(state): State<IpcState>,
     Path(id): Path<String>,
@@ -2150,6 +2206,12 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
         endpoint("POST", "/plugins/installed", true, false),
         endpoint("GET", "/plugins/installed/:id", true, true),
         endpoint("POST", "/plugins/installed/:id/execution", true, false),
+        endpoint(
+            "POST",
+            "/plugins/installed/:id/provenance/verify",
+            true,
+            false,
+        ),
         endpoint("POST", "/plugins/installed/:id/run", true, false),
         endpoint("GET", "/emergency-pause", false, true),
         endpoint("POST", "/emergency-pause", false, false),
@@ -2264,12 +2326,21 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert!(contract
             .safe_inspection_paths
             .contains(&"/plugins/installed/:id".to_string()));
+        assert!(!contract
+            .safe_inspection_paths
+            .contains(&"/plugins/installed/:id/execution".to_string()));
         assert!(contract
             .endpoints
             .iter()
             .any(|endpoint| endpoint.method == "GET"
                 && endpoint.path == "/scheduler/jobs/:id"
                 && !endpoint.repository_required));
+        assert!(contract
+            .endpoints
+            .iter()
+            .any(|endpoint| endpoint.method == "POST"
+                && endpoint.path == "/plugins/installed/:id/provenance/verify"
+                && endpoint.repository_required));
         assert!(contract
             .endpoints
             .iter()
@@ -2291,6 +2362,10 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let installed = InstalledPlugin {
             manifest: local_installed_manifest(&source_path),
             source_path: source_path.clone(),
+            provenance: InstalledPluginProvenance::legacy_unverified(
+                source_path.clone(),
+                Utc::now(),
+            ),
             execution_enabled: false,
             execution_grant: crate::InstalledPluginExecutionGrant::MetadataOnly,
         };
@@ -2361,7 +2436,8 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .to_string();
         let installed = InstalledPlugin {
             manifest: local_installed_manifest(&source_path),
-            source_path,
+            source_path: source_path.clone(),
+            provenance: InstalledPluginProvenance::legacy_unverified(source_path, Utc::now()),
             execution_enabled: false,
             execution_grant: crate::InstalledPluginExecutionGrant::MetadataOnly,
         };
@@ -2404,7 +2480,8 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .to_string();
         let installed = InstalledPlugin {
             manifest: local_installed_manifest(&source_path),
-            source_path,
+            source_path: source_path.clone(),
+            provenance: InstalledPluginProvenance::legacy_unverified(source_path, Utc::now()),
             execution_enabled: false,
             execution_grant: crate::InstalledPluginExecutionGrant::MetadataOnly,
         };
@@ -2454,7 +2531,8 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .to_string();
         let installed = InstalledPlugin {
             manifest: local_installed_manifest(&source_path),
-            source_path,
+            source_path: source_path.clone(),
+            provenance: InstalledPluginProvenance::legacy_unverified(source_path, Utc::now()),
             execution_enabled: false,
             execution_grant: crate::InstalledPluginExecutionGrant::MetadataOnly,
         };
@@ -2494,14 +2572,36 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let source_path_buf = source_dir.path().canonicalize().unwrap();
         write_executable_plugin_script(&source_path_buf);
         let source_path = source_path_buf.display().to_string();
-        let installed = InstalledPlugin {
-            manifest: local_subprocess_manifest(&source_path),
-            source_path,
-            execution_enabled: false,
-            execution_grant: InstalledPluginExecutionGrant::MetadataOnly,
-        };
+        let manifest_path = source_path_buf.join("jarvis-plugin.json");
+        std::fs::write(
+            &manifest_path,
+            serde_json::to_string(&local_subprocess_manifest(&source_path)).unwrap(),
+        )
+        .unwrap();
+        let installed = InstalledPlugin::from_local_manifest_path(&manifest_path).unwrap();
         repository.install_plugin_metadata(installed).unwrap();
         let state = IpcState::with_repository(repository).expect("state");
+
+        let unverified_error = state
+            .set_installed_plugin_execution(
+                "local_runner_test",
+                InstalledPluginExecutionRequest {
+                    execution_enabled: true,
+                    execution_grant: InstalledPluginExecutionGrant::SubprocessStdio,
+                },
+            )
+            .expect_err("unverified provenance cannot execute");
+        assert!(unverified_error
+            .to_string()
+            .contains("requires local provenance verification"));
+
+        let verified = state
+            .verify_installed_plugin_provenance("local_runner_test")
+            .expect("verify provenance");
+        assert_eq!(
+            verified.provenance.integrity_status,
+            InstalledPluginIntegrityStatus::MatchesInstallSnapshot
+        );
 
         let enabled = state
             .set_installed_plugin_execution(
@@ -2548,6 +2648,29 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             true
         );
         assert_eq!(response.audit_entry.payload["side_effect_executed"], true);
+
+        std::fs::write(
+            source_path_buf.join("plugin-runner.py"),
+            "#!/usr/bin/env python3\nprint('{\"path\":\"changed\"}')\n",
+        )
+        .unwrap();
+        let changed_response = state
+            .run_installed_plugin(
+                "local_runner_test",
+                InstalledPluginRunRequest {
+                    action: "inspect".to_string(),
+                    input: json!({ "path": "README.md" }),
+                    session_id: None,
+                    dry_run: false,
+                },
+            )
+            .expect("changed plugin blocks");
+        assert_eq!(changed_response.status, "blocked");
+        assert_eq!(
+            changed_response.provenance.integrity_status,
+            InstalledPluginIntegrityStatus::ChangedSinceInstall
+        );
+        assert!(!changed_response.side_effect_executed);
     }
 
     #[test]
@@ -2562,7 +2685,8 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .to_string();
         let installed = InstalledPlugin {
             manifest: local_installed_manifest(&source_path),
-            source_path,
+            source_path: source_path.clone(),
+            provenance: InstalledPluginProvenance::legacy_unverified(source_path, Utc::now()),
             execution_enabled: false,
             execution_grant: InstalledPluginExecutionGrant::MetadataOnly,
         };
@@ -3267,7 +3391,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .expect("diagnostics export");
         assert_eq!(export.health.status, "ok");
         assert!(export.repository_backed);
-        assert_eq!(export.schema_version, Some(7));
+        assert_eq!(export.schema_version, Some(8));
         assert_eq!(export.task_count, Some(1));
         assert!(export.audit_entry_count.unwrap_or_default() >= 2);
         assert_eq!(export.model_route_record_count, Some(1));
