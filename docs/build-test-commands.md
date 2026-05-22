@@ -365,9 +365,13 @@ artifacts and QA reports before writing production evidence.
 `./scripts/release-evidence-doctor.sh --check` inventories the expected signed
 artifact paths, live-device QA report, plugin-trust QA report, and final
 evidence bundle manifest, then reports present, missing, or invalid evidence
-without failing the local gate. Its `--self-test` uses fake artifacts/reports to
-prove the inventory logic only; it is not a signing, notarization, stapling, or
-installation validator.
+without failing the local gate. Its `--assert-complete` also requires the final
+bundle manifest to include a UTC generation timestamp, expected release
+version, non-empty artifact/report paths, SHA-256-shaped artifact/report
+digests, and `validation_flags.local_signature_validation=true`, matching the
+semantic floor exposed by `/release/evidence-status`. Its `--self-test` uses
+fake artifacts/reports to prove the inventory logic only; it is not a signing,
+notarization, stapling, or installation validator.
 `jarvis release evidence-status` exposes the same standard artifact/report
 inventory as structured JSON through `/release/evidence-status`; it is
 file/report inventory plus report semantic validation only and does not prove
