@@ -25,9 +25,8 @@ and not an autonomous external-communication system. Risky side effects must be
 blocked or require approval, and every meaningful decision should be auditable.
 The current implementation should not be described as a finished production
 assistant: distribution signing/notarization, live microphone validation,
-marketplace plugin trust, cryptographic signed-publisher verification,
-live OS-level scheduler notification validation, and manual release QA are
-still target architecture. The
+marketplace plugin trust, live OS-level scheduler notification validation, and
+manual release QA are still target architecture. The
 default command path still uses `FakeLocalModel`; set
 `JARVIS_LOCAL_MODEL_PROVIDER=ollama`, `JARVIS_LOCAL_MODEL`, and optionally
 `JARVIS_OLLAMA_BASE_URL`/`JARVIS_LOCAL_MODEL_TIMEOUT_MS` to exercise the local
@@ -42,7 +41,9 @@ require the snapshot to verify as unchanged plus an explicit
 `subprocess_stdio` grant, and still run only through the constrained JSON
 stdin/stdout boundary. Publisher-origin claims can be operator-pinned only
 after local provenance matches the install snapshot; this is an auditable
-local review step, not cryptographic signed-publisher trust.
+local review step. Manifests can also carry an Ed25519 publisher signature,
+which Jarvis verifies only against an explicit trusted public key after local
+provenance matches; this is not marketplace trust or malware analysis.
 
 ## Production Work Protocol
 

@@ -108,6 +108,12 @@ stage or when a PR needs focused evidence for one ownership slice.
   installed manifest author claim, persists `origin_claim_verified: true`, and
   appends `installed_plugin_publisher_verified` audit evidence. Do not describe
   this as cryptographic signed-publisher trust.
+- Confirm publisher-signature verification fails closed until local provenance
+  matches the install snapshot, requires a trusted public key to exactly match
+  the signed manifest public key, verifies the Ed25519 manifest signature,
+  persists `origin_claim_verified: true`, and appends
+  `installed_plugin_publisher_signature_verified` audit evidence with a hashed
+  trusted-key reference.
 - Confirm installed plugin run attempts fail closed with manifest/version and
   action validation, default `execution_enabled: false` semantics, local
   provenance verification, safe command path checks, JSON stdin/stdout, timeout

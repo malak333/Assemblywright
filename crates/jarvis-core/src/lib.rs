@@ -13,6 +13,7 @@ pub use ipc::{
     CommandResponse, CreateMemoryItemRequest, CreateSchedulerJobRequest, EmergencyPauseRequest,
     EmergencyPauseResponse, ErrorResponse, HealthResponse, InstallPluginRequest,
     InstalledPluginExecutionRequest, InstalledPluginGrantSurface,
+    InstalledPluginPublisherSignatureVerificationRequest,
     InstalledPluginPublisherVerificationRequest, InstalledPluginRunRequest,
     InstalledPluginRunResponse, IpcState, PermissionGrantSummary, PermissionPolicyReview,
     PermissionPolicyReviewItem, SchedulerAttentionItem, SchedulerAttentionSummary,
@@ -32,9 +33,9 @@ pub use plugin::{
     CancellationSignal, EchoPlugin, InProcessPlugin, InstalledPlugin,
     InstalledPluginExecutionGrant, InstalledPluginIntegrityStatus, InstalledPluginProvenance,
     JsonSchema, PluginAccess, PluginActionManifest, PluginCallMetadata, PluginCallRequest,
-    PluginCallResult, PluginCallStatus, PluginHost, PluginManifest, PluginPermission, PluginSource,
-    PluginSubprocessManifest, PluginSubprocessStream, PluginTimeout, PluginTimeoutAction,
-    StatusPlugin, SubprocessPluginExecution,
+    PluginCallResult, PluginCallStatus, PluginHost, PluginManifest, PluginPermission,
+    PluginPublisherSignature, PluginSource, PluginSubprocessManifest, PluginSubprocessStream,
+    PluginTimeout, PluginTimeoutAction, StatusPlugin, SubprocessPluginExecution,
 };
 pub use policy::{
     ApprovalDecision, ApprovalGrant, CapabilityScope, PermissionEngine, PolicyDecision,

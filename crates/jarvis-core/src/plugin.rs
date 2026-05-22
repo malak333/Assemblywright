@@ -2,7 +2,9 @@ use crate::{
     ApprovalDecision, ApprovalGrant, ApprovalStatus, CapabilityScope, JarvisError, JarvisResult,
     PermissionEngine, PolicyRequest, RiskTier, Sensitivity,
 };
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chrono::{DateTime, Utc};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -326,7 +328,16 @@ pub struct PluginManifest {
     pub source_path: Option<String>,
     #[serde(default)]
     pub subprocess: Option<PluginSubprocessManifest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publisher_signature: Option<PluginPublisherSignature>,
     pub actions: Vec<PluginActionManifest>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginPublisherSignature {
+    pub scheme: String,
+    pub public_key: String,
+    pub signature: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -363,6 +374,10 @@ impl PluginManifest {
                 "{} must declare at least one action",
                 self.id
             )));
+        }
+
+        if let Some(signature) = &self.publisher_signature {
+            signature.validate(&self.id)?;
         }
 
         let mut action_names = HashSet::new();
@@ -455,6 +470,75 @@ impl PluginManifest {
 
     pub fn action(&self, name: &str) -> Option<&PluginActionManifest> {
         self.actions.iter().find(|action| action.name == name)
+    }
+
+    pub fn verify_publisher_signature(&self, trusted_public_key: &str) -> JarvisResult<()> {
+        let signature = self.publisher_signature.as_ref().ok_or_else(|| {
+            JarvisError::Validation(format!(
+                "{} publisher signature is required for signature verification",
+                self.id
+            ))
+        })?;
+        signature.verify(&self.id, trusted_public_key, &self.signature_payload()?)
+    }
+
+    fn signature_payload(&self) -> JarvisResult<Vec<u8>> {
+        let mut unsigned = self.clone();
+        unsigned.publisher_signature = None;
+        serde_json::to_vec(&unsigned).map_err(|err| {
+            JarvisError::Validation(format!("{} publisher signature payload: {err}", self.id))
+        })
+    }
+}
+
+impl PluginPublisherSignature {
+    pub const ED25519_V1: &'static str = "ed25519-v1";
+
+    pub fn validate(&self, plugin_id: &str) -> JarvisResult<()> {
+        validate_non_empty(&self.scheme, "publisher signature scheme")?;
+        validate_non_empty(&self.public_key, "publisher signature public_key")?;
+        validate_non_empty(&self.signature, "publisher signature")?;
+        if self.scheme != Self::ED25519_V1 {
+            return Err(JarvisError::Validation(format!(
+                "{plugin_id} publisher signature scheme must be {}",
+                Self::ED25519_V1
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn verify(
+        &self,
+        plugin_id: &str,
+        trusted_public_key: &str,
+        payload: &[u8],
+    ) -> JarvisResult<()> {
+        self.validate(plugin_id)?;
+        let embedded_key = decode_fixed_base64::<32>(
+            &self.public_key,
+            "publisher signature public_key",
+            plugin_id,
+        )?;
+        let trusted_key =
+            decode_fixed_base64::<32>(trusted_public_key, "trusted_public_key", plugin_id)?;
+        if embedded_key != trusted_key {
+            return Err(JarvisError::Validation(format!(
+                "{plugin_id} publisher signature public_key does not match trusted_public_key"
+            )));
+        }
+        let signature_bytes =
+            decode_fixed_base64::<64>(&self.signature, "publisher signature", plugin_id)?;
+        let verifying_key = VerifyingKey::from_bytes(&embedded_key).map_err(|err| {
+            JarvisError::Validation(format!(
+                "{plugin_id} publisher public_key is invalid: {err}"
+            ))
+        })?;
+        let signature = Signature::from_bytes(&signature_bytes);
+        verifying_key.verify(payload, &signature).map_err(|err| {
+            JarvisError::Validation(format!(
+                "{plugin_id} publisher signature verification failed: {err}"
+            ))
+        })
     }
 }
 
@@ -857,6 +941,22 @@ fn sha256_file(path: &Path) -> JarvisResult<String> {
     Ok(format!("{digest:x}"))
 }
 
+fn decode_fixed_base64<const N: usize>(
+    value: &str,
+    label: &str,
+    plugin_id: &str,
+) -> JarvisResult<[u8; N]> {
+    let decoded = BASE64_STANDARD.decode(value).map_err(|err| {
+        JarvisError::Validation(format!("{plugin_id} {label} is not valid base64: {err}"))
+    })?;
+    decoded.try_into().map_err(|bytes: Vec<u8>| {
+        JarvisError::Validation(format!(
+            "{plugin_id} {label} must decode to {N} bytes, got {}",
+            bytes.len()
+        ))
+    })
+}
+
 fn validate_identifier(value: &str, label: &str) -> JarvisResult<()> {
     validate_non_empty(value, label)?;
     if !value.chars().all(|character| {
@@ -1226,6 +1326,7 @@ impl InProcessPlugin for EchoPlugin {
             author: "Jarvis".to_string(),
             source_path: None,
             subprocess: None,
+            publisher_signature: None,
             actions: vec![
                 PluginActionManifest {
                     name: "echo".to_string(),
@@ -1305,6 +1406,7 @@ impl InProcessPlugin for StatusPlugin {
             author: "Jarvis".to_string(),
             source_path: None,
             subprocess: None,
+            publisher_signature: None,
             actions: vec![PluginActionManifest {
                 name: "status".to_string(),
                 description: "Report deterministic first-party host status for contract testing."
@@ -1740,6 +1842,7 @@ mod tests {
                 author: "Jarvis".to_string(),
                 source_path: None,
                 subprocess: None,
+                publisher_signature: None,
                 actions: vec![PluginActionManifest {
                     name: "needs_approval".to_string(),
                     description: "Requires approval before execution.".to_string(),
@@ -1783,6 +1886,7 @@ mod tests {
                 author: "Jarvis".to_string(),
                 source_path: None,
                 subprocess: None,
+                publisher_signature: None,
                 actions: vec![PluginActionManifest {
                     name: "sleep".to_string(),
                     description: "Sleeps longer than its timeout.".to_string(),

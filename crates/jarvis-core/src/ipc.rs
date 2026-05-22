@@ -12,6 +12,7 @@ use axum::{Json, Router};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use tokio::net::TcpListener;
 use tokio_stream::{wrappers::IntervalStream, StreamExt};
 use tower_http::trace::TraceLayer;
@@ -311,6 +312,14 @@ pub struct InstalledPluginExecutionRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstalledPluginPublisherVerificationRequest {
     pub trusted_origin: String,
+    pub decided_by: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstalledPluginPublisherSignatureVerificationRequest {
+    pub trusted_public_key: String,
     pub decided_by: String,
     #[serde(default)]
     pub reason: Option<String>,
@@ -1507,6 +1516,57 @@ impl IpcState {
         })
     }
 
+    pub fn verify_installed_plugin_publisher_signature(
+        &self,
+        id: &str,
+        request: InstalledPluginPublisherSignatureVerificationRequest,
+    ) -> JarvisResult<InstalledPluginRecord> {
+        self.using_repository(|repository| {
+            let trusted_public_key = request.trusted_public_key.trim();
+            let decided_by = request.decided_by.trim();
+            if trusted_public_key.is_empty() {
+                return Err(JarvisError::Validation(
+                    "trusted_public_key is required for publisher signature verification"
+                        .to_string(),
+                ));
+            }
+            if decided_by.is_empty() {
+                return Err(JarvisError::Validation(
+                    "decided_by is required for publisher signature verification".to_string(),
+                ));
+            }
+
+            let record = repository.verify_installed_plugin_publisher_signature(
+                id,
+                trusted_public_key,
+                Utc::now(),
+            )?;
+            let audit_entry = AuditEntry::new(
+                None,
+                "installed_plugin_publisher_signature_verified",
+                "installed plugin publisher signature was verified against a trusted key",
+                json!({
+                    "plugin_id": record.id,
+                    "manifest_version": record.manifest.version,
+                    "source": record.manifest.source,
+                    "origin_claim": record.provenance.origin_claim,
+                    "publisher_signature_scheme": record
+                        .manifest
+                        .publisher_signature
+                        .as_ref()
+                        .map(|signature| signature.scheme.as_str()),
+                    "trusted_public_key_sha256": sha256_text(trusted_public_key),
+                    "decided_by": decided_by,
+                    "reason": request.reason,
+                    "integrity_status": record.provenance.integrity_status,
+                    "origin_claim_verified": record.provenance.origin_claim_verified,
+                }),
+            );
+            repository.append_audit_entry(&audit_entry)?;
+            Ok(record)
+        })
+    }
+
     pub fn pause(&self, reason: impl Into<String>) -> JarvisResult<EmergencyPauseResponse> {
         let reason = reason.into();
         let reason_present = !reason.trim().is_empty();
@@ -2246,6 +2306,10 @@ pub fn router(state: IpcState) -> Router {
             "/plugins/installed/:id/publisher/verify",
             post(verify_installed_plugin_publisher),
         )
+        .route(
+            "/plugins/installed/:id/publisher/signature/verify",
+            post(verify_installed_plugin_publisher_signature),
+        )
         .route("/plugins/installed/:id/run", post(run_installed_plugin))
         .route(
             "/emergency-pause",
@@ -2682,6 +2746,17 @@ async fn verify_installed_plugin_publisher(
         .map_err(error_response)
 }
 
+async fn verify_installed_plugin_publisher_signature(
+    State(state): State<IpcState>,
+    Path(id): Path<String>,
+    Json(request): Json<InstalledPluginPublisherSignatureVerificationRequest>,
+) -> Result<Json<InstalledPluginRecord>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .verify_installed_plugin_publisher_signature(&id, request)
+        .map(Json)
+        .map_err(error_response)
+}
+
 async fn run_installed_plugin(
     State(state): State<IpcState>,
     Path(id): Path<String>,
@@ -2816,6 +2891,12 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
             true,
             false,
         ),
+        endpoint(
+            "POST",
+            "/plugins/installed/:id/publisher/signature/verify",
+            true,
+            false,
+        ),
         endpoint("POST", "/plugins/installed/:id/run", true, false),
         endpoint("GET", "/emergency-pause", false, true),
         endpoint("POST", "/emergency-pause", false, false),
@@ -2827,6 +2908,11 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
         endpoint("GET", "/scheduler/jobs/:id", false, false),
         endpoint("DELETE", "/scheduler/jobs/:id", false, false),
     ]
+}
+
+fn sha256_text(value: &str) -> String {
+    let digest = Sha256::digest(value.as_bytes());
+    format!("{digest:x}")
 }
 
 fn endpoint(
@@ -2951,6 +3037,12 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .iter()
             .any(|endpoint| endpoint.method == "POST"
                 && endpoint.path == "/plugins/installed/:id/publisher/verify"
+                && endpoint.repository_required));
+        assert!(contract
+            .endpoints
+            .iter()
+            .any(|endpoint| endpoint.method == "POST"
+                && endpoint.path == "/plugins/installed/:id/publisher/signature/verify"
                 && endpoint.repository_required));
         assert!(contract
             .endpoints
@@ -3382,6 +3474,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             author: "Jarvis Test".to_string(),
             source_path: Some(source_path.to_string()),
             subprocess: None,
+            publisher_signature: None,
             actions: vec![crate::PluginActionManifest {
                 name: "inspect".to_string(),
                 description: "Validate installed runner boundary.".to_string(),
@@ -3422,6 +3515,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 stdin: crate::PluginSubprocessStream::Json,
                 stdout: crate::PluginSubprocessStream::Json,
             }),
+            publisher_signature: None,
             actions: vec![crate::PluginActionManifest {
                 name: "inspect".to_string(),
                 description: "Validate installed subprocess runner boundary.".to_string(),

@@ -956,6 +956,45 @@ impl SqliteRepository {
             .ok_or_else(|| JarvisError::Storage(format!("installed plugin not found: {id}")))
     }
 
+    pub fn verify_installed_plugin_publisher_signature(
+        &self,
+        id: &str,
+        trusted_public_key: &str,
+        verified_at: DateTime<Utc>,
+    ) -> JarvisResult<InstalledPluginRecord> {
+        let record = self
+            .get_installed_plugin(id)?
+            .ok_or_else(|| JarvisError::Storage(format!("installed plugin not found: {id}")))?;
+        if record.provenance.integrity_status
+            != InstalledPluginIntegrityStatus::MatchesInstallSnapshot
+        {
+            return Err(JarvisError::Validation(
+                "publisher signature verification requires local provenance to match the install snapshot"
+                    .to_string(),
+            ));
+        }
+        record
+            .manifest
+            .verify_publisher_signature(trusted_public_key)?;
+
+        let mut provenance = record.provenance;
+        provenance.last_verified_at = Some(verified_at);
+        provenance.origin_claim_verified = true;
+        let provenance_json = serde_json::to_string(&provenance).map_err(|err| {
+            JarvisError::Storage(format!("serialize plugin provenance {id}: {err}"))
+        })?;
+        self.conn
+            .execute(
+                "UPDATE installed_plugins
+                 SET provenance_json = ?2
+                 WHERE id = ?1",
+                params![id, provenance_json],
+            )
+            .map_err(storage_error)?;
+        self.get_installed_plugin(id)?
+            .ok_or_else(|| JarvisError::Storage(format!("installed plugin not found: {id}")))
+    }
+
     pub fn create_pending_approval(
         &self,
         approval: NewPendingApproval,
@@ -2647,6 +2686,7 @@ mod tests {
             author: "Jarvis Test".to_string(),
             source_path: Some(source_path.to_string()),
             subprocess: None,
+            publisher_signature: None,
             actions: vec![crate::PluginActionManifest {
                 name: "inspect".to_string(),
                 description: "Validate registry persistence.".to_string(),
