@@ -66,14 +66,49 @@ fn model_tools_cli_falls_back_without_running_server() {
     let endpoint = format!("http://{}", unused_loopback_addr());
 
     let tools = run_cli_json(["tools", "list", "--endpoint", endpoint.as_str()]);
+    let tools_model_alias = run_cli_json(["tools", "model", "--endpoint", endpoint.as_str()]);
+    let tools_catalog_alias = run_cli_json(["tools", "catalog", "--endpoint", endpoint.as_str()]);
 
     assert_eq!(tools["source"], "registered_first_party_plugins");
+    assert_eq!(tools_model_alias["source"], tools["source"]);
+    assert_eq!(tools_catalog_alias["source"], tools["source"]);
+    assert_eq!(tools_model_alias["tools"], tools["tools"]);
+    assert_eq!(tools_catalog_alias["tools"], tools["tools"]);
     assert_array_contains(&tools["tools"], "plugin_id", "fake_echo");
     assert_array_contains(&tools["tools"], "plugin_id", "fake_status");
     let encoded_tools = serde_json::to_string(&tools["tools"]).expect("tools JSON");
     assert!(!encoded_tools.contains("source_path"));
     assert!(!encoded_tools.contains("subprocess"));
     assert!(!encoded_tools.contains("provenance"));
+}
+
+#[test]
+fn contract_and_first_party_plugins_fall_back_without_running_server() {
+    let endpoint = format!("http://{}", unused_loopback_addr());
+
+    let contract = run_cli_json(["contract", "--endpoint", endpoint.as_str()]);
+    assert_eq!(contract["contract"]["name"], "jarvis.local-ipc");
+    assert_eq!(contract["contract"]["version"], 1);
+    assert_array_contains(&contract["endpoints"], "path", "/tools/model");
+    assert_array_contains(&contract["features"], "key", "model_tool_catalog_grounding");
+
+    let manifests = run_cli_json(["plugins", "list", "--endpoint", endpoint.as_str()]);
+    let manifests_available_alias =
+        run_cli_json(["plugins", "available", "--endpoint", endpoint.as_str()]);
+    assert_array_contains(&manifests_available_alias, "id", "fake_echo");
+    assert_array_contains(&manifests_available_alias, "id", "fake_status");
+    assert_array_contains(&manifests, "id", "fake_echo");
+    assert_array_contains(&manifests, "id", "fake_status");
+
+    let status_manifest = run_cli_json([
+        "plugins",
+        "get",
+        "fake_status",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(status_manifest["id"], "fake_status");
+    assert_array_contains(&status_manifest["actions"], "name", "status");
 }
 
 #[test]
@@ -567,6 +602,10 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_eq!(route["context_for_model"], Value::Null);
 
     let manifests = run_cli_json(["plugins", "list", "--endpoint", endpoint.as_str()]);
+    let manifests_available_alias =
+        run_cli_json(["plugins", "available", "--endpoint", endpoint.as_str()]);
+    assert_array_contains(&manifests_available_alias, "id", "fake_echo");
+    assert_array_contains(&manifests_available_alias, "id", "fake_status");
     assert_array_contains(&manifests, "id", "fake_echo");
     assert_array_contains(&manifests, "id", "fake_status");
 
@@ -2615,6 +2654,81 @@ fn serve_rejects_ollama_chrome_extension_hallucination_with_registered_tool_guid
     );
 }
 
+#[test]
+fn serve_recovers_from_hallucinated_tool_then_executes_registered_tool() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let db_path = temp_dir
+        .path()
+        .join("jarvis-provider-invalid-then-valid-tool-e2e.sqlite");
+    let (ollama_base_url, server_thread) = start_ollama_invalid_then_valid_tool_server();
+    let mut server = JarvisServer::start_with_env(
+        &db_path,
+        &[
+            ("JARVIS_LOCAL_MODEL_PROVIDER", "ollama"),
+            (
+                "JARVIS_LOCAL_MODEL",
+                "provider-invalid-then-valid-tool-test",
+            ),
+            ("JARVIS_OLLAMA_BASE_URL", ollama_base_url.as_str()),
+        ],
+    );
+    let endpoint = server.endpoint();
+
+    let command = run_cli_json([
+        "command",
+        "recover from a bad status tool and then use the registered one",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+
+    assert_eq!(command["accepted"], true, "{command}");
+    assert_eq!(command["task"]["status"], "completed", "{command}");
+    assert_eq!(command["message"], "provider completed after valid status");
+    assert_eq!(command["steps"][0]["tool_results"][0]["status"], "rejected");
+    assert!(command["steps"][0]["tool_results"][0]["output"]["error"]
+        .as_str()
+        .expect("rejection error")
+        .contains("plugin status is not registered"));
+    assert_eq!(
+        command["steps"][1]["tool_results"][0]["plugin_id"],
+        "fake_status"
+    );
+    assert_eq!(
+        command["steps"][1]["tool_results"][0]["status"],
+        "completed"
+    );
+    assert_array_contains(
+        &command["audit_entries"],
+        "event_type",
+        "tool_request_rejected",
+    );
+    assert_array_contains(
+        &command["audit_entries"],
+        "event_type",
+        "tool_execution_result",
+    );
+    let rejection_count = command["audit_entries"]
+        .as_array()
+        .expect("audit entries")
+        .iter()
+        .filter(|entry| entry["event_type"] == "tool_request_rejected")
+        .count();
+    let execution_count = command["audit_entries"]
+        .as_array()
+        .expect("audit entries")
+        .iter()
+        .filter(|entry| entry["event_type"] == "tool_execution_result")
+        .count();
+    assert_eq!(rejection_count, 1);
+    assert_eq!(execution_count, 1);
+
+    server.stop();
+    server_thread
+        .join()
+        .expect("ollama invalid-then-valid-tool stub thread");
+    drop(temp_dir);
+}
+
 fn assert_ollama_hallucinated_tool_is_rejected(plugin_id: &str, expected_error: &str) {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let db_path = temp_dir
@@ -3069,6 +3183,86 @@ fn start_ollama_invalid_tool_server(plugin_id: &str) -> (String, thread::JoinHan
                     request.contains(&format!("plugin {plugin_id} is not registered")),
                     "{request}"
                 );
+            }
+            let http = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                response.len(),
+                response
+            );
+            stream.write_all(http.as_bytes()).expect("write response");
+        }
+    });
+
+    (format!("http://{address}"), handle)
+}
+
+fn start_ollama_invalid_then_valid_tool_server() -> (String, thread::JoinHandle<()>) {
+    let listener =
+        TcpListener::bind("127.0.0.1:0").expect("bind ollama invalid-then-valid-tool stub");
+    let address = listener
+        .local_addr()
+        .expect("ollama invalid-then-valid-tool stub address");
+    let handle = thread::spawn(move || {
+        let invalid_envelope = json!({
+            "message": "provider guessed an invalid status plugin",
+            "complete": false,
+            "tool_requests": [
+                {
+                    "plugin_id": "status",
+                    "action": "status",
+                    "input": {}
+                }
+            ]
+        })
+        .to_string();
+        let valid_envelope = json!({
+            "message": "provider retried with registered status",
+            "complete": false,
+            "tool_requests": [
+                {
+                    "plugin_id": "fake_status",
+                    "action": "status",
+                    "input": {}
+                }
+            ]
+        })
+        .to_string();
+        let responses = [
+            json!({ "response": invalid_envelope, "done": false }).to_string(),
+            json!({ "response": valid_envelope, "done": false }).to_string(),
+            json!({ "response": "provider completed after valid status", "done": true })
+                .to_string(),
+        ];
+
+        for (index, response) in responses.into_iter().enumerate() {
+            let (mut stream, _) = listener
+                .accept()
+                .expect("ollama invalid-then-valid-tool request");
+            let mut buffer = [0_u8; 8192];
+            let read = stream.read(&mut buffer).expect("read request");
+            let request = String::from_utf8_lossy(&buffer[..read]);
+            assert!(request.contains("POST /api/generate"), "{request}");
+            assert!(
+                request.contains("Registered first-party tools are exactly this JSON allowlist")
+            );
+            assert!(request.contains("\\\"plugin_id\\\":\\\"fake_status\\\""));
+            assert!(request.contains("\\\"action\\\":\\\"status\\\""));
+            match index {
+                1 => {
+                    assert!(request.contains("rejected"), "{request}");
+                    assert!(
+                        request.contains("plugin status is not registered"),
+                        "{request}"
+                    );
+                }
+                2 => {
+                    assert!(
+                        request.contains("\\\"status\\\":\\\"completed\\\""),
+                        "{request}"
+                    );
+                    assert!(request.contains("\\\"plugin_count\\\""), "{request}");
+                }
+                _ => {}
             }
             let http = format!(
                 "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",

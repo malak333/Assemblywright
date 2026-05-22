@@ -70,6 +70,11 @@ fail closed before policy checks or tool execution, then feed registered-tool
 guidance back to the model as rejected tool results for bounded recovery. Mixed
 prose plus JSON `tool_requests` is treated as malformed provider output instead
 of a normal answer.
+Plugin availability for model planning means the `/tools/model` first-party
+catalog only. `jarvis tools list`, `jarvis tools model`, and
+`jarvis tools catalog` all print that same catalog. Chrome/browser-extension
+capabilities are unavailable unless they appear there, and installed local
+plugins remain outside model-originated planning.
 Live Ollama testing has proven the opt-in local HTTP route can complete real
 model commands; model-specific tool discipline can still vary, so the runtime
 boundary remains authoritative. Local plugin

@@ -350,6 +350,7 @@ enum MemoryCommand {
 #[derive(Debug, Subcommand)]
 enum PluginsCommand {
     /// List registered plugin manifests.
+    #[command(visible_alias = "available")]
     List {
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
@@ -438,6 +439,7 @@ enum PluginsCommand {
 #[derive(Debug, Subcommand)]
 enum ToolsCommand {
     /// List the registered first-party tools that models may request.
+    #[command(visible_aliases = ["model", "catalog"])]
     List {
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
@@ -553,7 +555,7 @@ async fn main() -> anyhow::Result<()> {
             );
         }
         CliCommand::Contract { endpoint } => {
-            println!("{}", request(&endpoint, "GET", "/contract", None)?);
+            println!("{}", contract(&endpoint)?);
         }
         CliCommand::Release { command } => match command {
             ReleaseCommand::Readiness { endpoint } => {
@@ -811,13 +813,10 @@ async fn main() -> anyhow::Result<()> {
         },
         CliCommand::Plugins { command } => match command {
             PluginsCommand::List { endpoint } => {
-                println!("{}", request(&endpoint, "GET", "/plugins/manifests", None)?);
+                println!("{}", plugin_manifests(&endpoint)?);
             }
             PluginsCommand::Get { id, endpoint } => {
-                println!(
-                    "{}",
-                    request(&endpoint, "GET", &format!("/plugins/manifests/{id}"), None)?
-                );
+                println!("{}", plugin_manifest(&endpoint, &id)?);
             }
             PluginsCommand::Install {
                 manifest_path,
@@ -1082,6 +1081,39 @@ fn release_evidence_status(endpoint: &str) -> anyhow::Result<String> {
         Err(error) if is_transport_unavailable(&error) => {
             let status = jarvis_core::IpcState::new().release_evidence_status();
             Ok(serde_json::to_string(&status)?)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn contract(endpoint: &str) -> anyhow::Result<String> {
+    match request(endpoint, "GET", "/contract", None) {
+        Ok(response) => Ok(response),
+        Err(error) if is_transport_unavailable(&error) => {
+            let contract = jarvis_core::IpcState::new().contract();
+            Ok(serde_json::to_string(&contract)?)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn plugin_manifests(endpoint: &str) -> anyhow::Result<String> {
+    match request(endpoint, "GET", "/plugins/manifests", None) {
+        Ok(response) => Ok(response),
+        Err(error) if is_transport_unavailable(&error) => {
+            let host = jarvis_core::PluginHost::with_first_party_plugins()?;
+            Ok(serde_json::to_string(&host.manifests()?)?)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn plugin_manifest(endpoint: &str, id: &str) -> anyhow::Result<String> {
+    match request(endpoint, "GET", &format!("/plugins/manifests/{id}"), None) {
+        Ok(response) => Ok(response),
+        Err(error) if is_transport_unavailable(&error) => {
+            let host = jarvis_core::PluginHost::with_first_party_plugins()?;
+            Ok(serde_json::to_string(&host.manifest(id)?)?)
         }
         Err(error) => Err(error),
     }

@@ -26,7 +26,10 @@ These notes capture durable facts for future agents working on this repository.
   constructed with `SqliteRepository`, records a local-first model-router audit
   entry, and can execute deterministic first-party plugin commands such as
   `plugin echo ...` and `status` through policy. `dry_run` skips plugin
-  execution and records audit evidence.
+  execution and records audit evidence. For provider-originated tool requests,
+  `status` is an action on the registered `fake_status` plugin, not a valid
+  standalone `plugin_id`; `chrome_extension` is also unavailable unless it
+  appears in `/tools/model` or `jarvis tools list`.
 - Repository-backed `/commands` also persists append-only SQLite model-route
   records. The stored and inspectable route copy keeps provider/outcome/policy
   evidence but omits `context_for_model`, so restart recovery can prove route
