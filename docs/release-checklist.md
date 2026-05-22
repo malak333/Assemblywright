@@ -179,12 +179,14 @@ stage or when a PR needs focused evidence for one ownership slice.
   request/error behavior are covered in focused tests; selected
   provider failures must return structured failed command responses with
   redacted `model_step_failed` audit and route evidence. Malformed provider
-  tool envelopes must fail with redacted diagnostics, and provider-originated
-  tool calls must still pass runtime schema, policy, approval, and audit paths;
-  hallucinated provider plugin IDs/actions must fail closed with
-  `tool_request_rejected` audit evidence and registered-tool guidance before
-  policy checks or tool execution; Swift approval decision controls are covered
-  by contract/model tests.
+  tool envelopes must fail with redacted diagnostics, mixed prose plus JSON
+  `tool_requests` must not be accepted as normal output, and
+  provider-originated tool calls must still pass runtime schema, policy,
+  approval, and audit paths; hallucinated provider plugin IDs/actions must fail
+  closed before policy checks or tool execution and feed
+  `tool_request_rejected` guidance back as rejected tool results for bounded
+  recovery; Swift approval decision controls are covered by contract/model
+  tests.
 - Confirm task, audit, model-route, memory, and plugin manifest inspection
   endpoints still require or use the correct repository/plugin backing and are
   covered by local smoke or focused IPC tests.

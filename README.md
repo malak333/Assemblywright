@@ -62,8 +62,10 @@ translated into the same bounded first-party path. Plain text remains
 supported, and this is not installed-plugin orchestration or broad third-party
 tool execution. Local-model prompts now include the exact registered
 first-party plugin/action inventory, and hallucinated or invalid model-planned
-plugin IDs/actions fail closed with registered-tool guidance plus
-`tool_request_rejected` audit evidence before policy checks or tool execution.
+plugin IDs/actions fail closed before policy checks or tool execution, then
+feed registered-tool guidance back to the model as rejected tool results for
+bounded recovery. Mixed prose plus JSON `tool_requests` is treated as malformed
+provider output instead of a normal answer.
 Live Ollama testing has proven the opt-in local HTTP route can complete real
 model commands; model-specific tool discipline can still vary, so the runtime
 boundary remains authoritative. Local plugin

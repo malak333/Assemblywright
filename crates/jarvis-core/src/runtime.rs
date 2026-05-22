@@ -736,7 +736,6 @@ where
                 Err(error) => {
                     let registered_tools = self.registered_first_party_tool_names();
                     let guidance = tool_rejection_message(&error, &registered_tools);
-                    self.update_task_status(task, TaskStatus::Failed)?;
                     self.record_audit(
                         audit_entries,
                         AuditEntry::new(
@@ -753,7 +752,13 @@ where
                             }),
                         ),
                     )?;
-                    return Ok(ToolPlanOutcome::Blocked(results, guidance));
+                    results.push(model_tool_rejection_result(
+                        tool_request,
+                        &error,
+                        &registered_tools,
+                        &guidance,
+                    ));
+                    continue;
                 }
             };
             let action = manifest
@@ -999,6 +1004,24 @@ fn model_tool_result(result: &PluginCallResult) -> ModelToolResult {
             .and_then(|value| value.as_str().map(ToOwned::to_owned))
             .unwrap_or_else(|| "failed".to_string()),
         output: result.output.clone(),
+    }
+}
+
+fn model_tool_rejection_result(
+    request: &ModelToolRequest,
+    error: &crate::JarvisError,
+    registered_tools: &[String],
+    guidance: &str,
+) -> ModelToolResult {
+    ModelToolResult {
+        plugin_id: request.plugin_id.clone(),
+        action: request.action.clone(),
+        status: "rejected".to_string(),
+        output: json!({
+            "error": error.to_string(),
+            "registered_tools": registered_tools,
+            "guidance": guidance,
+        }),
     }
 }
 
@@ -1524,11 +1547,12 @@ mod tests {
             .await
             .expect("validation failure should return structured response");
 
-        assert_eq!(response.task.status, TaskStatus::Failed);
-        assert!(response.tool_results.is_empty());
-        assert!(response.message.contains("Tool request rejected"));
-        assert!(response
-            .message
+        assert_eq!(response.task.status, TaskStatus::Completed);
+        assert_eq!(response.tool_results.len(), 1);
+        assert_eq!(response.tool_results[0].status, "rejected");
+        assert!(response.tool_results[0].output["guidance"]
+            .as_str()
+            .expect("guidance")
             .contains("Registered first-party model tools are: fake_echo.approval_echo, fake_echo.echo, fake_status.status"));
         assert!(response.audit_entries.iter().any(|entry| entry.event_type
             == "tool_request_rejected"
@@ -1561,13 +1585,18 @@ mod tests {
             .await
             .expect("validation failure should return structured response");
 
-        assert_eq!(response.task.status, TaskStatus::Failed);
-        assert!(response.tool_results.is_empty());
-        assert!(response
-            .message
+        assert_eq!(response.task.status, TaskStatus::Completed);
+        assert_eq!(response.tool_results.len(), 1);
+        assert_eq!(response.tool_results[0].plugin_id, "status");
+        assert_eq!(response.tool_results[0].action, "status");
+        assert_eq!(response.tool_results[0].status, "rejected");
+        assert!(response.tool_results[0].output["error"]
+            .as_str()
+            .expect("error")
             .contains("plugin error: plugin status is not registered"));
-        assert!(response
-            .message
+        assert!(response.tool_results[0].output["guidance"]
+            .as_str()
+            .expect("guidance")
             .contains("Registered first-party model tools are: fake_echo.approval_echo, fake_echo.echo, fake_status.status"));
         let rejection = response
             .audit_entries
@@ -1601,13 +1630,18 @@ mod tests {
             .await
             .expect("validation failure should return structured response");
 
-        assert_eq!(response.task.status, TaskStatus::Failed);
-        assert!(response.tool_results.is_empty());
-        assert!(response
-            .message
+        assert_eq!(response.task.status, TaskStatus::Completed);
+        assert_eq!(response.tool_results.len(), 1);
+        assert_eq!(response.tool_results[0].plugin_id, "fake_status");
+        assert_eq!(response.tool_results[0].action, "list");
+        assert_eq!(response.tool_results[0].status, "rejected");
+        assert!(response.tool_results[0].output["error"]
+            .as_str()
+            .expect("error")
             .contains("plugin fake_status does not declare action list"));
-        assert!(response
-            .message
+        assert!(response.tool_results[0].output["guidance"]
+            .as_str()
+            .expect("guidance")
             .contains("Registered first-party model tools are: fake_echo.approval_echo, fake_echo.echo, fake_status.status"));
         let rejection = response
             .audit_entries
