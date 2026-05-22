@@ -239,8 +239,9 @@ These notes capture durable facts for future agents working on this repository.
   installation, or external validation happened.
 - The structured release evidence status endpoint mirrors the doctor inventory
   for app/installer artifacts and JSON reports, including required owner-recorded
-  live-device and plugin-trust evidence fields, so the CLI and Swift Release tab
-  can show missing release evidence without parsing script text.
+  live-device and plugin-trust evidence fields plus live-device bundle/version
+  and timestamp semantic checks, so the CLI and Swift Release tab can show
+  missing or invalid release evidence without parsing script text.
 - Enabled `local_subprocess` plugins run with an environment boundary: Jarvis
   clears the inherited app/core process environment before spawn and provides
   only a deterministic `PATH` plus `JARVIS_PLUGIN_ID`,

@@ -363,12 +363,13 @@ prove the inventory logic only; it is not a signing, notarization, stapling, or
 installation validator.
 `jarvis release evidence-status` exposes the same standard artifact/report
 inventory as structured JSON through `/release/evidence-status`; it is
-file/report inventory only and does not prove signing, notarization, installed
-app launch, live-device QA, marketplace review, malware scanning, or OS
-sandboxing. Non-default live-device and plugin-trust report paths can be
-provided through either the QA script variables (`JARVIS_QA_REPORT_PATH`,
-`JARVIS_PLUGIN_QA_REPORT_PATH`) or the bundle/doctor aliases
-(`JARVIS_EVIDENCE_LIVE_QA_REPORT`, `JARVIS_EVIDENCE_PLUGIN_QA_REPORT`).
+file/report inventory plus report semantic validation only and does not prove
+signing, notarization, installed app launch, live-device QA, marketplace review,
+malware scanning, or OS sandboxing. Non-default live-device and plugin-trust
+report paths can be provided through either the QA script variables
+(`JARVIS_QA_REPORT_PATH`, `JARVIS_PLUGIN_QA_REPORT_PATH`) or the bundle/doctor
+aliases (`JARVIS_EVIDENCE_LIVE_QA_REPORT`,
+`JARVIS_EVIDENCE_PLUGIN_QA_REPORT`).
 
 ## Useful Focused Commands
 
