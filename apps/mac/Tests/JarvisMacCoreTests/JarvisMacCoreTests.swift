@@ -672,10 +672,15 @@ struct JarvisMacCoreTests {
         let taskId = UUID()
         let events = try JarvisActivityEvent.parseServerSentEvents(activityEventsSSE(taskId: taskId))
 
-        #expect(events.count == 2)
+        #expect(events.count == 3)
         #expect(events.first?.event == "activity_summary")
         #expect(events.first?.summary?.recentTasks.first?.id == taskId)
         #expect(events.first?.summary?.activeTaskCount == 1)
+        #expect(events[1].event == "activity_progress")
+        #expect(events[1].progress?.pluginId == "local_runner_test")
+        #expect(events[1].progress?.stage == "prepare")
+        #expect(events[1].progress?.message == "validated request")
+        #expect(events[1].progress?.stderrRedacted == true)
         #expect(events.last?.event == "activity_error")
         #expect(events.last?.error == "repository unavailable")
     }
@@ -1832,7 +1837,7 @@ struct JarvisMacCoreTests {
             JarvisActivitySummary.self,
             from: activitySummaryJSON(taskId: taskId)
         )
-        let event = JarvisActivityEvent(sequence: 0, event: "activity_summary", summary: summary, error: nil)
+        let event = JarvisActivityEvent(sequence: 0, event: "activity_summary", summary: summary, progress: nil, error: nil)
         let model = RunManagementModel(client: FakeCoreClient(activityEvents: [event]))
 
         await model.watchActivity()
@@ -2164,10 +2169,17 @@ struct JarvisMacCoreTests {
     private func activityEventsSSE(taskId: UUID) -> Data {
         let summary = String(decoding: activitySummaryJSON(taskId: taskId), as: UTF8.self)
             .replacingOccurrences(of: "\n", with: "")
+        let progress = """
+        {"audit_id":"\(UUID().uuidString)","task_id":"\(taskId.uuidString)","created_at":"2026-05-20T12:00:02Z","plugin_id":"local_runner_test","action":"inspect","session_id":"\(UUID().uuidString)","sequence":1,"stage":"prepare","message":"validated request","stderr_redacted":true}
+        """
+            .replacingOccurrences(of: "\n", with: "")
         return Data(
             """
             event: activity_summary
             data: \(summary)
+
+            event: activity_progress
+            data: \(progress)
 
             event: activity_error
             data: {"error":"repository unavailable"}
@@ -2806,7 +2818,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
 
         let summary = try await activitySummary()
         return [
-            JarvisActivityEvent(sequence: 0, event: "activity_summary", summary: summary, error: nil)
+            JarvisActivityEvent(sequence: 0, event: "activity_summary", summary: summary, progress: nil, error: nil)
         ]
     }
 

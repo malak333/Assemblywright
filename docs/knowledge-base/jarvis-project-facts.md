@@ -42,16 +42,20 @@ These notes capture durable facts for future agents working on this repository.
   deterministic repository evidence for current activity.
 - Repository-backed IPC also exposes `/activity/events`, and the CLI exposes
   `jarvis activity watch`, as bounded server-sent events carrying activity
-  summary snapshots. This is local progress-streaming evidence for current
-  task/audit state, not per-token model streaming. The Swift Runs tab can
-  manually watch a bounded event stream, decode `activity_summary` and
-  `activity_error` frames, and update the visible activity summary from the
-  latest event without opening an unbounded background listener.
+  summary snapshots and redacted installed-plugin progress frames. This is
+  local progress-streaming evidence for current task/audit state, not per-token
+  model streaming. The Swift Runs tab can manually watch a bounded event stream,
+  decode `activity_summary`, `activity_progress`, and `activity_error` frames,
+  update the visible activity summary from the latest summary event, and render
+  plugin progress stage/message text without opening an unbounded background
+  listener.
 - Installed `local_subprocess` plugins can emit bounded newline-delimited
   stderr JSON frames with `jarvis_progress: true`, `stage`, and `message`.
   Jarvis records parsed sequence/stage/message events in the run response and
-  append-only audit entries while redacting raw stderr. This is post-run
-  audit-backed plugin progress evidence, not real-time plugin UI streaming.
+  append-only audit entries, then emits redacted `activity_progress` SSE frames
+  from recent audit evidence while redacting raw stderr. This is bounded,
+  audit-backed plugin progress evidence, not per-token or unbounded real-time
+  plugin UI streaming.
 - `/contract` includes a `compatibility` block with supported version range,
   additive-change, deprecation, removed/deprecated endpoint, and client
   requirement policy, plus a `features` list with stable keys, status, proof,

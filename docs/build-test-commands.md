@@ -212,7 +212,8 @@ and executable installed plugins with those actions require
 governance, not OS-level network sandboxing or host-level egress filtering.
 Installed subprocess plugins can also emit bounded `jarvis_progress` stderr
 JSON frames. Jarvis exposes only parsed sequence/stage/message progress events
-and `installed_plugin_progress` audit entries; raw stderr remains redacted.
+and `installed_plugin_progress` audit entries, plus redacted
+`activity_progress` frames on `/activity/events`; raw stderr remains redacted.
 Background scheduler execution is opt-in on `jarvis serve`; it does not start
 for default smoke or manual inspection sessions unless `--scheduler-background`
 is passed.
