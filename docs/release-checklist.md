@@ -160,6 +160,9 @@ stage or when a PR needs focused evidence for one ownership slice.
 - Confirm permission policy review includes active scheduler triggers without
   exposing scheduler command bodies, and that recurring/due triggers remain
   visible before due-job execution.
+- Confirm permission policy review includes unreviewed memory items without
+  exposing memory values, and diagnostics export exposes only aggregate active,
+  unreviewed, and sensitive memory counts.
 - Confirm the Swift Approval Center renders permission policy review status
   alongside grant history when the IPC contract exposes the endpoint.
 - Confirm scheduler job create/list/cancel and due-run execution state is
@@ -168,7 +171,8 @@ stage or when a PR needs focused evidence for one ownership slice.
   fail-closed pause behavior, not background production trigger scheduling.
 - Confirm diagnostics export remains redacted and does not include command
   bodies, scheduler commands, model route contexts, audit payloads, memory
-  values, raw cancellation reasons, or credentials.
+  values, raw cancellation reasons, or credentials. Aggregate memory review
+  counts are allowed.
 - Confirm the Swift Memory tab still uses the Rust IPC memory contract for
   create, load, update of mutable fields, review, soft-delete, include-deleted
   refresh, restore, classification summary, and filtering, with deterministic

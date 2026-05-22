@@ -115,10 +115,13 @@ These notes capture durable facts for future agents working on this repository.
 - Repository-backed IPC also exposes `/permissions/policy-review`, and the CLI
   exposes `jarvis permissions review`, as a read-only policy review surface. It
   converts pending approvals, high-risk plugin actions, unverified installed
-  plugin provenance, unverified publisher-origin claims, and network-capable
-  plugin actions into explicit severity-ranked review items. The Swift
+  plugin provenance, unverified publisher-origin claims, network-capable plugin
+  actions, active scheduler triggers, and unreviewed memory items into explicit
+  severity-ranked review items. Memory review items include category/key and
+  sensitivity only; memory values are redacted from policy review. The Swift
   Approval Center renders this summary alongside grant history. It is
-  inspection-only and does not execute or enable plugin side effects.
+  inspection-only and does not execute, enable plugin side effects, or
+  autonomously rewrite/delete memory.
 - The CLI has matching `tasks`, `memory`, `scheduler`, `diagnostics`, and
   `plugins` subcommands, including `plugins install`, `plugins installed`,
   `plugins installed-get`, `plugins enable-installed`, `plugins
@@ -160,6 +163,10 @@ These notes capture durable facts for future agents working on this repository.
   and unreviewed-active counts, and never returns memory values beyond the
   existing item list/get endpoints. The Swift Memory tab renders this summary
   above the item list.
+- Diagnostics export now includes aggregate active, unreviewed, and sensitive
+  memory counts when repository backing is enabled. It still omits memory
+  values, and memory policy review similarly redacts values while surfacing
+  unreviewed memory for user review.
 - The Swift shell has a Keychain-backed launch credential boundary for
   app-supervised model provider secrets. `JarvisCoreCredentialProvider` reads
   known credentials such as the OpenAI API key from Keychain and injects only
@@ -215,6 +222,10 @@ These notes capture durable facts for future agents working on this repository.
   `cargo test -p jarvis-core model_provider_failure_returns_failed_response_with_route_evidence -- --nocapture`
   plus
   `cargo test -p jarvis-core command_schema_returns_failed_runtime_response_for_model_provider_error -- --nocapture`.
+- Focused memory policy review coverage is
+  `cargo test -p jarvis-core permission_policy_review_summarizes_unreviewed_memory_without_values -- --nocapture`
+  plus
+  `cargo test -p jarvis-core diagnostics_export_is_redacted_and_counts_repository_state -- --nocapture`.
 - The focused repository-state test for progress visibility is
   `cargo test -p jarvis-core repository_backed_state_endpoints_expose_tasks_and_audit -- --nocapture`.
   Contract coverage for the activity stream is in

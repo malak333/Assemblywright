@@ -208,11 +208,20 @@ cargo run -p jarvis-cli -- scheduler attention
 cargo run -p jarvis-cli -- diagnostics export
 ```
 
+`jarvis permissions review` includes pending approvals, plugin review items,
+active scheduler triggers, and unreviewed memory items. Memory review items
+include category/key and sensitivity only; memory values stay out of policy
+review and diagnostics export. `jarvis diagnostics export` exposes aggregate
+active, unreviewed, and sensitive memory counts when repository backing is
+enabled.
+
 ## Useful Focused Commands
 
 ```sh
 cargo test -p jarvis-core
 cargo test -p jarvis-core permission_policy_review -- --nocapture
+cargo test -p jarvis-core permission_policy_review_summarizes_unreviewed_memory_without_values -- --nocapture
+cargo test -p jarvis-core diagnostics_export_is_redacted_and_counts_repository_state -- --nocapture
 cargo test -p jarvis-core scheduler_attention -- --nocapture
 cargo test -p jarvis-core model_provider_failure_returns_failed_response_with_route_evidence -- --nocapture
 cargo test -p jarvis-core command_schema_returns_failed_runtime_response_for_model_provider_error -- --nocapture
@@ -323,7 +332,7 @@ advanced memory classification policy beyond the current summary surface, live
 microphone capture, or live audio output until those surfaces are manually
 validated. The current Swift gate proves the
 Mac shell scaffold builds, decodes IPC contracts, exposes management models for
-approval evidence, memory classification summary,
+approval evidence, memory classification summary, memory policy review counts,
 memory create/update/review/delete/restore state, runs/audit,
 activity summary, permission policy review, scheduler attention summaries, diagnostics,
 contract compatibility policy and feature proof/boundary metadata,

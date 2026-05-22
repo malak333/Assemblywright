@@ -115,6 +115,8 @@ pub struct DiagnosticsExport {
     pub audit_entry_count: Option<usize>,
     pub model_route_record_count: Option<usize>,
     pub active_memory_item_count: Option<usize>,
+    pub unreviewed_memory_item_count: Option<usize>,
+    pub sensitive_memory_item_count: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -403,6 +405,8 @@ pub struct PermissionPolicyReview {
     pub high_risk_pending_count: usize,
     pub executable_installed_plugin_count: usize,
     pub unverified_installed_plugin_count: usize,
+    pub unreviewed_memory_item_count: usize,
+    pub sensitive_memory_item_count: usize,
     pub side_effects_require_approval: bool,
     pub items: Vec<PermissionPolicyReviewItem>,
 }
@@ -417,6 +421,8 @@ pub struct PermissionPolicyReviewItem {
     pub approval_id: Option<Uuid>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plugin_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_id: Option<Uuid>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub action: Option<String>,
 }
@@ -617,17 +623,22 @@ impl IpcState {
             audit_entry_count,
             model_route_record_count,
             active_memory_item_count,
+            unreviewed_memory_item_count,
+            sensitive_memory_item_count,
         ) = match &self.repository {
             Some(_) => self.using_repository(|repository| {
+                let memory_summary = repository.memory_classification_summary(false)?;
                 Ok((
                     Some(repository.schema_version()?),
                     Some(repository.list_tasks()?.len()),
                     Some(repository.list_audit_entries(None)?.len()),
                     Some(repository.list_model_route_records(None)?.len()),
-                    Some(repository.list_memory_items(false)?.len()),
+                    Some(memory_summary.active_count),
+                    Some(memory_summary.unreviewed_active_count),
+                    Some(memory_summary.sensitive_active_count),
                 ))
             })?,
-            None => (None, None, None, None, None),
+            None => (None, None, None, None, None, None, None),
         };
 
         Ok(DiagnosticsExport {
@@ -648,6 +659,8 @@ impl IpcState {
             audit_entry_count,
             model_route_record_count,
             active_memory_item_count,
+            unreviewed_memory_item_count,
+            sensitive_memory_item_count,
         })
     }
 
@@ -816,6 +829,8 @@ impl IpcState {
         self.using_repository(|repository| {
             let approvals = repository.list_pending_approvals(None)?;
             let installed_plugins = repository.list_installed_plugins()?;
+            let memory_items = repository.list_memory_items(false)?;
+            let memory_summary = repository.memory_classification_summary(false)?;
             let mut items = Vec::new();
 
             let high_risk_pending_count = approvals
@@ -858,6 +873,7 @@ impl IpcState {
                     ),
                     approval_id: Some(approval.id),
                     plugin_id: None,
+                    memory_id: None,
                     action: Some(approval.action.clone()),
                 });
             }
@@ -893,6 +909,7 @@ impl IpcState {
                         ),
                         approval_id: None,
                         plugin_id: Some(plugin.id.clone()),
+                        memory_id: None,
                         action: None,
                     });
                 }
@@ -913,6 +930,7 @@ impl IpcState {
                         ),
                         approval_id: None,
                         plugin_id: Some(plugin.id.clone()),
+                        memory_id: None,
                         action: None,
                     });
                 }
@@ -938,6 +956,7 @@ impl IpcState {
                         ),
                         approval_id: None,
                         plugin_id: Some(plugin.id.clone()),
+                        memory_id: None,
                         action: Some(action.name.clone()),
                     });
                 }
@@ -962,9 +981,29 @@ impl IpcState {
                         ),
                         approval_id: None,
                         plugin_id: Some(plugin.id.clone()),
+                        memory_id: None,
                         action: Some(action.name.clone()),
                     });
                 }
+            }
+
+            for memory in memory_items
+                .iter()
+                .filter(|memory| memory.reviewed_at.is_none())
+            {
+                items.push(PermissionPolicyReviewItem {
+                    item_type: "memory_review".to_string(),
+                    severity: memory_review_severity(memory.sensitivity).to_string(),
+                    title: "Memory item needs review".to_string(),
+                    detail: format!(
+                        "Memory item {}/{} is {:?} and unreviewed; value text is redacted from policy review",
+                        memory.category, memory.key, memory.sensitivity
+                    ),
+                    approval_id: None,
+                    plugin_id: None,
+                    memory_id: Some(memory.id),
+                    action: Some(format!("{}/{}", memory.category, memory.key)),
+                });
             }
 
             items.sort_by_key(|item| {
@@ -973,6 +1012,7 @@ impl IpcState {
                     item.item_type.clone(),
                     item.title.clone(),
                     item.plugin_id.clone(),
+                    item.memory_id,
                     item.action.clone(),
                     item.approval_id,
                 )
@@ -989,6 +1029,8 @@ impl IpcState {
                 high_risk_pending_count,
                 executable_installed_plugin_count,
                 unverified_installed_plugin_count,
+                unreviewed_memory_item_count: memory_summary.unreviewed_active_count,
+                sensitive_memory_item_count: memory_summary.sensitive_active_count,
                 side_effects_require_approval: true,
                 items,
             })
@@ -2207,6 +2249,7 @@ fn scheduler_policy_review_item(
         ),
         approval_id: None,
         plugin_id: None,
+        memory_id: None,
         action: Some(job.id.to_string()),
     }
 }
@@ -2279,6 +2322,14 @@ fn permission_review_severity_rank(severity: &str) -> u8 {
         "medium" => 2,
         "low" => 3,
         _ => 4,
+    }
+}
+
+fn memory_review_severity(sensitivity: Sensitivity) -> &'static str {
+    match sensitivity {
+        Sensitivity::Restricted | Sensitivity::CredentialAdjacent | Sensitivity::Private => "high",
+        Sensitivity::Personal => "medium",
+        Sensitivity::Workspace | Sensitivity::Public => "low",
     }
 }
 
@@ -3067,6 +3118,12 @@ fn contract_features() -> Vec<ContractFeature> {
             "implemented",
             "Active scheduler triggers appear in `/permissions/policy-review` without scheduler command text and are covered by Rust unit and CLI IPC E2E tests.",
             "Review visibility only; richer proactive trigger policy and manual notification validation remain pending.",
+        ),
+        feature(
+            "memory_policy_review",
+            "implemented",
+            "Unreviewed memory items appear in `/permissions/policy-review` with redacted values, and diagnostics export exposes only aggregate memory review counts.",
+            "Review visibility only; no autonomous memory rewrite, retention policy, or vector-index governance claim.",
         ),
         feature(
             "installed_plugin_execution",
@@ -4033,6 +4090,48 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
     }
 
     #[tokio::test]
+    async fn permission_policy_review_summarizes_unreviewed_memory_without_values() {
+        let repository = SqliteRepository::in_memory().unwrap();
+        let memory = repository
+            .create_memory_item(NewMemoryItem {
+                category: "preference".to_string(),
+                key: "voice".to_string(),
+                value: "never expose this memory value".to_string(),
+                provenance: "test".to_string(),
+                sensitivity: Sensitivity::Private,
+            })
+            .expect("memory");
+        repository
+            .create_memory_item(NewMemoryItem {
+                category: "workflow".to_string(),
+                key: "release".to_string(),
+                value: "reviewed memory value".to_string(),
+                provenance: "test".to_string(),
+                sensitivity: Sensitivity::Workspace,
+            })
+            .and_then(|item| repository.mark_memory_reviewed(item.id))
+            .expect("reviewed memory");
+        let state = IpcState::with_repository(repository).expect("state");
+
+        let review = state.permission_policy_review().expect("policy review");
+
+        assert_eq!(review.status, "review_required");
+        assert_eq!(review.unreviewed_memory_item_count, 1);
+        assert_eq!(review.sensitive_memory_item_count, 1);
+        let item = review
+            .items
+            .iter()
+            .find(|item| item.item_type == "memory_review")
+            .expect("memory review item");
+        assert_eq!(item.severity, "high");
+        assert_eq!(item.memory_id, Some(memory.id));
+        assert_eq!(item.action.as_deref(), Some("preference/voice"));
+        let encoded = serde_json::to_string(&review).expect("review JSON");
+        assert!(!encoded.contains("never expose this memory value"));
+        assert!(!encoded.contains("reviewed memory value"));
+    }
+
+    #[tokio::test]
     async fn command_schema_executes_first_party_plugin_with_policy_audit() {
         let state = IpcState::new();
         let response = state
@@ -4711,6 +4810,17 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             })
             .expect("schedule");
         state
+            .using_repository(|repository| {
+                repository.create_memory_item(NewMemoryItem {
+                    category: "preference".to_string(),
+                    key: "diagnostics".to_string(),
+                    value: "diagnostic memory value should stay out".to_string(),
+                    provenance: "test".to_string(),
+                    sensitivity: Sensitivity::Private,
+                })
+            })
+            .expect("memory");
+        state
             .submit_command(CommandRequest {
                 input: "private command body should stay out of diagnostics".to_string(),
                 session_id: None,
@@ -4730,12 +4840,16 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert_eq!(export.task_count, Some(1));
         assert!(export.audit_entry_count.unwrap_or_default() >= 2);
         assert_eq!(export.model_route_record_count, Some(1));
+        assert_eq!(export.active_memory_item_count, Some(1));
+        assert_eq!(export.unreviewed_memory_item_count, Some(1));
+        assert_eq!(export.sensitive_memory_item_count, Some(1));
         assert_eq!(export.scheduler_jobs.len(), 1);
         assert!(export.redaction.contains("omits command bodies"));
 
         let encoded = serde_json::to_string(&export).unwrap();
         assert!(!encoded.contains("private command body"));
         assert!(!encoded.contains("do not redact scheduler command"));
+        assert!(!encoded.contains("diagnostic memory value should stay out"));
     }
 
     #[tokio::test]

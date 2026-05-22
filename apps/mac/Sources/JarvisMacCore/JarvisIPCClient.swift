@@ -195,6 +195,8 @@ public struct JarvisDiagnosticsExport: Decodable, Equatable, Sendable {
     public var taskCount: Int?
     public var auditEntryCount: Int?
     public var activeMemoryItemCount: Int?
+    public var unreviewedMemoryItemCount: Int?
+    public var sensitiveMemoryItemCount: Int?
 
     enum CodingKeys: String, CodingKey {
         case generatedAt = "generated_at"
@@ -206,6 +208,8 @@ public struct JarvisDiagnosticsExport: Decodable, Equatable, Sendable {
         case taskCount = "task_count"
         case auditEntryCount = "audit_entry_count"
         case activeMemoryItemCount = "active_memory_item_count"
+        case unreviewedMemoryItemCount = "unreviewed_memory_item_count"
+        case sensitiveMemoryItemCount = "sensitive_memory_item_count"
     }
 }
 
@@ -1034,6 +1038,8 @@ public struct JarvisPermissionPolicyReview: Decodable, Equatable, Sendable {
     public var highRiskPendingCount: Int
     public var executableInstalledPluginCount: Int
     public var unverifiedInstalledPluginCount: Int
+    public var unreviewedMemoryItemCount: Int
+    public var sensitiveMemoryItemCount: Int
     public var sideEffectsRequireApproval: Bool
     public var items: [JarvisPermissionPolicyReviewItem]
 
@@ -1044,6 +1050,8 @@ public struct JarvisPermissionPolicyReview: Decodable, Equatable, Sendable {
         case highRiskPendingCount = "high_risk_pending_count"
         case executableInstalledPluginCount = "executable_installed_plugin_count"
         case unverifiedInstalledPluginCount = "unverified_installed_plugin_count"
+        case unreviewedMemoryItemCount = "unreviewed_memory_item_count"
+        case sensitiveMemoryItemCount = "sensitive_memory_item_count"
         case sideEffectsRequireApproval = "side_effects_require_approval"
         case items
     }
@@ -1056,6 +1064,7 @@ public struct JarvisPermissionPolicyReviewItem: Decodable, Equatable, Identifiab
     public var detail: String
     public var approvalId: UUID?
     public var pluginId: String?
+    public var memoryId: UUID?
     public var action: String?
 
     public var id: String {
@@ -1064,6 +1073,7 @@ public struct JarvisPermissionPolicyReviewItem: Decodable, Equatable, Identifiab
             severity,
             approvalId?.uuidString ?? "",
             pluginId ?? "",
+            memoryId?.uuidString ?? "",
             action ?? title
         ].joined(separator: ":")
     }
@@ -1075,6 +1085,7 @@ public struct JarvisPermissionPolicyReviewItem: Decodable, Equatable, Identifiab
         case detail
         case approvalId = "approval_id"
         case pluginId = "plugin_id"
+        case memoryId = "memory_id"
         case action
     }
 }
