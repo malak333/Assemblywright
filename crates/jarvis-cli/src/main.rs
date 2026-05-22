@@ -253,6 +253,12 @@ enum MemoryCommand {
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
+    /// Restore a soft-deleted memory item.
+    Restore {
+        id: String,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -589,6 +595,12 @@ async fn main() -> anyhow::Result<()> {
                 println!(
                     "{}",
                     request(&endpoint, "DELETE", &format!("/memory/{id}"), None)?
+                );
+            }
+            MemoryCommand::Restore { id, endpoint } => {
+                println!(
+                    "{}",
+                    request(&endpoint, "POST", &format!("/memory/{id}/restore"), None)?
                 );
             }
         },

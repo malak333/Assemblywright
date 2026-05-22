@@ -271,8 +271,8 @@ export, and buildable Swift command/activity
 shell scaffold are implemented. The command runtime can route to fake local,
 Ollama-compatible local HTTP, or explicitly enabled ChatGPT/OpenAI-compatible
 HTTP providers. The Swift app includes approval decision controls, management
-surfaces, memory create/update/review/delete controls over the existing Rust
-IPC contract, voice input/output adapter controls, text-transcript command
+surfaces, memory create/update/review/delete/restore controls over the existing
+Rust IPC contract, voice input/output adapter controls, text-transcript command
 handoff, and core supervision abstractions. The product still lacks
 signed/notarized release evidence, live microphone and audio-output validation,
 marketplace/WASM/network/signed-publisher plugin trust boundaries, richer
@@ -286,7 +286,7 @@ reviewable PR slices, and docs-only synchronization work on
 `model-route-persistence`, `plugin-subprocess-sandbox`,
 `voice-adapter-production`, `packaged-app-release-smoke`,
 `permission-grants-ux`, and `phase3-docs-architecture`. Follow-on slices
-include Swift memory CRUD and local plugin provenance verification. That
+include Swift memory CRUD/restore and local plugin provenance verification. That
 workflow improves reviewability but is not readiness evidence by itself.
 Readiness language must be tied to checked-in code, documented diagrams,
 knowledge-base updates, and the specific local/E2E checks that passed.

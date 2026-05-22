@@ -936,6 +936,7 @@ public protocol JarvisCoreClient: Sendable {
     func updateMemoryItem(id: UUID, request: JarvisMemoryMutationRequest) async throws -> JarvisMemoryItem
     func reviewMemoryItem(id: UUID) async throws -> JarvisMemoryItem
     func deleteMemoryItem(id: UUID) async throws -> JarvisMemoryItem
+    func restoreMemoryItem(id: UUID) async throws -> JarvisMemoryItem
     func listPluginManifests() async throws -> [JarvisPluginManifest]
     func listSchedulerJobs() async throws -> [JarvisSchedulerJob]
     func schedulerJob(id: UUID) async throws -> JarvisSchedulerJob
@@ -1026,6 +1027,10 @@ public final class JarvisIPCClient: JarvisCoreClient {
 
     public func deleteMemoryItem(id: UUID) async throws -> JarvisMemoryItem {
         try await send(path: "/memory/\(id.uuidString)", method: "DELETE", body: Optional<Data>.none)
+    }
+
+    public func restoreMemoryItem(id: UUID) async throws -> JarvisMemoryItem {
+        try await send(path: "/memory/\(id.uuidString)/restore", method: "POST", body: Optional<Data>.none)
     }
 
     public func listPluginManifests() async throws -> [JarvisPluginManifest] {

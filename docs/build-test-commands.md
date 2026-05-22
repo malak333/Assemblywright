@@ -174,6 +174,7 @@ cargo run -p jarvis-cli -- approvals approve <approval-id> --decided-by cli --re
 cargo run -p jarvis-cli -- approvals deny <approval-id> --decided-by cli --reason "not safe"
 cargo run -p jarvis-cli -- memory list
 cargo run -p jarvis-cli -- memory create workflow release-gate "run local gate before PR" --provenance "manual note" --sensitivity workspace
+cargo run -p jarvis-cli -- memory restore <memory-id>
 cargo run -p jarvis-cli -- diagnostics export
 ```
 
@@ -254,7 +255,7 @@ cross-process IPC E2E test proves the local server and CLI can exchange JSON for
 health, runtime-backed command execution, deterministic first-party plugin
 execution, route/policy/plugin audit evidence, approval-required persistence and
 grant/deny decisions, scheduler schedule/cancel and persistence, redacted
-diagnostics export, memory create/update/review/delete and persistence, plugin
+diagnostics export, memory create/update/review/delete/restore and persistence, plugin
 manifests, installed-plugin provenance verification, permission-grant
 provenance summary fields, fail-closed subprocess enablement, scheduler due-job
 execution/reschedule audit evidence, scheduler fail-closed emergency pause on
@@ -264,11 +265,11 @@ orchestration, including policy checks, approval stops, validation failures, and
 tool-result feedback into later model steps. Focused provider tests prove typed
 Ollama-compatible request/error behavior without requiring a live model during
 the default release gate. They do not prove live ChatGPT service execution,
-memory classification/restore UX beyond the current CRUD/review surface, live
+memory classification UX beyond the current CRUD/review/restore surface, live
 microphone capture, or live audio output until those surfaces are manually
 validated. The current Swift gate proves the
 Mac shell scaffold builds, decodes IPC contracts, exposes management models for
-approval evidence, memory create/update/review/delete state, runs/audit,
+approval evidence, memory create/update/review/delete/restore state, runs/audit,
 scheduler, diagnostics, text-transcript voice handoff state, adapter-backed
 voice input controls, adapter-backed speech-output preview controls, and
 Keychain-backed supervised-core credential injection
