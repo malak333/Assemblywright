@@ -1161,6 +1161,24 @@ struct JarvisMacCoreTests {
     }
 
     @MainActor
+    @Test("Release readiness model surfaces invalid live-device evidence details")
+    func releaseReadinessModelSurfacesInvalidLiveDeviceEvidenceDetails() async throws {
+        let readiness = try JSONDecoder().decode(JarvisReleaseReadiness.self, from: releaseReadinessJSON())
+        let evidence = try JSONDecoder().decode(JarvisReleaseEvidenceStatus.self, from: invalidLiveDeviceEvidenceStatusJSON())
+        let model = ReleaseReadinessModel(client: FakeCoreClient(releaseReadiness: readiness, releaseEvidenceStatus: evidence))
+
+        await model.refresh()
+
+        let liveDeviceItem = try #require(model.evidenceStatus?.items.first { $0.key == "live_device_qa_report" })
+        #expect(model.evidenceStatus?.complete == false)
+        #expect(model.evidenceStatus?.invalidCount == 1)
+        #expect(liveDeviceItem.status == "invalid")
+        #expect(liveDeviceItem.detail.contains("app_bundle.bundle_identifier"))
+        #expect(model.readiness?.pendingFeatures.map(\.key).contains("live_voice_loop") == true)
+        #expect(model.lastError == nil)
+    }
+
+    @MainActor
     @Test("Release readiness model marks cached readiness stale after refresh failure")
     func releaseReadinessModelMarksCachedReadinessStaleAfterRefreshFailure() async throws {
         let readiness = try JSONDecoder().decode(JarvisReleaseReadiness.self, from: releaseReadinessJSON())
@@ -2786,7 +2804,44 @@ private func releaseEvidenceStatusJSON() -> Data {
               "detail": "expected JSON report is missing"
             }
           ],
-          "proof_boundary": "File/report inventory only; complete means expected paths and required JSON fields are present. This endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
+          "proof_boundary": "File/report inventory only; complete means expected paths are present and JSON reports pass required field checks plus live-device QA release-metadata and timestamp semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
+        }
+        """.utf8
+    )
+}
+
+private func invalidLiveDeviceEvidenceStatusJSON() -> Data {
+    Data(
+        """
+        {
+          "generated_at": "2026-05-22T08:05:00Z",
+          "complete": false,
+          "satisfied_count": 1,
+          "missing_count": 0,
+          "invalid_count": 1,
+          "items": [
+            {
+              "key": "signed_app_bundle",
+              "label": "App bundle path",
+              "path": "target/distribution/Jarvis.app",
+              "kind": "directory",
+              "status": "present",
+              "required_for_production": true,
+              "manual_gate": true,
+              "detail": "directory exists; presence only; signing, notarization, and stapling are not validated by evidence-status"
+            },
+            {
+              "key": "live_device_qa_report",
+              "label": "Live-device QA report",
+              "path": "target/release-live-device-qa-report.json",
+              "kind": "json_report",
+              "status": "invalid",
+              "required_for_production": true,
+              "manual_gate": true,
+              "detail": "JSON report app_bundle.bundle_identifier mismatch: expected com.nobiletechnology.jarvis, got com.example.StaleJarvis"
+            }
+          ],
+          "proof_boundary": "File/report inventory only; complete means expected paths are present and JSON reports pass required field checks plus live-device QA release-metadata and timestamp semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
         }
         """.utf8
     )

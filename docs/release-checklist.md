@@ -50,9 +50,9 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
 - Confirm `jarvis release evidence-status` or `/release/evidence-status` reports
   the standard signed artifact, live-device QA report, plugin-trust QA report,
   and final evidence bundle inventory as structured JSON. Treat it as
-  file/report inventory only, not proof that signing, notarization,
-  installation, Finder launch, live-device QA, marketplace review, malware
-  scanning, or OS sandboxing was performed.
+  file/report inventory plus report semantic validation only, not proof that
+  signing, notarization, installation, Finder launch, live-device QA,
+  marketplace review, malware scanning, or OS sandboxing was performed.
 - Confirm the live-device QA report is `present`, not `invalid`, before using
   external evidence mode. Evidence-status semantically checks the expected
   bundle ID, short/build version, non-self-test identity, and ordered UTC
