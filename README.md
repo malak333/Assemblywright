@@ -133,10 +133,10 @@ For distribution packaging work, run:
 ```
 
 The full `package-distribution.sh` lane owns Developer ID signing,
-notarization, stapling, and microphone entitlement packaging when Apple
-credentials are provided. It still does not replace clean-profile Finder
-launch, installer/App Store validation, or live microphone/Speech/audio-output
-validation.
+notarization, stapling, microphone entitlement packaging, and signed installer
+package creation when Apple credentials are provided. It still does not replace
+clean-profile installer run, Finder launch, App Store validation, or live
+microphone/Speech/audio-output validation.
 
 With a repository-backed server running, `jarvis tasks`, `jarvis memory`,
 `jarvis activity summary`, `jarvis scheduler`, `jarvis diagnostics`, and

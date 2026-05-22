@@ -283,13 +283,18 @@ clean-user manual QA pass.
 Distribution packaging gate:
 
 - Run `./scripts/package-distribution.sh --check` on packaging-related PRs to
-  validate local tool availability and entitlements templates.
-- For a release candidate, set `JARVIS_DEVELOPER_ID_APPLICATION` and either
-  `JARVIS_NOTARYTOOL_PROFILE` or the Apple ID/team/password notarytool
-  variables, then run `./scripts/package-distribution.sh`.
-- Confirm the resulting app is Developer ID signed, notarized, stapled, and
-  still passes clean-profile Finder launch/manual QA before any broader
-  production distribution claim.
+  validate local app signing, installer packaging, notarization tool
+  availability, and entitlements templates.
+- For a release candidate, set `JARVIS_DEVELOPER_ID_APPLICATION`,
+  `JARVIS_DEVELOPER_ID_INSTALLER`, and either `JARVIS_NOTARYTOOL_PROFILE` or
+  the Apple ID/team/password notarytool variables, then run
+  `./scripts/package-distribution.sh`.
+- Confirm the resulting app zip and installer package are Developer ID signed,
+  notarized, and stapled. The script also verifies the app signature, installer
+  signature, app staple, and package staple.
+- Still perform clean-profile installer run, Finder launch, microphone/Speech,
+  live audio-output, and manual QA before any broader production distribution
+  claim.
 
 ## Release Notes
 
