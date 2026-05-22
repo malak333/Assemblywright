@@ -234,6 +234,9 @@ stage or when a PR needs focused evidence for one ownership slice.
   live microphone/Speech validation, live audio-output validation, App Store
   review, marketplace plugin review, malware analysis, or OS sandbox
   enforcement.
+- Confirm the Swift Release tab decodes the same `/release/readiness` contract
+  and renders blocking gates, recommended commands, implemented proofs, pending
+  features, and proof boundary without enabling release side effects.
 - Confirm the cross-process CLI E2E still covers command, plugin, audit,
   redacted model-route inspection and restart recovery, memory
   classification summary, create/update/review/delete/restore, scheduler

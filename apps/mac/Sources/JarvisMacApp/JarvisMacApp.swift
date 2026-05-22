@@ -12,6 +12,7 @@ struct JarvisMacApp: App {
     @StateObject private var scheduler: SchedulerModel
     @StateObject private var schedulerNotifications: SchedulerNotificationModel
     @StateObject private var diagnostics: DiagnosticsModel
+    @StateObject private var releaseReadiness: ReleaseReadinessModel
     @StateObject private var voice: VoiceStateModel
     @StateObject private var voiceAdapter: VoiceAdapterStateModel
     @StateObject private var speechOutput: SpeechOutputStateModel
@@ -31,6 +32,7 @@ struct JarvisMacApp: App {
             wrappedValue: SchedulerNotificationModel(adapter: MacSchedulerNotificationAdapter())
         )
         _diagnostics = StateObject(wrappedValue: DiagnosticsModel(client: client))
+        _releaseReadiness = StateObject(wrappedValue: ReleaseReadinessModel(client: client))
         _voice = StateObject(wrappedValue: voice)
         _voiceAdapter = StateObject(wrappedValue: VoiceAdapterStateModel(adapter: MacSpeechVoiceAdapter(), voiceState: voice))
         _speechOutput = StateObject(wrappedValue: SpeechOutputStateModel(adapter: MacSpeechOutputAdapter()))
@@ -48,6 +50,7 @@ struct JarvisMacApp: App {
                 scheduler: scheduler,
                 schedulerNotifications: schedulerNotifications,
                 diagnostics: diagnostics,
+                releaseReadiness: releaseReadiness,
                 voice: voice,
                 voiceAdapter: voiceAdapter,
                 speechOutput: speechOutput
@@ -85,6 +88,7 @@ struct JarvisShellView: View {
     @ObservedObject var scheduler: SchedulerModel
     @ObservedObject var schedulerNotifications: SchedulerNotificationModel
     @ObservedObject var diagnostics: DiagnosticsModel
+    @ObservedObject var releaseReadiness: ReleaseReadinessModel
     @ObservedObject var voice: VoiceStateModel
     @ObservedObject var voiceAdapter: VoiceAdapterStateModel
     @ObservedObject var speechOutput: SpeechOutputStateModel
@@ -108,6 +112,8 @@ struct JarvisShellView: View {
                     .tabItem { Text("Scheduler") }
                 DiagnosticsExportView(model: diagnostics)
                     .tabItem { Text("Diagnostics") }
+                ReleaseReadinessView(model: releaseReadiness)
+                    .tabItem { Text("Release") }
                 VoiceStateView(model: voice, adapter: voiceAdapter, speechOutput: speechOutput, console: console)
                     .tabItem { Text("Voice") }
             }
@@ -1264,6 +1270,88 @@ struct DiagnosticsExportView: View {
                 }
             }
         }
+    }
+}
+
+struct ReleaseReadinessView: View {
+    @ObservedObject var model: ReleaseReadinessModel
+
+    var body: some View {
+        ManagementListView(
+            title: "Release Readiness",
+            isLoading: model.isLoading,
+            lastError: model.lastError,
+            refresh: { await model.refresh() }
+        ) {
+            List {
+                if let readiness = model.readiness {
+                    LabelValueRow(label: "Generated", value: readiness.generatedAt)
+                    LabelValueRow(label: "Production Ready", value: readiness.productionReady ? "yes" : "no")
+                    LabelValueRow(label: "Scope", value: readiness.readinessScope)
+                    LabelValueRow(label: "Verified Features", value: String(readiness.verifiedFeatureCount))
+                    LabelValueRow(label: "Pending Features", value: String(readiness.pendingFeatureCount))
+                    LabelValueRow(label: "Proof Boundary", value: readiness.proofBoundary)
+
+                    Section("Blocking Gates") {
+                        ForEach(readiness.blockingManualGates, id: \.self) { gate in
+                            Label(gate, systemImage: "exclamationmark.triangle")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                                .textSelection(.enabled)
+                        }
+                    }
+
+                    Section("Verification") {
+                        ForEach(readiness.recommendedVerificationCommands, id: \.self) { command in
+                            Text(command)
+                                .font(.caption.monospaced())
+                                .textSelection(.enabled)
+                        }
+                    }
+
+                    Section("Implemented") {
+                        ForEach(readiness.implementedFeatures) { feature in
+                            ReleaseReadinessFeatureRow(feature: feature)
+                        }
+                    }
+
+                    Section("Pending") {
+                        ForEach(readiness.pendingFeatures) { feature in
+                            ReleaseReadinessFeatureRow(feature: feature)
+                        }
+                    }
+                } else {
+                    Text("No release readiness loaded")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+}
+
+struct ReleaseReadinessFeatureRow: View {
+    let feature: JarvisReleaseReadinessFeature
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                Text(feature.key)
+                    .font(.subheadline)
+                Spacer()
+                Text(feature.status)
+                    .font(.caption)
+                    .foregroundStyle(feature.status == "implemented" ? .green : .orange)
+            }
+            Text(feature.proof)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+            Text(feature.boundary)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+        }
+        .padding(.vertical, 4)
     }
 }
 

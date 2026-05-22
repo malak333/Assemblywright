@@ -1,6 +1,34 @@
 import Foundation
 
 @MainActor
+public final class ReleaseReadinessModel: ObservableObject {
+    @Published public private(set) var readiness: JarvisReleaseReadiness?
+    @Published public private(set) var isLoading: Bool
+    @Published public private(set) var lastError: String?
+
+    private let client: any JarvisCoreClient
+
+    public init(client: any JarvisCoreClient = JarvisIPCClient()) {
+        self.client = client
+        self.readiness = nil
+        self.isLoading = false
+        self.lastError = nil
+    }
+
+    public func refresh() async {
+        isLoading = true
+        lastError = nil
+        defer { isLoading = false }
+
+        do {
+            readiness = try await client.releaseReadiness()
+        } catch {
+            lastError = String(describing: error)
+        }
+    }
+}
+
+@MainActor
 public final class MemoryManagerModel: ObservableObject {
     @Published public private(set) var items: [JarvisMemoryItem]
     @Published public private(set) var classification: JarvisMemoryClassificationSummary?

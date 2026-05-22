@@ -281,10 +281,11 @@ struct JarvisMacCoreTests {
                 { "method": "GET", "path": "/health", "repository_required": false, "redacted": true },
                 { "method": "GET", "path": "/scheduler/jobs/:id", "repository_required": false, "redacted": false },
                 { "method": "GET", "path": "/activity/summary", "repository_required": true, "redacted": false },
+                { "method": "GET", "path": "/release/readiness", "repository_required": false, "redacted": true },
                 { "method": "GET", "path": "/permissions/grants", "repository_required": true, "redacted": false },
                 { "method": "GET", "path": "/permissions/policy-review", "repository_required": true, "redacted": false }
               ],
-              "safe_inspection_paths": ["/health", "/diagnostics/export"],
+              "safe_inspection_paths": ["/health", "/release/readiness", "/diagnostics/export"],
               "features": [
                 {
                   "key": "scheduler_trigger_policy_review",
@@ -316,6 +317,24 @@ struct JarvisMacCoreTests {
         #expect(!contract.exposesApprovalActions)
         #expect(contract.exposesPermissionGrantSummary)
         #expect(contract.exposesPermissionPolicyReview)
+        #expect(contract.exposesReleaseReadiness)
+    }
+
+    @Test("Release readiness payload decodes production blockers")
+    func decodesReleaseReadiness() throws {
+        let readiness = try JSONDecoder().decode(
+            JarvisReleaseReadiness.self,
+            from: releaseReadinessJSON()
+        )
+
+        #expect(!readiness.productionReady)
+        #expect(readiness.verifiedFeatureCount == 11)
+        #expect(readiness.pendingFeatureCount == 1)
+        #expect(readiness.implementedFeatures.first?.key == "repository_state")
+        #expect(readiness.pendingFeatures.first?.key == "live_voice_loop")
+        #expect(readiness.blockingManualGates.contains("Developer ID Application and Installer signing credentials configured and used for a full signed package run"))
+        #expect(readiness.recommendedVerificationCommands.contains("./scripts/release-local.sh"))
+        #expect(readiness.proofBoundary.contains("does not perform signing"))
     }
 
     @Test("Command response decodes task, route, steps, and message")
@@ -485,6 +504,8 @@ struct JarvisMacCoreTests {
             switch request.url?.path(percentEncoded: false) {
             case "/contract":
                 return (response, contractJSON(exposesApprovalEndpoint: false))
+            case "/release/readiness":
+                return (response, releaseReadinessJSON())
             case "/memory":
                 if request.httpMethod == "GET" {
                     return (response, Data("[]".utf8))
@@ -522,6 +543,7 @@ struct JarvisMacCoreTests {
         defer { IPCURLProtocol.handler = nil }
 
         _ = try await client.contract()
+        _ = try await client.releaseReadiness()
         _ = try await client.listMemoryItems(includeDeleted: true)
         _ = try await client.memoryClassification(includeDeleted: true)
         _ = try await client.createMemoryItem(
@@ -564,6 +586,7 @@ struct JarvisMacCoreTests {
             "GET",
             "GET",
             "GET",
+            "GET",
             "POST",
             "GET",
             "PATCH",
@@ -581,6 +604,7 @@ struct JarvisMacCoreTests {
         ])
         #expect(requests.map(\.path) == [
             "/contract",
+            "/release/readiness",
             "/memory",
             "/memory/classification",
             "/memory",
@@ -598,9 +622,9 @@ struct JarvisMacCoreTests {
             "/activity/events",
             "/emergency-pause"
         ])
-        #expect(requests[3].body?["key"] as? String == "release-gate")
-        #expect(requests[5].body?["value"] as? String == "preview then sync")
-        #expect(requests[12].body?["command"] as? String == "status check")
+        #expect(requests[4].body?["key"] as? String == "release-gate")
+        #expect(requests[6].body?["value"] as? String == "preview then sync")
+        #expect(requests[13].body?["command"] as? String == "status check")
     }
 
     @Test("Management payloads decode tasks and audit list")
@@ -1044,6 +1068,22 @@ struct JarvisMacCoreTests {
 
         #expect(requestPath == "/diagnostics/export")
         #expect(export.health.status == "ok")
+    }
+
+    @MainActor
+    @Test("Release readiness model loads conservative blockers")
+    func releaseReadinessModelLoadsBlockers() async throws {
+        let readiness = try JSONDecoder().decode(JarvisReleaseReadiness.self, from: releaseReadinessJSON())
+        let model = ReleaseReadinessModel(client: FakeCoreClient(releaseReadiness: readiness))
+
+        await model.refresh()
+
+        #expect(model.readiness?.productionReady == false)
+        #expect(model.readiness?.implementedFeatures.map(\.key).contains("repository_state") == true)
+        #expect(model.readiness?.pendingFeatures.map(\.key).contains("live_voice_loop") == true)
+        #expect(model.readiness?.blockingManualGates.contains("Developer ID Application and Installer signing credentials configured and used for a full signed package run") == true)
+        #expect(model.readiness?.proofBoundary.contains("does not perform signing") == true)
+        #expect(model.lastError == nil)
     }
 
     @Test("Approval queue remains inspection-only when core has no approval endpoint")
@@ -2407,6 +2447,51 @@ private func permissionGrantSummaryJSON(approvalId: UUID = UUID(), taskId: UUID 
     )
 }
 
+private func releaseReadinessJSON() -> Data {
+    Data(
+        """
+        {
+          "generated_at": "2026-05-22T08:00:00Z",
+          "production_ready": false,
+          "readiness_scope": "local Rust/CLI foundation and Swift shell evidence only; full production distribution still has external manual gates",
+          "verified_feature_count": 11,
+          "pending_feature_count": 1,
+          "implemented_features": [
+            {
+              "key": "repository_state",
+              "status": "implemented",
+              "proof": "SQLite-backed task, audit, model-route, memory, scheduler, approval, and installed-plugin state is covered by Rust unit tests and local IPC E2E.",
+              "boundary": "Local repository evidence only; no hosted sync or multi-device state claim."
+            },
+            {
+              "key": "installed_plugin_execution",
+              "status": "implemented",
+              "proof": "Local subprocess plugins require provenance verification plus explicit grants.",
+              "boundary": "Constrained local subprocess execution only; not a WASM, OS-level, or marketplace sandbox."
+            }
+          ],
+          "pending_features": [
+            {
+              "key": "live_voice_loop",
+              "status": "pending_manual_validation",
+              "proof": "Swift voice input and speech-output adapters have deterministic fake-adapter tests.",
+              "boundary": "Live microphone, Speech permission, live audio output, and device validation are not proven by automated tests."
+            }
+          ],
+          "blocking_manual_gates": [
+            "Developer ID Application and Installer signing credentials configured and used for a full signed package run",
+            "live microphone and Speech permission prompt validation on a real Mac"
+          ],
+          "recommended_verification_commands": [
+            "./scripts/release-local.sh",
+            "./scripts/package-distribution.sh --unsigned-launch-check"
+          ],
+          "proof_boundary": "Read-only summary derived from /contract feature metadata and release checklist blockers; it does not perform signing, notarization, installation, Finder/LaunchServices validation, live microphone/Speech validation, live audio-output validation, App Store review, marketplace plugin review, malware analysis, or OS sandbox enforcement."
+        }
+        """.utf8
+    )
+}
+
 private func permissionPolicyReviewJSON(approvalId: UUID = UUID()) -> Data {
     Data(
         """
@@ -2698,6 +2783,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     private var activityEvents: [JarvisActivityEvent]
     private(set) var submittedCommands: [JarvisCommandRequest]
     private var contractResponse: JarvisContractResponse?
+    private var releaseReadinessResponse: JarvisReleaseReadiness?
     private var approvals: [JarvisPendingApproval]
     private var pluginManifests: [JarvisPluginManifest]
     private var installedPlugins: [JarvisInstalledPluginRecord]
@@ -2716,6 +2802,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         auditEntries: [JarvisAuditEntry] = [],
         activityEvents: [JarvisActivityEvent] = [],
         contractResponse: JarvisContractResponse? = nil,
+        releaseReadiness: JarvisReleaseReadiness? = nil,
         approvals: [JarvisPendingApproval] = [],
         pluginManifests: [JarvisPluginManifest] = [],
         installedPlugins: [JarvisInstalledPluginRecord] = [],
@@ -2729,6 +2816,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         self.activityEvents = activityEvents
         self.submittedCommands = []
         self.contractResponse = contractResponse
+        self.releaseReadinessResponse = releaseReadiness
         self.approvals = approvals
         self.pluginManifests = pluginManifests
         self.installedPlugins = installedPlugins
@@ -2769,6 +2857,14 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
                 """.utf8
             )
         )
+    }
+
+    func releaseReadiness() async throws -> JarvisReleaseReadiness {
+        if let releaseReadinessResponse {
+            return releaseReadinessResponse
+        }
+
+        return try JSONDecoder().decode(JarvisReleaseReadiness.self, from: releaseReadinessJSON())
     }
 
     func submit(_ command: JarvisCommandRequest) async throws -> JarvisCommandResponse {

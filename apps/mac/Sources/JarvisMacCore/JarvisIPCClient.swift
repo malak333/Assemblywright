@@ -170,6 +170,12 @@ public struct JarvisContractResponse: Decodable, Equatable, Sendable {
         }
     }
 
+    public var exposesReleaseReadiness: Bool {
+        endpoints.contains { endpoint in
+            endpoint.method.uppercased() == "GET" && endpoint.path == "/release/readiness"
+        }
+    }
+
     public var exposesApprovalApproveAction: Bool {
         endpoints.contains { endpoint in
             endpoint.method.uppercased() == "POST" && endpoint.path == "/approvals/:id/approve"
@@ -189,6 +195,41 @@ public struct JarvisContractResponse: Decodable, Equatable, Sendable {
         case safeInspectionPaths = "safe_inspection_paths"
         case features
     }
+}
+
+public struct JarvisReleaseReadiness: Decodable, Equatable, Sendable {
+    public var generatedAt: String
+    public var productionReady: Bool
+    public var readinessScope: String
+    public var verifiedFeatureCount: Int
+    public var pendingFeatureCount: Int
+    public var implementedFeatures: [JarvisReleaseReadinessFeature]
+    public var pendingFeatures: [JarvisReleaseReadinessFeature]
+    public var blockingManualGates: [String]
+    public var recommendedVerificationCommands: [String]
+    public var proofBoundary: String
+
+    enum CodingKeys: String, CodingKey {
+        case generatedAt = "generated_at"
+        case productionReady = "production_ready"
+        case readinessScope = "readiness_scope"
+        case verifiedFeatureCount = "verified_feature_count"
+        case pendingFeatureCount = "pending_feature_count"
+        case implementedFeatures = "implemented_features"
+        case pendingFeatures = "pending_features"
+        case blockingManualGates = "blocking_manual_gates"
+        case recommendedVerificationCommands = "recommended_verification_commands"
+        case proofBoundary = "proof_boundary"
+    }
+}
+
+public struct JarvisReleaseReadinessFeature: Decodable, Equatable, Identifiable, Sendable {
+    public var key: String
+    public var status: String
+    public var proof: String
+    public var boundary: String
+
+    public var id: String { key }
 }
 
 public struct JarvisDiagnosticsExport: Decodable, Equatable, Sendable {
@@ -1364,6 +1405,7 @@ public enum JarvisIPCError: Error, Equatable {
 public protocol JarvisCoreClient: Sendable {
     func health() async throws -> JarvisHealth
     func contract() async throws -> JarvisContractResponse
+    func releaseReadiness() async throws -> JarvisReleaseReadiness
     func submit(_ command: JarvisCommandRequest) async throws -> JarvisCommandResponse
     func pause(reason: String) async throws -> JarvisPauseResponse
     func resume() async throws -> JarvisPauseResponse
@@ -1417,6 +1459,10 @@ public final class JarvisIPCClient: JarvisCoreClient {
 
     public func contract() async throws -> JarvisContractResponse {
         try await send(path: "/contract", method: "GET", body: Optional<Data>.none)
+    }
+
+    public func releaseReadiness() async throws -> JarvisReleaseReadiness {
+        try await send(path: "/release/readiness", method: "GET", body: Optional<Data>.none)
     }
 
     public func submit(_ command: JarvisCommandRequest) async throws -> JarvisCommandResponse {
