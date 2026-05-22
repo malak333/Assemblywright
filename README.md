@@ -242,6 +242,13 @@ JSON evidence-report mechanics with fake flags only. The owner-recorded
 `target/release-plugin-trust-qa-report.json` after all required
 `JARVIS_PLUGIN_QA_*` flags are true, but that report remains manual external
 evidence rather than repo-local proof of marketplace or host sandbox systems.
+`./scripts/release-evidence-bundle.sh --check` ties those external proof paths
+together by listing the signed distribution artifacts, live-device QA report,
+plugin-trust QA report, and owner validation flags required before a final
+release evidence manifest can be written. Its `--self-test` mode uses fake
+artifacts/reports to prove bundle mechanics only; `--bundle` writes
+`target/release-evidence-bundle.json` after all referenced evidence exists and
+all required `JARVIS_EVIDENCE_*` flags are true.
 
 With a repository-backed server running, `jarvis release readiness`,
 `jarvis tasks`, `jarvis memory`, `jarvis activity summary`,

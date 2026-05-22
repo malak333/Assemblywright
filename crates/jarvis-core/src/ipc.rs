@@ -3676,6 +3676,8 @@ fn release_verification_commands() -> Vec<String> {
         "JARVIS_QA_CLEAN_PROFILE_VALIDATED=true JARVIS_QA_FINDER_LAUNCH_VALIDATED=true JARVIS_QA_MICROPHONE_VALIDATED=true JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true JARVIS_QA_NOTIFICATION_VALIDATED=true JARVIS_QA_RESTART_VALIDATED=true JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true ./scripts/release-live-device-qa.sh --assert-complete".to_string(),
         "./scripts/release-plugin-trust-qa.sh --check".to_string(),
         "JARVIS_PLUGIN_QA_MARKETPLACE_REVIEW_VALIDATED=true JARVIS_PLUGIN_QA_MALWARE_SCAN_VALIDATED=true JARVIS_PLUGIN_QA_OS_SANDBOX_VALIDATED=true JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED=true JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_POLICY_VALIDATED=true JARVIS_PLUGIN_QA_MANUAL_TRUST_REVIEW_VALIDATED=true ./scripts/release-plugin-trust-qa.sh --assert-complete".to_string(),
+        "./scripts/release-evidence-bundle.sh --check".to_string(),
+        "JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true JARVIS_EVIDENCE_REPORTS_ARCHIVED=true ./scripts/release-evidence-bundle.sh --bundle".to_string(),
         "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh".to_string(),
     ]
 }
@@ -4083,6 +4085,10 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .recommended_verification_commands
             .iter()
             .any(|command| command == "./scripts/release-plugin-trust-qa.sh --check"));
+        assert!(readiness
+            .recommended_verification_commands
+            .iter()
+            .any(|command| command == "./scripts/release-evidence-bundle.sh --check"));
         assert!(readiness
             .proof_boundary
             .contains("does not perform signing"));

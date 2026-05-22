@@ -30,6 +30,8 @@ cargo package --workspace --allow-dirty
 ./scripts/release-live-device-qa.sh --self-test
 ./scripts/release-plugin-trust-qa.sh --check
 ./scripts/release-plugin-trust-qa.sh --self-test
+./scripts/release-evidence-bundle.sh --check
+./scripts/release-evidence-bundle.sh --self-test
 swift test --package-path apps/mac
 swift build --package-path apps/mac
 ```
@@ -275,6 +277,11 @@ preflight for marketplace review, malware scanning, signed publisher policy,
 OS sandbox, and host-level egress validation. Its `--self-test` mode uses fake
 flags to verify report generation only; real release evidence must come from
 `--assert-complete` after the owner validates every `JARVIS_PLUGIN_QA_*` flag.
+`./scripts/release-evidence-bundle.sh --check` is the final evidence-bundle
+preflight. Its `--self-test` validates bundle manifest generation with fake
+artifacts and fake QA reports only; real release evidence must come from
+`--bundle` after signed/notarized distribution artifacts, live-device QA, and
+plugin-trust QA evidence exist and every `JARVIS_EVIDENCE_*` flag is true.
 
 ## Useful Focused Commands
 
