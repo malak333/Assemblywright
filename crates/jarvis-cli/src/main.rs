@@ -52,6 +52,11 @@ enum CliCommand {
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
+    /// Summarize release-readiness evidence and remaining production blockers.
+    Release {
+        #[command(subcommand)]
+        command: ReleaseCommand,
+    },
     /// Run a local IPC smoke test against an ephemeral core server.
     Smoke,
     /// Submit a command to the core command endpoint.
@@ -125,6 +130,15 @@ enum CliCommand {
     Permissions {
         #[command(subcommand)]
         command: PermissionsCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ReleaseCommand {
+    /// Print conservative release-readiness evidence as JSON.
+    Readiness {
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
     },
 }
 
@@ -511,6 +525,11 @@ async fn main() -> anyhow::Result<()> {
         CliCommand::Contract { endpoint } => {
             println!("{}", request(&endpoint, "GET", "/contract", None)?);
         }
+        CliCommand::Release { command } => match command {
+            ReleaseCommand::Readiness { endpoint } => {
+                println!("{}", request(&endpoint, "GET", "/release/readiness", None)?);
+            }
+        },
         CliCommand::Smoke => {
             run_smoke().await?;
         }

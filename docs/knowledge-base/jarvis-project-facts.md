@@ -62,6 +62,13 @@ These notes capture durable facts for future agents working on this repository.
   and boundary fields so Swift and release docs can distinguish implemented
   repo-owned surfaces from manual or target production claims without scraping
   prose.
+- `/release/readiness` and `jarvis release readiness` derive a conservative
+  read-only release summary from contract feature metadata and release-checklist
+  blockers. It reports implemented features, pending features, recommended
+  verification commands, and manual gates while keeping
+  `production_ready: false` until external signing/notarization, clean-profile
+  installer/Finder checks, live voice/audio validation, and manual QA are
+  complete.
 - `ConversationRuntime` supports bounded fake-model and provider-envelope
   planned first-party tool calls with schema validation, policy checks, approval
   stops, tool-result audit entries, and feedback of tool results into later
@@ -173,9 +180,9 @@ These notes capture durable facts for future agents working on this repository.
   first-party manifests. This surface is read-only and degrades to a warning
   while keeping first-party manifests visible when the repository-backed
   installed registry endpoint is unavailable.
-- The CLI has matching `tasks`, `memory`, `scheduler`, `diagnostics`, and
-  `plugins` subcommands, including `plugins install`, `plugins installed`,
-  `plugins installed-get`, `plugins enable-installed`, `plugins
+- The CLI has matching `release readiness`, `tasks`, `memory`, `scheduler`,
+  `diagnostics`, and `plugins` subcommands, including `plugins install`,
+  `plugins installed`, `plugins installed-get`, `plugins enable-installed`, `plugins
   verify-installed`, `plugins verify-publisher`,
   `plugins verify-publisher-signature`, `plugins disable-installed`, and
   `plugins run-installed` for disabled-by-default local manifests, auditable

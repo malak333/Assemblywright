@@ -92,6 +92,28 @@ pub struct ContractResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReleaseReadinessResponse {
+    pub generated_at: DateTime<Utc>,
+    pub production_ready: bool,
+    pub readiness_scope: String,
+    pub verified_feature_count: usize,
+    pub pending_feature_count: usize,
+    pub implemented_features: Vec<ReleaseReadinessFeature>,
+    pub pending_features: Vec<ReleaseReadinessFeature>,
+    pub blocking_manual_gates: Vec<String>,
+    pub recommended_verification_commands: Vec<String>,
+    pub proof_boundary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReleaseReadinessFeature {
+    pub key: String,
+    pub status: String,
+    pub proof: String,
+    pub boundary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HealthResponse {
     pub status: String,
     pub version: String,
@@ -612,6 +634,7 @@ impl IpcState {
             safe_inspection_paths: vec![
                 "/health".to_string(),
                 "/contract".to_string(),
+                "/release/readiness".to_string(),
                 "/diagnostics/export".to_string(),
                 "/plugins/manifests".to_string(),
                 "/plugins/manifests/:id".to_string(),
@@ -651,6 +674,38 @@ impl IpcState {
             local_model_provider: self.provider_config.local.provider,
             local_model: self.provider_config.local.model.clone(),
             local_endpoint_configured: self.provider_config.local.base_url.is_some(),
+        }
+    }
+
+    pub fn release_readiness(&self) -> ReleaseReadinessResponse {
+        let features = contract_features();
+        let implemented_features = features
+            .iter()
+            .filter(|feature| feature.status == "implemented")
+            .cloned()
+            .map(ReleaseReadinessFeature::from)
+            .collect::<Vec<_>>();
+        let pending_features = features
+            .into_iter()
+            .filter(|feature| feature.status != "implemented")
+            .map(ReleaseReadinessFeature::from)
+            .collect::<Vec<_>>();
+
+        ReleaseReadinessResponse {
+            generated_at: Utc::now(),
+            production_ready: false,
+            readiness_scope:
+                "local Rust/CLI foundation and Swift shell evidence only; full production distribution still has external manual gates"
+                    .to_string(),
+            verified_feature_count: implemented_features.len(),
+            pending_feature_count: pending_features.len(),
+            implemented_features,
+            pending_features,
+            blocking_manual_gates: release_blocking_manual_gates(),
+            recommended_verification_commands: release_verification_commands(),
+            proof_boundary:
+                "Read-only summary derived from /contract feature metadata and release checklist blockers; it does not perform signing, notarization, installation, Finder/LaunchServices validation, live microphone/Speech validation, live audio-output validation, App Store review, marketplace plugin review, malware analysis, or OS sandbox enforcement."
+                    .to_string(),
         }
     }
 
@@ -2835,6 +2890,7 @@ pub fn router(state: IpcState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/contract", get(contract))
+        .route("/release/readiness", get(release_readiness))
         .route("/diagnostics/export", get(diagnostics_export))
         .route("/commands", post(command))
         .route("/tasks", get(list_tasks))
@@ -2924,6 +2980,10 @@ async fn health(State(state): State<IpcState>) -> Json<HealthResponse> {
 
 async fn contract(State(state): State<IpcState>) -> Json<ContractResponse> {
     Json(state.contract())
+}
+
+async fn release_readiness(State(state): State<IpcState>) -> Json<ReleaseReadinessResponse> {
+    Json(state.release_readiness())
 }
 
 async fn diagnostics_export(
@@ -3518,6 +3578,7 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
     vec![
         endpoint("GET", "/health", false, true),
         endpoint("GET", "/contract", false, true),
+        endpoint("GET", "/release/readiness", false, true),
         endpoint("GET", "/diagnostics/export", false, true),
         endpoint("POST", "/commands", false, false),
         endpoint("GET", "/tasks", true, false),
@@ -3578,6 +3639,39 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
         endpoint("POST", "/scheduler/recover-stale", false, false),
         endpoint("GET", "/scheduler/jobs/:id", false, false),
         endpoint("DELETE", "/scheduler/jobs/:id", false, false),
+    ]
+}
+
+impl From<ContractFeature> for ReleaseReadinessFeature {
+    fn from(feature: ContractFeature) -> Self {
+        Self {
+            key: feature.key,
+            status: feature.status,
+            proof: feature.proof,
+            boundary: feature.boundary,
+        }
+    }
+}
+
+fn release_blocking_manual_gates() -> Vec<String> {
+    vec![
+        "Developer ID Application and Installer signing credentials configured and used for a full signed package run".to_string(),
+        "notarization and stapling completed for both app and installer package".to_string(),
+        "clean-profile installer run into /Applications".to_string(),
+        "Finder/LaunchServices launch validation for the installed app".to_string(),
+        "live microphone and Speech permission prompt validation on a real Mac".to_string(),
+        "live audio-output playback validation on a real Mac".to_string(),
+        "manual release QA pass covering command, audit, memory, scheduler, plugin, pause, diagnostics, and restart behavior".to_string(),
+        "broader installed-plugin marketplace trust, malware analysis, and OS-level sandbox/egress enforcement before marketplace claims".to_string(),
+    ]
+}
+
+fn release_verification_commands() -> Vec<String> {
+    vec![
+        "./scripts/release-local.sh".to_string(),
+        "./scripts/packaged-app-release-smoke.sh".to_string(),
+        "./scripts/package-distribution.sh --unsigned-launch-check".to_string(),
+        "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh".to_string(),
     ]
 }
 
@@ -3856,6 +3950,9 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         }));
         assert!(contract
             .safe_inspection_paths
+            .contains(&"/release/readiness".to_string()));
+        assert!(contract
+            .safe_inspection_paths
             .contains(&"/diagnostics/export".to_string()));
         assert!(contract
             .safe_inspection_paths
@@ -3866,6 +3963,13 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert!(!contract
             .safe_inspection_paths
             .contains(&"/plugins/installed/:id/execution".to_string()));
+        assert!(contract
+            .endpoints
+            .iter()
+            .any(|endpoint| endpoint.method == "GET"
+                && endpoint.path == "/release/readiness"
+                && !endpoint.repository_required
+                && endpoint.redacted));
         assert!(contract
             .endpoints
             .iter()
@@ -3914,6 +4018,43 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .any(|endpoint| endpoint.method == "GET"
                 && endpoint.path == "/activity/events"
                 && endpoint.repository_required));
+    }
+
+    #[test]
+    fn release_readiness_summarizes_blockers_without_claiming_production_ready() {
+        let state = IpcState::new();
+        let readiness = state.release_readiness();
+
+        assert!(!readiness.production_ready);
+        assert!(readiness
+            .readiness_scope
+            .contains("local Rust/CLI foundation"));
+        assert!(readiness.verified_feature_count > 0);
+        assert!(readiness.pending_feature_count > 0);
+        assert!(readiness
+            .implemented_features
+            .iter()
+            .any(|feature| feature.key == "installed_plugin_execution"));
+        assert!(readiness
+            .pending_features
+            .iter()
+            .any(|feature| feature.key == "live_voice_loop"
+                && feature.status == "pending_manual_validation"));
+        assert!(readiness
+            .blocking_manual_gates
+            .iter()
+            .any(|gate| gate.contains("Developer ID")));
+        assert!(readiness
+            .blocking_manual_gates
+            .iter()
+            .any(|gate| gate.contains("live microphone")));
+        assert!(readiness
+            .recommended_verification_commands
+            .iter()
+            .any(|command| command == "./scripts/release-local.sh"));
+        assert!(readiness
+            .proof_boundary
+            .contains("does not perform signing"));
     }
 
     #[test]

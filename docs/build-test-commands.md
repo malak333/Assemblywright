@@ -142,6 +142,7 @@ Run these while `cargo run -p jarvis-cli -- serve` is active:
 ```sh
 cargo run -p jarvis-cli -- command --dry-run "status check"
 cargo run -p jarvis-cli -- plugins list
+cargo run -p jarvis-cli -- release readiness
 cargo run -p jarvis-cli -- diagnostics export
 cargo run -p jarvis-cli -- permissions grants
 cargo run -p jarvis-cli -- activity summary
@@ -231,6 +232,7 @@ cargo run -p jarvis-cli -- approvals list --status pending
 cargo run -p jarvis-cli -- approvals approve <approval-id> --decided-by cli --reason "reviewed"
 cargo run -p jarvis-cli -- approvals execute <approval-id>
 cargo run -p jarvis-cli -- approvals deny <approval-id> --decided-by cli --reason "not safe"
+cargo run -p jarvis-cli -- release readiness
 cargo run -p jarvis-cli -- permissions review
 cargo run -p jarvis-cli -- activity summary
 cargo run -p jarvis-cli -- activity watch --max-events 2 --interval-ms 500
@@ -250,6 +252,10 @@ memory retained in local storage. Memory review items include category/key and
 sensitivity only; memory values stay out of policy review and diagnostics
 export. `jarvis diagnostics export` exposes aggregate active, unreviewed, and
 sensitive memory counts when repository backing is enabled.
+`jarvis release readiness` is read-only and summarizes implemented feature
+proofs, pending feature boundaries, recommended verification commands, and
+manual production blockers with `production_ready: false` until the external
+distribution and live-device gates are completed.
 
 ## Useful Focused Commands
 
