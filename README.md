@@ -110,7 +110,9 @@ or OS-level network sandboxing.
 Approval grant/deny decisions remain side-effect-free. Approved first-party
 approval records require a separate one-shot `/approvals/:id/execute` or
 `jarvis approvals execute <approval-id>` replay, which verifies the original
-action and scopes before recording `approval_executed` audit evidence.
+action and scopes before recording `approval_executed` audit evidence. The
+Swift Approval Center exposes the same boundary by showing Run Approved only
+for approved records that do not already have execution audit evidence.
 
 ## Build
 

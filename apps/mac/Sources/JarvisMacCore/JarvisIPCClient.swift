@@ -734,6 +734,7 @@ public struct JarvisApprovalQueueItem: Equatable, Identifiable, Sendable {
     public var source: String
     public var approvalStatus: String
     public var actionAvailable: Bool
+    public var executionAvailable: Bool
     public var action: String?
     public var requestedScopes: [String]
     public var riskTier: String?
@@ -748,6 +749,7 @@ public struct JarvisApprovalQueueItem: Equatable, Identifiable, Sendable {
         source: String,
         approvalStatus: String,
         actionAvailable: Bool,
+        executionAvailable: Bool = false,
         action: String? = nil,
         requestedScopes: [String] = [],
         riskTier: String? = nil,
@@ -761,6 +763,7 @@ public struct JarvisApprovalQueueItem: Equatable, Identifiable, Sendable {
         self.source = source
         self.approvalStatus = approvalStatus
         self.actionAvailable = actionAvailable
+        self.executionAvailable = executionAvailable
         self.action = action
         self.requestedScopes = requestedScopes
         self.riskTier = riskTier
@@ -768,7 +771,11 @@ public struct JarvisApprovalQueueItem: Equatable, Identifiable, Sendable {
         self.requestedAt = requestedAt
     }
 
-    public init(approval: JarvisPendingApproval, actionAvailable: Bool) {
+    public init(
+        approval: JarvisPendingApproval,
+        actionAvailable: Bool,
+        executionAvailable: Bool = false
+    ) {
         self.init(
             id: approval.id,
             taskId: approval.taskId,
@@ -777,6 +784,7 @@ public struct JarvisApprovalQueueItem: Equatable, Identifiable, Sendable {
             source: "approval",
             approvalStatus: approval.status,
             actionAvailable: actionAvailable && approval.status == "pending",
+            executionAvailable: executionAvailable && approval.status == "approved",
             action: approval.action,
             requestedScopes: approval.requestedScopes,
             riskTier: approval.riskTier,
@@ -829,8 +837,13 @@ public struct JarvisApprovalQueueItem: Equatable, Identifiable, Sendable {
         contract: JarvisContractResponse?
     ) -> [JarvisApprovalQueueItem] {
         let supportsApprovalActions = contract?.exposesApprovalActions == true
+        let supportsApprovalExecution = contract?.exposesApprovalExecuteAction == true
         return approvals.map {
-            JarvisApprovalQueueItem(approval: $0, actionAvailable: supportsApprovalActions)
+            JarvisApprovalQueueItem(
+                approval: $0,
+                actionAvailable: supportsApprovalActions,
+                executionAvailable: supportsApprovalExecution
+            )
         }
     }
 

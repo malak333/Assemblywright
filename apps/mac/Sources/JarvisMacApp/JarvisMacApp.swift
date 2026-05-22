@@ -757,6 +757,12 @@ struct ApprovalCenterView: View {
                         .foregroundStyle(.secondary)
                 }
 
+                if let execution = model.lastExecution {
+                    Text("\(execution.approval.action) executed: \(execution.task.status)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 ForEach(model.pendingItems) { item in
                     VStack(alignment: .leading, spacing: 5) {
                         HStack {
@@ -787,6 +793,14 @@ struct ApprovalCenterView: View {
                                 } label: {
                                     Label("Deny", systemImage: "xmark.circle")
                                 }
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(model.isLoading)
+                        } else if item.executionAvailable {
+                            Button {
+                                execute(item.id)
+                            } label: {
+                                Label("Run Approved", systemImage: "play.circle")
                             }
                             .buttonStyle(.bordered)
                             .disabled(model.isLoading)
@@ -834,6 +848,13 @@ struct ApprovalCenterView: View {
             if model.lastError == nil {
                 decisionReasons[id] = nil
             }
+        }
+    }
+
+    private func execute(_ id: UUID) {
+        Task {
+            await model.execute(id: id)
+            decisionReasons[id] = nil
         }
     }
 }

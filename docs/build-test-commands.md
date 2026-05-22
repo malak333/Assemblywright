@@ -183,8 +183,8 @@ constrained JSON stdin/stdout runner. The Swift app now exposes the
 Speech/AVFoundation input adapter controls and AVFoundation speech-output
 preview controls, but release claims for real voice still require entitlement
 packaging, live microphone checks, live audio-output checks, and manual device
-validation. Swift approval and voice controls are covered by the Swift
-contract/model tests.
+validation. Swift approval decision, approved-run, and voice controls are
+covered by the Swift contract/model tests.
 Local plugin install is metadata-only:
 `jarvis plugins install /absolute/path/to/jarvis-plugin.json` validates and
 stores a disabled registry record with local provenance hashes when repository

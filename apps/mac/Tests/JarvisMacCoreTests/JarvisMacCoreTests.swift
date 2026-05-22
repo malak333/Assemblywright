@@ -1604,7 +1604,7 @@ struct JarvisMacCoreTests {
     }
 
     @MainActor
-    @Test("Approval management model approves and removes pending approval")
+    @Test("Approval management model approves and stages executable approval")
     func approvalManagementModelApprovesPendingApproval() async {
         let approval = samplePendingApproval()
         let client = FakeCoreClient(
@@ -1618,7 +1618,10 @@ struct JarvisMacCoreTests {
         await model.approve(id: approval.id, reason: "reviewed in app")
 
         #expect(model.supportsApprovalActions)
-        #expect(model.pendingItems.isEmpty)
+        #expect(model.supportsApprovalExecution)
+        #expect(model.pendingItems.count == 1)
+        #expect(model.pendingItems.first?.approvalStatus == "approved")
+        #expect(model.pendingItems.first?.executionAvailable == true)
         #expect(model.lastDecision?.status == "approved")
         #expect(model.lastDecision?.decidedBy == "mac-ui")
         #expect(client.approvalDecisions == [
@@ -1631,6 +1634,34 @@ struct JarvisMacCoreTests {
         #expect(model.permissionSurface.unverifiedInstalledPluginGrantCount == 1)
         #expect(model.policyReview?.reviewItemCount == 3)
         #expect(model.policyReview?.status == "review_required")
+    }
+
+    @MainActor
+    @Test("Approval management model executes approved approval and hides completed replay")
+    func approvalManagementModelExecutesApprovedApproval() async {
+        let approval = samplePendingApproval(status: "approved", decidedBy: "mac-ui", decisionReason: "reviewed")
+        let client = FakeCoreClient(
+            contractResponse: fullApprovalContract(),
+            approvals: [approval],
+            permissionGrantSummary: samplePermissionGrantSummary(approval: approval)
+        )
+        let model = ApprovalManagementModel(client: client)
+
+        await model.refresh()
+
+        #expect(model.pendingItems.count == 1)
+        #expect(model.pendingItems.first?.executionAvailable == true)
+
+        await model.execute(id: approval.id)
+
+        #expect(client.approvalExecutions == [approval.id])
+        #expect(model.pendingItems.isEmpty)
+        #expect(model.lastExecution?.accepted == true)
+        #expect(model.lastExecution?.auditEntry.eventType == "approval_executed")
+
+        await model.refresh()
+
+        #expect(model.pendingItems.isEmpty)
     }
 
     @MainActor
@@ -2478,6 +2509,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     private var memoryItems: [JarvisMemoryItem]
     private var permissionGrantSummaryResult: JarvisPermissionGrantSummary?
     private(set) var approvalDecisions: [ApprovalDecision]
+    private(set) var approvalExecutions: [UUID]
     private(set) var includeDeletedMemoryRequests: [Bool]
     private(set) var createdMemoryRequests: [JarvisCreateMemoryItemRequest]
     private(set) var updatedMemoryRequests: [(id: UUID, request: JarvisMemoryMutationRequest)]
@@ -2502,6 +2534,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         self.memoryItems = memoryItems
         self.permissionGrantSummaryResult = permissionGrantSummary
         self.approvalDecisions = []
+        self.approvalExecutions = []
         self.includeDeletedMemoryRequests = []
         self.createdMemoryRequests = []
         self.updatedMemoryRequests = []
@@ -2796,6 +2829,17 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         guard let approval = approvals.first(where: { $0.id == id }) else {
             throw URLError(.badServerResponse)
         }
+        approvalExecutions.append(id)
+        auditEntries.append(
+            JarvisAuditEntry(
+                id: UUID(),
+                taskId: approval.taskId,
+                eventType: "approval_executed",
+                summary: "approved first-party plugin action execution completed",
+                payload: .object(["approval_id": .string(approval.id.uuidString)]),
+                createdAt: "2026-05-20T12:15:00Z"
+            )
+        )
         return try JSONDecoder().decode(
             JarvisApprovalExecutionResponse.self,
             from: approvalExecutionJSON(approvalId: approval.id, taskId: approval.taskId)
@@ -2807,18 +2851,21 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         approved: Bool,
         request: JarvisApprovalDecisionRequest
     ) throws -> JarvisPendingApproval {
-        guard let approval = approvals.first(where: { $0.id == id }) else {
+        guard let index = approvals.firstIndex(where: { $0.id == id }) else {
             throw URLError(.badServerResponse)
         }
+        let approval = approvals[index]
 
         approvalDecisions.append(ApprovalDecision(id: id, approved: approved, reason: request.reason))
-        return samplePendingApproval(
+        let decidedApproval = samplePendingApproval(
             id: approval.id,
             taskId: approval.taskId,
             status: approved ? "approved" : "denied",
             decidedBy: request.decidedBy,
             decisionReason: request.reason
         )
+        approvals[index] = decidedApproval
+        return decidedApproval
     }
 }
 
