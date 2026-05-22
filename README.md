@@ -251,11 +251,12 @@ prove the assertion/report mechanics without claiming real device validation.
 For plugin trust checks, `./scripts/release-plugin-trust-qa.sh --check` prints
 the marketplace, malware-analysis, OS sandbox, and egress-enforcement runbook
 and is part of the default local release gate. Its `--self-test` mode proves
-JSON evidence-report mechanics with fake flags only. The owner-recorded
-`--assert-complete` path writes
+JSON evidence-report mechanics with fake flags and fake evidence notes only.
+The owner-recorded `--assert-complete` path writes
 `target/release-plugin-trust-qa-report.json` after all required
-`JARVIS_PLUGIN_QA_*` flags are true, but that report remains manual external
-evidence rather than repo-local proof of marketplace or host sandbox systems.
+`JARVIS_PLUGIN_QA_*` flags are true and owner/timestamp/evidence-note fields are
+populated, but that report remains manual external evidence rather than
+repo-local proof of marketplace or host sandbox systems.
 `./scripts/release-evidence-bundle.sh --check` ties those external proof paths
 together by listing the signed distribution artifacts, live-device QA report,
 plugin-trust QA report, and owner validation flags required before a final

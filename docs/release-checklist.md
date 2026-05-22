@@ -268,9 +268,10 @@ stage or when a PR needs focused evidence for one ownership slice.
 - Confirm `./scripts/release-plugin-trust-qa.sh --check` is included in release
   readiness recommendations and the local release gate, and that
   `./scripts/release-plugin-trust-qa.sh --self-test` proves only JSON report
-  mechanics with fake validation flags. Treat `--assert-complete` output as
-  owner-recorded external evidence for marketplace review, malware scanning,
-  signed publisher policy, OS sandbox, and host-level egress validation.
+  mechanics with fake validation flags and fake evidence notes. Treat
+  `--assert-complete` output as owner-recorded external evidence for marketplace
+  review, malware scanning, signed publisher policy, OS sandbox, and host-level
+  egress validation only after owner/timestamp/evidence-note fields are present.
 - Confirm `./scripts/release-evidence-bundle.sh --check` is included in
   release readiness recommendations and the local release gate, and that
   `./scripts/release-evidence-bundle.sh --self-test` proves only final bundle
@@ -281,9 +282,10 @@ stage or when a PR needs focused evidence for one ownership slice.
   stapling ticket, and app zip payload before writing the manifest; it still
   does not perform those external validations locally. Production bundle
   creation must keep local signature validation enabled, parse every required
-  live-device/plugin-trust report flag, confirm the live-device QA report
-  matches the expected bundle id/version/build, and write SHA-256 digests for
-  the signed distribution artifacts plus QA reports before writing evidence;
+  live-device/plugin-trust report flag, require owner-recorded evidence fields
+  in both QA reports, confirm the live-device QA report matches the expected
+  bundle id/version/build, and write SHA-256 digests for the signed distribution
+  artifacts plus QA reports before writing evidence;
   the disabled-signature path is reserved for the fake self-test fixture.
 - Confirm `./scripts/release-evidence-doctor.sh --check` is included in
   release readiness recommendations and the local release gate, and that

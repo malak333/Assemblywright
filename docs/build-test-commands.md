@@ -289,8 +289,9 @@ distribution and live-device gates are completed.
 `./scripts/release-plugin-trust-qa.sh --check` is the local plugin-trust
 preflight for marketplace review, malware scanning, signed publisher policy,
 OS sandbox, and host-level egress validation. Its `--self-test` mode uses fake
-flags to verify report generation only; real release evidence must come from
-`--assert-complete` after the owner validates every `JARVIS_PLUGIN_QA_*` flag.
+flags and fake evidence notes to verify report generation only; real release
+evidence must come from `--assert-complete` after the owner validates every
+`JARVIS_PLUGIN_QA_*` flag and populates the owner/timestamp/evidence-note fields.
 `./scripts/release-evidence-bundle.sh --check` is the final evidence-bundle
 preflight. Its `--self-test` validates bundle manifest generation with fake
 artifacts and fake QA reports only; real release evidence must come from
@@ -300,9 +301,10 @@ The real bundle path also locally validates the signed app, app stapling
 ticket, signed installer package, installer stapling ticket, and app zip
 payload before writing the manifest. It rejects disabled local signature
 validation outside the fake self-test lane, parses every required
-live-device/plugin-trust report flag, requires live-device QA app bundle
-metadata to match the expected bundle id/version, and writes SHA-256 digests
-for distribution artifacts and QA reports before writing production evidence.
+live-device/plugin-trust report flag, requires owner-recorded evidence fields in
+both QA reports, requires live-device QA app bundle metadata to match the
+expected bundle id/version, and writes SHA-256 digests for distribution
+artifacts and QA reports before writing production evidence.
 `./scripts/release-evidence-doctor.sh --check` inventories the expected signed
 artifact paths, live-device QA report, plugin-trust QA report, and final
 evidence bundle manifest, then reports present and missing evidence without

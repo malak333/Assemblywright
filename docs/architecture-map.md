@@ -21,11 +21,13 @@ flowchart TB
     LocalGate --> Smoke["jarvis-cli smoke"]
     LocalGate --> OperatorQASmoke["release-operator-qa-smoke.sh"]
     LocalGate --> UnsignedLaunch["package-distribution.sh unsigned-launch-check"]
-    LocalGate --> LiveDeviceQA["release-live-device-qa.sh check/self-test"]
-    LiveDeviceQA --> LiveDeviceQAReport["target/release-live-device-qa-report.json owner-recorded voice evidence"]
-    LocalGate --> PluginTrustQA["release-plugin-trust-qa.sh check/self-test"]
+    LocalGate --> LiveDeviceQA["release-live-device-qa.sh check/self-test preflight"]
+    LiveDeviceAssert["release-live-device-qa.sh assert-complete"] --> LiveDeviceQAReport["target/release-live-device-qa-report.json owner-recorded voice evidence"]
+    LocalGate --> PluginTrustQA["release-plugin-trust-qa.sh check/self-test preflight"]
+    PluginTrustAssert["release-plugin-trust-qa.sh assert-complete"] --> PluginTrustQAReport["target/release-plugin-trust-qa-report.json owner-recorded plugin trust evidence"]
     LocalGate --> EvidenceBundle["release-evidence-bundle.sh check/self-test and signed-artifact validation path"]
     LiveDeviceQAReport --> EvidenceBundle
+    PluginTrustQAReport --> EvidenceBundle
     LocalGate --> EvidenceDoctor["release-evidence-doctor.sh check/self-test evidence inventory"]
     LocalGate --> SwiftGate["Swift package build/test"]
     LocalGate --> CargoGate["fmt, clippy, tests, build, package"]
@@ -268,8 +270,9 @@ The local release gate now runs `./scripts/release-plugin-trust-qa.sh --check`
 and `--self-test` so marketplace review, malware scanning, signed publisher
 policy, OS sandbox, and host-level egress validation stay visible as manual
 release evidence. `--check` is a runbook and `--self-test` proves JSON report
-mechanics only; `--assert-complete` records owner validation flags and does not
-turn those external checks into repo-local proof.
+mechanics only; `--assert-complete` records owner validation flags plus
+owner/timestamp/evidence-note fields and does not turn those external checks
+into repo-local proof.
 It supports opt-in
 ChatGPT/OpenAI-compatible execution only after route policy allows it. It does
 not yet support a broader WASM/OS-network/plugin-marketplace sandbox or a signed
@@ -337,7 +340,8 @@ mechanics in the local gate.
 The `./scripts/release-plugin-trust-qa.sh --check` command similarly keeps
 marketplace, malware-analysis, signed-publisher-policy, OS sandbox, and
 host-level egress checks on the release path; `--assert-complete` writes a
-manual JSON evidence report only after owner validation flags are true.
+manual JSON evidence report only after owner validation flags are true and
+owner/timestamp/evidence-note fields are populated.
 The `./scripts/release-evidence-bundle.sh --check` command ties the signed
 distribution artifacts, live-device QA report, plugin-trust QA report, and
 owner validation flags into a final bundle manifest path. `--self-test` uses
@@ -346,7 +350,8 @@ evidence exists, the owner flags are true, and the local app signature,
 app stapling ticket, installer signature, installer stapling ticket, and app
 zip payload validate. Production bundle creation keeps local signature
 validation mandatory, parses every required live-device/plugin-trust report
-flag, confirms the live-device QA bundle id/version/build metadata matches the
+flag, requires non-empty owner-recorded evidence fields in both QA reports,
+confirms the live-device QA bundle id/version/build metadata matches the
 expected release, and records SHA-256 digests for distribution artifacts and QA
 reports before writing evidence.
 The `./scripts/release-evidence-doctor.sh --check` command inventories the

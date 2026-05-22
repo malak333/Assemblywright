@@ -151,13 +151,14 @@ to explain what happened:
 - `./scripts/release-plugin-trust-qa.sh --check` keeps the manual marketplace,
   malware-analysis, OS sandbox, and egress-enforcement review path executable
   in the local release gate. `--self-test` proves only the assertion/report
-  mechanics; `--assert-complete` writes owner-recorded evidence after external
-  validation flags are true.
+  mechanics with fake evidence notes; `--assert-complete` writes owner-recorded
+  evidence after external validation flags and non-empty owner/timestamp/evidence
+  fields are present.
 - `./scripts/release-evidence-bundle.sh --bundle` references the plugin-trust
   QA report alongside signed distribution artifacts and live-device QA evidence
-  for final release review. It records evidence paths and owner flags only; it
-  does not turn plugin marketplace, malware, sandbox, or egress checks into
-  repo-local proof.
+  for final release review. It records evidence paths, owner flags, and
+  owner-recorded plugin trust notes only; it does not turn plugin marketplace,
+  malware, sandbox, or egress checks into repo-local proof.
 - Installed plugin dry runs are contract-only. `dry_run: true` validates the
   stored manifest, action name, and input schema, then returns `dry_run` with
   `contract_validated: true` and `side_effect_executed: false`; it never loads
