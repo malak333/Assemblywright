@@ -249,9 +249,12 @@ plugin-trust QA report, and owner validation flags required before a final
 release evidence manifest can be written. Its `--self-test` mode uses fake
 artifacts/reports to prove bundle mechanics only; `--bundle` writes
 `target/release-evidence-bundle.json` after all referenced evidence exists and
-all required `JARVIS_EVIDENCE_*` flags are true. The real bundle path also
+all required `JARVIS_EVIDENCE_*` flags are true. The live-device QA report
+must bind the validated bundle identifier, app version, build version, and
+voice permission usage strings to the installed app. The real bundle path also
 validates the local app signature, app stapling ticket, installer signature,
-installer stapling ticket, and app zip payload before writing the manifest.
+installer stapling ticket, and app zip payload, then records SHA-256 digests
+for distribution artifacts and QA reports before writing the manifest.
 
 With a repository-backed server running, `jarvis release readiness`,
 `jarvis tasks`, `jarvis memory`, `jarvis activity summary`,

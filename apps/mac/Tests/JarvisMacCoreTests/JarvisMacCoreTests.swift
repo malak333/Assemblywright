@@ -300,6 +300,12 @@ struct JarvisMacCoreTests {
                   "boundary": "bounded cleanup only; no default background recovery"
                 },
                 {
+                  "key": "release_evidence_bundle",
+                  "status": "implemented",
+                  "proof": "final bundle mechanics covered by self-test",
+                  "boundary": "owner-recorded external evidence still required"
+                },
+                {
                   "key": "live_voice_loop",
                   "status": "pending_manual_validation",
                   "proof": "fake-adapter tests",
@@ -320,6 +326,7 @@ struct JarvisMacCoreTests {
         #expect(contract.safeInspectionPaths.contains("/diagnostics/export"))
         #expect(contract.features.map(\.id).contains("scheduler_trigger_policy_review"))
         #expect(contract.features.first { $0.key == "scheduler_stale_running_recovery" }?.proof.contains("opt-in startup recovery") == true)
+        #expect(contract.features.map(\.id).contains("release_evidence_bundle"))
         #expect(contract.features.first { $0.key == "live_voice_loop" }?.status == "pending_manual_validation")
         #expect(!contract.exposesApprovalActions)
         #expect(contract.exposesPermissionGrantSummary)
@@ -335,13 +342,15 @@ struct JarvisMacCoreTests {
         )
 
         #expect(!readiness.productionReady)
-        #expect(readiness.verifiedFeatureCount == 13)
+        #expect(readiness.verifiedFeatureCount == 14)
         #expect(readiness.pendingFeatureCount == 1)
         #expect(readiness.implementedFeatures.first?.key == "repository_state")
         #expect(readiness.implementedFeatures.map(\.key).contains("operator_release_qa_smoke"))
         #expect(readiness.implementedFeatures.map(\.key).contains("unsigned_distribution_launch"))
+        #expect(readiness.implementedFeatures.map(\.key).contains("release_evidence_bundle"))
         #expect(readiness.pendingFeatures.first?.key == "live_voice_loop")
         #expect(readiness.blockingManualGates.contains("Developer ID Application and Installer signing credentials configured and used for a full signed package run"))
+        #expect(readiness.blockingManualGates.contains("final release evidence bundle generated and archived after signed distribution, live-device QA, and plugin-trust QA reports exist"))
         #expect(readiness.recommendedVerificationCommands.contains("./scripts/release-local.sh"))
         #expect(readiness.recommendedVerificationCommands.contains("./scripts/release-operator-qa-smoke.sh"))
         #expect(readiness.recommendedVerificationCommands.contains("./scripts/release-live-device-qa.sh --check"))
@@ -1093,8 +1102,10 @@ struct JarvisMacCoreTests {
 
         #expect(model.readiness?.productionReady == false)
         #expect(model.readiness?.implementedFeatures.map(\.key).contains("repository_state") == true)
+        #expect(model.readiness?.implementedFeatures.map(\.key).contains("release_evidence_bundle") == true)
         #expect(model.readiness?.pendingFeatures.map(\.key).contains("live_voice_loop") == true)
         #expect(model.readiness?.blockingManualGates.contains("Developer ID Application and Installer signing credentials configured and used for a full signed package run") == true)
+        #expect(model.readiness?.blockingManualGates.contains("final release evidence bundle generated and archived after signed distribution, live-device QA, and plugin-trust QA reports exist") == true)
         #expect(model.readiness?.proofBoundary.contains("does not perform signing") == true)
         #expect(model.lastError == nil)
     }
@@ -2467,7 +2478,7 @@ private func releaseReadinessJSON() -> Data {
           "generated_at": "2026-05-22T08:00:00Z",
           "production_ready": false,
           "readiness_scope": "local Rust/CLI foundation and Swift shell evidence only; full production distribution still has external manual gates",
-          "verified_feature_count": 13,
+          "verified_feature_count": 14,
           "pending_feature_count": 1,
           "implemented_features": [
             {
@@ -2493,6 +2504,12 @@ private func releaseReadinessJSON() -> Data {
               "status": "implemented",
               "proof": "`package-distribution.sh --unsigned-launch-check` builds the release app layout.",
               "boundary": "Unsigned distribution-layout proof only."
+            },
+            {
+              "key": "release_evidence_bundle",
+              "status": "implemented",
+              "proof": "`release-evidence-bundle.sh --bundle` writes SHA-256-bound evidence manifest entries.",
+              "boundary": "Evidence-bundle mechanics and local artifact/report validation only."
             }
           ],
           "pending_features": [
@@ -2505,7 +2522,8 @@ private func releaseReadinessJSON() -> Data {
           ],
           "blocking_manual_gates": [
             "Developer ID Application and Installer signing credentials configured and used for a full signed package run",
-            "live microphone and Speech permission prompt validation on a real Mac"
+            "live microphone and Speech permission prompt validation on a real Mac",
+            "final release evidence bundle generated and archived after signed distribution, live-device QA, and plugin-trust QA reports exist"
           ],
           "recommended_verification_commands": [
             "./scripts/release-local.sh",
