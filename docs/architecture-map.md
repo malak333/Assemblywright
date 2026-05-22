@@ -22,12 +22,9 @@ flowchart TB
     LocalGate --> OperatorQASmoke["release-operator-qa-smoke.sh"]
     LocalGate --> UnsignedLaunch["package-distribution.sh unsigned-launch-check"]
     LocalGate --> LiveDeviceQA["release-live-device-qa.sh check/self-test preflight"]
-    LiveDeviceAssert["release-live-device-qa.sh assert-complete"] --> LiveDeviceQAReport["target/release-live-device-qa-report.json owner-recorded voice evidence"]
     LocalGate --> PluginTrustQA["release-plugin-trust-qa.sh check/self-test preflight"]
-    PluginTrustAssert["release-plugin-trust-qa.sh assert-complete"] --> PluginTrustQAReport["target/release-plugin-trust-qa-report.json owner-recorded plugin trust evidence"]
-    LocalGate --> EvidenceBundle["release-evidence-bundle.sh check/self-test and bundle validation path"]
-    LiveDeviceQAReport --> EvidenceBundle
-    PluginTrustQAReport --> EvidenceBundle
+    LocalGate --> EvidenceBundlePreflight["release-evidence-bundle.sh check/self-test/template preflight"]
+    EvidenceTemplate["release-evidence-bundle.sh write-template"] --> EvidenceBundleEnv["sourceable final-bundle env with flags default false"]
     LocalGate --> EvidenceDoctor["release-evidence-doctor.sh check/self-test evidence inventory"]
     LocalGate --> SwiftGate["Swift package build/test"]
     LocalGate --> CargoGate["fmt, clippy, tests, build, package"]
@@ -36,6 +33,16 @@ flowchart TB
     ReleaseReadinessFallback["serverless CLI readiness fallback"] --> ReleaseReadiness
     EvidenceStatus["/release/evidence-status and jarvis release evidence-status"] --> EvidenceDoctor
     EvidenceStatus --> ReleaseReadiness
+    subgraph ManualExternal["Manual external evidence, not local gate proof"]
+        LiveDeviceAssert["release-live-device-qa.sh assert-complete"] --> LiveDeviceQAReport["target/release-live-device-qa-report.json owner-recorded voice evidence"]
+        PluginTrustAssert["release-plugin-trust-qa.sh assert-complete"] --> PluginTrustQAReport["target/release-plugin-trust-qa-report.json owner-recorded plugin trust evidence"]
+        SignedArtifacts["Developer ID signed, notarized, and stapled zip/pkg"] --> EvidenceBundleRun["release-evidence-bundle.sh bundle"]
+        EvidenceBundleEnv --> EvidenceBundleRun
+        LiveDeviceQAReport --> EvidenceBundleRun
+        PluginTrustQAReport --> EvidenceBundleRun
+        EvidenceBundleRun --> EvidenceArchive["archived final release evidence bundle"]
+    end
+    EvidenceBundleRun -. referenced by .-> EvidenceStatus
     AppReleaseSmoke["packaged-app-release-smoke.sh"] --> LocalApp["temp Jarvis.app bundle"]
     LocalApp --> AppMetadata["Info.plist plus ad-hoc codesign when available"]
     LocalApp --> BundledCLI["Contents/Resources/bin/jarvis-cli"]
@@ -614,7 +621,7 @@ flowchart TB
     AppFiles["app-owned files and plugin bundles"] --> RuntimeProd
     DiagnosticsProd --> Diagnostics["local diagnostics export"]
     Diagnostics --> MacApp
-    ReleaseOps["release operator"] --> ReleaseGate["signed package, clean-profile Mac smoke, live voice QA evidence report, E2E, migration, recovery, diagnostics, final evidence bundle checks"]
+    ReleaseOps["release operator"] --> ReleaseGate["Developer ID signed package, notarization/stapling, clean-profile install, Finder/LaunchServices launch, live voice/audio QA, plugin marketplace/malware/sandbox/egress QA, E2E, migration, recovery, diagnostics, archived final evidence bundle"]
     ReleaseGate --> MacApp
     ReleaseGate --> IPCServer
 ```

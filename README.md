@@ -117,7 +117,8 @@ implemented local evidence, with clean-profile installed-app and live-device
 QA still listed as manual gates.
 The response keeps `production_ready: false` until Developer ID
 signing/notarization, clean-profile installer/Finder validation, live voice
-device checks, and manual QA are actually completed.
+device checks, plugin trust QA, the final evidence bundle, and manual QA are
+actually completed.
 Readiness stays conservative by default; only set
 `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external` after owner-recorded external
 QA reports and signed-distribution evidence have been collected.
