@@ -195,6 +195,31 @@ raise SystemExit(0 if isinstance(cursor, str) and bool(cursor.strip()) else 1)
 PY
 }
 
+json_sha256_string() {
+  local path="$1"
+  local dotted_key="$2"
+  python3 - "$path" "$dotted_key" <<'PY'
+import json
+import re
+import sys
+
+path, dotted_key = sys.argv[1:3]
+try:
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+except Exception:
+    raise SystemExit(1)
+
+cursor = data
+for segment in dotted_key.split("."):
+    if not isinstance(cursor, dict) or segment not in cursor:
+        raise SystemExit(1)
+    cursor = cursor[segment]
+
+raise SystemExit(0 if isinstance(cursor, str) and re.fullmatch(r"[0-9a-f]{64}", cursor) else 1)
+PY
+}
+
 json_utc_timestamp() {
   local path="$1"
   local dotted_key="$2"
@@ -347,6 +372,18 @@ check_json_nonempty_string() {
   fi
 }
 
+check_json_sha256() {
+  local label="$1"
+  local path="$2"
+  local dotted_key="$3"
+
+  if json_sha256_string "$path" "$dotted_key"; then
+    record_satisfied "$label: $dotted_key is SHA-256"
+  else
+    record_missing "$label invalid SHA-256 field: $dotted_key in $path"
+  fi
+}
+
 check_json_utc_timestamp() {
   local label="$1"
   local path="$2"
@@ -426,7 +463,15 @@ check_release_evidence() {
     for flag in signed_distribution notarization clean_profile live_device_qa plugin_trust_qa reports_archived; do
       check_json_flag "release evidence bundle" "$BUNDLE_PATH" "validation_flags.$flag"
     done
+    check_json_flag "release evidence bundle" "$BUNDLE_PATH" "validation_flags.local_signature_validation"
+    check_json_utc_timestamp "release evidence bundle" "$BUNDLE_PATH" "generated_at"
     check_json_string "release evidence bundle" "$BUNDLE_PATH" "version" "$VERSION"
+    for field in artifacts.app_path artifacts.zip_path artifacts.pkg_path reports.live_device_qa_report reports.plugin_trust_qa_report; do
+      check_json_nonempty_string "release evidence bundle" "$BUNDLE_PATH" "$field"
+    done
+    for field in artifacts.zip_sha256 artifacts.pkg_sha256 reports.live_device_qa_sha256 reports.plugin_trust_qa_sha256; do
+      check_json_sha256 "release evidence bundle" "$BUNDLE_PATH" "$field"
+    done
   else
     record_missing "release evidence bundle missing or invalid JSON: $BUNDLE_PATH"
   fi
@@ -543,7 +588,21 @@ JSON
 JSON
   cat >"$bundle_path" <<'JSON'
 {
+  "generated_at": "2026-05-22T16:30:00Z",
   "version": "0.1.4",
+  "artifacts": {
+    "app_path": "target/distribution/Jarvis.app",
+    "zip_path": "target/distribution/Jarvis-0.1.4.zip",
+    "pkg_path": "target/distribution/Jarvis-0.1.4.pkg",
+    "zip_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "pkg_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  },
+  "reports": {
+    "live_device_qa_report": "target/release-live-device-qa-report.json",
+    "plugin_trust_qa_report": "target/release-plugin-trust-qa-report.json",
+    "live_device_qa_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "plugin_trust_qa_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  },
   "validation_flags": {
     "signed_distribution": true,
     "notarization": true,
@@ -551,7 +610,7 @@ JSON
     "live_device_qa": true,
     "plugin_trust_qa": true,
     "reports_archived": true,
-    "local_signature_validation": false
+    "local_signature_validation": true
   },
   "proof_boundary": "self-test fixture"
 }
@@ -653,6 +712,73 @@ PY
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected blank plugin trust observation to fail"
+  fi
+
+  python3 - "$tmp_dir/bundle.json" "$tmp_dir/minimal-bundle.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+with open(source, encoding="utf-8") as handle:
+    data = json.load(handle)
+data.pop("artifacts", None)
+data.pop("reports", None)
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+PY
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="$tmp_dir/dist/Jarvis-0.1.4.zip" \
+    JARVIS_EVIDENCE_PKG_PATH="$tmp_dir/dist/Jarvis-0.1.4.pkg" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/minimal-bundle.json" \
+    "$0" --assert-complete >/dev/null 2>&1; then
+    fail "release evidence doctor self-test expected minimal final bundle to fail"
+  fi
+
+  python3 - "$tmp_dir/bundle.json" "$tmp_dir/bad-digest-bundle.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+with open(source, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["artifacts"]["zip_sha256"] = "not-a-sha"
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+PY
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="$tmp_dir/dist/Jarvis-0.1.4.zip" \
+    JARVIS_EVIDENCE_PKG_PATH="$tmp_dir/dist/Jarvis-0.1.4.pkg" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bad-digest-bundle.json" \
+    "$0" --assert-complete >/dev/null 2>&1; then
+    fail "release evidence doctor self-test expected malformed final bundle digest to fail"
+  fi
+
+  python3 - "$tmp_dir/bundle.json" "$tmp_dir/disabled-local-signature-bundle.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+with open(source, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["validation_flags"]["local_signature_validation"] = False
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+PY
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="$tmp_dir/dist/Jarvis-0.1.4.zip" \
+    JARVIS_EVIDENCE_PKG_PATH="$tmp_dir/dist/Jarvis-0.1.4.pkg" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/disabled-local-signature-bundle.json" \
+    "$0" --assert-complete >/dev/null 2>&1; then
+    fail "release evidence doctor self-test expected disabled local signature validation to fail"
   fi
 
   rm "$tmp_dir/plugin.json"

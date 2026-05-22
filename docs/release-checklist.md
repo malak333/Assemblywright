@@ -64,6 +64,11 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   Evidence-status checks plugin-trust review timestamps, final bundle version,
   SHA-256 digest shape, and local signature-validation status before treating
   those reports as usable evidence.
+- Confirm `release-evidence-doctor.sh --assert-complete` enforces the same
+  final-bundle semantic floor as `/release/evidence-status`: UTC generation
+  timestamp, expected release version, non-empty artifact/report paths,
+  SHA-256-shaped artifact/report digests, and
+  `validation_flags.local_signature_validation=true`.
 - Confirm `jarvis release --help`, `jarvis release readiness --help`, and
   `jarvis release evidence-status --help` preserve the same read-only,
   IPC-first/local-fallback, evidence-mode, and file/report-inspection
