@@ -32,6 +32,11 @@ fn release_readiness_cli_falls_back_without_running_server() {
         "operator_release_qa_smoke",
     );
     assert_array_contains(
+        &release_readiness["implemented_features"],
+        "key",
+        "unsigned_distribution_launch",
+    );
+    assert_array_contains(
         &release_readiness["pending_features"],
         "key",
         "live_voice_loop",

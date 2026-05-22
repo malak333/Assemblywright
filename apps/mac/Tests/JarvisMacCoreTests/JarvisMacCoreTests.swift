@@ -328,10 +328,11 @@ struct JarvisMacCoreTests {
         )
 
         #expect(!readiness.productionReady)
-        #expect(readiness.verifiedFeatureCount == 12)
+        #expect(readiness.verifiedFeatureCount == 13)
         #expect(readiness.pendingFeatureCount == 1)
         #expect(readiness.implementedFeatures.first?.key == "repository_state")
         #expect(readiness.implementedFeatures.map(\.key).contains("operator_release_qa_smoke"))
+        #expect(readiness.implementedFeatures.map(\.key).contains("unsigned_distribution_launch"))
         #expect(readiness.pendingFeatures.first?.key == "live_voice_loop")
         #expect(readiness.blockingManualGates.contains("Developer ID Application and Installer signing credentials configured and used for a full signed package run"))
         #expect(readiness.recommendedVerificationCommands.contains("./scripts/release-local.sh"))
@@ -2456,7 +2457,7 @@ private func releaseReadinessJSON() -> Data {
           "generated_at": "2026-05-22T08:00:00Z",
           "production_ready": false,
           "readiness_scope": "local Rust/CLI foundation and Swift shell evidence only; full production distribution still has external manual gates",
-          "verified_feature_count": 12,
+          "verified_feature_count": 13,
           "pending_feature_count": 1,
           "implemented_features": [
             {
@@ -2476,6 +2477,12 @@ private func releaseReadinessJSON() -> Data {
               "status": "implemented",
               "proof": "`release-operator-qa-smoke.sh` exercises repository-backed operator QA.",
               "boundary": "Local CLI/operator QA evidence only."
+            },
+            {
+              "key": "unsigned_distribution_launch",
+              "status": "implemented",
+              "proof": "`package-distribution.sh --unsigned-launch-check` builds the release app layout.",
+              "boundary": "Unsigned distribution-layout proof only."
             }
           ],
           "pending_features": [

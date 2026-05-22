@@ -68,6 +68,7 @@ stage or when a PR needs focused evidence for one ownership slice.
 - `cargo run -p jarvis-cli -- smoke`
 - `./scripts/release-operator-qa-smoke.sh`
 - `cargo package --workspace --allow-dirty`
+- `./scripts/package-distribution.sh --unsigned-launch-check`
 - Focused supervision proof for branches that touch Swift core launch or bundle
   discovery: `./scripts/packaged-supervision-proof.sh`
 - Focused packaged app release smoke for branches that touch packaging,
@@ -76,6 +77,8 @@ stage or when a PR needs focused evidence for one ownership slice.
 - Distribution packaging preflight for branches that touch release packaging,
   signing, entitlements, or notarization:
   `./scripts/package-distribution.sh --check`
+- Unsigned distribution launch proof is part of the default local gate:
+  `./scripts/package-distribution.sh --unsigned-launch-check`
 - `swift test --package-path apps/mac`
 - `swift build --package-path apps/mac`
 - Optional manual CLI/IPC smoke against a running local server:

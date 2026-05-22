@@ -3751,6 +3751,12 @@ fn contract_features() -> Vec<ContractFeature> {
             "Local CLI/operator QA evidence only; not clean-profile installed-app QA, Finder/LaunchServices validation, live voice/audio validation, live notification delivery, notarization, or marketplace trust.",
         ),
         feature(
+            "unsigned_distribution_launch",
+            "implemented",
+            "`package-distribution.sh --unsigned-launch-check` builds the release app layout, creates an unsigned installer payload, launches the release-built app executable with isolated HOME, and verifies bundled-core IPC smoke.",
+            "Unsigned distribution-layout proof only; not Developer ID signing, notarization, stapling, /Applications install, Finder/LaunchServices validation, live device validation, App Store review, or manual QA.",
+        ),
+        feature(
             "live_voice_loop",
             "pending_manual_validation",
             "Swift voice input and speech-output adapters have deterministic fake-adapter tests.",
