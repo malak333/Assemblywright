@@ -260,10 +260,11 @@ stage or when a PR needs focused evidence for one ownership slice.
   read-only conservative readiness summary derived from contract feature
   metadata and release-checklist blockers, and that it does not perform or
   claim signing, notarization, installation, Finder/LaunchServices validation,
-  live microphone/Speech validation, live audio-output validation, App Store
-  review, marketplace plugin review, malware analysis, or OS sandbox
-  enforcement. The CLI fallback for an unavailable local IPC server must keep
-  the same conservative blocker set instead of claiming server-backed proof.
+  live microphone/Speech validation, spoken transcript handoff, live
+  audio-output validation, App Store review, marketplace plugin review, malware
+  analysis, or OS sandbox enforcement. The CLI fallback for an unavailable local
+  IPC server must keep the same conservative blocker set instead of claiming
+  server-backed proof.
 - Confirm `./scripts/release-plugin-trust-qa.sh --check` is included in release
   readiness recommendations and the local release gate, and that
   `./scripts/release-plugin-trust-qa.sh --self-test` proves only JSON report
@@ -401,9 +402,11 @@ Still future gates for production distribution:
   validation on a real device.
 - Run `./scripts/release-live-device-qa.sh --check` before a release candidate
   to print the live-device runbook. After clean-profile install, Finder launch,
-  microphone/Speech, live audio-output, notification, restart, and manual QA are
+  microphone/Speech permission prompts, spoken transcript handoff into the
+  command path, live audio-output, notification, restart, and manual QA are
   actually validated on the release machine, rerun it with `--assert-complete`
-  and all required `JARVIS_QA_*` flags set to `true`. Preserve the generated
+  and all required `JARVIS_QA_*` flags set to `true`, including
+  `JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true`. Preserve the generated
   `target/release-live-device-qa-report.json` artifact, or the
   `JARVIS_QA_REPORT_PATH` override, with the release notes.
 - Activity view shows current task state, active/status counts, and recent
@@ -458,12 +461,14 @@ Distribution packaging gate:
 - Confirm the resulting app zip and installer package are Developer ID signed,
   notarized, and stapled. The script also verifies the app signature, installer
   signature, app staple, and package staple.
-- Still perform clean-profile installer run, Finder launch, microphone/Speech,
-  live audio-output, and manual QA before any broader production distribution
-  claim. `./scripts/release-live-device-qa.sh --assert-complete` is the
-  repo-owned way to record that those checks were completed; it remains an
-  owner assertion, not automated live-device proof. The resulting JSON report
-  records only the owner-asserted validation flags and proof boundary.
+- Still perform clean-profile installer run, Finder launch, microphone/Speech
+  permission prompts, spoken transcript handoff into the command path, live
+  audio-output, and manual QA before any broader production distribution claim.
+  `./scripts/release-live-device-qa.sh --assert-complete` is the repo-owned way
+  to record that those checks were completed; it remains an owner assertion,
+  not automated live-device proof. The resulting JSON report records
+  owner-asserted validation flags, voice-loop evidence fields, installed-app
+  metadata, and proof boundary.
 
 ## Release Notes
 

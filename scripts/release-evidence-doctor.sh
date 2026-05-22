@@ -184,6 +184,10 @@ check_release_evidence() {
     for flag in clean_profile finder_launch microphone speech_permission audio_output notification restart manual_release_qa; do
       check_json_flag "live-device QA report" "$LIVE_QA_REPORT" "validation_flags.$flag"
     done
+    check_json_flag "live-device QA report" "$LIVE_QA_REPORT" "validation_flags.transcript_handoff"
+    for flag in microphone_permission_prompt speech_permission_prompt spoken_transcript_handoff same_command_path speech_output_playback; do
+      check_json_flag "live-device QA report" "$LIVE_QA_REPORT" "voice_loop.$flag"
+    done
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.bundle_identifier" "$EXPECTED_BUNDLE_ID"
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.short_version" "$EXPECTED_VERSION"
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.build_version" "$EXPECTED_VERSION"
@@ -252,10 +256,18 @@ write_fixture_reports() {
     "finder_launch": true,
     "microphone": true,
     "speech_permission": true,
+    "transcript_handoff": true,
     "audio_output": true,
     "notification": true,
     "restart": true,
     "manual_release_qa": true
+  },
+  "voice_loop": {
+    "microphone_permission_prompt": true,
+    "speech_permission_prompt": true,
+    "spoken_transcript_handoff": true,
+    "same_command_path": true,
+    "speech_output_playback": true
   },
   "app_bundle": {
     "bundle_identifier": "com.nobiletechnology.jarvis",

@@ -32,6 +32,7 @@ explicitly recorded each live validation flag below as true:
   JARVIS_QA_FINDER_LAUNCH_VALIDATED=true
   JARVIS_QA_MICROPHONE_VALIDATED=true
   JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true
+  JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true
   JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true
   JARVIS_QA_NOTIFICATION_VALIDATED=true
   JARVIS_QA_RESTART_VALIDATED=true
@@ -133,7 +134,7 @@ write_report() {
   escaped_build_version="$(json_escape "$APP_BUILD_VERSION")"
   escaped_microphone_usage="$(json_escape "$APP_MICROPHONE_USAGE")"
   escaped_speech_usage="$(json_escape "$APP_SPEECH_USAGE")"
-  escaped_boundary="$(json_escape "Owner-recorded clean-profile install, Finder launch, microphone/Speech, live audio output, notification, restart, and manual release QA flags only; no App Store review, marketplace trust, malware analysis, or OS-level sandbox/egress enforcement.")"
+  escaped_boundary="$(json_escape "Owner-recorded clean-profile install, Finder launch, microphone/Speech permission prompts, spoken transcript handoff into the command path, live audio output, notification, restart, and manual release QA flags only; no App Store review, marketplace trust, malware analysis, or OS-level sandbox/egress enforcement.")"
 
   mkdir -p "$(dirname "$REPORT_PATH")"
   cat >"$REPORT_PATH" <<EOF
@@ -152,10 +153,18 @@ write_report() {
     "finder_launch": true,
     "microphone": true,
     "speech_permission": true,
+    "transcript_handoff": true,
     "audio_output": true,
     "notification": true,
     "restart": true,
     "manual_release_qa": true
+  },
+  "voice_loop": {
+    "microphone_permission_prompt": true,
+    "speech_permission_prompt": true,
+    "spoken_transcript_handoff": true,
+    "same_command_path": true,
+    "speech_output_playback": true
   },
   "proof_boundary": "$escaped_boundary"
 }
@@ -246,6 +255,7 @@ PLIST
     JARVIS_QA_FINDER_LAUNCH_VALIDATED=true \
     JARVIS_QA_MICROPHONE_VALIDATED=true \
     JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true \
+    JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true \
     JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true \
     JARVIS_QA_NOTIFICATION_VALIDATED=true \
     JARVIS_QA_RESTART_VALIDATED=true \
@@ -254,7 +264,26 @@ PLIST
   require_file_contains "live QA self-test report" "$fixture_report" '"manual_release_qa": true'
   require_file_contains "live QA self-test report" "$fixture_report" '"bundle_identifier": "com.nobiletechnology.jarvis.selftest"'
   require_file_contains "live QA self-test report" "$fixture_report" '"microphone_usage_description"'
+  require_file_contains "live QA self-test report" "$fixture_report" '"transcript_handoff": true'
+  require_file_contains "live QA self-test report" "$fixture_report" '"same_command_path": true'
   require_file_contains "live QA self-test report" "$fixture_report" '"proof_boundary"'
+
+  if JARVIS_QA_INSTALLED_APP_PATH="$fixture_app" \
+    JARVIS_QA_REPORT_PATH="$tmp_dir/missing-transcript-handoff.json" \
+    JARVIS_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.jarvis.selftest" \
+    JARVIS_QA_EXPECTED_VERSION="0.1.4" \
+    JARVIS_QA_CLEAN_PROFILE_VALIDATED=true \
+    JARVIS_QA_FINDER_LAUNCH_VALIDATED=true \
+    JARVIS_QA_MICROPHONE_VALIDATED=true \
+    JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true \
+    JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true \
+    JARVIS_QA_NOTIFICATION_VALIDATED=true \
+    JARVIS_QA_RESTART_VALIDATED=true \
+    JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
+    "$0" --assert-complete >/dev/null 2>&1; then
+    fail "live QA self-test expected missing transcript handoff validation to fail"
+  fi
+
   printf 'Jarvis live-device QA self-test: ok\n'
   printf 'Proof boundary: fake app fixture validates assertion/report mechanics only; no live device validation was performed.\n'
   exit 0
@@ -292,6 +321,7 @@ require_true JARVIS_QA_CLEAN_PROFILE_VALIDATED
 require_true JARVIS_QA_FINDER_LAUNCH_VALIDATED
 require_true JARVIS_QA_MICROPHONE_VALIDATED
 require_true JARVIS_QA_SPEECH_PERMISSION_VALIDATED
+require_true JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED
 require_true JARVIS_QA_AUDIO_OUTPUT_VALIDATED
 require_true JARVIS_QA_NOTIFICATION_VALIDATED
 require_true JARVIS_QA_RESTART_VALIDATED
@@ -304,7 +334,8 @@ Installed app: $APP_PATH
 Bundle: $APP_BUNDLE_ID $APP_SHORT_VERSION ($APP_BUILD_VERSION)
 Report: $REPORT_PATH
 Proof boundary: owner-recorded clean-profile install, Finder launch,
-microphone/Speech, live audio output, notification, restart, and manual release
-QA flags only; this still does not prove App Store review, marketplace trust,
-malware analysis, or OS-level sandbox/egress enforcement.
+microphone/Speech permission prompts, spoken transcript handoff into the command
+path, live audio output, notification, restart, and manual release QA flags
+only; this still does not prove App Store review, marketplace trust, malware
+analysis, or OS-level sandbox/egress enforcement.
 EOF

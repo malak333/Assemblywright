@@ -211,6 +211,10 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         &release_readiness["recommended_verification_commands"],
         "./scripts/release-live-device-qa.sh --check",
     );
+    assert_string_array_contains_substring(
+        &release_readiness["recommended_verification_commands"],
+        "JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true",
+    );
     assert_string_array_contains(
         &release_readiness["recommended_verification_commands"],
         "./scripts/release-plugin-trust-qa.sh --check",
@@ -3062,6 +3066,19 @@ fn assert_string_array_contains(value: &Value, expected: &str) {
     assert!(
         array.iter().any(|item| item.as_str() == Some(expected)),
         "expected array to contain {expected}, got {value}"
+    );
+}
+
+fn assert_string_array_contains_substring(value: &Value, expected: &str) {
+    let array = value.as_array().unwrap_or_else(|| {
+        panic!("expected array, got {}", json!(value));
+    });
+    assert!(
+        array
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|item| item.contains(expected)),
+        "expected array to contain item with {expected}, got {value}"
     );
 }
 

@@ -136,7 +136,8 @@ require_command grep
 
 require_file_contains "plugin contract" "$ROOT_DIR/docs/plugin-contract.md" "WASM, OS-level network sandboxing, and malware-analysis trust remain target"
 require_file_contains "plugin contract" "$ROOT_DIR/docs/plugin-contract.md" "marketplace approval, malware safety, or sandbox completeness"
-require_file_contains "release checklist" "$ROOT_DIR/docs/release-checklist.md" "marketplace plugin review, malware analysis, or OS sandbox"
+require_file_contains "release checklist" "$ROOT_DIR/docs/release-checklist.md" "marketplace plugin review, malware"
+require_file_contains "release checklist" "$ROOT_DIR/docs/release-checklist.md" "analysis, or OS sandbox"
 require_file_contains "readme" "$ROOT_DIR/README.md" "marketplace plugin trust, OS-level plugin network sandboxing"
 require_file_contains "plugin runtime" "$ROOT_DIR/crates/jarvis-core/src/plugin.rs" "network_access declared_hosts requires allowed_hosts"
 require_file_contains "cross-process E2E" "$ROOT_DIR/crates/jarvis-cli/tests/local_ipc_e2e.rs" "network_subprocess_e2e"
