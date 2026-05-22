@@ -69,11 +69,13 @@ These notes capture durable facts for future agents working on this repository.
   read-only release summary from contract feature metadata, release-checklist
   blockers, and explicitly enabled release evidence status. Default readiness
   treats standard `target/` evidence files as inventory only; with
-  `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external`, a valid
-  live-device QA report can move `live_voice_loop` to implemented and clear
-  related live voice/audio blockers while keeping `production_ready: false`
-  until the remaining signed-artifact, plugin-trust, and final evidence-bundle
-  gates validate. The CLI command prefers the IPC endpoint when it is running
+  `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external`, readiness can compute
+  `production_ready: true` only when every required `/release/evidence-status`
+  item is present, no missing or invalid evidence remains, and
+  evidence-cleared features leave no pending readiness features. This remains
+  validated owner-recorded release evidence, not Jarvis-performed signing,
+  notarization, stapling, live-device QA, plugin trust QA, or manual release
+  QA. The CLI command prefers the IPC endpoint when it is running
   and falls back to the same local `IpcState` readiness summary when the server
   is unavailable, so operator triage does not require a prestarted core.
   `operator_release_qa_smoke` is an implemented readiness feature for the local

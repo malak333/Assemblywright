@@ -326,9 +326,13 @@ sensitive memory counts when repository backing is enabled.
 `jarvis release readiness` is read-only and summarizes implemented feature
 proofs, pending feature boundaries, recommended verification commands, and
 manual production blockers. Evidence-aware mode can clear the live voice/audio
-blocker only from a valid live-device QA report, but `production_ready` remains
-false until the signed distribution, notarization, plugin-trust report, and
-final evidence bundle validate.
+blocker from a valid live-device QA report. In explicit
+`JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external`, it can compute
+`production_ready: true` only when every required `/release/evidence-status`
+item is present, no missing or invalid evidence remains, and evidence-cleared
+features leave no pending readiness features. That is still owner-recorded
+external evidence, not proof that Jarvis performed signing, notarization,
+stapling, live-device QA, plugin trust QA, or manual release QA.
 The release command `--help` output is part of the operator contract: it should
 preserve the read-only scope, IPC-first/local-fallback behavior, explicit
 `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external` opt-in, and file/report

@@ -115,13 +115,17 @@ triage still works before starting the supervised core.
 Readiness feature metadata includes the repository-backed operator QA smoke as
 implemented local evidence, with clean-profile installed-app and live-device
 QA still listed as manual gates.
-The response keeps `production_ready: false` until Developer ID
-signing/notarization, clean-profile installer/Finder validation, live voice
-device checks, plugin trust QA, the final evidence bundle, and manual QA are
-actually completed.
-Readiness stays conservative by default; only set
-`JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external` after owner-recorded external
-QA reports and signed-distribution evidence have been collected.
+The response keeps `production_ready: false` by default. With
+`JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external`, readiness can compute
+`production_ready: true` only when every required `/release/evidence-status`
+item is present, no missing or invalid evidence remains, and evidence-cleared
+features leave no pending readiness features. That remains owner-recorded
+external evidence: Jarvis does not itself perform Developer ID signing,
+notarization, stapling, clean-profile install/Finder validation, live-device
+QA, plugin trust QA, or manual release QA.
+Only set `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external` after
+owner-recorded external QA reports and signed-distribution evidence have been
+collected.
 In external evidence mode, the live-device QA report must still pass semantic
 validation for the expected bundle identifier, short/build version, non-self-test
 identity, and ordered UTC voice-check timestamps before it can clear the live
