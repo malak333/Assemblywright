@@ -23,7 +23,7 @@ use crate::storage::{
     NewPendingApproval, PendingApproval, SqliteRepository,
 };
 use crate::{
-    execute_installed_subprocess_plugin, plugin_permission_scopes, ApprovalDecision,
+    execute_installed_subprocess_plugin, plugin_permission_scopes, ApprovalDecision, ApprovalGrant,
     ApprovalStatus, AuditEntry, CapabilityScope, ConversationRuntime, InstalledPlugin,
     InstalledPluginExecutionGrant, InstalledPluginIntegrityStatus, InstalledPluginProvenance,
     InstalledPluginRecord, JarvisError, JarvisResult, LocalModelProviderKind, ModelRoute,
@@ -200,6 +200,17 @@ pub struct CommandResponse {
     pub route: Option<ModelRoute>,
     pub route_evidence: Option<ModelRouteRecord>,
     pub steps: Vec<RuntimeStep>,
+    pub plugin_results: Vec<PluginCallResult>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalExecutionResponse {
+    pub accepted: bool,
+    pub approval: PendingApproval,
+    pub task: TaskRecord,
+    pub audit_entry: AuditEntry,
+    pub audit_entries: Vec<AuditEntry>,
     pub plugin_results: Vec<PluginCallResult>,
     pub message: String,
 }
@@ -1114,6 +1125,179 @@ impl IpcState {
                 }),
             ))?;
             Ok(approval)
+        })
+    }
+
+    pub fn execute_approved_approval(&self, id: Uuid) -> JarvisResult<ApprovalExecutionResponse> {
+        let (approval, task) = self.using_repository(|repository| {
+            let approval = repository
+                .get_pending_approval(id)?
+                .ok_or_else(|| JarvisError::Storage(format!("pending approval not found: {id}")))?;
+            if approval.status != ApprovalStatus::Approved {
+                return Err(JarvisError::Validation(format!(
+                    "approval {id} must be approved before execution"
+                )));
+            }
+            let task = repository.get_task(approval.task_id)?.ok_or_else(|| {
+                JarvisError::Storage(format!("task not found: {}", approval.task_id))
+            })?;
+            let approval_id = approval.id.to_string();
+            let already_executed =
+                repository
+                    .list_audit_entries(Some(task.id))?
+                    .iter()
+                    .any(|entry| {
+                        entry.event_type == "approval_executed"
+                            && entry
+                                .payload
+                                .get("approval_id")
+                                .and_then(serde_json::Value::as_str)
+                                == Some(approval_id.as_str())
+                    });
+            if already_executed {
+                return Err(JarvisError::Validation(format!(
+                    "approval {id} has already been executed"
+                )));
+            }
+            Ok((approval, task))
+        })?;
+
+        let mut plugin_request = first_party_plugin_request(&task.user_input).ok_or_else(|| {
+            JarvisError::Validation(format!(
+                "approval {id} cannot be executed because its task is not a first-party plugin command"
+            ))
+        })?;
+        let action_name = format!("{}.{}", plugin_request.plugin_id, plugin_request.action);
+        if action_name != approval.action {
+            return Err(JarvisError::Validation(format!(
+                "approval {id} action mismatch: approval is {}, task would execute {action_name}",
+                approval.action
+            )));
+        }
+
+        let host = PluginHost::with_first_party_plugins()?;
+        let manifest = host.manifest(&plugin_request.plugin_id)?;
+        let action = manifest.action(&plugin_request.action).ok_or_else(|| {
+            JarvisError::Plugin(format!(
+                "plugin {} does not declare action {}",
+                plugin_request.plugin_id, plugin_request.action
+            ))
+        })?;
+        let requested_scopes = plugin_permission_scopes(&action.permissions);
+        if requested_scopes != approval.requested_scopes {
+            return Err(JarvisError::Validation(format!(
+                "approval {id} scope mismatch; the current plugin contract differs from the approval record"
+            )));
+        }
+
+        let mut granted_scopes = approval.requested_scopes.clone();
+        granted_scopes.push(CapabilityScope::Conversation);
+        plugin_request.granted_scopes = granted_scopes.clone();
+        plugin_request.sensitivity = approval.sensitivity;
+        plugin_request = plugin_request
+            .with_approval(ApprovalGrant::approved(approval.requested_scopes.clone()));
+
+        let policy_request = PolicyRequest {
+            task_id: Some(task.id),
+            action: approval.action.clone(),
+            requested_scopes,
+            granted_scopes,
+            risk_tier: action.risk_tier,
+            sensitivity: approval.sensitivity,
+            emergency_paused: self.runtime_control.is_emergency_paused(),
+            approval: plugin_request.approval.clone(),
+        };
+        let policy = PermissionEngine::evaluate(&policy_request);
+        if policy.decision == ApprovalDecision::Blocked {
+            return Err(JarvisError::PolicyBlocked(policy.reason));
+        }
+        if policy.decision == ApprovalDecision::RequireConfirmation {
+            return Err(JarvisError::Validation(format!(
+                "approval {id} did not satisfy the current policy requirement"
+            )));
+        }
+
+        let result = host.execute(plugin_request)?;
+        let completed = result.status == PluginCallStatus::Completed;
+        let task_status = if completed {
+            TaskStatus::Completed
+        } else {
+            TaskStatus::Failed
+        };
+
+        let mut audit_entries = Vec::new();
+        let policy_audit = AuditEntry::new(
+            Some(task.id),
+            "approval_execution_policy_evaluated",
+            "approved first-party plugin action policy was evaluated before execution",
+            json!({
+                "approval_id": approval.id,
+                "action": approval.action,
+                "decision": policy.decision,
+                "reason": policy.reason,
+                "risk_tier": policy.risk_tier,
+                "approval_status": policy.approval_status,
+                "side_effect_executed": false,
+            }),
+        );
+        let plugin_event_type = match result.status {
+            PluginCallStatus::Completed => "plugin_completed_after_approval",
+            PluginCallStatus::ApprovalRequired => "plugin_approval_required_after_approval",
+            PluginCallStatus::TimedOut => "plugin_timed_out_after_approval",
+            PluginCallStatus::Cancelled => "plugin_cancelled_after_approval",
+            PluginCallStatus::Failed => "plugin_failed_after_approval",
+        };
+        let plugin_audit = AuditEntry::new(
+            Some(task.id),
+            plugin_event_type,
+            "approved first-party plugin action finished",
+            json!({
+                "approval_id": approval.id,
+                "plugin_id": result.metadata.plugin_id,
+                "action": result.metadata.action,
+                "status": result.status,
+                "risk_tier": result.metadata.risk_tier,
+                "approval_status": result.metadata.approval_status,
+                "proactive": result.metadata.proactive,
+                "timeout_ms": result.metadata.timeout_ms,
+                "side_effect_executed": completed,
+            }),
+        );
+        let execution_audit = AuditEntry::new(
+            Some(task.id),
+            "approval_executed",
+            "approved first-party plugin action execution completed",
+            json!({
+                "approval_id": approval.id,
+                "action": approval.action,
+                "status": result.status,
+                "approval_status": approval.status,
+                "side_effect_executed": completed,
+            }),
+        );
+        audit_entries.push(policy_audit.clone());
+        audit_entries.push(plugin_audit.clone());
+        audit_entries.push(execution_audit.clone());
+
+        let task = self.using_repository(|repository| {
+            repository.append_audit_entry(&policy_audit)?;
+            repository.append_audit_entry(&plugin_audit)?;
+            repository.append_audit_entry(&execution_audit)?;
+            repository.update_task_status(task.id, task_status)
+        })?;
+
+        Ok(ApprovalExecutionResponse {
+            accepted: completed,
+            approval,
+            task,
+            audit_entry: execution_audit,
+            audit_entries,
+            plugin_results: vec![result],
+            message: if completed {
+                "approved first-party plugin action executed".to_string()
+            } else {
+                "approved first-party plugin action did not complete".to_string()
+            },
         })
     }
 
@@ -2627,6 +2811,7 @@ pub fn router(state: IpcState) -> Router {
         .route("/approvals/:id", get(get_approval))
         .route("/approvals/:id/approve", post(approve_approval))
         .route("/approvals/:id/deny", post(deny_approval))
+        .route("/approvals/:id/execute", post(execute_approved_approval))
         .route("/plugins/manifests", get(list_plugin_manifests))
         .route("/plugins/manifests/:id", get(get_plugin_manifest))
         .route(
@@ -3004,6 +3189,16 @@ async fn deny_approval(
         .map_err(error_response)
 }
 
+async fn execute_approved_approval(
+    State(state): State<IpcState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<ApprovalExecutionResponse>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .execute_approved_approval(id)
+        .map(Json)
+        .map_err(error_response)
+}
+
 async fn list_plugin_manifests(
     State(_state): State<IpcState>,
 ) -> Result<Json<Vec<PluginManifest>>, (StatusCode, Json<ErrorResponse>)> {
@@ -3235,6 +3430,7 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
         endpoint("GET", "/approvals/:id", true, false),
         endpoint("POST", "/approvals/:id/approve", true, false),
         endpoint("POST", "/approvals/:id/deny", true, false),
+        endpoint("POST", "/approvals/:id/execute", true, false),
         endpoint("GET", "/plugins/manifests", false, true),
         endpoint("GET", "/plugins/manifests/:id", false, true),
         endpoint("GET", "/plugins/installed", true, true),
@@ -3310,6 +3506,12 @@ fn contract_features() -> Vec<ContractFeature> {
             "implemented",
             "Unreviewed memory items appear in `/permissions/policy-review` with redacted values, and diagnostics export exposes only aggregate memory review counts.",
             "Review visibility only; no autonomous memory rewrite, retention policy, or vector-index governance claim.",
+        ),
+        feature(
+            "approval_execution",
+            "implemented",
+            "Approved first-party actions execute through `/approvals/:id/execute` after action/scope verification and are covered by Rust unit and CLI IPC E2E tests.",
+            "Explicit replay only for first-party plugin commands; grant/deny remains side-effect-free and this is not broad autonomous execution.",
         ),
         feature(
             "installed_plugin_execution",
@@ -4336,6 +4538,95 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             Some("fake_echo.approval_echo")
         );
         assert!(review.side_effects_require_approval);
+    }
+
+    #[tokio::test]
+    async fn approved_first_party_action_executes_with_audit_evidence() {
+        let repository = SqliteRepository::in_memory().unwrap();
+        let state = IpcState::with_repository(repository).expect("state");
+        let response = state
+            .submit_command(CommandRequest {
+                input: "plugin approval echo review me".to_string(),
+                session_id: None,
+                context: json!({"surface": "test"}),
+                dry_run: false,
+                sensitivity: Some(Sensitivity::Workspace),
+            })
+            .await
+            .expect("approval command");
+        assert_eq!(response.task.status, TaskStatus::WaitingForApproval);
+        let approval = state
+            .list_approvals(Some(ApprovalStatus::Pending))
+            .expect("pending approvals")
+            .into_iter()
+            .next()
+            .expect("pending approval");
+
+        state
+            .approve_approval(
+                approval.id,
+                "test".to_string(),
+                Some("reviewed".to_string()),
+            )
+            .expect("approve");
+        let executed = state
+            .execute_approved_approval(approval.id)
+            .expect("execute approved");
+
+        assert!(executed.accepted);
+        assert_eq!(executed.task.status, TaskStatus::Completed);
+        assert_eq!(executed.audit_entry.event_type, "approval_executed");
+        assert_eq!(executed.audit_entry.payload["side_effect_executed"], true);
+        assert_eq!(executed.plugin_results.len(), 1);
+        assert_eq!(
+            executed.plugin_results[0].status,
+            PluginCallStatus::Completed
+        );
+        assert_eq!(
+            executed.plugin_results[0].output,
+            json!({ "message": "review me" })
+        );
+        assert!(executed
+            .audit_entries
+            .iter()
+            .any(|entry| entry.event_type == "plugin_completed_after_approval"));
+
+        let replay_error = state
+            .execute_approved_approval(approval.id)
+            .expect_err("approved action cannot be replayed twice");
+        assert!(replay_error
+            .to_string()
+            .contains("has already been executed"));
+    }
+
+    #[tokio::test]
+    async fn pending_first_party_action_cannot_execute_without_approval_grant() {
+        let repository = SqliteRepository::in_memory().unwrap();
+        let state = IpcState::with_repository(repository).expect("state");
+        state
+            .submit_command(CommandRequest {
+                input: "plugin approval echo wait".to_string(),
+                session_id: None,
+                context: json!({"surface": "test"}),
+                dry_run: false,
+                sensitivity: Some(Sensitivity::Workspace),
+            })
+            .await
+            .expect("approval command");
+        let approval = state
+            .list_approvals(Some(ApprovalStatus::Pending))
+            .expect("pending approvals")
+            .into_iter()
+            .next()
+            .expect("pending approval");
+
+        let error = state
+            .execute_approved_approval(approval.id)
+            .expect_err("pending approval cannot execute");
+
+        assert!(error
+            .to_string()
+            .contains("must be approved before execution"));
     }
 
     #[tokio::test]

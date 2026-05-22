@@ -435,6 +435,12 @@ enum ApprovalsCommand {
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
+    /// Execute an already-approved first-party action.
+    Execute {
+        id: String,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -942,6 +948,12 @@ async fn main() -> anyhow::Result<()> {
                         &format!("/approvals/{id}/deny"),
                         Some(&body)
                     )?
+                );
+            }
+            ApprovalsCommand::Execute { id, endpoint } => {
+                println!(
+                    "{}",
+                    request(&endpoint, "POST", &format!("/approvals/{id}/execute"), None)?
                 );
             }
         },

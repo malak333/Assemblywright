@@ -152,8 +152,14 @@ stage or when a PR needs focused evidence for one ownership slice.
   endpoints still require or use the correct repository/plugin backing and are
   covered by local smoke or focused IPC tests.
 - Confirm approval inspection and grant/deny endpoints require repository
-  backing, preserve fail-closed execution behavior, and stay covered by local
-  IPC tests.
+  backing, remain side-effect-free, and stay covered by local IPC tests.
+- Confirm approved first-party approval execution requires a one-shot explicit
+  `/approvals/:id/execute` or `jarvis approvals execute <approval-id>` call,
+  verifies the original task action and scope contract against the approval
+  record, applies an approval grant only for that replay, updates the task
+  result, prevents duplicate replay through existing audit evidence, and
+  records `approval_executed` plus plugin completion audit evidence with
+  `side_effect_executed: true`.
 - Confirm `/permissions/grants` and `jarvis permissions grants` expose
   read-only approval history/counts plus installed-plugin grant state,
   provenance integrity status, unverified plugin counts, and the

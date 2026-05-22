@@ -171,7 +171,10 @@ Approval-required command scaffolds such as `plugin approval echo ...` fail
 closed by returning `waiting_for_approval`, persisting an inspectable pending
 approval when repository backing is enabled, and requiring a separate CLI/IPC
 grant or denial. Granting an approval records the decision but does not execute
-the side effect. `jarvis permissions grants` reads the combined local grant
+the side effect; approved first-party actions require an explicit
+`jarvis approvals execute <approval-id>` replay, which verifies the original
+action and scope contract before recording `approval_executed` audit evidence.
+`jarvis permissions grants` reads the combined local grant
 surface: approval counts/history, high-risk pending count, installed-plugin
 `metadata_only` grant records, and the invariant that side effects still
 require approval. Installed `local_subprocess` plugins remain disabled by
@@ -222,6 +225,7 @@ cargo run -p jarvis-cli -- routes list --task-id <task-id>
 cargo run -p jarvis-cli -- routes get <route-id>
 cargo run -p jarvis-cli -- approvals list --status pending
 cargo run -p jarvis-cli -- approvals approve <approval-id> --decided-by cli --reason "reviewed"
+cargo run -p jarvis-cli -- approvals execute <approval-id>
 cargo run -p jarvis-cli -- approvals deny <approval-id> --decided-by cli --reason "not safe"
 cargo run -p jarvis-cli -- permissions review
 cargo run -p jarvis-cli -- activity summary

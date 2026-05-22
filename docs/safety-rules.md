@@ -34,6 +34,9 @@ release requirements, not optional UX guidance.
 - Audit logs must explain model route, permission checks, tool calls,
   approvals, denials, files touched, external actions attempted, failures, and
   final state.
+- Approval grant/deny decisions must not execute side effects. Approved
+  first-party actions require a one-shot explicit replay that verifies the
+  original action and scope contract and records side-effect audit evidence.
 - Memory writes must have provenance, timestamp, category, sensitivity label,
   and review/delete controls.
 - Scheduler jobs must remain inspectable and cancellable. Persisted scheduler
