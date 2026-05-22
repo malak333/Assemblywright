@@ -953,7 +953,9 @@ struct JarvisMacCoreTests {
               "schema_version": 1,
               "task_count": 2,
               "audit_entry_count": 4,
-              "active_memory_item_count": 3
+              "active_memory_item_count": 3,
+              "unreviewed_memory_item_count": 2,
+              "sensitive_memory_item_count": 1
             }
             """.utf8
         )
@@ -966,6 +968,8 @@ struct JarvisMacCoreTests {
         #expect(export.taskCount == 2)
         #expect(export.auditEntryCount == 4)
         #expect(export.activeMemoryItemCount == 3)
+        #expect(export.unreviewedMemoryItemCount == 2)
+        #expect(export.sensitiveMemoryItemCount == 1)
         #expect(export.schedulerJobs.first?.id == jobId)
         #expect(export.schedulerJobs.first?.trigger == .manual)
     }
@@ -1100,12 +1104,18 @@ struct JarvisMacCoreTests {
         let item = try #require(review.items.first)
 
         #expect(review.status == "review_required")
-        #expect(review.reviewItemCount == 2)
+        #expect(review.reviewItemCount == 3)
         #expect(review.highRiskPendingCount == 1)
         #expect(review.unverifiedInstalledPluginCount == 1)
+        #expect(review.unreviewedMemoryItemCount == 1)
+        #expect(review.sensitiveMemoryItemCount == 1)
         #expect(item.approvalId == approvalId)
         #expect(item.severity == "high")
         #expect(item.title.contains("approval"))
+        let memoryItem = try #require(review.items.first { $0.itemType == "memory_review" })
+        #expect(memoryItem.memoryId != nil)
+        #expect(memoryItem.action == "preference/voice")
+        #expect(!memoryItem.detail.contains("never expose"))
     }
 
     @Test("Approval client methods send Rust IPC decision requests")
@@ -1169,7 +1179,7 @@ struct JarvisMacCoreTests {
 
         #expect(pending.first?.id == approvalId)
         #expect(grants.highRiskPendingCount == 1)
-        #expect(review.reviewItemCount == 2)
+        #expect(review.reviewItemCount == 3)
         #expect(approved.status == "approved")
         #expect(denied.status == "denied")
         #expect(requests.map(\.method) == ["GET", "GET", "GET", "GET", "POST", "POST"])
@@ -1613,7 +1623,7 @@ struct JarvisMacCoreTests {
         #expect(model.permissionSurface.approvedGrantCount == 2)
         #expect(model.permissionSurface.sideEffectsRequireApproval)
         #expect(model.permissionSurface.unverifiedInstalledPluginGrantCount == 1)
-        #expect(model.policyReview?.reviewItemCount == 2)
+        #expect(model.policyReview?.reviewItemCount == 3)
         #expect(model.policyReview?.status == "review_required")
     }
 
@@ -2191,10 +2201,12 @@ private func permissionPolicyReviewJSON(approvalId: UUID = UUID()) -> Data {
         {
           "generated_at": "2026-05-20T12:03:00Z",
           "status": "review_required",
-          "review_item_count": 2,
+          "review_item_count": 3,
           "high_risk_pending_count": 1,
           "executable_installed_plugin_count": 0,
           "unverified_installed_plugin_count": 1,
+          "unreviewed_memory_item_count": 1,
+          "sensitive_memory_item_count": 1,
           "side_effects_require_approval": true,
           "items": [
             {
@@ -2211,6 +2223,14 @@ private func permissionPolicyReviewJSON(approvalId: UUID = UUID()) -> Data {
               "title": "Installed plugin provenance is not verified",
               "detail": "Local E2E Plugin integrity status is not_verified",
               "plugin_id": "local_e2e_plugin"
+            },
+            {
+              "item_type": "memory_review",
+              "severity": "high",
+              "title": "Memory item needs review",
+              "detail": "Memory item preference/voice is Private and unreviewed; value text is redacted from policy review",
+              "memory_id": "\(UUID().uuidString)",
+              "action": "preference/voice"
             }
           ]
         }

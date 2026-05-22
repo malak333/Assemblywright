@@ -15,7 +15,7 @@ It also includes the first buildable Swift/SwiftUI Mac shell scaffold under
 `apps/mac`, with a tested IPC client, command-console state model,
 activity/audit panel with current progress summary, memory
 create/update/review/delete and restore management, memory classification
-summary, provenance-aware
+summary, memory review counts in diagnostics and permission policy review, provenance-aware
 permission/grant inspection, permission policy review items, redacted scheduler
 attention summaries for app handoff, scheduler trigger policy-review items,
 adapter-backed scheduler notification controls, degraded-mode handling, and a
@@ -78,9 +78,10 @@ recorded focused E2E or integration proof.
 The permission center now surfaces installed-plugin provenance status from
 `/permissions/grants`, including unverified plugin counts and local integrity
 state. `/permissions/policy-review` turns pending approvals and installed
-plugin provenance/grant/network concerns into explicit review items, but it
-still does not grant broader marketplace trust, malware safety, or OS-level
-network sandboxing.
+plugin provenance/grant/network concerns plus unreviewed memory items into
+explicit review items without exposing memory values, but it still does not
+grant broader marketplace trust, malware safety, autonomous memory rewriting,
+or OS-level network sandboxing.
 
 ## Build
 
