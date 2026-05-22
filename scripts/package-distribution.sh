@@ -357,7 +357,7 @@ run_unsigned_launch_check() {
     exit 1
   fi
 
-  COMMAND_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" command "plugin echo unsigned distribution launch smoke" --endpoint "$ENDPOINT")"
+  COMMAND_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" command --json "plugin echo unsigned distribution launch smoke" --endpoint "$ENDPOINT")"
   require_output_contains "release app command" "$COMMAND_OUTPUT" '"accepted":true'
   require_output_contains "release app command" "$COMMAND_OUTPUT" '"status":"completed"'
   require_output_contains "release app command" "$COMMAND_OUTPUT" '"event_type":"plugin_completed"'
@@ -374,7 +374,7 @@ run_unsigned_launch_check() {
   PAUSE_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" pause --endpoint "$ENDPOINT" --reason "unsigned distribution launch smoke")"
   require_output_contains "release app pause" "$PAUSE_OUTPUT" '"paused":true'
 
-  BLOCKED_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" command "plugin echo blocked by unsigned distribution launch smoke" --endpoint "$ENDPOINT" --dry-run)"
+  BLOCKED_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" command --json "plugin echo blocked by unsigned distribution launch smoke" --endpoint "$ENDPOINT" --dry-run)"
   require_output_contains "release app blocked command" "$BLOCKED_OUTPUT" '"accepted":false'
   require_output_contains "release app blocked command" "$BLOCKED_OUTPUT" '"status":"blocked"'
 

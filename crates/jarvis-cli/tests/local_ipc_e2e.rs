@@ -886,6 +886,42 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert!(!tools_encoded.contains("subprocess"));
     assert!(!tools_encoded.contains("provenance"));
 
+    let readable_tools = run_cli_text(["tools", "list", "--endpoint", endpoint.as_str()]);
+    assert!(readable_tools.contains("Registered first-party model tools:"));
+    assert!(readable_tools.contains("fake_echo.echo"));
+    assert!(readable_tools.contains("fake_status.status"));
+    assert!(readable_tools.contains("Raw JSON: rerun with --json"));
+
+    let readable_ask = run_cli_text(["ask", "plugin status", "--endpoint", endpoint.as_str()]);
+    assert!(readable_ask.contains("Jarvis command: completed"));
+    assert!(readable_ask.contains("Accepted: true"));
+    assert!(readable_ask.contains("Route: local / fake-local-model"));
+    assert!(readable_ask.contains("Tools:"));
+    assert!(readable_ask.contains("fake_status.status: completed"));
+    assert!(readable_ask.contains("Raw JSON: rerun with --json"));
+    assert!(
+        serde_json::from_str::<Value>(&readable_ask).is_err(),
+        "default command output should be operator-readable text"
+    );
+
+    let ask_json = run_cli_json([
+        "ask",
+        "plugin status",
+        "--json",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(ask_json["accepted"], true, "{ask_json}");
+    assert_eq!(ask_json["task"]["status"], "completed", "{ask_json}");
+    assert_eq!(
+        ask_json["plugin_results"][0]["metadata"]["plugin_id"],
+        "fake_status"
+    );
+    assert_eq!(
+        ask_json["plugin_results"][0]["metadata"]["action"],
+        "status"
+    );
+
     let activity = run_cli_json(["activity", "summary", "--endpoint", endpoint.as_str()]);
     assert_eq!(activity["repository_backed"], true);
     assert!(
@@ -3665,7 +3701,7 @@ fn unused_loopback_addr() -> SocketAddr {
 }
 
 fn run_cli_json<const N: usize>(args: [&str; N]) -> Value {
-    let output = run_cli(args);
+    let output = run_cli_with_env(args, &[("JARVIS_CLI_JSON", "1")]);
     serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
         panic!(
             "stdout was not JSON: {error}\nstdout:\n{}\nstderr:\n{}",

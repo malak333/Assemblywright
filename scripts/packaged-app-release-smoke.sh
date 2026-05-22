@@ -182,7 +182,7 @@ if [[ -z "$HEALTH_OUTPUT" ]]; then
   exit 1
 fi
 
-COMMAND_OUTPUT="$("$BUNDLED_CORE" command "plugin echo packaged app release smoke" --endpoint "$ENDPOINT")"
+COMMAND_OUTPUT="$("$BUNDLED_CORE" command --json "plugin echo packaged app release smoke" --endpoint "$ENDPOINT")"
 require_output_contains "packaged app command" "$COMMAND_OUTPUT" '"accepted":true'
 require_output_contains "packaged app command" "$COMMAND_OUTPUT" '"status":"completed"'
 require_output_contains "packaged app command" "$COMMAND_OUTPUT" '"event_type":"plugin_completed"'
@@ -199,7 +199,7 @@ require_output_contains "packaged app diagnostics" "$DIAGNOSTICS_OUTPUT" '"redac
 PAUSE_OUTPUT="$("$BUNDLED_CORE" pause --endpoint "$ENDPOINT" --reason "packaged app release smoke")"
 require_output_contains "packaged app pause" "$PAUSE_OUTPUT" '"paused":true'
 
-BLOCKED_OUTPUT="$("$BUNDLED_CORE" command "plugin echo blocked by packaged app release smoke" --endpoint "$ENDPOINT" --dry-run)"
+BLOCKED_OUTPUT="$("$BUNDLED_CORE" command --json "plugin echo blocked by packaged app release smoke" --endpoint "$ENDPOINT" --dry-run)"
 require_output_contains "packaged app blocked command" "$BLOCKED_OUTPUT" '"accepted":false'
 require_output_contains "packaged app blocked command" "$BLOCKED_OUTPUT" '"status":"blocked"'
 

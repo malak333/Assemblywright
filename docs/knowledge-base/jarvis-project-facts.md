@@ -139,6 +139,11 @@ These notes capture durable facts for future agents working on this repository.
   grants, but model-originated tool calls cannot target them and `/tools/model`
   excludes installed plugin paths, subprocess configuration, provenance hashes,
   audit payloads, memory values, and provider route context.
+- The CLI interaction contract is now split between human and machine output:
+  `jarvis command`, visible alias `jarvis ask`, and `jarvis tools list` default
+  to concise operator-readable text, while `--json` returns the exact IPC
+  payload for scripts, diagnostics, and E2E assertions. Test harnesses may set
+  `JARVIS_CLI_JSON=1` to keep legacy JSON parsing across command invocations.
 - Provider-envelope coverage includes
   `ollama_http_provider_parses_tool_request_envelope`,
   `chatgpt_http_provider_parses_tool_request_envelope`,
@@ -308,8 +313,9 @@ These notes capture durable facts for future agents working on this repository.
   first-party manifests. This surface is read-only and degrades to a warning
   while keeping first-party manifests visible when the repository-backed
   installed registry endpoint is unavailable.
-- The CLI has matching `release readiness`, `release evidence-status`, `tasks`,
-  `memory`, `scheduler`, `diagnostics`, and `plugins` subcommands, including
+- The CLI has matching `release readiness`, `release evidence-status`,
+  `command`/`ask`, `tools`, `tasks`, `memory`, `scheduler`, `diagnostics`, and
+  `plugins` subcommands, including
   `plugins install`,
   `plugins installed`, `plugins installed-get`, `plugins enable-installed`, `plugins
   verify-installed`, `plugins verify-publisher`,

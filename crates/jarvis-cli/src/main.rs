@@ -63,6 +63,7 @@ enum CliCommand {
     /// Run a local IPC smoke test against an ephemeral core server.
     Smoke,
     /// Submit a command to the core command endpoint.
+    #[command(visible_alias = "ask")]
     Command {
         input: String,
         #[arg(long, default_value = "http://127.0.0.1:7787")]
@@ -71,6 +72,9 @@ enum CliCommand {
         dry_run: bool,
         #[arg(long)]
         sensitivity: Option<String>,
+        /// Print the raw JSON command response.
+        #[arg(long)]
+        json: bool,
     },
     /// Activate emergency pause.
     Pause {
@@ -443,6 +447,9 @@ enum ToolsCommand {
     List {
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
+        /// Print the raw JSON tool catalog.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -573,6 +580,7 @@ async fn main() -> anyhow::Result<()> {
             endpoint,
             dry_run,
             sensitivity,
+            json,
         } => {
             let body = serde_json::to_string(&CommandRequest {
                 input,
@@ -582,7 +590,12 @@ async fn main() -> anyhow::Result<()> {
                 proactive: false,
                 sensitivity: sensitivity.as_deref().map(parse_sensitivity).transpose()?,
             })?;
-            println!("{}", request(&endpoint, "POST", "/commands", Some(&body))?);
+            let response = request(&endpoint, "POST", "/commands", Some(&body))?;
+            if json || cli_json_requested() {
+                println!("{response}");
+            } else {
+                println!("{}", format_command_response(&response)?);
+            }
         }
         CliCommand::Pause { reason, endpoint } => {
             let body = serde_json::to_string(&EmergencyPauseRequest { reason })?;
@@ -956,8 +969,13 @@ async fn main() -> anyhow::Result<()> {
             }
         },
         CliCommand::Tools { command } => match command {
-            ToolsCommand::List { endpoint } => {
-                println!("{}", model_tool_catalog(&endpoint)?);
+            ToolsCommand::List { endpoint, json } => {
+                let response = model_tool_catalog(&endpoint)?;
+                if json || cli_json_requested() {
+                    println!("{response}");
+                } else {
+                    println!("{}", format_model_tool_catalog(&response)?);
+                }
             }
         },
         CliCommand::Approvals { command } => match command {
@@ -1128,6 +1146,170 @@ fn model_tool_catalog(endpoint: &str) -> anyhow::Result<String> {
         }
         Err(error) => Err(error),
     }
+}
+
+fn cli_json_requested() -> bool {
+    std::env::var("JARVIS_CLI_JSON")
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false)
+}
+
+fn format_command_response(response: &str) -> anyhow::Result<String> {
+    let value: serde_json::Value = serde_json::from_str(response)?;
+    let status = value
+        .pointer("/task/status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown");
+    let accepted = value
+        .get("accepted")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let task_id = value
+        .pointer("/task/id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown");
+    let mut lines = vec![
+        format!("Jarvis command: {status}"),
+        format!("Accepted: {accepted}"),
+        format!("Task: {task_id}"),
+    ];
+
+    if let Some(route) = value.get("route").and_then(serde_json::Value::as_object) {
+        let provider = route
+            .get("provider")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown");
+        let model = route
+            .get("model")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown");
+        let reason = route
+            .get("reason")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("no route reason provided");
+        lines.push(format!("Route: {provider} / {model}"));
+        lines.push(format!("Route reason: {reason}"));
+    }
+
+    if let Some(message) = value.get("message").and_then(serde_json::Value::as_str) {
+        lines.push("Message:".to_string());
+        lines.push(message.to_string());
+    }
+
+    let mut tool_lines = Vec::new();
+    if let Some(steps) = value.get("steps").and_then(serde_json::Value::as_array) {
+        for step in steps {
+            let Some(results) = step
+                .get("tool_results")
+                .and_then(serde_json::Value::as_array)
+            else {
+                continue;
+            };
+            for result in results {
+                let plugin_id = result
+                    .get("plugin_id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown_plugin");
+                let action = result
+                    .get("action")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown_action");
+                let result_status = result
+                    .get("status")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown");
+                let mut line = format!("- {plugin_id}.{action}: {result_status}");
+                if let Some(error) = result
+                    .pointer("/output/error")
+                    .and_then(serde_json::Value::as_str)
+                {
+                    line.push_str(&format!(" ({error})"));
+                }
+                tool_lines.push(line);
+            }
+        }
+    }
+    if let Some(results) = value
+        .get("plugin_results")
+        .and_then(serde_json::Value::as_array)
+    {
+        for result in results {
+            let plugin_id = result
+                .get("plugin_id")
+                .or_else(|| result.pointer("/metadata/plugin_id"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown_plugin");
+            let action = result
+                .get("action")
+                .or_else(|| result.pointer("/metadata/action"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown_action");
+            let result_status = result
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown");
+            let mut line = format!("- {plugin_id}.{action}: {result_status}");
+            if let Some(error) = result
+                .pointer("/output/error")
+                .and_then(serde_json::Value::as_str)
+            {
+                line.push_str(&format!(" ({error})"));
+            }
+            tool_lines.push(line);
+        }
+    }
+    if !tool_lines.is_empty() {
+        lines.push("Tools:".to_string());
+        lines.extend(tool_lines);
+    }
+
+    if let Some(entry) = value
+        .get("audit_entry")
+        .and_then(serde_json::Value::as_object)
+    {
+        let event_type = entry
+            .get("event_type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown_event");
+        let summary = entry
+            .get("summary")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("no audit summary");
+        lines.push(format!("Latest audit: {event_type} - {summary}"));
+    }
+
+    lines.push("Raw JSON: rerun with --json for full audit and route evidence.".to_string());
+    Ok(lines.join("\n"))
+}
+
+fn format_model_tool_catalog(response: &str) -> anyhow::Result<String> {
+    let value: serde_json::Value = serde_json::from_str(response)?;
+    let mut lines = vec!["Registered first-party model tools:".to_string()];
+    if let Some(tools) = value.get("tools").and_then(serde_json::Value::as_array) {
+        for tool in tools {
+            let plugin_id = tool
+                .get("plugin_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown_plugin");
+            let action = tool
+                .get("action")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown_action");
+            let description = tool
+                .get("description")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("no description");
+            lines.push(format!("- {plugin_id}.{action}: {description}"));
+        }
+    }
+    if let Some(proof_boundary) = value
+        .get("proof_boundary")
+        .and_then(serde_json::Value::as_str)
+    {
+        lines.push(format!("Boundary: {proof_boundary}"));
+    }
+    lines.push("Raw JSON: rerun with --json for the exact catalog payload.".to_string());
+    Ok(lines.join("\n"))
 }
 
 fn is_transport_unavailable(error: &anyhow::Error) -> bool {
