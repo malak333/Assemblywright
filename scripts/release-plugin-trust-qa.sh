@@ -20,13 +20,23 @@ marketplace, malware-analysis, OS sandbox, and egress checks required before
 any marketplace or third-party plugin safety claim.
 
 --assert-complete verifies that the owner has explicitly recorded each plugin
-trust validation flag below as true and writes a JSON evidence report:
+trust validation flag below as true, has recorded evidence-note fields, and
+writes a JSON evidence report:
   JARVIS_PLUGIN_QA_MARKETPLACE_REVIEW_VALIDATED=true
   JARVIS_PLUGIN_QA_MALWARE_SCAN_VALIDATED=true
   JARVIS_PLUGIN_QA_OS_SANDBOX_VALIDATED=true
   JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED=true
   JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_POLICY_VALIDATED=true
   JARVIS_PLUGIN_QA_MANUAL_TRUST_REVIEW_VALIDATED=true
+  JARVIS_PLUGIN_QA_OWNER_NAME
+  JARVIS_PLUGIN_QA_REVIEW_STARTED_AT
+  JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT
+  JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE
+  JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE
+  JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE
+  JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE
+  JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE
+  JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE
 
 --self-test exercises the assertion/report mechanics with fake validation flags
 without claiming real marketplace, malware-analysis, sandbox, or egress proof.
@@ -66,6 +76,12 @@ require_true() {
   [[ "$value" == "true" ]] || fail "$name must be set to true after manual validation"
 }
 
+require_non_empty_env() {
+  local name="$1"
+  local value="${!name:-}"
+  [[ -n "${value//[[:space:]]/}" ]] || fail "$name must be set after manual validation"
+}
+
 json_escape() {
   printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
@@ -74,10 +90,28 @@ write_report() {
   local generated_at
   local escaped_boundary
   local escaped_source
+  local escaped_owner
+  local escaped_started
+  local escaped_completed
+  local escaped_marketplace_note
+  local escaped_malware_note
+  local escaped_sandbox_note
+  local escaped_egress_note
+  local escaped_signed_publisher_note
+  local escaped_manual_note
   require_command python3
   generated_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-  escaped_boundary="$(json_escape "Owner-recorded marketplace review, malware scan, OS sandbox, egress enforcement, signed publisher policy, and manual plugin trust review flags only; no repo-local command can prove an external marketplace, malware scanner, or host-level sandbox deployment.")"
+  escaped_boundary="$(json_escape "Owner-recorded marketplace review, malware scan, OS sandbox, egress enforcement, signed publisher policy, and manual plugin trust evidence only; no repo-local command can prove an external marketplace, malware scanner, or host-level sandbox deployment.")"
   escaped_source="$(json_escape "${JARVIS_PLUGIN_QA_REVIEW_SOURCE:-owner-asserted-manual-review}")"
+  escaped_owner="$(json_escape "$JARVIS_PLUGIN_QA_OWNER_NAME")"
+  escaped_started="$(json_escape "$JARVIS_PLUGIN_QA_REVIEW_STARTED_AT")"
+  escaped_completed="$(json_escape "$JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT")"
+  escaped_marketplace_note="$(json_escape "$JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE")"
+  escaped_malware_note="$(json_escape "$JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE")"
+  escaped_sandbox_note="$(json_escape "$JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE")"
+  escaped_egress_note="$(json_escape "$JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE")"
+  escaped_signed_publisher_note="$(json_escape "$JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE")"
+  escaped_manual_note="$(json_escape "$JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE")"
 
   mkdir -p "$(dirname "$REPORT_PATH")"
   cat >"$REPORT_PATH" <<EOF
@@ -91,6 +125,17 @@ write_report() {
     "egress_enforcement": true,
     "signed_publisher_policy": true,
     "manual_trust_review": true
+  },
+  "owner_recorded_plugin_trust_evidence": {
+    "owner_name": "$escaped_owner",
+    "review_started_at": "$escaped_started",
+    "review_completed_at": "$escaped_completed",
+    "marketplace_evidence_note": "$escaped_marketplace_note",
+    "malware_scan_evidence_note": "$escaped_malware_note",
+    "os_sandbox_evidence_note": "$escaped_sandbox_note",
+    "egress_evidence_note": "$escaped_egress_note",
+    "signed_publisher_evidence_note": "$escaped_signed_publisher_note",
+    "manual_review_evidence_note": "$escaped_manual_note"
   },
   "proof_boundary": "$escaped_boundary"
 }
@@ -155,12 +200,44 @@ if [[ "$SELF_TEST" == true ]]; then
     JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED=true \
     JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_POLICY_VALIDATED=true \
     JARVIS_PLUGIN_QA_MANUAL_TRUST_REVIEW_VALIDATED=true \
+    JARVIS_PLUGIN_QA_OWNER_NAME="Jarvis Plugin QA Self-Test" \
+    JARVIS_PLUGIN_QA_REVIEW_STARTED_AT="2026-05-22T16:10:00Z" \
+    JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT="2026-05-22T16:20:00Z" \
+    JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE="Marketplace review fixture was observed." \
+    JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE="Malware scan fixture was observed." \
+    JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE="OS sandbox fixture was observed." \
+    JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE="Egress fixture was observed." \
+    JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE="Signed publisher policy fixture was observed." \
+    JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE="Manual trust review fixture was observed." \
     "$0" --assert-complete >/dev/null
   require_file_contains "plugin trust QA self-test report" "$fixture_report" '"marketplace_review": true'
   require_file_contains "plugin trust QA self-test report" "$fixture_report" '"review_source": "self-test-fixture"'
+  require_file_contains "plugin trust QA self-test report" "$fixture_report" '"owner_recorded_plugin_trust_evidence"'
+  require_file_contains "plugin trust QA self-test report" "$fixture_report" '"egress_evidence_note": "Egress fixture was observed."'
   require_file_contains "plugin trust QA self-test report" "$fixture_report" '"proof_boundary"'
+
+  if JARVIS_PLUGIN_QA_REPORT_PATH="$tmp_dir/blank-evidence-report.json" \
+    JARVIS_PLUGIN_QA_REVIEW_SOURCE="self-test-fixture" \
+    JARVIS_PLUGIN_QA_MARKETPLACE_REVIEW_VALIDATED=true \
+    JARVIS_PLUGIN_QA_MALWARE_SCAN_VALIDATED=true \
+    JARVIS_PLUGIN_QA_OS_SANDBOX_VALIDATED=true \
+    JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED=true \
+    JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_POLICY_VALIDATED=true \
+    JARVIS_PLUGIN_QA_MANUAL_TRUST_REVIEW_VALIDATED=true \
+    JARVIS_PLUGIN_QA_OWNER_NAME="Jarvis Plugin QA Self-Test" \
+    JARVIS_PLUGIN_QA_REVIEW_STARTED_AT="2026-05-22T16:10:00Z" \
+    JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT="2026-05-22T16:20:00Z" \
+    JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE="Marketplace review fixture was observed." \
+    JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE="Malware scan fixture was observed." \
+    JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE="OS sandbox fixture was observed." \
+    JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE="" \
+    JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE="Signed publisher policy fixture was observed." \
+    JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE="Manual trust review fixture was observed." \
+    "$0" --assert-complete >/dev/null 2>&1; then
+    fail "plugin trust QA self-test expected blank egress evidence to be rejected"
+  fi
   printf 'Jarvis plugin trust QA self-test: ok\n'
-  printf 'Proof boundary: fake flags validate assertion/report mechanics only; no marketplace, malware, sandbox, or egress validation was performed.\n'
+  printf 'Proof boundary: fake flags and evidence notes validate assertion/report mechanics only; no marketplace, malware, sandbox, or egress validation was performed.\n'
   exit 0
 fi
 
@@ -185,7 +262,8 @@ Manual plugin trust checks still required before marketplace safety language:
 - Validate host-level egress enforcement with a network-deny fixture and a
   declared-host allow fixture.
 - Record all JARVIS_PLUGIN_QA_* flags as true, then rerun this script with
-  --assert-complete on the validated release machine.
+  --assert-complete on the validated release machine with owner, timestamp, and
+  evidence-note fields populated.
 - Preserve the generated JSON report from --assert-complete as release evidence.
 
 Proof boundary: preflight and runbook only; no marketplace review, malware scan,
@@ -200,13 +278,22 @@ require_true JARVIS_PLUGIN_QA_OS_SANDBOX_VALIDATED
 require_true JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED
 require_true JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_POLICY_VALIDATED
 require_true JARVIS_PLUGIN_QA_MANUAL_TRUST_REVIEW_VALIDATED
+require_non_empty_env JARVIS_PLUGIN_QA_OWNER_NAME
+require_non_empty_env JARVIS_PLUGIN_QA_REVIEW_STARTED_AT
+require_non_empty_env JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT
+require_non_empty_env JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE
+require_non_empty_env JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE
+require_non_empty_env JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE
+require_non_empty_env JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE
+require_non_empty_env JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE
+require_non_empty_env JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE
 write_report
 
 cat <<EOF
 Jarvis plugin trust QA assertion: complete
 Report: $REPORT_PATH
 Proof boundary: owner-recorded marketplace review, malware scan, OS sandbox,
-egress enforcement, signed publisher policy, and manual trust review flags only;
-this still does not prove those systems are available in the repo-local test
-environment.
+egress enforcement, signed publisher policy, and manual trust review evidence
+only; this still does not prove those systems are available in the repo-local
+test environment.
 EOF

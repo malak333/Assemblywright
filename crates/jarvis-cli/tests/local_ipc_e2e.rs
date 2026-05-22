@@ -227,6 +227,14 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         &release_readiness["recommended_verification_commands"],
         "./scripts/release-plugin-trust-qa.sh --check",
     );
+    assert_string_array_contains_substring(
+        &release_readiness["recommended_verification_commands"],
+        "JARVIS_PLUGIN_QA_OWNER_NAME=",
+    );
+    assert_string_array_contains_substring(
+        &release_readiness["recommended_verification_commands"],
+        "JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE=",
+    );
     assert_string_array_contains(
         &release_readiness["recommended_verification_commands"],
         "./scripts/release-evidence-bundle.sh --check",
@@ -2274,11 +2282,23 @@ fn serve_executes_ollama_provider_tool_request_envelope() {
 
 #[test]
 fn serve_rejects_ollama_hallucinated_tool_with_registered_tool_guidance() {
+    assert_ollama_hallucinated_tool_is_rejected("status", "plugin status is not registered");
+}
+
+#[test]
+fn serve_rejects_ollama_chrome_extension_hallucination_with_registered_tool_guidance() {
+    assert_ollama_hallucinated_tool_is_rejected(
+        "chrome_extension",
+        "plugin chrome_extension is not registered",
+    );
+}
+
+fn assert_ollama_hallucinated_tool_is_rejected(plugin_id: &str, expected_error: &str) {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let db_path = temp_dir
         .path()
         .join("jarvis-provider-invalid-tool-e2e.sqlite");
-    let (ollama_base_url, server_thread) = start_ollama_invalid_tool_server();
+    let (ollama_base_url, server_thread) = start_ollama_invalid_tool_server(plugin_id);
     let mut server = JarvisServer::start_with_env(
         &db_path,
         &[
@@ -2310,7 +2330,7 @@ fn serve_rejects_ollama_hallucinated_tool_with_registered_tool_guidance() {
     assert!(command["steps"][0]["tool_results"][0]["output"]["error"]
         .as_str()
         .expect("rejection error")
-        .contains("plugin status is not registered"));
+        .contains(expected_error));
     assert!(command["steps"][0]["tool_results"][0]["output"]["guidance"]
         .as_str()
         .expect("rejection guidance")
@@ -2326,7 +2346,7 @@ fn serve_rejects_ollama_hallucinated_tool_with_registered_tool_guidance() {
         .iter()
         .find(|entry| entry["event_type"] == "tool_request_rejected")
         .expect("rejection audit");
-    assert_eq!(rejection["payload"]["plugin_id"], "status");
+    assert_eq!(rejection["payload"]["plugin_id"], plugin_id);
     assert!(rejection["payload"]["registered_tools"]
         .as_array()
         .expect("registered tools")
@@ -2666,18 +2686,19 @@ fn start_ollama_envelope_server() -> (String, thread::JoinHandle<()>) {
     (format!("http://{address}"), handle)
 }
 
-fn start_ollama_invalid_tool_server() -> (String, thread::JoinHandle<()>) {
+fn start_ollama_invalid_tool_server(plugin_id: &str) -> (String, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind ollama invalid-tool stub");
     let address = listener
         .local_addr()
         .expect("ollama invalid-tool stub address");
+    let plugin_id = plugin_id.to_string();
     let handle = thread::spawn(move || {
         let envelope = json!({
             "message": "provider guessed a status tool",
             "complete": false,
             "tool_requests": [
                 {
-                    "plugin_id": "status",
+                    "plugin_id": plugin_id.as_str(),
                     "action": "status",
                     "input": {}
                 }
@@ -2702,7 +2723,7 @@ fn start_ollama_invalid_tool_server() -> (String, thread::JoinHandle<()>) {
             if index == 1 {
                 assert!(request.contains("rejected"), "{request}");
                 assert!(
-                    request.contains("plugin status is not registered"),
+                    request.contains(&format!("plugin {plugin_id} is not registered")),
                     "{request}"
                 );
             }

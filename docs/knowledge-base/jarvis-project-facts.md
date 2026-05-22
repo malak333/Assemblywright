@@ -181,9 +181,11 @@ These notes capture durable facts for future agents working on this repository.
   explicit. `--check` validates repo-owned plugin trust prerequisites and
   prints the marketplace review, malware scan, signed publisher policy, OS
   sandbox, and host-level egress runbook. `--self-test` proves JSON report
-  mechanics with fake validation flags only. `--assert-complete` writes an
-  owner-recorded JSON report after every `JARVIS_PLUGIN_QA_*` flag is true; it
-  is manual external release evidence, not repo-local proof of those systems.
+  mechanics with fake validation flags and fake evidence notes only.
+  `--assert-complete` writes an owner-recorded JSON report after every
+  `JARVIS_PLUGIN_QA_*` flag is true and the owner/timestamp/evidence-note fields
+  are populated; it is manual external release evidence, not repo-local proof of
+  those systems.
 - `./scripts/release-evidence-bundle.sh` is the final release evidence
   manifest gate. `--check` prints the required signed distribution artifacts,
   live-device QA report, plugin-trust QA report, and owner validation flags.
@@ -193,11 +195,12 @@ These notes capture durable facts for future agents working on this repository.
   artifact checks validate the app signature, app stapling ticket, installer
   signature, installer stapling ticket, and app zip payload. Production
   bundles must keep local signature validation enabled; the script parses
-  every required live-device and plugin-trust report flag, requires the
-  live-device QA report's app bundle identifier/version/build metadata to
-  match the expected release, and records SHA-256 digests for the distribution
-  zip, installer package, live-device QA report, and plugin-trust QA report
-  before writing the bundle manifest.
+  every required live-device and plugin-trust report flag, requires non-empty
+  owner-recorded evidence fields in both QA reports, requires the live-device QA
+  report's app bundle identifier/version/build metadata to match the expected
+  release, and records SHA-256 digests for the distribution zip, installer
+  package, live-device QA report, and plugin-trust QA report before writing the
+  bundle manifest.
 - `./scripts/release-evidence-doctor.sh` inventories release evidence readiness
   before final bundling. `--check` reports present and missing signed-artifact,
   live-device QA, plugin-trust QA, and final bundle evidence without failing

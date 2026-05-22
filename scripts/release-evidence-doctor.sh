@@ -239,6 +239,9 @@ check_release_evidence() {
     for flag in marketplace_review malware_scan os_sandbox egress_enforcement signed_publisher_policy manual_trust_review; do
       check_json_flag "plugin-trust QA report" "$PLUGIN_QA_REPORT" "validation_flags.$flag"
     done
+    for field in owner_name review_started_at review_completed_at marketplace_evidence_note malware_scan_evidence_note os_sandbox_evidence_note egress_evidence_note signed_publisher_evidence_note manual_review_evidence_note; do
+      check_json_nonempty_string "plugin-trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.$field"
+    done
   else
     record_missing "plugin-trust QA report missing or invalid JSON: $PLUGIN_QA_REPORT"
   fi
@@ -337,6 +340,17 @@ JSON
     "signed_publisher_policy": true,
     "manual_trust_review": true
   },
+  "owner_recorded_plugin_trust_evidence": {
+    "owner_name": "Jarvis Plugin QA Self-Test",
+    "review_started_at": "2026-05-22T16:10:00Z",
+    "review_completed_at": "2026-05-22T16:20:00Z",
+    "marketplace_evidence_note": "Marketplace review fixture was observed.",
+    "malware_scan_evidence_note": "Malware scan fixture was observed.",
+    "os_sandbox_evidence_note": "OS sandbox fixture was observed.",
+    "egress_evidence_note": "Egress fixture was observed.",
+    "signed_publisher_evidence_note": "Signed publisher policy fixture was observed.",
+    "manual_review_evidence_note": "Manual trust review fixture was observed."
+  },
   "proof_boundary": "self-test fixture"
 }
 JSON
@@ -430,6 +444,28 @@ PY
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected blank live voice observation to fail"
+  fi
+
+  python3 - "$tmp_dir/plugin.json" "$tmp_dir/missing-observation-plugin.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+with open(source, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["owner_recorded_plugin_trust_evidence"]["egress_evidence_note"] = ""
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+PY
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="$tmp_dir/dist/Jarvis-0.1.4.zip" \
+    JARVIS_EVIDENCE_PKG_PATH="$tmp_dir/dist/Jarvis-0.1.4.pkg" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/missing-observation-plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+    "$0" --assert-complete >/dev/null 2>&1; then
+    fail "release evidence doctor self-test expected blank plugin trust observation to fail"
   fi
 
   rm "$tmp_dir/plugin.json"

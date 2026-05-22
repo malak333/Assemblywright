@@ -403,6 +403,17 @@ JSON
     "signed_publisher_policy": true,
     "manual_trust_review": true
   },
+  "owner_recorded_plugin_trust_evidence": {
+    "owner_name": "Jarvis Plugin QA Self-Test",
+    "review_started_at": "2026-05-22T16:10:00Z",
+    "review_completed_at": "2026-05-22T16:20:00Z",
+    "marketplace_evidence_note": "Marketplace review fixture was observed.",
+    "malware_scan_evidence_note": "Malware scan fixture was observed.",
+    "os_sandbox_evidence_note": "OS sandbox fixture was observed.",
+    "egress_evidence_note": "Egress fixture was observed.",
+    "signed_publisher_evidence_note": "Signed publisher policy fixture was observed.",
+    "manual_review_evidence_note": "Manual trust review fixture was observed."
+  },
   "proof_boundary": "self-test fixture"
 }
 JSON
@@ -531,6 +542,36 @@ JSON
     fail "release evidence self-test expected incomplete plugin-trust report to be rejected"
   fi
 
+  python3 - "$tmp_dir/plugin.json" "$tmp_dir/missing-observation-plugin.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+with open(source, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["owner_recorded_plugin_trust_evidence"]["egress_evidence_note"] = ""
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+PY
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="$tmp_dir/dist/Jarvis-0.1.4.zip" \
+    JARVIS_EVIDENCE_PKG_PATH="$tmp_dir/dist/Jarvis-0.1.4.pkg" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/missing-observation-plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/missing-plugin-observation-bundle.json" \
+    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
+    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+    "$0" --bundle >/dev/null 2>&1; then
+    fail "release evidence self-test expected blank plugin trust observation to be rejected"
+  fi
+
   printf 'Jarvis release evidence bundle self-test: ok\n'
   printf 'Proof boundary: fake artifacts and reports validate bundle mechanics only; no production evidence was created.\n'
   exit 0
@@ -578,6 +619,9 @@ require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "app_bundle
 require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.build_version" "$EXPECTED_VERSION"
 for flag in marketplace_review malware_scan os_sandbox egress_enforcement signed_publisher_policy manual_trust_review; do
   require_json_bool_true "plugin trust QA report" "$PLUGIN_QA_REPORT" "validation_flags.$flag"
+done
+for field in owner_name review_started_at review_completed_at marketplace_evidence_note malware_scan_evidence_note os_sandbox_evidence_note egress_evidence_note signed_publisher_evidence_note manual_review_evidence_note; do
+  require_json_nonempty_string "plugin trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.$field"
 done
 require_true JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED
 require_true JARVIS_EVIDENCE_NOTARIZATION_VALIDATED
