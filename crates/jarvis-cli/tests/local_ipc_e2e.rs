@@ -28,6 +28,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_eq!(contract["contract"]["name"], "jarvis.local-ipc");
     assert_eq!(contract["contract"]["version"], 1);
     assert_array_contains(&contract["endpoints"], "path", "/diagnostics/export");
+    assert_array_contains(&contract["endpoints"], "path", "/permissions/grants");
     assert_array_contains(&contract["endpoints"], "path", "/model-routes");
     assert_array_contains(&contract["endpoints"], "path", "/approvals/:id/approve");
     assert_array_contains(
@@ -39,6 +40,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_string_array_contains(&contract["safe_inspection_paths"], "/model-routes");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/model-routes/:id");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/scheduler/jobs/:id");
+    assert_string_array_contains(&contract["safe_inspection_paths"], "/permissions/grants");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/approvals/:id");
 
     let command = run_cli_json([
@@ -167,6 +169,20 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_eq!(installed_plugin_get["id"], "local_e2e_plugin");
     assert_eq!(installed_plugin_get["execution_enabled"], false);
     assert_eq!(installed_plugin_get["execution_grant"], "metadata_only");
+
+    let initial_grants = run_cli_json(["permissions", "grants", "--endpoint", endpoint.as_str()]);
+    assert_eq!(initial_grants["executable_installed_plugin_count"], 0);
+    assert_eq!(initial_grants["side_effects_require_approval"], true);
+    assert_array_contains(
+        &initial_grants["installed_plugin_grants"],
+        "plugin_id",
+        "local_e2e_plugin",
+    );
+    assert_array_contains(
+        &initial_grants["installed_plugin_grants"],
+        "execution_grant",
+        "metadata_only",
+    );
 
     let blocked_installed_run = run_cli_json([
         "plugins",
@@ -822,6 +838,22 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     ]);
     assert_array_contains(&persisted_approvals, "id", &approval_id);
     assert_array_contains(&persisted_approvals, "id", &deny_approval_id);
+
+    let persisted_grants = run_cli_json([
+        "permissions",
+        "grants",
+        "--endpoint",
+        restarted_endpoint.as_str(),
+    ]);
+    assert_array_contains(&persisted_grants["approval_counts"], "status", "approved");
+    assert_array_contains(&persisted_grants["approval_counts"], "status", "denied");
+    assert_array_contains(
+        &persisted_grants["installed_plugin_grants"],
+        "plugin_id",
+        "local_e2e_plugin",
+    );
+    assert_eq!(persisted_grants["executable_installed_plugin_count"], 1);
+    assert_eq!(persisted_grants["side_effects_require_approval"], true);
 
     let persisted_memory =
         run_cli_json(["memory", "list", "--endpoint", restarted_endpoint.as_str()]);

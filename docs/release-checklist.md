@@ -107,6 +107,10 @@ stage or when a PR needs focused evidence for one ownership slice.
 - Confirm approval inspection and grant/deny endpoints require repository
   backing, preserve fail-closed execution behavior, and stay covered by local
   IPC tests.
+- Confirm `/permissions/grants` and `jarvis permissions grants` expose
+  read-only approval history/counts plus installed-plugin `metadata_only`
+  grant state, and that this inspection surface does not enable installed
+  plugin code execution.
 - Confirm scheduler job create/list/cancel and due-run execution state is
   restored and updated when repository backing is enabled. Due-run coverage
   proves explicit CLI/IPC runner behavior, including interval reschedule and

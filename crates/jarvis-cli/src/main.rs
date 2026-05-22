@@ -109,6 +109,11 @@ enum CliCommand {
         #[command(subcommand)]
         command: ApprovalsCommand,
     },
+    /// Inspect persisted permission grants and approval history.
+    Permissions {
+        #[command(subcommand)]
+        command: PermissionsCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -339,6 +344,15 @@ enum ApprovalsCommand {
         decided_by: String,
         #[arg(long)]
         reason: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum PermissionsCommand {
+    /// Show approval history and installed-plugin execution grant state.
+    Grants {
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
@@ -708,6 +722,14 @@ async fn main() -> anyhow::Result<()> {
                         &format!("/approvals/{id}/deny"),
                         Some(&body)
                     )?
+                );
+            }
+        },
+        CliCommand::Permissions { command } => match command {
+            PermissionsCommand::Grants { endpoint } => {
+                println!(
+                    "{}",
+                    request(&endpoint, "GET", "/permissions/grants", None)?
                 );
             }
         },

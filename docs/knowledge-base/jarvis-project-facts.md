@@ -49,6 +49,12 @@ These notes capture durable facts for future agents working on this repository.
   explicitly enabled through `/plugins/installed/:id/execution` or
   `plugins enable-installed` with `execution_grant: subprocess_stdio`; only then
   can they run through the constrained subprocess-stdio JSON boundary.
+- Repository-backed IPC exposes `/permissions/grants`, and the CLI exposes
+  `jarvis permissions grants`, as a read-only permission-center summary. It
+  combines approval status counts/history, high-risk pending approval count,
+  installed-plugin grant state, executable installed-plugin count, and the
+  `side_effects_require_approval` invariant without enabling installed plugin
+  execution.
 - The CLI has matching `tasks`, `memory`, `scheduler`, `diagnostics`, and
   `plugins` subcommands, including `plugins install`, `plugins installed`,
   `plugins installed-get`, `plugins enable-installed`, `plugins
@@ -61,8 +67,9 @@ These notes capture durable facts for future agents working on this repository.
   system.
   The SwiftUI shell scaffold and IPC client live under `apps/mac`, including a
   command transcript, activity/audit panel, approval decision controls,
-  management tabs, degraded-mode handling, text-only voice command handoff, and
-  a core supervisor abstraction for configured or bundled local core binaries.
+  management tabs, permission grant-history summary, degraded-mode handling,
+  text-only voice command handoff, and a core supervisor abstraction for
+  configured or bundled local core binaries.
 - The architecture docs must preserve two diagrams: the current implemented
   Rust/Swift scaffold and the end-goal production architecture. Keep the
   current-vs-target phase table aligned with code before answering readiness

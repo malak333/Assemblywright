@@ -9,11 +9,12 @@ pub mod storage;
 pub mod types;
 
 pub use ipc::{
-    router, serve, serve_listener, ApprovalDecisionRequest, CommandRequest, CommandResponse,
-    CreateMemoryItemRequest, CreateSchedulerJobRequest, EmergencyPauseRequest,
+    router, serve, serve_listener, ApprovalDecisionRequest, ApprovalStatusCount, CommandRequest,
+    CommandResponse, CreateMemoryItemRequest, CreateSchedulerJobRequest, EmergencyPauseRequest,
     EmergencyPauseResponse, ErrorResponse, HealthResponse, InstallPluginRequest,
     InstalledPluginExecutionRequest, InstalledPluginRunRequest, InstalledPluginRunResponse,
-    IpcState, SchedulerBackgroundConfig, SchedulerJobExecution, SchedulerRunResponse,
+    InstalledPluginGrantSurface, IpcState, PermissionGrantSummary, SchedulerBackgroundConfig,
+    SchedulerJobExecution, SchedulerRunResponse,
     UpdateMemoryItemRequest, DEFAULT_SCHEDULER_BACKGROUND_INTERVAL_MS,
     DEFAULT_SCHEDULER_BACKGROUND_LIMIT, MAX_SCHEDULER_BACKGROUND_LIMIT,
 };

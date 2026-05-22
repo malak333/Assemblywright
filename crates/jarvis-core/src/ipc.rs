@@ -285,6 +285,34 @@ pub struct InstalledPluginRunResponse {
     pub audit_entry: AuditEntry,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionGrantSummary {
+    pub generated_at: DateTime<Utc>,
+    pub approval_counts: Vec<ApprovalStatusCount>,
+    pub latest_approvals: Vec<PendingApproval>,
+    pub installed_plugin_grants: Vec<InstalledPluginGrantSurface>,
+    pub high_risk_pending_count: usize,
+    pub executable_installed_plugin_count: usize,
+    pub side_effects_require_approval: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalStatusCount {
+    pub status: ApprovalStatus,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstalledPluginGrantSurface {
+    pub plugin_id: String,
+    pub name: String,
+    pub execution_enabled: bool,
+    pub execution_grant: crate::InstalledPluginExecutionGrant,
+    pub installed_at: DateTime<Utc>,
+    pub action_count: usize,
+    pub high_risk_action_count: usize,
+}
+
 #[derive(Debug, Clone, Default)]
 struct EmergencyPauseState {
     paused: bool,
@@ -405,6 +433,7 @@ impl IpcState {
                 "/model-routes/:id".to_string(),
                 "/memory".to_string(),
                 "/memory/:id".to_string(),
+                "/permissions/grants".to_string(),
                 "/approvals".to_string(),
                 "/approvals/:id".to_string(),
             ],
@@ -491,6 +520,92 @@ impl IpcState {
         status: Option<ApprovalStatus>,
     ) -> JarvisResult<Vec<PendingApproval>> {
         self.using_repository(|repository| repository.list_pending_approvals(status))
+    }
+
+    pub fn permission_grant_summary(&self) -> JarvisResult<PermissionGrantSummary> {
+        self.using_repository(|repository| {
+            let mut approvals = repository.list_pending_approvals(None)?;
+            let installed_plugins = repository.list_installed_plugins()?;
+            let pending_count = approvals
+                .iter()
+                .filter(|approval| approval.status == ApprovalStatus::Pending)
+                .count();
+            let approved_count = approvals
+                .iter()
+                .filter(|approval| approval.status == ApprovalStatus::Approved)
+                .count();
+            let denied_count = approvals
+                .iter()
+                .filter(|approval| approval.status == ApprovalStatus::Denied)
+                .count();
+
+            approvals.sort_by(|left, right| {
+                right
+                    .requested_at
+                    .cmp(&left.requested_at)
+                    .then_with(|| left.id.cmp(&right.id))
+            });
+
+            let high_risk_pending_count = approvals
+                .iter()
+                .filter(|approval| {
+                    approval.status == ApprovalStatus::Pending
+                        && matches!(
+                            approval.risk_tier,
+                            crate::RiskTier::Confirm | crate::RiskTier::Block
+                        )
+                })
+                .count();
+            let executable_installed_plugin_count = installed_plugins
+                .iter()
+                .filter(|plugin| plugin.execution_enabled)
+                .count();
+            let installed_plugin_grants = installed_plugins
+                .into_iter()
+                .map(|plugin| InstalledPluginGrantSurface {
+                    plugin_id: plugin.id,
+                    name: plugin.manifest.name,
+                    execution_enabled: plugin.execution_enabled,
+                    execution_grant: plugin.execution_grant,
+                    installed_at: plugin.installed_at,
+                    action_count: plugin.manifest.actions.len(),
+                    high_risk_action_count: plugin
+                        .manifest
+                        .actions
+                        .iter()
+                        .filter(|action| {
+                            matches!(
+                                action.risk_tier,
+                                crate::RiskTier::Confirm | crate::RiskTier::Block
+                            )
+                        })
+                        .count(),
+                })
+                .collect();
+
+            Ok(PermissionGrantSummary {
+                generated_at: Utc::now(),
+                approval_counts: vec![
+                    ApprovalStatusCount {
+                        status: ApprovalStatus::Pending,
+                        count: pending_count,
+                    },
+                    ApprovalStatusCount {
+                        status: ApprovalStatus::Approved,
+                        count: approved_count,
+                    },
+                    ApprovalStatusCount {
+                        status: ApprovalStatus::Denied,
+                        count: denied_count,
+                    },
+                ],
+                latest_approvals: approvals.into_iter().take(10).collect(),
+                installed_plugin_grants,
+                high_risk_pending_count,
+                executable_installed_plugin_count,
+                side_effects_require_approval: true,
+            })
+        })
     }
 
     pub fn get_approval(&self, id: Uuid) -> JarvisResult<PendingApproval> {
@@ -1572,6 +1687,7 @@ pub fn router(state: IpcState) -> Router {
                 .delete(delete_memory_item),
         )
         .route("/memory/:id/review", post(review_memory_item))
+        .route("/permissions/grants", get(permission_grant_summary))
         .route("/approvals", get(list_approvals))
         .route("/approvals/:id", get(get_approval))
         .route("/approvals/:id/approve", post(approve_approval))
@@ -1818,6 +1934,15 @@ async fn list_approvals(
         .map_err(error_response)
 }
 
+async fn permission_grant_summary(
+    State(state): State<IpcState>,
+) -> Result<Json<PermissionGrantSummary>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .permission_grant_summary()
+        .map(Json)
+        .map_err(error_response)
+}
+
 async fn get_approval(
     State(state): State<IpcState>,
     Path(id): Path<Uuid>,
@@ -2014,6 +2139,7 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
         endpoint("PATCH", "/memory/:id", true, false),
         endpoint("DELETE", "/memory/:id", true, false),
         endpoint("POST", "/memory/:id/review", true, false),
+        endpoint("GET", "/permissions/grants", true, false),
         endpoint("GET", "/approvals", true, false),
         endpoint("GET", "/approvals/:id", true, false),
         endpoint("POST", "/approvals/:id/approve", true, false),
