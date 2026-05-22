@@ -159,6 +159,9 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_string_array_contains(&contract["safe_inspection_paths"], "/approvals/:id");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/activity/summary");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/activity/events");
+    assert_string_array_contains(&contract["safe_inspection_paths"], "/memory/classification");
+    assert_string_array_lacks(&contract["safe_inspection_paths"], "/memory");
+    assert_string_array_lacks(&contract["safe_inspection_paths"], "/memory/:id");
 
     let release_readiness = run_cli_json(["release", "readiness", "--endpoint", endpoint.as_str()]);
     assert_eq!(release_readiness["production_ready"], false);
@@ -2533,6 +2536,16 @@ fn assert_string_array_contains(value: &Value, expected: &str) {
     assert!(
         array.iter().any(|item| item.as_str() == Some(expected)),
         "expected array to contain {expected}, got {value}"
+    );
+}
+
+fn assert_string_array_lacks(value: &Value, unexpected: &str) {
+    let array = value.as_array().unwrap_or_else(|| {
+        panic!("expected array, got {}", json!(value));
+    });
+    assert!(
+        !array.iter().any(|item| item.as_str() == Some(unexpected)),
+        "expected array not to contain {unexpected}, got {value}"
     );
 }
 

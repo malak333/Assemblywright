@@ -647,9 +647,7 @@ impl IpcState {
                 "/activity/events".to_string(),
                 "/model-routes".to_string(),
                 "/model-routes/:id".to_string(),
-                "/memory".to_string(),
                 "/memory/classification".to_string(),
-                "/memory/:id".to_string(),
                 "/permissions/grants".to_string(),
                 "/permissions/policy-review".to_string(),
                 "/approvals".to_string(),
@@ -3590,7 +3588,7 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
         endpoint("GET", "/model-routes", true, true),
         endpoint("GET", "/model-routes/:id", true, true),
         endpoint("GET", "/memory", true, false),
-        endpoint("GET", "/memory/classification", true, false),
+        endpoint("GET", "/memory/classification", true, true),
         endpoint("POST", "/memory", true, false),
         endpoint("GET", "/memory/:id", true, false),
         endpoint("PATCH", "/memory/:id", true, false),
@@ -3979,6 +3977,15 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert!(contract
             .safe_inspection_paths
             .contains(&"/plugins/installed/:id".to_string()));
+        assert!(contract
+            .safe_inspection_paths
+            .contains(&"/memory/classification".to_string()));
+        assert!(!contract
+            .safe_inspection_paths
+            .contains(&"/memory".to_string()));
+        assert!(!contract
+            .safe_inspection_paths
+            .contains(&"/memory/:id".to_string()));
         assert!(!contract
             .safe_inspection_paths
             .contains(&"/plugins/installed/:id/execution".to_string()));
@@ -3989,6 +3996,27 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 && endpoint.path == "/release/readiness"
                 && !endpoint.repository_required
                 && endpoint.redacted));
+        assert!(contract
+            .endpoints
+            .iter()
+            .any(|endpoint| endpoint.method == "GET"
+                && endpoint.path == "/memory/classification"
+                && endpoint.repository_required
+                && endpoint.redacted));
+        assert!(contract
+            .endpoints
+            .iter()
+            .any(|endpoint| endpoint.method == "GET"
+                && endpoint.path == "/memory"
+                && endpoint.repository_required
+                && !endpoint.redacted));
+        assert!(contract
+            .endpoints
+            .iter()
+            .any(|endpoint| endpoint.method == "GET"
+                && endpoint.path == "/memory/:id"
+                && endpoint.repository_required
+                && !endpoint.redacted));
         assert!(contract
             .endpoints
             .iter()
