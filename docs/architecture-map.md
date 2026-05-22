@@ -34,7 +34,7 @@ flowchart TB
         IPC --> Diagnostics["/diagnostics/export"]
         IPC --> Commands["/commands"]
         IPC --> Inspection["/tasks, /audit, /memory, /plugins/manifests, /plugins/installed"]
-        IPC --> InstalledRunner["/plugins/installed/:id/run fail-closed boundary"]
+        IPC --> InstalledRunner["installed plugin execution boundary"]
         IPC --> PauseApi["/emergency-pause"]
         IPC --> SchedulerApi["/scheduler/jobs"]
 
@@ -58,9 +58,12 @@ flowchart TB
         PluginHost --> ManifestValidation["manifest and JSON schema validation"]
         PluginHost --> FirstParty["fake_echo and fake_status plugins"]
         PluginHost --> TimeoutCancel["timeout and cancellation handling"]
-        InstalledRunner --> InstalledValidation["stored manifest/action/input validation"]
-        InstalledRunner --> InstalledGrant["metadata_only execution grant"]
-        InstalledRunner --> InstalledAudit["blocked or dry-run audit evidence, side_effect_executed=false"]
+        InstalledRunner --> InstalledValidation["stored manifest/action/input/output validation"]
+        InstalledRunner --> InstalledGrant["disabled-by-default metadata_only grant"]
+        InstalledRunner --> InstalledEnable["/plugins/installed/:id/execution explicit subprocess_stdio grant"]
+        InstalledRunner --> SubprocessRunner["local_subprocess direct Command JSON stdin/stdout runner"]
+        SubprocessRunner --> SafePath["canonical command under source_path, no shell interpolation"]
+        SubprocessRunner --> InstalledAudit["blocked, dry-run, completed, or failed audit evidence"]
 
         SchedulerApi --> Scheduler["Scheduler"]
         PauseApi --> RuntimeControl
@@ -99,13 +102,18 @@ in `pending_approvals`, exposes them through CLI/IPC inspection endpoints, and
 lets a user grant or deny the pending record without executing the side effect.
 Installed plugin run requests have an explicit fail-closed boundary that
 revalidates stored manifest metadata, checks the requested action, validates
-input schema, honors `execution_enabled` plus the `metadata_only` execution
-grant, appends audit evidence, and returns `blocked` without dispatching plugin
-code. Contract-only dry runs can return `dry_run` after manifest/action/input
-validation with `side_effect_executed=false`. It supports opt-in
+input schema, honors disabled-by-default `metadata_only` semantics, and appends
+audit evidence. Contract-only dry runs can return `dry_run` after
+manifest/action/input validation with `side_effect_executed=false`.
+`local_subprocess` manifests can be explicitly enabled through
+`/plugins/installed/:id/execution` with `execution_grant: subprocess_stdio`;
+only then can the runner start the declared command directly with JSON stdin and
+JSON stdout, with canonical source-path checks, timeout enforcement, output
+schema validation, and audit evidence recording whether the subprocess started.
+It supports opt-in
 ChatGPT/OpenAI-compatible execution only after route policy allows it. It does
-not yet support installed plugin sandboxing or a signed packaged Mac approval
-flow.
+not yet support a broader WASM/network/plugin-marketplace sandbox or a signed
+packaged Mac approval flow.
 Repository-backed IPC state also exposes task, audit, and memory inspection
 endpoints, plus first-party plugin manifest listing, so the CLI and Swift shell
 can inspect durable local state without reaching into SQLite directly.

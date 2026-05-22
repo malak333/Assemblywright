@@ -12,7 +12,7 @@ use crate::{
     Sensitivity, TaskRecord, TaskStatus, TriggerKind,
 };
 
-const CURRENT_SCHEMA_VERSION: i64 = 5;
+const CURRENT_SCHEMA_VERSION: i64 = 6;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EmergencyPauseState {
@@ -651,6 +651,40 @@ impl SqliteRepository {
         collect_rows(rows)
     }
 
+    pub fn set_installed_plugin_execution(
+        &self,
+        id: &str,
+        execution_enabled: bool,
+        execution_grant: InstalledPluginExecutionGrant,
+    ) -> JarvisResult<InstalledPluginRecord> {
+        if execution_enabled && execution_grant == InstalledPluginExecutionGrant::MetadataOnly {
+            return Err(JarvisError::Validation(
+                "metadata_only grants cannot enable installed plugin execution".to_string(),
+            ));
+        }
+        let changed = self
+            .conn
+            .execute(
+                "UPDATE installed_plugins
+                 SET execution_enabled = ?2,
+                     execution_grant = ?3
+                 WHERE id = ?1",
+                params![
+                    id,
+                    if execution_enabled { 1 } else { 0 },
+                    execution_grant.as_str(),
+                ],
+            )
+            .map_err(storage_error)?;
+        if changed == 0 {
+            return Err(JarvisError::Storage(format!(
+                "installed plugin not found: {id}"
+            )));
+        }
+        self.get_installed_plugin(id)?
+            .ok_or_else(|| JarvisError::Storage(format!("installed plugin not found: {id}")))
+    }
+
     pub fn create_pending_approval(
         &self,
         approval: NewPendingApproval,
@@ -894,6 +928,9 @@ impl SqliteRepository {
         }
         if version < 5 {
             self.apply_migration_5()?;
+        }
+        if version < 6 {
+            self.apply_migration_6()?;
         }
 
         let migrated = self.schema_version()?;
@@ -1153,6 +1190,48 @@ impl SqliteRepository {
         tx.execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
             params![5, now],
+        )
+        .map_err(storage_error)?;
+
+        tx.commit().map_err(storage_error)?;
+        Ok(())
+    }
+
+    fn apply_migration_6(&self) -> JarvisResult<()> {
+        let now = to_db_time(Utc::now());
+        let tx = self.conn.unchecked_transaction().map_err(storage_error)?;
+
+        tx.execute_batch(
+            "
+                ALTER TABLE installed_plugins RENAME TO installed_plugins_v5;
+
+                CREATE TABLE installed_plugins (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    manifest_json TEXT NOT NULL,
+                    source_path TEXT NOT NULL,
+                    execution_enabled INTEGER NOT NULL CHECK (execution_enabled IN (0, 1)),
+                    execution_grant TEXT NOT NULL CHECK (
+                        execution_grant IN ('metadata_only', 'subprocess_stdio')
+                    ),
+                    installed_at TEXT NOT NULL
+                );
+
+                INSERT INTO installed_plugins
+                    (id, manifest_json, source_path, execution_enabled, execution_grant, installed_at)
+                SELECT id, manifest_json, source_path, 0, 'metadata_only', installed_at
+                FROM installed_plugins_v5;
+
+                DROP TABLE installed_plugins_v5;
+
+                CREATE INDEX idx_installed_plugins_installed_at
+                    ON installed_plugins (installed_at);
+                ",
+        )
+        .map_err(storage_error)?;
+
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+            params![6, now],
         )
         .map_err(storage_error)?;
 
@@ -1709,6 +1788,7 @@ mod tests {
             source: crate::PluginSource::LocalDevelopment,
             author: "Jarvis Test".to_string(),
             source_path: Some(source_path.to_string()),
+            subprocess: None,
             actions: vec![crate::PluginActionManifest {
                 name: "inspect".to_string(),
                 description: "Validate registry persistence.".to_string(),
