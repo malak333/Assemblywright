@@ -22,7 +22,8 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   `ModelExecutor` (`FakeLocalModel` by default, Ollama-compatible HTTP or
   ChatGPT/OpenAI-compatible HTTP only when explicitly enabled), records
   route/policy/plugin audit evidence for deterministic first-party plugin
-  commands, and supports bounded fake-model planned first-party tool execution
+  commands, and supports bounded fake-model plus strict provider-envelope
+  planned first-party tool execution
   before any broader assistant claim.
 - Confirm the current-vs-target implementation phase table is up to date before
   using any production-readiness language. Release notes may claim foundation
@@ -132,14 +133,17 @@ stage or when a PR needs focused evidence for one ownership slice.
   persists runtime, route, and deterministic first-party plugin audit evidence
   when repository backing is used. It also persists append-only model-route
   records in SQLite and exposes redacted `/model-routes` CLI/IPC inspection
-  that survives restart without retaining route context. Approval-required first-party command
-  scaffolds persist inspectable pending approvals and record CLI/IPC grant or
-  denial decisions without executing side effects. Bounded fake-model
-  first-party tool calls and Ollama-compatible plus ChatGPT/OpenAI-compatible
+  that survives restart without retaining route context. Approval-required
+  first-party command scaffolds persist inspectable pending approvals and record
+  CLI/IPC grant or denial decisions without executing side effects. Bounded
+  fake-model first-party tool calls, strict Ollama-compatible and
+  ChatGPT/OpenAI-compatible provider-envelope first-party tool requests, and
   provider request/error behavior are covered in focused tests; selected
   provider failures must return structured failed command responses with
-  redacted `model_step_failed` audit and route evidence; Swift approval decision
-  controls are covered by contract/model tests.
+  redacted `model_step_failed` audit and route evidence. Malformed provider
+  tool envelopes must fail with redacted diagnostics, and provider-originated
+  tool calls must still pass runtime schema, policy, approval, and audit paths;
+  Swift approval decision controls are covered by contract/model tests.
 - Confirm task, audit, model-route, memory, and plugin manifest inspection
   endpoints still require or use the correct repository/plugin backing and are
   covered by local smoke or focused IPC tests.

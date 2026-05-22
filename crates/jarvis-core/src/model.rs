@@ -310,6 +310,13 @@ impl ModelToolRequest {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProviderResponseEnvelope {
+    message: String,
+    complete: bool,
+    tool_requests: Vec<ModelToolRequest>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelToolResult {
     pub plugin_id: String,
@@ -563,8 +570,8 @@ impl ModelExecutor for OllamaHttpModel {
             ));
         }
 
-        let message = body.response.unwrap_or_default();
-        if message.trim().is_empty() {
+        let raw_message = body.response.unwrap_or_default();
+        if raw_message.trim().is_empty() {
             return Err(ollama_error(
                 "provider returned an empty response",
                 &self.safe_endpoint(),
@@ -572,6 +579,14 @@ impl ModelExecutor for OllamaHttpModel {
                 None,
             ));
         }
+        let envelope = parse_provider_response_envelope(&raw_message).map_err(|error| {
+            ollama_error(
+                "provider returned an invalid tool-call envelope",
+                &self.safe_endpoint(),
+                self.timeout,
+                Some(error.to_string()),
+            )
+        })?;
 
         Ok(ModelResponse {
             route: ModelRoute::local(
@@ -581,9 +596,9 @@ impl ModelExecutor for OllamaHttpModel {
                     self.safe_endpoint()
                 ),
             ),
-            message,
-            complete: body.done.unwrap_or(true),
-            tool_requests: Vec::new(),
+            message: envelope.message,
+            complete: body.done.unwrap_or(envelope.complete),
+            tool_requests: envelope.tool_requests,
         })
     }
 }
@@ -680,7 +695,7 @@ impl ChatGptHttpModel {
                 "messages": [
                     {
                         "role": "system",
-                        "content": "You are Jarvis. Use only the redacted context supplied by the route guardrail. Do not request secrets or claim access to hidden local state."
+                        "content": "You are Jarvis. Use only the redacted context supplied by the route guardrail. Do not request secrets or claim access to hidden local state. If a first-party tool is needed, reply only with JSON: {\"message\":\"short reason\",\"complete\":false,\"tool_requests\":[{\"plugin_id\":\"fake_status\",\"action\":\"status\",\"input\":{}}]}."
                     },
                     {
                         "role": "user",
@@ -723,12 +738,12 @@ impl ChatGptHttpModel {
                 )
             })?;
 
-        let message = body
+        let raw_message = body
             .choices
             .first()
             .map(|choice| choice.message.content.trim().to_string())
             .unwrap_or_default();
-        if message.is_empty() {
+        if raw_message.is_empty() {
             return Err(chatgpt_error(
                 "provider returned an empty response",
                 &self.safe_endpoint(),
@@ -736,6 +751,14 @@ impl ChatGptHttpModel {
                 None,
             ));
         }
+        let envelope = parse_provider_response_envelope(&raw_message).map_err(|error| {
+            chatgpt_error(
+                "provider returned an invalid tool-call envelope",
+                &self.safe_endpoint(),
+                self.timeout,
+                Some(error.to_string()),
+            )
+        })?;
 
         Ok(ModelResponse {
             route: ModelRoute::chatgpt(
@@ -747,9 +770,9 @@ impl ChatGptHttpModel {
                     route.redaction_applied
                 ),
             ),
-            message,
-            complete: true,
-            tool_requests: Vec::new(),
+            message: envelope.message,
+            complete: envelope.complete,
+            tool_requests: envelope.tool_requests,
         })
     }
 }
@@ -804,9 +827,105 @@ fn ollama_prompt(request: &ModelRequest) -> JarvisResult<String> {
     };
 
     Ok(format!(
-        "You are Jarvis, a local-first assistant. Answer the user directly. Do not claim cloud access. Task: {}\nStep: {}\nTool results: {}",
+        "You are Jarvis, a local-first assistant. Answer the user directly. Do not claim cloud access. If a first-party tool is needed, reply only with JSON: {{\"message\":\"short reason\",\"complete\":false,\"tool_requests\":[{{\"plugin_id\":\"fake_status\",\"action\":\"status\",\"input\":{{}}}}]}}. Task: {}\nStep: {}\nTool results: {}",
         request.user_input, request.step_index, tool_results
     ))
+}
+
+fn parse_provider_response_envelope(raw: &str) -> JarvisResult<ProviderResponseEnvelope> {
+    let trimmed = raw.trim();
+    let Some(value) = parse_envelope_candidate(trimmed)? else {
+        return Ok(ProviderResponseEnvelope {
+            message: trimmed.to_string(),
+            complete: true,
+            tool_requests: Vec::new(),
+        });
+    };
+
+    let object = value.as_object().ok_or_else(|| {
+        JarvisError::Model("provider tool-call envelope must be a JSON object".to_string())
+    })?;
+    let is_envelope = object.contains_key("message")
+        || object.contains_key("complete")
+        || object.contains_key("tool_requests");
+    if !is_envelope {
+        return Ok(ProviderResponseEnvelope {
+            message: trimmed.to_string(),
+            complete: true,
+            tool_requests: Vec::new(),
+        });
+    }
+
+    let message = object
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let complete = object
+        .get("complete")
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| !object.contains_key("tool_requests"));
+    let tool_requests = parse_provider_tool_requests(object.get("tool_requests"))?;
+
+    if message.is_empty() && tool_requests.is_empty() {
+        return Err(JarvisError::Model(
+            "provider tool-call envelope must include a message or tool_requests".to_string(),
+        ));
+    }
+
+    Ok(ProviderResponseEnvelope {
+        message,
+        complete,
+        tool_requests,
+    })
+}
+
+fn parse_envelope_candidate(trimmed: &str) -> JarvisResult<Option<Value>> {
+    if !(trimmed.starts_with('{') && trimmed.ends_with('}')) {
+        return Ok(None);
+    }
+
+    serde_json::from_str::<Value>(trimmed)
+        .map(Some)
+        .map_err(|_| JarvisError::Model("provider JSON envelope is malformed".to_string()))
+}
+
+fn parse_provider_tool_requests(value: Option<&Value>) -> JarvisResult<Vec<ModelToolRequest>> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let requests = value
+        .as_array()
+        .ok_or_else(|| JarvisError::Model("provider tool_requests must be an array".to_string()))?;
+
+    let mut parsed = Vec::with_capacity(requests.len());
+    for request in requests {
+        let object = request.as_object().ok_or_else(|| {
+            JarvisError::Model("provider tool_requests entries must be objects".to_string())
+        })?;
+        let plugin_id = object
+            .get("plugin_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                JarvisError::Model("provider tool_requests entries require plugin_id".to_string())
+            })?;
+        let action = object
+            .get("action")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                JarvisError::Model("provider tool_requests entries require action".to_string())
+            })?;
+        let input = object.get("input").cloned().unwrap_or_else(|| json!({}));
+
+        parsed.push(ModelToolRequest::new(plugin_id, action, input));
+    }
+
+    Ok(parsed)
 }
 
 fn ollama_error(
@@ -988,6 +1107,21 @@ mod tests {
         );
     }
 
+    #[test]
+    fn provider_tool_request_envelope_rejects_malformed_tool_requests_without_leaking_prompt() {
+        let raw = json!({
+            "message": "use a tool for api_key=abc123",
+            "tool_requests": "not an array"
+        })
+        .to_string();
+
+        let error = parse_provider_response_envelope(&raw).expect_err("malformed envelope");
+
+        let message = error.to_string();
+        assert!(message.contains("tool_requests must be an array"));
+        assert!(!message.contains("api_key=abc123"));
+    }
+
     #[tokio::test]
     async fn ollama_http_provider_posts_non_streaming_generate_request() {
         async fn generate(Json(body): Json<Value>) -> Json<Value> {
@@ -1031,6 +1165,60 @@ mod tests {
         assert_eq!(response.route.model, "test-local-model");
         assert_eq!(response.route.provider, ModelProvider::Local);
         assert!(!response.route.reason.contains("hello local"));
+    }
+
+    #[tokio::test]
+    async fn ollama_http_provider_parses_tool_request_envelope() {
+        async fn generate() -> Json<Value> {
+            Json(json!({
+                "response": json!({
+                    "message": "checking local status",
+                    "complete": false,
+                    "tool_requests": [
+                        {
+                            "plugin_id": "fake_status",
+                            "action": "status",
+                            "input": {}
+                        }
+                    ]
+                }).to_string(),
+                "done": false
+            }))
+        }
+
+        let app = Router::new().route("/api/generate", post(generate));
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let address = listener.local_addr().expect("address");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("test server");
+        });
+
+        let config = LocalModelConfig {
+            enabled: true,
+            provider: LocalModelProviderKind::Ollama,
+            model: "test-local-model".to_string(),
+            base_url: Some(format!("http://{address}")),
+            timeout_ms: 2_000,
+        };
+        let model = OllamaHttpModel::from_config(&config).expect("ollama model");
+
+        let response = model
+            .execute(ModelRequest {
+                task_id: uuid::Uuid::new_v4(),
+                session_id: uuid::Uuid::new_v4(),
+                user_input: "status".to_string(),
+                step_index: 0,
+                tool_results: Vec::new(),
+            })
+            .await
+            .expect("model response");
+
+        assert_eq!(response.message, "checking local status");
+        assert!(!response.complete);
+        assert_eq!(response.tool_requests.len(), 1);
+        assert_eq!(response.tool_requests[0].plugin_id, "fake_status");
+        assert_eq!(response.tool_requests[0].action, "status");
+        assert_eq!(response.tool_requests[0].input, json!({}));
     }
 
     #[tokio::test]
@@ -1188,6 +1376,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn chatgpt_http_provider_parses_tool_request_envelope() {
+        async fn chat() -> Json<Value> {
+            Json(json!({
+                "choices": [
+                    {
+                        "message": {
+                            "content": json!({
+                                "message": "checking cloud-routed status",
+                                "complete": false,
+                                "tool_requests": [
+                                    {
+                                        "plugin_id": "fake_status",
+                                        "action": "status",
+                                        "input": {}
+                                    }
+                                ]
+                            }).to_string()
+                        }
+                    }
+                ]
+            }))
+        }
+
+        let app = Router::new().route("/v1/chat/completions", post(chat));
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let address = listener.local_addr().expect("address");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("test server");
+        });
+
+        let config = ChatGptProviderConfig {
+            enabled: true,
+            model: "gpt-test".to_string(),
+            base_url: format!("http://{address}/v1"),
+            api_key: Some("test-token-value".to_string()),
+            requires_approval: true,
+            timeout_ms: 2_000,
+        };
+        let model = ChatGptHttpModel::from_config(&config).expect("chatgpt model");
+        let route = test_chatgpt_route(&config, "workspace context");
+
+        let response = model
+            .execute_guarded(
+                ModelRequest {
+                    task_id: route.task_id.expect("task id"),
+                    session_id: uuid::Uuid::new_v4(),
+                    user_input: "status".to_string(),
+                    step_index: 0,
+                    tool_results: Vec::new(),
+                },
+                &route,
+            )
+            .await
+            .expect("chatgpt response");
+
+        assert_eq!(response.message, "checking cloud-routed status");
+        assert!(!response.complete);
+        assert_eq!(response.tool_requests.len(), 1);
+        assert_eq!(response.tool_requests[0].plugin_id, "fake_status");
+        assert_eq!(response.tool_requests[0].action, "status");
+    }
+
+    #[tokio::test]
     async fn chatgpt_http_provider_returns_redacted_structured_errors() {
         async fn chat() -> (axum::http::StatusCode, Json<Value>) {
             (
@@ -1258,5 +1509,33 @@ mod tests {
         assert!(!message.contains("test-token-value"));
         assert!(!message.contains("password"));
         assert!(!message.contains("raw command"));
+    }
+
+    fn test_chatgpt_route(
+        config: &ChatGptProviderConfig,
+        context_preview: &str,
+    ) -> ModelRouteRecord {
+        crate::ModelRouter::route(&crate::ModelRouteRequest {
+            task_id: Some(uuid::Uuid::new_v4()),
+            user_intent: "workspace planning".to_string(),
+            sensitivity: crate::Sensitivity::Workspace,
+            required_scopes: vec![crate::CapabilityScope::Conversation],
+            granted_scopes: vec![
+                crate::CapabilityScope::Conversation,
+                crate::CapabilityScope::CloudModel,
+            ],
+            local_available: false,
+            local_sufficient: false,
+            provider_status: ProviderStatus::from_config(&ProviderConfig {
+                local: LocalModelConfig {
+                    enabled: false,
+                    ..LocalModelConfig::default()
+                },
+                chatgpt: config.clone(),
+            }),
+            emergency_paused: false,
+            approval: None,
+            context_preview: context_preview.to_string(),
+        })
     }
 }

@@ -51,11 +51,21 @@ These notes capture durable facts for future agents working on this repository.
   and boundary fields so Swift and release docs can distinguish implemented
   repo-owned surfaces from manual or target production claims without scraping
   prose.
-- `ConversationRuntime` supports bounded fake-model planned first-party tool
-  calls with schema validation, policy checks, approval stops, tool-result audit
-  entries, and feedback of tool results into later model steps. The local HTTP
-  provider does not yet make real model-planned tool calls; installed-plugin
-  orchestration remains target architecture.
+- `ConversationRuntime` supports bounded fake-model and provider-envelope
+  planned first-party tool calls with schema validation, policy checks, approval
+  stops, tool-result audit entries, and feedback of tool results into later
+  model steps. Ollama-compatible and ChatGPT/OpenAI-compatible text responses
+  can return a strict JSON envelope with `message`, `complete`, and
+  `tool_requests`; plain text remains backward-compatible. This is not native
+  OpenAI function calling, installed-plugin orchestration, or broad third-party
+  tool execution.
+- Provider-envelope coverage includes
+  `ollama_http_provider_parses_tool_request_envelope`,
+  `chatgpt_http_provider_parses_tool_request_envelope`,
+  `provider_tool_request_envelope_rejects_malformed_tool_requests_without_leaking_prompt`,
+  `provider_originated_tool_request_executes_first_party_tool_and_feeds_result`,
+  and the cross-process `serve_executes_ollama_provider_tool_request_envelope`
+  E2E with an Ollama-compatible stub.
 - Repository-backed IPC state exposes task, audit, model-route, and memory
   inspection routes, persists scheduler jobs, restores them at startup, and all
   IPC states expose `/plugins/manifests` for deterministic first-party plugin
@@ -300,9 +310,10 @@ These notes capture durable facts for future agents working on this repository.
 - It is fair to describe the current repo as a Rust foundation with tested
   scaffolding for IPC, storage, policy, routing, runtime, scheduler, plugin
   contracts, deterministic first-party plugin command execution, bounded
-  fake-model planned first-party tool orchestration, opt-in Ollama-compatible
-  local HTTP provider behavior, opt-in ChatGPT/OpenAI-compatible provider
-  behavior, CLI behavior, and a Swift command/management shell with supervisor
+  fake-model and strict provider-envelope planned first-party tool orchestration,
+  opt-in Ollama-compatible local HTTP provider behavior, opt-in
+  ChatGPT/OpenAI-compatible provider behavior, CLI behavior, and a Swift
+  command/management shell with supervisor
   abstraction, approval decisions, and text-only voice handoff when the local
   gate passes.
 - Do not claim autonomous external communication, smart-home control, or

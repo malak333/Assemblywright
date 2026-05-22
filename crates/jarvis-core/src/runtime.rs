@@ -1430,6 +1430,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn provider_originated_tool_request_executes_first_party_tool_and_feeds_result() {
+        let runtime = ConversationRuntime::new(ProviderEnvelopeToolModel);
+
+        let response = runtime
+            .execute_command(CommandRequest::new("provider envelope tool"))
+            .await
+            .expect("command should execute");
+
+        assert_eq!(response.task.status, TaskStatus::Completed);
+        assert_eq!(response.steps.len(), 2);
+        assert_eq!(response.tool_results.len(), 1);
+        assert_eq!(response.tool_results[0].plugin_id, "fake_echo");
+        assert_eq!(
+            response.message,
+            "provider envelope saw: from provider envelope"
+        );
+        assert!(response
+            .audit_entries
+            .iter()
+            .any(|entry| entry.event_type == "tool_plan_received"));
+    }
+
+    #[tokio::test]
     async fn private_model_planned_tool_call_waits_for_approval_before_execution() {
         let runtime = ConversationRuntime::new(FakeLocalModel::default().with_tool_request(
             ModelToolRequest::new("fake_echo", "echo", json!({ "message": "private" })),
@@ -1676,6 +1699,44 @@ mod tests {
                 route: ModelRoute::fake_local("tool-aware local model"),
                 message: format!(
                     "saw tool result: {}",
+                    request.tool_results[0].output["message"]
+                        .as_str()
+                        .expect("echo message")
+                ),
+                complete: true,
+                tool_requests: Vec::new(),
+            })
+        }
+    }
+
+    struct ProviderEnvelopeToolModel;
+
+    #[async_trait::async_trait]
+    impl ModelExecutor for ProviderEnvelopeToolModel {
+        async fn execute(&self, request: ModelRequest) -> JarvisResult<ModelResponse> {
+            if request.step_index == 0 {
+                return Ok(ModelResponse {
+                    route: ModelRoute::local(
+                        "test-provider-envelope",
+                        "provider-originated strict envelope",
+                    ),
+                    message: "provider envelope requested echo".to_string(),
+                    complete: false,
+                    tool_requests: vec![ModelToolRequest::new(
+                        "fake_echo",
+                        "echo",
+                        json!({ "message": "from provider envelope" }),
+                    )],
+                });
+            }
+
+            Ok(ModelResponse {
+                route: ModelRoute::local(
+                    "test-provider-envelope",
+                    "provider-originated strict envelope",
+                ),
+                message: format!(
+                    "provider envelope saw: {}",
                     request.tool_results[0].output["message"]
                         .as_str()
                         .expect("echo message")

@@ -3,6 +3,7 @@ use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::process::{Child, Command, Output, Stdio};
+use std::thread;
 use std::time::Duration;
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
@@ -1657,6 +1658,59 @@ fn serve_background_scheduler_runs_due_jobs_and_honors_pause() {
 }
 
 #[test]
+fn serve_executes_ollama_provider_tool_request_envelope() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let db_path = temp_dir.path().join("jarvis-provider-tool-e2e.sqlite");
+    let (ollama_base_url, server_thread) = start_ollama_envelope_server();
+    let mut server = JarvisServer::start_with_env(
+        &db_path,
+        &[
+            ("JARVIS_LOCAL_MODEL_PROVIDER", "ollama"),
+            ("JARVIS_LOCAL_MODEL", "provider-envelope-test"),
+            ("JARVIS_OLLAMA_BASE_URL", ollama_base_url.as_str()),
+        ],
+    );
+    let endpoint = server.endpoint();
+
+    let command = run_cli_json([
+        "command",
+        "ask provider to inspect status",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+
+    assert_eq!(command["accepted"], true);
+    assert_eq!(command["task"]["status"], "completed");
+    assert_eq!(command["route"]["model"], "provider-envelope-test");
+    assert_eq!(
+        command["steps"][0]["tool_results"][0]["plugin_id"],
+        "fake_status"
+    );
+    assert_eq!(
+        command["steps"][0]["tool_results"][0]["status"],
+        "completed"
+    );
+    assert_eq!(command["message"], "provider saw tool result");
+    assert_array_contains(
+        &command["audit_entries"],
+        "event_type",
+        "tool_plan_received",
+    );
+    assert_array_contains(&command["audit_entries"], "event_type", "tool_policy_check");
+    assert_array_contains(
+        &command["audit_entries"],
+        "event_type",
+        "tool_execution_result",
+    );
+    let encoded = serde_json::to_string(&command).expect("command JSON");
+    assert!(!encoded.contains("JARVIS_OLLAMA_BASE_URL"));
+
+    server.stop();
+    server_thread.join().expect("ollama stub thread");
+    drop(temp_dir);
+}
+
+#[test]
 #[ignore = "opt-in release proof; spawns jarvis smoke and duplicates broader CLI coverage"]
 fn cli_smoke_command_is_release_gate_compatible() {
     let output = run_cli(["smoke"]);
@@ -1682,7 +1736,19 @@ impl JarvisServer {
         Self::start_inner(db_path, Some((interval_ms, limit)))
     }
 
+    fn start_with_env(db_path: &Path, env: &[(&str, &str)]) -> Self {
+        Self::start_inner_with_env(db_path, None, env)
+    }
+
     fn start_inner(db_path: &Path, scheduler_background: Option<(u64, usize)>) -> Self {
+        Self::start_inner_with_env(db_path, scheduler_background, &[])
+    }
+
+    fn start_inner_with_env(
+        db_path: &Path,
+        scheduler_background: Option<(u64, usize)>,
+        env: &[(&str, &str)],
+    ) -> Self {
         let bind = unused_loopback_addr();
         let endpoint = format!("http://{bind}");
         let temp_dir = tempfile::tempdir().expect("server temp dir");
@@ -1707,14 +1773,17 @@ impl JarvisServer {
                 limit.to_string(),
             ]);
         }
-        let child = Command::new(BIN)
+        let mut command = Command::new(BIN);
+        command
             .args(args)
             .current_dir(temp_dir.path())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("start jarvis serve");
+            .stderr(Stdio::null());
+        for (key, value) in env {
+            command.env(key, value);
+        }
+        let child = command.spawn().expect("start jarvis serve");
 
         let mut server = Self {
             child: Some(child),
@@ -1775,6 +1844,43 @@ impl Drop for JarvisServer {
     fn drop(&mut self) {
         self.stop();
     }
+}
+
+fn start_ollama_envelope_server() -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind ollama stub");
+    let address = listener.local_addr().expect("ollama stub address");
+    let handle = thread::spawn(move || {
+        let envelope = json!({
+            "message": "provider requested status",
+            "complete": false,
+            "tool_requests": [
+                {
+                    "plugin_id": "fake_status",
+                    "action": "status",
+                    "input": {}
+                }
+            ]
+        })
+        .to_string();
+        let responses = [
+            json!({ "response": envelope, "done": false }).to_string(),
+            json!({ "response": "provider saw tool result", "done": true }).to_string(),
+        ];
+
+        for response in responses {
+            let (mut stream, _) = listener.accept().expect("ollama request");
+            let mut buffer = [0_u8; 4096];
+            let _ = stream.read(&mut buffer).expect("read request");
+            let http = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                response.len(),
+                response
+            );
+            stream.write_all(http.as_bytes()).expect("write response");
+        }
+    });
+
+    (format!("http://{address}"), handle)
 }
 
 fn wait_for_json(timeout: Duration, mut condition: impl FnMut() -> bool) {
