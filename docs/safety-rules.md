@@ -55,10 +55,11 @@ policy:
 - Third-party plugin marketplace.
 - Cloud-first routing.
 - Plugin access outside declared scopes.
-- Executing locally installed plugin metadata. The current local install path is
-  registry-only and stores disabled manifest metadata until a sandboxed
-  execution path exists. Any installed-plugin run request must fail closed,
-  append audit evidence, and report `side_effect_executed: false`.
+- Executing locally installed plugin metadata. Local installs begin as disabled
+  manifest metadata with `execution_grant: metadata_only`. Any installed-plugin
+  run request must fail closed, append audit evidence, and report
+  `side_effect_executed: false` unless the manifest is a verified
+  `local_subprocess` plugin with an explicit `subprocess_stdio` grant.
 
 ## Regression Tests
 
@@ -68,7 +69,9 @@ Safety regressions should fail release verification:
 - Cloud routing receiving restricted data without explicit approval.
 - Plugin actions executing outside their manifest.
 - Installed plugin run attempts that execute while `execution_enabled` is
-  false, omit manifest/action validation, or skip audit evidence.
+  false, omit manifest/action/provenance validation, or skip audit evidence.
+- Installed subprocess plugin enablement or execution while provenance status
+  is anything other than `matches_install_snapshot`.
 - Local plugin manifests installing with invalid schema, blocked risk tier,
   missing proactive/memory/model permissions, unsafe source paths, or
   `first_party` source claims.

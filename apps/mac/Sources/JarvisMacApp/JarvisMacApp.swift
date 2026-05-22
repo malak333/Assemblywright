@@ -733,10 +733,23 @@ struct PermissionGrantHistoryView: View {
                 .textSelection(.enabled)
 
             if !summary.installedPluginGrants.isEmpty {
-                Text(pluginGrantText)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
+                ForEach(summary.installedPluginGrants) { grant in
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Label(grant.name, systemImage: grant.needsProvenanceReview ? "exclamationmark.shield" : "checkmark.shield")
+                                .font(.caption)
+                            Spacer()
+                            Text(grant.integrityStatus)
+                                .font(.caption2)
+                                .foregroundStyle(grant.needsProvenanceReview ? .orange : .secondary)
+                        }
+
+                        Text(pluginGrantDetail(grant))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                }
             }
         }
         .padding(.vertical, 4)
@@ -747,13 +760,16 @@ struct PermissionGrantHistoryView: View {
         let approved = summary.count(for: "approved")
         let denied = summary.count(for: "denied")
         let approvalGate = summary.sideEffectsRequireApproval ? "side effects approval-gated" : "approval gate unknown"
-        return "pending \(pending) | approved \(approved) | denied \(denied) | high-risk pending \(summary.highRiskPendingCount) | \(approvalGate)"
+        return "pending \(pending) | approved \(approved) | denied \(denied) | high-risk pending \(summary.highRiskPendingCount) | unverified plugins \(summary.unverifiedInstalledPluginCount) | \(approvalGate)"
     }
 
-    private var pluginGrantText: String {
-        summary.installedPluginGrants
-            .map { "\($0.pluginId): \($0.executionGrant), executable \($0.executionEnabled)" }
-            .joined(separator: " | ")
+    private func pluginGrantDetail(_ grant: JarvisInstalledPluginGrantSurface) -> String {
+        let executable = grant.executionEnabled ? "executable" : "disabled"
+        let verifiedAt = grant.lastVerifiedAt.map { "verified \($0)" } ?? "not verified"
+        let origin = grant.originClaim.map {
+            grant.originClaimVerified ? "origin \($0) verified" : "origin \($0) unverified"
+        } ?? "origin unknown"
+        return "\(grant.pluginId): \(grant.executionGrant), \(executable), \(grant.captureMethod), \(verifiedAt), \(origin), high-risk actions \(grant.highRiskActionCount)"
     }
 }
 
@@ -812,7 +828,7 @@ struct PermissionSurfaceSummaryView: View {
         let risks = surface.riskTierCounts.isEmpty
             ? "risk tiers: none declared"
             : "risk tiers: \(surface.riskTierCounts.map { "\($0.riskTier) \($0.count)" }.joined(separator: ", "))"
-        let grants = "grants: approved \(surface.approvedGrantCount), denied \(surface.deniedGrantCount), installed \(surface.installedPluginGrantCount), executable \(surface.executableInstalledPluginGrantCount)"
+        let grants = "grants: approved \(surface.approvedGrantCount), denied \(surface.deniedGrantCount), installed \(surface.installedPluginGrantCount), executable \(surface.executableInstalledPluginGrantCount), unverified \(surface.unverifiedInstalledPluginGrantCount)"
         let sideEffects = surface.sideEffectsRequireApproval ? "side effects gated" : "side effects gate unknown"
         return "\(scopes) | \(risks) | proactive actions: \(surface.proactiveActionCount) | \(grants) | \(sideEffects)"
     }

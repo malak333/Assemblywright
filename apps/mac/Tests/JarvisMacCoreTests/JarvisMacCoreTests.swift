@@ -883,9 +883,15 @@ struct JarvisMacCoreTests {
         #expect(summary.count(for: "approved") == 2)
         #expect(summary.latestApprovals.first?.id == approvalId)
         #expect(summary.highRiskPendingCount == 1)
+        #expect(summary.unverifiedInstalledPluginCount == 1)
         #expect(summary.installedPluginGrants.first?.pluginId == "local_e2e_plugin")
         #expect(summary.installedPluginGrants.first?.executionGrant == "metadata_only")
         #expect(summary.installedPluginGrants.first?.executionEnabled == false)
+        #expect(summary.installedPluginGrants.first?.integrityStatus == "not_verified")
+        #expect(summary.installedPluginGrants.first?.captureMethod == "local_manifest_snapshot")
+        #expect(summary.installedPluginGrants.first?.originClaim == "Jarvis Test")
+        #expect(summary.installedPluginGrants.first?.originClaimVerified == false)
+        #expect(summary.installedPluginGrants.first?.needsProvenanceReview == true)
         #expect(summary.sideEffectsRequireApproval)
     }
 
@@ -1380,6 +1386,7 @@ struct JarvisMacCoreTests {
         #expect(model.permissionSurface.pendingApprovalCount == 0)
         #expect(model.permissionSurface.approvedGrantCount == 2)
         #expect(model.permissionSurface.sideEffectsRequireApproval)
+        #expect(model.permissionSurface.unverifiedInstalledPluginGrantCount == 1)
     }
 
     @MainActor
@@ -1430,7 +1437,10 @@ struct JarvisMacCoreTests {
         #expect(model.permissionSurface.approvedGrantCount == 2)
         #expect(model.permissionSurface.installedPluginGrantCount == 1)
         #expect(model.permissionSurface.executableInstalledPluginGrantCount == 0)
+        #expect(model.permissionSurface.unverifiedInstalledPluginGrantCount == 1)
         #expect(model.permissionSurface.summaryText.contains("need a decision"))
+        #expect(model.grantSummary?.installedPluginGrants.first?.needsProvenanceReview == true)
+        #expect(model.grantSummary?.installedPluginGrants.first?.integrityStatus == "not_verified")
     }
 
     @MainActor
@@ -1820,6 +1830,11 @@ private func permissionGrantSummaryJSON(approvalId: UUID = UUID(), taskId: UUID 
               "name": "Local E2E Plugin",
               "execution_enabled": false,
               "execution_grant": "metadata_only",
+              "integrity_status": "not_verified",
+              "capture_method": "local_manifest_snapshot",
+              "last_verified_at": null,
+              "origin_claim": "Jarvis Test",
+              "origin_claim_verified": false,
               "installed_at": "2026-05-20T12:00:00Z",
               "action_count": 1,
               "high_risk_action_count": 0
@@ -1827,6 +1842,7 @@ private func permissionGrantSummaryJSON(approvalId: UUID = UUID(), taskId: UUID 
           ],
           "high_risk_pending_count": 1,
           "executable_installed_plugin_count": 0,
+          "unverified_installed_plugin_count": 1,
           "side_effects_require_approval": true
         }
         """.utf8
