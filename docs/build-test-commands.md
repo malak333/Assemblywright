@@ -286,7 +286,9 @@ artifacts and fake QA reports only; real release evidence must come from
 plugin-trust QA evidence exist and every `JARVIS_EVIDENCE_*` flag is true.
 The real bundle path also locally validates the signed app, app stapling
 ticket, signed installer package, installer stapling ticket, and app zip
-payload before writing the manifest.
+payload before writing the manifest. It rejects disabled local signature
+validation outside the fake self-test lane and parses every required
+live-device/plugin-trust report flag before writing production evidence.
 
 ## Useful Focused Commands
 

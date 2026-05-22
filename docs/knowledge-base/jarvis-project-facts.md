@@ -159,7 +159,10 @@ These notes capture durable facts for future agents working on this repository.
   `--bundle` writes `target/release-evidence-bundle.json` after referenced
   artifacts/reports exist, every `JARVIS_EVIDENCE_*` flag is true, and local
   artifact checks validate the app signature, app stapling ticket, installer
-  signature, installer stapling ticket, and app zip payload.
+  signature, installer stapling ticket, and app zip payload. Production
+  bundles must keep local signature validation enabled, and the script parses
+  every required live-device and plugin-trust report flag before writing the
+  bundle manifest.
 - Enabled `local_subprocess` plugins run with an environment boundary: Jarvis
   clears the inherited app/core process environment before spawn and provides
   only a deterministic `PATH` plus `JARVIS_PLUGIN_ID`,
