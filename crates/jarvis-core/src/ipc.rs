@@ -38,6 +38,8 @@ pub const IPC_CONTRACT_VERSION: u16 = 1;
 pub const IPC_CONTRACT_NAME: &str = "jarvis.local-ipc";
 pub const DEFAULT_SCHEDULER_BACKGROUND_INTERVAL_MS: u64 = 30_000;
 pub const DEFAULT_SCHEDULER_BACKGROUND_LIMIT: usize = 16;
+pub const DEFAULT_SCHEDULER_STALE_RECOVERY_OLDER_THAN_SECONDS: u64 = 3_600;
+pub const DEFAULT_SCHEDULER_STALE_RECOVERY_LIMIT: usize = 16;
 pub const MAX_SCHEDULER_BACKGROUND_LIMIT: usize = 64;
 pub const DEFAULT_ACTIVITY_EVENT_INTERVAL_MS: u64 = 1_000;
 pub const DEFAULT_ACTIVITY_EVENT_LIMIT: usize = 3;
@@ -1995,6 +1997,23 @@ impl IpcState {
         older_than_seconds: u64,
         limit: usize,
     ) -> JarvisResult<SchedulerStaleRecoveryResponse> {
+        self.recover_stale_scheduler_jobs_inner(older_than_seconds, limit, false)
+    }
+
+    pub fn recover_stale_scheduler_jobs_automatically(
+        &self,
+        older_than_seconds: u64,
+        limit: usize,
+    ) -> JarvisResult<SchedulerStaleRecoveryResponse> {
+        self.recover_stale_scheduler_jobs_inner(older_than_seconds, limit, true)
+    }
+
+    fn recover_stale_scheduler_jobs_inner(
+        &self,
+        older_than_seconds: u64,
+        limit: usize,
+        automatic_recovery: bool,
+    ) -> JarvisResult<SchedulerStaleRecoveryResponse> {
         let checked_at = Utc::now();
         let seconds = i64::try_from(older_than_seconds).map_err(|_| {
             JarvisError::Validation(
@@ -2017,7 +2036,11 @@ impl IpcState {
             let audit_entry = self.append_scheduler_audit_entry(
                 None,
                 "scheduler_stale_running_recovered",
-                "scheduler marked a stale running job failed for explicit operator recovery",
+                if automatic_recovery {
+                    "scheduler marked a stale running job failed during opt-in startup recovery"
+                } else {
+                    "scheduler marked a stale running job failed for explicit operator recovery"
+                },
                 json!({
                     "checked_at": checked_at,
                     "scheduler_job_id": failed.id,
@@ -2029,7 +2052,7 @@ impl IpcState {
                     "stale_for_seconds": stale_for_seconds,
                     "older_than_seconds": older_than_seconds,
                     "command_redacted": true,
-                    "automatic_recovery": false,
+                    "automatic_recovery": automatic_recovery,
                 }),
             )?;
             recovered.push(SchedulerStaleRecoveryItem {
@@ -4873,9 +4896,47 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert!(audit
             .iter()
             .any(|entry| entry.event_type == "scheduler_stale_running_recovered"));
+        assert_eq!(
+            response.recovered[0].audit_entry.payload["automatic_recovery"],
+            false
+        );
         let encoded = serde_json::to_string(&response).expect("recovery JSON");
         assert!(!encoded.contains("do not expose stale command"));
         assert!(!encoded.contains("do not recover scheduled"));
+    }
+
+    #[tokio::test]
+    async fn automatic_stale_scheduler_recovery_marks_audit_without_command_text() {
+        let repository = SqliteRepository::in_memory().unwrap();
+        let state = IpcState::with_repository(repository).expect("state");
+        let stale = state
+            .schedule_scheduler_job(SchedulerJobSpec {
+                name: "stale automatic running".to_string(),
+                command: "do not expose automatic stale command".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .expect("schedule stale");
+        state
+            .mark_scheduler_job_running(stale.id)
+            .expect("mark running");
+
+        let response = state
+            .recover_stale_scheduler_jobs_automatically(0, 16)
+            .expect("recover stale");
+
+        assert_eq!(response.recovered.len(), 1);
+        assert_eq!(response.recovered[0].job.id, stale.id);
+        assert_eq!(response.recovered[0].job.status, SchedulerJobStatus::Failed);
+        assert_eq!(
+            response.recovered[0].audit_entry.payload["automatic_recovery"],
+            true
+        );
+        assert_eq!(
+            response.recovered[0].audit_entry.payload["command_redacted"],
+            true
+        );
+        let encoded = serde_json::to_string(&response).expect("recovery JSON");
+        assert!(!encoded.contains("do not expose automatic stale command"));
     }
 
     #[tokio::test]

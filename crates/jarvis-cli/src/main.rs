@@ -35,6 +35,12 @@ enum CliCommand {
         scheduler_interval_ms: u64,
         #[arg(long, default_value_t = jarvis_core::DEFAULT_SCHEDULER_BACKGROUND_LIMIT)]
         scheduler_limit: usize,
+        #[arg(long)]
+        scheduler_recover_stale_on_startup: bool,
+        #[arg(long, default_value_t = jarvis_core::DEFAULT_SCHEDULER_STALE_RECOVERY_OLDER_THAN_SECONDS)]
+        scheduler_stale_older_than_seconds: u64,
+        #[arg(long, default_value_t = jarvis_core::DEFAULT_SCHEDULER_STALE_RECOVERY_LIMIT)]
+        scheduler_stale_recovery_limit: usize,
     },
     /// Query core health over HTTP IPC.
     Health {
@@ -456,6 +462,9 @@ async fn main() -> anyhow::Result<()> {
             scheduler_background,
             scheduler_interval_ms,
             scheduler_limit,
+            scheduler_recover_stale_on_startup,
+            scheduler_stale_older_than_seconds,
+            scheduler_stale_recovery_limit,
         } => {
             let provider_config = jarvis_core::ProviderConfig::from_env()?;
             let state = match db_path {
@@ -470,6 +479,12 @@ async fn main() -> anyhow::Result<()> {
                 }
                 None => jarvis_core::IpcState::with_provider_config(provider_config),
             };
+            if scheduler_recover_stale_on_startup {
+                state.recover_stale_scheduler_jobs_automatically(
+                    scheduler_stale_older_than_seconds,
+                    scheduler_stale_recovery_limit,
+                )?;
+            }
             let _scheduler_loop = if scheduler_background {
                 let config = jarvis_core::SchedulerBackgroundConfig::new(
                     std::time::Duration::from_millis(scheduler_interval_ms),

@@ -28,6 +28,9 @@ exposing scheduler command text.
 Operators can also run `jarvis scheduler recover-stale` to mark persisted
 stale `Running` scheduler jobs failed with redacted audit evidence after a
 crash or killed process leaves a job leased but unfinished.
+`jarvis serve --scheduler-recover-stale-on-startup` offers the same recovery as
+an explicit startup option and marks the audit payload with
+`automatic_recovery: true` while keeping scheduler command text redacted.
 
 ## Current Scope
 
@@ -86,10 +89,10 @@ Keychain launch credential injection. Follow-on slices have added Swift memory
 CRUD, local plugin provenance verification, scheduler attention handoff, and
 permission policy review plus scheduler trigger review and notification
 controls, including redacted proactive scheduler policy audit before due
-command execution and explicit stale-running scheduler recovery. Later slices
-continue the same branch/PR discipline, including strict provider tool-request
-envelope coverage for Ollama-compatible and ChatGPT/OpenAI-compatible text
-responses;
+command execution, explicit stale-running scheduler recovery, opt-in startup
+stale-running recovery, and strict provider tool-request envelope coverage for
+Ollama-compatible and ChatGPT/OpenAI-compatible text responses. Later slices
+continue the same branch/PR discipline;
 release language should describe only the merged repo-owned surfaces with
 recorded focused E2E or integration proof.
 The permission center now surfaces installed-plugin provenance status from
