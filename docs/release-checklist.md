@@ -53,16 +53,19 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   file/report inspection only, not proof that signing, notarization,
   installation, Finder launch, live-device QA, marketplace review, malware
   scanning, or OS sandboxing was performed.
+- Confirm `jarvis release --help`, `jarvis release readiness --help`, and
+  `jarvis release evidence-status --help` preserve the same read-only,
+  IPC-first/local-fallback, evidence-mode, and file/report-inspection
+  boundaries as the JSON surfaces.
 - Confirm no Marvel branding, copyrighted visuals, or confusing product claims
   were introduced.
 - Confirm any autonomous sweep summary names the active ownership slices and
   states which evidence came from commands, tests, or manual checks. A
   six-agent sweep is coordination context, not proof of readiness.
-- For phase 3, confirm the active worktree/branch lanes are named separately
-  from merged implementation evidence: `model-route-persistence`,
-  `plugin-subprocess-sandbox`, `voice-adapter-production`,
-  `packaged-app-release-smoke`, `permission-grants-ux`, and
-  `phase3-docs-architecture`.
+- Treat older phase/worktree lane names as historical coordination context
+  unless the branch is verified active in the current checkout. Current
+  readiness should come from `/release/readiness`, checked-in docs, and local
+  verification output.
 - For each feature/phase, confirm the relevant docs were updated, durable
   knowledge-base facts were added, and matching E2E or focused integration
   coverage exists. If coverage does not exist, add it for behavior changes or

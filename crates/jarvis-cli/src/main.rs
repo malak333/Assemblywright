@@ -53,6 +53,9 @@ enum CliCommand {
         endpoint: String,
     },
     /// Summarize release-readiness evidence and remaining production blockers.
+    #[command(
+        long_about = "Read-only release operator commands.\n\nThese commands prefer the configured IPC endpoint. When the core is not running and transport is unavailable, they fall back to conservative local metadata or local file/report inspection without executing release side effects."
+    )]
     Release {
         #[command(subcommand)]
         command: ReleaseCommand,
@@ -141,12 +144,20 @@ enum CliCommand {
 #[derive(Debug, Subcommand)]
 enum ReleaseCommand {
     /// Print conservative release-readiness evidence as JSON.
+    #[command(
+        long_about = "Print conservative release-readiness evidence as JSON.\n\nThis is a read-only operator summary of implemented repo-owned proof, pending features, recommended verification commands, and manual production blockers. By default it remains conservative even if local evidence files exist; set JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external only after owner-recorded external evidence has been collected. The production_ready field stays false until signed distribution, notarization/stapling, plugin-trust QA, and final evidence bundle checks validate."
+    )]
     Readiness {
+        /// HTTP IPC endpoint. Falls back to local read-only readiness metadata when unavailable.
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
     /// Print structured release evidence file/report status as JSON.
+    #[command(
+        long_about = "Print structured release evidence file/report status as JSON.\n\nThis is file/report inspection only. It can report whether expected artifact paths and JSON reports are present, missing, or invalid, but it does not prove Developer ID signing, notarization, stapling, Finder launch, live-device QA, marketplace review, malware scanning, OS sandboxing, or host-level egress enforcement."
+    )]
     EvidenceStatus {
+        /// HTTP IPC endpoint. Falls back to local read-only evidence inspection when unavailable.
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },

@@ -3834,12 +3834,14 @@ fn release_evidence_status_from_env() -> ReleaseEvidenceStatusResponse {
         "JARVIS_EVIDENCE_PKG_PATH",
         dist_dir.join(format!("Jarvis-{version}.pkg")),
     );
-    let live_qa_report = env_path(
+    let live_qa_report = env_path_alias(
         "JARVIS_QA_REPORT_PATH",
+        "JARVIS_EVIDENCE_LIVE_QA_REPORT",
         "target/release-live-device-qa-report.json",
     );
-    let plugin_qa_report = env_path(
+    let plugin_qa_report = env_path_alias(
         "JARVIS_PLUGIN_QA_REPORT_PATH",
+        "JARVIS_EVIDENCE_PLUGIN_QA_REPORT",
         "target/release-plugin-trust-qa-report.json",
     );
     let bundle_path = env_path(
@@ -3850,7 +3852,7 @@ fn release_evidence_status_from_env() -> ReleaseEvidenceStatusResponse {
     let mut items = vec![
         release_path_item(
             "signed_app_bundle",
-            "Signed app bundle",
+            "App bundle path",
             app_path.clone(),
             ReleaseEvidenceKind::Directory,
         ),
@@ -3868,13 +3870,13 @@ fn release_evidence_status_from_env() -> ReleaseEvidenceStatusResponse {
         ),
         release_path_item(
             "signed_app_zip",
-            "Signed app zip",
+            "App zip path",
             zip_path,
             ReleaseEvidenceKind::File,
         ),
         release_path_item(
             "signed_installer_package",
-            "Signed installer package",
+            "Installer package path",
             pkg_path,
             ReleaseEvidenceKind::File,
         ),
@@ -3995,6 +3997,13 @@ fn release_evidence_status_from_env() -> ReleaseEvidenceStatusResponse {
 
 fn env_path(key: &str, default: &str) -> PathBuf {
     env_path_or(key, PathBuf::from(default))
+}
+
+fn env_path_alias(primary: &str, alias: &str, default: &str) -> PathBuf {
+    std::env::var(primary)
+        .or_else(|_| std::env::var(alias))
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(default))
 }
 
 fn env_path_or(key: &str, default: PathBuf) -> PathBuf {

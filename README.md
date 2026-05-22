@@ -113,6 +113,9 @@ QA still listed as manual gates.
 The response keeps `production_ready: false` until Developer ID
 signing/notarization, clean-profile installer/Finder validation, live voice
 device checks, and manual QA are actually completed.
+Readiness stays conservative by default; only set
+`JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external` after owner-recorded external
+QA reports and signed-distribution evidence have been collected.
 Opt-in final-transcript auto-submit is text-path parity only; it does not clear
 live microphone/Speech/audio-output validation or manual release QA.
 
@@ -276,9 +279,13 @@ plugin-trust QA report, and owner validation flags required before a final
 release evidence manifest can be written. Its `--self-test` mode uses fake
 artifacts/reports to prove bundle mechanics only; `--bundle` writes
 `target/release-evidence-bundle.json` after all referenced evidence exists and
-all required `JARVIS_EVIDENCE_*` flags are true. The live-device QA report
-must bind the validated bundle identifier, app version, build version, and
-voice permission usage strings to the installed app. The real bundle path also
+all required `JARVIS_EVIDENCE_*` flags are true. Non-default live-device and
+plugin-trust report paths can be supplied with either the QA script variables
+(`JARVIS_QA_REPORT_PATH`, `JARVIS_PLUGIN_QA_REPORT_PATH`) or the bundle/doctor
+aliases (`JARVIS_EVIDENCE_LIVE_QA_REPORT`,
+`JARVIS_EVIDENCE_PLUGIN_QA_REPORT`). The live-device QA report must bind the
+validated bundle identifier, app version, build version, and voice permission
+usage strings to the installed app. The real bundle path also
 validates the local app signature, app stapling ticket, installer signature,
 installer stapling ticket, and app zip payload, then records SHA-256 digests
 for distribution artifacts and QA reports before writing the manifest.

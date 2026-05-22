@@ -1716,6 +1716,35 @@ struct JarvisMacCoreTests {
     }
 
     @MainActor
+    @Test("Voice adapter ignores late final transcript after interruption")
+    func voiceAdapterIgnoresLateFinalTranscriptAfterInterruption() async throws {
+        let adapter = FakeVoiceAdapter()
+        let voice = VoiceStateModel()
+        var submittedHandoffs: [JarvisVoiceCommandHandoff] = []
+        let model = VoiceAdapterStateModel(
+            adapter: adapter,
+            voiceState: voice,
+            submitFinalTranscript: { handoff in
+                submittedHandoffs.append(handoff)
+            }
+        )
+
+        model.setFinalTranscriptAutoSubmitEnabled(true)
+        await model.startCapture()
+        adapter.emitPartial("status")
+        let callbacks = try #require(adapter.callbacks)
+
+        await model.interrupt(reason: "User stopped push-to-talk.")
+        callbacks.onFinalTranscript("status check")
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        #expect(model.phase == .interrupted(reason: "User stopped push-to-talk."))
+        #expect(voice.transcriptDraft == "status")
+        #expect(voice.lastHandoff == nil)
+        #expect(submittedHandoffs.isEmpty)
+    }
+
+    @MainActor
     @Test("Voice adapter callback errors mark voice unavailable")
     func voiceAdapterCallbackErrorsMarkVoiceUnavailable() async {
         let adapter = FakeVoiceAdapter()
@@ -2737,7 +2766,7 @@ private func releaseEvidenceStatusJSON() -> Data {
           "items": [
             {
               "key": "signed_app_bundle",
-              "label": "Signed app bundle",
+              "label": "App bundle path",
               "path": "target/distribution/Jarvis.app",
               "kind": "directory",
               "status": "present",

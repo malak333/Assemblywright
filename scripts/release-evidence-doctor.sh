@@ -9,8 +9,8 @@ DIST_DIR="${JARVIS_EVIDENCE_DIST_DIR:-$ROOT_DIR/target/distribution}"
 APP_PATH="${JARVIS_EVIDENCE_APP_PATH:-$DIST_DIR/Jarvis.app}"
 ZIP_PATH="${JARVIS_EVIDENCE_ZIP_PATH:-$DIST_DIR/Jarvis-$VERSION.zip}"
 PKG_PATH="${JARVIS_EVIDENCE_PKG_PATH:-$DIST_DIR/Jarvis-$VERSION.pkg}"
-LIVE_QA_REPORT="${JARVIS_EVIDENCE_LIVE_QA_REPORT:-$ROOT_DIR/target/release-live-device-qa-report.json}"
-PLUGIN_QA_REPORT="${JARVIS_EVIDENCE_PLUGIN_QA_REPORT:-$ROOT_DIR/target/release-plugin-trust-qa-report.json}"
+LIVE_QA_REPORT="${JARVIS_EVIDENCE_LIVE_QA_REPORT:-${JARVIS_QA_REPORT_PATH:-$ROOT_DIR/target/release-live-device-qa-report.json}}"
+PLUGIN_QA_REPORT="${JARVIS_EVIDENCE_PLUGIN_QA_REPORT:-${JARVIS_PLUGIN_QA_REPORT_PATH:-$ROOT_DIR/target/release-plugin-trust-qa-report.json}}"
 BUNDLE_PATH="${JARVIS_EVIDENCE_OUTPUT_PATH:-$ROOT_DIR/target/release-evidence-bundle.json}"
 EXPECTED_BUNDLE_ID="${JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID:-com.nobiletechnology.jarvis}"
 EXPECTED_VERSION="${JARVIS_EVIDENCE_EXPECTED_VERSION:-$VERSION}"
@@ -43,8 +43,8 @@ Optional paths match scripts/release-evidence-bundle.sh:
   JARVIS_EVIDENCE_APP_PATH
   JARVIS_EVIDENCE_ZIP_PATH
   JARVIS_EVIDENCE_PKG_PATH
-  JARVIS_EVIDENCE_LIVE_QA_REPORT
-  JARVIS_EVIDENCE_PLUGIN_QA_REPORT
+  JARVIS_EVIDENCE_LIVE_QA_REPORT      Defaults to JARVIS_QA_REPORT_PATH or target/release-live-device-qa-report.json
+  JARVIS_EVIDENCE_PLUGIN_QA_REPORT    Defaults to JARVIS_PLUGIN_QA_REPORT_PATH or target/release-plugin-trust-qa-report.json
   JARVIS_EVIDENCE_OUTPUT_PATH
   JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID
   JARVIS_EVIDENCE_EXPECTED_VERSION
@@ -310,6 +310,8 @@ check_release_evidence() {
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.bundle_identifier" "$EXPECTED_BUNDLE_ID"
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.short_version" "$EXPECTED_VERSION"
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.build_version" "$EXPECTED_VERSION"
+    check_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.microphone_usage_description"
+    check_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.speech_recognition_usage_description"
   else
     record_missing "live-device QA report missing or invalid JSON: $LIVE_QA_REPORT"
   fi
@@ -415,7 +417,9 @@ write_fixture_reports() {
   "app_bundle": {
     "bundle_identifier": "com.nobiletechnology.jarvis",
     "short_version": "0.1.4",
-    "build_version": "0.1.4"
+    "build_version": "0.1.4",
+    "microphone_usage_description": "self-test fixture",
+    "speech_recognition_usage_description": "self-test fixture"
   },
   "proof_boundary": "self-test fixture"
 }
