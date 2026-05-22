@@ -19,13 +19,14 @@ use crate::storage::{
     PendingApproval, SqliteRepository,
 };
 use crate::{
-    plugin_permission_scopes, ApprovalDecision, ApprovalStatus, AuditEntry, CapabilityScope,
-    ConversationRuntime, InstalledPlugin, InstalledPluginRecord, JarvisError, JarvisResult,
+    execute_installed_subprocess_plugin, plugin_permission_scopes, ApprovalDecision,
+    ApprovalStatus, AuditEntry, CapabilityScope, ConversationRuntime, InstalledPlugin,
+    InstalledPluginExecutionGrant, InstalledPluginRecord, JarvisError, JarvisResult,
     LocalModelProviderKind, ModelRoute, ModelRouteRecord, PermissionEngine, PluginCallRequest,
-    PluginCallResult, PluginCallStatus, PluginHost, PluginManifest, PolicyRequest, ProviderConfig,
-    RoutedModelExecutor, RuntimeCommandRequest, RuntimeCommandStore, RuntimeConfig, RuntimeControl,
-    RuntimeStep, Scheduler, SchedulerJob, SchedulerJobSpec, SchedulerJobStatus, Sensitivity,
-    TaskRecord, TaskStatus, TriggerKind,
+    PluginCallResult, PluginCallStatus, PluginHost, PluginManifest, PluginSource, PolicyRequest,
+    ProviderConfig, RoutedModelExecutor, RuntimeCommandRequest, RuntimeCommandStore, RuntimeConfig,
+    RuntimeControl, RuntimeStep, Scheduler, SchedulerJob, SchedulerJobSpec, SchedulerJobStatus,
+    Sensitivity, TaskRecord, TaskStatus, TriggerKind,
 };
 
 pub const IPC_CONTRACT_VERSION: u16 = 1;
@@ -241,6 +242,14 @@ pub struct InstallPluginRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstalledPluginExecutionRequest {
+    #[serde(default)]
+    pub execution_enabled: bool,
+    #[serde(default)]
+    pub execution_grant: InstalledPluginExecutionGrant,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstalledPluginRunRequest {
     pub action: String,
     #[serde(default)]
@@ -264,6 +273,14 @@ pub struct InstalledPluginRunResponse {
     pub input_valid: bool,
     pub contract_validated: bool,
     pub side_effect_executed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stdout_bytes: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stderr_bytes: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
     pub audit_entry: AuditEntry,
 }
 
@@ -380,6 +397,7 @@ impl IpcState {
                 "/plugins/manifests/:id".to_string(),
                 "/plugins/installed".to_string(),
                 "/plugins/installed/:id".to_string(),
+                "/plugins/installed/:id/execution".to_string(),
                 "/scheduler/jobs".to_string(),
                 "/scheduler/jobs/:id".to_string(),
                 "/memory".to_string(),
@@ -776,6 +794,17 @@ impl IpcState {
             };
             let input_valid = action_declared && input_validation.is_ok();
             let contract_validated = manifest_valid && action_declared && input_valid;
+            let execution_ready = contract_validated
+                && record.execution_enabled
+                && record.execution_grant == InstalledPluginExecutionGrant::SubprocessStdio
+                && record.manifest.source == PluginSource::LocalSubprocess
+                && record.manifest.subprocess.is_some();
+            let mut output = None;
+            let mut stdout_bytes = None;
+            let mut stderr_bytes = None;
+            let mut exit_code = None;
+            let mut side_effect_executed = false;
+
             let (status, reason) = if let Err(error) = &manifest_validation {
                 ("blocked".to_string(), error.to_string())
             } else if !action_declared {
@@ -794,20 +823,62 @@ impl IpcState {
                     "installed plugin contract dry run validated manifest, action, and input schema without executing plugin code"
                         .to_string(),
                 )
+            } else if record.execution_grant == InstalledPluginExecutionGrant::MetadataOnly {
+                (
+                    "blocked".to_string(),
+                    "installed plugin execution grant is metadata_only; only contract dry runs are allowed"
+                        .to_string(),
+                )
             } else if !record.execution_enabled {
                 (
                     "blocked".to_string(),
-                    "installed plugin execution grant is metadata_only; only contract dry runs are allowed until a sandboxed runner is implemented"
+                    "installed plugin execution is disabled; enable execution with an explicit non-metadata grant"
                         .to_string(),
                 )
+            } else if record.manifest.source != PluginSource::LocalSubprocess {
+                (
+                    "blocked".to_string(),
+                    "installed plugin execution requires local_subprocess source".to_string(),
+                )
+            } else if record.manifest.subprocess.is_none() {
+                (
+                    "blocked".to_string(),
+                    "installed plugin execution requires subprocess config".to_string(),
+                )
+            } else if execution_ready {
+                let action = action_manifest.expect("contract validated action");
+                let source_path = std::path::Path::new(&record.source_path);
+                side_effect_executed = true;
+                match execute_installed_subprocess_plugin(
+                    &record.manifest,
+                    action,
+                    source_path,
+                    &request.input,
+                ) {
+                    Ok(execution) => {
+                        stdout_bytes = Some(execution.stdout_bytes);
+                        stderr_bytes = Some(execution.stderr_bytes);
+                        exit_code = execution.exit_code;
+                        output = Some(execution.output);
+                        (
+                            "completed".to_string(),
+                            "installed plugin subprocess completed with validated JSON output"
+                                .to_string(),
+                        )
+                    }
+                    Err(error) => ("failed".to_string(), error.to_string()),
+                }
             } else {
                 (
                     "blocked".to_string(),
-                    "installed plugin execution is blocked because no sandboxed runner is implemented"
-                        .to_string(),
+                    "installed plugin execution did not satisfy sandbox preconditions".to_string(),
                 )
             };
-            let event_type = if request.dry_run && contract_validated {
+            let event_type = if status == "completed" {
+                "installed_plugin_subprocess_completed"
+            } else if status == "failed" {
+                "installed_plugin_subprocess_failed"
+            } else if request.dry_run && contract_validated {
                 "installed_plugin_contract_dry_run"
             } else if manifest_valid && action_declared && !input_valid {
                 "installed_plugin_input_invalid"
@@ -838,7 +909,11 @@ impl IpcState {
                     "input_valid": input_valid,
                     "contract_validated": contract_validated,
                     "input_provided": !request.input.is_null(),
-                    "side_effect_executed": false,
+                    "side_effect_executed": side_effect_executed,
+                    "sandbox_process_started": side_effect_executed,
+                    "stdout_bytes": stdout_bytes,
+                    "stderr_bytes": stderr_bytes,
+                    "exit_code": exit_code,
                     "reason": reason,
                 }),
             );
@@ -855,9 +930,52 @@ impl IpcState {
                 action_declared,
                 input_valid,
                 contract_validated,
-                side_effect_executed: false,
+                side_effect_executed,
+                output,
+                stdout_bytes,
+                stderr_bytes,
+                exit_code,
                 audit_entry,
             })
+        })
+    }
+
+    pub fn set_installed_plugin_execution(
+        &self,
+        id: &str,
+        request: InstalledPluginExecutionRequest,
+    ) -> JarvisResult<InstalledPluginRecord> {
+        self.using_repository(|repository| {
+            let record = repository
+                .get_installed_plugin(id)?
+                .ok_or_else(|| JarvisError::Storage(format!("installed plugin not found: {id}")))?;
+            validate_installed_plugin_record(&record)?;
+
+            if request.execution_enabled {
+                if request.execution_grant != InstalledPluginExecutionGrant::SubprocessStdio {
+                    return Err(JarvisError::Validation(
+                        "installed plugin execution requires subprocess_stdio grant".to_string(),
+                    ));
+                }
+                if record.manifest.source != PluginSource::LocalSubprocess {
+                    return Err(JarvisError::Validation(
+                        "installed plugin execution requires local_subprocess source".to_string(),
+                    ));
+                }
+                let source_path = std::path::Path::new(&record.source_path);
+                let subprocess = record.manifest.subprocess.as_ref().ok_or_else(|| {
+                    JarvisError::Validation(
+                        "installed plugin execution requires subprocess config".to_string(),
+                    )
+                })?;
+                subprocess.validate(&record.id, source_path)?;
+            }
+
+            repository.set_installed_plugin_execution(
+                id,
+                request.execution_enabled,
+                request.execution_grant,
+            )
         })
     }
 
@@ -1399,6 +1517,18 @@ fn validate_installed_plugin_record(record: &InstalledPluginRecord) -> JarvisRes
             record.id
         )));
     }
+    let canonical_source = std::fs::canonicalize(&record.source_path).map_err(|err| {
+        JarvisError::Validation(format!(
+            "{} installed plugin source_path is not readable: {err}",
+            record.id
+        ))
+    })?;
+    if canonical_source.display().to_string() != record.source_path {
+        return Err(JarvisError::Validation(format!(
+            "{} installed plugin source_path must be canonical",
+            record.id
+        )));
+    }
     Ok(())
 }
 
@@ -1431,6 +1561,10 @@ pub fn router(state: IpcState) -> Router {
             get(list_installed_plugins).post(install_plugin),
         )
         .route("/plugins/installed/:id", get(get_installed_plugin))
+        .route(
+            "/plugins/installed/:id/execution",
+            post(set_installed_plugin_execution),
+        )
         .route("/plugins/installed/:id/run", post(run_installed_plugin))
         .route(
             "/emergency-pause",
@@ -1712,6 +1846,17 @@ async fn install_plugin(
         .map_err(error_response)
 }
 
+async fn set_installed_plugin_execution(
+    State(state): State<IpcState>,
+    Path(id): Path<String>,
+    Json(request): Json<InstalledPluginExecutionRequest>,
+) -> Result<Json<InstalledPluginRecord>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .set_installed_plugin_execution(&id, request)
+        .map(Json)
+        .map_err(error_response)
+}
+
 async fn run_installed_plugin(
     State(state): State<IpcState>,
     Path(id): Path<String>,
@@ -1821,6 +1966,7 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
         endpoint("GET", "/plugins/installed", true, true),
         endpoint("POST", "/plugins/installed", true, false),
         endpoint("GET", "/plugins/installed/:id", true, true),
+        endpoint("POST", "/plugins/installed/:id/execution", true, false),
         endpoint("POST", "/plugins/installed/:id/run", true, false),
         endpoint("GET", "/emergency-pause", false, true),
         endpoint("POST", "/emergency-pause", false, false),
@@ -1869,6 +2015,29 @@ fn error_response(error: JarvisError) -> (StatusCode, Json<ErrorResponse>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    fn write_executable_plugin_script(dir: &std::path::Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let script = dir.join("plugin-runner.py");
+        std::fs::write(
+            &script,
+            r#"#!/usr/bin/env python3
+import json
+import sys
+
+request = json.load(sys.stdin)
+json.dump({"path": request["input"]["path"]}, sys.stdout)
+"#,
+        )
+        .expect("write plugin runner");
+        let mut permissions = std::fs::metadata(&script)
+            .expect("script metadata")
+            .permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&script, permissions).expect("chmod plugin runner");
+    }
 
     #[test]
     fn health_reports_pause_and_scheduler_counts() {
@@ -1970,7 +2139,7 @@ mod tests {
         assert!(!response.side_effect_executed);
         assert_eq!(
             response.reason,
-            "installed plugin execution grant is metadata_only; only contract dry runs are allowed until a sandboxed runner is implemented"
+            "installed plugin execution grant is metadata_only; only contract dry runs are allowed"
         );
         assert_eq!(
             response.audit_entry.event_type,
@@ -2134,6 +2303,103 @@ mod tests {
         assert!(response.reason.contains("undeclared field extra"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn installed_plugin_runner_executes_enabled_subprocess_with_validated_output() {
+        let repository = SqliteRepository::in_memory().unwrap();
+        let source_dir = tempfile::tempdir().unwrap();
+        let source_path_buf = source_dir.path().canonicalize().unwrap();
+        write_executable_plugin_script(&source_path_buf);
+        let source_path = source_path_buf.display().to_string();
+        let installed = InstalledPlugin {
+            manifest: local_subprocess_manifest(&source_path),
+            source_path,
+            execution_enabled: false,
+            execution_grant: InstalledPluginExecutionGrant::MetadataOnly,
+        };
+        repository.install_plugin_metadata(installed).unwrap();
+        let state = IpcState::with_repository(repository).expect("state");
+
+        let enabled = state
+            .set_installed_plugin_execution(
+                "local_runner_test",
+                InstalledPluginExecutionRequest {
+                    execution_enabled: true,
+                    execution_grant: InstalledPluginExecutionGrant::SubprocessStdio,
+                },
+            )
+            .expect("enable subprocess");
+        assert!(enabled.execution_enabled);
+        assert_eq!(
+            enabled.execution_grant,
+            InstalledPluginExecutionGrant::SubprocessStdio
+        );
+
+        let response = state
+            .run_installed_plugin(
+                "local_runner_test",
+                InstalledPluginRunRequest {
+                    action: "inspect".to_string(),
+                    input: json!({ "path": "README.md" }),
+                    session_id: None,
+                    dry_run: false,
+                },
+            )
+            .expect("subprocess response");
+
+        assert_eq!(response.status, "completed");
+        assert!(response.execution_enabled);
+        assert_eq!(
+            response.execution_grant,
+            InstalledPluginExecutionGrant::SubprocessStdio
+        );
+        assert!(response.contract_validated);
+        assert!(response.side_effect_executed);
+        assert_eq!(response.output, Some(json!({ "path": "README.md" })));
+        assert_eq!(
+            response.audit_entry.event_type,
+            "installed_plugin_subprocess_completed"
+        );
+        assert_eq!(
+            response.audit_entry.payload["sandbox_process_started"],
+            true
+        );
+        assert_eq!(response.audit_entry.payload["side_effect_executed"], true);
+    }
+
+    #[test]
+    fn installed_plugin_execution_enable_fails_for_metadata_grant() {
+        let repository = SqliteRepository::in_memory().unwrap();
+        let source_dir = tempfile::tempdir().unwrap();
+        let source_path = source_dir
+            .path()
+            .canonicalize()
+            .unwrap()
+            .display()
+            .to_string();
+        let installed = InstalledPlugin {
+            manifest: local_installed_manifest(&source_path),
+            source_path,
+            execution_enabled: false,
+            execution_grant: InstalledPluginExecutionGrant::MetadataOnly,
+        };
+        repository.install_plugin_metadata(installed).unwrap();
+        let state = IpcState::with_repository(repository).expect("state");
+
+        let error = state
+            .set_installed_plugin_execution(
+                "local_runner_test",
+                InstalledPluginExecutionRequest {
+                    execution_enabled: true,
+                    execution_grant: InstalledPluginExecutionGrant::MetadataOnly,
+                },
+            )
+            .expect_err("metadata grant cannot execute");
+        assert!(error
+            .to_string()
+            .contains("requires subprocess_stdio grant"));
+    }
+
     #[tokio::test]
     async fn command_schema_executes_fake_local_runtime() {
         let state = IpcState::new();
@@ -2179,6 +2445,7 @@ mod tests {
             source: crate::PluginSource::LocalDevelopment,
             author: "Jarvis Test".to_string(),
             source_path: Some(source_path.to_string()),
+            subprocess: None,
             actions: vec![crate::PluginActionManifest {
                 name: "inspect".to_string(),
                 description: "Validate installed runner boundary.".to_string(),
@@ -2189,6 +2456,46 @@ mod tests {
                     vec!["path".to_string()],
                 ),
                 output_schema: crate::JsonSchema::empty_object(),
+                proactive: false,
+                memory_access: crate::PluginAccess::None,
+                model_access: crate::PluginAccess::None,
+                audit_fields: vec!["path".to_string()],
+                timeout: crate::PluginTimeout::default_for_action(),
+                cancellation: crate::CancellationBehavior::Cooperative,
+            }],
+        }
+    }
+
+    fn local_subprocess_manifest(source_path: &str) -> PluginManifest {
+        let mut input_properties = serde_json::Map::new();
+        input_properties.insert("path".to_string(), json!({ "type": "string" }));
+        let mut output_properties = serde_json::Map::new();
+        output_properties.insert("path".to_string(), json!({ "type": "string" }));
+
+        PluginManifest {
+            manifest_schema_version: 1,
+            id: "local_runner_test".to_string(),
+            name: "Local Runner Test".to_string(),
+            version: "0.1.0".to_string(),
+            source: crate::PluginSource::LocalSubprocess,
+            author: "Jarvis Test".to_string(),
+            source_path: Some(source_path.to_string()),
+            subprocess: Some(crate::PluginSubprocessManifest {
+                command: "plugin-runner.py".to_string(),
+                args: Vec::new(),
+                stdin: crate::PluginSubprocessStream::Json,
+                stdout: crate::PluginSubprocessStream::Json,
+            }),
+            actions: vec![crate::PluginActionManifest {
+                name: "inspect".to_string(),
+                description: "Validate installed subprocess runner boundary.".to_string(),
+                permissions: vec![crate::PluginPermission::ReadWorkspace],
+                risk_tier: crate::RiskTier::Low,
+                input_schema: crate::JsonSchema::object(input_properties, vec!["path".to_string()]),
+                output_schema: crate::JsonSchema::object(
+                    output_properties,
+                    vec!["path".to_string()],
+                ),
                 proactive: false,
                 memory_access: crate::PluginAccess::None,
                 model_access: crate::PluginAccess::None,
@@ -2777,7 +3084,7 @@ mod tests {
             .expect("diagnostics export");
         assert_eq!(export.health.status, "ok");
         assert!(export.repository_backed);
-        assert_eq!(export.schema_version, Some(5));
+        assert_eq!(export.schema_version, Some(6));
         assert_eq!(export.task_count, Some(1));
         assert!(export.audit_entry_count.unwrap_or_default() >= 2);
         assert_eq!(export.scheduler_jobs.len(), 1);
