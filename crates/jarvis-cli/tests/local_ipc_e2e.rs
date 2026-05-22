@@ -32,6 +32,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_array_contains(&contract["endpoints"], "path", "/permissions/policy-review");
     assert_array_contains(&contract["endpoints"], "path", "/model-routes");
     assert_array_contains(&contract["endpoints"], "path", "/activity/summary");
+    assert_array_contains(&contract["endpoints"], "path", "/activity/events");
     assert_array_contains(&contract["endpoints"], "path", "/approvals/:id/approve");
     assert_array_contains(
         &contract["endpoints"],
@@ -50,6 +51,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     );
     assert_string_array_contains(&contract["safe_inspection_paths"], "/approvals/:id");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/activity/summary");
+    assert_string_array_contains(&contract["safe_inspection_paths"], "/activity/events");
 
     let command = run_cli_json([
         "command",
@@ -118,6 +120,24 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         &activity["recent_audit_entries"],
         "event_type",
         "plugin_completed",
+    );
+    let activity_events = run_cli_text([
+        "activity",
+        "watch",
+        "--max-events",
+        "2",
+        "--interval-ms",
+        "100",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert!(
+        activity_events.matches("event: activity_summary").count() >= 2,
+        "{activity_events}"
+    );
+    assert!(
+        activity_events.contains("\"task_count\""),
+        "{activity_events}"
     );
 
     let fake_echo_manifest = run_cli_json([

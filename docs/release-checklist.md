@@ -240,6 +240,7 @@ Still future gates for production distribution:
   validation on a real device.
 - Activity view shows current task state, active/status counts, and recent
   audit progress through `/activity/summary`.
+- CLI activity watch receives bounded `/activity/events` progress events.
 - Memory tab can create, edit mutable fields, mark reviewed, soft-delete,
   restore, and include deleted items through the supervised core IPC contract.
 - Audit entry is written for the command.

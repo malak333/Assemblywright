@@ -270,8 +270,9 @@ plugin provenance snapshot verification, CLI smoke path, redacted diagnostics
 export, repository-backed activity summary, and buildable Swift command/activity
 shell scaffold are implemented. The command runtime can route to fake local,
 Ollama-compatible local HTTP, or explicitly enabled ChatGPT/OpenAI-compatible
-HTTP providers. The Swift app includes approval decision controls, management
-surfaces, memory classification plus create/update/review/delete/restore
+HTTP providers. The IPC layer exposes bounded activity event streaming for
+current task/audit progress. The Swift app includes approval decision controls,
+management surfaces, memory classification plus create/update/review/delete/restore
 controls over the existing Rust IPC contract, run activity summary,
 voice input/output adapter controls, text-transcript command handoff,
 permission policy review,

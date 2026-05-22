@@ -16,8 +16,9 @@ pub use ipc::{
     InstalledPluginRunResponse, IpcState, PermissionGrantSummary, PermissionPolicyReview,
     PermissionPolicyReviewItem, SchedulerAttentionItem, SchedulerAttentionSummary,
     SchedulerBackgroundConfig, SchedulerJobExecution, SchedulerRunResponse,
-    UpdateMemoryItemRequest, DEFAULT_SCHEDULER_BACKGROUND_INTERVAL_MS,
-    DEFAULT_SCHEDULER_BACKGROUND_LIMIT, MAX_SCHEDULER_BACKGROUND_LIMIT,
+    UpdateMemoryItemRequest, DEFAULT_ACTIVITY_EVENT_INTERVAL_MS, DEFAULT_ACTIVITY_EVENT_LIMIT,
+    DEFAULT_SCHEDULER_BACKGROUND_INTERVAL_MS, DEFAULT_SCHEDULER_BACKGROUND_LIMIT,
+    MAX_ACTIVITY_EVENT_LIMIT, MAX_SCHEDULER_BACKGROUND_LIMIT,
 };
 pub use model::{
     redact_url_credentials, ChatGptHttpModel, ChatGptProviderConfig, FakeLocalModel,

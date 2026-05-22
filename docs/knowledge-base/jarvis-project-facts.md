@@ -34,8 +34,12 @@ These notes capture durable facts for future agents working on this repository.
 - Repository-backed IPC exposes `/activity/summary`, and the CLI exposes
   `jarvis activity summary`, as a pollable progress surface for task status
   counts, active task count, recent tasks, and recent audit entries. It is
-  deterministic repository evidence for current activity, not a long-lived
-  streaming channel.
+  deterministic repository evidence for current activity.
+- Repository-backed IPC also exposes `/activity/events`, and the CLI exposes
+  `jarvis activity watch`, as bounded server-sent events carrying activity
+  summary snapshots. This is local progress-streaming evidence for current
+  task/audit state, not per-token model streaming or plugin-internal progress
+  events.
 - `ConversationRuntime` supports bounded fake-model planned first-party tool
   calls with schema validation, policy checks, approval stops, tool-result audit
   entries, and feedback of tool results into later model steps. The local HTTP
@@ -162,6 +166,10 @@ These notes capture durable facts for future agents working on this repository.
   release-proof coverage and is included by `./scripts/release-local.sh`.
 - The focused repository-state test for progress visibility is
   `cargo test -p jarvis-core repository_backed_state_endpoints_expose_tasks_and_audit -- --nocapture`.
+  Contract coverage for the activity stream is in
+  `cargo test -p jarvis-core contract_endpoint_documents_safe_inspection_paths -- --nocapture`,
+  and cross-process CLI coverage is in
+  `cargo test -p jarvis-cli --test local_ipc_e2e serve_exposes_local_ipc_contract_and_persists_state -- --nocapture`.
   Swift model coverage for the same contract is included in
   `swift test --package-path apps/mac --filter JarvisMacCoreTests`.
 - Every feature or phase should identify the relevant E2E or focused
@@ -236,6 +244,8 @@ These notes capture durable facts for future agents working on this repository.
   `/Users/michaelnobile/Antigravity/jarvis-worktrees-continuation/scheduler-notifications`.
 - Follow-on activity summary work uses `codex/activity-summary` in
   `/Users/michaelnobile/Antigravity/jarvis-worktrees-continuation/activity-summary`.
+- Follow-on activity event streaming work uses `codex/activity-events` in
+  `/Users/michaelnobile/Antigravity/jarvis-worktrees-continuation/activity-events`.
 - When multiple agents are active, stay inside assigned ownership. For docs-only
   architecture work, use `apply_patch` and do not touch implementation files.
 - Do not revert or overwrite unrelated work from other agents.
