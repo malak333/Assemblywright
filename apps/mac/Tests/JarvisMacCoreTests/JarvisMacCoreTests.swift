@@ -963,6 +963,34 @@ struct JarvisMacCoreTests {
         #expect(model.status == .delivered(1))
     }
 
+    @Test("Scheduler notification model delivers emergency-pause blocked attention")
+    @MainActor
+    func schedulerNotificationsDeliverEmergencyPauseBlockedAttention() async throws {
+        let id = UUID()
+        let attention = try JSONDecoder().decode(
+            JarvisSchedulerAttentionSummary.self,
+            from: schedulerAttentionJSON(
+                id: id,
+                emergencyPaused: true,
+                notificationKind: "blocked_by_emergency_pause",
+                notificationReason: "Emergency pause is active; scheduler job execution is blocked."
+            )
+        )
+        let adapter = FakeSchedulerNotificationAdapter()
+        let model = SchedulerNotificationModel(adapter: adapter)
+
+        let deliveredCount = await model.notify(attention: attention)
+        let delivered = try #require(adapter.deliveredRequests.first)
+
+        #expect(deliveredCount == 1)
+        #expect(adapter.authorizationRequestCount == 1)
+        #expect(delivered.schedulerJobId == id)
+        #expect(delivered.notificationKind == "blocked_by_emergency_pause")
+        #expect(delivered.title == "Scheduler job blocked by pause: one shot")
+        #expect(delivered.body == "Emergency pause is active; scheduler job execution is blocked.")
+        #expect(model.status == .delivered(1))
+    }
+
     @Test("Scheduler notification model avoids duplicate notifications for the same attention item")
     @MainActor
     func schedulerNotificationsAvoidDuplicates() async throws {
@@ -2285,12 +2313,17 @@ struct JarvisMacCoreTests {
         )
     }
 
-    private func schedulerAttentionJSON(id: UUID) -> Data {
+    private func schedulerAttentionJSON(
+        id: UUID,
+        emergencyPaused: Bool = false,
+        notificationKind: String = "due_now",
+        notificationReason: String = "A scheduler job is due and ready for the app to surface."
+    ) -> Data {
         Data(
             """
             {
               "generated_at": "2026-05-20T12:00:02Z",
-              "emergency_paused": false,
+              "emergency_paused": \(emergencyPaused),
               "attention_required": true,
               "due_count": 1,
               "scheduled_count": 1,
@@ -2305,8 +2338,8 @@ struct JarvisMacCoreTests {
                   "status": "scheduled",
                   "due": true,
                   "next_due_at": "2026-05-20T12:00:01Z",
-                  "notification_kind": "due_now",
-                  "notification_reason": "A scheduler job is due and ready for the app to surface."
+                  "notification_kind": "\(notificationKind)",
+                  "notification_reason": "\(notificationReason)"
                 }
               ]
             }

@@ -403,9 +403,10 @@ Still future gates for production distribution:
 - Text command reaches the Rust core.
 - Text-transcript voice command parity is verified through the scaffold.
 - Scheduler attention produces OS-level user notifications with user-visible
-  permission handling. The Swift adapter boundary is implemented and tested
-  with fakes; live clean-profile notification prompt and delivery still require
-  manual verification.
+  permission handling for due, failed, and emergency-pause-blocked attention.
+  The Swift adapter boundary is implemented and tested with fakes; live
+  clean-profile notification prompt and delivery still require manual
+  verification.
 - The macOS Speech/AVFoundation adapter boundary compiles and has deterministic
   fake-adapter state/error tests.
 - The AVFoundation speech-output adapter boundary compiles and has

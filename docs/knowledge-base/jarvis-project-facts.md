@@ -474,9 +474,10 @@ These notes capture durable facts for future agents working on this repository.
   validation, Finder/LaunchServices validation, App Store distribution, or real
   microphone/Speech/live audio-output coverage.
 - Swift scheduler notification controls are repo-owned adapter evidence: the
-  core model can request authorization, build due/failed notification requests,
-  suppress duplicate deliveries for the same attention item, and fail closed
-  when permission is denied. This is not a substitute for manual clean-profile
+  core model can request authorization, build due, failed, and
+  emergency-pause-blocked notification requests, suppress duplicate deliveries
+  for the same attention item, and fail closed when permission is denied. This
+  is not a substitute for manual clean-profile
   macOS notification prompt and delivery validation.
 - `./scripts/package-distribution.sh` is the repo-owned distribution packaging
   lane. Its `--check` mode is credential-free and validates local tools plus

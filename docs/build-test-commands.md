@@ -406,8 +406,9 @@ Finder/LaunchServices validation, or real microphone/Speech/live audio-output
 coverage.
 `swift test --package-path apps/mac --filter JarvisMacCoreTests` is the focused
 Swift contract/model proof for Mac app model changes, including scheduler
-notification authorization, due/failed request creation, duplicate suppression,
-and denied-permission fail-closed behavior through a fake adapter.
+notification authorization, due/failed/emergency-pause-blocked request
+creation, duplicate suppression, and denied-permission fail-closed behavior
+through a fake adapter.
 `./scripts/package-distribution.sh` is the stricter distribution packaging
 lane, and `--unsigned-launch-check` is now part of `./scripts/release-local.sh`
 so release-built app layout regressions are caught by the default gate. Its

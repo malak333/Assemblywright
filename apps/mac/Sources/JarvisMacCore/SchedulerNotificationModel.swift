@@ -132,7 +132,9 @@ public final class SchedulerNotificationModel: ObservableObject {
     ) -> [JarvisSchedulerNotificationRequest] {
         attention.items
             .filter { item in
-                item.notificationKind == "due_now" || item.notificationKind == "failed"
+                item.notificationKind == "due_now"
+                    || item.notificationKind == "failed"
+                    || item.notificationKind == "blocked_by_emergency_pause"
             }
             .map { item in
                 JarvisSchedulerNotificationRequest(
@@ -148,6 +150,8 @@ public final class SchedulerNotificationModel: ObservableObject {
 
     private func notificationTitle(for item: JarvisSchedulerAttentionItem) -> String {
         switch item.notificationKind {
+        case "blocked_by_emergency_pause":
+            return "Scheduler job blocked by pause: \(item.name)"
         case "failed":
             return "Scheduler job failed: \(item.name)"
         default:
