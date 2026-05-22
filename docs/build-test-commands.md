@@ -23,6 +23,7 @@ cargo test --workspace -- --ignored
 ./scripts/storage-migration-backup-smoke.sh
 cargo build --workspace
 cargo run -p jarvis-cli -- smoke
+./scripts/release-operator-qa-smoke.sh
 cargo package --workspace --allow-dirty
 swift test --package-path apps/mac
 swift build --package-path apps/mac
@@ -295,6 +296,7 @@ cargo test -p jarvis-cli --test local_ipc_e2e serve_can_recover_stale_scheduler_
 cargo test -p jarvis-cli --test local_ipc_e2e serve_executes_ollama_provider_tool_request_envelope -- --nocapture
 cargo test -p jarvis-cli --test local_ipc_e2e -- --ignored
 ./scripts/storage-migration-backup-smoke.sh
+./scripts/release-operator-qa-smoke.sh
 ./scripts/packaged-supervision-proof.sh
 ./scripts/packaged-app-release-smoke.sh
 ./scripts/package-distribution.sh --check
@@ -311,6 +313,15 @@ proof for migration changes: it runs Rust tests that create a legacy
 file-backed DB, verify preflight backup creation, corrupt the DB after backup
 to prove restore on migration-open failure, and verify newer schema versions
 fail with an explicit upgrade diagnostic.
+`./scripts/release-operator-qa-smoke.sh` is the local operator-facing release
+QA proof for CLI/repository surfaces: it starts a loopback core with an
+isolated SQLite database, exercises command, audit, route inspection, memory
+create/update/review/delete/restore, scheduler attention and due execution,
+activity summary/watch, permission review, diagnostics, emergency
+pause/block/resume, release readiness, and then restarts the core against the
+same database to verify recovered memory, task, scheduler, and diagnostics
+state. It is local operator QA evidence only, not a clean-profile installed-app
+or live-device validation pass.
 `./scripts/packaged-supervision-proof.sh` is the focused Swift/Rust bridge
 proof for supervision changes: it builds `jarvis-cli`, copies it into a
 temporary `Jarvis.app/Contents/Resources/bin/` layout, runs the Swift supervisor

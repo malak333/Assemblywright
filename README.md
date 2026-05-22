@@ -134,6 +134,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo build --workspace
 ./scripts/storage-migration-backup-smoke.sh
+./scripts/release-operator-qa-smoke.sh
 swift test --package-path apps/mac
 swift build --package-path apps/mac
 ```
@@ -159,6 +160,18 @@ run the focused storage recovery proof:
 That script proves legacy file-backed DB migration creates a preflight backup,
 failed migration-open restores the backup, and newer schema versions fail with
 an explicit upgrade diagnostic. It does not replace installer upgrade QA.
+
+For operator-facing release QA over a repository-backed local core, run:
+
+```sh
+./scripts/release-operator-qa-smoke.sh
+```
+
+That script starts a loopback core with an isolated SQLite database, exercises
+command, audit, routes, memory create/update/review/delete/restore, scheduler
+attention/run-due, activity, permission review, diagnostics, emergency pause,
+release readiness, and restart recovery. It is local CLI QA evidence, not a
+clean-profile installed-app or live-device validation pass.
 
 For branches that touch Swift supervision or core binary discovery, run the
 focused packaged-supervision proof:

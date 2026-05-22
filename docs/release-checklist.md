@@ -62,10 +62,11 @@ stage or when a PR needs focused evidence for one ownership slice.
 - `cargo fmt --check`
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - `cargo test --workspace`
-- `./scripts/storage-migration-backup-smoke.sh`
 - `cargo test --workspace -- --ignored`
+- `./scripts/storage-migration-backup-smoke.sh`
 - `cargo build --workspace`
 - `cargo run -p jarvis-cli -- smoke`
+- `./scripts/release-operator-qa-smoke.sh`
 - `cargo package --workspace --allow-dirty`
 - Focused supervision proof for branches that touch Swift core launch or bundle
   discovery: `./scripts/packaged-supervision-proof.sh`
@@ -253,6 +254,11 @@ stage or when a PR needs focused evidence for one ownership slice.
   current Rust/CLI foundation; packaged Mac release smoke is now covered by
   `./scripts/packaged-app-release-smoke.sh` for the local assembled app
   boundary.
+- Confirm `./scripts/release-operator-qa-smoke.sh` passes when CLI/operator
+  release surfaces change, proving command, audit, routes, memory mutation,
+  scheduler attention/run-due, activity, permission review, diagnostics,
+  emergency pause, release readiness, and restart recovery in one
+  repository-backed local smoke.
 - Confirm `./scripts/storage-migration-backup-smoke.sh` passes for storage
   changes, proving legacy DB backup creation, restore after migration-open
   failure, and newer-schema diagnostics. Treat broad installer upgrade and
@@ -351,12 +357,24 @@ Still future gates for production distribution:
 - Audit entry is written for the command.
 - Emergency pause stops new actions.
 - App exits cleanly and restarts with recoverable state.
+- CLI/operator release QA covers repository-backed command, audit, route,
+  memory, scheduler, activity, permission, diagnostics, pause, release
+  readiness, and restart recovery paths in one local smoke.
 
 The current script covers local app-executable launch and ad-hoc signing only.
 It does not prove Finder launch, LaunchServices registration, Developer ID
 signing, notarization, entitlement validation, installer behavior, App Store
 distribution, microphone permissions, real speech capture, or a separate
 clean-user manual QA pass.
+
+Operator QA gate:
+
+- Run `./scripts/release-operator-qa-smoke.sh` for local CLI/operator release
+  QA. Treat it as repository-backed command, audit, route, memory, scheduler,
+  activity, permission review, diagnostics, pause, release readiness, and
+  restart evidence only. It does not prove clean-profile install,
+  Finder/LaunchServices launch, live microphone/Speech, live audio output,
+  live OS notification delivery, or manual device QA.
 
 Distribution packaging gate:
 
