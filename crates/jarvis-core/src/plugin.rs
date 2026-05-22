@@ -936,11 +936,21 @@ pub fn execute_installed_subprocess_plugin(
     let request_bytes = serde_json::to_vec(&request)
         .map_err(|err| JarvisError::Plugin(format!("serialize subprocess input: {err}")))?;
 
-    let mut child = Command::new(executable)
+    let mut command = Command::new(executable);
+    command
         .args(&subprocess.args)
+        .env_clear()
+        .env("JARVIS_PLUGIN_ID", &manifest.id)
+        .env("JARVIS_PLUGIN_ACTION", &action.name)
+        .env("JARVIS_PLUGIN_SOURCE_PATH", source_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(path) = plugin_subprocess_path_env() {
+        command.env("PATH", path);
+    }
+
+    let mut child = command
         .spawn()
         .map_err(|err| JarvisError::Plugin(format!("spawn subprocess plugin: {err}")))?;
 
@@ -990,6 +1000,14 @@ pub fn execute_installed_subprocess_plugin(
             )));
         }
         std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn plugin_subprocess_path_env() -> Option<String> {
+    if cfg!(windows) {
+        std::env::var("PATH").ok()
+    } else {
+        Some("/usr/bin:/bin:/usr/sbin:/sbin".to_string())
     }
 }
 

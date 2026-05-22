@@ -3516,7 +3516,7 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "installed_plugin_execution",
             "implemented",
-            "Local subprocess plugins require provenance verification plus explicit subprocess_stdio or subprocess_stdio_network grants and are covered by Rust unit and CLI IPC E2E tests.",
+            "Local subprocess plugins require provenance verification plus explicit subprocess_stdio or subprocess_stdio_network grants, run with inherited environment cleared, and are covered by Rust unit and CLI IPC E2E tests.",
             "Constrained local subprocess execution only; not a WASM, OS-level, or marketplace sandbox.",
         ),
         feature(
@@ -3645,10 +3645,16 @@ mod tests {
             &script,
             r#"#!/usr/bin/env python3
 import json
+import os
 import sys
 
 request = json.load(sys.stdin)
-json.dump({"path": request["input"]["path"]}, sys.stdout)
+json.dump({
+    "path": request["input"]["path"],
+    "secret_seen": "JARVIS_SECRET_LEAK_TEST" in os.environ,
+    "plugin_id": os.environ.get("JARVIS_PLUGIN_ID"),
+    "plugin_action": os.environ.get("JARVIS_PLUGIN_ACTION")
+}, sys.stdout)
 "#,
         )
         .expect("write plugin runner");
@@ -3821,6 +3827,12 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         repository.install_plugin_metadata(installed).unwrap();
         let state = IpcState::with_repository(repository).expect("state");
 
+        unsafe {
+            std::env::set_var(
+                "JARVIS_SECRET_LEAK_TEST",
+                "subprocess must not inherit this",
+            );
+        }
         let response = state
             .run_installed_plugin(
                 "local_runner_test",
@@ -4078,6 +4090,9 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 },
             )
             .expect("subprocess response");
+        unsafe {
+            std::env::remove_var("JARVIS_SECRET_LEAK_TEST");
+        }
 
         assert_eq!(response.status, "completed");
         assert!(response.execution_enabled);
@@ -4087,7 +4102,11 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         );
         assert!(response.contract_validated);
         assert!(response.side_effect_executed);
-        assert_eq!(response.output, Some(json!({ "path": "README.md" })));
+        let output = response.output.as_ref().expect("subprocess output");
+        assert_eq!(output["path"], "README.md");
+        assert_eq!(output["secret_seen"], false);
+        assert_eq!(output["plugin_id"], "local_runner_test");
+        assert_eq!(output["plugin_action"], "inspect");
         assert_eq!(
             response.audit_entry.event_type,
             "installed_plugin_subprocess_completed"
@@ -4474,6 +4493,9 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         input_properties.insert("path".to_string(), json!({ "type": "string" }));
         let mut output_properties = serde_json::Map::new();
         output_properties.insert("path".to_string(), json!({ "type": "string" }));
+        output_properties.insert("secret_seen".to_string(), json!({ "type": "boolean" }));
+        output_properties.insert("plugin_id".to_string(), json!({ "type": "string" }));
+        output_properties.insert("plugin_action".to_string(), json!({ "type": "string" }));
 
         PluginManifest {
             manifest_schema_version: 1,

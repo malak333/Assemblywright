@@ -19,7 +19,13 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let db_path = temp_dir.path().join("jarvis-e2e.sqlite");
 
+    unsafe {
+        std::env::set_var("JARVIS_SECRET_LEAK_TEST", "server inherited secret");
+    }
     let mut server = JarvisServer::start(&db_path);
+    unsafe {
+        std::env::remove_var("JARVIS_SECRET_LEAK_TEST");
+    }
     let endpoint = server.endpoint();
 
     let health = run_cli_text(["health", "--endpoint", endpoint.as_str()]);
@@ -537,7 +543,12 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
                 "output_schema": {
                     "schema": {
                         "type": "object",
-                        "properties": { "path": { "type": "string" } },
+                        "properties": {
+                            "path": { "type": "string" },
+                            "secret_seen": { "type": "boolean" },
+                            "plugin_id": { "type": "string" },
+                            "plugin_action": { "type": "string" }
+                        },
                         "required": ["path"],
                         "additionalProperties": false
                     }
@@ -633,7 +644,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         "--endpoint",
         endpoint.as_str(),
     ]);
-    assert_eq!(subprocess_run["status"], "completed");
+    assert_eq!(subprocess_run["status"], "completed", "{subprocess_run}");
     assert_eq!(subprocess_run["execution_enabled"], true);
     assert_eq!(subprocess_run["execution_grant"], "subprocess_stdio");
     assert_eq!(
@@ -641,6 +652,12 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         "matches_install_snapshot"
     );
     assert_eq!(subprocess_run["output"]["path"], "README.md");
+    assert_eq!(subprocess_run["output"]["secret_seen"], false);
+    assert_eq!(
+        subprocess_run["output"]["plugin_id"],
+        "local_subprocess_e2e"
+    );
+    assert_eq!(subprocess_run["output"]["plugin_action"], "inspect");
     assert_eq!(subprocess_run["side_effect_executed"], true);
     assert_eq!(
         subprocess_run["audit_entry"]["event_type"],
@@ -706,7 +723,12 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
                 "output_schema": {
                     "schema": {
                         "type": "object",
-                        "properties": { "path": { "type": "string" } },
+                        "properties": {
+                            "path": { "type": "string" },
+                            "secret_seen": { "type": "boolean" },
+                            "plugin_id": { "type": "string" },
+                            "plugin_action": { "type": "string" }
+                        },
                         "required": ["path"],
                         "additionalProperties": false
                     }
@@ -798,6 +820,12 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         "subprocess_stdio_network"
     );
     assert_eq!(network_subprocess_run["output"]["path"], "README.md");
+    assert_eq!(network_subprocess_run["output"]["secret_seen"], false);
+    assert_eq!(
+        network_subprocess_run["output"]["plugin_id"],
+        "network_subprocess_e2e"
+    );
+    assert_eq!(network_subprocess_run["output"]["plugin_action"], "inspect");
     assert_eq!(
         network_subprocess_run["audit_entry"]["payload"]["action_requires_network_grant"],
         true
@@ -2267,13 +2295,19 @@ fn write_executable_plugin_script(dir: &Path) {
         &script,
         r#"#!/usr/bin/env python3
 import json
+import os
 import sys
 
 request = json.load(sys.stdin)
 print('{"jarvis_progress":true,"stage":"prepare","message":"validated request"}', file=sys.stderr)
 print('raw stderr secret should stay redacted', file=sys.stderr)
 print('{"jarvis_progress":true,"stage":"complete","message":"writing validated output","payload":{"ignored":"not exposed"}}', file=sys.stderr)
-json.dump({"path": request["input"]["path"]}, sys.stdout)
+json.dump({
+    "path": request["input"]["path"],
+    "secret_seen": "JARVIS_SECRET_LEAK_TEST" in os.environ,
+    "plugin_id": os.environ.get("JARVIS_PLUGIN_ID"),
+    "plugin_action": os.environ.get("JARVIS_PLUGIN_ACTION")
+}, sys.stdout)
 "#,
     )
     .expect("write plugin runner");

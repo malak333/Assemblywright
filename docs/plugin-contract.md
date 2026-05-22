@@ -112,7 +112,11 @@ to explain what happened:
   enabled without `subprocess_stdio_network` all fail closed with audit
   evidence. Jarvis sends a JSON object containing `plugin_id`, `action`, and
   `input` to stdin and accepts only JSON stdout that matches the action output
-  schema.
+  schema. Jarvis clears the inherited process environment before spawn and
+  exposes only a minimal allowlist: a deterministic `PATH` for interpreter
+  resolution plus `JARVIS_PLUGIN_ID`, `JARVIS_PLUGIN_ACTION`, and
+  `JARVIS_PLUGIN_SOURCE_PATH`. This prevents app/core secrets from reaching
+  subprocess plugins by default; it is still not a full OS sandbox.
 - Publisher signature verification uses
   `/plugins/installed/:id/publisher/signature/verify` or
   `jarvis plugins verify-publisher-signature`. It fails closed until local
@@ -157,6 +161,7 @@ contract testing. Release verification should keep covering:
 - Installed plugin run attempts fail closed with manifest/action/input
   validation, disabled `metadata_only` execution-grant semantics, explicit
   enablement semantics, local provenance verification, subprocess safe-path
-  validation, network declaration validation, contract-only dry-run evidence,
-  constrained subprocess execution evidence, publisher-origin/signature
-  verification evidence, and durable audit evidence.
+  validation, minimal subprocess environment isolation, network declaration
+  validation, contract-only dry-run evidence, constrained subprocess execution
+  evidence, publisher-origin/signature verification evidence, and durable audit
+  evidence.
