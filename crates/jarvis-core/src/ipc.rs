@@ -3267,7 +3267,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .expect("diagnostics export");
         assert_eq!(export.health.status, "ok");
         assert!(export.repository_backed);
-        assert_eq!(export.schema_version, Some(6));
+        assert_eq!(export.schema_version, Some(7));
         assert_eq!(export.task_count, Some(1));
         assert!(export.audit_entry_count.unwrap_or_default() >= 2);
         assert_eq!(export.model_route_record_count, Some(1));
