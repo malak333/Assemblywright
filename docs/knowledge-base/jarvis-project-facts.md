@@ -295,8 +295,9 @@ These notes capture durable facts for future agents working on this repository.
   --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `cargo
   test --workspace -- --ignored`, `cargo build --workspace`, `cargo run -p
   jarvis-cli -- smoke`, `./scripts/release-operator-qa-smoke.sh`, `cargo
-  package --workspace --allow-dirty`, `swift test --package-path apps/mac`,
-  and `swift build --package-path apps/mac`.
+  package --workspace --allow-dirty`,
+  `./scripts/package-distribution.sh --unsigned-launch-check`, `swift test
+  --package-path apps/mac`, and `swift build --package-path apps/mac`.
   It also runs `./scripts/storage-migration-backup-smoke.sh` so file-backed
   migration backup/recovery stays part of the default local release evidence.
 - The current E2E expectation for Rust/CLI foundation changes is
@@ -381,11 +382,11 @@ These notes capture durable facts for future agents working on this repository.
   artifacts, assembles `target/distribution/Jarvis.app`, optionally ad-hoc signs
   when `codesign` is available, creates an unsigned `/Applications` installer
   package, and inspects the package payload for the app executable, bundled
-  core, and `Info.plist`. Its `--unsigned-launch-check` mode also launches the
-  release-built app executable with an isolated temporary HOME, verifies the
-  bundled core over loopback IPC, and checks command, audit, diagnostics,
-  pause/block/resume, and SQLite state through the release app layout. Full mode
-  requires the owner's Developer ID
+  core, and `Info.plist`. Its `--unsigned-launch-check` mode is part of
+  `./scripts/release-local.sh`, launches the release-built app executable with
+  an isolated temporary HOME, verifies the bundled core over loopback IPC, and
+  checks command, audit, diagnostics, pause/block/resume, and SQLite state
+  through the release app layout. Full mode requires the owner's Developer ID
   Application, Developer ID Installer, and notarytool credentials; signs with
   hardened runtime and microphone entitlements; notarizes and staples the app
   zip; then creates, signs, notarizes, and staples a `/Applications` installer

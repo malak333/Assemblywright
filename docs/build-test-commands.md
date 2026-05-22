@@ -25,6 +25,7 @@ cargo build --workspace
 cargo run -p jarvis-cli -- smoke
 ./scripts/release-operator-qa-smoke.sh
 cargo package --workspace --allow-dirty
+./scripts/package-distribution.sh --unsigned-launch-check
 swift test --package-path apps/mac
 swift build --package-path apps/mac
 ```
@@ -347,7 +348,9 @@ Swift contract/model proof for Mac app model changes, including scheduler
 notification authorization, due/failed request creation, duplicate suppression,
 and denied-permission fail-closed behavior through a fake adapter.
 `./scripts/package-distribution.sh` is the stricter distribution packaging
-lane. Its `--check` mode validates local tool availability and the entitlements
+lane, and `--unsigned-launch-check` is now part of `./scripts/release-local.sh`
+so release-built app layout regressions are caught by the default gate. Its
+`--check` mode validates local tool availability and the entitlements
 template without Apple credentials. Its `--unsigned-structure-check` mode
 builds and inspects the release app/pkg structure without Developer ID
 credentials. Its `--unsigned-launch-check` mode also launches the release-built

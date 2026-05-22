@@ -217,7 +217,9 @@ and inspects the package payload for the app executable, bundled core, and
 The unsigned launch check additionally launches the release-built app
 executable with an isolated temporary HOME and verifies app-supervised core
 health, command, audit, diagnostics, pause/block/resume behavior, and SQLite
-state through the bundled core.
+state through the bundled core. It is also part of the default
+`./scripts/release-local.sh` local release gate so distribution-layout launch
+regressions fail the standard proof path.
 The full `package-distribution.sh` lane owns Developer ID signing,
 notarization, stapling, microphone entitlement packaging, and signed installer
 package creation when Apple credentials are provided. It still does not replace
