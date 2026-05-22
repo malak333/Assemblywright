@@ -511,6 +511,8 @@ struct JarvisMacCoreTests {
                 return (response, schedulerJobJSON(id: jobId))
             case "/activity/summary":
                 return (response, activitySummaryJSON(taskId: jobId))
+            case "/activity/events":
+                return (response, activityEventsSSE(taskId: jobId))
             case "/emergency-pause":
                 return (response, Data(#"{"paused":false,"reason":null,"paused_at":null,"resumed_at":"2026-05-20T12:00:00Z","cancelled_scheduler_jobs":0}"#.utf8))
             default:
@@ -555,6 +557,7 @@ struct JarvisMacCoreTests {
         )
         _ = try await client.schedulerJob(id: jobId)
         _ = try await client.activitySummary()
+        _ = try await client.activityEvents(maxEvents: 2, intervalMilliseconds: 500)
         _ = try await client.pauseStatus()
 
         #expect(requests.map(\.method) == [
@@ -571,6 +574,7 @@ struct JarvisMacCoreTests {
             "GET",
             "GET",
             "POST",
+            "GET",
             "GET",
             "GET",
             "GET"
@@ -591,6 +595,7 @@ struct JarvisMacCoreTests {
             "/scheduler/jobs",
             "/scheduler/jobs/\(jobId.uuidString)",
             "/activity/summary",
+            "/activity/events",
             "/emergency-pause"
         ])
         #expect(requests[3].body?["key"] as? String == "release-gate")
@@ -660,6 +665,19 @@ struct JarvisMacCoreTests {
         #expect(summary.statusCounts.contains(JarvisActivityStatusCount(status: "completed", count: 1)))
         #expect(summary.recentTasks.first?.id == taskId)
         #expect(summary.recentAuditEntries.first?.eventType == "plugin_completed")
+    }
+
+    @Test("Activity event stream parses bounded server-sent summaries and errors")
+    func parsesActivityEventStream() throws {
+        let taskId = UUID()
+        let events = try JarvisActivityEvent.parseServerSentEvents(activityEventsSSE(taskId: taskId))
+
+        #expect(events.count == 2)
+        #expect(events.first?.event == "activity_summary")
+        #expect(events.first?.summary?.recentTasks.first?.id == taskId)
+        #expect(events.first?.summary?.activeTaskCount == 1)
+        #expect(events.last?.event == "activity_error")
+        #expect(events.last?.error == "repository unavailable")
     }
 
     @Test("Management payloads decode memory items")
@@ -1806,6 +1824,24 @@ struct JarvisMacCoreTests {
         ])
     }
 
+    @MainActor
+    @Test("Run management model watches bounded activity events")
+    func runManagementModelWatchesActivityEvents() async {
+        let taskId = UUID()
+        let summary = try! JSONDecoder().decode(
+            JarvisActivitySummary.self,
+            from: activitySummaryJSON(taskId: taskId)
+        )
+        let event = JarvisActivityEvent(sequence: 0, event: "activity_summary", summary: summary, error: nil)
+        let model = RunManagementModel(client: FakeCoreClient(activityEvents: [event]))
+
+        await model.watchActivity()
+
+        #expect(model.activityEvents == [event])
+        #expect(model.activitySummary?.recentTasks.first?.id == taskId)
+        #expect(model.lastError == nil)
+    }
+
     @Test("Supervisor configuration builds jarvis-cli serve arguments")
     func supervisorConfigurationBuildsLaunchArguments() {
         let databaseURL = URL(fileURLWithPath: "/tmp/jarvis-test.sqlite")
@@ -2121,6 +2157,21 @@ struct JarvisMacCoreTests {
                 }
               ]
             }
+            """.utf8
+        )
+    }
+
+    private func activityEventsSSE(taskId: UUID) -> Data {
+        let summary = String(decoding: activitySummaryJSON(taskId: taskId), as: UTF8.self)
+            .replacingOccurrences(of: "\n", with: "")
+        return Data(
+            """
+            event: activity_summary
+            data: \(summary)
+
+            event: activity_error
+            data: {"error":"repository unavailable"}
+
             """.utf8
         )
     }
@@ -2620,6 +2671,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     private var healthResults: [Result<JarvisHealth, Error>]
     private var tasks: [JarvisTask]
     private var auditEntries: [JarvisAuditEntry]
+    private var activityEvents: [JarvisActivityEvent]
     private(set) var submittedCommands: [JarvisCommandRequest]
     private var contractResponse: JarvisContractResponse?
     private var approvals: [JarvisPendingApproval]
@@ -2638,6 +2690,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         healthResults: [Result<JarvisHealth, Error>] = [.success(sampleHealth())],
         tasks: [JarvisTask] = [],
         auditEntries: [JarvisAuditEntry] = [],
+        activityEvents: [JarvisActivityEvent] = [],
         contractResponse: JarvisContractResponse? = nil,
         approvals: [JarvisPendingApproval] = [],
         pluginManifests: [JarvisPluginManifest] = [],
@@ -2649,6 +2702,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         self.healthResults = healthResults
         self.tasks = tasks
         self.auditEntries = auditEntries
+        self.activityEvents = activityEvents
         self.submittedCommands = []
         self.contractResponse = contractResponse
         self.approvals = approvals
@@ -2743,6 +2797,17 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
             recentTasks: Array(tasks.suffix(5).reversed()),
             recentAuditEntries: Array(auditEntries.suffix(10).reversed())
         )
+    }
+
+    func activityEvents(maxEvents: Int, intervalMilliseconds: Int) async throws -> [JarvisActivityEvent] {
+        if !activityEvents.isEmpty {
+            return activityEvents
+        }
+
+        let summary = try await activitySummary()
+        return [
+            JarvisActivityEvent(sequence: 0, event: "activity_summary", summary: summary, error: nil)
+        ]
     }
 
     func listMemoryItems(includeDeleted: Bool) async throws -> [JarvisMemoryItem] {

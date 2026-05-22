@@ -363,6 +363,73 @@ public struct JarvisActivitySummary: Decodable, Equatable, Sendable {
     }
 }
 
+public struct JarvisActivityEvent: Equatable, Identifiable, Sendable {
+    public var sequence: Int
+    public var event: String
+    public var summary: JarvisActivitySummary?
+    public var error: String?
+
+    public var id: Int { sequence }
+
+    public static func parseServerSentEvents(_ data: Data) throws -> [JarvisActivityEvent] {
+        let stream = String(decoding: data, as: UTF8.self)
+        let decoder = JSONDecoder()
+        return try stream
+            .components(separatedBy: "\n\n")
+            .enumerated()
+            .compactMap { index, block in
+                let parsed = parseEventBlock(block)
+                guard let event = parsed.event, let payload = parsed.data?.data(using: .utf8) else {
+                    return nil
+                }
+
+                switch event {
+                case "activity_summary":
+                    return JarvisActivityEvent(
+                        sequence: index,
+                        event: event,
+                        summary: try decoder.decode(JarvisActivitySummary.self, from: payload),
+                        error: nil
+                    )
+                case "activity_error":
+                    let body = try decoder.decode(JarvisActivityEventError.self, from: payload)
+                    return JarvisActivityEvent(
+                        sequence: index,
+                        event: event,
+                        summary: nil,
+                        error: body.error
+                    )
+                default:
+                    return JarvisActivityEvent(
+                        sequence: index,
+                        event: event,
+                        summary: nil,
+                        error: String(decoding: payload, as: UTF8.self)
+                    )
+                }
+            }
+    }
+
+    private static func parseEventBlock(_ block: String) -> (event: String?, data: String?) {
+        var event: String?
+        var dataLines: [String] = []
+
+        for line in block.split(separator: "\n", omittingEmptySubsequences: false) {
+            if line.hasPrefix("event:") {
+                event = String(line.dropFirst("event:".count)).trimmingCharacters(in: .whitespaces)
+            } else if line.hasPrefix("data:") {
+                dataLines.append(String(line.dropFirst("data:".count)).trimmingCharacters(in: .whitespaces))
+            }
+        }
+
+        return (event, dataLines.isEmpty ? nil : dataLines.joined(separator: "\n"))
+    }
+}
+
+private struct JarvisActivityEventError: Decodable {
+    var error: String
+}
+
 public struct JarvisRuntimeStep: Decodable, Equatable, Sendable {
     public var index: Int
     public var message: String
@@ -1267,6 +1334,7 @@ public protocol JarvisCoreClient: Sendable {
     func task(id: UUID) async throws -> JarvisTask
     func listAuditEntries(taskId: UUID?) async throws -> [JarvisAuditEntry]
     func activitySummary() async throws -> JarvisActivitySummary
+    func activityEvents(maxEvents: Int, intervalMilliseconds: Int) async throws -> [JarvisActivityEvent]
     func listMemoryItems(includeDeleted: Bool) async throws -> [JarvisMemoryItem]
     func memoryClassification(includeDeleted: Bool) async throws -> JarvisMemoryClassificationSummary
     func createMemoryItem(_ request: JarvisCreateMemoryItemRequest) async throws -> JarvisMemoryItem
@@ -1348,6 +1416,26 @@ public final class JarvisIPCClient: JarvisCoreClient {
 
     public func activitySummary() async throws -> JarvisActivitySummary {
         try await send(path: "/activity/summary", method: "GET", body: Optional<Data>.none)
+    }
+
+    public func activityEvents(maxEvents: Int = 2, intervalMilliseconds: Int = 500) async throws -> [JarvisActivityEvent] {
+        let boundedMaxEvents = min(max(maxEvents, 1), 16)
+        let boundedInterval = max(intervalMilliseconds, 100)
+        let path = "/activity/events?max_events=\(boundedMaxEvents)&interval_ms=\(boundedInterval)"
+        var request = URLRequest(url: endpoint.url(path: path))
+        request.httpMethod = "GET"
+        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw JarvisIPCError.invalidResponse
+        }
+
+        guard (200..<300).contains(http.statusCode) else {
+            throw JarvisIPCError.httpStatus(http.statusCode, String(decoding: data, as: UTF8.self))
+        }
+
+        return try JarvisActivityEvent.parseServerSentEvents(data)
     }
 
     public func listMemoryItems(includeDeleted: Bool = false) async throws -> [JarvisMemoryItem] {

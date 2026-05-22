@@ -254,6 +254,7 @@ public final class RunManagementModel: ObservableObject {
     @Published public private(set) var tasks: [JarvisTask]
     @Published public private(set) var auditEntries: [JarvisAuditEntry]
     @Published public private(set) var activitySummary: JarvisActivitySummary?
+    @Published public private(set) var activityEvents: [JarvisActivityEvent]
     @Published public private(set) var isLoading: Bool
     @Published public private(set) var lastError: String?
 
@@ -264,6 +265,7 @@ public final class RunManagementModel: ObservableObject {
         self.tasks = []
         self.auditEntries = []
         self.activitySummary = nil
+        self.activityEvents = []
         self.isLoading = false
         self.lastError = nil
     }
@@ -282,6 +284,19 @@ public final class RunManagementModel: ObservableObject {
     public func refreshAudit(taskId: UUID?) async {
         await run {
             self.auditEntries = try await self.client.listAuditEntries(taskId: taskId)
+        }
+    }
+
+    public func watchActivity(maxEvents: Int = 2, intervalMilliseconds: Int = 500) async {
+        await run {
+            let events = try await self.client.activityEvents(
+                maxEvents: maxEvents,
+                intervalMilliseconds: intervalMilliseconds
+            )
+            self.activityEvents = events
+            if let latest = events.compactMap(\.summary).last {
+                self.activitySummary = latest
+            }
         }
     }
 

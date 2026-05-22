@@ -43,7 +43,10 @@ These notes capture durable facts for future agents working on this repository.
 - Repository-backed IPC also exposes `/activity/events`, and the CLI exposes
   `jarvis activity watch`, as bounded server-sent events carrying activity
   summary snapshots. This is local progress-streaming evidence for current
-  task/audit state, not per-token model streaming.
+  task/audit state, not per-token model streaming. The Swift Runs tab can
+  manually watch a bounded event stream, decode `activity_summary` and
+  `activity_error` frames, and update the visible activity summary from the
+  latest event without opening an unbounded background listener.
 - Installed `local_subprocess` plugins can emit bounded newline-delimited
   stderr JSON frames with `jarvis_progress: true`, `stage`, and `message`.
   Jarvis records parsed sequence/stage/message events in the run response and
