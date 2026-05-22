@@ -912,6 +912,29 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert!(!all_audit_encoded.contains("raw stderr secret"));
     assert!(!all_audit_encoded.contains("ignored"));
 
+    let progress_activity_events = run_cli_text([
+        "activity",
+        "watch",
+        "--max-events",
+        "1",
+        "--interval-ms",
+        "100",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert!(
+        progress_activity_events.contains("event: activity_progress"),
+        "{progress_activity_events}"
+    );
+    assert!(
+        progress_activity_events.contains("\"stage\":\"complete\""),
+        "{progress_activity_events}"
+    );
+    assert!(
+        !progress_activity_events.contains("raw stderr secret"),
+        "{progress_activity_events}"
+    );
+
     let approval_command = run_cli_json([
         "command",
         "plugin approval echo needs user approval",

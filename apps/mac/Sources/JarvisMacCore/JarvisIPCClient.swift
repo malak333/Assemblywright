@@ -363,10 +363,37 @@ public struct JarvisActivitySummary: Decodable, Equatable, Sendable {
     }
 }
 
+public struct JarvisActivityProgressEvent: Decodable, Equatable, Sendable {
+    public var auditId: UUID
+    public var taskId: UUID?
+    public var createdAt: String
+    public var pluginId: String?
+    public var action: String?
+    public var sessionId: UUID?
+    public var sequence: Int?
+    public var stage: String?
+    public var message: String?
+    public var stderrRedacted: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case auditId = "audit_id"
+        case taskId = "task_id"
+        case createdAt = "created_at"
+        case pluginId = "plugin_id"
+        case action
+        case sessionId = "session_id"
+        case sequence
+        case stage
+        case message
+        case stderrRedacted = "stderr_redacted"
+    }
+}
+
 public struct JarvisActivityEvent: Equatable, Identifiable, Sendable {
     public var sequence: Int
     public var event: String
     public var summary: JarvisActivitySummary?
+    public var progress: JarvisActivityProgressEvent?
     public var error: String?
 
     public var id: Int { sequence }
@@ -389,6 +416,15 @@ public struct JarvisActivityEvent: Equatable, Identifiable, Sendable {
                         sequence: index,
                         event: event,
                         summary: try decoder.decode(JarvisActivitySummary.self, from: payload),
+                        progress: nil,
+                        error: nil
+                    )
+                case "activity_progress":
+                    return JarvisActivityEvent(
+                        sequence: index,
+                        event: event,
+                        summary: nil,
+                        progress: try decoder.decode(JarvisActivityProgressEvent.self, from: payload),
                         error: nil
                     )
                 case "activity_error":
@@ -397,6 +433,7 @@ public struct JarvisActivityEvent: Equatable, Identifiable, Sendable {
                         sequence: index,
                         event: event,
                         summary: nil,
+                        progress: nil,
                         error: body.error
                     )
                 default:
@@ -404,6 +441,7 @@ public struct JarvisActivityEvent: Equatable, Identifiable, Sendable {
                         sequence: index,
                         event: event,
                         summary: nil,
+                        progress: nil,
                         error: String(decoding: payload, as: UTF8.self)
                     )
                 }

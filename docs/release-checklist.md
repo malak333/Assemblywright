@@ -131,7 +131,9 @@ stage or when a PR needs focused evidence for one ownership slice.
   is allowed.
 - Confirm installed subprocess progress frames are bounded to parsed
   sequence/stage/message events, append `installed_plugin_progress` audit
-  evidence, and do not expose raw stderr in responses or audit payloads.
+  evidence, emit redacted `activity_progress` SSE frames through
+  `/activity/events`, and do not expose raw stderr in responses, event streams,
+  or audit payloads.
 - Confirm persistent audit entries remain append-only in SQLite tests.
 - Confirm route, policy, approval, action, and failure evidence stay covered
   before claiming an end-to-end assistant release. The current command path

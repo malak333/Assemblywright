@@ -14,9 +14,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use tokio::net::TcpListener;
-use tokio_stream::{wrappers::IntervalStream, StreamExt};
+use tokio_stream::wrappers::IntervalStream;
 use tower_http::trace::TraceLayer;
 use uuid::Uuid;
+
+use futures_util::StreamExt as FuturesStreamExt;
 
 use crate::storage::{
     EmergencyPauseState as StoredEmergencyPauseState, MemoryClassificationSummary, NewMemoryItem,
@@ -239,6 +241,27 @@ pub struct ActivityEventsQuery {
     pub interval_ms: Option<u64>,
     #[serde(default)]
     pub max_events: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ActivityProgressEvent {
+    pub audit_id: Uuid,
+    #[serde(default)]
+    pub task_id: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
+    #[serde(default)]
+    pub plugin_id: Option<String>,
+    #[serde(default)]
+    pub action: Option<String>,
+    #[serde(default)]
+    pub session_id: Option<Uuid>,
+    #[serde(default)]
+    pub sequence: Option<u64>,
+    #[serde(default)]
+    pub stage: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+    pub stderr_redacted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2966,26 +2989,88 @@ async fn activity_events(
         .unwrap_or(DEFAULT_ACTIVITY_EVENT_LIMIT)
         .clamp(1, MAX_ACTIVITY_EVENT_LIMIT);
     let stream_state = state.clone();
-    let stream = IntervalStream::new(tokio::time::interval(interval))
-        .take(max_events)
-        .map(move |_| {
-            let event = match stream_state.activity_summary() {
-                Ok(summary) => Event::default().event("activity_summary").data(
-                    serde_json::to_string(&summary).unwrap_or_else(|error| {
-                        json!({
-                            "error": format!("serialize activity summary: {error}")
-                        })
-                        .to_string()
-                    }),
-                ),
-                Err(error) => Event::default()
+    let stream = FuturesStreamExt::flat_map(
+        FuturesStreamExt::take(
+            IntervalStream::new(tokio::time::interval(interval)),
+            max_events,
+        ),
+        move |_| {
+            let events = match stream_state.activity_summary() {
+                Ok(summary) => {
+                    let mut events = vec![Event::default().event("activity_summary").data(
+                        serde_json::to_string(&summary).unwrap_or_else(|error| {
+                            json!({
+                                "error": format!("serialize activity summary: {error}")
+                            })
+                            .to_string()
+                        }),
+                    )];
+                    for progress in activity_progress_events_from_summary(&summary) {
+                        events.push(Event::default().event("activity_progress").data(
+                            serde_json::to_string(&progress).unwrap_or_else(|error| {
+                                json!({
+                                    "error": format!("serialize activity progress: {error}")
+                                })
+                                .to_string()
+                            }),
+                        ));
+                    }
+                    events
+                }
+                Err(error) => vec![Event::default()
                     .event("activity_error")
-                    .data(json!({ "error": error.to_string() }).to_string()),
+                    .data(json!({ "error": error.to_string() }).to_string())],
             };
-            Ok(event)
-        });
+            tokio_stream::iter(events.into_iter().map(Ok))
+        },
+    );
 
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+fn activity_progress_events_from_summary(summary: &ActivitySummary) -> Vec<ActivityProgressEvent> {
+    summary
+        .recent_audit_entries
+        .iter()
+        .filter(|entry| entry.event_type == "installed_plugin_progress")
+        .filter_map(activity_progress_event_from_audit)
+        .collect()
+}
+
+fn activity_progress_event_from_audit(entry: &AuditEntry) -> Option<ActivityProgressEvent> {
+    let payload = entry.payload.as_object()?;
+    let session_id = payload
+        .get("session_id")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| Uuid::parse_str(value).ok());
+
+    Some(ActivityProgressEvent {
+        audit_id: entry.id,
+        task_id: entry.task_id,
+        created_at: entry.created_at,
+        plugin_id: payload
+            .get("plugin_id")
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned),
+        action: payload
+            .get("action")
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned),
+        session_id,
+        sequence: payload.get("sequence").and_then(serde_json::Value::as_u64),
+        stage: payload
+            .get("stage")
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned),
+        message: payload
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned),
+        stderr_redacted: payload
+            .get("stderr_redacted")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true),
+    })
 }
 
 async fn list_model_routes(
@@ -3480,8 +3565,8 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "activity_events",
             "implemented",
-            "Repository-backed `/activity/events` exposes bounded task/audit event batches and is covered by CLI IPC E2E.",
-            "This is bounded state polling over SSE, not per-token model streaming or plugin-internal progress streaming.",
+            "Repository-backed `/activity/events` exposes bounded task/audit event batches plus redacted installed-plugin progress frames and is covered by CLI IPC E2E.",
+            "This is bounded state polling over SSE from audit evidence, not per-token model streaming or unbounded plugin-internal progress streaming.",
         ),
         feature(
             "scheduler_attention",
@@ -4207,6 +4292,22 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert_eq!(progress_entries.len(), 2);
         assert_eq!(progress_entries[0].payload["stage"], "prepare");
         assert_eq!(progress_entries[0].payload["stderr_redacted"], true);
+
+        let summary = state.activity_summary().expect("activity summary");
+        let activity_progress = activity_progress_events_from_summary(&summary);
+        assert_eq!(activity_progress.len(), 2);
+        assert_eq!(
+            activity_progress[0].plugin_id.as_deref(),
+            Some("local_runner_test")
+        );
+        assert_eq!(activity_progress[0].action.as_deref(), Some("inspect"));
+        assert_eq!(activity_progress[0].stage.as_deref(), Some("complete"));
+        assert_eq!(
+            activity_progress[0].message.as_deref(),
+            Some("writing validated output")
+        );
+        assert!(activity_progress[0].stderr_redacted);
+        assert_eq!(activity_progress[1].stage.as_deref(), Some("prepare"));
 
         let encoded_response = serde_json::to_string(&response).expect("response JSON");
         let encoded_audit = serde_json::to_string(&audit_entries).expect("audit JSON");

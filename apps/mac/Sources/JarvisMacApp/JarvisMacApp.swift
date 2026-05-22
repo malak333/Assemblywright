@@ -1158,7 +1158,7 @@ struct RunActivityEventView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 8) {
-                Label(event.event, systemImage: event.error == nil ? "waveform.path" : "exclamationmark.triangle")
+                Label(event.event, systemImage: eventIcon)
                     .font(.caption)
                     .foregroundStyle(event.error == nil ? Color.secondary : Color.orange)
                 Spacer()
@@ -1172,6 +1172,12 @@ struct RunActivityEventView: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
+            } else if let progress = event.progress {
+                Text(progressLabel(progress))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+                    .textSelection(.enabled)
             } else if let error = event.error {
                 Text(error)
                     .font(.caption2)
@@ -1180,6 +1186,24 @@ struct RunActivityEventView: View {
             }
         }
         .padding(.vertical, 4)
+    }
+
+    private var eventIcon: String {
+        if event.error != nil {
+            return "exclamationmark.triangle"
+        }
+        if event.progress != nil {
+            return "point.3.connected.trianglepath.dotted"
+        }
+        return "waveform.path"
+    }
+
+    private func progressLabel(_ progress: JarvisActivityProgressEvent) -> String {
+        let plugin = progress.pluginId ?? "installed plugin"
+        let stage = progress.stage ?? "progress"
+        let message = progress.message ?? "progress event"
+        let sequence = progress.sequence.map { " #\($0)" } ?? ""
+        return "\(plugin)\(sequence) \(stage): \(message)"
     }
 }
 
