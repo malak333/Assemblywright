@@ -98,6 +98,12 @@ require_artifact_validation_mode() {
   esac
 }
 
+require_production_signature_validation() {
+  if [[ "$VALIDATE_LOCAL_SIGNATURES" != true && "${JARVIS_EVIDENCE_SELF_TEST_MODE:-}" != true ]]; then
+    fail "JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false is only allowed during --self-test"
+  fi
+}
+
 require_json_contains() {
   local label="$1"
   local path="$2"
@@ -107,6 +113,30 @@ require_json_contains() {
   if ! grep -F "$expected" "$path" >/dev/null 2>&1; then
     fail "$label does not include required evidence text: $expected"
   fi
+}
+
+require_json_bool_true() {
+  local label="$1"
+  local path="$2"
+  local dotted_key="$3"
+  require_file "$label" "$path"
+  python3 - "$path" "$dotted_key" "$label" <<'PY'
+import json
+import sys
+
+path, dotted_key, label = sys.argv[1:4]
+with open(path, encoding="utf-8") as handle:
+    data = json.load(handle)
+
+cursor = data
+for segment in dotted_key.split("."):
+    if not isinstance(cursor, dict) or segment not in cursor:
+        raise SystemExit(f"{label} is missing required evidence flag: {dotted_key}")
+    cursor = cursor[segment]
+
+if cursor is not True:
+    raise SystemExit(f"{label} required evidence flag is not true: {dotted_key}")
+PY
 }
 
 validate_zip_payload() {
@@ -285,6 +315,7 @@ JSON
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
     JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
     JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
     JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
     JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
@@ -296,6 +327,79 @@ JSON
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"reports_archived": true'
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"local_signature_validation": false'
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"plugin_trust_qa_report"'
+
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="$tmp_dir/dist/Jarvis-0.1.4.zip" \
+    JARVIS_EVIDENCE_PKG_PATH="$tmp_dir/dist/Jarvis-0.1.4.pkg" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/forbidden-bundle.json" \
+    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+    "$0" --bundle >/dev/null 2>&1; then
+    fail "release evidence self-test expected production bundle to reject disabled local signature validation"
+  fi
+
+  cat >"$tmp_dir/incomplete-live.json" <<'JSON'
+{
+  "validation_flags": {
+    "manual_release_qa": true
+  },
+  "proof_boundary": "incomplete self-test fixture"
+}
+JSON
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="$tmp_dir/dist/Jarvis-0.1.4.zip" \
+    JARVIS_EVIDENCE_PKG_PATH="$tmp_dir/dist/Jarvis-0.1.4.pkg" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/incomplete-live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/incomplete-live-bundle.json" \
+    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
+    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+    "$0" --bundle >/dev/null 2>&1; then
+    fail "release evidence self-test expected incomplete live-device report to be rejected"
+  fi
+
+  cat >"$tmp_dir/incomplete-plugin.json" <<'JSON'
+{
+  "validation_flags": {
+    "manual_trust_review": true
+  },
+  "proof_boundary": "incomplete self-test fixture"
+}
+JSON
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="$tmp_dir/dist/Jarvis-0.1.4.zip" \
+    JARVIS_EVIDENCE_PKG_PATH="$tmp_dir/dist/Jarvis-0.1.4.pkg" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/incomplete-plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/incomplete-plugin-bundle.json" \
+    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
+    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+    "$0" --bundle >/dev/null 2>&1; then
+    fail "release evidence self-test expected incomplete plugin-trust report to be rejected"
+  fi
+
   printf 'Jarvis release evidence bundle self-test: ok\n'
   printf 'Proof boundary: fake artifacts and reports validate bundle mechanics only; no production evidence was created.\n'
   exit 0
@@ -327,9 +431,14 @@ fi
 require_dir "signed app bundle" "$APP_PATH"
 require_file "signed app zip" "$ZIP_PATH"
 require_file "signed installer package" "$PKG_PATH"
+require_production_signature_validation
 validate_local_distribution_evidence
-require_json_contains "live-device QA report" "$LIVE_QA_REPORT" '"manual_release_qa": true'
-require_json_contains "plugin trust QA report" "$PLUGIN_QA_REPORT" '"manual_trust_review": true'
+for flag in clean_profile finder_launch microphone speech_permission audio_output notification restart manual_release_qa; do
+  require_json_bool_true "live-device QA report" "$LIVE_QA_REPORT" "validation_flags.$flag"
+done
+for flag in marketplace_review malware_scan os_sandbox egress_enforcement signed_publisher_policy manual_trust_review; do
+  require_json_bool_true "plugin trust QA report" "$PLUGIN_QA_REPORT" "validation_flags.$flag"
+done
 require_true JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED
 require_true JARVIS_EVIDENCE_NOTARIZATION_VALIDATED
 require_true JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED

@@ -327,7 +327,9 @@ owner validation flags into a final bundle manifest path. `--self-test` uses
 fake artifacts/reports only; `--bundle` writes a manifest after the referenced
 evidence exists, the owner flags are true, and the local app signature,
 app stapling ticket, installer signature, installer stapling ticket, and app
-zip payload validate.
+zip payload validate. Production bundle creation keeps local signature
+validation mandatory and parses every required live-device/plugin-trust report
+flag before writing evidence.
 
 The production-readiness sweep is coordinated through isolated worktrees and
 topic branches against the public repository
