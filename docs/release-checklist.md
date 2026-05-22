@@ -53,6 +53,11 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   file/report inventory only, not proof that signing, notarization,
   installation, Finder launch, live-device QA, marketplace review, malware
   scanning, or OS sandboxing was performed.
+- Confirm the live-device QA report is `present`, not `invalid`, before using
+  external evidence mode. Evidence-status semantically checks the expected
+  bundle ID, short/build version, non-self-test identity, and ordered UTC
+  voice-check timestamps; weak or stale hand-written reports must keep
+  `live_voice_loop` pending.
 - Confirm `jarvis release --help`, `jarvis release readiness --help`, and
   `jarvis release evidence-status --help` preserve the same read-only,
   IPC-first/local-fallback, evidence-mode, and file/report-inspection

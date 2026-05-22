@@ -161,6 +161,117 @@ fn release_readiness_cli_uses_explicit_live_voice_evidence() {
 }
 
 #[test]
+fn release_readiness_rejects_semantically_invalid_live_voice_evidence() {
+    let endpoint = format!("http://{}", unused_loopback_addr());
+
+    fn wrong_bundle_id(report: &mut Value) {
+        report["app_bundle"]["bundle_identifier"] = json!("com.example.StaleJarvis");
+    }
+    fn wrong_version(report: &mut Value) {
+        report["app_bundle"]["short_version"] = json!("9.9.9");
+    }
+    fn bad_started_timestamp(report: &mut Value) {
+        report["owner_recorded_live_voice_evidence"]["voice_check_started_at"] =
+            json!("not-a-timestamp");
+    }
+    fn reversed_timestamps(report: &mut Value) {
+        report["owner_recorded_live_voice_evidence"]["voice_check_started_at"] =
+            json!("2026-05-22T16:05:00Z");
+        report["owner_recorded_live_voice_evidence"]["voice_check_completed_at"] =
+            json!("2026-05-22T16:00:00Z");
+    }
+    fn self_test_fixture(report: &mut Value) {
+        report["self_test_fixture"] = json!(true);
+    }
+
+    for (name, mutate, detail_fragment) in [
+        (
+            "wrong bundle id",
+            wrong_bundle_id as fn(&mut Value),
+            "app_bundle.bundle_identifier",
+        ),
+        (
+            "wrong version",
+            wrong_version as fn(&mut Value),
+            "app_bundle.short_version",
+        ),
+        (
+            "bad started timestamp",
+            bad_started_timestamp as fn(&mut Value),
+            "voice_check_started_at",
+        ),
+        (
+            "reversed timestamps",
+            reversed_timestamps as fn(&mut Value),
+            "voice_check_completed_at",
+        ),
+        (
+            "self-test fixture",
+            self_test_fixture as fn(&mut Value),
+            "self-test fixture",
+        ),
+    ] {
+        let temp_dir = tempfile::tempdir().expect("temp live QA report");
+        let live_report_path = temp_dir
+            .path()
+            .join(format!("release-live-device-qa-report-{name}.json"));
+        let mut report = valid_live_device_qa_report();
+        mutate(&mut report);
+        write_live_device_qa_report(&live_report_path, report);
+        let report_path = live_report_path
+            .to_str()
+            .expect("live report path is UTF-8")
+            .to_string();
+
+        let evidence_status = run_cli_json_with_env(
+            [
+                "release",
+                "evidence-status",
+                "--endpoint",
+                endpoint.as_str(),
+            ],
+            &[("JARVIS_QA_REPORT_PATH", report_path.as_str())],
+        );
+        let live_item = evidence_status["items"]
+            .as_array()
+            .expect("evidence items")
+            .iter()
+            .find(|item| item["key"] == "live_device_qa_report")
+            .unwrap_or_else(|| panic!("missing live-device QA item for {name}"));
+        assert_eq!(live_item["status"], "invalid", "{name}: {live_item}");
+        assert!(
+            live_item["detail"]
+                .as_str()
+                .expect("detail string")
+                .contains(detail_fragment),
+            "{name}: {live_item}"
+        );
+
+        let readiness = run_cli_json_with_env(
+            ["release", "readiness", "--endpoint", endpoint.as_str()],
+            &[
+                ("JARVIS_QA_REPORT_PATH", report_path.as_str()),
+                ("JARVIS_RELEASE_READINESS_EVIDENCE_MODE", "external"),
+            ],
+        );
+        assert_array_contains(&readiness["pending_features"], "key", "live_voice_loop");
+        assert!(!readiness["implemented_features"]
+            .as_array()
+            .expect("implemented features")
+            .iter()
+            .any(|feature| feature["key"] == "live_voice_loop"));
+        assert!(readiness["blocking_manual_gates"]
+            .as_array()
+            .expect("blocking gates")
+            .iter()
+            .any(|gate| gate
+                .as_str()
+                .expect("gate string")
+                .contains("live microphone")));
+    }
+}
+
+#[test]
 fn release_evidence_status_cli_falls_back_without_running_server() {
     let endpoint = format!("http://{}", unused_loopback_addr());
 
@@ -3470,8 +3581,8 @@ fn run_cli_with_env<const N: usize>(args: [&str; N], env: &[(&str, &str)]) -> Ou
     output
 }
 
-fn write_valid_live_device_qa_report(path: &Path) {
-    let report = json!({
+fn valid_live_device_qa_report() -> Value {
+    json!({
         "schema_version": 1,
         "evidence_type": "owner_recorded_live_device_qa",
         "self_test_fixture": false,
@@ -3521,7 +3632,14 @@ fn write_valid_live_device_qa_report(path: &Path) {
             "audio_output_device_label": "Built-in speakers"
         },
         "proof_boundary": "Owner-recorded live device QA fixture for CLI E2E."
-    });
+    })
+}
+
+fn write_valid_live_device_qa_report(path: &Path) {
+    write_live_device_qa_report(path, valid_live_device_qa_report());
+}
+
+fn write_live_device_qa_report(path: &Path, report: Value) {
     fs::write(
         path,
         serde_json::to_string_pretty(&report).expect("serialize live QA report"),

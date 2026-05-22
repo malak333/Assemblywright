@@ -62,6 +62,19 @@ after preserving the relevant QA reports:
 cargo run -p jarvis-cli -- release readiness
 ```
 
+Evidence-aware readiness only accepts a live-device QA report that passes
+`release evidence-status` semantic checks: schema/type, `self_test_fixture=false`,
+expected bundle ID, matching short/build version, and ordered UTC voice-check
+timestamps. Wrong bundle/version metadata, malformed timestamps, reversed
+timestamps, or a self-test fixture leave `live_voice_loop` pending.
+
+Focused regression checks for that release evidence boundary:
+
+```sh
+cargo test -p jarvis-core live_device_qa_report -- --nocapture
+cargo test -p jarvis-cli --test local_ipc_e2e release_readiness_rejects_semantically_invalid_live_voice_evidence -- --nocapture
+```
+
 For manual inspection, `jarvis-cli health` calls a loopback HTTP server, so
 start the server first.
 

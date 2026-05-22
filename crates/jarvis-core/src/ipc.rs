@@ -49,6 +49,43 @@ pub const MAX_SCHEDULER_BACKGROUND_LIMIT: usize = 64;
 pub const DEFAULT_ACTIVITY_EVENT_INTERVAL_MS: u64 = 1_000;
 pub const DEFAULT_ACTIVITY_EVENT_LIMIT: usize = 3;
 pub const MAX_ACTIVITY_EVENT_LIMIT: usize = 50;
+const LIVE_DEVICE_QA_REQUIRED_FIELDS: &[&str] = &[
+    "schema_version",
+    "evidence_type",
+    "validation_flags.clean_profile",
+    "validation_flags.finder_launch",
+    "validation_flags.microphone",
+    "validation_flags.speech_permission",
+    "validation_flags.transcript_handoff",
+    "validation_flags.audio_output",
+    "validation_flags.notification",
+    "validation_flags.restart",
+    "validation_flags.manual_release_qa",
+    "voice_loop.microphone_permission_prompt",
+    "voice_loop.speech_permission_prompt",
+    "voice_loop.spoken_transcript_handoff",
+    "voice_loop.same_command_path",
+    "voice_loop.speech_output_playback",
+    "app_bundle.bundle_identifier",
+    "app_bundle.short_version",
+    "app_bundle.build_version",
+    "app_bundle.microphone_usage_description",
+    "app_bundle.speech_recognition_usage_description",
+    "owner_recorded_live_voice_evidence.owner_name",
+    "owner_recorded_live_voice_evidence.device_label",
+    "owner_recorded_live_voice_evidence.profile_label",
+    "owner_recorded_live_voice_evidence.voice_check_started_at",
+    "owner_recorded_live_voice_evidence.voice_check_completed_at",
+    "owner_recorded_live_voice_evidence.microphone_evidence_note",
+    "owner_recorded_live_voice_evidence.speech_permission_evidence_note",
+    "owner_recorded_live_voice_evidence.transcript_handoff_evidence_note",
+    "owner_recorded_live_voice_evidence.audio_output_evidence_note",
+    "voice_command_observation.test_phrase",
+    "voice_command_observation.observed_transcript",
+    "voice_command_observation.observed_command_text",
+    "voice_command_observation.command_result_evidence_id",
+    "voice_command_observation.audio_output_device_label",
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContractMetadata {
@@ -3886,43 +3923,7 @@ fn release_evidence_status_from_env() -> ReleaseEvidenceStatusResponse {
             "live_device_qa_report",
             "Live-device QA report",
             live_qa_report,
-            &[
-                "schema_version",
-                "evidence_type",
-                "validation_flags.clean_profile",
-                "validation_flags.finder_launch",
-                "validation_flags.microphone",
-                "validation_flags.speech_permission",
-                "validation_flags.transcript_handoff",
-                "validation_flags.audio_output",
-                "validation_flags.notification",
-                "validation_flags.restart",
-                "validation_flags.manual_release_qa",
-                "voice_loop.microphone_permission_prompt",
-                "voice_loop.speech_permission_prompt",
-                "voice_loop.spoken_transcript_handoff",
-                "voice_loop.same_command_path",
-                "voice_loop.speech_output_playback",
-                "app_bundle.bundle_identifier",
-                "app_bundle.short_version",
-                "app_bundle.build_version",
-                "app_bundle.microphone_usage_description",
-                "app_bundle.speech_recognition_usage_description",
-                "owner_recorded_live_voice_evidence.owner_name",
-                "owner_recorded_live_voice_evidence.device_label",
-                "owner_recorded_live_voice_evidence.profile_label",
-                "owner_recorded_live_voice_evidence.voice_check_started_at",
-                "owner_recorded_live_voice_evidence.voice_check_completed_at",
-                "owner_recorded_live_voice_evidence.microphone_evidence_note",
-                "owner_recorded_live_voice_evidence.speech_permission_evidence_note",
-                "owner_recorded_live_voice_evidence.transcript_handoff_evidence_note",
-                "owner_recorded_live_voice_evidence.audio_output_evidence_note",
-                "voice_command_observation.test_phrase",
-                "voice_command_observation.observed_transcript",
-                "voice_command_observation.observed_command_text",
-                "voice_command_observation.command_result_evidence_id",
-                "voice_command_observation.audio_output_device_label",
-            ],
+            LIVE_DEVICE_QA_REQUIRED_FIELDS,
         ),
         release_json_report_item(
             "plugin_trust_qa_report",
@@ -4120,33 +4121,8 @@ fn inspect_release_json_report(
         .collect::<Vec<_>>();
     if missing.is_empty() {
         if key == "live_device_qa_report" {
-            if value
-                .get("schema_version")
-                .and_then(|schema| schema.as_i64())
-                != Some(1)
-            {
-                return (
-                    ReleaseEvidenceItemStatus::Invalid,
-                    "JSON report schema_version must be 1".to_string(),
-                );
-            }
-            if value.get("evidence_type").and_then(|kind| kind.as_str())
-                != Some("owner_recorded_live_device_qa")
-            {
-                return (
-                    ReleaseEvidenceItemStatus::Invalid,
-                    "JSON report evidence_type must be owner_recorded_live_device_qa".to_string(),
-                );
-            }
-            if value
-                .get("self_test_fixture")
-                .and_then(|fixture| fixture.as_bool())
-                .unwrap_or(true)
-            {
-                return (
-                    ReleaseEvidenceItemStatus::Invalid,
-                    "JSON report must not be marked as a self-test fixture".to_string(),
-                );
+            if let Err(error) = validate_live_device_qa_report(&value) {
+                return (ReleaseEvidenceItemStatus::Invalid, error);
             }
         }
         (
@@ -4164,9 +4140,108 @@ fn inspect_release_json_report(
     }
 }
 
+fn validate_live_device_qa_report(value: &serde_json::Value) -> Result<(), String> {
+    if value
+        .get("schema_version")
+        .and_then(|schema| schema.as_i64())
+        != Some(1)
+    {
+        return Err("JSON report schema_version must be 1".to_string());
+    }
+    if value.get("evidence_type").and_then(|kind| kind.as_str())
+        != Some("owner_recorded_live_device_qa")
+    {
+        return Err("JSON report evidence_type must be owner_recorded_live_device_qa".to_string());
+    }
+    if value
+        .get("self_test_fixture")
+        .and_then(|fixture| fixture.as_bool())
+        .unwrap_or(true)
+    {
+        return Err("JSON report must not be marked as a self-test fixture".to_string());
+    }
+
+    let expected_bundle_id = env_value_alias(
+        "JARVIS_QA_EXPECTED_BUNDLE_ID",
+        "JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID",
+        "com.nobiletechnology.jarvis",
+    );
+    let expected_version = expected_live_qa_version();
+    require_json_string_value(value, "app_bundle.bundle_identifier", &expected_bundle_id)?;
+    require_json_string_value(value, "app_bundle.short_version", &expected_version)?;
+    require_json_string_value(value, "app_bundle.build_version", &expected_version)?;
+
+    let started_at = require_utc_report_timestamp(
+        value,
+        "owner_recorded_live_voice_evidence.voice_check_started_at",
+    )?;
+    let completed_at = require_utc_report_timestamp(
+        value,
+        "owner_recorded_live_voice_evidence.voice_check_completed_at",
+    )?;
+    if completed_at < started_at {
+        return Err("JSON report voice_check_completed_at must be greater than or equal to voice_check_started_at".to_string());
+    }
+
+    Ok(())
+}
+
+fn env_value_alias(primary: &str, alias: &str, default: &str) -> String {
+    std::env::var(primary)
+        .or_else(|_| std::env::var(alias))
+        .unwrap_or_else(|_| default.to_string())
+}
+
+fn expected_live_qa_version() -> String {
+    std::env::var("JARVIS_QA_EXPECTED_VERSION")
+        .or_else(|_| std::env::var("JARVIS_EVIDENCE_VERSION"))
+        .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string())
+}
+
+fn require_json_string_value(
+    value: &serde_json::Value,
+    dotted_path: &str,
+    expected: &str,
+) -> Result<(), String> {
+    let found = json_string_at(value, dotted_path)
+        .ok_or_else(|| format!("JSON report is missing required field: {dotted_path}"))?;
+    if found == expected {
+        Ok(())
+    } else {
+        Err(format!(
+            "JSON report {dotted_path} mismatch: expected {expected}, got {found}"
+        ))
+    }
+}
+
+fn require_utc_report_timestamp(
+    value: &serde_json::Value,
+    dotted_path: &str,
+) -> Result<DateTime<Utc>, String> {
+    let found = json_string_at(value, dotted_path)
+        .ok_or_else(|| format!("JSON report is missing required field: {dotted_path}"))?;
+    if !found.ends_with('Z') {
+        return Err(format!(
+            "JSON report {dotted_path} must be a UTC RFC3339 timestamp ending in Z"
+        ));
+    }
+    DateTime::parse_from_rfc3339(&found)
+        .map(|parsed| parsed.with_timezone(&Utc))
+        .map_err(|_| format!("JSON report {dotted_path} must be a UTC RFC3339 timestamp"))
+}
+
+fn json_string_at(value: &serde_json::Value, dotted_path: &str) -> Option<String> {
+    dotted_path
+        .split('.')
+        .try_fold(value, |current, key| current.get(key))
+        .and_then(|found| found.as_str())
+        .map(ToString::to_string)
+}
+
 fn release_json_present_detail(key: &str) -> String {
     match key {
         "release_evidence_bundle" => "JSON report exists and required owner-recorded fields are present; signed_distribution and notarization are report flags and are not revalidated by evidence-status".to_string(),
+        "live_device_qa_report" => "JSON report exists, required owner-recorded fields are present, and release metadata plus timestamps match expected values; live-device claims are still owner-recorded external evidence".to_string(),
         _ => "JSON report exists and required owner-recorded fields are present; external claims are not revalidated by evidence-status".to_string(),
     }
 }
@@ -4909,9 +4984,10 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
 
     #[test]
     fn release_evidence_json_report_details_distinguish_presence_from_revalidation() {
-        let generic_detail = release_json_present_detail("live_device_qa_report");
-        assert!(generic_detail.contains("required owner-recorded fields"));
-        assert!(generic_detail.contains("external claims are not revalidated"));
+        let live_detail = release_json_present_detail("live_device_qa_report");
+        assert!(live_detail.contains("required owner-recorded fields"));
+        assert!(live_detail.contains("release metadata plus timestamps"));
+        assert!(live_detail.contains("owner-recorded external evidence"));
 
         let bundle_detail = release_json_present_detail("release_evidence_bundle");
         assert!(bundle_detail.contains("signed_distribution"));
@@ -4920,107 +4996,151 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert!(bundle_detail.contains("not revalidated by evidence-status"));
     }
 
-    #[test]
-    fn live_device_qa_report_rejects_self_test_fixture_identity() {
+    fn valid_live_device_qa_report_json() -> serde_json::Value {
+        json!({
+            "schema_version": 1,
+            "evidence_type": "owner_recorded_live_device_qa",
+            "self_test_fixture": false,
+            "validation_flags": {
+                "clean_profile": true,
+                "finder_launch": true,
+                "microphone": true,
+                "speech_permission": true,
+                "transcript_handoff": true,
+                "audio_output": true,
+                "notification": true,
+                "restart": true,
+                "manual_release_qa": true
+            },
+            "voice_loop": {
+                "microphone_permission_prompt": true,
+                "speech_permission_prompt": true,
+                "spoken_transcript_handoff": true,
+                "same_command_path": true,
+                "speech_output_playback": true
+            },
+            "app_bundle": {
+                "bundle_identifier": "com.nobiletechnology.jarvis",
+                "short_version": "0.1.4",
+                "build_version": "0.1.4",
+                "microphone_usage_description": "fixture",
+                "speech_recognition_usage_description": "fixture"
+            },
+            "owner_recorded_live_voice_evidence": {
+                "owner_name": "Release Operator",
+                "device_label": "Clean-profile release Mac",
+                "profile_label": "Clean macOS QA profile",
+                "voice_check_started_at": "2026-05-22T16:00:00Z",
+                "voice_check_completed_at": "2026-05-22T16:05:00Z",
+                "microphone_evidence_note": "Microphone prompt observed.",
+                "speech_permission_evidence_note": "Speech prompt observed.",
+                "transcript_handoff_evidence_note": "Transcript handoff observed.",
+                "audio_output_evidence_note": "Audio output observed."
+            },
+            "voice_command_observation": {
+                "test_phrase": "Jarvis status check.",
+                "observed_transcript": "Jarvis status check.",
+                "observed_command_text": "status check",
+                "command_result_evidence_id": "task:fixture",
+                "audio_output_device_label": "Built-in speakers"
+            }
+        })
+    }
+
+    fn inspect_live_device_qa_report_value(
+        value: serde_json::Value,
+    ) -> (ReleaseEvidenceItemStatus, String) {
         let report_path = tempfile::NamedTempFile::new().expect("temp live QA report");
         std::fs::write(
             report_path.path(),
-            serde_json::to_string_pretty(&json!({
-                "schema_version": 1,
-                "evidence_type": "owner_recorded_live_device_qa",
-                "self_test_fixture": true,
-                "validation_flags": {
-                    "clean_profile": true,
-                    "finder_launch": true,
-                    "microphone": true,
-                    "speech_permission": true,
-                    "transcript_handoff": true,
-                    "audio_output": true,
-                    "notification": true,
-                    "restart": true,
-                    "manual_release_qa": true
-                },
-                "voice_loop": {
-                    "microphone_permission_prompt": true,
-                    "speech_permission_prompt": true,
-                    "spoken_transcript_handoff": true,
-                    "same_command_path": true,
-                    "speech_output_playback": true
-                },
-                "app_bundle": {
-                    "bundle_identifier": "com.nobiletechnology.jarvis",
-                    "short_version": "0.1.4",
-                    "build_version": "0.1.4",
-                    "microphone_usage_description": "fixture",
-                    "speech_recognition_usage_description": "fixture"
-                },
-                "owner_recorded_live_voice_evidence": {
-                    "owner_name": "Release Operator",
-                    "device_label": "Clean-profile release Mac",
-                    "profile_label": "Clean macOS QA profile",
-                    "voice_check_started_at": "2026-05-22T16:00:00Z",
-                    "voice_check_completed_at": "2026-05-22T16:05:00Z",
-                    "microphone_evidence_note": "Microphone prompt observed.",
-                    "speech_permission_evidence_note": "Speech prompt observed.",
-                    "transcript_handoff_evidence_note": "Transcript handoff observed.",
-                    "audio_output_evidence_note": "Audio output observed."
-                },
-                "voice_command_observation": {
-                    "test_phrase": "Jarvis status check.",
-                    "observed_transcript": "Jarvis status check.",
-                    "observed_command_text": "status check",
-                    "command_result_evidence_id": "task:fixture",
-                    "audio_output_device_label": "Built-in speakers"
-                }
-            }))
-            .expect("serialize live QA fixture"),
+            serde_json::to_string_pretty(&value).expect("serialize live QA fixture"),
         )
         .expect("write live QA fixture");
 
-        let (status, detail) = inspect_release_json_report(
+        inspect_release_json_report(
             "live_device_qa_report",
             report_path.path(),
-            &[
-                "schema_version",
-                "evidence_type",
-                "validation_flags.clean_profile",
-                "validation_flags.finder_launch",
-                "validation_flags.microphone",
-                "validation_flags.speech_permission",
-                "validation_flags.transcript_handoff",
-                "validation_flags.audio_output",
-                "validation_flags.notification",
-                "validation_flags.restart",
-                "validation_flags.manual_release_qa",
-                "voice_loop.microphone_permission_prompt",
-                "voice_loop.speech_permission_prompt",
-                "voice_loop.spoken_transcript_handoff",
-                "voice_loop.same_command_path",
-                "voice_loop.speech_output_playback",
-                "app_bundle.bundle_identifier",
-                "app_bundle.short_version",
-                "app_bundle.build_version",
-                "app_bundle.microphone_usage_description",
-                "app_bundle.speech_recognition_usage_description",
-                "owner_recorded_live_voice_evidence.owner_name",
-                "owner_recorded_live_voice_evidence.device_label",
-                "owner_recorded_live_voice_evidence.profile_label",
-                "owner_recorded_live_voice_evidence.voice_check_started_at",
-                "owner_recorded_live_voice_evidence.voice_check_completed_at",
-                "owner_recorded_live_voice_evidence.microphone_evidence_note",
-                "owner_recorded_live_voice_evidence.speech_permission_evidence_note",
-                "owner_recorded_live_voice_evidence.transcript_handoff_evidence_note",
-                "owner_recorded_live_voice_evidence.audio_output_evidence_note",
-                "voice_command_observation.test_phrase",
-                "voice_command_observation.observed_transcript",
-                "voice_command_observation.observed_command_text",
-                "voice_command_observation.command_result_evidence_id",
-                "voice_command_observation.audio_output_device_label",
-            ],
-        );
+            LIVE_DEVICE_QA_REQUIRED_FIELDS,
+        )
+    }
 
+    #[test]
+    fn live_device_qa_report_accepts_semantically_valid_owner_report() {
+        let (status, detail) =
+            inspect_live_device_qa_report_value(valid_live_device_qa_report_json());
+        assert_eq!(status, ReleaseEvidenceItemStatus::Present);
+        assert!(
+            detail.contains("release metadata plus timestamps"),
+            "{detail}"
+        );
+    }
+
+    #[test]
+    fn live_device_qa_report_rejects_self_test_fixture_identity() {
+        let mut report = valid_live_device_qa_report_json();
+        report["self_test_fixture"] = json!(true);
+        let (status, detail) = inspect_live_device_qa_report_value(report);
         assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
         assert!(detail.contains("self-test fixture"));
+    }
+
+    #[test]
+    fn live_device_qa_report_rejects_wrong_bundle_identifier() {
+        let mut report = valid_live_device_qa_report_json();
+        report["app_bundle"]["bundle_identifier"] = json!("com.example.StaleJarvis");
+        let (status, detail) = inspect_live_device_qa_report_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("app_bundle.bundle_identifier"), "{detail}");
+    }
+
+    #[test]
+    fn live_device_qa_report_rejects_wrong_short_version() {
+        let mut report = valid_live_device_qa_report_json();
+        report["app_bundle"]["short_version"] = json!("9.9.9");
+        let (status, detail) = inspect_live_device_qa_report_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("app_bundle.short_version"), "{detail}");
+    }
+
+    #[test]
+    fn live_device_qa_report_rejects_wrong_build_version() {
+        let mut report = valid_live_device_qa_report_json();
+        report["app_bundle"]["build_version"] = json!("9.9.9");
+        let (status, detail) = inspect_live_device_qa_report_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("app_bundle.build_version"), "{detail}");
+    }
+
+    #[test]
+    fn live_device_qa_report_rejects_bad_started_timestamp() {
+        let mut report = valid_live_device_qa_report_json();
+        report["owner_recorded_live_voice_evidence"]["voice_check_started_at"] =
+            json!("not-a-timestamp");
+        let (status, detail) = inspect_live_device_qa_report_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("voice_check_started_at"), "{detail}");
+    }
+
+    #[test]
+    fn live_device_qa_report_rejects_bad_completed_timestamp() {
+        let mut report = valid_live_device_qa_report_json();
+        report["owner_recorded_live_voice_evidence"]["voice_check_completed_at"] =
+            json!("2026-05-22T16:05:00-04:00");
+        let (status, detail) = inspect_live_device_qa_report_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("voice_check_completed_at"), "{detail}");
+    }
+
+    #[test]
+    fn live_device_qa_report_rejects_reversed_timestamps() {
+        let mut report = valid_live_device_qa_report_json();
+        report["owner_recorded_live_voice_evidence"]["voice_check_started_at"] =
+            json!("2026-05-22T16:05:00Z");
+        report["owner_recorded_live_voice_evidence"]["voice_check_completed_at"] =
+            json!("2026-05-22T16:00:00Z");
+        let (status, detail) = inspect_live_device_qa_report_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("voice_check_completed_at"), "{detail}");
     }
 
     fn release_evidence_status_fixture(
