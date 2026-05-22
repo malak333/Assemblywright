@@ -540,6 +540,8 @@ struct JarvisMacCoreTests {
                 return (response, contractJSON(exposesApprovalEndpoint: false))
             case "/release/readiness":
                 return (response, releaseReadinessJSON())
+            case "/release/evidence-status":
+                return (response, releaseEvidenceStatusJSON())
             case "/memory":
                 if request.httpMethod == "GET" {
                     return (response, Data("[]".utf8))
@@ -578,6 +580,7 @@ struct JarvisMacCoreTests {
 
         _ = try await client.contract()
         _ = try await client.releaseReadiness()
+        _ = try await client.releaseEvidenceStatus()
         _ = try await client.listMemoryItems(includeDeleted: true)
         _ = try await client.memoryClassification(includeDeleted: true)
         _ = try await client.createMemoryItem(
@@ -621,6 +624,7 @@ struct JarvisMacCoreTests {
             "GET",
             "GET",
             "GET",
+            "GET",
             "POST",
             "GET",
             "PATCH",
@@ -639,6 +643,7 @@ struct JarvisMacCoreTests {
         #expect(requests.map(\.path) == [
             "/contract",
             "/release/readiness",
+            "/release/evidence-status",
             "/memory",
             "/memory/classification",
             "/memory",
@@ -656,9 +661,9 @@ struct JarvisMacCoreTests {
             "/activity/events",
             "/emergency-pause"
         ])
-        #expect(requests[4].body?["key"] as? String == "release-gate")
-        #expect(requests[6].body?["value"] as? String == "preview then sync")
-        #expect(requests[13].body?["command"] as? String == "status check")
+        #expect(requests[5].body?["key"] as? String == "release-gate")
+        #expect(requests[7].body?["value"] as? String == "preview then sync")
+        #expect(requests[14].body?["command"] as? String == "status check")
     }
 
     @Test("Management payloads decode tasks and audit list")
@@ -1108,11 +1113,14 @@ struct JarvisMacCoreTests {
     @Test("Release readiness model loads conservative blockers")
     func releaseReadinessModelLoadsBlockers() async throws {
         let readiness = try JSONDecoder().decode(JarvisReleaseReadiness.self, from: releaseReadinessJSON())
-        let model = ReleaseReadinessModel(client: FakeCoreClient(releaseReadiness: readiness))
+        let evidence = try JSONDecoder().decode(JarvisReleaseEvidenceStatus.self, from: releaseEvidenceStatusJSON())
+        let model = ReleaseReadinessModel(client: FakeCoreClient(releaseReadiness: readiness, releaseEvidenceStatus: evidence))
 
         await model.refresh()
 
         #expect(model.readiness?.productionReady == false)
+        #expect(model.evidenceStatus?.complete == false)
+        #expect(model.evidenceStatus?.items.map(\.key).contains("live_device_qa_report") == true)
         #expect(model.readiness?.implementedFeatures.map(\.key).contains("repository_state") == true)
         #expect(model.readiness?.implementedFeatures.map(\.key).contains("release_evidence_bundle") == true)
         #expect(model.readiness?.pendingFeatures.map(\.key).contains("live_voice_loop") == true)
@@ -1120,6 +1128,31 @@ struct JarvisMacCoreTests {
         #expect(model.readiness?.blockingManualGates.contains("final release evidence bundle generated and archived after signed distribution, live-device QA, and plugin-trust QA reports exist") == true)
         #expect(model.readiness?.proofBoundary.contains("does not perform signing") == true)
         #expect(model.lastError == nil)
+        #expect(model.isShowingStaleReadiness == false)
+    }
+
+    @MainActor
+    @Test("Release readiness model marks cached readiness stale after refresh failure")
+    func releaseReadinessModelMarksCachedReadinessStaleAfterRefreshFailure() async throws {
+        let readiness = try JSONDecoder().decode(JarvisReleaseReadiness.self, from: releaseReadinessJSON())
+        let evidence = try JSONDecoder().decode(JarvisReleaseEvidenceStatus.self, from: releaseEvidenceStatusJSON())
+        let client = FakeCoreClient(
+            releaseReadinessResults: [
+                .success(readiness),
+                .failure(URLError(.cannotConnectToHost))
+            ],
+            releaseEvidenceStatus: evidence
+        )
+        let model = ReleaseReadinessModel(client: client)
+
+        await model.refresh()
+        #expect(model.readiness?.generatedAt == "2026-05-22T08:00:00Z")
+        #expect(model.isShowingStaleReadiness == false)
+
+        await model.refresh()
+        #expect(model.readiness?.generatedAt == "2026-05-22T08:00:00Z")
+        #expect(model.lastError != nil)
+        #expect(model.isShowingStaleReadiness == true)
     }
 
     @Test("Approval queue remains inspection-only when core has no approval endpoint")
@@ -2628,6 +2661,43 @@ private func releaseReadinessJSON() -> Data {
     )
 }
 
+private func releaseEvidenceStatusJSON() -> Data {
+    Data(
+        """
+        {
+          "generated_at": "2026-05-22T08:05:00Z",
+          "complete": false,
+          "satisfied_count": 3,
+          "missing_count": 5,
+          "invalid_count": 0,
+          "items": [
+            {
+              "key": "signed_app_bundle",
+              "label": "Signed app bundle",
+              "path": "target/distribution/Jarvis.app",
+              "kind": "directory",
+              "status": "present",
+              "required_for_production": true,
+              "manual_gate": true,
+              "detail": "directory exists"
+            },
+            {
+              "key": "live_device_qa_report",
+              "label": "Live-device QA report",
+              "path": "target/release-live-device-qa-report.json",
+              "kind": "json_report",
+              "status": "missing",
+              "required_for_production": true,
+              "manual_gate": true,
+              "detail": "expected JSON report is missing"
+            }
+          ],
+          "proof_boundary": "File/report inspection only; this endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
+        }
+        """.utf8
+    )
+}
+
 private func permissionPolicyReviewJSON(approvalId: UUID = UUID()) -> Data {
     Data(
         """
@@ -2920,6 +2990,8 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     private(set) var submittedCommands: [JarvisCommandRequest]
     private var contractResponse: JarvisContractResponse?
     private var releaseReadinessResponse: JarvisReleaseReadiness?
+    private var releaseReadinessResults: [Result<JarvisReleaseReadiness, Error>]
+    private var releaseEvidenceStatusResponse: JarvisReleaseEvidenceStatus?
     private var approvals: [JarvisPendingApproval]
     private var pluginManifests: [JarvisPluginManifest]
     private var installedPlugins: [JarvisInstalledPluginRecord]
@@ -2939,6 +3011,8 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         activityEvents: [JarvisActivityEvent] = [],
         contractResponse: JarvisContractResponse? = nil,
         releaseReadiness: JarvisReleaseReadiness? = nil,
+        releaseReadinessResults: [Result<JarvisReleaseReadiness, Error>] = [],
+        releaseEvidenceStatus: JarvisReleaseEvidenceStatus? = nil,
         approvals: [JarvisPendingApproval] = [],
         pluginManifests: [JarvisPluginManifest] = [],
         installedPlugins: [JarvisInstalledPluginRecord] = [],
@@ -2953,6 +3027,8 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         self.submittedCommands = []
         self.contractResponse = contractResponse
         self.releaseReadinessResponse = releaseReadiness
+        self.releaseReadinessResults = releaseReadinessResults
+        self.releaseEvidenceStatusResponse = releaseEvidenceStatus
         self.approvals = approvals
         self.pluginManifests = pluginManifests
         self.installedPlugins = installedPlugins
@@ -2996,11 +3072,22 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     }
 
     func releaseReadiness() async throws -> JarvisReleaseReadiness {
+        if !releaseReadinessResults.isEmpty {
+            return try releaseReadinessResults.removeFirst().get()
+        }
         if let releaseReadinessResponse {
             return releaseReadinessResponse
         }
 
         return try JSONDecoder().decode(JarvisReleaseReadiness.self, from: releaseReadinessJSON())
+    }
+
+    func releaseEvidenceStatus() async throws -> JarvisReleaseEvidenceStatus {
+        if let releaseEvidenceStatusResponse {
+            return releaseEvidenceStatusResponse
+        }
+
+        return try JSONDecoder().decode(JarvisReleaseEvidenceStatus.self, from: releaseEvidenceStatusJSON())
     }
 
     func submit(_ command: JarvisCommandRequest) async throws -> JarvisCommandResponse {

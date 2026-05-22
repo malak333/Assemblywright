@@ -74,10 +74,17 @@ These notes capture durable facts for future agents working on this repository.
   `operator_release_qa_smoke` is an implemented readiness feature for the local
   repository-backed operator QA lane; it does not clear clean-profile
   installed-app or live-device manual gates.
+- `/release/evidence-status` and `jarvis release evidence-status` expose the
+  standard release evidence doctor inventory as structured JSON with present,
+  missing, or invalid status for signed artifact paths, live-device QA report,
+  plugin-trust QA report, and final evidence bundle. This is file/report
+  inspection only; it does not prove signing, notarization, installation, Finder
+  launch, live-device QA, marketplace review, malware scanning, or OS sandboxing.
 - The Swift shell also decodes `/release/readiness` through
   `ReleaseReadinessModel` and renders a Release tab with blocking manual gates,
-  recommended commands, implemented proofs, pending features, and the proof
-  boundary. This remains inspection-only and does not perform signing,
+  recommended commands, implemented proofs, pending features, the proof
+  boundary, stale cached-readiness warning, and `/release/evidence-status`
+  inventory. This remains inspection-only and does not perform signing,
   notarization, installation, Finder/LaunchServices validation, or live-device
   validation.
 - `ConversationRuntime` supports bounded fake-model and provider-envelope
@@ -207,6 +214,10 @@ These notes capture durable facts for future agents working on this repository.
   the default local gate; `--self-test` uses fake artifacts/reports to prove the
   inventory mechanics only. A complete doctor run is diagnostic status, not
   proof that external validation happened.
+- The structured release evidence status endpoint mirrors the doctor inventory
+  for app/installer artifacts and JSON reports, including required owner-recorded
+  live-device and plugin-trust evidence fields, so the CLI and Swift Release tab
+  can show missing release evidence without parsing script text.
 - Enabled `local_subprocess` plugins run with an environment boundary: Jarvis
   clears the inherited app/core process environment before spawn and provides
   only a deterministic `PATH` plus `JARVIS_PLUGIN_ID`,
@@ -260,8 +271,9 @@ These notes capture durable facts for future agents working on this repository.
   first-party manifests. This surface is read-only and degrades to a warning
   while keeping first-party manifests visible when the repository-backed
   installed registry endpoint is unavailable.
-- The CLI has matching `release readiness`, `tasks`, `memory`, `scheduler`,
-  `diagnostics`, and `plugins` subcommands, including `plugins install`,
+- The CLI has matching `release readiness`, `release evidence-status`, `tasks`,
+  `memory`, `scheduler`, `diagnostics`, and `plugins` subcommands, including
+  `plugins install`,
   `plugins installed`, `plugins installed-get`, `plugins enable-installed`, `plugins
   verify-installed`, `plugins verify-publisher`,
   `plugins verify-publisher-signature`, `plugins disable-installed`, and

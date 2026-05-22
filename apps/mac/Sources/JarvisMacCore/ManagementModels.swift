@@ -3,6 +3,7 @@ import Foundation
 @MainActor
 public final class ReleaseReadinessModel: ObservableObject {
     @Published public private(set) var readiness: JarvisReleaseReadiness?
+    @Published public private(set) var evidenceStatus: JarvisReleaseEvidenceStatus?
     @Published public private(set) var isLoading: Bool
     @Published public private(set) var lastError: String?
 
@@ -11,8 +12,13 @@ public final class ReleaseReadinessModel: ObservableObject {
     public init(client: any JarvisCoreClient = JarvisIPCClient()) {
         self.client = client
         self.readiness = nil
+        self.evidenceStatus = nil
         self.isLoading = false
         self.lastError = nil
+    }
+
+    public var isShowingStaleReadiness: Bool {
+        readiness != nil && lastError != nil
     }
 
     public func refresh() async {
@@ -22,6 +28,7 @@ public final class ReleaseReadinessModel: ObservableObject {
 
         do {
             readiness = try await client.releaseReadiness()
+            evidenceStatus = try await client.releaseEvidenceStatus()
         } catch {
             lastError = String(describing: error)
         }

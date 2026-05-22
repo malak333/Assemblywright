@@ -140,18 +140,19 @@ action and scopes before recording `approval_executed` audit evidence. The
 Swift Approval Center exposes the same boundary by showing Run Approved only
 for approved records that do not already have execution audit evidence.
 
-## Build
+## Build And Test
+
+For executable PR evidence, run the canonical local release gate:
 
 ```sh
-cargo fmt --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-cargo build --workspace
-./scripts/storage-migration-backup-smoke.sh
-./scripts/release-operator-qa-smoke.sh
-swift test --package-path apps/mac
-swift build --package-path apps/mac
+./scripts/release-local.sh
 ```
+
+It wraps Rust fmt/clippy/tests, ignored release-proof tests, smoke scripts,
+unsigned release-layout launch checks, release evidence preflights/self-tests,
+and Swift build/test. Focused commands below are for local iteration or
+ownership-specific proof; they do not replace the full gate for executable
+changes.
 
 For the current IPC smoke path, start the local server and run CLI commands
 from a second terminal:
@@ -163,6 +164,10 @@ cargo run -p jarvis-cli -- health
 
 Use `cargo run -p jarvis-cli -- serve --db-path /tmp/jarvis.sqlite` when you
 want manual IPC commands to persist task and audit state locally.
+
+Use the following focused commands when iterating on the named surface, then run
+`./scripts/release-local.sh` before treating executable changes as release-gate
+evidence.
 
 For branches that touch SQLite migrations or file-backed repository startup,
 run the focused storage recovery proof:
@@ -271,13 +276,14 @@ installer stapling ticket, and app zip payload, then records SHA-256 digests
 for distribution artifacts and QA reports before writing the manifest.
 
 With a repository-backed server running, `jarvis release readiness`,
+`jarvis release evidence-status`,
 `jarvis tasks`, `jarvis memory`, `jarvis activity summary`,
 `jarvis activity watch`, `jarvis scheduler`, `jarvis diagnostics`, and
 `jarvis plugins` expose the current readiness evidence, durable state, status
 counts, recent task/audit progress, bounded activity events, redacted scheduler
 attention handoff, scheduler trigger policy review, redacted diagnostics,
-first-party plugin manifests, and disabled installed-plugin registry metadata
-over IPC.
+first-party plugin manifests, disabled installed-plugin registry metadata, and
+structured release evidence file/report inventory over IPC.
 
 ## Docs
 

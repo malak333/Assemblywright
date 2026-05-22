@@ -140,6 +140,11 @@ enum ReleaseCommand {
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
+    /// Print structured release evidence file/report status as JSON.
+    EvidenceStatus {
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -528,6 +533,9 @@ async fn main() -> anyhow::Result<()> {
         CliCommand::Release { command } => match command {
             ReleaseCommand::Readiness { endpoint } => {
                 println!("{}", release_readiness(&endpoint)?);
+            }
+            ReleaseCommand::EvidenceStatus { endpoint } => {
+                println!("{}", release_evidence_status(&endpoint)?);
             }
         },
         CliCommand::Smoke => {
@@ -1032,6 +1040,17 @@ fn release_readiness(endpoint: &str) -> anyhow::Result<String> {
         Err(error) if is_transport_unavailable(&error) => {
             let readiness = jarvis_core::IpcState::new().release_readiness();
             Ok(serde_json::to_string(&readiness)?)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn release_evidence_status(endpoint: &str) -> anyhow::Result<String> {
+    match request(endpoint, "GET", "/release/evidence-status", None) {
+        Ok(response) => Ok(response),
+        Err(error) if is_transport_unavailable(&error) => {
+            let status = jarvis_core::IpcState::new().release_evidence_status();
+            Ok(serde_json::to_string(&status)?)
         }
         Err(error) => Err(error),
     }

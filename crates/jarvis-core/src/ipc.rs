@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::convert::Infallible;
+use std::fs;
 use std::net::SocketAddr;
+use std::path::{Path as FsPath, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration as StdDuration;
 
@@ -111,6 +113,46 @@ pub struct ReleaseReadinessFeature {
     pub status: String,
     pub proof: String,
     pub boundary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReleaseEvidenceStatusResponse {
+    pub generated_at: DateTime<Utc>,
+    pub complete: bool,
+    pub satisfied_count: usize,
+    pub missing_count: usize,
+    pub invalid_count: usize,
+    pub items: Vec<ReleaseEvidenceStatusItem>,
+    pub proof_boundary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReleaseEvidenceStatusItem {
+    pub key: String,
+    pub label: String,
+    pub path: String,
+    pub kind: ReleaseEvidenceKind,
+    pub status: ReleaseEvidenceItemStatus,
+    pub required_for_production: bool,
+    pub manual_gate: bool,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReleaseEvidenceKind {
+    Directory,
+    File,
+    Executable,
+    JsonReport,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReleaseEvidenceItemStatus {
+    Present,
+    Missing,
+    Invalid,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -635,6 +677,7 @@ impl IpcState {
                 "/health".to_string(),
                 "/contract".to_string(),
                 "/release/readiness".to_string(),
+                "/release/evidence-status".to_string(),
                 "/diagnostics/export".to_string(),
                 "/plugins/manifests".to_string(),
                 "/plugins/manifests/:id".to_string(),
@@ -705,6 +748,10 @@ impl IpcState {
                 "Read-only summary derived from /contract feature metadata and release checklist blockers; it does not perform signing, notarization, installation, Finder/LaunchServices validation, live microphone/Speech validation, spoken transcript handoff, live audio-output validation, App Store review, marketplace plugin review, malware analysis, or OS sandbox enforcement."
                     .to_string(),
         }
+    }
+
+    pub fn release_evidence_status(&self) -> ReleaseEvidenceStatusResponse {
+        release_evidence_status_from_env()
     }
 
     fn command_runtime_label(&self) -> String {
@@ -2889,6 +2936,7 @@ pub fn router(state: IpcState) -> Router {
         .route("/health", get(health))
         .route("/contract", get(contract))
         .route("/release/readiness", get(release_readiness))
+        .route("/release/evidence-status", get(release_evidence_status))
         .route("/diagnostics/export", get(diagnostics_export))
         .route("/commands", post(command))
         .route("/tasks", get(list_tasks))
@@ -2982,6 +3030,12 @@ async fn contract(State(state): State<IpcState>) -> Json<ContractResponse> {
 
 async fn release_readiness(State(state): State<IpcState>) -> Json<ReleaseReadinessResponse> {
     Json(state.release_readiness())
+}
+
+async fn release_evidence_status(
+    State(state): State<IpcState>,
+) -> Json<ReleaseEvidenceStatusResponse> {
+    Json(state.release_evidence_status())
 }
 
 async fn diagnostics_export(
@@ -3577,6 +3631,7 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
         endpoint("GET", "/health", false, true),
         endpoint("GET", "/contract", false, true),
         endpoint("GET", "/release/readiness", false, true),
+        endpoint("GET", "/release/evidence-status", false, true),
         endpoint("GET", "/diagnostics/export", false, true),
         endpoint("POST", "/commands", false, false),
         endpoint("GET", "/tasks", true, false),
@@ -3649,6 +3704,322 @@ impl From<ContractFeature> for ReleaseReadinessFeature {
             boundary: feature.boundary,
         }
     }
+}
+
+fn release_evidence_status_from_env() -> ReleaseEvidenceStatusResponse {
+    let version = std::env::var("JARVIS_EVIDENCE_VERSION")
+        .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string());
+    let dist_dir = env_path("JARVIS_EVIDENCE_DIST_DIR", "target/distribution");
+    let app_path = env_path_or("JARVIS_EVIDENCE_APP_PATH", dist_dir.join("Jarvis.app"));
+    let zip_path = env_path_or(
+        "JARVIS_EVIDENCE_ZIP_PATH",
+        dist_dir.join(format!("Jarvis-{version}.zip")),
+    );
+    let pkg_path = env_path_or(
+        "JARVIS_EVIDENCE_PKG_PATH",
+        dist_dir.join(format!("Jarvis-{version}.pkg")),
+    );
+    let live_qa_report = env_path(
+        "JARVIS_QA_REPORT_PATH",
+        "target/release-live-device-qa-report.json",
+    );
+    let plugin_qa_report = env_path(
+        "JARVIS_PLUGIN_QA_REPORT_PATH",
+        "target/release-plugin-trust-qa-report.json",
+    );
+    let bundle_path = env_path(
+        "JARVIS_EVIDENCE_OUTPUT_PATH",
+        "target/release-evidence-bundle.json",
+    );
+
+    let mut items = vec![
+        release_path_item(
+            "signed_app_bundle",
+            "Signed app bundle",
+            app_path.clone(),
+            ReleaseEvidenceKind::Directory,
+        ),
+        release_path_item(
+            "app_executable",
+            "App executable",
+            app_path.join("Contents/MacOS/JarvisMacApp"),
+            ReleaseEvidenceKind::Executable,
+        ),
+        release_path_item(
+            "bundled_core_executable",
+            "Bundled core executable",
+            app_path.join("Contents/Resources/bin/jarvis-cli"),
+            ReleaseEvidenceKind::Executable,
+        ),
+        release_path_item(
+            "signed_app_zip",
+            "Signed app zip",
+            zip_path,
+            ReleaseEvidenceKind::File,
+        ),
+        release_path_item(
+            "signed_installer_package",
+            "Signed installer package",
+            pkg_path,
+            ReleaseEvidenceKind::File,
+        ),
+        release_json_report_item(
+            "live_device_qa_report",
+            "Live-device QA report",
+            live_qa_report,
+            &[
+                "validation_flags.clean_profile",
+                "validation_flags.finder_launch",
+                "validation_flags.microphone",
+                "validation_flags.speech_permission",
+                "validation_flags.transcript_handoff",
+                "validation_flags.audio_output",
+                "validation_flags.notification",
+                "validation_flags.restart",
+                "validation_flags.manual_release_qa",
+                "voice_loop.microphone_permission_prompt",
+                "voice_loop.speech_permission_prompt",
+                "voice_loop.spoken_transcript_handoff",
+                "voice_loop.same_command_path",
+                "voice_loop.speech_output_playback",
+                "owner_recorded_live_voice_evidence.owner_name",
+                "owner_recorded_live_voice_evidence.device_label",
+                "owner_recorded_live_voice_evidence.profile_label",
+                "owner_recorded_live_voice_evidence.voice_check_started_at",
+                "owner_recorded_live_voice_evidence.voice_check_completed_at",
+                "owner_recorded_live_voice_evidence.microphone_evidence_note",
+                "owner_recorded_live_voice_evidence.speech_permission_evidence_note",
+                "owner_recorded_live_voice_evidence.transcript_handoff_evidence_note",
+                "owner_recorded_live_voice_evidence.audio_output_evidence_note",
+            ],
+        ),
+        release_json_report_item(
+            "plugin_trust_qa_report",
+            "Plugin-trust QA report",
+            plugin_qa_report,
+            &[
+                "validation_flags.marketplace_review",
+                "validation_flags.malware_scan",
+                "validation_flags.os_sandbox",
+                "validation_flags.egress_enforcement",
+                "validation_flags.signed_publisher_policy",
+                "validation_flags.manual_trust_review",
+                "owner_recorded_plugin_trust_evidence.owner_name",
+                "owner_recorded_plugin_trust_evidence.review_started_at",
+                "owner_recorded_plugin_trust_evidence.review_completed_at",
+                "owner_recorded_plugin_trust_evidence.marketplace_evidence_note",
+                "owner_recorded_plugin_trust_evidence.malware_scan_evidence_note",
+                "owner_recorded_plugin_trust_evidence.os_sandbox_evidence_note",
+                "owner_recorded_plugin_trust_evidence.egress_evidence_note",
+                "owner_recorded_plugin_trust_evidence.signed_publisher_evidence_note",
+                "owner_recorded_plugin_trust_evidence.manual_review_evidence_note",
+            ],
+        ),
+        release_json_report_item(
+            "release_evidence_bundle",
+            "Release evidence bundle",
+            bundle_path,
+            &[
+                "validation_flags.signed_distribution",
+                "validation_flags.notarization",
+                "validation_flags.clean_profile",
+                "validation_flags.live_device_qa",
+                "validation_flags.plugin_trust_qa",
+                "validation_flags.reports_archived",
+                "version",
+            ],
+        ),
+    ];
+
+    if dist_dir != FsPath::new("target/distribution") {
+        items.push(release_path_item(
+            "distribution_directory",
+            "Distribution directory",
+            dist_dir,
+            ReleaseEvidenceKind::Directory,
+        ));
+    }
+
+    let satisfied_count = items
+        .iter()
+        .filter(|item| item.status == ReleaseEvidenceItemStatus::Present)
+        .count();
+    let missing_count = items
+        .iter()
+        .filter(|item| item.status == ReleaseEvidenceItemStatus::Missing)
+        .count();
+    let invalid_count = items
+        .iter()
+        .filter(|item| item.status == ReleaseEvidenceItemStatus::Invalid)
+        .count();
+
+    ReleaseEvidenceStatusResponse {
+        generated_at: Utc::now(),
+        complete: missing_count == 0 && invalid_count == 0,
+        satisfied_count,
+        missing_count,
+        invalid_count,
+        items,
+        proof_boundary:
+            "File/report inspection only; this endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
+                .to_string(),
+    }
+}
+
+fn env_path(key: &str, default: &str) -> PathBuf {
+    env_path_or(key, PathBuf::from(default))
+}
+
+fn env_path_or(key: &str, default: PathBuf) -> PathBuf {
+    std::env::var(key).map(PathBuf::from).unwrap_or(default)
+}
+
+fn release_path_item(
+    key: &str,
+    label: &str,
+    path: PathBuf,
+    kind: ReleaseEvidenceKind,
+) -> ReleaseEvidenceStatusItem {
+    let (status, detail) = inspect_release_path(&path, kind);
+    ReleaseEvidenceStatusItem {
+        key: key.to_string(),
+        label: label.to_string(),
+        path: path.display().to_string(),
+        kind,
+        status,
+        required_for_production: true,
+        manual_gate: true,
+        detail,
+    }
+}
+
+fn release_json_report_item(
+    key: &str,
+    label: &str,
+    path: PathBuf,
+    required_fields: &[&str],
+) -> ReleaseEvidenceStatusItem {
+    let (status, detail) = inspect_release_json_report(&path, required_fields);
+    ReleaseEvidenceStatusItem {
+        key: key.to_string(),
+        label: label.to_string(),
+        path: path.display().to_string(),
+        kind: ReleaseEvidenceKind::JsonReport,
+        status,
+        required_for_production: true,
+        manual_gate: true,
+        detail,
+    }
+}
+
+fn inspect_release_path(
+    path: &FsPath,
+    kind: ReleaseEvidenceKind,
+) -> (ReleaseEvidenceItemStatus, String) {
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(_) => {
+            return (
+                ReleaseEvidenceItemStatus::Missing,
+                "expected evidence path is missing".to_string(),
+            )
+        }
+    };
+
+    match kind {
+        ReleaseEvidenceKind::Directory if metadata.is_dir() => (
+            ReleaseEvidenceItemStatus::Present,
+            "directory exists".to_string(),
+        ),
+        ReleaseEvidenceKind::File if metadata.is_file() => (
+            ReleaseEvidenceItemStatus::Present,
+            "file exists".to_string(),
+        ),
+        ReleaseEvidenceKind::Executable if metadata.is_file() && is_executable(&metadata) => (
+            ReleaseEvidenceItemStatus::Present,
+            "executable file exists".to_string(),
+        ),
+        ReleaseEvidenceKind::Executable if metadata.is_file() => (
+            ReleaseEvidenceItemStatus::Invalid,
+            "file exists but is not executable".to_string(),
+        ),
+        _ => (
+            ReleaseEvidenceItemStatus::Invalid,
+            "path exists but has the wrong type".to_string(),
+        ),
+    }
+}
+
+fn inspect_release_json_report(
+    path: &FsPath,
+    required_fields: &[&str],
+) -> (ReleaseEvidenceItemStatus, String) {
+    let contents = match fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(_) => {
+            return (
+                ReleaseEvidenceItemStatus::Missing,
+                "expected JSON report is missing".to_string(),
+            )
+        }
+    };
+    let value: serde_json::Value = match serde_json::from_str(&contents) {
+        Ok(value) => value,
+        Err(error) => {
+            return (
+                ReleaseEvidenceItemStatus::Invalid,
+                format!("JSON report is invalid: {error}"),
+            )
+        }
+    };
+    let missing = required_fields
+        .iter()
+        .copied()
+        .filter(|field| !json_field_is_present(&value, field))
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        (
+            ReleaseEvidenceItemStatus::Present,
+            "JSON report exists and required fields are present".to_string(),
+        )
+    } else {
+        (
+            ReleaseEvidenceItemStatus::Invalid,
+            format!(
+                "JSON report is missing required fields: {}",
+                missing.join(", ")
+            ),
+        )
+    }
+}
+
+fn json_field_is_present(value: &serde_json::Value, dotted_path: &str) -> bool {
+    let Some(found) = dotted_path
+        .split('.')
+        .try_fold(value, |current, key| current.get(key))
+    else {
+        return false;
+    };
+
+    match found {
+        serde_json::Value::Bool(value) => *value,
+        serde_json::Value::String(value) => !value.trim().is_empty(),
+        serde_json::Value::Number(_) => true,
+        serde_json::Value::Array(values) => !values.is_empty(),
+        serde_json::Value::Object(values) => !values.is_empty(),
+        serde_json::Value::Null => false,
+    }
+}
+
+#[cfg(unix)]
+fn is_executable(metadata: &fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    metadata.permissions().mode() & 0o111 != 0
+}
+
+#[cfg(not(unix))]
+fn is_executable(metadata: &fs::Metadata) -> bool {
+    metadata.is_file()
 }
 
 fn release_blocking_manual_gates() -> Vec<String> {
@@ -3761,6 +4132,12 @@ fn contract_features() -> Vec<ContractFeature> {
             "implemented",
             "`package-distribution.sh --unsigned-launch-check` builds the release app layout, creates an unsigned installer payload, launches the release-built app executable with isolated HOME, and verifies bundled-core IPC smoke.",
             "Unsigned distribution-layout proof only; not Developer ID signing, notarization, stapling, /Applications install, Finder/LaunchServices validation, live device validation, App Store review, or manual QA.",
+        ),
+        feature(
+            "release_evidence_status",
+            "implemented",
+            "`/release/evidence-status` and `jarvis release evidence-status` expose structured present, missing, or invalid status for standard signed artifacts, QA reports, and final evidence bundle paths, with Rust, CLI E2E, and Swift model coverage.",
+            "Read-only file/report inventory only; it does not sign, notarize, install, Finder-launch, run live-device QA, review marketplace trust, scan malware, or enforce OS sandboxing.",
         ),
         feature(
             "release_evidence_bundle",
@@ -3978,6 +4355,9 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .contains(&"/release/readiness".to_string()));
         assert!(contract
             .safe_inspection_paths
+            .contains(&"/release/evidence-status".to_string()));
+        assert!(contract
+            .safe_inspection_paths
             .contains(&"/diagnostics/export".to_string()));
         assert!(contract
             .safe_inspection_paths
@@ -4002,6 +4382,13 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .iter()
             .any(|endpoint| endpoint.method == "GET"
                 && endpoint.path == "/release/readiness"
+                && !endpoint.repository_required
+                && endpoint.redacted));
+        assert!(contract
+            .endpoints
+            .iter()
+            .any(|endpoint| endpoint.method == "GET"
+                && endpoint.path == "/release/evidence-status"
                 && !endpoint.repository_required
                 && endpoint.redacted));
         assert!(contract
@@ -4099,6 +4486,12 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert!(readiness
             .implemented_features
             .iter()
+            .any(|feature| feature.key == "release_evidence_status"
+                && feature.proof.contains("/release/evidence-status")
+                && feature.boundary.contains("file/report inventory")));
+        assert!(readiness
+            .implemented_features
+            .iter()
             .any(|feature| feature.key == "scheduler_stale_running_recovery"
                 && feature.proof.contains("opt-in startup recovery")
                 && feature.boundary.contains("no default background recovery")));
@@ -4157,6 +4550,34 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert!(readiness
             .proof_boundary
             .contains("does not perform signing"));
+    }
+
+    #[test]
+    fn release_evidence_status_reports_missing_and_invalid_evidence_without_manual_claims() {
+        let missing_path = PathBuf::from("target/jarvis-test-missing-release-report.json");
+        let invalid_path = tempfile::NamedTempFile::new().expect("temp invalid report");
+        std::fs::write(invalid_path.path(), "{not-json").expect("write invalid json");
+
+        let (missing_status, missing_detail) =
+            inspect_release_json_report(&missing_path, &["validation_flags.clean_profile"]);
+        let (invalid_status, invalid_detail) =
+            inspect_release_json_report(invalid_path.path(), &["validation_flags.clean_profile"]);
+
+        assert_eq!(missing_status, ReleaseEvidenceItemStatus::Missing);
+        assert!(missing_detail.contains("missing"));
+        assert_eq!(invalid_status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(invalid_detail.contains("invalid"));
+
+        let state = IpcState::new();
+        let status = state.release_evidence_status();
+        assert!(!status.proof_boundary.contains("production ready"));
+        assert!(status.proof_boundary.contains("does not sign"));
+        assert!(status.items.iter().any(|item| {
+            item.key == "release_evidence_bundle"
+                && item.kind == ReleaseEvidenceKind::JsonReport
+                && item.required_for_production
+                && item.manual_gate
+        }));
     }
 
     #[test]
