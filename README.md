@@ -94,6 +94,9 @@ verification commands, and manual production blockers in read-only surfaces.
 The CLI command prefers a running IPC server but falls back to the same
 conservative local readiness summary when the server is unavailable, so release
 triage still works before starting the supervised core.
+Readiness feature metadata includes the repository-backed operator QA smoke as
+implemented local evidence, with clean-profile installed-app and live-device
+QA still listed as manual gates.
 The response keeps `production_ready: false` until Developer ID
 signing/notarization, clean-profile installer/Finder validation, live voice
 device checks, and manual QA are actually completed.

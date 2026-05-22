@@ -282,7 +282,9 @@ evidence proves only the current implemented foundation surfaces.
 core and verifies command, audit, routes, memory mutation/review/restore,
 scheduler attention/run-due, activity, permission review, diagnostics,
 emergency pause, release readiness, and restart recovery in one operator-facing
-CLI smoke. `./scripts/packaged-app-release-smoke.sh`
+CLI smoke. The same local lane is exposed as the implemented
+`operator_release_qa_smoke` contract feature so Swift and release docs can cite
+it without implying clean-profile installed-app QA. `./scripts/packaged-app-release-smoke.sh`
 adds local packaged app evidence by assembling a SwiftPM-built `Jarvis.app`
 with `Info.plist`, bundled `jarvis-cli`, ad-hoc signing plus audio-input
 entitlement evidence when `codesign` is available, temp-profile launch,

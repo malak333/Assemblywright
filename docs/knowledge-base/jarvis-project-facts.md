@@ -71,6 +71,9 @@ These notes capture durable facts for future agents working on this repository.
   complete. The CLI command prefers the IPC endpoint when it is running and
   falls back to the same local `IpcState` readiness summary when the server is
   unavailable, so operator triage does not require a prestarted core.
+  `operator_release_qa_smoke` is an implemented readiness feature for the local
+  repository-backed operator QA lane; it does not clear clean-profile
+  installed-app or live-device manual gates.
 - The Swift shell also decodes `/release/readiness` through
   `ReleaseReadinessModel` and renders a Release tab with blocking manual gates,
   recommended commands, implemented proofs, pending features, and the proof

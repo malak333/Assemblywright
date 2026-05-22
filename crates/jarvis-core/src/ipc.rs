@@ -3745,6 +3745,12 @@ fn contract_features() -> Vec<ContractFeature> {
             "Local ad-hoc proof only; Developer ID signing, notarization, installer, Finder, App Store, and entitlement validation remain manual/distribution gates.",
         ),
         feature(
+            "operator_release_qa_smoke",
+            "implemented",
+            "`release-operator-qa-smoke.sh` exercises repository-backed command, audit, route, memory, scheduler, activity, permission, diagnostics, pause, readiness, and restart paths in one local QA lane.",
+            "Local CLI/operator QA evidence only; not clean-profile installed-app QA, Finder/LaunchServices validation, live voice/audio validation, live notification delivery, notarization, or marketplace trust.",
+        ),
+        feature(
             "live_voice_loop",
             "pending_manual_validation",
             "Swift voice input and speech-output adapters have deterministic fake-adapter tests.",
