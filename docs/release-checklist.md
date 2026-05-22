@@ -38,9 +38,13 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   verification commands, and manual production blockers as this checklist.
   The CLI command should also return the conservative local readiness summary
   when no IPC server is running, while preserving the same production blockers.
-  Treat `production_ready: false` as authoritative until the external signing,
-  notarization, install, Finder/LaunchServices, live-device, and manual QA
-  gates are complete.
+  Treat default readiness as conservative inventory only. After owner-recorded
+  evidence exists, rerun readiness with
+  `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external` and confirm only
+  report-backed blockers are cleared. Treat `production_ready: false` as
+  authoritative until the signed artifacts, notarization/stapling,
+  live-device QA report, plugin-trust report, and final evidence bundle all
+  validate.
 - Confirm `jarvis release evidence-status` or `/release/evidence-status` reports
   the standard signed artifact, live-device QA report, plugin-trust QA report,
   and final evidence bundle inventory as structured JSON. Treat it as
@@ -431,6 +435,10 @@ Still future gates for production distribution:
   `owner_recorded_live_voice_evidence`, validation flags, and proof boundary,
   then preserve the `target/release-live-device-qa-report.json` artifact, or
   the `JARVIS_QA_REPORT_PATH` override, with the release notes.
+  Then rerun `jarvis release evidence-status` and
+  `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external jarvis release readiness`
+  against that report and confirm the live voice/audio readiness item is
+  cleared only from valid owner-recorded evidence.
 - Activity view shows current task state, active/status counts, and recent
   audit progress through `/activity/summary`.
 - CLI activity watch receives bounded `/activity/events` progress events.
@@ -491,6 +499,8 @@ Distribution packaging gate:
   not automated live-device proof. The resulting JSON report records
   owner-asserted validation flags, voice-loop evidence fields, owner-recorded
   live voice evidence notes, installed-app metadata, and proof boundary.
+  Confirm the same report is visible through `jarvis release evidence-status`
+  before using evidence-aware readiness language.
 
 ## Release Notes
 

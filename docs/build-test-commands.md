@@ -53,7 +53,10 @@ cargo run -p jarvis-cli -- smoke
 
 Release-readiness triage can run before starting a server. The command prefers
 `/release/readiness` from a running IPC endpoint, then falls back to the same
-conservative local summary when the endpoint is unavailable:
+conservative local summary when the endpoint is unavailable. By default it
+treats standard release reports as inventory only; release operators can enable
+evidence-aware blocker clearing with `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external`
+after preserving the relevant QA reports:
 
 ```sh
 cargo run -p jarvis-cli -- release readiness
@@ -284,8 +287,10 @@ export. `jarvis diagnostics export` exposes aggregate active, unreviewed, and
 sensitive memory counts when repository backing is enabled.
 `jarvis release readiness` is read-only and summarizes implemented feature
 proofs, pending feature boundaries, recommended verification commands, and
-manual production blockers with `production_ready: false` until the external
-distribution and live-device gates are completed.
+manual production blockers. Evidence-aware mode can clear the live voice/audio
+blocker only from a valid live-device QA report, but `production_ready` remains
+false until the signed distribution, notarization, plugin-trust report, and
+final evidence bundle validate.
 `./scripts/release-plugin-trust-qa.sh --check` is the local plugin-trust
 preflight for marketplace review, malware scanning, signed publisher policy,
 OS sandbox, and host-level egress validation. Its `--self-test` mode uses fake
@@ -450,6 +455,9 @@ On success, `--assert-complete` writes a JSON evidence report to
 `JARVIS_QA_REPORT_PATH` or `target/release-live-device-qa-report.json` by
 default. The report includes installed-app metadata, voice-loop evidence fields,
 owner/device/profile/timestamp/evidence-note fields, and the proof boundary.
+After generating it, run `cargo run -p jarvis-cli -- release evidence-status`
+and `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness`
+to confirm any live voice/audio blocker changes are backed by the report.
 Preserve that report with release notes when making a production-ready claim.
 `--self-test` uses a fake app fixture to exercise only the assertion/report
 mechanics and is included in `./scripts/release-local.sh`.
@@ -551,7 +559,10 @@ launch, microphone permissions, live speech-to-text, or live audio-output
 behavior unless the stricter distribution lane and manual checks named in the
 release checklist are also completed. The live-device QA script standardizes
 that final manual evidence but does not create live microphone, Speech,
-notification, or audio-output proof when run in `--check` mode.
+notification, or audio-output proof when run in `--check` mode. A valid
+`--assert-complete` report can clear the live voice/audio readiness blocker
+only when evidence-aware readiness mode is explicitly enabled; `--self-test`
+and stale default `target/` reports must not be treated as production evidence.
 
 The public-repo production workflow expects isolated worktrees, topic branches,
 reviewable PRs, and clear ownership. A six-agent autonomous sweep can reduce
