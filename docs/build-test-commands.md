@@ -32,6 +32,8 @@ cargo package --workspace --allow-dirty
 ./scripts/release-plugin-trust-qa.sh --self-test
 ./scripts/release-evidence-bundle.sh --check
 ./scripts/release-evidence-bundle.sh --self-test
+./scripts/release-evidence-doctor.sh --check
+./scripts/release-evidence-doctor.sh --self-test
 swift test --package-path apps/mac
 swift build --package-path apps/mac
 ```
@@ -299,6 +301,12 @@ validation outside the fake self-test lane, parses every required
 live-device/plugin-trust report flag, requires live-device QA app bundle
 metadata to match the expected bundle id/version, and writes SHA-256 digests
 for distribution artifacts and QA reports before writing production evidence.
+`./scripts/release-evidence-doctor.sh --check` inventories the expected signed
+artifact paths, live-device QA report, plugin-trust QA report, and final
+evidence bundle manifest, then reports present and missing evidence without
+failing the local gate. Its `--self-test` uses fake artifacts/reports to prove
+the inventory logic only; `--assert-complete` is reserved for release triage
+after real external evidence exists.
 
 ## Useful Focused Commands
 

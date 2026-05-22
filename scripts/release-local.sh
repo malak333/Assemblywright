@@ -25,6 +25,8 @@ run ./scripts/release-plugin-trust-qa.sh --check
 run ./scripts/release-plugin-trust-qa.sh --self-test
 run ./scripts/release-evidence-bundle.sh --check
 run ./scripts/release-evidence-bundle.sh --self-test
+run ./scripts/release-evidence-doctor.sh --check
+run ./scripts/release-evidence-doctor.sh --self-test
 
 if ! command -v swift >/dev/null 2>&1; then
   printf '\nerror: swift is required for the local release gate because apps/mac exists\n' >&2
