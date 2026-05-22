@@ -20,6 +20,7 @@ flowchart TB
     LocalGate --> E2E["local_ipc_e2e ignored release proof"]
     LocalGate --> Smoke["jarvis-cli smoke"]
     LocalGate --> OperatorQASmoke["release-operator-qa-smoke.sh"]
+    LocalGate --> PluginTrustQA["release-plugin-trust-qa.sh check/self-test"]
     LocalGate --> SwiftGate["Swift package build/test"]
     LocalGate --> CargoGate["fmt, clippy, tests, build, package"]
     LocalGate --> MigrationSmoke["storage-migration-backup-smoke.sh"]
@@ -102,6 +103,7 @@ flowchart TB
         PublisherReview --> PublisherAudit["operator-pinned origin audit evidence"]
         PublisherSignature --> SignatureAudit["trusted-key signature audit evidence"]
         PluginHost --> NetworkDeclarations["network_access declared_hosts validation and subprocess_stdio_network gate"]
+        NetworkDeclarations --> PluginTrustQAGate["manual plugin trust QA report gate"]
         NetworkDeclarations --> PluginPolicy
         InstalledRunner --> SubprocessRunner["local_subprocess direct Command JSON stdin/stdout runner"]
         SubprocessRunner --> SafePath["canonical command under source_path, no shell interpolation"]
@@ -244,6 +246,12 @@ Network-capable actions must request the `network` permission and declare exact
 plain-hostname allowlists; invalid declarations fail manifest validation and
 policy review surfaces network-capable installed actions. This is manifest
 governance, not OS-level network sandboxing.
+The local release gate now runs `./scripts/release-plugin-trust-qa.sh --check`
+and `--self-test` so marketplace review, malware scanning, signed publisher
+policy, OS sandbox, and host-level egress validation stay visible as manual
+release evidence. `--check` is a runbook and `--self-test` proves JSON report
+mechanics only; `--assert-complete` records owner validation flags and does not
+turn those external checks into repo-local proof.
 It supports opt-in
 ChatGPT/OpenAI-compatible execution only after route policy allows it. It does
 not yet support a broader WASM/OS-network/plugin-marketplace sandbox or a signed
@@ -277,8 +285,9 @@ per-token model response stream or unbounded real-time plugin UI stream.
 The release-proof path remains local: `./scripts/release-local.sh` runs Rust
 formatting, linting, tests, ignored release-proof tests, build/package, CLI
 smoke, repository-backed operator QA smoke, unsigned distribution launch proof,
-live-device QA preflight, and Swift package build/test. That evidence proves
-only the current implemented foundation surfaces.
+live-device QA preflight/self-test, plugin-trust QA preflight/self-test, and
+Swift package build/test. That evidence proves only the current implemented
+foundation surfaces.
 `./scripts/release-operator-qa-smoke.sh` starts an isolated repository-backed
 core and verifies command, audit, routes, memory mutation/review/restore,
 scheduler attention/run-due, activity, permission review, diagnostics,
@@ -303,6 +312,10 @@ live-device QA runbook executable in the default gate;
 writes a JSON evidence report, not an automated proof. The `--self-test` mode
 uses a fake app fixture to cover the assertion/report mechanics in the local
 gate.
+The `./scripts/release-plugin-trust-qa.sh --check` command similarly keeps
+marketplace, malware-analysis, signed-publisher-policy, OS sandbox, and
+host-level egress checks on the release path; `--assert-complete` writes a
+manual JSON evidence report only after owner validation flags are true.
 
 The production-readiness sweep is coordinated through isolated worktrees and
 topic branches against the public repository

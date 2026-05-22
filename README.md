@@ -234,6 +234,14 @@ That assertion writes a JSON report, defaulting to
 release gate also runs `./scripts/release-live-device-qa.sh --self-test` against
 a fake app fixture to prove the assertion/report mechanics without claiming
 real device validation.
+For plugin trust checks, `./scripts/release-plugin-trust-qa.sh --check` prints
+the marketplace, malware-analysis, OS sandbox, and egress-enforcement runbook
+and is part of the default local release gate. Its `--self-test` mode proves
+JSON evidence-report mechanics with fake flags only. The owner-recorded
+`--assert-complete` path writes
+`target/release-plugin-trust-qa-report.json` after all required
+`JARVIS_PLUGIN_QA_*` flags are true, but that report remains manual external
+evidence rather than repo-local proof of marketplace or host sandbox systems.
 
 With a repository-backed server running, `jarvis release readiness`,
 `jarvis tasks`, `jarvis memory`, `jarvis activity summary`,

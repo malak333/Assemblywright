@@ -128,6 +128,11 @@ to explain what happened:
 - Policy review emits `network_plugin_action` items for installed plugin
   actions that declare network access so the operator can inspect
   network-capable plugins before enabling execution.
+- `./scripts/release-plugin-trust-qa.sh --check` keeps the manual marketplace,
+  malware-analysis, OS sandbox, and egress-enforcement review path executable
+  in the local release gate. `--self-test` proves only the assertion/report
+  mechanics; `--assert-complete` writes owner-recorded evidence after external
+  validation flags are true.
 - Installed plugin dry runs are contract-only. `dry_run: true` validates the
   stored manifest, action name, and input schema, then returns `dry_run` with
   `contract_validated: true` and `side_effect_executed: false`; it never loads

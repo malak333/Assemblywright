@@ -145,6 +145,13 @@ These notes capture durable facts for future agents working on this repository.
   `subprocess_stdio_network`. This is runtime grant gating plus manifest
   governance and review evidence, not OS-level network sandboxing or host-level
   egress filtering.
+- `./scripts/release-plugin-trust-qa.sh` keeps the plugin trust release gate
+  explicit. `--check` validates repo-owned plugin trust prerequisites and
+  prints the marketplace review, malware scan, signed publisher policy, OS
+  sandbox, and host-level egress runbook. `--self-test` proves JSON report
+  mechanics with fake validation flags only. `--assert-complete` writes an
+  owner-recorded JSON report after every `JARVIS_PLUGIN_QA_*` flag is true; it
+  is manual external release evidence, not repo-local proof of those systems.
 - Enabled `local_subprocess` plugins run with an environment boundary: Jarvis
   clears the inherited app/core process environment before spawn and provides
   only a deterministic `PATH` plus `JARVIS_PLUGIN_ID`,

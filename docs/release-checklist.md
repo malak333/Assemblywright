@@ -247,6 +247,12 @@ stage or when a PR needs focused evidence for one ownership slice.
   review, marketplace plugin review, malware analysis, or OS sandbox
   enforcement. The CLI fallback for an unavailable local IPC server must keep
   the same conservative blocker set instead of claiming server-backed proof.
+- Confirm `./scripts/release-plugin-trust-qa.sh --check` is included in release
+  readiness recommendations and the local release gate, and that
+  `./scripts/release-plugin-trust-qa.sh --self-test` proves only JSON report
+  mechanics with fake validation flags. Treat `--assert-complete` output as
+  owner-recorded external evidence for marketplace review, malware scanning,
+  signed publisher policy, OS sandbox, and host-level egress validation.
 - Confirm the Swift Release tab decodes the same `/release/readiness` contract
   and renders blocking gates, recommended commands, implemented proofs, pending
   features, and proof boundary without enabling release side effects.

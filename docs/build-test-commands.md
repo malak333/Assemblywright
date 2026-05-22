@@ -28,6 +28,8 @@ cargo package --workspace --allow-dirty
 ./scripts/package-distribution.sh --unsigned-launch-check
 ./scripts/release-live-device-qa.sh --check
 ./scripts/release-live-device-qa.sh --self-test
+./scripts/release-plugin-trust-qa.sh --check
+./scripts/release-plugin-trust-qa.sh --self-test
 swift test --package-path apps/mac
 swift build --package-path apps/mac
 ```
@@ -268,6 +270,11 @@ sensitive memory counts when repository backing is enabled.
 proofs, pending feature boundaries, recommended verification commands, and
 manual production blockers with `production_ready: false` until the external
 distribution and live-device gates are completed.
+`./scripts/release-plugin-trust-qa.sh --check` is the local plugin-trust
+preflight for marketplace review, malware scanning, signed publisher policy,
+OS sandbox, and host-level egress validation. Its `--self-test` mode uses fake
+flags to verify report generation only; real release evidence must come from
+`--assert-complete` after the owner validates every `JARVIS_PLUGIN_QA_*` flag.
 
 ## Useful Focused Commands
 
