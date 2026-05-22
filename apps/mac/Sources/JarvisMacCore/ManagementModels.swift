@@ -615,7 +615,7 @@ public struct JarvisVoiceCommandHandoff: Equatable, Identifiable, Sendable {
 
 @MainActor
 public final class VoiceStateModel: ObservableObject {
-    public static let textOnlyReason = "Speech recognition is not implemented in this Swift shell yet."
+    public static let textOnlyReason = "Voice capture is idle; typed transcript fallback is available."
 
     @Published public private(set) var captureState: JarvisVoiceCaptureState
     @Published public private(set) var transcriptDraft: String

@@ -442,22 +442,29 @@ Store review, spoken transcript handoff, or live audio-output validation.
 in the default release gate. It validates the repo-owned entitlement/checklist
 preconditions and prints the required clean-profile install, Finder launch,
 microphone/Speech, spoken transcript handoff, live audio-output, notification,
-restart, and manual QA steps. `--assert-complete` is for the release machine
-after those checks are actually performed and all required `JARVIS_QA_*` flags
-are explicitly set to `true`, including
+restart, and manual QA steps. `--write-template target/release-live-device-qa.env`
+writes a sourceable checklist for the release operator to fill on the validated
+machine. `--assert-complete` is for the release machine after those checks are
+actually performed and all required `JARVIS_QA_*` flags are explicitly set to
+`true`, including
 `JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true` for the spoken
 transcript handoff into the same command path. The assertion command also
-requires non-empty owner-recorded evidence fields:
+requires ordered UTC timestamps plus non-empty owner-recorded evidence fields:
 `JARVIS_QA_OWNER_NAME`, `JARVIS_QA_DEVICE_LABEL`, `JARVIS_QA_PROFILE_LABEL`,
 `JARVIS_QA_VOICE_CHECK_STARTED_AT`, `JARVIS_QA_VOICE_CHECK_COMPLETED_AT`,
 `JARVIS_QA_MICROPHONE_EVIDENCE_NOTE`,
 `JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE`,
 `JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE`, and
-`JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE`.
+`JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE`. It also requires structured
+spoken-command observation fields: `JARVIS_QA_VOICE_TEST_PHRASE`,
+`JARVIS_QA_OBSERVED_TRANSCRIPT`, `JARVIS_QA_OBSERVED_COMMAND_TEXT`,
+`JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID`, and
+`JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL`.
 On success, `--assert-complete` writes a JSON evidence report to
 `JARVIS_QA_REPORT_PATH` or `target/release-live-device-qa-report.json` by
 default. The report includes installed-app metadata, voice-loop evidence fields,
-owner/device/profile/timestamp/evidence-note fields, and the proof boundary.
+owner/device/profile/timestamp/evidence-note fields, structured command
+observation, schema identity, and the proof boundary.
 After generating it, run `cargo run -p jarvis-cli -- release evidence-status`
 and `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness`
 to confirm any live voice/audio blocker changes are backed by the report.

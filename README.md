@@ -22,7 +22,8 @@ permission/grant inspection, permission policy review items, redacted scheduler
 attention summaries for app handoff, scheduler trigger policy-review items,
 release-readiness blocker inspection,
 adapter-backed scheduler notification controls, degraded-mode handling, and a
-core supervisor abstraction.
+Speech/AVFoundation voice input controls, AVFoundation speech-output controls,
+and a core supervisor abstraction.
 Scheduler due execution records a redacted proactive policy audit before
 submitting commands, using the same trigger classification as
 `/permissions/policy-review`, so proactive routines stay inspectable without
@@ -40,7 +41,8 @@ This repository is intentionally v1 foundation work, not a Marvel/JARVIS clone
 and not an autonomous external-communication system. Risky side effects must be
 blocked or require approval, and every meaningful decision should be auditable.
 The current implementation should not be described as a finished production
-assistant: distribution signing/notarization, live microphone validation,
+assistant: distribution signing/notarization, live microphone/Speech capture
+validation, live audio-output validation,
 marketplace plugin trust, OS-level plugin network sandboxing, live OS-level
 scheduler notification validation, and manual release QA are still target
 architecture. The
@@ -244,17 +246,21 @@ package creation when Apple credentials are provided. It still does not replace
 clean-profile installer run, Finder launch, App Store validation, or live
 microphone/Speech/audio-output validation.
 For those live checks, `./scripts/release-live-device-qa.sh --check` prints the
-required manual runbook and is part of the default local release gate. After the
-owner validates a signed installed app on a real Mac profile, rerun the script
-with `--assert-complete` and all required `JARVIS_QA_*` flags set to `true`,
-including explicit transcript handoff validation plus owner/device/profile,
-timestamp, and voice evidence-note fields. That assertion writes a JSON report,
-defaulting to `target/release-live-device-qa-report.json`, with installed-app
-metadata, microphone/Speech permission prompt evidence, spoken transcript
-handoff into the command path, speech-output playback evidence, owner-recorded
-live voice evidence notes, and the proof boundary. The local release gate also runs
-`./scripts/release-live-device-qa.sh --self-test` against a fake app fixture to
-prove the assertion/report mechanics without claiming real device validation.
+required manual runbook and is part of the default local release gate.
+`./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env`
+writes a sourceable checklist of every required `JARVIS_QA_*` flag and evidence
+field. After the owner validates a signed installed app on a real Mac profile,
+fill that template, source it, and rerun the script with `--assert-complete`.
+The assertion requires explicit transcript handoff validation, structured
+spoken-command observation fields, owner/device/profile, ordered UTC timestamps,
+and voice evidence-note fields. It writes a JSON report, defaulting to
+`target/release-live-device-qa-report.json`, with installed-app metadata,
+microphone/Speech permission prompt evidence, spoken transcript handoff into
+the command path, speech-output playback evidence, owner-recorded live voice
+evidence notes, structured command observation, and the proof boundary. The
+local release gate also runs `./scripts/release-live-device-qa.sh --self-test`
+against a fake app fixture to prove the assertion/report mechanics without
+claiming real device validation.
 For plugin trust checks, `./scripts/release-plugin-trust-qa.sh --check` prints
 the marketplace, malware-analysis, OS sandbox, and egress-enforcement runbook
 and is part of the default local release gate. Its `--self-test` mode proves
