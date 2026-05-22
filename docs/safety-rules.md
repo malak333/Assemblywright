@@ -73,9 +73,12 @@ policy:
   manifest metadata with `execution_grant: metadata_only`. Any installed-plugin
   run request must fail closed, append audit evidence, and report
   `side_effect_executed: false` unless the manifest is a verified
-  `local_subprocess` plugin with an explicit `subprocess_stdio` grant. Enabled
-  subprocesses must not inherit the app/core process environment; only the
-  documented plugin metadata environment allowlist is exposed.
+  `local_subprocess` plugin with an explicit action-scoped grant:
+  `subprocess_stdio` for non-network actions or `subprocess_stdio_network` for
+  network-declaring actions. The network grant must not execute non-network
+  actions. Enabled subprocesses must not inherit the app/core process
+  environment; only the documented plugin metadata environment allowlist is
+  exposed.
 
 ## Regression Tests
 
@@ -86,6 +89,8 @@ Safety regressions should fail release verification:
 - Plugin actions executing outside their manifest.
 - Installed plugin run attempts that execute while `execution_enabled` is
   false, omit manifest/action/provenance validation, or skip audit evidence.
+- Installed plugin network grants executing non-network actions, or stdio
+  grants executing network-declaring actions.
 - Installed subprocess plugin enablement or execution while provenance status
   is anything other than `matches_install_snapshot`.
 - Installed subprocess plugin execution that inherits unrelated app/core

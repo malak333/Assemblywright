@@ -1877,6 +1877,14 @@ impl IpcState {
                     "installed plugin action declares network access; execution requires subprocess_stdio_network grant"
                         .to_string(),
                 )
+            } else if !action_requires_network_grant
+                && record.execution_grant == InstalledPluginExecutionGrant::SubprocessStdioNetwork
+            {
+                (
+                    "blocked".to_string(),
+                    "installed plugin action does not declare network access; subprocess_stdio_network grant is reserved for network-declaring actions"
+                        .to_string(),
+                )
             } else if !record.execution_enabled {
                 (
                     "blocked".to_string(),
@@ -2037,18 +2045,31 @@ impl IpcState {
                     .actions
                     .iter()
                     .any(|action| action.network_access.mode != crate::PluginNetworkAccessMode::None);
-                if has_network_action {
-                    if request.execution_grant
-                        != InstalledPluginExecutionGrant::SubprocessStdioNetwork
-                    {
+                let has_non_network_action = record
+                    .manifest
+                    .actions
+                    .iter()
+                    .any(|action| action.network_access.mode == crate::PluginNetworkAccessMode::None);
+                match request.execution_grant {
+                    InstalledPluginExecutionGrant::MetadataOnly => {
                         return Err(JarvisError::Validation(
-                            "network-capable installed plugin execution requires subprocess_stdio_network grant".to_string(),
+                            "installed plugin execution requires subprocess_stdio or subprocess_stdio_network grant".to_string(),
                         ));
                     }
-                } else if request.execution_grant != InstalledPluginExecutionGrant::SubprocessStdio {
-                    return Err(JarvisError::Validation(
-                        "installed plugin execution requires subprocess_stdio grant".to_string(),
-                    ));
+                    InstalledPluginExecutionGrant::SubprocessStdio if !has_non_network_action => {
+                        return Err(JarvisError::Validation(
+                            "subprocess_stdio grant requires at least one non-network action".to_string(),
+                        ));
+                    }
+                    InstalledPluginExecutionGrant::SubprocessStdioNetwork
+                        if !has_network_action =>
+                    {
+                        return Err(JarvisError::Validation(
+                            "subprocess_stdio_network grant requires at least one network-declaring action".to_string(),
+                        ));
+                    }
+                    InstalledPluginExecutionGrant::SubprocessStdio
+                    | InstalledPluginExecutionGrant::SubprocessStdioNetwork => {}
                 }
                 if record.manifest.source != PluginSource::LocalSubprocess {
                     return Err(JarvisError::Validation(
@@ -4626,10 +4647,11 @@ fn installed_plugin_grant_allows_action(
     action_requires_network_grant: bool,
 ) -> bool {
     match (grant, action_requires_network_grant) {
-        (InstalledPluginExecutionGrant::SubprocessStdioNetwork, _) => true,
+        (InstalledPluginExecutionGrant::SubprocessStdioNetwork, true) => true,
         (InstalledPluginExecutionGrant::SubprocessStdio, false) => true,
         (InstalledPluginExecutionGrant::MetadataOnly, _)
-        | (InstalledPluginExecutionGrant::SubprocessStdio, true) => false,
+        | (InstalledPluginExecutionGrant::SubprocessStdio, true)
+        | (InstalledPluginExecutionGrant::SubprocessStdioNetwork, false) => false,
     }
 }
 
@@ -6064,7 +6086,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .expect_err("metadata grant cannot execute");
         assert!(error
             .to_string()
-            .contains("requires subprocess_stdio grant"));
+            .contains("requires subprocess_stdio or subprocess_stdio_network grant"));
     }
 
     #[cfg(unix)]
@@ -6103,7 +6125,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .expect_err("network action requires network grant");
         assert!(default_grant_error
             .to_string()
-            .contains("requires subprocess_stdio_network grant"));
+            .contains("subprocess_stdio grant requires at least one non-network action"));
 
         let stored = state
             .using_repository(|repository| {
@@ -6171,6 +6193,127 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             completed.execution_grant,
             InstalledPluginExecutionGrant::SubprocessStdioNetwork
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn installed_plugin_runner_scopes_network_grants_to_declaring_actions() {
+        let repository = SqliteRepository::in_memory().unwrap();
+        let source_dir = tempfile::tempdir().unwrap();
+        let source_path_buf = source_dir.path().canonicalize().unwrap();
+        write_executable_plugin_script(&source_path_buf);
+        let source_path = source_path_buf.display().to_string();
+        let mut manifest = local_subprocess_manifest(&source_path);
+        let mut network_action = manifest.actions[0].clone();
+        network_action.name = "fetch".to_string();
+        network_action
+            .permissions
+            .push(crate::PluginPermission::Network);
+        network_action.network_access = crate::PluginNetworkAccess {
+            mode: crate::PluginNetworkAccessMode::DeclaredHosts,
+            allowed_hosts: vec!["api.jarvis.local".to_string()],
+        };
+        manifest.actions.push(network_action);
+        let manifest_path = source_path_buf.join("jarvis-plugin.json");
+        std::fs::write(&manifest_path, serde_json::to_string(&manifest).unwrap()).unwrap();
+        let installed = InstalledPlugin::from_local_manifest_path(&manifest_path).unwrap();
+        repository.install_plugin_metadata(installed).unwrap();
+        let state = IpcState::with_repository(repository).expect("state");
+        state
+            .verify_installed_plugin_provenance("local_runner_test")
+            .expect("verify provenance");
+
+        let stdio_enabled = state
+            .set_installed_plugin_execution(
+                "local_runner_test",
+                InstalledPluginExecutionRequest {
+                    execution_enabled: true,
+                    execution_grant: InstalledPluginExecutionGrant::SubprocessStdio,
+                },
+            )
+            .expect("enable non-network execution for mixed plugin");
+        assert_eq!(
+            stdio_enabled.execution_grant,
+            InstalledPluginExecutionGrant::SubprocessStdio
+        );
+        let inspect = state
+            .run_installed_plugin(
+                "local_runner_test",
+                InstalledPluginRunRequest {
+                    action: "inspect".to_string(),
+                    input: json!({ "path": "README.md" }),
+                    session_id: None,
+                    dry_run: false,
+                },
+            )
+            .expect("non-network action runs under stdio grant");
+        assert_eq!(inspect.status, "completed");
+        assert!(inspect.side_effect_executed);
+
+        let fetch_blocked = state
+            .run_installed_plugin(
+                "local_runner_test",
+                InstalledPluginRunRequest {
+                    action: "fetch".to_string(),
+                    input: json!({ "path": "README.md" }),
+                    session_id: None,
+                    dry_run: false,
+                },
+            )
+            .expect("network action returns blocked response under stdio grant");
+        assert_eq!(fetch_blocked.status, "blocked");
+        assert!(!fetch_blocked.side_effect_executed);
+        assert!(fetch_blocked
+            .reason
+            .contains("requires subprocess_stdio_network grant"));
+
+        let network_enabled = state
+            .set_installed_plugin_execution(
+                "local_runner_test",
+                InstalledPluginExecutionRequest {
+                    execution_enabled: true,
+                    execution_grant: InstalledPluginExecutionGrant::SubprocessStdioNetwork,
+                },
+            )
+            .expect("enable network execution for mixed plugin");
+        assert_eq!(
+            network_enabled.execution_grant,
+            InstalledPluginExecutionGrant::SubprocessStdioNetwork
+        );
+        let fetch = state
+            .run_installed_plugin(
+                "local_runner_test",
+                InstalledPluginRunRequest {
+                    action: "fetch".to_string(),
+                    input: json!({ "path": "README.md" }),
+                    session_id: None,
+                    dry_run: false,
+                },
+            )
+            .expect("network action runs under network grant");
+        assert_eq!(fetch.status, "completed");
+        assert!(fetch.side_effect_executed);
+        assert_eq!(
+            fetch.output.as_ref().expect("fetch output")["plugin_action"],
+            "fetch"
+        );
+
+        let inspect_blocked = state
+            .run_installed_plugin(
+                "local_runner_test",
+                InstalledPluginRunRequest {
+                    action: "inspect".to_string(),
+                    input: json!({ "path": "README.md" }),
+                    session_id: None,
+                    dry_run: false,
+                },
+            )
+            .expect("non-network action returns blocked response under network grant");
+        assert_eq!(inspect_blocked.status, "blocked");
+        assert!(!inspect_blocked.side_effect_executed);
+        assert!(inspect_blocked
+            .reason
+            .contains("reserved for network-declaring actions"));
     }
 
     #[tokio::test]

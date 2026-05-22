@@ -95,11 +95,13 @@ to explain what happened:
   manifests are stored as `execution_enabled: false` with
   `execution_grant: metadata_only`, including `local_subprocess` manifests.
 - Installed plugin execution requires a separate explicit enablement step that
-  sets `execution_enabled: true` and `execution_grant: subprocess_stdio`.
-  Actions that declare network access require
-  `execution_grant: subprocess_stdio_network` instead. `metadata_only` can
-  never execute. Enablement also requires the local provenance snapshot to
-  verify as `matches_install_snapshot`.
+  sets `execution_enabled: true` and an action-scoped execution grant.
+  `subprocess_stdio` authorizes only non-network actions, while
+  `subprocess_stdio_network` authorizes only actions that declare network
+  access. Mixed-action plugins can be enabled for either side, but the runner
+  still blocks actions outside the current grant. `metadata_only` can never
+  execute. Enablement also requires the local provenance snapshot to verify as
+  `matches_install_snapshot`.
 - Installed plugin run requests go through an explicit fail-closed runner
   boundary. The boundary revalidates the stored manifest/version metadata,
   checks the requested action is declared, validates input schema, verifies the
@@ -129,7 +131,9 @@ to explain what happened:
   outside `source_path`, missing subprocess config, undeclared actions, invalid
   input, malformed stdout JSON, output-schema mismatches, and network actions
   enabled without `subprocess_stdio_network` all fail closed with audit
-  evidence. Jarvis sends a JSON object containing `plugin_id`, `action`, and
+  evidence. Non-network actions also fail closed while the installed plugin is
+  enabled with `subprocess_stdio_network`; the network grant is not a superset
+  of plain stdio authority. Jarvis sends a JSON object containing `plugin_id`, `action`, and
   `input` to stdin and accepts only JSON stdout that matches the action output
   schema. Subprocess stdout is capped at 1 MiB and stderr is capped at 256 KiB;
   a stream that exceeds its cap is killed and fails closed before raw output is
