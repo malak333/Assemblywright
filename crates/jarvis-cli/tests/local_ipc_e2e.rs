@@ -1174,6 +1174,47 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     );
     assert_array_contains(&memory_classification["by_category"], "label", "e2e");
 
+    let sensitive_memory = run_cli_json([
+        "memory",
+        "create",
+        "retention",
+        "deleted-secret",
+        "do not expose deleted sensitive memory",
+        "--provenance",
+        "local_ipc_e2e retention review",
+        "--sensitivity",
+        "private",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    let sensitive_memory_id = sensitive_memory["id"]
+        .as_str()
+        .expect("sensitive memory id")
+        .to_string();
+    let deleted_sensitive_memory = run_cli_json([
+        "memory",
+        "delete",
+        sensitive_memory_id.as_str(),
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert!(deleted_sensitive_memory["deleted_at"].is_string());
+    let retention_policy_review =
+        run_cli_json(["permissions", "review", "--endpoint", endpoint.as_str()]);
+    assert_array_contains(
+        &retention_policy_review["items"],
+        "item_type",
+        "memory_retention_review",
+    );
+    assert_array_contains(
+        &retention_policy_review["items"],
+        "action",
+        "retention/deleted-secret",
+    );
+    let retention_policy_review_encoded =
+        serde_json::to_string(&retention_policy_review).expect("retention policy review JSON");
+    assert!(!retention_policy_review_encoded.contains("do not expose deleted sensitive memory"));
+
     let scheduled = run_cli_json([
         "scheduler",
         "schedule",

@@ -147,9 +147,10 @@ These notes capture durable facts for future agents working on this repository.
   exposes `jarvis permissions review`, as a read-only policy review surface. It
   converts pending approvals, high-risk plugin actions, unverified installed
   plugin provenance, unverified publisher-origin claims, network-capable plugin
-  actions, active scheduler triggers, and unreviewed memory items into explicit
-  severity-ranked review items. Memory review items include category/key and
-  sensitivity only; memory values are redacted from policy review. The Swift
+  actions, active scheduler triggers, unreviewed memory items, and deleted
+  sensitive memory retained in local storage into explicit severity-ranked
+  review items. Memory review and retention-review items include category/key
+  and sensitivity only; memory values are redacted from policy review. The Swift
   Approval Center renders this summary alongside grant history. It is
   inspection-only and does not execute, enable plugin side effects, or
   autonomously rewrite/delete memory.
@@ -217,7 +218,7 @@ These notes capture durable facts for future agents working on this repository.
 - Diagnostics export now includes aggregate active, unreviewed, and sensitive
   memory counts when repository backing is enabled. It still omits memory
   values, and memory policy review similarly redacts values while surfacing
-  unreviewed memory for user review.
+  unreviewed memory plus deleted sensitive retained memory for user review.
 - The Swift shell has a Keychain-backed launch credential boundary for
   app-supervised model provider secrets. `JarvisCoreCredentialProvider` reads
   known credentials such as the OpenAI API key from Keychain and injects only

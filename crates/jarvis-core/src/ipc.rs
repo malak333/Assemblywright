@@ -884,6 +884,7 @@ impl IpcState {
             let approvals = repository.list_pending_approvals(None)?;
             let installed_plugins = repository.list_installed_plugins()?;
             let memory_items = repository.list_memory_items(false)?;
+            let all_memory_items = repository.list_memory_items(true)?;
             let memory_summary = repository.memory_classification_summary(false)?;
             let mut items = Vec::new();
 
@@ -1051,6 +1052,25 @@ impl IpcState {
                     title: "Memory item needs review".to_string(),
                     detail: format!(
                         "Memory item {}/{} is {:?} and unreviewed; value text is redacted from policy review",
+                        memory.category, memory.key, memory.sensitivity
+                    ),
+                    approval_id: None,
+                    plugin_id: None,
+                    memory_id: Some(memory.id),
+                    action: Some(format!("{}/{}", memory.category, memory.key)),
+                });
+            }
+
+            for memory in all_memory_items.iter().filter(|memory| {
+                memory.deleted_at.is_some()
+                    && memory_sensitivity_requires_retention_review(memory.sensitivity)
+            }) {
+                items.push(PermissionPolicyReviewItem {
+                    item_type: "memory_retention_review".to_string(),
+                    severity: memory_review_severity(memory.sensitivity).to_string(),
+                    title: "Deleted sensitive memory is retained locally".to_string(),
+                    detail: format!(
+                        "Deleted memory item {}/{} is {:?} and still retained in local storage; value text is redacted from policy review",
                         memory.category, memory.key, memory.sensitivity
                     ),
                     approval_id: None,
@@ -2697,6 +2717,13 @@ fn memory_review_severity(sensitivity: Sensitivity) -> &'static str {
     }
 }
 
+fn memory_sensitivity_requires_retention_review(sensitivity: Sensitivity) -> bool {
+    matches!(
+        sensitivity,
+        Sensitivity::Private | Sensitivity::CredentialAdjacent | Sensitivity::Restricted
+    )
+}
+
 fn sensitivity_from_context(context: &serde_json::Value) -> Option<Sensitivity> {
     let value = context.get("sensitivity")?.as_str()?;
     match value {
@@ -3589,8 +3616,8 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "memory_policy_review",
             "implemented",
-            "Unreviewed memory items appear in `/permissions/policy-review` with redacted values, and diagnostics export exposes only aggregate memory review counts.",
-            "Review visibility only; no autonomous memory rewrite, retention policy, or vector-index governance claim.",
+            "Unreviewed memory items and deleted sensitive retained memory appear in `/permissions/policy-review` with redacted values, and diagnostics export exposes only aggregate memory review counts.",
+            "Review visibility and retention-risk surfacing only; no autonomous memory rewrite, purge automation, or vector-index governance claim.",
         ),
         feature(
             "approval_execution",
@@ -4830,6 +4857,54 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let encoded = serde_json::to_string(&review).expect("review JSON");
         assert!(!encoded.contains("never expose this memory value"));
         assert!(!encoded.contains("reviewed memory value"));
+    }
+
+    #[tokio::test]
+    async fn permission_policy_review_summarizes_deleted_sensitive_memory_without_values() {
+        let repository = SqliteRepository::in_memory().unwrap();
+        let sensitive = repository
+            .create_memory_item(NewMemoryItem {
+                category: "credential-adjacent".to_string(),
+                key: "token-location".to_string(),
+                value: "never expose deleted sensitive memory".to_string(),
+                provenance: "test".to_string(),
+                sensitivity: Sensitivity::CredentialAdjacent,
+            })
+            .and_then(|item| repository.delete_memory_item(item.id))
+            .expect("deleted sensitive memory");
+        let workspace = repository
+            .create_memory_item(NewMemoryItem {
+                category: "workspace".to_string(),
+                key: "old-note".to_string(),
+                value: "deleted workspace memory value".to_string(),
+                provenance: "test".to_string(),
+                sensitivity: Sensitivity::Workspace,
+            })
+            .and_then(|item| repository.delete_memory_item(item.id))
+            .expect("deleted workspace memory");
+        let state = IpcState::with_repository(repository).expect("state");
+
+        let review = state.permission_policy_review().expect("policy review");
+
+        let retention_items = review
+            .items
+            .iter()
+            .filter(|item| item.item_type == "memory_retention_review")
+            .collect::<Vec<_>>();
+        assert_eq!(retention_items.len(), 1);
+        assert_eq!(retention_items[0].severity, "high");
+        assert_eq!(retention_items[0].memory_id, Some(sensitive.id));
+        assert_eq!(
+            retention_items[0].action.as_deref(),
+            Some("credential-adjacent/token-location")
+        );
+        assert!(!review
+            .items
+            .iter()
+            .any(|item| item.memory_id == Some(workspace.id)));
+        let encoded = serde_json::to_string(&review).expect("review JSON");
+        assert!(!encoded.contains("never expose deleted sensitive memory"));
+        assert!(!encoded.contains("deleted workspace memory value"));
     }
 
     #[tokio::test]
