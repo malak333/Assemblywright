@@ -166,6 +166,11 @@ These notes capture durable facts for future agents working on this repository.
   `JARVIS_PLUGIN_ACTION`, and `JARVIS_PLUGIN_SOURCE_PATH`. Rust unit coverage
   and CLI IPC E2E assert that a secret inherited by the core process is not
   visible inside the plugin subprocess.
+- Enabled `local_subprocess` plugin output is bounded before parsing or audit:
+  stdout is capped at 1 MiB, stderr is capped at 256 KiB, and either stream
+  exceeding its cap kills the child and returns a fail-closed plugin error.
+  Normal JSON stdout and bounded `jarvis_progress` stderr lines still execute
+  and parse under the same runner.
 - Repository-backed IPC exposes `/permissions/grants`, and the CLI exposes
   `jarvis permissions grants`, as a read-only permission-center summary. It
   combines approval status counts/history, high-risk pending approval count,

@@ -444,8 +444,8 @@ trusted-key publisher-signature verification,
 network-capable plugin policy review items,
 permission policy review items, redacted scheduler trigger review items, fail-closed
 subprocess enablement, installed subprocess minimal environment isolation,
-installed subprocess progress-frame response/audit redaction, repository-backed
-activity summary status/recent-audit
+installed subprocess stdout/stderr byte limits, installed subprocess
+progress-frame response/audit redaction, repository-backed activity summary status/recent-audit
 evidence, bounded activity event streaming over server-sent events, redacted
 scheduler attention handoff, Swift bounded activity event parsing/model
 coverage, scheduler due-job
