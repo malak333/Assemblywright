@@ -70,6 +70,7 @@ stage or when a PR needs focused evidence for one ownership slice.
 - `cargo package --workspace --allow-dirty`
 - `./scripts/package-distribution.sh --unsigned-launch-check`
 - `./scripts/release-live-device-qa.sh --check`
+- `./scripts/release-live-device-qa.sh --self-test`
 - Focused supervision proof for branches that touch Swift core launch or bundle
   discovery: `./scripts/packaged-supervision-proof.sh`
 - Focused packaged app release smoke for branches that touch packaging,
@@ -82,6 +83,8 @@ stage or when a PR needs focused evidence for one ownership slice.
   `./scripts/package-distribution.sh --unsigned-launch-check`
 - Live-device QA preflight is part of the default local gate:
   `./scripts/release-live-device-qa.sh --check`
+- Live-device QA assertion/report mechanics are covered by a fake fixture in
+  the default local gate: `./scripts/release-live-device-qa.sh --self-test`
 - `swift test --package-path apps/mac`
 - `swift build --package-path apps/mac`
 - Optional manual CLI/IPC smoke against a running local server:
@@ -356,7 +359,9 @@ Still future gates for production distribution:
   to print the live-device runbook. After clean-profile install, Finder launch,
   microphone/Speech, live audio-output, notification, restart, and manual QA are
   actually validated on the release machine, rerun it with `--assert-complete`
-  and all required `JARVIS_QA_*` flags set to `true`.
+  and all required `JARVIS_QA_*` flags set to `true`. Preserve the generated
+  `target/release-live-device-qa-report.json` artifact, or the
+  `JARVIS_QA_REPORT_PATH` override, with the release notes.
 - Activity view shows current task state, active/status counts, and recent
   audit progress through `/activity/summary`.
 - CLI activity watch receives bounded `/activity/events` progress events.
@@ -413,7 +418,8 @@ Distribution packaging gate:
   live audio-output, and manual QA before any broader production distribution
   claim. `./scripts/release-live-device-qa.sh --assert-complete` is the
   repo-owned way to record that those checks were completed; it remains an
-  owner assertion, not automated live-device proof.
+  owner assertion, not automated live-device proof. The resulting JSON report
+  records only the owner-asserted validation flags and proof boundary.
 
 ## Release Notes
 
