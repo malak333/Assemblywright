@@ -240,7 +240,8 @@ struct JarvisMacCoreTests {
               "endpoints": [
                 { "method": "GET", "path": "/health", "repository_required": false, "redacted": true },
                 { "method": "GET", "path": "/scheduler/jobs/:id", "repository_required": false, "redacted": false },
-                { "method": "GET", "path": "/permissions/grants", "repository_required": true, "redacted": false }
+                { "method": "GET", "path": "/permissions/grants", "repository_required": true, "redacted": false },
+                { "method": "GET", "path": "/permissions/policy-review", "repository_required": true, "redacted": false }
               ],
               "safe_inspection_paths": ["/health", "/diagnostics/export"]
             }
@@ -254,6 +255,7 @@ struct JarvisMacCoreTests {
         #expect(contract.safeInspectionPaths.contains("/diagnostics/export"))
         #expect(!contract.exposesApprovalActions)
         #expect(contract.exposesPermissionGrantSummary)
+        #expect(contract.exposesPermissionPolicyReview)
     }
 
     @Test("Command response decodes task, route, steps, and message")
@@ -946,6 +948,24 @@ struct JarvisMacCoreTests {
         #expect(summary.sideEffectsRequireApproval)
     }
 
+    @Test("Permission policy review decodes explicit review items")
+    func decodesPermissionPolicyReview() throws {
+        let approvalId = UUID()
+        let review = try JSONDecoder().decode(
+            JarvisPermissionPolicyReview.self,
+            from: permissionPolicyReviewJSON(approvalId: approvalId)
+        )
+        let item = try #require(review.items.first)
+
+        #expect(review.status == "review_required")
+        #expect(review.reviewItemCount == 2)
+        #expect(review.highRiskPendingCount == 1)
+        #expect(review.unverifiedInstalledPluginCount == 1)
+        #expect(item.approvalId == approvalId)
+        #expect(item.severity == "high")
+        #expect(item.title.contains("approval"))
+    }
+
     @Test("Approval client methods send Rust IPC decision requests")
     func approvalClientMethodsSendDecisionRequests() async throws {
         let configuration = URLSessionConfiguration.ephemeral
@@ -978,6 +998,8 @@ struct JarvisMacCoreTests {
                 return (response, Data("[\(String(decoding: pendingApprovalJSON(id: approvalId, taskId: taskId), as: UTF8.self))]".utf8))
             case "/permissions/grants":
                 return (response, permissionGrantSummaryJSON(approvalId: approvalId, taskId: taskId))
+            case "/permissions/policy-review":
+                return (response, permissionPolicyReviewJSON(approvalId: approvalId))
             case "/approvals/\(approvalId.uuidString)":
                 return (response, pendingApprovalJSON(id: approvalId, taskId: taskId))
             case "/approvals/\(approvalId.uuidString)/approve":
@@ -992,6 +1014,7 @@ struct JarvisMacCoreTests {
 
         let pending = try await client.listApprovals(status: "pending")
         let grants = try await client.permissionGrantSummary()
+        let review = try await client.permissionPolicyReview()
         _ = try await client.approval(id: approvalId)
         let approved = try await client.approveApproval(
             id: approvalId,
@@ -1004,20 +1027,22 @@ struct JarvisMacCoreTests {
 
         #expect(pending.first?.id == approvalId)
         #expect(grants.highRiskPendingCount == 1)
+        #expect(review.reviewItemCount == 2)
         #expect(approved.status == "approved")
         #expect(denied.status == "denied")
-        #expect(requests.map(\.method) == ["GET", "GET", "GET", "POST", "POST"])
+        #expect(requests.map(\.method) == ["GET", "GET", "GET", "GET", "POST", "POST"])
         #expect(requests.map(\.path) == [
             "/approvals",
             "/permissions/grants",
+            "/permissions/policy-review",
             "/approvals/\(approvalId.uuidString)",
             "/approvals/\(approvalId.uuidString)/approve",
             "/approvals/\(approvalId.uuidString)/deny"
         ])
         #expect(requests[0].query == "status=pending")
-        #expect(requests[3].body?["decided_by"] as? String == "mac-ui")
-        #expect(requests[3].body?["reason"] as? String == "reviewed")
-        #expect(requests[4].body?["reason"] as? String == "too risky")
+        #expect(requests[4].body?["decided_by"] as? String == "mac-ui")
+        #expect(requests[4].body?["reason"] as? String == "reviewed")
+        #expect(requests[5].body?["reason"] as? String == "too risky")
     }
 
     @MainActor
@@ -1446,6 +1471,8 @@ struct JarvisMacCoreTests {
         #expect(model.permissionSurface.approvedGrantCount == 2)
         #expect(model.permissionSurface.sideEffectsRequireApproval)
         #expect(model.permissionSurface.unverifiedInstalledPluginGrantCount == 1)
+        #expect(model.policyReview?.reviewItemCount == 2)
+        #expect(model.policyReview?.status == "review_required")
     }
 
     @MainActor
@@ -1872,12 +1899,13 @@ private func fullApprovalContract() -> JarvisContractResponse {
               "endpoints": [
                 { "method": "GET", "path": "/health", "repository_required": false, "redacted": true },
                 { "method": "GET", "path": "/permissions/grants", "repository_required": true, "redacted": false },
+                { "method": "GET", "path": "/permissions/policy-review", "repository_required": true, "redacted": false },
                 { "method": "GET", "path": "/approvals", "repository_required": true, "redacted": false },
                 { "method": "GET", "path": "/approvals/:id", "repository_required": true, "redacted": false },
                 { "method": "POST", "path": "/approvals/:id/approve", "repository_required": true, "redacted": false },
                 { "method": "POST", "path": "/approvals/:id/deny", "repository_required": true, "redacted": false }
               ],
-              "safe_inspection_paths": ["/health", "/permissions/grants", "/approvals"]
+              "safe_inspection_paths": ["/health", "/permissions/grants", "/permissions/policy-review", "/approvals"]
             }
             """.utf8
         )
@@ -1967,6 +1995,39 @@ private func permissionGrantSummaryJSON(approvalId: UUID = UUID(), taskId: UUID 
           "executable_installed_plugin_count": 0,
           "unverified_installed_plugin_count": 1,
           "side_effects_require_approval": true
+        }
+        """.utf8
+    )
+}
+
+private func permissionPolicyReviewJSON(approvalId: UUID = UUID()) -> Data {
+    Data(
+        """
+        {
+          "generated_at": "2026-05-20T12:03:00Z",
+          "status": "review_required",
+          "review_item_count": 2,
+          "high_risk_pending_count": 1,
+          "executable_installed_plugin_count": 0,
+          "unverified_installed_plugin_count": 1,
+          "side_effects_require_approval": true,
+          "items": [
+            {
+              "item_type": "pending_approval",
+              "severity": "high",
+              "title": "Pending approval requires review",
+              "detail": "plugin approval echo requests Confirm access for Workspace data",
+              "approval_id": "\(approvalId.uuidString)",
+              "action": "plugin approval echo"
+            },
+            {
+              "item_type": "installed_plugin_provenance",
+              "severity": "medium",
+              "title": "Installed plugin provenance is not verified",
+              "detail": "Local E2E Plugin integrity status is not_verified",
+              "plugin_id": "local_e2e_plugin"
+            }
+          ]
         }
         """.utf8
     )
@@ -2410,6 +2471,13 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         return try JSONDecoder().decode(
             JarvisPermissionGrantSummary.self,
             from: permissionGrantSummaryJSON()
+        )
+    }
+
+    func permissionPolicyReview() async throws -> JarvisPermissionPolicyReview {
+        try JSONDecoder().decode(
+            JarvisPermissionPolicyReview.self,
+            from: permissionPolicyReviewJSON()
         )
     }
 

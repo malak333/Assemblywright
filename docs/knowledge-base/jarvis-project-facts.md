@@ -64,6 +64,13 @@ These notes capture durable facts for future agents working on this repository.
   execution. The Swift permission center renders those provenance statuses so
   metadata-only, verified, changed, missing, invalid, and legacy-unverified
   plugin grants are visible during review.
+- Repository-backed IPC also exposes `/permissions/policy-review`, and the CLI
+  exposes `jarvis permissions review`, as a read-only policy review surface. It
+  converts pending approvals, high-risk plugin actions, unverified installed
+  plugin provenance, and unverified publisher-origin claims into explicit
+  severity-ranked review items. The Swift Approval Center renders this summary
+  alongside grant history. It is inspection-only and does not execute or enable
+  plugin side effects.
 - The CLI has matching `tasks`, `memory`, `scheduler`, `diagnostics`, and
   `plugins` subcommands, including `plugins install`, `plugins installed`,
   `plugins installed-get`, `plugins enable-installed`, `plugins

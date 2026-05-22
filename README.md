@@ -13,8 +13,9 @@ It also includes the first buildable Swift/SwiftUI Mac shell scaffold under
 `apps/mac`, with a tested IPC client, command-console state model,
 activity/audit panel for command evidence, memory create/update/review/delete
 and restore management, memory classification summary, provenance-aware
-permission/grant inspection, redacted scheduler attention summaries for app
-handoff, degraded-mode handling, and a core supervisor abstraction.
+permission/grant inspection, permission policy review items, redacted scheduler
+attention summaries for app handoff, degraded-mode handling, and a core
+supervisor abstraction.
 
 ## Current Scope
 
@@ -23,8 +24,8 @@ and not an autonomous external-communication system. Risky side effects must be
 blocked or require approval, and every meaningful decision should be auditable.
 The current implementation should not be described as a finished production
 assistant: distribution signing/notarization, live microphone validation,
-marketplace or signed-publisher plugin trust, richer permission policy review
-UX, OS-level scheduler notifications, and manual release QA are still target
+marketplace or signed-publisher plugin trust, signed-publisher verification,
+OS-level scheduler notifications, and manual release QA are still target
 architecture. The
 default command path still uses `FakeLocalModel`; set
 `JARVIS_LOCAL_MODEL_PROVIDER=ollama`, `JARVIS_LOCAL_MODEL`, and optionally
@@ -53,13 +54,15 @@ Phase 3 landed through separate worktrees for model route persistence, plugin
 subprocess sandboxing, voice input controls, packaged app release smoke,
 permission grants UX, docs architecture alignment, distribution packaging, and
 Keychain launch credential injection. Follow-on slices have added Swift memory
-CRUD, local plugin provenance verification, and scheduler attention handoff.
-Later slices continue the same branch/PR discipline; release language should
-describe only the merged repo-owned surfaces with recorded focused E2E or
-integration proof.
+CRUD, local plugin provenance verification, scheduler attention handoff, and
+permission policy review. Later slices continue the same branch/PR discipline;
+release language should describe only the merged repo-owned surfaces with
+recorded focused E2E or integration proof.
 The permission center now surfaces installed-plugin provenance status from
 `/permissions/grants`, including unverified plugin counts and local integrity
-state, but it still does not grant broader plugin trust or publisher identity.
+state. `/permissions/policy-review` turns pending approvals and installed
+plugin provenance/grant concerns into explicit review items, but it still does
+not grant broader plugin trust or publisher identity.
 
 ## Build
 

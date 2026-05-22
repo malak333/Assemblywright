@@ -273,8 +273,8 @@ Ollama-compatible local HTTP, or explicitly enabled ChatGPT/OpenAI-compatible
 HTTP providers. The Swift app includes approval decision controls, management
 surfaces, memory classification plus create/update/review/delete/restore
 controls over the existing Rust IPC contract, voice input/output adapter
-controls, text-transcript command handoff, redacted scheduler attention
-handoff, and core supervision abstractions.
+controls, text-transcript command handoff, permission policy review,
+redacted scheduler attention handoff, and core supervision abstractions.
 The product still lacks
 signed/notarized release evidence, live microphone and audio-output validation,
 marketplace/WASM/network/signed-publisher plugin trust boundaries, richer
@@ -289,8 +289,8 @@ reviewable PR slices, and docs-only synchronization work on
 `voice-adapter-production`, `packaged-app-release-smoke`,
 `permission-grants-ux`, and `phase3-docs-architecture`. Follow-on slices
 include Swift memory classification/CRUD/restore and local plugin provenance
-verification plus scheduler attention handoff. That workflow improves
-reviewability but is not readiness evidence by itself.
+verification plus scheduler attention handoff and permission policy review.
+That workflow improves reviewability but is not readiness evidence by itself.
 Readiness language must be tied to checked-in code, documented diagrams,
 knowledge-base updates, and the specific local/E2E checks that passed.
 

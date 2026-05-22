@@ -380,6 +380,11 @@ enum PermissionsCommand {
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
+    /// Show permission policy review items that need operator attention.
+    Review {
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
 }
 
 #[tokio::main]
@@ -788,6 +793,12 @@ async fn main() -> anyhow::Result<()> {
                 println!(
                     "{}",
                     request(&endpoint, "GET", "/permissions/grants", None)?
+                );
+            }
+            PermissionsCommand::Review { endpoint } => {
+                println!(
+                    "{}",
+                    request(&endpoint, "GET", "/permissions/policy-review", None)?
                 );
             }
         },

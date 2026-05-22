@@ -29,6 +29,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_eq!(contract["contract"]["version"], 1);
     assert_array_contains(&contract["endpoints"], "path", "/diagnostics/export");
     assert_array_contains(&contract["endpoints"], "path", "/permissions/grants");
+    assert_array_contains(&contract["endpoints"], "path", "/permissions/policy-review");
     assert_array_contains(&contract["endpoints"], "path", "/model-routes");
     assert_array_contains(&contract["endpoints"], "path", "/approvals/:id/approve");
     assert_array_contains(
@@ -42,6 +43,10 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_string_array_contains(&contract["safe_inspection_paths"], "/scheduler/attention");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/scheduler/jobs/:id");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/permissions/grants");
+    assert_string_array_contains(
+        &contract["safe_inspection_paths"],
+        "/permissions/policy-review",
+    );
     assert_string_array_contains(&contract["safe_inspection_paths"], "/approvals/:id");
 
     let command = run_cli_json([
@@ -210,6 +215,20 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         "capture_method",
         "local_manifest_snapshot",
     );
+
+    let initial_policy_review =
+        run_cli_json(["permissions", "review", "--endpoint", endpoint.as_str()]);
+    assert_eq!(initial_policy_review["status"], "review_required");
+    assert_eq!(
+        initial_policy_review["unverified_installed_plugin_count"],
+        1
+    );
+    assert_array_contains(
+        &initial_policy_review["items"],
+        "item_type",
+        "installed_plugin_provenance",
+    );
+    assert_array_contains(&initial_policy_review["items"], "severity", "medium");
 
     let blocked_installed_run = run_cli_json([
         "plugins",
@@ -946,6 +965,25 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_eq!(persisted_grants["executable_installed_plugin_count"], 1);
     assert_eq!(persisted_grants["unverified_installed_plugin_count"], 0);
     assert_eq!(persisted_grants["side_effects_require_approval"], true);
+
+    let persisted_policy_review = run_cli_json([
+        "permissions",
+        "review",
+        "--endpoint",
+        restarted_endpoint.as_str(),
+    ]);
+    assert_eq!(
+        persisted_policy_review["executable_installed_plugin_count"],
+        1
+    );
+    assert_eq!(
+        persisted_policy_review["unverified_installed_plugin_count"],
+        0
+    );
+    assert_eq!(
+        persisted_policy_review["side_effects_require_approval"],
+        true
+    );
 
     let persisted_memory =
         run_cli_json(["memory", "list", "--endpoint", restarted_endpoint.as_str()]);
