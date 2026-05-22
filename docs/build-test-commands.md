@@ -255,10 +255,10 @@ health, runtime-backed command execution, deterministic first-party plugin
 execution, route/policy/plugin audit evidence, approval-required persistence and
 grant/deny decisions, scheduler schedule/cancel and persistence, redacted
 diagnostics export, memory create/update/review/delete and persistence, plugin
-manifests, installed-plugin provenance verification, fail-closed subprocess
-enablement, scheduler due-job execution/reschedule audit evidence, scheduler
-fail-closed emergency pause on non-accepted due jobs, and emergency-pause
-blocking/resume surfaces.
+manifests, installed-plugin provenance verification, permission-grant
+provenance summary fields, fail-closed subprocess enablement, scheduler due-job
+execution/reschedule audit evidence, scheduler fail-closed emergency pause on
+non-accepted due jobs, and emergency-pause blocking/resume surfaces.
 Runtime unit tests additionally prove bounded fake-model first-party tool-call
 orchestration, including policy checks, approval stops, validation failures, and
 tool-result feedback into later model steps. Focused provider tests prove typed

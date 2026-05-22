@@ -12,7 +12,8 @@ packaged app.
 It also includes the first buildable Swift/SwiftUI Mac shell scaffold under
 `apps/mac`, with a tested IPC client, command-console state model,
 activity/audit panel for command evidence, memory create/update/review/delete
-management, degraded-mode handling, and a core supervisor abstraction.
+management, provenance-aware permission/grant inspection, degraded-mode
+handling, and a core supervisor abstraction.
 
 ## Current Scope
 
@@ -21,8 +22,8 @@ and not an autonomous external-communication system. Risky side effects must be
 blocked or require approval, and every meaningful decision should be auditable.
 The current implementation should not be described as a finished production
 assistant: distribution signing/notarization, live microphone validation,
-marketplace or signed-publisher plugin trust, richer permission-center UX, and
-manual release QA are still target architecture. The
+marketplace or signed-publisher plugin trust, richer permission policy review
+UX, and manual release QA are still target architecture. The
 default command path still uses `FakeLocalModel`; set
 `JARVIS_LOCAL_MODEL_PROVIDER=ollama`, `JARVIS_LOCAL_MODEL`, and optionally
 `JARVIS_OLLAMA_BASE_URL`/`JARVIS_LOCAL_MODEL_TIMEOUT_MS` to exercise the local
@@ -53,6 +54,9 @@ Keychain launch credential injection. Follow-on slices have added Swift memory
 CRUD and local plugin provenance verification. Later slices continue the same
 branch/PR discipline; release language should describe only the merged
 repo-owned surfaces with recorded focused E2E or integration proof.
+The permission center now surfaces installed-plugin provenance status from
+`/permissions/grants`, including unverified plugin counts and local integrity
+state, but it still does not grant broader plugin trust or publisher identity.
 
 ## Build
 

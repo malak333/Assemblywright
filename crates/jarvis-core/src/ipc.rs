@@ -295,6 +295,7 @@ pub struct PermissionGrantSummary {
     pub installed_plugin_grants: Vec<InstalledPluginGrantSurface>,
     pub high_risk_pending_count: usize,
     pub executable_installed_plugin_count: usize,
+    pub unverified_installed_plugin_count: usize,
     pub side_effects_require_approval: bool,
 }
 
@@ -310,6 +311,11 @@ pub struct InstalledPluginGrantSurface {
     pub name: String,
     pub execution_enabled: bool,
     pub execution_grant: crate::InstalledPluginExecutionGrant,
+    pub integrity_status: crate::InstalledPluginIntegrityStatus,
+    pub capture_method: String,
+    pub last_verified_at: Option<DateTime<Utc>>,
+    pub origin_claim: Option<String>,
+    pub origin_claim_verified: bool,
     pub installed_at: DateTime<Utc>,
     pub action_count: usize,
     pub high_risk_action_count: usize,
@@ -561,6 +567,13 @@ impl IpcState {
                 .iter()
                 .filter(|plugin| plugin.execution_enabled)
                 .count();
+            let unverified_installed_plugin_count = installed_plugins
+                .iter()
+                .filter(|plugin| {
+                    plugin.provenance.integrity_status
+                        != crate::InstalledPluginIntegrityStatus::MatchesInstallSnapshot
+                })
+                .count();
             let installed_plugin_grants = installed_plugins
                 .into_iter()
                 .map(|plugin| InstalledPluginGrantSurface {
@@ -568,6 +581,11 @@ impl IpcState {
                     name: plugin.manifest.name,
                     execution_enabled: plugin.execution_enabled,
                     execution_grant: plugin.execution_grant,
+                    integrity_status: plugin.provenance.integrity_status,
+                    capture_method: plugin.provenance.capture_method,
+                    last_verified_at: plugin.provenance.last_verified_at,
+                    origin_claim: plugin.provenance.origin_claim,
+                    origin_claim_verified: plugin.provenance.origin_claim_verified,
                     installed_at: plugin.installed_at,
                     action_count: plugin.manifest.actions.len(),
                     high_risk_action_count: plugin
@@ -604,6 +622,7 @@ impl IpcState {
                 installed_plugin_grants,
                 high_risk_pending_count,
                 executable_installed_plugin_count,
+                unverified_installed_plugin_count,
                 side_effects_require_approval: true,
             })
         })

@@ -57,9 +57,13 @@ These notes capture durable facts for future agents working on this repository.
 - Repository-backed IPC exposes `/permissions/grants`, and the CLI exposes
   `jarvis permissions grants`, as a read-only permission-center summary. It
   combines approval status counts/history, high-risk pending approval count,
-  installed-plugin grant state, executable installed-plugin count, and the
+  installed-plugin grant state, executable installed-plugin count, provenance
+  integrity status, capture method, last verification timestamp, origin claim
+  metadata, unverified installed-plugin count, and the
   `side_effects_require_approval` invariant without enabling installed plugin
-  execution.
+  execution. The Swift permission center renders those provenance statuses so
+  metadata-only, verified, changed, missing, invalid, and legacy-unverified
+  plugin grants are visible during review.
 - The CLI has matching `tasks`, `memory`, `scheduler`, `diagnostics`, and
   `plugins` subcommands, including `plugins install`, `plugins installed`,
   `plugins installed-get`, `plugins enable-installed`, `plugins

@@ -665,6 +665,7 @@ public struct JarvisPermissionSurfaceState: Equatable, Sendable {
     public var deniedGrantCount: Int
     public var installedPluginGrantCount: Int
     public var executableInstalledPluginGrantCount: Int
+    public var unverifiedInstalledPluginGrantCount: Int
     public var sideEffectsRequireApproval: Bool
     public var declaredScopes: [String]
     public var riskTierCounts: [JarvisPermissionRiskCount]
@@ -691,6 +692,7 @@ public struct JarvisPermissionSurfaceState: Equatable, Sendable {
         deniedGrantCount: Int,
         installedPluginGrantCount: Int,
         executableInstalledPluginGrantCount: Int,
+        unverifiedInstalledPluginGrantCount: Int,
         sideEffectsRequireApproval: Bool,
         declaredScopes: [String],
         riskTierCounts: [JarvisPermissionRiskCount],
@@ -705,6 +707,7 @@ public struct JarvisPermissionSurfaceState: Equatable, Sendable {
         self.deniedGrantCount = deniedGrantCount
         self.installedPluginGrantCount = installedPluginGrantCount
         self.executableInstalledPluginGrantCount = executableInstalledPluginGrantCount
+        self.unverifiedInstalledPluginGrantCount = unverifiedInstalledPluginGrantCount
         self.sideEffectsRequireApproval = sideEffectsRequireApproval
         self.declaredScopes = declaredScopes
         self.riskTierCounts = riskTierCounts
@@ -721,6 +724,7 @@ public struct JarvisPermissionSurfaceState: Equatable, Sendable {
         deniedGrantCount: 0,
         installedPluginGrantCount: 0,
         executableInstalledPluginGrantCount: 0,
+        unverifiedInstalledPluginGrantCount: 0,
         sideEffectsRequireApproval: true,
         declaredScopes: [],
         riskTierCounts: [],
@@ -741,6 +745,7 @@ public struct JarvisPermissionSurfaceState: Equatable, Sendable {
         let deniedGrantCount = grantSummary?.count(for: "denied") ?? 0
         let installedPluginGrantCount = grantSummary?.installedPluginGrants.count ?? 0
         let executableInstalledPluginGrantCount = grantSummary?.executableInstalledPluginCount ?? 0
+        let unverifiedInstalledPluginGrantCount = grantSummary?.unverifiedInstalledPluginCount ?? 0
         let sideEffectsRequireApproval = grantSummary?.sideEffectsRequireApproval ?? true
         let actions = pluginManifests.flatMap(\.actions)
         let declaredScopes = Array(Set(actions.flatMap(\.permissions))).sorted()
@@ -768,6 +773,7 @@ public struct JarvisPermissionSurfaceState: Equatable, Sendable {
             deniedGrantCount: deniedGrantCount,
             installedPluginGrantCount: installedPluginGrantCount,
             executableInstalledPluginGrantCount: executableInstalledPluginGrantCount,
+            unverifiedInstalledPluginGrantCount: unverifiedInstalledPluginGrantCount,
             sideEffectsRequireApproval: sideEffectsRequireApproval,
             declaredScopes: declaredScopes,
             riskTierCounts: riskTierCounts,
@@ -828,6 +834,7 @@ public struct JarvisPermissionGrantSummary: Decodable, Equatable, Sendable {
     public var installedPluginGrants: [JarvisInstalledPluginGrantSurface]
     public var highRiskPendingCount: Int
     public var executableInstalledPluginCount: Int
+    public var unverifiedInstalledPluginCount: Int
     public var sideEffectsRequireApproval: Bool
 
     public func count(for status: String) -> Int {
@@ -841,6 +848,7 @@ public struct JarvisPermissionGrantSummary: Decodable, Equatable, Sendable {
         case installedPluginGrants = "installed_plugin_grants"
         case highRiskPendingCount = "high_risk_pending_count"
         case executableInstalledPluginCount = "executable_installed_plugin_count"
+        case unverifiedInstalledPluginCount = "unverified_installed_plugin_count"
         case sideEffectsRequireApproval = "side_effects_require_approval"
     }
 }
@@ -855,17 +863,28 @@ public struct JarvisInstalledPluginGrantSurface: Decodable, Equatable, Identifia
     public var name: String
     public var executionEnabled: Bool
     public var executionGrant: String
+    public var integrityStatus: String
+    public var captureMethod: String
+    public var lastVerifiedAt: String?
+    public var originClaim: String?
+    public var originClaimVerified: Bool
     public var installedAt: String
     public var actionCount: Int
     public var highRiskActionCount: Int
 
     public var id: String { pluginId }
+    public var needsProvenanceReview: Bool { integrityStatus != "matches_install_snapshot" }
 
     enum CodingKeys: String, CodingKey {
         case pluginId = "plugin_id"
         case name
         case executionEnabled = "execution_enabled"
         case executionGrant = "execution_grant"
+        case integrityStatus = "integrity_status"
+        case captureMethod = "capture_method"
+        case lastVerifiedAt = "last_verified_at"
+        case originClaim = "origin_claim"
+        case originClaimVerified = "origin_claim_verified"
         case installedAt = "installed_at"
         case actionCount = "action_count"
         case highRiskActionCount = "high_risk_action_count"

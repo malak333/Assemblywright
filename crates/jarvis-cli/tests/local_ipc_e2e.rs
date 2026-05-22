@@ -187,6 +187,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
 
     let initial_grants = run_cli_json(["permissions", "grants", "--endpoint", endpoint.as_str()]);
     assert_eq!(initial_grants["executable_installed_plugin_count"], 0);
+    assert_eq!(initial_grants["unverified_installed_plugin_count"], 1);
     assert_eq!(initial_grants["side_effects_require_approval"], true);
     assert_array_contains(
         &initial_grants["installed_plugin_grants"],
@@ -197,6 +198,16 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         &initial_grants["installed_plugin_grants"],
         "execution_grant",
         "metadata_only",
+    );
+    assert_array_contains(
+        &initial_grants["installed_plugin_grants"],
+        "integrity_status",
+        "not_verified",
+    );
+    assert_array_contains(
+        &initial_grants["installed_plugin_grants"],
+        "capture_method",
+        "local_manifest_snapshot",
     );
 
     let blocked_installed_run = run_cli_json([
@@ -903,7 +914,13 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         "plugin_id",
         "local_e2e_plugin",
     );
+    assert_array_contains(
+        &persisted_grants["installed_plugin_grants"],
+        "integrity_status",
+        "matches_install_snapshot",
+    );
     assert_eq!(persisted_grants["executable_installed_plugin_count"], 1);
+    assert_eq!(persisted_grants["unverified_installed_plugin_count"], 0);
     assert_eq!(persisted_grants["side_effects_require_approval"], true);
 
     let persisted_memory =
