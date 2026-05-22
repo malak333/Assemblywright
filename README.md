@@ -120,7 +120,7 @@ Opt-in final-transcript auto-submit is text-path parity only; it does not clear
 live microphone/Speech/audio-output validation or manual release QA.
 
 Phase 3 landed through separate worktrees for model route persistence, plugin
-subprocess sandboxing, voice input controls, packaged app release smoke,
+subprocess grant gating, voice input controls, packaged app release smoke,
 permission grants UX, docs architecture alignment, distribution packaging, and
 Keychain launch credential injection. Follow-on slices have added Swift memory
 CRUD, local plugin provenance verification, scheduler attention handoff, and

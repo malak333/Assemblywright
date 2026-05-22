@@ -180,8 +180,8 @@ These notes capture durable facts for future agents working on this repository.
   public key, verify the signature, set `origin_claim_verified: true`, and
   append `installed_plugin_publisher_signature_verified` with a hashed trusted
   key reference. This proves the manifest was signed by the trusted key; it
-  still does not prove marketplace approval, malware safety, or runtime sandbox
-  completeness.
+  still does not prove marketplace approval, malware safety, or OS-level
+  process/network sandbox completeness.
 - Plugin actions that request the existing `network` permission must now
   declare `network_access.mode: declared_hosts` and exact plain-hostname
   `allowed_hosts`. Invalid host declarations fail manifest validation, and
@@ -194,7 +194,7 @@ These notes capture durable facts for future agents working on this repository.
 - `./scripts/release-plugin-trust-qa.sh` keeps the plugin trust release gate
   explicit. `--check` validates repo-owned plugin trust prerequisites and
   prints the marketplace review, malware scan, signed publisher policy, OS
-  sandbox, and host-level egress runbook. `--self-test` proves JSON report
+  OS-level process/network sandbox and host-level egress runbook. `--self-test` proves JSON report
   mechanics with fake validation flags and fake evidence notes only.
   `--assert-complete` writes an owner-recorded JSON report after every
   `JARVIS_PLUGIN_QA_*` flag is true and the owner/timestamp/evidence-note fields
@@ -635,6 +635,6 @@ These notes capture durable facts for future agents working on this repository.
   Subprocess stderr may contain bounded progress frames, but raw stderr remains
   redacted from response and audit payloads. Any broader executable path or
   real-time plugin progress
-  stream needs a stronger sandbox,
+  stream needs a stronger OS-level process/network sandbox or equivalent host isolation boundary,
   explicit grant state beyond `metadata_only`, policy checks,
   timeout/cancellation behavior, and E2E audit coverage.

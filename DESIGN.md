@@ -303,7 +303,7 @@ configured or packaged-style local core binaries.
 The active phase-3 production sweep uses isolated worktrees, topic branches,
 reviewable PR slices, and docs-only synchronization work on
 `codex/phase3-docs-architecture`. The phase-3 lanes are
-`model-route-persistence`, `plugin-subprocess-sandbox`,
+`model-route-persistence`, `plugin-subprocess-grant-gating`,
 `voice-adapter-production`, `packaged-app-release-smoke`,
 `permission-grants-ux`, and `phase3-docs-architecture`. Follow-on slices
 include Swift memory classification/CRUD/restore and local plugin provenance

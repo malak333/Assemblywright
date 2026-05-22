@@ -180,7 +180,7 @@ fi
 require_command grep
 
 require_file_contains "plugin contract" "$ROOT_DIR/docs/plugin-contract.md" "WASM, OS-level network sandboxing, and malware-analysis trust remain target"
-require_file_contains "plugin contract" "$ROOT_DIR/docs/plugin-contract.md" "marketplace approval, malware safety, or sandbox completeness"
+require_file_contains "plugin contract" "$ROOT_DIR/docs/plugin-contract.md" "marketplace approval, malware safety, OS-level process/network sandboxing"
 require_file_contains "release checklist" "$ROOT_DIR/docs/release-checklist.md" "marketplace plugin review, malware"
 require_file_contains "release checklist" "$ROOT_DIR/docs/release-checklist.md" "analysis, or OS sandbox"
 require_file_contains "readme" "$ROOT_DIR/README.md" "marketplace plugin trust, OS-level plugin network sandboxing"
