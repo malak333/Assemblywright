@@ -239,12 +239,13 @@ These notes capture durable facts for future agents working on this repository.
   evidence: it builds `jarvis-cli` and the Swift app executable, assembles a
   deterministic `Jarvis.app`, writes release-smoke `Info.plist` metadata,
   bundles `jarvis-cli` at `Contents/Resources/bin/jarvis-cli`, ad-hoc signs
-  with `codesign -` when available, launches the app executable with a
-  temporary HOME/profile and explicit temp database path, and verifies
-  app-supervised health, command, audit, diagnostics, emergency pause, blocked
-  command, pause status, resume, and SQLite state. It is not Developer ID
-  signing, notarization, installer validation, entitlement validation,
-  Finder/LaunchServices validation, App Store distribution, or real
+  with `codesign -` and `packaging/Jarvis.entitlements` when available,
+  verifies microphone/Speech usage strings and the packaged app audio-input
+  entitlement, launches the app executable with a temporary HOME/profile and
+  explicit temp database path, and verifies app-supervised health, command,
+  audit, diagnostics, emergency pause, blocked command, pause status, resume,
+  and SQLite state. It is not Developer ID signing, notarization, installer
+  validation, Finder/LaunchServices validation, App Store distribution, or real
   microphone/Speech/live audio-output coverage.
 - Swift scheduler notification controls are repo-owned adapter evidence: the
   core model can request authorization, build due/failed notification requests,

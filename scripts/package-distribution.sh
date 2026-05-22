@@ -185,6 +185,12 @@ run codesign --force --timestamp --options runtime \
   --sign "$JARVIS_DEVELOPER_ID_APPLICATION" \
   "$APP_PATH"
 run codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+APP_ENTITLEMENTS_OUTPUT="$(codesign -d --entitlements :- "$APP_PATH" 2>/dev/null)"
+if [[ "$APP_ENTITLEMENTS_OUTPUT" != *"com.apple.security.device.audio-input"* ]]; then
+  printf 'error: signed app entitlements do not include microphone access\n' >&2
+  printf '%s\n' "$APP_ENTITLEMENTS_OUTPUT" >&2
+  exit 1
+fi
 
 rm -f "$ZIP_PATH"
 run ditto -c -k --keepParent "$APP_PATH" "$ZIP_PATH"
