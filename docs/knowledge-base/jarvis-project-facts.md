@@ -60,11 +60,11 @@ These notes capture durable facts for future agents working on this repository.
   `plugins installed-get`, `plugins enable-installed`, `plugins
   disable-installed`, and `plugins run-installed` for disabled-by-default local
   manifests and explicit subprocess execution.
-- The planned signed packaged app, real voice loop, and broader production
-  operations are not yet implemented in this worktree. Installed plugin
-  execution now has a constrained local subprocess proof, but not a broader
-  plugin marketplace, WASM sandbox, network sandbox, or third-party trust
-  system.
+- A local packaged app release smoke exists, and installed plugin execution now
+  has a constrained local subprocess proof. Developer ID signing,
+  notarization, installer validation, App Store distribution, real voice loop,
+  broader plugin marketplace/WASM/network sandboxing, third-party trust, and
+  broader production operations are not yet implemented in this worktree.
   The SwiftUI shell scaffold and IPC client live under `apps/mac`, including a
   command transcript, activity/audit panel, approval decision controls,
   management tabs, permission grant-history summary, degraded-mode handling,
@@ -77,8 +77,9 @@ These notes capture durable facts for future agents working on this repository.
 - The active architecture docs should also describe the current production
   sweep structure, but that workflow context must remain separate from
   readiness proof.
-- The Swift shell is currently a scaffold with a core supervisor abstraction,
-  not a signed packaged app with bundled-core smoke evidence.
+- The Swift shell is currently a scaffold with a core supervisor abstraction
+  and local packaged-app smoke evidence. It is not a Developer ID signed or
+  notarized packaged app.
 - The Swift shell now exposes production-facing scaffold tabs for approval
   evidence, runs/audit, scheduler create/inspect/cancel, redacted diagnostics,
   and voice state. Voice supports typed transcript staging and hands the
@@ -115,8 +116,11 @@ These notes capture durable facts for future agents working on this repository.
   and no coverage exists, add the coverage or record the blocker. Docs-only
   phases should at least preserve the architecture diagrams, release checklist,
   build/test commands, and KB proof-boundary notes.
-- Do not describe Jarvis as a finished desktop assistant until the Swift shell,
-  packaged app, richer permission UX, and Mac release smoke test exist.
+- Do not describe Jarvis as a finished desktop assistant based on the local
+  packaged app smoke alone. Broader readiness still needs Developer ID
+  signing/notarization evidence, richer permission UX, real voice where
+  claimed, installed-plugin sandboxing/execution where claimed, and manual
+  clean-profile release QA.
 - Do not describe Jarvis as production assistant ready based only on the Rust
   and Swift local gates. The stronger claim requires packaged-app evidence,
   richer permission UX, real voice where claimed, diagnostics/recovery checks,
@@ -128,6 +132,17 @@ These notes capture durable facts for future agents working on this repository.
   state, and verifies health, command, audit, diagnostics, emergency pause,
   blocked command, pause status, and resume over IPC. It is not signed,
   notarized, clean-profile packaged app release evidence.
+- `./scripts/packaged-app-release-smoke.sh` is stronger local packaged app
+  evidence: it builds `jarvis-cli` and the Swift app executable, assembles a
+  deterministic `Jarvis.app`, writes release-smoke `Info.plist` metadata,
+  bundles `jarvis-cli` at `Contents/Resources/bin/jarvis-cli`, ad-hoc signs
+  with `codesign -` when available, launches the app executable with a
+  temporary HOME/profile and explicit temp database path, and verifies
+  app-supervised health, command, audit, diagnostics, emergency pause, blocked
+  command, pause status, resume, and SQLite state. It is not Developer ID
+  signing, notarization, installer validation, entitlement validation,
+  Finder/LaunchServices validation, App Store distribution, or real
+  microphone/Speech/TTS coverage.
 - It is fair to describe the current repo as a Rust foundation with tested
   scaffolding for IPC, storage, policy, routing, runtime, scheduler, plugin
   contracts, deterministic first-party plugin command execution, bounded
@@ -162,8 +177,13 @@ These notes capture durable facts for future agents working on this repository.
   worktrees and `codex/` topic branches, PRs should be reviewable and
   evidence-backed, docs-only workers must not edit Rust or Swift code, and
   readiness language must stay scoped to verified local foundation surfaces
-  until the packaged app, real voice, executable plugin sandbox, proactive
-  background scheduler, recovery, and release smoke gates exist.
+  until distribution-grade packaged app signing/notarization, real voice,
+  executable plugin sandbox, recovery, and manual release QA gates exist.
+- Durable fact from phase 3 packaged app work: SwiftPM does not create a full
+  release `.app` bundle by itself here, so the local smoke assembles the bundle
+  deterministically in a temp directory and uses environment-configurable
+  supervisor endpoint/database settings to avoid port conflicts and preserve
+  clean temp-profile state.
 - The user explicitly expects each feature/phase to follow docs and
   documentation, add useful conversation-derived knowledge-base facts, and add
   or confirm end-to-end testing for the discussed scope.

@@ -14,8 +14,9 @@ struct JarvisMacApp: App {
     @StateObject private var voice: VoiceStateModel
 
     init() {
-        let client = JarvisIPCClient()
-        _supervisor = StateObject(wrappedValue: JarvisCoreSupervisor(client: client))
+        let configuration = JarvisCoreSupervisorConfiguration()
+        let client = JarvisIPCClient(endpoint: configuration.endpoint)
+        _supervisor = StateObject(wrappedValue: JarvisCoreSupervisor(configuration: configuration, client: client))
         _console = StateObject(wrappedValue: CommandConsoleModel(client: client))
         _memory = StateObject(wrappedValue: MemoryManagerModel(client: client))
         _plugins = StateObject(wrappedValue: PluginManagerModel(client: client))
