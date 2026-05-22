@@ -65,6 +65,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_array_contains(&contract["features"], "key", "live_voice_loop");
     assert_array_contains(&contract["features"], "status", "pending_manual_validation");
     assert_array_contains(&contract["endpoints"], "path", "/diagnostics/export");
+    assert_array_contains(&contract["endpoints"], "path", "/release/readiness");
     assert_array_contains(&contract["endpoints"], "path", "/permissions/grants");
     assert_array_contains(&contract["endpoints"], "path", "/permissions/policy-review");
     assert_array_contains(&contract["endpoints"], "path", "/scheduler/recover-stale");
@@ -89,6 +90,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     );
     assert_array_contains(&contract["endpoints"], "path", "/plugins/installed/:id/run");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/model-routes");
+    assert_string_array_contains(&contract["safe_inspection_paths"], "/release/readiness");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/model-routes/:id");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/scheduler/attention");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/scheduler/jobs/:id");
@@ -100,6 +102,31 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_string_array_contains(&contract["safe_inspection_paths"], "/approvals/:id");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/activity/summary");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/activity/events");
+
+    let release_readiness = run_cli_json(["release", "readiness", "--endpoint", endpoint.as_str()]);
+    assert_eq!(release_readiness["production_ready"], false);
+    assert_array_contains(
+        &release_readiness["implemented_features"],
+        "key",
+        "installed_plugin_execution",
+    );
+    assert_array_contains(
+        &release_readiness["pending_features"],
+        "key",
+        "live_voice_loop",
+    );
+    assert_string_array_contains(
+        &release_readiness["blocking_manual_gates"],
+        "Developer ID Application and Installer signing credentials configured and used for a full signed package run",
+    );
+    assert_string_array_contains(
+        &release_readiness["recommended_verification_commands"],
+        "./scripts/release-local.sh",
+    );
+    assert!(release_readiness["proof_boundary"]
+        .as_str()
+        .expect("release readiness proof boundary")
+        .contains("does not perform signing"));
 
     let command = run_cli_json([
         "command",

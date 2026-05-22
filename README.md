@@ -10,8 +10,9 @@ structured provider-failure responses with route/audit evidence, plugin
 contracts, metadata-only local plugin installation, local plugin
 provenance snapshots, scheduler state, redacted diagnostics export, a loopback
 IPC surface with compatibility policy plus feature proof/boundary metadata,
-repository-backed activity summary and activity event stream, and CLI smoke
-paths for the Swift shell scaffold and future packaged app.
+repository-backed activity summary and activity event stream, conservative
+release-readiness inspection, and CLI smoke paths for the Swift shell scaffold
+and future packaged app.
 It also includes the first buildable Swift/SwiftUI Mac shell scaffold under
 `apps/mac`, with a tested IPC client, command-console state model,
 activity/audit panel with current progress summary, memory
@@ -86,6 +87,12 @@ agents should stay inside their assigned ownership, preserve unrelated edits,
 and treat cross-process E2E plus the local release gate as the evidence bar.
 Passing the local gate supports only the implemented Rust/Swift foundation
 claim; it is not proof of a finished packaged assistant.
+`/release/readiness` and `jarvis release readiness` summarize implemented
+feature proofs, pending feature boundaries, recommended verification commands,
+and manual production blockers in one read-only response. The response keeps
+`production_ready: false` until Developer ID signing/notarization,
+clean-profile installer/Finder validation, live voice device checks, and manual
+QA are actually completed.
 
 Phase 3 landed through separate worktrees for model route persistence, plugin
 subprocess sandboxing, voice input controls, packaged app release smoke,
@@ -197,13 +204,14 @@ package creation when Apple credentials are provided. It still does not replace
 clean-profile installer run, Finder launch, App Store validation, or live
 microphone/Speech/audio-output validation.
 
-With a repository-backed server running, `jarvis tasks`, `jarvis memory`,
-`jarvis activity summary`, `jarvis scheduler`, `jarvis diagnostics`, and
+With a repository-backed server running, `jarvis release readiness`,
+`jarvis tasks`, `jarvis memory`, `jarvis activity summary`,
 `jarvis activity watch`, `jarvis scheduler`, `jarvis diagnostics`, and
-`jarvis plugins` expose the current durable state, status counts, recent
-task/audit progress, bounded activity events, redacted scheduler attention
-handoff, scheduler trigger policy review, redacted diagnostics, first-party
-plugin manifests, and disabled installed-plugin registry metadata over IPC.
+`jarvis plugins` expose the current readiness evidence, durable state, status
+counts, recent task/audit progress, bounded activity events, redacted scheduler
+attention handoff, scheduler trigger policy review, redacted diagnostics,
+first-party plugin manifests, and disabled installed-plugin registry metadata
+over IPC.
 
 ## Docs
 

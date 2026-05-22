@@ -28,6 +28,12 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
 - Confirm the current-vs-target implementation phase table is up to date before
   using any production-readiness language. Release notes may claim foundation
   readiness only for verified Rust/Swift surfaces, not full assistant readiness.
+- Confirm `jarvis release readiness` or `/release/readiness` reports the same
+  implemented feature proofs, pending feature boundaries, recommended
+  verification commands, and manual production blockers as this checklist.
+  Treat `production_ready: false` as authoritative until the external signing,
+  notarization, install, Finder/LaunchServices, live-device, and manual QA
+  gates are complete.
 - Confirm no Marvel branding, copyrighted visuals, or confusing product claims
   were introduced.
 - Confirm any autonomous sweep summary names the active ownership slices and
@@ -221,6 +227,13 @@ stage or when a PR needs focused evidence for one ownership slice.
 - Confirm `/contract` exposes compatibility policy plus feature proof/boundary
   metadata and Swift decodes it, so release notes can cite implemented surfaces
   without overclaiming pending manual gates.
+- Confirm `/release/readiness` and `jarvis release readiness` expose a
+  read-only conservative readiness summary derived from contract feature
+  metadata and release-checklist blockers, and that it does not perform or
+  claim signing, notarization, installation, Finder/LaunchServices validation,
+  live microphone/Speech validation, live audio-output validation, App Store
+  review, marketplace plugin review, malware analysis, or OS sandbox
+  enforcement.
 - Confirm the cross-process CLI E2E still covers command, plugin, audit,
   redacted model-route inspection and restart recovery, memory
   classification summary, create/update/review/delete/restore, scheduler
