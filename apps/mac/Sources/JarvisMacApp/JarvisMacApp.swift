@@ -519,22 +519,70 @@ struct PluginManagerView: View {
             lastError: model.lastError,
             refresh: { await model.refresh() }
         ) {
-            List(model.manifests) { manifest in
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("\(manifest.name) \(manifest.version)")
-                        .font(.subheadline)
-                    Text("\(manifest.source) | \(manifest.author)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    ForEach(manifest.actions, id: \.name) { action in
-                        Text("\(action.name): \(action.riskTier), \(action.permissions.joined(separator: ", "))")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+            List {
+                if let warning = model.installedRegistryWarning {
+                    Section("Installed") {
+                        Text(warning)
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .textSelection(.enabled)
                     }
                 }
-                .padding(.vertical, 4)
+
+                if !model.installedPlugins.isEmpty {
+                    Section("Installed") {
+                        ForEach(model.installedPlugins) { plugin in
+                            VStack(alignment: .leading, spacing: 5) {
+                                HStack {
+                                    Text("\(plugin.manifest.name) \(plugin.manifest.version)")
+                                        .font(.subheadline)
+                                    Spacer()
+                                    Text(plugin.executionEnabled ? plugin.executionGrant : "disabled")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Text(plugin.sourcePath)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                    .textSelection(.enabled)
+                                Text(installedPluginStatus(plugin))
+                                    .font(.caption2)
+                                    .foregroundStyle(plugin.provenance.needsReview ? .orange : .secondary)
+                                    .textSelection(.enabled)
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                }
+
+                Section("First-party manifests") {
+                    ForEach(model.manifests) { manifest in
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text("\(manifest.name) \(manifest.version)")
+                                .font(.subheadline)
+                            Text("\(manifest.source) | \(manifest.author)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            ForEach(manifest.actions, id: \.name) { action in
+                                Text("\(action.name): \(action.riskTier), \(action.permissions.joined(separator: ", "))")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
             }
         }
+    }
+
+    private func installedPluginStatus(_ plugin: JarvisInstalledPluginRecord) -> String {
+        let origin = plugin.provenance.originClaim.map { "origin \($0)" } ?? "origin unknown"
+        let originReview = plugin.provenance.originClaimVerified ? "origin reviewed" : "origin unreviewed"
+        let executable = plugin.isExecutable ? "executable" : "not executable"
+        return "\(plugin.provenance.integrityStatus) | \(origin) | \(originReview) | \(executable)"
     }
 }
 
