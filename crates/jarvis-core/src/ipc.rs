@@ -3709,8 +3709,8 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "scheduler_stale_running_recovery",
             "implemented",
-            "Explicit `/scheduler/recover-stale` marks stale running jobs failed with redacted audit evidence and is covered by Rust unit plus CLI IPC E2E tests.",
-            "Operator-triggered recovery only; no automatic background recovery or distributed lease claim.",
+            "Explicit `/scheduler/recover-stale` plus opt-in startup recovery mark stale running jobs failed with redacted audit evidence and are covered by Rust unit plus CLI IPC E2E tests.",
+            "Bounded local stale-job cleanup only; no default background recovery or distributed lease claim.",
         ),
         feature(
             "memory_policy_review",
@@ -4052,6 +4052,12 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .implemented_features
             .iter()
             .any(|feature| feature.key == "installed_plugin_execution"));
+        assert!(readiness
+            .implemented_features
+            .iter()
+            .any(|feature| feature.key == "scheduler_stale_running_recovery"
+                && feature.proof.contains("opt-in startup recovery")
+                && feature.boundary.contains("no default background recovery")));
         assert!(readiness
             .pending_features
             .iter()

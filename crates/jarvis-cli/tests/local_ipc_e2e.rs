@@ -98,6 +98,26 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         "key",
         "scheduler_stale_running_recovery",
     );
+    let stale_recovery = contract["features"]
+        .as_array()
+        .expect("features array")
+        .iter()
+        .find(|feature| feature["key"] == "scheduler_stale_running_recovery")
+        .expect("scheduler stale recovery feature");
+    assert!(
+        stale_recovery["proof"]
+            .as_str()
+            .expect("stale recovery proof")
+            .contains("opt-in startup recovery"),
+        "{stale_recovery}"
+    );
+    assert!(
+        stale_recovery["boundary"]
+            .as_str()
+            .expect("stale recovery boundary")
+            .contains("no default background recovery"),
+        "{stale_recovery}"
+    );
     assert_array_contains(&contract["features"], "key", "installed_plugin_execution");
     assert_array_contains(&contract["features"], "key", "live_voice_loop");
     assert_array_contains(&contract["features"], "status", "pending_manual_validation");
