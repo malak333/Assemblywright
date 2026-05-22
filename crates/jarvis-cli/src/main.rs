@@ -7,7 +7,8 @@ use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 use jarvis_core::{
     ApprovalDecisionRequest, CommandRequest, CreateMemoryItemRequest, CreateSchedulerJobRequest,
-    EmergencyPauseRequest, InstallPluginRequest, Sensitivity, TriggerKind, UpdateMemoryItemRequest,
+    EmergencyPauseRequest, InstallPluginRequest, InstalledPluginExecutionGrant,
+    InstalledPluginExecutionRequest, Sensitivity, TriggerKind, UpdateMemoryItemRequest,
 };
 use tokio::net::TcpListener;
 
@@ -87,6 +88,11 @@ enum CliCommand {
     Tasks {
         #[command(subcommand)]
         command: TasksCommand,
+    },
+    /// Inspect persisted model route evidence.
+    Routes {
+        #[command(subcommand)]
+        command: RoutesCommand,
     },
     /// Inspect or update persisted memory items.
     Memory {
@@ -181,6 +187,23 @@ enum TasksCommand {
 }
 
 #[derive(Debug, Subcommand)]
+enum RoutesCommand {
+    /// List persisted model route records, optionally scoped to one task id.
+    List {
+        #[arg(long)]
+        task_id: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    /// Fetch one persisted model route record by id.
+    Get {
+        id: String,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 enum MemoryCommand {
     /// List persisted memory items.
     List {
@@ -258,6 +281,20 @@ enum PluginsCommand {
     },
     /// Fetch one locally installed plugin metadata record by id.
     InstalledGet {
+        id: String,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    /// Enable an installed local subprocess plugin with an explicit execution grant.
+    EnableInstalled {
+        id: String,
+        #[arg(long, default_value = "subprocess_stdio")]
+        grant: InstalledPluginExecutionGrant,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    /// Disable an installed plugin and reset it to metadata-only.
+    DisableInstalled {
         id: String,
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
@@ -470,6 +507,20 @@ async fn main() -> anyhow::Result<()> {
                 println!("{}", request(&endpoint, "GET", &path, None)?);
             }
         },
+        CliCommand::Routes { command } => match command {
+            RoutesCommand::List { task_id, endpoint } => {
+                let path = task_id
+                    .map(|id| format!("/model-routes?task_id={id}"))
+                    .unwrap_or_else(|| "/model-routes".to_string());
+                println!("{}", request(&endpoint, "GET", &path, None)?);
+            }
+            RoutesCommand::Get { id, endpoint } => {
+                println!(
+                    "{}",
+                    request(&endpoint, "GET", &format!("/model-routes/{id}"), None)?
+                );
+            }
+        },
         CliCommand::Memory { command } => match command {
             MemoryCommand::List {
                 include_deleted,
@@ -565,6 +616,40 @@ async fn main() -> anyhow::Result<()> {
                 println!(
                     "{}",
                     request(&endpoint, "GET", &format!("/plugins/installed/{id}"), None)?
+                );
+            }
+            PluginsCommand::EnableInstalled {
+                id,
+                grant,
+                endpoint,
+            } => {
+                let body = serde_json::to_string(&InstalledPluginExecutionRequest {
+                    execution_enabled: true,
+                    execution_grant: grant,
+                })?;
+                println!(
+                    "{}",
+                    request(
+                        &endpoint,
+                        "POST",
+                        &format!("/plugins/installed/{id}/execution"),
+                        Some(&body)
+                    )?
+                );
+            }
+            PluginsCommand::DisableInstalled { id, endpoint } => {
+                let body = serde_json::to_string(&InstalledPluginExecutionRequest {
+                    execution_enabled: false,
+                    execution_grant: InstalledPluginExecutionGrant::MetadataOnly,
+                })?;
+                println!(
+                    "{}",
+                    request(
+                        &endpoint,
+                        "POST",
+                        &format!("/plugins/installed/{id}/execution"),
+                        Some(&body)
+                    )?
                 );
             }
             PluginsCommand::RunInstalled {
@@ -742,6 +827,7 @@ async fn run_smoke() -> anyhow::Result<()> {
         "path",
         "/diagnostics/export",
     )?;
+    require_array_contains_object_field(&contract_json["endpoints"], "path", "/model-routes")?;
 
     let command_body = serde_json::to_string(&CommandRequest {
         input: "smoke command".to_string(),
@@ -766,7 +852,7 @@ async fn run_smoke() -> anyhow::Result<()> {
     require_json_field(
         &diagnostics_json,
         "redaction",
-        "diagnostics export omits command bodies, scheduler commands, audit payloads, memory values, and cancellation reason text",
+        "diagnostics export omits command bodies, scheduler commands, model route contexts, audit payloads, memory values, and cancellation reason text",
     )?;
     require_nested_field(&diagnostics_json, &["health", "status"], "ok")?;
 
@@ -834,6 +920,11 @@ async fn run_smoke() -> anyhow::Result<()> {
         serde_json::from_str(&persistent_diagnostics)?;
     require_bool_field(&persistent_diagnostics_json, "repository_backed", true)?;
     require_number_at_least(&persistent_diagnostics_json, "task_count", 1)?;
+    require_number_at_least(&persistent_diagnostics_json, "model_route_record_count", 1)?;
+
+    let routes = request(&persistent_endpoint, "GET", "/model-routes", None)?;
+    let routes_json: serde_json::Value = serde_json::from_str(&routes)?;
+    require_array_field(&routes_json, "root")?;
 
     persistent_server.abort();
     let _ = std::fs::remove_file(db_path);
