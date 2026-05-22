@@ -15,6 +15,33 @@ use tempfile::TempDir;
 const BIN: &str = env!("CARGO_BIN_EXE_jarvis");
 
 #[test]
+fn release_readiness_cli_falls_back_without_running_server() {
+    let endpoint = format!("http://{}", unused_loopback_addr());
+
+    let release_readiness = run_cli_json(["release", "readiness", "--endpoint", endpoint.as_str()]);
+
+    assert_eq!(release_readiness["production_ready"], false);
+    assert_array_contains(
+        &release_readiness["implemented_features"],
+        "key",
+        "installed_plugin_execution",
+    );
+    assert_array_contains(
+        &release_readiness["pending_features"],
+        "key",
+        "live_voice_loop",
+    );
+    assert_string_array_contains(
+        &release_readiness["blocking_manual_gates"],
+        "Developer ID Application and Installer signing credentials configured and used for a full signed package run",
+    );
+    assert!(release_readiness["proof_boundary"]
+        .as_str()
+        .expect("release readiness proof boundary")
+        .contains("does not perform signing"));
+}
+
+#[test]
 fn serve_exposes_local_ipc_contract_and_persists_state() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let db_path = temp_dir.path().join("jarvis-e2e.sqlite");

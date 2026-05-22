@@ -31,6 +31,8 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
 - Confirm `jarvis release readiness` or `/release/readiness` reports the same
   implemented feature proofs, pending feature boundaries, recommended
   verification commands, and manual production blockers as this checklist.
+  The CLI command should also return the conservative local readiness summary
+  when no IPC server is running, while preserving the same production blockers.
   Treat `production_ready: false` as authoritative until the external signing,
   notarization, install, Finder/LaunchServices, live-device, and manual QA
   gates are complete.
@@ -233,7 +235,8 @@ stage or when a PR needs focused evidence for one ownership slice.
   claim signing, notarization, installation, Finder/LaunchServices validation,
   live microphone/Speech validation, live audio-output validation, App Store
   review, marketplace plugin review, malware analysis, or OS sandbox
-  enforcement.
+  enforcement. The CLI fallback for an unavailable local IPC server must keep
+  the same conservative blocker set instead of claiming server-backed proof.
 - Confirm the Swift Release tab decodes the same `/release/readiness` contract
   and renders blocking gates, recommended commands, implemented proofs, pending
   features, and proof boundary without enabling release side effects.

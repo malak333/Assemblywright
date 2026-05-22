@@ -23,6 +23,7 @@ flowchart TB
     LocalGate --> CargoGate["fmt, clippy, tests, build, package"]
     LocalGate --> MigrationSmoke["storage-migration-backup-smoke.sh"]
     ReleaseReadiness["/release/readiness and jarvis release readiness"] --> Docs
+    ReleaseReadinessFallback["serverless CLI readiness fallback"] --> ReleaseReadiness
     AppReleaseSmoke["packaged-app-release-smoke.sh"] --> LocalApp["temp Jarvis.app bundle"]
     LocalApp --> AppMetadata["Info.plist plus ad-hoc codesign when available"]
     LocalApp --> BundledCLI["Contents/Resources/bin/jarvis-cli"]
@@ -170,7 +171,10 @@ implemented feature proofs, pending feature boundaries, recommended
 verification commands, and manual production blockers while keeping
 `production_ready: false` until external signing/notarization, clean-profile
 install/Finder validation, live voice/audio validation, and manual QA are
-actually complete.
+actually complete. `jarvis release readiness` prefers that IPC endpoint and
+falls back to the same local `IpcState` readiness summary when no server is
+available; the fallback is operator triage only and does not claim
+server-backed runtime evidence.
 Repository-backed IPC state stores approval-required plugin command decisions
 in `pending_approvals`, exposes them through CLI/IPC inspection endpoints, and
 lets a user grant or deny the pending record without executing the side effect.

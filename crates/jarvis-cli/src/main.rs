@@ -527,7 +527,7 @@ async fn main() -> anyhow::Result<()> {
         }
         CliCommand::Release { command } => match command {
             ReleaseCommand::Readiness { endpoint } => {
-                println!("{}", request(&endpoint, "GET", "/release/readiness", None)?);
+                println!("{}", release_readiness(&endpoint)?);
             }
         },
         CliCommand::Smoke => {
@@ -1024,6 +1024,33 @@ fn request(endpoint: &str, method: &str, path: &str, body: Option<&str>) -> anyh
     }
 
     Ok(response_body.to_string())
+}
+
+fn release_readiness(endpoint: &str) -> anyhow::Result<String> {
+    match request(endpoint, "GET", "/release/readiness", None) {
+        Ok(response) => Ok(response),
+        Err(error) if is_transport_unavailable(&error) => {
+            let readiness = jarvis_core::IpcState::new().release_readiness();
+            Ok(serde_json::to_string(&readiness)?)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn is_transport_unavailable(error: &anyhow::Error) -> bool {
+    let Some(error) = error.downcast_ref::<std::io::Error>() else {
+        return false;
+    };
+
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::ConnectionRefused
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::TimedOut
+            | std::io::ErrorKind::AddrNotAvailable
+            | std::io::ErrorKind::NotFound
+    )
 }
 
 fn parse_sensitivity(value: &str) -> anyhow::Result<Sensitivity> {

@@ -39,6 +39,14 @@ inspection paths:
 cargo run -p jarvis-cli -- smoke
 ```
 
+Release-readiness triage can run before starting a server. The command prefers
+`/release/readiness` from a running IPC endpoint, then falls back to the same
+conservative local summary when the endpoint is unavailable:
+
+```sh
+cargo run -p jarvis-cli -- release readiness
+```
+
 For manual inspection, `jarvis-cli health` calls a loopback HTTP server, so
 start the server first.
 

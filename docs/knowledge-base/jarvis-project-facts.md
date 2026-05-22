@@ -68,7 +68,9 @@ These notes capture durable facts for future agents working on this repository.
   verification commands, and manual gates while keeping
   `production_ready: false` until external signing/notarization, clean-profile
   installer/Finder checks, live voice/audio validation, and manual QA are
-  complete.
+  complete. The CLI command prefers the IPC endpoint when it is running and
+  falls back to the same local `IpcState` readiness summary when the server is
+  unavailable, so operator triage does not require a prestarted core.
 - The Swift shell also decodes `/release/readiness` through
   `ReleaseReadinessModel` and renders a Release tab with blocking manual gates,
   recommended commands, implemented proofs, pending features, and the proof
