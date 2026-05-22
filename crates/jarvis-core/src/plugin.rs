@@ -24,6 +24,10 @@ use std::{
 const DEFAULT_TIMEOUT_MS: u64 = 5_000;
 const MAX_TIMEOUT_MS: u64 = 60_000;
 const LOCAL_MANIFEST_SCHEMA_VERSION: u16 = 1;
+const MAX_PLUGIN_PROGRESS_EVENTS: usize = 32;
+const MAX_PLUGIN_PROGRESS_LINE_BYTES: usize = 4_096;
+const MAX_PLUGIN_PROGRESS_STAGE_CHARS: usize = 64;
+const MAX_PLUGIN_PROGRESS_MESSAGE_CHARS: usize = 240;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -889,6 +893,15 @@ pub struct SubprocessPluginExecution {
     pub stdout_bytes: usize,
     pub stderr_bytes: usize,
     pub exit_code: Option<i32>,
+    #[serde(default)]
+    pub progress_events: Vec<PluginProgressEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginProgressEvent {
+    pub sequence: usize,
+    pub stage: String,
+    pub message: String,
 }
 
 pub fn execute_installed_subprocess_plugin(
@@ -953,6 +966,7 @@ pub fn execute_installed_subprocess_plugin(
             }
             let stdout_bytes = output.stdout.len();
             let stderr_bytes = output.stderr.len();
+            let progress_events = parse_plugin_progress_events(&output.stderr);
             let value: Value = serde_json::from_slice(&output.stdout).map_err(|err| {
                 JarvisError::Plugin(format!("parse subprocess stdout JSON: {err}"))
             })?;
@@ -964,6 +978,7 @@ pub fn execute_installed_subprocess_plugin(
                 stdout_bytes,
                 stderr_bytes,
                 exit_code: status.code(),
+                progress_events,
             });
         }
         if Instant::now() >= deadline {
@@ -976,6 +991,55 @@ pub fn execute_installed_subprocess_plugin(
         }
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+fn parse_plugin_progress_events(stderr: &[u8]) -> Vec<PluginProgressEvent> {
+    let text = String::from_utf8_lossy(stderr);
+    let mut events = Vec::new();
+
+    for line in text.lines() {
+        if events.len() >= MAX_PLUGIN_PROGRESS_EVENTS {
+            break;
+        }
+        let line = line.trim();
+        if line.is_empty() || line.len() > MAX_PLUGIN_PROGRESS_LINE_BYTES {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if value.get("jarvis_progress").and_then(Value::as_bool) != Some(true) {
+            continue;
+        }
+        let Some(stage) = value.get("stage").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(message) = value.get("message").and_then(Value::as_str) else {
+            continue;
+        };
+        let stage = sanitize_progress_text(stage, MAX_PLUGIN_PROGRESS_STAGE_CHARS);
+        let message = sanitize_progress_text(message, MAX_PLUGIN_PROGRESS_MESSAGE_CHARS);
+        if stage.is_empty() || message.is_empty() {
+            continue;
+        }
+        events.push(PluginProgressEvent {
+            sequence: events.len() + 1,
+            stage,
+            message,
+        });
+    }
+
+    events
+}
+
+fn sanitize_progress_text(value: &str, max_chars: usize) -> String {
+    value
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(max_chars)
+        .collect::<String>()
+        .trim()
+        .to_string()
 }
 
 impl InstalledPlugin {

@@ -62,7 +62,10 @@ a local manifest/subprocess hash snapshot. Executable local subprocess plugins
 require the snapshot to verify as unchanged plus an explicit
 `subprocess_stdio` grant, or `subprocess_stdio_network` when an action declares
 network access, and still run only through the constrained JSON stdin/stdout
-boundary. Publisher-origin claims can be operator-pinned only
+boundary. They may emit bounded `jarvis_progress` JSON frames on stderr; Jarvis
+exposes only parsed sequence/stage/message progress events in the run response
+and audit log, while raw stderr stays redacted. Publisher-origin claims can be
+operator-pinned only
 after local provenance matches the install snapshot; this is an auditable
 local review step. Manifests can also carry an Ed25519 publisher signature,
 which Jarvis verifies only against an explicit trusted public key after local
