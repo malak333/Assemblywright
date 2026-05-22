@@ -247,7 +247,10 @@ These notes capture durable facts for future agents working on this repository.
   groups memory by sensitivity and category, reports active/deleted/reviewed
   and unreviewed-active counts, and never returns memory values beyond the
   existing item list/get endpoints. The Swift Memory tab renders this summary
-  above the item list.
+  above the item list. `/contract.safe_inspection_paths` includes this
+  aggregate classification route but intentionally excludes raw `/memory` and
+  `/memory/:id` because those explicit memory-management routes return stored
+  values.
 - Diagnostics export now includes aggregate active, unreviewed, and sensitive
   memory counts when repository backing is enabled. It still omits memory
   values, and memory policy review similarly redacts values while surfacing
@@ -491,9 +494,9 @@ These notes capture durable facts for future agents working on this repository.
   are not redacted diagnostics exports. Keychain secrets are not stored in
   SQLite backups.
 - `cargo run -p jarvis-cli -- smoke` now covers baseline command/pause smoke,
-  plugin manifest listing, and repository-backed task, model-route, and memory
-  inspection paths, diagnostics redaction, and repository-backed scheduler/job
-  state surfaces.
+  plugin manifest listing, and repository-backed task, model-route, explicit
+  memory-management paths, diagnostics redaction, and repository-backed
+  scheduler/job state surfaces.
 
 ## Safety Guardrails
 

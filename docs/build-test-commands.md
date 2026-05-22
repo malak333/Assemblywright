@@ -40,8 +40,10 @@ swift build --package-path apps/mac
 
 `jarvis smoke` starts an ephemeral loopback server and verifies the currently
 implemented foundation surfaces: health, command execution, pause blocking,
-resume, plugin manifest listing, and repository-backed task plus memory
-inspection paths:
+resume, plugin manifest listing, and repository-backed task plus explicit
+memory-management paths. Raw memory list/get endpoints are not advertised as
+safe inspection paths in `/contract`; use `/memory/classification` for the
+safe aggregate memory summary.
 
 ```sh
 cargo run -p jarvis-cli -- smoke
