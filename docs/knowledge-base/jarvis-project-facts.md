@@ -85,12 +85,13 @@ These notes capture durable facts for future agents working on this repository.
   and voice state. Voice supports typed transcript staging and hands the
   transcript to the same text command path. The scaffold now models
   interruption, resume/cancel, unavailable, and degraded typed-fallback states,
-  and a protocol-backed macOS Speech/AVFoundation adapter boundary now exists
-  with explicit permission, capture, interruption, and recognition-error states.
-  Swift tests cover the adapter boundary with fakes and do not require live
-  microphone access. The app still must not claim real voice parity until
-  entitlements, clean-profile permission prompts, live microphone capture, and
-  manual device validation are complete; text-to-speech remains pending.
+  owns a protocol-backed macOS Speech/AVFoundation adapter model from the
+  SwiftUI Voice tab, and exposes permission request, start/stop capture, and
+  interrupt controls. Swift tests cover the adapter boundary with fakes and do
+  not require live microphone access. The app still must not claim real voice
+  parity until entitlements, clean-profile permission prompts, live microphone
+  capture, and manual device validation are complete; text-to-speech remains
+  pending.
 - The scheduler is inspectable, cancellable, explicitly runnable through
   `scheduler run-due`, and opt-in runnable as a bounded background loop with
   `jarvis serve --scheduler-background`. Scheduler jobs are in-memory without

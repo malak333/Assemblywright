@@ -141,9 +141,12 @@ grant or denial. Granting an approval records the decision but does not execute
 the side effect. `jarvis permissions grants` reads the combined local grant
 surface: approval counts/history, high-risk pending count, installed-plugin
 `metadata_only` grant records, and the invariant that side effects still
-require approval. It does not yet implement installed plugin sandboxing,
-installed plugin execution, real voice capture, or signed packaged-app smoke.
-Swift approval decision controls are covered by the Swift contract/model tests.
+require approval. Installed `local_subprocess` plugins remain disabled by
+default and execute only after an explicit `subprocess_stdio` grant through the
+constrained JSON stdin/stdout runner. The Swift app now exposes the
+Speech/AVFoundation adapter controls, but release claims for real voice still
+require entitlement packaging and manual device validation. Swift approval and
+voice controls are covered by the Swift contract/model tests.
 Local plugin install is metadata-only:
 `jarvis plugins install /absolute/path/to/jarvis-plugin.json` validates and
 stores a disabled registry record when repository backing is enabled.

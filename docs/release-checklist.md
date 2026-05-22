@@ -12,9 +12,11 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
 - Confirm release notes distinguish implemented Rust foundation and Swift shell
   scaffold behavior from the implemented opt-in Ollama-compatible local
   provider boundary, implemented opt-in ChatGPT/OpenAI-compatible provider
-  boundary, metadata-only local plugin installation, implemented Swift approval
-  decision surface, and planned installed plugin execution, real voice support,
-  and packaging work.
+  boundary, metadata-only local plugin installation, explicit installed-plugin
+  subprocess execution grant, implemented Swift approval decision surface,
+  adapter-backed Swift voice controls, local packaged smoke, and distribution
+  packaging lane. Keep real microphone/TTS support and distribution readiness
+  scoped to the manual gates below.
 - Confirm the current architecture map still matches the real module wiring,
   especially the fact that `/commands` invokes the configured routed
   `ModelExecutor` (`FakeLocalModel` by default, Ollama-compatible HTTP or

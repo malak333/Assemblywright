@@ -90,6 +90,43 @@ public final class VoiceAdapterStateModel: ObservableObject {
         self.lastError = nil
     }
 
+    public var statusText: String {
+        switch phase {
+        case .idle:
+            return "Voice adapter idle."
+        case .requestingPermission:
+            return "Voice adapter requesting microphone and speech permissions."
+        case .listening:
+            return "Voice adapter listening."
+        case .transcribing:
+            return "Voice adapter transcribing."
+        case let .interrupted(reason):
+            return "Voice adapter interrupted: \(reason)"
+        case let .degraded(reason):
+            return "Voice adapter degraded: \(reason)"
+        case let .unavailable(reason):
+            return "Voice adapter unavailable: \(reason)"
+        }
+    }
+
+    public var isCaptureActive: Bool {
+        switch phase {
+        case .listening, .transcribing:
+            return true
+        case .idle, .requestingPermission, .interrupted, .degraded, .unavailable:
+            return false
+        }
+    }
+
+    public var canStartCapture: Bool {
+        switch phase {
+        case .idle, .degraded:
+            return true
+        case .requestingPermission, .listening, .transcribing, .interrupted, .unavailable:
+            return false
+        }
+    }
+
     public func requestPermissions() async {
         phase = .requestingPermission
         switch await adapter.requestPermissions() {
