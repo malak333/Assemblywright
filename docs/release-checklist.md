@@ -93,15 +93,17 @@ stage or when a PR needs focused evidence for one ownership slice.
 - Confirm route, policy, approval, action, and failure evidence stay covered
   before claiming an end-to-end assistant release. The current command path
   persists runtime, route, and deterministic first-party plugin audit evidence
-  when repository backing is used. Approval-required first-party command
+  when repository backing is used. It also persists append-only model-route
+  records in SQLite and exposes redacted `/model-routes` CLI/IPC inspection
+  that survives restart without retaining route context. Approval-required first-party command
   scaffolds persist inspectable pending approvals and record CLI/IPC grant or
   denial decisions without executing side effects. Bounded fake-model
   first-party tool calls and Ollama-compatible plus ChatGPT/OpenAI-compatible
   provider request/error behavior are covered in focused tests; Swift approval
   decision controls are covered by contract/model tests.
-- Confirm task, audit, memory, and plugin manifest inspection endpoints still
-  require or use the correct repository/plugin backing and are covered by local
-  smoke or focused IPC tests.
+- Confirm task, audit, model-route, memory, and plugin manifest inspection
+  endpoints still require or use the correct repository/plugin backing and are
+  covered by local smoke or focused IPC tests.
 - Confirm approval inspection and grant/deny endpoints require repository
   backing, preserve fail-closed execution behavior, and stay covered by local
   IPC tests.
@@ -110,13 +112,14 @@ stage or when a PR needs focused evidence for one ownership slice.
   proves explicit CLI/IPC runner behavior, including interval reschedule and
   fail-closed pause behavior, not background production trigger scheduling.
 - Confirm diagnostics export remains redacted and does not include command
-  bodies, scheduler commands, audit payloads, memory values, raw cancellation
-  reasons, or credentials.
+  bodies, scheduler commands, model route contexts, audit payloads, memory
+  values, raw cancellation reasons, or credentials.
 - Confirm the cross-process CLI E2E still covers command, plugin, audit,
-  memory create/update/review/delete, scheduler schedule/get/list/cancel,
-  scheduler run-due success/reschedule, scheduler fail-closed pause on
-  non-accepted due jobs, diagnostics redaction, persistence restart, and
-  emergency-pause blocking/resume behavior. Treat this as the minimum E2E
+  redacted model-route inspection and restart recovery, memory
+  create/update/review/delete, scheduler schedule/get/list/cancel, scheduler
+  run-due success/reschedule, scheduler fail-closed pause on non-accepted due
+  jobs, diagnostics redaction, persistence restart, and emergency-pause
+  blocking/resume behavior. Treat this as the minimum E2E
   expectation for the current Rust/CLI foundation; packaged Mac E2E remains a
   future release gate.
 - Confirm local plugin metadata install/list/get coverage remains in that E2E

@@ -83,6 +83,7 @@ pub struct DiagnosticsExport {
     pub schema_version: Option<i64>,
     pub task_count: Option<usize>,
     pub audit_entry_count: Option<usize>,
+    pub model_route_record_count: Option<usize>,
     pub active_memory_item_count: Option<usize>,
 }
 
@@ -400,6 +401,8 @@ impl IpcState {
                 "/plugins/installed/:id/execution".to_string(),
                 "/scheduler/jobs".to_string(),
                 "/scheduler/jobs/:id".to_string(),
+                "/model-routes".to_string(),
+                "/model-routes/:id".to_string(),
                 "/memory".to_string(),
                 "/memory/:id".to_string(),
                 "/approvals".to_string(),
@@ -443,23 +446,29 @@ impl IpcState {
     }
 
     pub fn diagnostics_export(&self) -> JarvisResult<DiagnosticsExport> {
-        let (schema_version, task_count, audit_entry_count, active_memory_item_count) =
-            match &self.repository {
-                Some(_) => self.using_repository(|repository| {
-                    Ok((
-                        Some(repository.schema_version()?),
-                        Some(repository.list_tasks()?.len()),
-                        Some(repository.list_audit_entries(None)?.len()),
-                        Some(repository.list_memory_items(false)?.len()),
-                    ))
-                })?,
-                None => (None, None, None, None),
-            };
+        let (
+            schema_version,
+            task_count,
+            audit_entry_count,
+            model_route_record_count,
+            active_memory_item_count,
+        ) = match &self.repository {
+            Some(_) => self.using_repository(|repository| {
+                Ok((
+                    Some(repository.schema_version()?),
+                    Some(repository.list_tasks()?.len()),
+                    Some(repository.list_audit_entries(None)?.len()),
+                    Some(repository.list_model_route_records(None)?.len()),
+                    Some(repository.list_memory_items(false)?.len()),
+                ))
+            })?,
+            None => (None, None, None, None, None),
+        };
 
         Ok(DiagnosticsExport {
             generated_at: Utc::now(),
             redaction:
-                "diagnostics export omits command bodies, scheduler commands, audit payloads, memory values, and cancellation reason text"
+                "diagnostics export omits command bodies, scheduler commands, model route contexts, audit payloads, memory values, and cancellation reason text"
                     .to_string(),
             health: self.health(),
             scheduler_jobs: self
@@ -472,6 +481,7 @@ impl IpcState {
             schema_version,
             task_count,
             audit_entry_count,
+            model_route_record_count,
             active_memory_item_count,
         })
     }
@@ -1423,6 +1433,16 @@ impl RuntimeCommandStore for SharedCommandStore {
             None => crate::NoopRuntimeCommandStore.append_audit_entry(entry),
         }
     }
+
+    fn append_model_route_record(&self, record: &ModelRouteRecord) -> JarvisResult<()> {
+        match &self.repository {
+            Some(repository) => repository
+                .lock()
+                .expect("IPC repository lock poisoned")
+                .append_model_route_record(record),
+            None => crate::NoopRuntimeCommandStore.append_model_route_record(record),
+        }
+    }
 }
 
 fn sensitivity_from_context(context: &serde_json::Value) -> Option<Sensitivity> {
@@ -1542,6 +1562,8 @@ pub fn router(state: IpcState) -> Router {
         .route("/tasks/:id", get(get_task))
         .route("/tasks/:id/audit", get(list_task_audit_entries))
         .route("/audit", get(list_audit_entries))
+        .route("/model-routes", get(list_model_routes))
+        .route("/model-routes/:id", get(get_model_route))
         .route("/memory", get(list_memory_items).post(create_memory_item))
         .route(
             "/memory/:id",
@@ -1661,6 +1683,39 @@ async fn list_audit_entries(
 ) -> Result<Json<Vec<AuditEntry>>, (StatusCode, Json<ErrorResponse>)> {
     state
         .using_repository(|repository| repository.list_audit_entries(None))
+        .map(Json)
+        .map_err(error_response)
+}
+
+async fn list_model_routes(
+    State(state): State<IpcState>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Result<Json<Vec<ModelRouteRecord>>, (StatusCode, Json<ErrorResponse>)> {
+    let task_id = query
+        .get("task_id")
+        .map(|value| {
+            Uuid::parse_str(value).map_err(|error| {
+                JarvisError::Validation(format!("task_id must be a UUID: {error}"))
+            })
+        })
+        .transpose()
+        .map_err(error_response)?;
+    state
+        .using_repository(|repository| repository.list_model_route_records(task_id))
+        .map(Json)
+        .map_err(error_response)
+}
+
+async fn get_model_route(
+    State(state): State<IpcState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<ModelRouteRecord>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .using_repository(|repository| {
+            repository
+                .get_model_route_record(id)?
+                .ok_or_else(|| JarvisError::Storage(format!("model route not found: {id}")))
+        })
         .map(Json)
         .map_err(error_response)
 }
@@ -1951,6 +2006,8 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
         endpoint("GET", "/tasks/:id", true, false),
         endpoint("GET", "/tasks/:id/audit", true, false),
         endpoint("GET", "/audit", true, false),
+        endpoint("GET", "/model-routes", true, true),
+        endpoint("GET", "/model-routes/:id", true, true),
         endpoint("GET", "/memory", true, false),
         endpoint("POST", "/memory", true, false),
         endpoint("GET", "/memory/:id", true, false),
@@ -3087,12 +3144,64 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert_eq!(export.schema_version, Some(6));
         assert_eq!(export.task_count, Some(1));
         assert!(export.audit_entry_count.unwrap_or_default() >= 2);
+        assert_eq!(export.model_route_record_count, Some(1));
         assert_eq!(export.scheduler_jobs.len(), 1);
         assert!(export.redaction.contains("omits command bodies"));
 
         let encoded = serde_json::to_string(&export).unwrap();
         assert!(!encoded.contains("private command body"));
         assert!(!encoded.contains("do not redact scheduler command"));
+    }
+
+    #[tokio::test]
+    async fn model_route_inspection_survives_restart_and_omits_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("jarvis.sqlite");
+        let state =
+            IpcState::with_repository(SqliteRepository::open(&db_path).unwrap()).expect("state");
+        let response = state
+            .submit_command(CommandRequest {
+                input: "route secret token=do-not-store".to_string(),
+                session_id: None,
+                context: json!({ "surface": "test" }),
+                dry_run: true,
+                sensitivity: Some(Sensitivity::Private),
+            })
+            .await
+            .expect("command");
+        let task_id = response.task.id;
+        let route_id = response.route_evidence.as_ref().expect("route evidence").id;
+        drop(state);
+
+        let restarted =
+            IpcState::with_repository(SqliteRepository::open(&db_path).unwrap()).expect("restart");
+        let Json(routes) = list_model_routes(State(restarted.clone()), Query(HashMap::new()))
+            .await
+            .expect("routes");
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].id, route_id);
+        assert_eq!(routes[0].task_id, Some(task_id));
+        assert_eq!(routes[0].context_for_model, None);
+
+        let Json(task_routes) = list_model_routes(
+            State(restarted.clone()),
+            Query(HashMap::from([(
+                "task_id".to_string(),
+                task_id.to_string(),
+            )])),
+        )
+        .await
+        .expect("task routes");
+        assert_eq!(task_routes.len(), 1);
+
+        let Json(route) = get_model_route(State(restarted), Path(route_id))
+            .await
+            .expect("route");
+        assert_eq!(route.id, route_id);
+        assert_eq!(route.context_for_model, None);
+        let encoded = serde_json::to_string(&route).unwrap();
+        assert!(!encoded.contains("do-not-store"));
+        assert!(!encoded.contains("token="));
     }
 
     #[tokio::test]
