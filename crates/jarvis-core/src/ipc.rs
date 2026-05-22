@@ -805,6 +805,15 @@ impl IpcState {
                 })
                 .count();
 
+            for job in self.scheduler.list().into_iter().filter(|job| {
+                matches!(
+                    job.status,
+                    SchedulerJobStatus::Scheduled | SchedulerJobStatus::Running
+                )
+            }) {
+                items.push(scheduler_policy_review_item(job, Utc::now()));
+            }
+
             for approval in approvals
                 .iter()
                 .filter(|approval| approval.status == ApprovalStatus::Pending)
@@ -940,6 +949,7 @@ impl IpcState {
                     item.item_type.clone(),
                     item.title.clone(),
                     item.plugin_id.clone(),
+                    item.action.clone(),
                     item.approval_id,
                 )
             });
@@ -2100,6 +2110,53 @@ impl RuntimeCommandStore for SharedCommandStore {
                 .append_model_route_record(record),
             None => crate::NoopRuntimeCommandStore.append_model_route_record(record),
         }
+    }
+}
+
+fn scheduler_policy_review_item(
+    job: SchedulerJob,
+    now: DateTime<Utc>,
+) -> PermissionPolicyReviewItem {
+    let due_at = scheduler_job_due_at(&job);
+    let due = matches!(job.status, SchedulerJobStatus::Scheduled)
+        && due_at.is_some_and(|candidate| candidate <= now);
+    let (item_type, severity, trigger_label) = match job.trigger {
+        TriggerKind::Manual => (
+            "manual_scheduler_trigger",
+            "low",
+            "manual trigger".to_string(),
+        ),
+        TriggerKind::OnceAt { run_at } => {
+            let severity = if due { "medium" } else { "low" };
+            (
+                "scheduled_scheduler_trigger",
+                severity,
+                format!("one-time trigger at {run_at}"),
+            )
+        }
+        TriggerKind::Interval { every_seconds } => (
+            "recurring_scheduler_trigger",
+            "medium",
+            format!("recurring trigger every {every_seconds} seconds"),
+        ),
+    };
+    let due_detail = if due {
+        " The job is currently due."
+    } else {
+        ""
+    };
+
+    PermissionPolicyReviewItem {
+        item_type: item_type.to_string(),
+        severity: severity.to_string(),
+        title: "Scheduler trigger is active".to_string(),
+        detail: format!(
+            "{} is {:?} with a {trigger_label}; scheduler command text is redacted and due execution remains policy-gated.{due_detail}",
+            job.name, job.status
+        ),
+        approval_id: None,
+        plugin_id: None,
+        action: Some(job.id.to_string()),
     }
 }
 
@@ -3589,6 +3646,44 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             Some("fake_echo.approval_echo")
         );
         assert!(review.side_effects_require_approval);
+    }
+
+    #[tokio::test]
+    async fn permission_policy_review_summarizes_scheduler_triggers_without_commands() {
+        let repository = SqliteRepository::in_memory().unwrap();
+        let state = IpcState::with_repository(repository).expect("state");
+        let _manual = state
+            .schedule_scheduler_job(SchedulerJobSpec {
+                name: "manual review job".to_string(),
+                command: "do not expose manual command".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .expect("manual scheduler job");
+        let interval = state
+            .schedule_scheduler_job(SchedulerJobSpec {
+                name: "interval review job".to_string(),
+                command: "do not expose interval command".to_string(),
+                trigger: TriggerKind::Interval { every_seconds: 60 },
+            })
+            .expect("interval scheduler job");
+        let interval_id = interval.id.to_string();
+
+        let review = state.permission_policy_review().expect("policy review");
+        assert_eq!(review.status, "review_required");
+        assert_eq!(review.review_item_count, 2);
+        assert!(review
+            .items
+            .iter()
+            .any(|item| item.item_type == "manual_scheduler_trigger" && item.severity == "low"));
+        assert!(review
+            .items
+            .iter()
+            .any(|item| item.item_type == "recurring_scheduler_trigger"
+                && item.severity == "medium"
+                && item.action.as_deref() == Some(interval_id.as_str())));
+        let encoded = serde_json::to_string(&review).expect("review JSON");
+        assert!(!encoded.contains("do not expose manual command"));
+        assert!(!encoded.contains("do not expose interval command"));
     }
 
     #[tokio::test]
