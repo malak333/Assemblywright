@@ -272,7 +272,21 @@ struct JarvisMacCoreTests {
                 { "method": "GET", "path": "/permissions/grants", "repository_required": true, "redacted": false },
                 { "method": "GET", "path": "/permissions/policy-review", "repository_required": true, "redacted": false }
               ],
-              "safe_inspection_paths": ["/health", "/diagnostics/export"]
+              "safe_inspection_paths": ["/health", "/diagnostics/export"],
+              "features": [
+                {
+                  "key": "scheduler_trigger_policy_review",
+                  "status": "implemented",
+                  "proof": "covered by tests",
+                  "boundary": "review visibility only"
+                },
+                {
+                  "key": "live_voice_loop",
+                  "status": "pending_manual_validation",
+                  "proof": "fake-adapter tests",
+                  "boundary": "manual validation pending"
+                }
+              ]
             }
             """.utf8
         )
@@ -282,6 +296,8 @@ struct JarvisMacCoreTests {
         #expect(contract.contract.name == "jarvis.local-ipc")
         #expect(contract.endpoints.map(\.id).contains("GET /scheduler/jobs/:id"))
         #expect(contract.safeInspectionPaths.contains("/diagnostics/export"))
+        #expect(contract.features.map(\.id).contains("scheduler_trigger_policy_review"))
+        #expect(contract.features.first { $0.key == "live_voice_loop" }?.status == "pending_manual_validation")
         #expect(!contract.exposesApprovalActions)
         #expect(contract.exposesPermissionGrantSummary)
         #expect(contract.exposesPermissionPolicyReview)

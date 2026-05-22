@@ -88,10 +88,28 @@ public struct JarvisContractEndpoint: Decodable, Equatable, Identifiable, Sendab
     }
 }
 
+public struct JarvisContractFeature: Decodable, Equatable, Identifiable, Sendable {
+    public var key: String
+    public var status: String
+    public var proof: String
+    public var boundary: String
+
+    public var id: String { key }
+}
+
 public struct JarvisContractResponse: Decodable, Equatable, Sendable {
     public var contract: JarvisContractMetadata
     public var endpoints: [JarvisContractEndpoint]
     public var safeInspectionPaths: [String]
+    public var features: [JarvisContractFeature]
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        contract = try container.decode(JarvisContractMetadata.self, forKey: .contract)
+        endpoints = try container.decode([JarvisContractEndpoint].self, forKey: .endpoints)
+        safeInspectionPaths = try container.decode([String].self, forKey: .safeInspectionPaths)
+        features = try container.decodeIfPresent([JarvisContractFeature].self, forKey: .features) ?? []
+    }
 
     public var exposesApprovalActions: Bool {
         exposesApprovalApproveAction || exposesApprovalDenyAction
@@ -131,6 +149,7 @@ public struct JarvisContractResponse: Decodable, Equatable, Sendable {
         case contract
         case endpoints
         case safeInspectionPaths = "safe_inspection_paths"
+        case features
     }
 }
 
