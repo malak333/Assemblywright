@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::time::Duration;
 
-use crate::plugin::{EchoPlugin, InProcessPlugin, PluginManifest, StatusPlugin};
+use crate::plugin::{EchoPlugin, InProcessPlugin, PluginManifest, PluginSource, StatusPlugin};
 use crate::router::{ModelProvider as RoutedModelProvider, ModelRouteRecord};
 use crate::types::{JarvisError, JarvisResult};
 
@@ -283,6 +283,16 @@ pub struct ModelRequest {
     pub user_input: String,
     pub step_index: u32,
     pub tool_results: Vec<ModelToolResult>,
+    #[serde(default = "default_first_party_model_tools")]
+    pub first_party_tools: Vec<ModelToolDefinition>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelToolDefinition {
+    pub plugin_id: String,
+    pub action: String,
+    pub description: String,
+    pub input_schema: Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -696,7 +706,7 @@ impl ChatGptHttpModel {
                 "messages": [
                     {
                         "role": "system",
-                        "content": "You are Jarvis. Use only the redacted context supplied by the route guardrail. Do not request secrets or claim access to hidden local state. Prefer the provided first-party tools when a tool is needed. If native tool calls are unavailable, reply only with JSON: {\"message\":\"short reason\",\"complete\":false,\"tool_requests\":[{\"plugin_id\":\"fake_status\",\"action\":\"status\",\"input\":{}}]}."
+                        "content": "You are Jarvis. Use only the redacted context supplied by the route guardrail. Do not request secrets or claim access to hidden local state. Prefer the provided first-party tools when a tool is needed. If native tool calls are unavailable, reply only with JSON using an exact provided plugin_id and action: {\"message\":\"short reason\",\"complete\":false,\"tool_requests\":[{\"plugin_id\":\"<provided plugin_id>\",\"action\":\"<provided action>\",\"input\":{}}]}. If no provided tool fits, answer directly without tool_requests."
                     },
                     {
                         "role": "user",
@@ -704,7 +714,7 @@ impl ChatGptHttpModel {
                     }
                 ],
                 "temperature": 0.2,
-                "tools": openai_first_party_tools(),
+                "tools": openai_first_party_tools(&request.first_party_tools),
                 "tool_choice": "auto",
             }))
             .send()
@@ -877,7 +887,7 @@ fn ollama_prompt(request: &ModelRequest) -> JarvisResult<String> {
 
     Ok(format!(
         "You are Jarvis, a local-first assistant. Answer the user directly. Do not claim cloud access. Registered first-party tools are exactly: {}. Never invent plugin_id or action values. Choose exactly one response mode: plain natural language with no JSON-looking tool fields, or one strict JSON object with no surrounding prose. If a first-party tool is needed, copy one exact registered plugin_id and action into this JSON shape: {{\"message\":\"short reason\",\"complete\":false,\"tool_requests\":[{{\"plugin_id\":\"<registered plugin_id>\",\"action\":\"<registered action>\",\"input\":{{}}}}]}}. If no registered tool fits, answer directly without tool_requests. Task: {}\nStep: {}\nTool results: {}",
-        first_party_tool_inventory_text(),
+        first_party_tool_inventory_text(&request.first_party_tools),
         request.user_input,
         request.step_index,
         tool_results
@@ -1030,45 +1040,74 @@ fn parse_openai_function_name(name: &str) -> JarvisResult<(&str, &str)> {
     Ok((plugin_id, action))
 }
 
-fn openai_first_party_tools() -> Vec<Value> {
-    [EchoPlugin.manifest(), StatusPlugin.manifest()]
+fn default_first_party_model_tools() -> Vec<ModelToolDefinition> {
+    model_tool_definitions_from_manifests([EchoPlugin.manifest(), StatusPlugin.manifest()])
+}
+
+fn openai_first_party_tools(tools: &[ModelToolDefinition]) -> Vec<Value> {
+    sorted_model_tool_definitions(tools)
         .into_iter()
-        .flat_map(openai_tools_for_manifest)
+        .map(openai_tool_for_definition)
         .collect()
 }
 
-fn first_party_tool_inventory_text() -> String {
-    let mut tools = [EchoPlugin.manifest(), StatusPlugin.manifest()]
+fn first_party_tool_inventory_text(tools: &[ModelToolDefinition]) -> String {
+    let tools = sorted_model_tool_definitions(tools)
         .into_iter()
-        .flat_map(|manifest| {
-            let plugin_id = manifest.id;
-            manifest.actions.into_iter().map(move |action| {
-                let input = serde_json::to_string(&action.input_schema.schema)
-                    .unwrap_or_else(|_| "{}".to_string());
-                format!("{}.{} input_schema={}", plugin_id, action.name, input)
-            })
+        .map(|tool| {
+            let input =
+                serde_json::to_string(&tool.input_schema).unwrap_or_else(|_| "{}".to_string());
+            format!("{}.{} input_schema={}", tool.plugin_id, tool.action, input)
         })
         .collect::<Vec<_>>();
-    tools.sort();
-    tools.join("; ")
+    if tools.is_empty() {
+        "none".to_string()
+    } else {
+        tools.join("; ")
+    }
 }
 
-fn openai_tools_for_manifest(manifest: PluginManifest) -> Vec<Value> {
-    let plugin_id = manifest.id;
-    manifest
-        .actions
+pub(crate) fn model_tool_definitions_from_manifests(
+    manifests: impl IntoIterator<Item = PluginManifest>,
+) -> Vec<ModelToolDefinition> {
+    let tools = manifests
         .into_iter()
-        .map(|action| {
-            json!({
-                "type": "function",
-                "function": {
-                    "name": format!("{}__{}", plugin_id, action.name),
-                    "description": action.description,
-                    "parameters": action.input_schema.schema,
-                }
-            })
+        .filter(|manifest| manifest.source == PluginSource::FirstParty)
+        .flat_map(|manifest| {
+            let plugin_id = manifest.id;
+            manifest
+                .actions
+                .into_iter()
+                .map(move |action| ModelToolDefinition {
+                    plugin_id: plugin_id.clone(),
+                    action: action.name,
+                    description: action.description,
+                    input_schema: action.input_schema.schema,
+                })
         })
-        .collect()
+        .collect::<Vec<_>>();
+    sorted_model_tool_definitions(&tools)
+}
+
+fn sorted_model_tool_definitions(tools: &[ModelToolDefinition]) -> Vec<ModelToolDefinition> {
+    let mut tools = tools.to_vec();
+    tools.sort_by(|left, right| {
+        left.plugin_id
+            .cmp(&right.plugin_id)
+            .then_with(|| left.action.cmp(&right.action))
+    });
+    tools
+}
+
+fn openai_tool_for_definition(tool: ModelToolDefinition) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": format!("{}__{}", tool.plugin_id, tool.action),
+            "description": tool.description,
+            "parameters": tool.input_schema,
+        }
+    })
 }
 
 fn ollama_error(
@@ -1190,6 +1229,19 @@ mod tests {
             }),
             "{value}"
         );
+    }
+
+    fn model_tool(plugin_id: &str, action: &str) -> ModelToolDefinition {
+        ModelToolDefinition {
+            plugin_id: plugin_id.to_string(),
+            action: action.to_string(),
+            description: format!("{plugin_id}.{action} test tool"),
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+        }
     }
 
     #[test]
@@ -1322,6 +1374,36 @@ mod tests {
         assert!(!message.contains("fake_status"));
     }
 
+    #[test]
+    fn ollama_prompt_uses_request_supplied_first_party_tool_inventory() {
+        let prompt = ollama_prompt(&ModelRequest {
+            task_id: uuid::Uuid::new_v4(),
+            session_id: uuid::Uuid::new_v4(),
+            user_input: "check runtime inventory".to_string(),
+            step_index: 0,
+            tool_results: Vec::new(),
+            first_party_tools: vec![model_tool("runtime_status", "inspect")],
+        })
+        .expect("prompt");
+
+        assert!(prompt.contains("runtime_status.inspect"));
+        assert!(prompt.contains("input_schema="));
+        assert!(!prompt.contains("fake_status.status"));
+        assert!(!prompt.contains("fake_echo.echo"));
+    }
+
+    #[test]
+    fn chatgpt_tools_use_request_supplied_first_party_tool_inventory() {
+        let tools = Value::Array(openai_first_party_tools(&[model_tool(
+            "runtime_status",
+            "inspect",
+        )]));
+
+        assert_array_contains_nested(&tools, &["function", "name"], "runtime_status__inspect");
+        assert!(!tools.to_string().contains("fake_status__status"));
+        assert!(!tools.to_string().contains("fake_echo__echo"));
+    }
+
     #[tokio::test]
     async fn ollama_http_provider_posts_non_streaming_generate_request() {
         async fn generate(Json(body): Json<Value>) -> Json<Value> {
@@ -1361,6 +1443,7 @@ mod tests {
                 user_input: "hello local".to_string(),
                 step_index: 0,
                 tool_results: Vec::new(),
+                first_party_tools: default_first_party_model_tools(),
             })
             .await
             .expect("model response");
@@ -1413,6 +1496,7 @@ mod tests {
                 user_input: "status".to_string(),
                 step_index: 0,
                 tool_results: Vec::new(),
+                first_party_tools: default_first_party_model_tools(),
             })
             .await
             .expect("model response");
@@ -1456,6 +1540,7 @@ mod tests {
                 user_input: "do not leak this body".to_string(),
                 step_index: 0,
                 tool_results: Vec::new(),
+                first_party_tools: default_first_party_model_tools(),
             })
             .await
             .expect_err("provider error");
@@ -1495,6 +1580,7 @@ mod tests {
                 user_input: "timeout body should not leak".to_string(),
                 step_index: 0,
                 tool_results: Vec::new(),
+                first_party_tools: default_first_party_model_tools(),
             })
             .await
             .expect_err("provider timeout");
@@ -1574,6 +1660,7 @@ mod tests {
                     user_input: "raw api_key=abc123 should not be sent".to_string(),
                     step_index: 0,
                     tool_results: Vec::new(),
+                    first_party_tools: default_first_party_model_tools(),
                 },
                 &route,
             )
@@ -1636,6 +1723,7 @@ mod tests {
                     user_input: "status".to_string(),
                     step_index: 0,
                     tool_results: Vec::new(),
+                    first_party_tools: default_first_party_model_tools(),
                 },
                 &route,
             )
@@ -1700,6 +1788,7 @@ mod tests {
                     user_input: "use native tool".to_string(),
                     step_index: 0,
                     tool_results: Vec::new(),
+                    first_party_tools: default_first_party_model_tools(),
                 },
                 &route,
             )
@@ -1777,6 +1866,7 @@ mod tests {
                     user_input: "raw command".to_string(),
                     step_index: 0,
                     tool_results: Vec::new(),
+                    first_party_tools: default_first_party_model_tools(),
                 },
                 &route,
             )

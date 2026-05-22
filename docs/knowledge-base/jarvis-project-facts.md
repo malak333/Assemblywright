@@ -91,14 +91,15 @@ These notes capture durable facts for future agents working on this repository.
   broad third-party tool execution.
 - Live local testing with Ollama `llama3.2` has proven the opt-in
   Ollama-compatible HTTP route can complete real model commands. The runtime
-  now advertises the exact registered first-party tool inventory in the
-  Ollama prompt and rejects hallucinated provider plugin IDs/actions before
-  policy checks or tool execution. Those recoverable validation misses emit
-  `tool_request_rejected` audit evidence plus registered-tool guidance and are
-  fed back to the next model step as `rejected` tool results. Malformed provider
-  envelopes, including prose mixed with JSON `tool_requests`, still fail as
-  redacted model errors instead of leaking tool-planning text as a normal
-  answer.
+  derives the provider-visible first-party tool inventory from the registered
+  runtime `PluginHost` manifests, advertises that exact inventory in the Ollama
+  prompt and ChatGPT/OpenAI-compatible native tool definitions, and rejects
+  hallucinated provider plugin IDs/actions before policy checks or tool
+  execution. Those recoverable validation misses emit `tool_request_rejected`
+  audit evidence plus registered-tool guidance and are fed back to the next
+  model step as `rejected` tool results. Malformed provider envelopes,
+  including prose mixed with JSON `tool_requests`, still fail as redacted model
+  errors instead of leaking tool-planning text as a normal answer.
 - The registered model-tool contract is first-party only. Ollama envelope
   requests use `plugin_id` plus `action`; native ChatGPT/OpenAI-compatible tool
   names use `plugin__action`; both must map back to the same registered
@@ -108,10 +109,14 @@ These notes capture durable facts for future agents working on this repository.
 - Provider-envelope coverage includes
   `ollama_http_provider_parses_tool_request_envelope`,
   `chatgpt_http_provider_parses_tool_request_envelope`,
+  `ollama_prompt_uses_request_supplied_first_party_tool_inventory`,
+  `chatgpt_tools_use_request_supplied_first_party_tool_inventory`,
+  `model_request_advertises_registered_first_party_tools_only`,
   `provider_tool_request_envelope_rejects_malformed_tool_requests_without_leaking_prompt`,
   `provider_originated_tool_request_executes_first_party_tool_and_feeds_result`,
   and the cross-process `serve_executes_ollama_provider_tool_request_envelope`
-  E2E with an Ollama-compatible stub.
+  E2E with an Ollama-compatible stub that asserts the advertised registered
+  first-party inventory excludes invented browser plugin IDs.
 - Native ChatGPT/OpenAI-compatible tool-call coverage includes
   `chatgpt_http_provider_parses_native_tool_calls` and the cross-process
   `serve_executes_chatgpt_native_tool_call` E2E.

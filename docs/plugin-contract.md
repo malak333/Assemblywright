@@ -108,10 +108,13 @@ to explain what happened:
   appends audit evidence.
 - Model-originated tool requests are stricter than direct plugin registry
   inspection. They may target only registered first-party plugin actions
-  advertised to the provider. The normative path is provider response parsing,
-  canonical envelope or native-name normalization, lookup against the
-  registered first-party manifest inventory, input schema validation,
-  policy/approval, then execution. Unknown plugin IDs, undeclared actions,
+  advertised to the provider. Provider-visible Ollama prompt inventory and
+  ChatGPT/OpenAI-compatible native tool definitions are generated from the same
+  runtime `PluginHost` first-party manifest inventory used for validation. The
+  normative path is provider response parsing, canonical envelope or
+  native-name normalization, lookup against the registered first-party manifest
+  inventory, input schema validation, policy/approval, then execution. Unknown
+  plugin IDs, undeclared actions,
   non-object or schema-invalid inputs, and non-first-party requests fail closed
   before policy checks or execution, emit `tool_request_rejected` audit
   evidence, and are returned to the model as `rejected` tool results for
