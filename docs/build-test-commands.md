@@ -417,8 +417,8 @@ validated. The current Swift gate proves the
 Mac shell scaffold builds, decodes IPC contracts, exposes management models for
 approval evidence, memory classification summary, memory policy review counts,
 memory create/update/review/delete/restore state, runs/audit,
-activity summary, permission policy review, scheduler attention summaries, diagnostics,
-contract compatibility policy and feature proof/boundary metadata,
+activity summary, permission policy review, scheduler attention summaries,
+diagnostics, release readiness, contract compatibility policy and feature proof/boundary metadata,
 text-transcript voice handoff state, adapter-backed voice input controls,
 adapter-backed speech-output preview controls, adapter-backed scheduler
 notification controls, and

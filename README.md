@@ -20,6 +20,7 @@ create/update/review/delete and restore management, memory classification
 summary, memory review counts in diagnostics and permission policy review, provenance-aware
 permission/grant inspection, permission policy review items, redacted scheduler
 attention summaries for app handoff, scheduler trigger policy-review items,
+release-readiness blocker inspection,
 adapter-backed scheduler notification controls, degraded-mode handling, and a
 core supervisor abstraction.
 Scheduler due execution records a redacted proactive policy audit before
@@ -87,12 +88,12 @@ agents should stay inside their assigned ownership, preserve unrelated edits,
 and treat cross-process E2E plus the local release gate as the evidence bar.
 Passing the local gate supports only the implemented Rust/Swift foundation
 claim; it is not proof of a finished packaged assistant.
-`/release/readiness` and `jarvis release readiness` summarize implemented
-feature proofs, pending feature boundaries, recommended verification commands,
-and manual production blockers in one read-only response. The response keeps
-`production_ready: false` until Developer ID signing/notarization,
-clean-profile installer/Finder validation, live voice device checks, and manual
-QA are actually completed.
+`/release/readiness`, `jarvis release readiness`, and the Swift Release tab
+summarize implemented feature proofs, pending feature boundaries, recommended
+verification commands, and manual production blockers in read-only surfaces.
+The response keeps `production_ready: false` until Developer ID
+signing/notarization, clean-profile installer/Finder validation, live voice
+device checks, and manual QA are actually completed.
 
 Phase 3 landed through separate worktrees for model route persistence, plugin
 subprocess sandboxing, voice input controls, packaged app release smoke,

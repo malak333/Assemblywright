@@ -69,6 +69,12 @@ These notes capture durable facts for future agents working on this repository.
   `production_ready: false` until external signing/notarization, clean-profile
   installer/Finder checks, live voice/audio validation, and manual QA are
   complete.
+- The Swift shell also decodes `/release/readiness` through
+  `ReleaseReadinessModel` and renders a Release tab with blocking manual gates,
+  recommended commands, implemented proofs, pending features, and the proof
+  boundary. This remains inspection-only and does not perform signing,
+  notarization, installation, Finder/LaunchServices validation, or live-device
+  validation.
 - `ConversationRuntime` supports bounded fake-model and provider-envelope
   planned first-party tool calls with schema validation, policy checks, approval
   stops, tool-result audit entries, and feedback of tool results into later
@@ -233,7 +239,7 @@ These notes capture durable facts for future agents working on this repository.
   environment values still win, and the provider does not auto-enable ChatGPT.
 - The Swift shell now exposes production-facing scaffold tabs for approval
   evidence, runs/audit, scheduler create/inspect/cancel, redacted diagnostics,
-  and voice state. Voice supports typed transcript staging and hands the
+  release readiness, and voice state. Voice supports typed transcript staging and hands the
   transcript to the same text command path. The scaffold now models
   interruption, resume/cancel, unavailable, and degraded typed-fallback states,
   owns a protocol-backed macOS Speech/AVFoundation adapter model from the
