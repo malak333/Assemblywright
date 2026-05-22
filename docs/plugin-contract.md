@@ -112,9 +112,11 @@ to explain what happened:
   enabled without `subprocess_stdio_network` all fail closed with audit
   evidence. Jarvis sends a JSON object containing `plugin_id`, `action`, and
   `input` to stdin and accepts only JSON stdout that matches the action output
-  schema. Jarvis clears the inherited process environment before spawn and
-  exposes only a minimal allowlist: a deterministic `PATH` for interpreter
-  resolution plus `JARVIS_PLUGIN_ID`, `JARVIS_PLUGIN_ACTION`, and
+  schema. Subprocess stdout is capped at 1 MiB and stderr is capped at 256 KiB;
+  a stream that exceeds its cap is killed and fails closed before raw output is
+  parsed or audited. Jarvis clears the inherited process environment before
+  spawn and exposes only a minimal allowlist: a deterministic `PATH` for
+  interpreter resolution plus `JARVIS_PLUGIN_ID`, `JARVIS_PLUGIN_ACTION`, and
   `JARVIS_PLUGIN_SOURCE_PATH`. This prevents app/core secrets from reaching
   subprocess plugins by default; it is still not a full OS sandbox.
 - Publisher signature verification uses

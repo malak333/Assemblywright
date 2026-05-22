@@ -11,13 +11,14 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc, Arc,
     },
+    thread,
     time::{Duration, Instant},
 };
 
@@ -28,6 +29,8 @@ const MAX_PLUGIN_PROGRESS_EVENTS: usize = 32;
 const MAX_PLUGIN_PROGRESS_LINE_BYTES: usize = 4_096;
 const MAX_PLUGIN_PROGRESS_STAGE_CHARS: usize = 64;
 const MAX_PLUGIN_PROGRESS_MESSAGE_CHARS: usize = 240;
+const MAX_PLUGIN_STDOUT_BYTES: usize = 1024 * 1024;
+const MAX_PLUGIN_STDERR_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -959,25 +962,59 @@ pub fn execute_installed_subprocess_plugin(
             .write_all(&request_bytes)
             .map_err(|err| JarvisError::Plugin(format!("write subprocess stdin: {err}")))?;
     }
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| JarvisError::Plugin("capture subprocess stdout".to_string()))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| JarvisError::Plugin("capture subprocess stderr".to_string()))?;
+    let (output_tx, output_rx) = mpsc::channel();
+    spawn_bounded_output_reader(
+        PluginOutputStream::Stdout,
+        stdout,
+        MAX_PLUGIN_STDOUT_BYTES,
+        output_tx.clone(),
+    );
+    spawn_bounded_output_reader(
+        PluginOutputStream::Stderr,
+        stderr,
+        MAX_PLUGIN_STDERR_BYTES,
+        output_tx,
+    );
+    let mut stdout_output: Option<Vec<u8>> = None;
+    let mut stderr_output: Option<Vec<u8>> = None;
 
     let deadline = Instant::now() + action.timeout.duration();
     loop {
+        handle_subprocess_output_events(
+            &mut child,
+            &output_rx,
+            &mut stdout_output,
+            &mut stderr_output,
+        )?;
         if let Some(status) = child
             .try_wait()
             .map_err(|err| JarvisError::Plugin(format!("wait subprocess plugin: {err}")))?
         {
-            let output = child
-                .wait_with_output()
-                .map_err(|err| JarvisError::Plugin(format!("read subprocess output: {err}")))?;
+            collect_subprocess_outputs(
+                &output_rx,
+                &mut stdout_output,
+                &mut stderr_output,
+                Instant::now() + Duration::from_secs(1),
+            )?;
             if !status.success() {
                 return Err(JarvisError::Plugin(format!(
                     "subprocess plugin exited with status {status}"
                 )));
             }
-            let stdout_bytes = output.stdout.len();
-            let stderr_bytes = output.stderr.len();
-            let progress_events = parse_plugin_progress_events(&output.stderr);
-            let value: Value = serde_json::from_slice(&output.stdout).map_err(|err| {
+            let stdout = stdout_output.take().unwrap_or_default();
+            let stderr = stderr_output.take().unwrap_or_default();
+            let stdout_bytes = stdout.len();
+            let stderr_bytes = stderr.len();
+            let progress_events = parse_plugin_progress_events(&stderr);
+            let value: Value = serde_json::from_slice(&stdout).map_err(|err| {
                 JarvisError::Plugin(format!("parse subprocess stdout JSON: {err}"))
             })?;
             action
@@ -1000,6 +1037,167 @@ pub fn execute_installed_subprocess_plugin(
             )));
         }
         std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PluginOutputStream {
+    Stdout,
+    Stderr,
+}
+
+impl PluginOutputStream {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Stdout => "stdout",
+            Self::Stderr => "stderr",
+        }
+    }
+}
+
+enum PluginOutputEvent {
+    Complete(PluginOutputStream, Vec<u8>),
+    Exceeded(PluginOutputStream, usize),
+    Error(PluginOutputStream, String),
+}
+
+fn spawn_bounded_output_reader<R>(
+    stream: PluginOutputStream,
+    mut reader: R,
+    limit: usize,
+    sender: mpsc::Sender<PluginOutputEvent>,
+) where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut output = Vec::new();
+        let mut buffer = [0_u8; 8192];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) => {
+                    let _ = sender.send(PluginOutputEvent::Complete(stream, output));
+                    return;
+                }
+                Ok(read) => {
+                    if output.len().saturating_add(read) > limit {
+                        let observed = output.len().saturating_add(read);
+                        let _ = sender.send(PluginOutputEvent::Exceeded(stream, observed));
+                        return;
+                    }
+                    output.extend_from_slice(&buffer[..read]);
+                }
+                Err(err) => {
+                    let _ = sender.send(PluginOutputEvent::Error(stream, err.to_string()));
+                    return;
+                }
+            }
+        }
+    });
+}
+
+fn handle_subprocess_output_events(
+    child: &mut std::process::Child,
+    receiver: &mpsc::Receiver<PluginOutputEvent>,
+    stdout_output: &mut Option<Vec<u8>>,
+    stderr_output: &mut Option<Vec<u8>>,
+) -> JarvisResult<()> {
+    while let Ok(event) = receiver.try_recv() {
+        handle_subprocess_output_event(child, event, stdout_output, stderr_output)?;
+    }
+    Ok(())
+}
+
+fn collect_subprocess_outputs(
+    receiver: &mpsc::Receiver<PluginOutputEvent>,
+    stdout_output: &mut Option<Vec<u8>>,
+    stderr_output: &mut Option<Vec<u8>>,
+    deadline: Instant,
+) -> JarvisResult<()> {
+    while stdout_output.is_none() || stderr_output.is_none() {
+        let now = Instant::now();
+        if now >= deadline {
+            return Err(JarvisError::Plugin(
+                "read subprocess output after exit timed out".to_string(),
+            ));
+        }
+        let timeout = deadline.saturating_duration_since(now);
+        let event = receiver.recv_timeout(timeout).map_err(|err| {
+            JarvisError::Plugin(format!("read subprocess output after exit: {err}"))
+        })?;
+        handle_subprocess_output_event_without_child(event, stdout_output, stderr_output)?;
+    }
+    Ok(())
+}
+
+fn handle_subprocess_output_event(
+    child: &mut std::process::Child,
+    event: PluginOutputEvent,
+    stdout_output: &mut Option<Vec<u8>>,
+    stderr_output: &mut Option<Vec<u8>>,
+) -> JarvisResult<()> {
+    match event {
+        PluginOutputEvent::Complete(stream, output) => {
+            store_subprocess_output(stream, output, stdout_output, stderr_output);
+            Ok(())
+        }
+        PluginOutputEvent::Exceeded(stream, observed) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            Err(JarvisError::Plugin(format!(
+                "subprocess plugin {} exceeded {} byte limit after at least {observed} bytes",
+                stream.label(),
+                output_limit_for_stream(stream)
+            )))
+        }
+        PluginOutputEvent::Error(stream, error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            Err(JarvisError::Plugin(format!(
+                "read subprocess plugin {}: {error}",
+                stream.label()
+            )))
+        }
+    }
+}
+
+fn handle_subprocess_output_event_without_child(
+    event: PluginOutputEvent,
+    stdout_output: &mut Option<Vec<u8>>,
+    stderr_output: &mut Option<Vec<u8>>,
+) -> JarvisResult<()> {
+    match event {
+        PluginOutputEvent::Complete(stream, output) => {
+            store_subprocess_output(stream, output, stdout_output, stderr_output);
+            Ok(())
+        }
+        PluginOutputEvent::Exceeded(stream, observed) => Err(JarvisError::Plugin(format!(
+            "subprocess plugin {} exceeded {} byte limit after at least {observed} bytes",
+            stream.label(),
+            output_limit_for_stream(stream)
+        ))),
+        PluginOutputEvent::Error(stream, error) => Err(JarvisError::Plugin(format!(
+            "read subprocess plugin {}: {error}",
+            stream.label()
+        ))),
+    }
+}
+
+fn store_subprocess_output(
+    stream: PluginOutputStream,
+    output: Vec<u8>,
+    stdout_output: &mut Option<Vec<u8>>,
+    stderr_output: &mut Option<Vec<u8>>,
+) {
+    match stream {
+        PluginOutputStream::Stdout => *stdout_output = Some(output),
+        PluginOutputStream::Stderr => *stderr_output = Some(output),
+    }
+}
+
+fn output_limit_for_stream(stream: PluginOutputStream) -> usize {
+    match stream {
+        PluginOutputStream::Stdout => MAX_PLUGIN_STDOUT_BYTES,
+        PluginOutputStream::Stderr => MAX_PLUGIN_STDERR_BYTES,
     }
 }
 
@@ -1642,6 +1840,8 @@ impl InProcessPlugin for StatusPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use std::{fs, thread, time::Duration};
 
     #[test]
@@ -2055,6 +2255,141 @@ mod tests {
             result.metadata.cancellation,
             CancellationBehavior::Cooperative
         );
+    }
+
+    #[test]
+    fn local_subprocess_output_within_limits_executes_and_parses_progress() {
+        let fixture = local_subprocess_fixture(
+            r#"#!/bin/sh
+printf '%s\n' '{"jarvis_progress":true,"stage":"prepare","message":"bounded output"}' >&2
+printf '%s\n' '{"ok":true}'
+"#,
+        );
+        let manifest = local_subprocess_manifest("bounded_success", "runner.sh");
+        let source_path = fixture.path().canonicalize().expect("canonical fixture");
+
+        let execution = execute_installed_subprocess_plugin(
+            &manifest,
+            &manifest.actions[0],
+            &source_path,
+            &json!({}),
+        )
+        .expect("bounded subprocess should execute");
+
+        assert_eq!(execution.output, json!({ "ok": true }));
+        assert!(execution.stdout_bytes < MAX_PLUGIN_STDOUT_BYTES);
+        assert!(execution.stderr_bytes < MAX_PLUGIN_STDERR_BYTES);
+        assert_eq!(execution.progress_events.len(), 1);
+        assert_eq!(execution.progress_events[0].stage, "prepare");
+    }
+
+    #[test]
+    fn local_subprocess_stdout_over_limit_fails_closed() {
+        let fixture = local_subprocess_fixture(&format!(
+            r#"#!/bin/sh
+python3 - <<'PY'
+import sys
+sys.stdout.write("x" * {})
+sys.stdout.flush()
+PY
+"#,
+            MAX_PLUGIN_STDOUT_BYTES + 1
+        ));
+        let manifest = local_subprocess_manifest("noisy_stdout", "runner.sh");
+        let source_path = fixture.path().canonicalize().expect("canonical fixture");
+
+        let error = execute_installed_subprocess_plugin(
+            &manifest,
+            &manifest.actions[0],
+            &source_path,
+            &json!({}),
+        )
+        .expect_err("oversize stdout must fail closed");
+
+        assert!(error.to_string().contains("stdout exceeded"));
+        assert!(error.to_string().contains("byte limit"));
+    }
+
+    #[test]
+    fn local_subprocess_stderr_over_limit_fails_closed() {
+        let fixture = local_subprocess_fixture(&format!(
+            r#"#!/bin/sh
+python3 - <<'PY'
+import sys
+sys.stderr.write("x" * {})
+sys.stderr.flush()
+sys.stdout.write('{{"ok":true}}')
+PY
+"#,
+            MAX_PLUGIN_STDERR_BYTES + 1
+        ));
+        let manifest = local_subprocess_manifest("noisy_stderr", "runner.sh");
+        let source_path = fixture.path().canonicalize().expect("canonical fixture");
+
+        let error = execute_installed_subprocess_plugin(
+            &manifest,
+            &manifest.actions[0],
+            &source_path,
+            &json!({}),
+        )
+        .expect_err("oversize stderr must fail closed");
+
+        assert!(error.to_string().contains("stderr exceeded"));
+        assert!(error.to_string().contains("byte limit"));
+    }
+
+    fn local_subprocess_fixture(script: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("temp plugin dir");
+        let runner = dir.path().join("runner.sh");
+        fs::write(&runner, script).expect("write runner");
+        #[cfg(unix)]
+        {
+            let mut permissions = fs::metadata(&runner)
+                .expect("runner metadata")
+                .permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&runner, permissions).expect("chmod runner");
+        }
+        dir
+    }
+
+    fn local_subprocess_manifest(id: &str, command: &str) -> PluginManifest {
+        let mut output_properties = Map::new();
+        output_properties.insert("ok".to_string(), json!({ "type": "boolean" }));
+        PluginManifest {
+            manifest_schema_version: LOCAL_MANIFEST_SCHEMA_VERSION,
+            id: id.to_string(),
+            name: "Local Subprocess Fixture".to_string(),
+            version: "0.1.0".to_string(),
+            source: PluginSource::LocalSubprocess,
+            author: "Jarvis Test".to_string(),
+            source_path: None,
+            subprocess: Some(PluginSubprocessManifest {
+                command: command.to_string(),
+                args: Vec::new(),
+                stdin: PluginSubprocessStream::Json,
+                stdout: PluginSubprocessStream::Json,
+            }),
+            publisher_signature: None,
+            actions: vec![PluginActionManifest {
+                name: "run".to_string(),
+                description: "Run local subprocess fixture.".to_string(),
+                permissions: Vec::new(),
+                risk_tier: RiskTier::Low,
+                input_schema: JsonSchema::empty_object(),
+                output_schema: JsonSchema::object(output_properties, vec!["ok".to_string()]),
+                proactive: false,
+                memory_access: PluginAccess::None,
+                model_access: PluginAccess::None,
+                network_access: PluginNetworkAccess::default(),
+                audit_fields: Vec::new(),
+                timeout: PluginTimeout {
+                    timeout_ms: 2_000,
+                    on_timeout: PluginTimeoutAction::Cancel,
+                },
+                cancellation: CancellationBehavior::Cooperative,
+            }],
+        }
     }
 
     struct ApprovalPlugin;

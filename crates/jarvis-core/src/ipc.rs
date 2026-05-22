@@ -3727,7 +3727,7 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "installed_plugin_execution",
             "implemented",
-            "Local subprocess plugins require provenance verification plus explicit subprocess_stdio or subprocess_stdio_network grants, run with inherited environment cleared, and are covered by Rust unit and CLI IPC E2E tests.",
+            "Local subprocess plugins require provenance verification plus explicit subprocess_stdio or subprocess_stdio_network grants, run with inherited environment cleared, enforce stdout/stderr byte limits, and are covered by Rust unit and CLI IPC E2E tests.",
             "Constrained local subprocess execution only; not a WASM, OS-level, or marketplace sandbox.",
         ),
         feature(
