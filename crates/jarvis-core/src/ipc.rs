@@ -1,16 +1,19 @@
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration as StdDuration;
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::net::TcpListener;
+use tokio_stream::{wrappers::IntervalStream, StreamExt};
 use tower_http::trace::TraceLayer;
 use uuid::Uuid;
 
@@ -35,6 +38,9 @@ pub const IPC_CONTRACT_NAME: &str = "jarvis.local-ipc";
 pub const DEFAULT_SCHEDULER_BACKGROUND_INTERVAL_MS: u64 = 30_000;
 pub const DEFAULT_SCHEDULER_BACKGROUND_LIMIT: usize = 16;
 pub const MAX_SCHEDULER_BACKGROUND_LIMIT: usize = 64;
+pub const DEFAULT_ACTIVITY_EVENT_INTERVAL_MS: u64 = 1_000;
+pub const DEFAULT_ACTIVITY_EVENT_LIMIT: usize = 3;
+pub const MAX_ACTIVITY_EVENT_LIMIT: usize = 50;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContractMetadata {
@@ -187,6 +193,14 @@ pub struct ActivitySummary {
     pub status_counts: Vec<ActivityStatusCount>,
     pub recent_tasks: Vec<TaskRecord>,
     pub recent_audit_entries: Vec<AuditEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ActivityEventsQuery {
+    #[serde(default)]
+    pub interval_ms: Option<u64>,
+    #[serde(default)]
+    pub max_events: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -507,6 +521,7 @@ impl IpcState {
                 "/scheduler/attention".to_string(),
                 "/scheduler/jobs/:id".to_string(),
                 "/activity/summary".to_string(),
+                "/activity/events".to_string(),
                 "/model-routes".to_string(),
                 "/model-routes/:id".to_string(),
                 "/memory".to_string(),
@@ -2143,6 +2158,7 @@ pub fn router(state: IpcState) -> Router {
         .route("/tasks/:id/audit", get(list_task_audit_entries))
         .route("/audit", get(list_audit_entries))
         .route("/activity/summary", get(activity_summary))
+        .route("/activity/events", get(activity_events))
         .route("/model-routes", get(list_model_routes))
         .route("/model-routes/:id", get(get_model_route))
         .route("/memory", get(list_memory_items).post(create_memory_item))
@@ -2281,6 +2297,48 @@ async fn activity_summary(
     State(state): State<IpcState>,
 ) -> Result<Json<ActivitySummary>, (StatusCode, Json<ErrorResponse>)> {
     state.activity_summary().map(Json).map_err(error_response)
+}
+
+async fn activity_events(
+    State(state): State<IpcState>,
+    Query(query): Query<ActivityEventsQuery>,
+) -> Result<
+    Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>>,
+    (StatusCode, Json<ErrorResponse>),
+> {
+    state.activity_summary().map_err(error_response)?;
+
+    let interval = StdDuration::from_millis(
+        query
+            .interval_ms
+            .unwrap_or(DEFAULT_ACTIVITY_EVENT_INTERVAL_MS)
+            .max(100),
+    );
+    let max_events = query
+        .max_events
+        .unwrap_or(DEFAULT_ACTIVITY_EVENT_LIMIT)
+        .clamp(1, MAX_ACTIVITY_EVENT_LIMIT);
+    let stream_state = state.clone();
+    let stream = IntervalStream::new(tokio::time::interval(interval))
+        .take(max_events)
+        .map(move |_| {
+            let event = match stream_state.activity_summary() {
+                Ok(summary) => Event::default().event("activity_summary").data(
+                    serde_json::to_string(&summary).unwrap_or_else(|error| {
+                        json!({
+                            "error": format!("serialize activity summary: {error}")
+                        })
+                        .to_string()
+                    }),
+                ),
+                Err(error) => Event::default()
+                    .event("activity_error")
+                    .data(json!({ "error": error.to_string() }).to_string()),
+            };
+            Ok(event)
+        });
+
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
 
 async fn list_model_routes(
@@ -2658,6 +2716,7 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
         endpoint("GET", "/tasks/:id/audit", true, false),
         endpoint("GET", "/audit", true, false),
         endpoint("GET", "/activity/summary", true, false),
+        endpoint("GET", "/activity/events", true, false),
         endpoint("GET", "/model-routes", true, true),
         endpoint("GET", "/model-routes/:id", true, true),
         endpoint("GET", "/memory", true, false),
@@ -2826,10 +2885,19 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .safe_inspection_paths
             .contains(&"/activity/summary".to_string()));
         assert!(contract
+            .safe_inspection_paths
+            .contains(&"/activity/events".to_string()));
+        assert!(contract
             .endpoints
             .iter()
             .any(|endpoint| endpoint.method == "GET"
                 && endpoint.path == "/activity/summary"
+                && endpoint.repository_required));
+        assert!(contract
+            .endpoints
+            .iter()
+            .any(|endpoint| endpoint.method == "GET"
+                && endpoint.path == "/activity/events"
                 && endpoint.repository_required));
     }
 

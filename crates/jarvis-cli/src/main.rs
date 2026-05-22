@@ -203,6 +203,15 @@ enum ActivityCommand {
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
+    /// Stream bounded activity summary events.
+    Watch {
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+        #[arg(long, default_value_t = jarvis_core::DEFAULT_ACTIVITY_EVENT_LIMIT)]
+        max_events: usize,
+        #[arg(long, default_value_t = jarvis_core::DEFAULT_ACTIVITY_EVENT_INTERVAL_MS)]
+        interval_ms: u64,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -556,11 +565,28 @@ async fn main() -> anyhow::Result<()> {
                 println!("{}", request(&endpoint, "GET", &path, None)?);
             }
         },
-        CliCommand::Activity { command } => match command {
-            ActivityCommand::Summary { endpoint } => {
-                println!("{}", request(&endpoint, "GET", "/activity/summary", None)?);
+        CliCommand::Activity { command } => {
+            match command {
+                ActivityCommand::Summary { endpoint } => {
+                    println!("{}", request(&endpoint, "GET", "/activity/summary", None)?);
+                }
+                ActivityCommand::Watch {
+                    endpoint,
+                    max_events,
+                    interval_ms,
+                } => {
+                    println!(
+                    "{}",
+                    request(
+                        &endpoint,
+                        "GET",
+                        &format!("/activity/events?max_events={max_events}&interval_ms={interval_ms}"),
+                        None,
+                    )?
+                );
+                }
             }
-        },
+        }
         CliCommand::Routes { command } => match command {
             RoutesCommand::List { task_id, endpoint } => {
                 let path = task_id
