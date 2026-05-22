@@ -278,9 +278,13 @@ voice input/output adapter controls, text-transcript command handoff,
 permission policy review,
 redacted scheduler attention handoff, adapter-backed scheduler notification
 controls for due/failed attention items, and core supervision abstractions.
+Installed plugin publisher-origin claims can be operator-pinned after local
+provenance matches the install snapshot and the supplied trusted origin exactly
+matches the manifest author claim; this is audit-backed local review, not
+cryptographic signed-publisher verification.
 The product still lacks
 signed/notarized release evidence, live microphone and audio-output validation,
-marketplace/WASM/network/signed-publisher plugin trust boundaries, richer
+marketplace/WASM/network/cryptographic signed-publisher plugin trust boundaries, richer
 proactive trigger policy, and live OS notification validation. Swift supervision is
 covered only as a scaffold for
 configured or packaged-style local core binaries.

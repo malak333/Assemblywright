@@ -13,8 +13,9 @@ use crate::router::{
 };
 use crate::{
     ApprovalStatus, AuditEntry, CapabilityScope, InstalledPlugin, InstalledPluginExecutionGrant,
-    InstalledPluginProvenance, JarvisError, JarvisResult, PluginManifest, RiskTier, SchedulerJob,
-    SchedulerJobStatus, Sensitivity, TaskRecord, TaskStatus, TriggerKind,
+    InstalledPluginIntegrityStatus, InstalledPluginProvenance, JarvisError, JarvisResult,
+    PluginManifest, RiskTier, SchedulerJob, SchedulerJobStatus, Sensitivity, TaskRecord,
+    TaskStatus, TriggerKind,
 };
 
 const CURRENT_SCHEMA_VERSION: i64 = 8;
@@ -894,6 +895,52 @@ impl SqliteRepository {
         let provenance = record
             .provenance
             .verify_snapshot(&record.manifest, Utc::now());
+        let provenance_json = serde_json::to_string(&provenance).map_err(|err| {
+            JarvisError::Storage(format!("serialize plugin provenance {id}: {err}"))
+        })?;
+        self.conn
+            .execute(
+                "UPDATE installed_plugins
+                 SET provenance_json = ?2
+                 WHERE id = ?1",
+                params![id, provenance_json],
+            )
+            .map_err(storage_error)?;
+        self.get_installed_plugin(id)?
+            .ok_or_else(|| JarvisError::Storage(format!("installed plugin not found: {id}")))
+    }
+
+    pub fn verify_installed_plugin_publisher(
+        &self,
+        id: &str,
+        trusted_origin: &str,
+        verified_at: DateTime<Utc>,
+    ) -> JarvisResult<InstalledPluginRecord> {
+        let record = self
+            .get_installed_plugin(id)?
+            .ok_or_else(|| JarvisError::Storage(format!("installed plugin not found: {id}")))?;
+        if record.provenance.integrity_status
+            != InstalledPluginIntegrityStatus::MatchesInstallSnapshot
+        {
+            return Err(JarvisError::Validation(
+                "publisher verification requires local provenance to match the install snapshot"
+                    .to_string(),
+            ));
+        }
+        let origin_claim = record.provenance.origin_claim.as_deref().ok_or_else(|| {
+            JarvisError::Validation(
+                "publisher verification requires an installed plugin origin claim".to_string(),
+            )
+        })?;
+        if origin_claim != trusted_origin {
+            return Err(JarvisError::Validation(format!(
+                "trusted_origin must exactly match installed plugin origin claim: {origin_claim}"
+            )));
+        }
+
+        let mut provenance = record.provenance;
+        provenance.last_verified_at = Some(verified_at);
+        provenance.origin_claim_verified = true;
         let provenance_json = serde_json::to_string(&provenance).map_err(|err| {
             JarvisError::Storage(format!("serialize plugin provenance {id}: {err}"))
         })?;

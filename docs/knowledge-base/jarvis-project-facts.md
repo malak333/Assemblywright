@@ -54,8 +54,8 @@ These notes capture durable facts for future agents working on this repository.
   `execution_enabled: false` and `execution_grant: metadata_only` by default.
   Installed records also carry a local provenance snapshot with manifest and,
   for `local_subprocess`, command SHA-256 hashes. This proves only local file
-  integrity against the install snapshot, not publisher identity or malware
-  safety.
+  integrity against the install snapshot, not malware safety or cryptographic
+  publisher identity.
   Installed plugin run requests can perform contract-only dry runs that
   validate manifest/action/input schema and audit `side_effect_executed: false`
   without loading or executing plugin code. `local_subprocess` manifests can be
@@ -63,6 +63,14 @@ These notes capture durable facts for future agents working on this repository.
   `plugins enable-installed` with `execution_grant: subprocess_stdio` after
   `plugins verify-installed` confirms `matches_install_snapshot`; only then can
   they run through the constrained subprocess-stdio JSON boundary.
+- Installed plugin publisher-origin claims can be operator-pinned through
+  `/plugins/installed/:id/publisher/verify` or `plugins verify-publisher`.
+  Verification requires the stored provenance to already match the install
+  snapshot and `trusted_origin` to exactly match the manifest author claim, then
+  sets `origin_claim_verified: true` and appends an
+  `installed_plugin_publisher_verified` audit entry. This is a local review
+  control, not cryptographic signature validation, marketplace trust, or malware
+  analysis.
 - Repository-backed IPC exposes `/permissions/grants`, and the CLI exposes
   `jarvis permissions grants`, as a read-only permission-center summary. It
   combines approval status counts/history, high-risk pending approval count,
@@ -83,13 +91,15 @@ These notes capture durable facts for future agents working on this repository.
 - The CLI has matching `tasks`, `memory`, `scheduler`, `diagnostics`, and
   `plugins` subcommands, including `plugins install`, `plugins installed`,
   `plugins installed-get`, `plugins enable-installed`, `plugins
-  verify-installed`, `plugins disable-installed`, and `plugins run-installed`
-  for disabled-by-default local manifests and explicit subprocess execution.
+  verify-installed`, `plugins verify-publisher`, `plugins disable-installed`,
+  and `plugins run-installed` for disabled-by-default local manifests,
+  auditable publisher-origin review, and explicit subprocess execution.
 - A local packaged app release smoke exists, and installed plugin execution now
   has a constrained local subprocess proof. Developer ID signing,
   notarization, installer validation, App Store distribution, real voice loop,
-  broader plugin marketplace/WASM/network sandboxing, signed-publisher trust,
-  and broader production operations are not yet implemented in this worktree.
+  broader plugin marketplace/WASM/network sandboxing, cryptographic
+  signed-publisher trust, and broader production operations are not yet
+  implemented in this worktree.
   The SwiftUI shell scaffold and IPC client live under `apps/mac`, including a
   command transcript, activity/audit panel, approval decision controls,
   management tabs, permission grant-history summary, degraded-mode handling,
