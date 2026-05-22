@@ -107,13 +107,14 @@ Ollama-compatible and ChatGPT/OpenAI-compatible text responses may also return
 a strict JSON envelope with `message`, `complete`, and `tool_requests`.
 Accepted `tool_requests` are fed into the same bounded first-party schema,
 policy, approval, and audit path as fake-model tool plans; malformed envelopes
-fail with redacted diagnostics. Unknown plugin IDs, undeclared actions,
-malformed inputs, and oversized tool plans fail closed with
-`tool_request_rejected` audit evidence and registered-tool guidance before any
-policy check or tool execution. ChatGPT/OpenAI-compatible responses may also
-return native OpenAI `tool_calls` for the advertised first-party tools; these
-are translated into the same bounded first-party path. This is provider tool
-compatibility, not installed-plugin orchestration.
+fail with redacted diagnostics. Unknown plugin IDs, undeclared actions, and
+malformed inputs fail closed before policy check or tool execution, emit
+`tool_request_rejected` audit evidence, and are returned to the model as
+`rejected` tool results for bounded recovery. Oversized tool plans still fail
+the task. ChatGPT/OpenAI-compatible responses may also return native OpenAI
+`tool_calls` for the advertised first-party tools; these are translated into
+the same bounded first-party path. This is provider tool compatibility, not
+installed-plugin orchestration.
 
 For durable local task and audit state during manual inspection, pass a SQLite
 path:
@@ -325,6 +326,7 @@ cargo test -p jarvis-core ollama_http_provider_parses_tool_request_envelope -- -
 cargo test -p jarvis-core chatgpt_http_provider_parses_tool_request_envelope -- --nocapture
 cargo test -p jarvis-core chatgpt_http_provider_parses_native_tool_calls -- --nocapture
 cargo test -p jarvis-core provider_tool_request_envelope_rejects_malformed_tool_requests_without_leaking_prompt -- --nocapture
+cargo test -p jarvis-core provider_tool_request_envelope_rejects_mixed_prose_and_tool_json -- --nocapture
 cargo test -p jarvis-core provider_originated_tool_request_executes_first_party_tool_and_feeds_result -- --nocapture
 cargo test -p jarvis-cli serve_executes_chatgpt_native_tool_call --test local_ipc_e2e -- --nocapture
 cargo test -p jarvis-core model_provider_failure_returns_failed_response_with_route_evidence -- --nocapture
@@ -336,6 +338,8 @@ cargo test -p jarvis-cli
 cargo test -p jarvis-cli --test local_ipc_e2e
 cargo test -p jarvis-cli --test local_ipc_e2e serve_can_recover_stale_scheduler_jobs_on_startup -- --nocapture
 cargo test -p jarvis-cli --test local_ipc_e2e serve_executes_ollama_provider_tool_request_envelope -- --nocapture
+cargo test -p jarvis-cli --test local_ipc_e2e serve_rejects_ollama_hallucinated_tool_with_registered_tool_guidance -- --nocapture
+cargo test -p jarvis-cli --test local_ipc_e2e serve_rejects_ollama_mixed_prose_tool_json_as_malformed_model_output -- --nocapture
 cargo test -p jarvis-cli --test local_ipc_e2e -- --ignored
 ./scripts/storage-migration-backup-smoke.sh
 ./scripts/release-operator-qa-smoke.sh

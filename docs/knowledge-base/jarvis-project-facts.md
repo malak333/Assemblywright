@@ -92,9 +92,19 @@ These notes capture durable facts for future agents working on this repository.
 - Live local testing with Ollama `llama3.2` has proven the opt-in
   Ollama-compatible HTTP route can complete real model commands. The runtime
   now advertises the exact registered first-party tool inventory in the
-  Ollama prompt and rejects hallucinated provider plugin IDs/actions with
-  `tool_request_rejected` audit evidence plus registered-tool guidance before
-  policy checks or tool execution.
+  Ollama prompt and rejects hallucinated provider plugin IDs/actions before
+  policy checks or tool execution. Those recoverable validation misses emit
+  `tool_request_rejected` audit evidence plus registered-tool guidance and are
+  fed back to the next model step as `rejected` tool results. Malformed provider
+  envelopes, including prose mixed with JSON `tool_requests`, still fail as
+  redacted model errors instead of leaking tool-planning text as a normal
+  answer.
+- The registered model-tool contract is first-party only. Ollama envelope
+  requests use `plugin_id` plus `action`; native ChatGPT/OpenAI-compatible tool
+  names use `plugin__action`; both must map back to the same registered
+  first-party manifest inventory before any policy check or execution.
+  Installed plugin registry records are inspectable and separately executable
+  through explicit grants, but model-originated tool calls cannot target them.
 - Provider-envelope coverage includes
   `ollama_http_provider_parses_tool_request_envelope`,
   `chatgpt_http_provider_parses_tool_request_envelope`,
@@ -110,6 +120,9 @@ These notes capture durable facts for future agents working on this repository.
   `rejects_hallucinated_model_planned_action_with_registered_tool_guidance`,
   and the cross-process
   `serve_rejects_ollama_hallucinated_tool_with_registered_tool_guidance` E2E.
+  Malformed mixed-format provider output is covered by
+  `provider_tool_request_envelope_rejects_mixed_prose_and_tool_json` and
+  `serve_rejects_ollama_mixed_prose_tool_json_as_malformed_model_output`.
 - Repository-backed IPC state exposes task, audit, model-route, and memory
   inspection routes, persists scheduler jobs, restores them at startup, and all
   IPC states expose `/plugins/manifests` for deterministic first-party plugin

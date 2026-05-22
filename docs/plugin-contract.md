@@ -108,10 +108,16 @@ to explain what happened:
   appends audit evidence.
 - Model-originated tool requests are stricter than direct plugin registry
   inspection. They may target only registered first-party plugin actions
-  advertised to the provider. Unknown plugin IDs, undeclared actions,
-  non-object or schema-invalid inputs, non-first-party requests, and oversized
-  tool plans fail closed before policy checks or execution, with
-  `tool_request_rejected` audit evidence and registered-tool guidance.
+  advertised to the provider. The normative path is provider response parsing,
+  canonical envelope or native-name normalization, lookup against the
+  registered first-party manifest inventory, input schema validation,
+  policy/approval, then execution. Unknown plugin IDs, undeclared actions,
+  non-object or schema-invalid inputs, and non-first-party requests fail closed
+  before policy checks or execution, emit `tool_request_rejected` audit
+  evidence, and are returned to the model as `rejected` tool results for
+  bounded recovery on the next step. Oversized tool plans and malformed provider
+  envelopes still fail the task. Installed plugins, including enabled
+  `local_subprocess` plugins, are never model-planned tools.
 - Enabled installed plugin execution is limited to `local_subprocess` manifests
   with the `subprocess_stdio` grant for non-network actions and
   `subprocess_stdio_network` for network-declaring actions. The command must

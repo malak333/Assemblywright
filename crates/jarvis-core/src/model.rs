@@ -876,7 +876,7 @@ fn ollama_prompt(request: &ModelRequest) -> JarvisResult<String> {
     };
 
     Ok(format!(
-        "You are Jarvis, a local-first assistant. Answer the user directly. Do not claim cloud access. Registered first-party tools are exactly: {}. Never invent plugin_id or action values. If a first-party tool is needed, reply only with JSON: {{\"message\":\"short reason\",\"complete\":false,\"tool_requests\":[{{\"plugin_id\":\"fake_status\",\"action\":\"status\",\"input\":{{}}}}]}}. If no registered tool fits, answer directly without tool_requests. Task: {}\nStep: {}\nTool results: {}",
+        "You are Jarvis, a local-first assistant. Answer the user directly. Do not claim cloud access. Registered first-party tools are exactly: {}. Never invent plugin_id or action values. Choose exactly one response mode: plain natural language with no JSON-looking tool fields, or one strict JSON object with no surrounding prose. If a first-party tool is needed, copy one exact registered plugin_id and action into this JSON shape: {{\"message\":\"short reason\",\"complete\":false,\"tool_requests\":[{{\"plugin_id\":\"<registered plugin_id>\",\"action\":\"<registered action>\",\"input\":{{}}}}]}}. If no registered tool fits, answer directly without tool_requests. Task: {}\nStep: {}\nTool results: {}",
         first_party_tool_inventory_text(),
         request.user_input,
         request.step_index,
@@ -887,6 +887,11 @@ fn ollama_prompt(request: &ModelRequest) -> JarvisResult<String> {
 fn parse_provider_response_envelope(raw: &str) -> JarvisResult<ProviderResponseEnvelope> {
     let trimmed = raw.trim();
     let Some(value) = parse_envelope_candidate(trimmed)? else {
+        if trimmed.contains("\"tool_requests\"") || trimmed.contains("'tool_requests'") {
+            return Err(JarvisError::Model(
+                "provider mixed prose and tool_requests outside a strict JSON envelope".to_string(),
+            ));
+        }
         return Ok(ProviderResponseEnvelope {
             message: trimmed.to_string(),
             complete: true,
@@ -956,6 +961,13 @@ fn parse_provider_tool_requests(value: Option<&Value>) -> JarvisResult<Vec<Model
         let object = request.as_object().ok_or_else(|| {
             JarvisError::Model("provider tool_requests entries must be objects".to_string())
         })?;
+        for key in object.keys() {
+            if key != "plugin_id" && key != "action" && key != "input" {
+                return Err(JarvisError::Model(format!(
+                    "provider tool_requests entries contain unsupported field {key}"
+                )));
+            }
+        }
         let plugin_id = object
             .get("plugin_id")
             .and_then(Value::as_str)
@@ -1277,6 +1289,39 @@ mod tests {
         assert!(!message.contains("api_key=abc123"));
     }
 
+    #[test]
+    fn provider_tool_request_envelope_rejects_mixed_prose_and_tool_json() {
+        let raw = "I can check that.\n{\"tool_requests\":[{\"plugin_id\":\"fake_status\",\"action\":\"status\",\"input\":{}}]}";
+
+        let error = parse_provider_response_envelope(raw).expect_err("mixed envelope");
+
+        let message = error.to_string();
+        assert!(message.contains("mixed prose and tool_requests"));
+        assert!(!message.contains("fake_status"));
+    }
+
+    #[test]
+    fn provider_tool_request_envelope_rejects_unsupported_tool_fields() {
+        let raw = json!({
+            "message": "use a tool",
+            "tool_requests": [
+                {
+                    "plugin_id": "fake_status",
+                    "action": "status",
+                    "tool_id": "invented",
+                    "input": {}
+                }
+            ]
+        })
+        .to_string();
+
+        let error = parse_provider_response_envelope(&raw).expect_err("unsupported field");
+
+        let message = error.to_string();
+        assert!(message.contains("unsupported field tool_id"));
+        assert!(!message.contains("fake_status"));
+    }
+
     #[tokio::test]
     async fn ollama_http_provider_posts_non_streaming_generate_request() {
         async fn generate(Json(body): Json<Value>) -> Json<Value> {
@@ -1288,6 +1333,8 @@ mod tests {
             assert!(prompt.contains("fake_status.status"));
             assert!(prompt.contains("fake_echo.echo"));
             assert!(prompt.contains("Never invent plugin_id or action values"));
+            assert!(prompt.contains("one strict JSON object with no surrounding prose"));
+            assert!(prompt.contains("<registered plugin_id>"));
             Json(json!({ "response": "local answer", "done": true }))
         }
 
