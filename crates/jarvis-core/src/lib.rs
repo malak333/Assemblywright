@@ -13,10 +13,10 @@ pub use ipc::{
     CommandResponse, CreateMemoryItemRequest, CreateSchedulerJobRequest, EmergencyPauseRequest,
     EmergencyPauseResponse, ErrorResponse, HealthResponse, InstallPluginRequest,
     InstalledPluginExecutionRequest, InstalledPluginGrantSurface, InstalledPluginRunRequest,
-    InstalledPluginRunResponse, IpcState, PermissionGrantSummary, SchedulerBackgroundConfig,
-    SchedulerJobExecution, SchedulerRunResponse, UpdateMemoryItemRequest,
-    DEFAULT_SCHEDULER_BACKGROUND_INTERVAL_MS, DEFAULT_SCHEDULER_BACKGROUND_LIMIT,
-    MAX_SCHEDULER_BACKGROUND_LIMIT,
+    InstalledPluginRunResponse, IpcState, PermissionGrantSummary, SchedulerAttentionItem,
+    SchedulerAttentionSummary, SchedulerBackgroundConfig, SchedulerJobExecution,
+    SchedulerRunResponse, UpdateMemoryItemRequest, DEFAULT_SCHEDULER_BACKGROUND_INTERVAL_MS,
+    DEFAULT_SCHEDULER_BACKGROUND_LIMIT, MAX_SCHEDULER_BACKGROUND_LIMIT,
 };
 pub use model::{
     redact_url_credentials, ChatGptHttpModel, ChatGptProviderConfig, FakeLocalModel,

@@ -157,6 +157,7 @@ public final class PluginManagerModel: ObservableObject {
 @MainActor
 public final class SchedulerModel: ObservableObject {
     @Published public private(set) var jobs: [JarvisSchedulerJob]
+    @Published public private(set) var attention: JarvisSchedulerAttentionSummary?
     @Published public private(set) var selectedJob: JarvisSchedulerJob?
     @Published public private(set) var isLoading: Bool
     @Published public private(set) var lastError: String?
@@ -166,6 +167,7 @@ public final class SchedulerModel: ObservableObject {
     public init(client: any JarvisCoreClient = JarvisIPCClient()) {
         self.client = client
         self.jobs = []
+        self.attention = nil
         self.selectedJob = nil
         self.isLoading = false
         self.lastError = nil
@@ -173,7 +175,10 @@ public final class SchedulerModel: ObservableObject {
 
     public func refresh() async {
         await run {
-            self.jobs = try await self.client.listSchedulerJobs()
+            async let jobs = self.client.listSchedulerJobs()
+            async let attention = self.client.schedulerAttention()
+            self.jobs = try await jobs
+            self.attention = try await attention
         }
     }
 
@@ -202,6 +207,7 @@ public final class SchedulerModel: ObservableObject {
             )
             self.selectedJob = job
             self.jobs.insert(job, at: 0)
+            self.attention = try await self.client.schedulerAttention()
         }
     }
 
@@ -214,6 +220,7 @@ public final class SchedulerModel: ObservableObject {
             if self.selectedJob?.id == id {
                 self.selectedJob = job
             }
+            self.attention = try await self.client.schedulerAttention()
         }
     }
 

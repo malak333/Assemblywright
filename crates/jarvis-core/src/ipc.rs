@@ -7,7 +7,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::net::TcpListener;
@@ -223,6 +223,31 @@ pub struct SchedulerJobExecution {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SchedulerAttentionSummary {
+    pub generated_at: DateTime<Utc>,
+    pub emergency_paused: bool,
+    pub attention_required: bool,
+    pub due_count: usize,
+    pub scheduled_count: usize,
+    pub running_count: usize,
+    pub failed_count: usize,
+    pub next_due_at: Option<DateTime<Utc>>,
+    pub items: Vec<SchedulerAttentionItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SchedulerAttentionItem {
+    pub id: Uuid,
+    pub name: String,
+    pub trigger: TriggerKind,
+    pub status: SchedulerJobStatus,
+    pub due: bool,
+    pub next_due_at: Option<DateTime<Utc>>,
+    pub notification_kind: String,
+    pub notification_reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateMemoryItemRequest {
     pub category: String,
     pub key: String,
@@ -435,6 +460,7 @@ impl IpcState {
                 "/plugins/installed".to_string(),
                 "/plugins/installed/:id".to_string(),
                 "/scheduler/jobs".to_string(),
+                "/scheduler/attention".to_string(),
                 "/scheduler/jobs/:id".to_string(),
                 "/model-routes".to_string(),
                 "/model-routes/:id".to_string(),
@@ -1443,6 +1469,62 @@ impl IpcState {
         })
     }
 
+    pub fn scheduler_attention(&self) -> SchedulerAttentionSummary {
+        let generated_at = Utc::now();
+        let emergency_paused = self.runtime_control.is_emergency_paused();
+        let mut scheduled_count = 0;
+        let mut running_count = 0;
+        let mut failed_count = 0;
+        let mut due_count = 0;
+        let mut next_due_at: Option<DateTime<Utc>> = None;
+        let mut items = Vec::new();
+
+        for job in self.scheduler.list() {
+            match job.status {
+                SchedulerJobStatus::Scheduled => scheduled_count += 1,
+                SchedulerJobStatus::Running => running_count += 1,
+                SchedulerJobStatus::Failed => failed_count += 1,
+                SchedulerJobStatus::Completed | SchedulerJobStatus::Cancelled => {}
+            }
+
+            let due_at = scheduler_job_due_at(&job);
+            if let Some(candidate) = due_at.filter(|candidate| *candidate > generated_at) {
+                next_due_at = Some(next_due_at.map_or(candidate, |current| current.min(candidate)));
+            }
+
+            let due = matches!(job.status, SchedulerJobStatus::Scheduled)
+                && due_at.is_some_and(|candidate| candidate <= generated_at);
+            if due {
+                due_count += 1;
+            }
+
+            if let Some(item) = scheduler_attention_item(job, due, due_at, emergency_paused) {
+                items.push(item);
+            }
+        }
+
+        items.sort_by_key(|item| {
+            (
+                scheduler_notification_priority(&item.notification_kind),
+                item.next_due_at,
+                item.name.clone(),
+                item.id,
+            )
+        });
+
+        SchedulerAttentionSummary {
+            generated_at,
+            emergency_paused,
+            attention_required: !items.is_empty(),
+            due_count,
+            scheduled_count,
+            running_count,
+            failed_count,
+            next_due_at,
+            items,
+        }
+    }
+
     pub fn spawn_scheduler_background_loop(
         &self,
         config: SchedulerBackgroundConfig,
@@ -1622,6 +1704,67 @@ impl RuntimeCommandStore for SharedCommandStore {
     }
 }
 
+fn scheduler_job_due_at(job: &SchedulerJob) -> Option<DateTime<Utc>> {
+    match job.trigger {
+        TriggerKind::Manual => Some(job.updated_at),
+        TriggerKind::OnceAt { run_at } => Some(run_at),
+        TriggerKind::Interval { every_seconds } => {
+            let seconds = i64::try_from(every_seconds).ok()?;
+            Some(job.updated_at + Duration::seconds(seconds))
+        }
+    }
+}
+
+fn scheduler_attention_item(
+    job: SchedulerJob,
+    due: bool,
+    next_due_at: Option<DateTime<Utc>>,
+    emergency_paused: bool,
+) -> Option<SchedulerAttentionItem> {
+    let (notification_kind, notification_reason) = match job.status {
+        SchedulerJobStatus::Scheduled if due && emergency_paused => (
+            "blocked_by_emergency_pause",
+            "A due scheduler job is waiting, but emergency pause is active.",
+        ),
+        SchedulerJobStatus::Scheduled if due => (
+            "due_now",
+            "A scheduler job is due and ready for the app to surface.",
+        ),
+        SchedulerJobStatus::Running => (
+            "running",
+            "A scheduler job is still marked running and should remain visible.",
+        ),
+        SchedulerJobStatus::Failed => (
+            "failed",
+            "A scheduler job failed and needs review before stronger production claims.",
+        ),
+        SchedulerJobStatus::Scheduled
+        | SchedulerJobStatus::Completed
+        | SchedulerJobStatus::Cancelled => return None,
+    };
+
+    Some(SchedulerAttentionItem {
+        id: job.id,
+        name: job.name,
+        trigger: job.trigger,
+        status: job.status,
+        due,
+        next_due_at,
+        notification_kind: notification_kind.to_string(),
+        notification_reason: notification_reason.to_string(),
+    })
+}
+
+fn scheduler_notification_priority(kind: &str) -> u8 {
+    match kind {
+        "blocked_by_emergency_pause" => 0,
+        "failed" => 1,
+        "due_now" => 2,
+        "running" => 3,
+        _ => 4,
+    }
+}
+
 fn sensitivity_from_context(context: &serde_json::Value) -> Option<Sensitivity> {
     let value = context.get("sensitivity")?.as_str()?;
     match value {
@@ -1780,6 +1923,7 @@ pub fn router(state: IpcState) -> Router {
             "/scheduler/jobs",
             get(list_scheduler_jobs).post(create_scheduler_job),
         )
+        .route("/scheduler/attention", get(scheduler_attention))
         .route("/scheduler/run-due", post(run_due_scheduler_jobs))
         .route(
             "/scheduler/jobs/:id",
@@ -2173,6 +2317,10 @@ async fn list_scheduler_jobs(State(state): State<IpcState>) -> Json<Vec<Schedule
     Json(state.scheduler().list())
 }
 
+async fn scheduler_attention(State(state): State<IpcState>) -> Json<SchedulerAttentionSummary> {
+    Json(state.scheduler_attention())
+}
+
 async fn get_scheduler_job(
     State(state): State<IpcState>,
     Path(id): Path<Uuid>,
@@ -2265,6 +2413,7 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
         endpoint("DELETE", "/emergency-pause", false, true),
         endpoint("GET", "/scheduler/jobs", false, false),
         endpoint("POST", "/scheduler/jobs", false, false),
+        endpoint("GET", "/scheduler/attention", false, true),
         endpoint("POST", "/scheduler/run-due", false, false),
         endpoint("GET", "/scheduler/jobs/:id", false, false),
         endpoint("DELETE", "/scheduler/jobs/:id", false, false),
@@ -3101,6 +3250,87 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let repository = SqliteRepository::open(db_path).unwrap();
         let stored = repository.list_scheduler_jobs().expect("stored jobs");
         assert_eq!(stored[0].status, crate::SchedulerJobStatus::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn scheduler_attention_summarizes_due_and_failed_jobs_without_commands() {
+        let state = IpcState::new();
+        let _ = create_scheduler_job(
+            State(state.clone()),
+            Json(CreateSchedulerJobRequest {
+                name: "due handoff".to_string(),
+                command: "do not expose this due command".to_string(),
+                trigger: TriggerKind::Manual,
+            }),
+        )
+        .await
+        .expect("create due job");
+        let Json(failed) = create_scheduler_job(
+            State(state.clone()),
+            Json(CreateSchedulerJobRequest {
+                name: "failed handoff".to_string(),
+                command: "do not expose this failed command".to_string(),
+                trigger: TriggerKind::Manual,
+            }),
+        )
+        .await
+        .expect("create failed job");
+        state.fail_scheduler_job(failed.id).expect("fail job");
+        let _ = create_scheduler_job(
+            State(state.clone()),
+            Json(CreateSchedulerJobRequest {
+                name: "future handoff".to_string(),
+                command: "do not expose this future command".to_string(),
+                trigger: TriggerKind::OnceAt {
+                    run_at: Utc::now() + Duration::minutes(10),
+                },
+            }),
+        )
+        .await
+        .expect("create future job");
+
+        let Json(summary) = scheduler_attention(State(state)).await;
+        assert!(summary.attention_required);
+        assert_eq!(summary.due_count, 1);
+        assert_eq!(summary.scheduled_count, 2);
+        assert_eq!(summary.failed_count, 1);
+        assert!(summary.next_due_at.is_some());
+        assert!(summary
+            .items
+            .iter()
+            .any(|item| item.notification_kind == "due_now" && item.name == "due handoff"));
+        assert!(summary
+            .items
+            .iter()
+            .any(|item| item.notification_kind == "failed" && item.name == "failed handoff"));
+
+        let encoded = serde_json::to_string(&summary).expect("encode summary");
+        assert!(!encoded.contains("do not expose this"));
+    }
+
+    #[tokio::test]
+    async fn scheduler_attention_clears_due_jobs_after_emergency_pause_cancels_them() {
+        let state = IpcState::new();
+        let _ = create_scheduler_job(
+            State(state.clone()),
+            Json(CreateSchedulerJobRequest {
+                name: "paused handoff".to_string(),
+                command: "do not expose paused command".to_string(),
+                trigger: TriggerKind::Manual,
+            }),
+        )
+        .await
+        .expect("create due job");
+        state.pause("test pause".to_string()).expect("pause");
+
+        let Json(summary) = scheduler_attention(State(state)).await;
+        assert!(summary.emergency_paused);
+        assert!(!summary.attention_required);
+        assert_eq!(summary.due_count, 0);
+        assert_eq!(summary.items.len(), 0);
+        assert!(!serde_json::to_string(&summary)
+            .expect("encode summary")
+            .contains("do not expose paused command"));
     }
 
     #[tokio::test]

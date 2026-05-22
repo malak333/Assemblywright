@@ -4,7 +4,8 @@ Jarvis is a local-first macOS assistant foundation. The current repository
 contains a Rust workspace with the core contracts, loopback IPC server,
 SQLite-backed repository primitives, policy/model-routing rules, in-process
 plugin contracts, scheduler state, CLI client, and a first Swift/SwiftUI Mac
-shell scaffold with core supervision under `apps/mac`.
+shell scaffold with core supervision and redacted scheduler attention handoff
+under `apps/mac`.
 
 ## Current Implementation Diagram
 
@@ -27,9 +28,11 @@ flowchart TB
     AppReleaseSmoke --> CleanProfile["temporary HOME and SQLite app state"]
     MacShell --> MacCore["JarvisMacCore IPC client, supervisor, and view models"]
     MacShell --> MemoryUI["Memory CRUD, classification, review, soft-delete, restore, and include-deleted controls"]
+    MacShell --> SchedulerAttentionUI["Scheduler attention summary"]
     MacShell --> VoiceInput["Speech/AVFoundation input controls"]
     MacShell --> SpeechOutput["AVFoundation speech-output preview controls"]
     MemoryUI --> MacCore
+    SchedulerAttentionUI --> MacCore
     VoiceInput --> MacCore
     SpeechOutput --> MacCore
     MacCore --> Supervisor["JarvisCoreSupervisor configured or bundled process"]
@@ -48,6 +51,7 @@ flowchart TB
         IPC --> InstalledRunner["installed plugin execution boundary"]
         IPC --> PauseApi["/emergency-pause"]
         IPC --> SchedulerApi["/scheduler/jobs"]
+        IPC --> SchedulerAttention["/scheduler/attention redacted handoff"]
 
         Commands --> Runtime["ConversationRuntime"]
         Runtime --> ModelExec["ModelExecutor trait"]
@@ -79,6 +83,7 @@ flowchart TB
         SubprocessRunner --> InstalledAudit["blocked, dry-run, completed, or failed audit evidence"]
 
         SchedulerApi --> Scheduler["Scheduler"]
+        SchedulerAttention --> Scheduler
         PauseApi --> RuntimeControl
     end
 
@@ -87,6 +92,7 @@ flowchart TB
     Inspection --> RepoState
     PauseApi --> RepoState
     SchedulerApi --> RepoState
+    SchedulerAttention --> RepoState
     RepoState --> Tasks["tasks"]
     RepoState --> Audit["append-only audit_entries"]
     RepoState --> Memory["memory_items"]
@@ -121,6 +127,10 @@ The read-only `/permissions/grants` endpoint combines approval history,
 high-risk pending counts, installed-plugin execution-grant state, provenance
 integrity status, and unverified plugin counts into one permission-center
 surface for CLI and Swift inspection.
+The read-only `/scheduler/attention` endpoint summarizes due, running, and
+failed scheduler jobs for app handoff without returning scheduler command
+text. The Swift Scheduler tab renders the same summary above the job list; this
+is a local contract for attention state, not OS notification delivery.
 Installed plugin run requests have an explicit fail-closed boundary that
 revalidates stored manifest metadata, checks the requested action, validates
 input schema, verifies the local install provenance snapshot, honors
@@ -163,10 +173,9 @@ topic branches against the public repository
 `https://github.com/malak333/Jarvis`. Phase-3 slices have landed for model-route
 persistence, plugin subprocess sandboxing, voice input controls, packaged app
 release smoke, permission grants UX, docs architecture alignment, versioning,
-distribution packaging, and Keychain credential launch injection. Follow-on
-slices continue in separate worktrees, including `codex/speech-output-adapter`
-in
-`/Users/michaelnobile/Antigravity/jarvis-worktrees-continuation/speech-output-adapter`.
+distribution packaging, Keychain credential launch injection, Swift memory
+management, plugin provenance surfaces, and scheduler attention handoff.
+Follow-on slices continue in separate worktrees.
 The six-worker structure is implementation coordination, not release evidence;
 each phase still needs matching docs, knowledge-base facts, and E2E or focused
 verification evidence for the surface it changes.
@@ -389,7 +398,7 @@ operation.
 | Command runtime | `ConversationRuntime` creates tasks, runs a routed `ModelExecutor` (`FakeLocalModel` by default, Ollama-compatible HTTP or ChatGPT/OpenAI-compatible HTTP when explicitly enabled), records structured audit entries, handles pause/cancel, enforces max steps, can persist task/audit/model-route state through `RuntimeCommandStore`, and can execute bounded model-planned first-party tool calls after schema and policy checks. | Multi-step assistant runtime with production model responses, installed plugin/tool orchestration, streaming progress, approval UI handoff, and robust recovery. | Bounded fake-model tool orchestration, opt-in local and ChatGPT provider boundaries, explicit installed-plugin subprocess runner, and CLI/IPC/Swift approval scaffold implemented; streaming pending. |
 | Model routing | Local-first `ModelRouter` exists with sensitivity checks, provider-status route evidence, ChatGPT opt-in gate, approval delegation, and redaction logic. The active `/commands` path can call a configured local provider or opt-in ChatGPT/OpenAI-compatible provider after policy allows the route. Repository-backed command execution persists append-only SQLite model-route records and exposes redacted IPC/CLI inspection without storing route context. | Local provider integration, explicit ChatGPT escalation, minimized cloud context, user approval where required, and durable route evidence in every relevant task. | Local and ChatGPT provider boundaries plus SQLite route recovery evidence implemented with tests; broader production model operations pending. |
 | Plugins and tools | Deterministic in-process first-party plugins (`fake_echo`, `fake_status`) execute through command-pattern dispatch and bounded model-planned runtime calls, with manifest validation, policy checks, timeout, cancellation, approval stops, pending approval persistence for approval-gated command scaffolds, and audit evidence. Local plugin installation validates manifest metadata and safe source paths, captures local manifest/subprocess SHA-256 provenance, stores disabled registry records with `execution_enabled=false` and `execution_grant=metadata_only`, supports contract-only dry runs with `side_effect_executed=false`, and can run `local_subprocess` plugins only after local provenance verification plus an explicit `subprocess_stdio` grant through the constrained JSON stdin/stdout runner. | First-party production plugins plus installed local plugins behind manifests, sandboxing, user grants, UI approval, proactive gating, and real model-generated tool-call execution. | Contract, deterministic first-party paths, metadata-only local install, local provenance snapshot verification, explicit subprocess execution grant, and constrained installed-plugin runner implemented; broader WASM/network/plugin-marketplace/signed-publisher trust pending. |
-| Scheduler | Inspectable scheduler jobs with manual, one-time, interval trigger contracts, explicit run-due execution, and an opt-in bounded background trigger loop on `jarvis serve --scheduler-background`. Each tick uses the same visible task/audit records, deterministic due ordering, per-tick limit, and fail-closed emergency-pause behavior as manual run-due. Repository-backed IPC state restores and updates jobs through SQLite. Emergency pause cancels active scheduler jobs, and unsafe due commands fail closed by pausing and cancelling remaining open jobs. | Durable scheduler and trigger engine for approved proactive routines, persisted job state, visible task records, and policy-gated execution. | Durable job state, explicit run-due execution, and opt-in bounded background loop implemented; richer production trigger policy and app notification handoff pending. |
+| Scheduler | Inspectable scheduler jobs with manual, one-time, interval trigger contracts, explicit run-due execution, an opt-in bounded background trigger loop on `jarvis serve --scheduler-background`, and a redacted `/scheduler/attention` handoff for due, running, and failed jobs. Each tick uses the same visible task/audit records, deterministic due ordering, per-tick limit, and fail-closed emergency-pause behavior as manual run-due. Repository-backed IPC state restores and updates jobs through SQLite. Emergency pause cancels active scheduler jobs, and unsafe due commands fail closed by pausing and cancelling remaining open jobs. | Durable scheduler and trigger engine for approved proactive routines, persisted job state, visible task records, policy-gated execution, and OS-level app notifications. | Durable job state, explicit run-due execution, opt-in bounded background loop, and redacted app handoff summary implemented; richer production trigger policy and OS notification delivery pending. |
 | Storage and memory | SQLite migrations store tasks, append-only audit entries, append-only redacted model-route records, emergency pause, memory items with provenance/sensitivity/review/soft-delete/restore behavior, scheduler jobs, pending approval records, and disabled installed-plugin registry metadata. File-backed repository open creates a preflight migration backup for older schema versions and restores the original DB/WAL/SHM files if opening/configuring/migrating fails. CLI/IPC can inspect model routes, memory classification summaries, memory items, approval decisions, and plugin metadata when repository backing is enabled. The Mac shell can summarize by category/sensitivity, list, filter, create, load, update mutable memory fields, mark reviewed, soft-delete, restore deleted items, and inspect deleted memory through the existing IPC surface. It can also read provider credentials from Keychain at supervised-core launch and inject missing secret env vars without storing them in SQLite or diagnostics. | SQLite also owns permissions, executable plugin grants, migration backup/rollback, and memory UX review flows; Keychain owns secrets; vector indexes remain rebuildable. | Core local state, route recovery evidence, plugin metadata registry, migration preflight backup/restore, Swift memory classification/CRUD/review/restore UI, and Keychain launch credential boundary implemented; richer memory policy automation pending. |
 | Safety and approvals | Capability scopes, risk tiers, emergency-pause fail-closed behavior, audit-required flags, and approval-required decisions exist in Rust. Repository-backed IPC persists pending approvals and supports CLI and Swift grant/deny decisions without executing side effects. `/permissions/grants` also exposes approval history/counts plus installed-plugin grant and provenance integrity state, and the Swift permission center renders unverified/changed/missing/invalid/verified plugin grant status. | Human approval prompts, permission center, grants history, policy review, and no bypass for high-risk side effects. | Policy engine plus CLI/IPC/Swift approval decision surface and provenance-aware permission grant inspection implemented; richer policy review UX pending. |
 | Voice and diagnostics | Swift has a text-transcript voice state/action scaffold with typed transcript staging, unavailable/degraded/interrupted states, and handoff into the same `CommandConsoleModel.submit` path used by text commands. The Voice tab now owns the protocol-backed macOS Speech/AVFoundation input adapter model and exposes permission request, start/stop capture, and interruption controls, with deterministic fake-adapter tests for permission, capture, transcript, interruption, and error states. It also owns a protocol-backed AVFoundation speech-output adapter with preview, stop, and interrupt controls, plus deterministic fake-adapter tests for playback state and failures. Live microphone capture and live audio output are still release claims only after entitlement packaging and manual device validation. Redacted diagnostics export exists over CLI/IPC and omits command bodies, scheduler commands, model route contexts, audit payloads, memory values, and cancellation reason text. | Voice input/output loop, interruption/cancel behavior, microphone degraded modes, and local diagnostics export integrated into the packaged app. | Adapter-backed SwiftUI voice input/output controls and text-parity scaffold implemented; live microphone/audio validation pending. |

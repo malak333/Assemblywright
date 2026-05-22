@@ -142,11 +142,14 @@ stage or when a PR needs focused evidence for one ownership slice.
   create, load, update of mutable fields, review, soft-delete, include-deleted
   refresh, restore, classification summary, and filtering, with deterministic
   Swift package coverage.
+- Confirm the Swift Scheduler tab still consumes `/scheduler/attention` and
+  renders redacted due/running/failed attention state without exposing
+  scheduler command bodies.
 - Confirm the cross-process CLI E2E still covers command, plugin, audit,
   redacted model-route inspection and restart recovery, memory
   classification summary, create/update/review/delete/restore, scheduler
-  schedule/get/list/cancel, scheduler run-due success/reschedule, scheduler
-  fail-closed pause on non-accepted due
+  schedule/get/list/cancel, redacted scheduler attention handoff, scheduler
+  run-due success/reschedule, scheduler fail-closed pause on non-accepted due
   jobs, diagnostics redaction, persistence restart, and emergency-pause
   blocking/resume behavior. Treat this as the minimum E2E expectation for the
   current Rust/CLI foundation; packaged Mac release smoke is now covered by
@@ -217,6 +220,8 @@ Still future gates for production distribution:
 - App starts and supervises `jarvis-core`.
 - Text command reaches the Rust core.
 - Text-transcript voice command parity is verified through the scaffold.
+- Scheduler attention produces OS-level user notifications with user-visible
+  permission handling and manual verification.
 - The macOS Speech/AVFoundation adapter boundary compiles and has deterministic
   fake-adapter state/error tests.
 - The AVFoundation speech-output adapter boundary compiles and has

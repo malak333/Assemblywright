@@ -443,6 +443,8 @@ struct JarvisMacCoreTests {
                     return (response, Data("[]".utf8))
                 }
                 return (response, schedulerJobJSON(id: jobId))
+            case "/scheduler/attention":
+                return (response, schedulerAttentionJSON(id: jobId))
             case "/scheduler/jobs/\(jobId.uuidString)":
                 return (response, schedulerJobJSON(id: jobId))
             case "/emergency-pause":
@@ -479,6 +481,7 @@ struct JarvisMacCoreTests {
         _ = try await client.restoreMemoryItem(id: memoryId)
         _ = try await client.listPluginManifests()
         _ = try await client.listSchedulerJobs()
+        _ = try await client.schedulerAttention()
         _ = try await client.createSchedulerJob(
             JarvisCreateSchedulerJobRequest(
                 name: "one shot",
@@ -501,6 +504,7 @@ struct JarvisMacCoreTests {
             "POST",
             "GET",
             "GET",
+            "GET",
             "POST",
             "GET",
             "GET"
@@ -517,13 +521,14 @@ struct JarvisMacCoreTests {
             "/memory/\(memoryId.uuidString)/restore",
             "/plugins/manifests",
             "/scheduler/jobs",
+            "/scheduler/attention",
             "/scheduler/jobs",
             "/scheduler/jobs/\(jobId.uuidString)",
             "/emergency-pause"
         ])
         #expect(requests[3].body?["key"] as? String == "release-gate")
         #expect(requests[5].body?["value"] as? String == "preview then sync")
-        #expect(requests[11].body?["command"] as? String == "status check")
+        #expect(requests[12].body?["command"] as? String == "status check")
     }
 
     @Test("Management payloads decode tasks and audit list")
@@ -726,6 +731,25 @@ struct JarvisMacCoreTests {
         #expect(jobs.first?.id == id)
         #expect(jobs.first?.trigger == .interval(everySeconds: 86400))
         #expect(onceAt["run_at"] as? String == "2026-05-20T13:00:00Z")
+    }
+
+    @Test("Scheduler attention summary decodes redacted notification handoff")
+    func decodesSchedulerAttentionSummary() throws {
+        let id = UUID()
+        let summary = try JSONDecoder().decode(
+            JarvisSchedulerAttentionSummary.self,
+            from: schedulerAttentionJSON(id: id)
+        )
+        let item = try #require(summary.items.first)
+
+        #expect(summary.attentionRequired)
+        #expect(summary.dueCount == 1)
+        #expect(summary.scheduledCount == 1)
+        #expect(summary.runningCount == 0)
+        #expect(summary.failedCount == 0)
+        #expect(item.id == id)
+        #expect(item.notificationKind == "due_now")
+        #expect(item.notificationReason.contains("scheduler job is due"))
     }
 
     @Test("Pause status decodes detailed timestamps")
@@ -1757,6 +1781,35 @@ struct JarvisMacCoreTests {
         )
     }
 
+    private func schedulerAttentionJSON(id: UUID) -> Data {
+        Data(
+            """
+            {
+              "generated_at": "2026-05-20T12:00:02Z",
+              "emergency_paused": false,
+              "attention_required": true,
+              "due_count": 1,
+              "scheduled_count": 1,
+              "running_count": 0,
+              "failed_count": 0,
+              "next_due_at": null,
+              "items": [
+                {
+                  "id": "\(id.uuidString)",
+                  "name": "one shot",
+                  "trigger": "manual",
+                  "status": "scheduled",
+                  "due": true,
+                  "next_due_at": "2026-05-20T12:00:01Z",
+                  "notification_kind": "due_now",
+                  "notification_reason": "A scheduler job is due and ready for the app to surface."
+                }
+              ]
+            }
+            """.utf8
+        )
+    }
+
     private func contractJSON(exposesApprovalEndpoint: Bool) -> Data {
         let extra = exposesApprovalEndpoint
             ? """
@@ -2310,6 +2363,27 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
 
     func listSchedulerJobs() async throws -> [JarvisSchedulerJob] {
         []
+    }
+
+    func schedulerAttention() async throws -> JarvisSchedulerAttentionSummary {
+        try JSONDecoder().decode(
+            JarvisSchedulerAttentionSummary.self,
+            from: Data(
+                """
+                {
+                  "generated_at": "2026-05-20T12:00:02Z",
+                  "emergency_paused": false,
+                  "attention_required": false,
+                  "due_count": 0,
+                  "scheduled_count": 0,
+                  "running_count": 0,
+                  "failed_count": 0,
+                  "next_due_at": null,
+                  "items": []
+                }
+                """.utf8
+            )
+        )
     }
 
     func schedulerJob(id: UUID) async throws -> JarvisSchedulerJob {

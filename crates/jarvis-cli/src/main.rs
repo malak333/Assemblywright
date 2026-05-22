@@ -123,6 +123,11 @@ enum SchedulerCommand {
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
+    /// Inspect redacted scheduler attention signals for the app notification surface.
+    Attention {
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
     /// Fetch one scheduler job by id.
     Get {
         id: String,
@@ -459,6 +464,12 @@ async fn main() -> anyhow::Result<()> {
         CliCommand::Scheduler { command } => match command {
             SchedulerCommand::List { endpoint } => {
                 println!("{}", request(&endpoint, "GET", "/scheduler/jobs", None)?);
+            }
+            SchedulerCommand::Attention { endpoint } => {
+                println!(
+                    "{}",
+                    request(&endpoint, "GET", "/scheduler/attention", None)?
+                );
             }
             SchedulerCommand::Get { id, endpoint } => {
                 println!(

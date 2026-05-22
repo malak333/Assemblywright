@@ -125,8 +125,12 @@ These notes capture durable facts for future agents working on this repository.
   repository backing and durable when the IPC state is started with
   `SqliteRepository`. The background loop uses the same audited run-due path,
   per-tick limit, deterministic due ordering, and fail-closed emergency-pause
-  behavior as manual execution. Richer proactive trigger policy and app
-  notification handoff remain target architecture.
+  behavior as manual execution. Repository-backed IPC exposes
+  `/scheduler/attention`, and the CLI exposes `jarvis scheduler attention`, as
+  a redacted app handoff summary for due, running, and failed scheduler jobs.
+  The Swift Scheduler tab renders this summary above the job list. Richer
+  proactive trigger policy and OS-level app notifications remain target
+  architecture.
 
 ## Proof Boundaries
 
