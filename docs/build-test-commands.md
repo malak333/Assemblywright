@@ -26,6 +26,7 @@ cargo run -p jarvis-cli -- smoke
 ./scripts/release-operator-qa-smoke.sh
 cargo package --workspace --allow-dirty
 ./scripts/package-distribution.sh --unsigned-launch-check
+./scripts/release-live-device-qa.sh --check
 swift test --package-path apps/mac
 swift build --package-path apps/mac
 ```
@@ -367,6 +368,13 @@ package. Passing the unsigned structure or launch checks still does not prove
 signing/notarization, and passing full mode still does not replace
 clean-profile install, Finder launch, live microphone/Speech validation, App
 Store review, or live audio-output validation.
+`./scripts/release-live-device-qa.sh --check` keeps the live-device QA runbook
+in the default release gate. It validates the repo-owned entitlement/checklist
+preconditions and prints the required clean-profile install, Finder launch,
+microphone/Speech, live audio-output, notification, restart, and manual QA
+steps. `--assert-complete` is for the release machine after those checks are
+actually performed and all required `JARVIS_QA_*` flags are explicitly set to
+`true`.
 Docs-only branches should at least run a render/lint-oriented documentation
 check when available, plus `cargo fmt --check` if the branch also touches Rust
 examples or scripts. Record any skipped full-gate stage as a blocker, not as
@@ -458,7 +466,9 @@ profile state, and verifies app-supervised core IPC through the bundled
 notarization, installer behavior, entitlement validation, Finder/LaunchServices
 launch, microphone permissions, live speech-to-text, or live audio-output
 behavior unless the stricter distribution lane and manual checks named in the
-release checklist are also completed.
+release checklist are also completed. The live-device QA script standardizes
+that final manual evidence but does not create live microphone, Speech,
+notification, or audio-output proof when run in `--check` mode.
 
 The public-repo production workflow expects isolated worktrees, topic branches,
 reviewable PRs, and clear ownership. A six-agent autonomous sweep can reduce
