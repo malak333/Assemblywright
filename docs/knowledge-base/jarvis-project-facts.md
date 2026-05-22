@@ -198,11 +198,15 @@ These notes capture durable facts for future agents working on this repository.
   one-time, and recurring scheduler triggers as redacted review items, with
   due and recurring jobs raised above future one-time/manual jobs and scheduler
   command text omitted from the payload.
+  Due-job execution appends a redacted `scheduler_proactive_policy_checked`
+  audit entry before command submission. The audit uses the same trigger
+  classification as `/permissions/policy-review`, marks `command_redacted:
+  true`, and keeps scheduler command text out of the policy audit payload.
   The Swift Scheduler tab renders this summary above the job list and now owns
   a protocol-backed notification model plus macOS `UserNotifications` adapter
   controls for due/failed attention items. Swift tests use a fake adapter to
   cover authorization, delivery, duplicate suppression, and denied-permission
-  fail-closed behavior. Richer proactive trigger policy and live OS
+  fail-closed behavior. Broader production trigger policy and live OS
   notification validation remain target architecture.
 
 ## Proof Boundaries
@@ -218,6 +222,9 @@ These notes capture durable facts for future agents working on this repository.
 - The current E2E expectation for Rust/CLI foundation changes is
   `cargo test -p jarvis-cli --test local_ipc_e2e`; the ignored variant is
   release-proof coverage and is included by `./scripts/release-local.sh`.
+  The E2E covers scheduler proactive policy audit evidence during `scheduler
+  run-due` by asserting both one-time and recurring due jobs emit redacted
+  `scheduler_proactive_policy_checked` audit entries.
 - Focused provider-failure recovery coverage is
   `cargo test -p jarvis-core model_provider_failure_returns_failed_response_with_route_evidence -- --nocapture`
   plus
