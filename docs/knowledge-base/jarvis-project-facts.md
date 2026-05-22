@@ -289,8 +289,9 @@ These notes capture durable facts for future agents working on this repository.
   environment values still win, and the provider does not auto-enable ChatGPT.
 - The Swift shell now exposes production-facing scaffold tabs for approval
   evidence, runs/audit, scheduler create/inspect/cancel, redacted diagnostics,
-  release readiness, and voice state. Voice supports typed transcript staging and hands the
-  transcript to the same text command path. The scaffold now models
+  release readiness, and voice state. Voice supports typed transcript staging,
+  manual submit, and opt-in final-transcript auto-submit into the same text
+  command path. The scaffold now models
   interruption, resume/cancel, unavailable, and degraded typed-fallback states,
   owns a protocol-backed macOS Speech/AVFoundation adapter model from the
   SwiftUI Voice tab, and exposes permission request, start/stop capture, and

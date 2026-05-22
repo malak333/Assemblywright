@@ -670,24 +670,7 @@ public final class VoiceStateModel: ObservableObject {
             captureState = .stagingTranscript(source: "typed transcript parity path")
             return nil
         case .submitTranscript:
-            guard !isUnavailable else {
-                lastError = "Voice input is unavailable; transcript cannot be submitted."
-                return nil
-            }
-            guard !isInterrupted else {
-                lastError = "Voice transcript is interrupted; resume or cancel before submitting."
-                return nil
-            }
-            let trimmed = transcriptDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else {
-                lastError = "Transcript is empty."
-                return nil
-            }
-            let handoff = JarvisVoiceCommandHandoff(text: trimmed)
-            lastHandoff = handoff
-            transcriptDraft = ""
-            captureState = .textOnly(reason: Self.textOnlyReason)
-            return handoff
+            return submitTranscript()
         case let .interruptTranscript(reason):
             guard case .stagingTranscript = captureState else {
                 lastError = "No active transcript is available to interrupt."
@@ -746,6 +729,28 @@ public final class VoiceStateModel: ObservableObject {
 
     public func resetTextOnly() {
         apply(.resetTextOnly)
+    }
+
+    @discardableResult
+    public func submitTranscript(source: String = "voice-transcript-scaffold") -> JarvisVoiceCommandHandoff? {
+        guard !isUnavailable else {
+            lastError = "Voice input is unavailable; transcript cannot be submitted."
+            return nil
+        }
+        guard !isInterrupted else {
+            lastError = "Voice transcript is interrupted; resume or cancel before submitting."
+            return nil
+        }
+        let trimmed = transcriptDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            lastError = "Transcript is empty."
+            return nil
+        }
+        let handoff = JarvisVoiceCommandHandoff(text: trimmed, source: source)
+        lastHandoff = handoff
+        transcriptDraft = ""
+        captureState = .textOnly(reason: Self.textOnlyReason)
+        return handoff
     }
 
     private var isUnavailable: Bool {
