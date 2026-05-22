@@ -136,8 +136,10 @@ stage or when a PR needs focused evidence for one ownership slice.
   scaffolds persist inspectable pending approvals and record CLI/IPC grant or
   denial decisions without executing side effects. Bounded fake-model
   first-party tool calls and Ollama-compatible plus ChatGPT/OpenAI-compatible
-  provider request/error behavior are covered in focused tests; Swift approval
-  decision controls are covered by contract/model tests.
+  provider request/error behavior are covered in focused tests; selected
+  provider failures must return structured failed command responses with
+  redacted `model_step_failed` audit and route evidence; Swift approval decision
+  controls are covered by contract/model tests.
 - Confirm task, audit, model-route, memory, and plugin manifest inspection
   endpoints still require or use the correct repository/plugin backing and are
   covered by local smoke or focused IPC tests.

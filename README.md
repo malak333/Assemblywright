@@ -5,7 +5,8 @@ the Rust core described in [DESIGN.md](DESIGN.md): durable task/audit
 primitives, policy-gated first-party plugin commands, bounded model-planned
 first-party tool orchestration, local-first model routing evidence, opt-in
 Ollama-compatible local HTTP and ChatGPT/OpenAI-compatible provider boundaries,
-plugin contracts, metadata-only local plugin installation, local plugin
+structured provider-failure responses with route/audit evidence, plugin
+contracts, metadata-only local plugin installation, local plugin
 provenance snapshots, scheduler state, redacted diagnostics export, a loopback
 IPC surface with compatibility policy plus feature proof/boundary metadata,
 repository-backed activity summary and activity event stream, and CLI smoke
@@ -37,7 +38,9 @@ HTTP provider. ChatGPT execution is disabled by default and requires explicit
 typed env opt-in with `JARVIS_CHATGPT_ENABLED=true`,
 `JARVIS_OPENAI_API_KEY`, and optional `JARVIS_CHATGPT_MODEL`,
 `JARVIS_OPENAI_BASE_URL`, and `JARVIS_CHATGPT_TIMEOUT_MS`; route policy still
-blocks restricted data and sends only redacted route context. Local plugin
+blocks restricted data and sends only redacted route context. Provider failures
+return failed command responses with redacted diagnostics instead of becoming
+IPC transport errors. Local plugin
 installation stores validated manifest metadata disabled by default and captures
 a local manifest/subprocess hash snapshot. Executable local subprocess plugins
 require the snapshot to verify as unchanged plus an explicit

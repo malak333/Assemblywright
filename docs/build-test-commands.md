@@ -73,6 +73,11 @@ JARVIS_CHATGPT_MODEL=gpt-4.1-mini \
 cargo run -p jarvis-cli -- serve
 ```
 
+If the selected local or ChatGPT/OpenAI-compatible provider fails during
+execution, `/commands` now returns a normal failed command response with
+redacted `model_step_failed` audit evidence and route evidence instead of an
+IPC transport error.
+
 For durable local task and audit state during manual inspection, pass a SQLite
 path:
 
@@ -209,6 +214,8 @@ cargo run -p jarvis-cli -- diagnostics export
 cargo test -p jarvis-core
 cargo test -p jarvis-core permission_policy_review -- --nocapture
 cargo test -p jarvis-core scheduler_attention -- --nocapture
+cargo test -p jarvis-core model_provider_failure_returns_failed_response_with_route_evidence -- --nocapture
+cargo test -p jarvis-core command_schema_returns_failed_runtime_response_for_model_provider_error -- --nocapture
 cargo test -p jarvis-core repository_backed_state_endpoints_expose_tasks_and_audit -- --nocapture
 cargo test -p jarvis-core contract_endpoint_documents_safe_inspection_paths -- --nocapture
 cargo test -p jarvis-core --test e2e_scaffold
@@ -309,8 +316,9 @@ non-accepted due jobs, and emergency-pause blocking/resume surfaces.
 Runtime unit tests additionally prove bounded fake-model first-party tool-call
 orchestration, including policy checks, approval stops, validation failures, and
 tool-result feedback into later model steps. Focused provider tests prove typed
-Ollama-compatible request/error behavior without requiring a live model during
-the default release gate. They do not prove live ChatGPT service execution,
+Ollama-compatible request/error behavior and structured failed command
+responses for selected model-provider failures without requiring a live model
+during the default release gate. They do not prove live ChatGPT service execution,
 advanced memory classification policy beyond the current summary surface, live
 microphone capture, or live audio output until those surfaces are manually
 validated. The current Swift gate proves the
