@@ -15,10 +15,11 @@ APP_PATH="$DIST_DIR/$APP_NAME.app"
 ZIP_PATH="$DIST_DIR/$APP_NAME-$VERSION.zip"
 PKG_PATH="$DIST_DIR/$APP_NAME-$VERSION.pkg"
 CHECK_ONLY=false
+UNSIGNED_STRUCTURE_CHECK=false
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/package-distribution.sh [--check]
+Usage: scripts/package-distribution.sh [--check] [--unsigned-structure-check]
 
 Build a distribution-shaped Jarvis.app bundle, sign it with Developer ID, zip it,
 submit it for notarization, staple the ticket, then build, sign, notarize, and
@@ -40,6 +41,9 @@ Optional:
   JARVIS_DISTRIBUTION_DIR          Defaults to target/distribution
 
 --check validates local tool/template preconditions without signing or notarizing.
+--unsigned-structure-check builds and inspects an unsigned app/pkg layout without
+Developer ID credentials, notarization, stapling, Finder launch, or live device
+validation.
 USAGE
 }
 
@@ -53,10 +57,25 @@ fail() {
   exit 1
 }
 
+require_output_contains() {
+  local label="$1"
+  local output="$2"
+  local expected="$3"
+  if [[ "$output" != *"$expected"* ]]; then
+    printf 'error: %s did not include %q\n' "$label" "$expected" >&2
+    printf '%s\n%s\n%s\n' "--- $label output ---" "$output" "--- end $label output ---" >&2
+    exit 1
+  fi
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --check)
       CHECK_ONLY=true
+      shift
+      ;;
+    --unsigned-structure-check)
+      UNSIGNED_STRUCTURE_CHECK=true
       shift
       ;;
     -h|--help)
@@ -69,75 +88,33 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ "$CHECK_ONLY" == true && "$UNSIGNED_STRUCTURE_CHECK" == true ]]; then
+  fail "--check and --unsigned-structure-check are mutually exclusive"
+fi
+
 require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "required command is missing: $1"
 }
 
-notary_args=()
-if [[ -n "${JARVIS_NOTARYTOOL_PROFILE:-}" ]]; then
-  notary_args=(--keychain-profile "$JARVIS_NOTARYTOOL_PROFILE")
-elif [[ -n "${JARVIS_NOTARYTOOL_APPLE_ID:-}" ]] &&
-  [[ -n "${JARVIS_NOTARYTOOL_TEAM_ID:-}" ]] &&
-  [[ -n "${JARVIS_NOTARYTOOL_PASSWORD:-}" ]]; then
-  notary_args=(
-    --apple-id "$JARVIS_NOTARYTOOL_APPLE_ID"
-    --team-id "$JARVIS_NOTARYTOOL_TEAM_ID"
-    --password "$JARVIS_NOTARYTOOL_PASSWORD"
-  )
-fi
+build_app_bundle() {
+  rm -rf "$DIST_DIR"
+  mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources/bin"
 
-require_command cargo
-require_command swift
-require_command plutil
-require_command codesign
-require_command xcrun
-require_command ditto
-require_command pkgbuild
-require_command pkgutil
+  run cargo build --release -p jarvis-cli
+  run swift build -c release --package-path apps/mac
 
-[[ -f "$ENTITLEMENTS" ]] || fail "missing entitlements file: $ENTITLEMENTS"
-run plutil -lint "$ENTITLEMENTS"
+  SWIFT_BIN_DIR="$(swift build -c release --package-path apps/mac --show-bin-path)"
+  SWIFT_EXECUTABLE="$SWIFT_BIN_DIR/$APP_EXECUTABLE_NAME"
+  CORE_EXECUTABLE="$ROOT_DIR/target/release/jarvis"
 
-if [[ "$CHECK_ONLY" == true ]]; then
-  if [[ -z "${JARVIS_DEVELOPER_ID_APPLICATION:-}" ]]; then
-    printf 'warning: JARVIS_DEVELOPER_ID_APPLICATION is not set; full signing will fail until configured.\n' >&2
-  fi
-  if [[ -z "${JARVIS_DEVELOPER_ID_INSTALLER:-}" ]]; then
-    printf 'warning: JARVIS_DEVELOPER_ID_INSTALLER is not set; full installer signing will fail until configured.\n' >&2
-  fi
-  if [[ ${#notary_args[@]} -eq 0 ]]; then
-    printf 'warning: notarization credentials are not set; full notarization will fail until configured.\n' >&2
-  fi
-  printf '\nJarvis distribution packaging preflight: ok\n'
-  printf 'Proof boundary: template/tool check only; no app was signed, notarized, stapled, or manually launched.\n'
-  exit 0
-fi
+  [[ -x "$SWIFT_EXECUTABLE" ]] || fail "Swift release executable missing: $SWIFT_EXECUTABLE"
+  [[ -x "$CORE_EXECUTABLE" ]] || fail "Rust release executable missing: $CORE_EXECUTABLE"
 
-[[ -n "${JARVIS_DEVELOPER_ID_APPLICATION:-}" ]] ||
-  fail "JARVIS_DEVELOPER_ID_APPLICATION must name a Developer ID Application identity"
-[[ -n "${JARVIS_DEVELOPER_ID_INSTALLER:-}" ]] ||
-  fail "JARVIS_DEVELOPER_ID_INSTALLER must name a Developer ID Installer identity"
-[[ ${#notary_args[@]} -gt 0 ]] ||
-  fail "notarization credentials are required; set JARVIS_NOTARYTOOL_PROFILE or Apple ID/team/password vars"
+  cp "$SWIFT_EXECUTABLE" "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME"
+  cp "$CORE_EXECUTABLE" "$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
+  chmod 755 "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME" "$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
 
-rm -rf "$DIST_DIR"
-mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources/bin"
-
-run cargo build --release -p jarvis-cli
-run swift build -c release --package-path apps/mac
-
-SWIFT_BIN_DIR="$(swift build -c release --package-path apps/mac --show-bin-path)"
-SWIFT_EXECUTABLE="$SWIFT_BIN_DIR/$APP_EXECUTABLE_NAME"
-CORE_EXECUTABLE="$ROOT_DIR/target/release/jarvis"
-
-[[ -x "$SWIFT_EXECUTABLE" ]] || fail "Swift release executable missing: $SWIFT_EXECUTABLE"
-[[ -x "$CORE_EXECUTABLE" ]] || fail "Rust release executable missing: $CORE_EXECUTABLE"
-
-cp "$SWIFT_EXECUTABLE" "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME"
-cp "$CORE_EXECUTABLE" "$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
-chmod 755 "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME" "$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
-
-cat >"$APP_PATH/Contents/Info.plist" <<PLIST
+  cat >"$APP_PATH/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -170,7 +147,101 @@ cat >"$APP_PATH/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-run plutil -lint "$APP_PATH/Contents/Info.plist"
+  run plutil -lint "$APP_PATH/Contents/Info.plist"
+
+  INFO_PLIST_CONTENTS="$(cat "$APP_PATH/Contents/Info.plist")"
+  require_output_contains "Info.plist" "$INFO_PLIST_CONTENTS" "<string>$APP_EXECUTABLE_NAME</string>"
+  require_output_contains "Info.plist" "$INFO_PLIST_CONTENTS" "<string>$BUNDLE_ID</string>"
+  require_output_contains "Info.plist" "$INFO_PLIST_CONTENTS" "<string>APPL</string>"
+  require_output_contains "Info.plist" "$INFO_PLIST_CONTENTS" "NSMicrophoneUsageDescription"
+  require_output_contains "Info.plist" "$INFO_PLIST_CONTENTS" "NSSpeechRecognitionUsageDescription"
+}
+
+notary_args=()
+if [[ -n "${JARVIS_NOTARYTOOL_PROFILE:-}" ]]; then
+  notary_args=(--keychain-profile "$JARVIS_NOTARYTOOL_PROFILE")
+elif [[ -n "${JARVIS_NOTARYTOOL_APPLE_ID:-}" ]] &&
+  [[ -n "${JARVIS_NOTARYTOOL_TEAM_ID:-}" ]] &&
+  [[ -n "${JARVIS_NOTARYTOOL_PASSWORD:-}" ]]; then
+  notary_args=(
+    --apple-id "$JARVIS_NOTARYTOOL_APPLE_ID"
+    --team-id "$JARVIS_NOTARYTOOL_TEAM_ID"
+    --password "$JARVIS_NOTARYTOOL_PASSWORD"
+  )
+fi
+
+require_command cargo
+require_command swift
+require_command plutil
+require_command pkgbuild
+require_command pkgutil
+
+if [[ "$UNSIGNED_STRUCTURE_CHECK" != true ]]; then
+  require_command codesign
+  require_command xcrun
+  require_command ditto
+fi
+
+[[ -f "$ENTITLEMENTS" ]] || fail "missing entitlements file: $ENTITLEMENTS"
+run plutil -lint "$ENTITLEMENTS"
+
+if [[ "$CHECK_ONLY" == true ]]; then
+  if [[ -z "${JARVIS_DEVELOPER_ID_APPLICATION:-}" ]]; then
+    printf 'warning: JARVIS_DEVELOPER_ID_APPLICATION is not set; full signing will fail until configured.\n' >&2
+  fi
+  if [[ -z "${JARVIS_DEVELOPER_ID_INSTALLER:-}" ]]; then
+    printf 'warning: JARVIS_DEVELOPER_ID_INSTALLER is not set; full installer signing will fail until configured.\n' >&2
+  fi
+  if [[ ${#notary_args[@]} -eq 0 ]]; then
+    printf 'warning: notarization credentials are not set; full notarization will fail until configured.\n' >&2
+  fi
+  printf '\nJarvis distribution packaging preflight: ok\n'
+  printf 'Proof boundary: template/tool check only; no app was signed, notarized, stapled, or manually launched.\n'
+  exit 0
+fi
+
+if [[ "$UNSIGNED_STRUCTURE_CHECK" == true ]]; then
+  build_app_bundle
+
+  SIGNING_STATUS="not attempted"
+  if command -v codesign >/dev/null 2>&1; then
+    run codesign --force --sign - --entitlements "$ENTITLEMENTS" "$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
+    run codesign --force --sign - --entitlements "$ENTITLEMENTS" "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME"
+    run codesign --force --sign - --entitlements "$ENTITLEMENTS" "$APP_PATH"
+    run codesign --verify --deep --strict "$APP_PATH"
+    SIGNING_STATUS="ad-hoc signed with codesign -"
+  fi
+
+  PKG_PATH="$DIST_DIR/$APP_NAME-$VERSION-unsigned-structure.pkg"
+  rm -f "$PKG_PATH"
+  run pkgbuild \
+    --component "$APP_PATH" \
+    --install-location /Applications \
+    --identifier "$BUNDLE_ID.unsigned-structure.pkg" \
+    --version "$VERSION" \
+    "$PKG_PATH"
+
+  PAYLOAD_OUTPUT="$(pkgutil --payload-files "$PKG_PATH")"
+  require_output_contains "unsigned package payload" "$PAYLOAD_OUTPUT" "Jarvis.app/Contents/MacOS/$APP_EXECUTABLE_NAME"
+  require_output_contains "unsigned package payload" "$PAYLOAD_OUTPUT" "Jarvis.app/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
+  require_output_contains "unsigned package payload" "$PAYLOAD_OUTPUT" "Jarvis.app/Contents/Info.plist"
+
+  printf '\nJarvis unsigned distribution structure check: ok\n'
+  printf 'App: %s\n' "$APP_PATH"
+  printf 'Pkg: %s\n' "$PKG_PATH"
+  printf 'Signing: %s\n' "$SIGNING_STATUS"
+  printf 'Proof boundary: release app and unsigned installer payload structure only; no Developer ID signing, notarization, stapling, /Applications install, Finder launch, live microphone/Speech validation, live audio-output validation, App Store validation, or manual QA.\n'
+  exit 0
+fi
+
+[[ -n "${JARVIS_DEVELOPER_ID_APPLICATION:-}" ]] ||
+  fail "JARVIS_DEVELOPER_ID_APPLICATION must name a Developer ID Application identity"
+[[ -n "${JARVIS_DEVELOPER_ID_INSTALLER:-}" ]] ||
+  fail "JARVIS_DEVELOPER_ID_INSTALLER must name a Developer ID Installer identity"
+[[ ${#notary_args[@]} -gt 0 ]] ||
+  fail "notarization credentials are required; set JARVIS_NOTARYTOOL_PROFILE or Apple ID/team/password vars"
+
+build_app_bundle
 
 run codesign --force --timestamp --options runtime \
   --entitlements "$ENTITLEMENTS" \

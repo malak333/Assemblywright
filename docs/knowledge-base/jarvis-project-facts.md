@@ -307,13 +307,18 @@ These notes capture durable facts for future agents working on this repository.
   macOS notification prompt and delivery validation.
 - `./scripts/package-distribution.sh` is the repo-owned distribution packaging
   lane. Its `--check` mode is credential-free and validates local tools plus
-  entitlements. Full mode requires the owner's Developer ID Application,
-  Developer ID Installer, and notarytool credentials; signs with hardened
-  runtime and microphone entitlements; notarizes and staples the app zip; then
-  creates, signs, notarizes, and staples a `/Applications` installer package.
-  It still does not replace clean-profile install, Finder launch, live
-  microphone/Speech validation, App Store review, or live audio-output
-  validation.
+  entitlements. Its `--unsigned-structure-check` mode builds release Rust/Swift
+  artifacts, assembles `target/distribution/Jarvis.app`, optionally ad-hoc signs
+  when `codesign` is available, creates an unsigned `/Applications` installer
+  package, and inspects the package payload for the app executable, bundled
+  core, and `Info.plist`. Full mode requires the owner's Developer ID
+  Application, Developer ID Installer, and notarytool credentials; signs with
+  hardened runtime and microphone entitlements; notarizes and staples the app
+  zip; then creates, signs, notarizes, and staples a `/Applications` installer
+  package. The unsigned structure check still does not prove Developer ID
+  signing, notarization, stapling, installation, Finder launch, live
+  microphone/Speech validation, App Store review, live audio-output validation,
+  or manual QA.
 - It is fair to describe the current repo as a Rust foundation with tested
   scaffolding for IPC, storage, policy, routing, runtime, scheduler, plugin
   contracts, deterministic first-party plugin command execution, bounded
