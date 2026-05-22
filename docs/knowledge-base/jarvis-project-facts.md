@@ -170,7 +170,9 @@ These notes capture durable facts for future agents working on this repository.
   stdout is capped at 1 MiB, stderr is capped at 256 KiB, and either stream
   exceeding its cap kills the child and returns a fail-closed plugin error.
   Normal JSON stdout and bounded `jarvis_progress` stderr lines still execute
-  and parse under the same runner.
+  and parse under the same runner. CLI IPC E2E now covers stdout and stderr
+  over-limit failures through the installed-plugin run endpoint, including
+  failed audit evidence.
 - Repository-backed IPC exposes `/permissions/grants`, and the CLI exposes
   `jarvis permissions grants`, as a read-only permission-center summary. It
   combines approval status counts/history, high-risk pending approval count,

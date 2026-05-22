@@ -787,6 +787,142 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert!(!subprocess_run_encoded.contains("raw stderr secret"));
     assert!(!subprocess_run_encoded.contains("ignored"));
 
+    let noisy_stdout_plugin_dir = temp_dir.path().join("noisy-stdout-subprocess-plugin");
+    fs::create_dir(&noisy_stdout_plugin_dir).expect("create noisy stdout plugin dir");
+    let noisy_stdout_plugin_dir = noisy_stdout_plugin_dir
+        .canonicalize()
+        .expect("canonical noisy stdout plugin dir");
+    write_noisy_plugin_script(&noisy_stdout_plugin_dir, "stdout", 1_048_577);
+    let noisy_stdout_manifest_path = noisy_stdout_plugin_dir.join("jarvis-plugin.json");
+    fs::write(
+        &noisy_stdout_manifest_path,
+        local_subprocess_manifest_json(
+            "noisy_stdout_subprocess_e2e",
+            "Noisy Stdout Subprocess E2E Plugin",
+            &noisy_stdout_plugin_dir,
+        )
+        .to_string(),
+    )
+    .expect("write noisy stdout plugin manifest");
+    run_cli_json([
+        "plugins",
+        "install",
+        noisy_stdout_manifest_path
+            .to_str()
+            .expect("noisy stdout manifest path"),
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    run_cli_json([
+        "plugins",
+        "verify-installed",
+        "noisy_stdout_subprocess_e2e",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    run_cli_json([
+        "plugins",
+        "enable-installed",
+        "noisy_stdout_subprocess_e2e",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    let noisy_stdout_run = run_cli_json([
+        "plugins",
+        "run-installed",
+        "noisy_stdout_subprocess_e2e",
+        "inspect",
+        "--input",
+        r#"{"path":"README.md"}"#,
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(noisy_stdout_run["status"], "failed");
+    assert!(
+        noisy_stdout_run["reason"]
+            .as_str()
+            .expect("noisy stdout reason")
+            .contains("stdout exceeded 1048576 byte limit"),
+        "{noisy_stdout_run}"
+    );
+    assert_eq!(noisy_stdout_run["side_effect_executed"], true);
+    assert_eq!(
+        noisy_stdout_run["audit_entry"]["event_type"],
+        "installed_plugin_subprocess_failed"
+    );
+    assert_eq!(
+        noisy_stdout_run["audit_entry"]["payload"]["sandbox_process_started"],
+        true
+    );
+
+    let noisy_stderr_plugin_dir = temp_dir.path().join("noisy-stderr-subprocess-plugin");
+    fs::create_dir(&noisy_stderr_plugin_dir).expect("create noisy stderr plugin dir");
+    let noisy_stderr_plugin_dir = noisy_stderr_plugin_dir
+        .canonicalize()
+        .expect("canonical noisy stderr plugin dir");
+    write_noisy_plugin_script(&noisy_stderr_plugin_dir, "stderr", 262_145);
+    let noisy_stderr_manifest_path = noisy_stderr_plugin_dir.join("jarvis-plugin.json");
+    fs::write(
+        &noisy_stderr_manifest_path,
+        local_subprocess_manifest_json(
+            "noisy_stderr_subprocess_e2e",
+            "Noisy Stderr Subprocess E2E Plugin",
+            &noisy_stderr_plugin_dir,
+        )
+        .to_string(),
+    )
+    .expect("write noisy stderr plugin manifest");
+    run_cli_json([
+        "plugins",
+        "install",
+        noisy_stderr_manifest_path
+            .to_str()
+            .expect("noisy stderr manifest path"),
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    run_cli_json([
+        "plugins",
+        "verify-installed",
+        "noisy_stderr_subprocess_e2e",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    run_cli_json([
+        "plugins",
+        "enable-installed",
+        "noisy_stderr_subprocess_e2e",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    let noisy_stderr_run = run_cli_json([
+        "plugins",
+        "run-installed",
+        "noisy_stderr_subprocess_e2e",
+        "inspect",
+        "--input",
+        r#"{"path":"README.md"}"#,
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(noisy_stderr_run["status"], "failed");
+    assert!(
+        noisy_stderr_run["reason"]
+            .as_str()
+            .expect("noisy stderr reason")
+            .contains("stderr exceeded 262144 byte limit"),
+        "{noisy_stderr_run}"
+    );
+    assert_eq!(noisy_stderr_run["side_effect_executed"], true);
+    assert_eq!(
+        noisy_stderr_run["audit_entry"]["event_type"],
+        "installed_plugin_subprocess_failed"
+    );
+    assert_eq!(
+        noisy_stderr_run["audit_entry"]["payload"]["sandbox_process_started"],
+        true
+    );
+
     let network_subprocess_plugin_dir = temp_dir.path().join("network-subprocess-plugin");
     fs::create_dir(&network_subprocess_plugin_dir).expect("create network subprocess plugin dir");
     let network_subprocess_plugin_dir = network_subprocess_plugin_dir
@@ -1730,6 +1866,16 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_array_contains(
         &persisted_grants["installed_plugin_grants"],
         "plugin_id",
+        "noisy_stdout_subprocess_e2e",
+    );
+    assert_array_contains(
+        &persisted_grants["installed_plugin_grants"],
+        "plugin_id",
+        "noisy_stderr_subprocess_e2e",
+    );
+    assert_array_contains(
+        &persisted_grants["installed_plugin_grants"],
+        "plugin_id",
         "network_subprocess_e2e",
     );
     assert_array_contains(
@@ -1742,7 +1888,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         "integrity_status",
         "matches_install_snapshot",
     );
-    assert_eq!(persisted_grants["executable_installed_plugin_count"], 2);
+    assert_eq!(persisted_grants["executable_installed_plugin_count"], 4);
     assert_eq!(persisted_grants["unverified_installed_plugin_count"], 0);
     assert_eq!(persisted_grants["side_effects_require_approval"], true);
 
@@ -1754,7 +1900,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     ]);
     assert_eq!(
         persisted_policy_review["executable_installed_plugin_count"],
-        2
+        4
     );
     assert_eq!(
         persisted_policy_review["unverified_installed_plugin_count"],
@@ -1785,6 +1931,16 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         restarted_endpoint.as_str(),
     ]);
     assert_array_contains(&persisted_installed_plugins, "id", "local_e2e_plugin");
+    assert_array_contains(
+        &persisted_installed_plugins,
+        "id",
+        "noisy_stdout_subprocess_e2e",
+    );
+    assert_array_contains(
+        &persisted_installed_plugins,
+        "id",
+        "noisy_stderr_subprocess_e2e",
+    );
     assert_array_contains(&persisted_installed_plugins, "id", "network_subprocess_e2e");
 
     let persisted_diagnostics = run_cli_json([
@@ -2483,6 +2639,88 @@ json.dump({
         .permissions();
     permissions.set_mode(0o700);
     fs::set_permissions(&script, permissions).expect("chmod plugin runner");
+}
+
+#[cfg(unix)]
+fn write_noisy_plugin_script(dir: &Path, stream: &str, byte_count: usize) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let script = dir.join("plugin-runner.py");
+    let output_statement = match stream {
+        "stdout" => format!("sys.stdout.write('x' * {byte_count})"),
+        "stderr" => format!(
+            "sys.stderr.write('x' * {byte_count})\njson.dump({{\"path\": request[\"input\"][\"path\"]}}, sys.stdout)"
+        ),
+        other => panic!("unsupported noisy stream: {other}"),
+    };
+    fs::write(
+        &script,
+        format!(
+            r#"#!/usr/bin/env python3
+import json
+import sys
+
+request = json.load(sys.stdin)
+{output_statement}
+sys.stdout.flush()
+sys.stderr.flush()
+"#
+        ),
+    )
+    .expect("write noisy plugin runner");
+    let mut permissions = fs::metadata(&script)
+        .expect("noisy script metadata")
+        .permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script, permissions).expect("chmod noisy plugin runner");
+}
+
+fn local_subprocess_manifest_json(id: &str, name: &str, source_path: &Path) -> Value {
+    json!({
+        "manifest_schema_version": 1,
+        "id": id,
+        "name": name,
+        "version": "0.1.0",
+        "source": "local_subprocess",
+        "author": "Jarvis E2E",
+        "source_path": source_path.display().to_string(),
+        "subprocess": {
+            "command": "plugin-runner.py",
+            "args": [],
+            "stdin": "json",
+            "stdout": "json"
+        },
+        "actions": [{
+            "name": "inspect",
+            "description": "Validate bounded subprocess output failure behavior.",
+            "permissions": ["read_workspace"],
+            "risk_tier": "low",
+            "input_schema": {
+                "schema": {
+                    "type": "object",
+                    "properties": { "path": { "type": "string" } },
+                    "required": ["path"],
+                    "additionalProperties": false
+                }
+            },
+            "output_schema": {
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" }
+                    },
+                    "required": ["path"],
+                    "additionalProperties": false
+                }
+            },
+            "proactive": false,
+            "memory_access": "none",
+            "model_access": "none",
+            "audit_fields": ["path"],
+            "timeout": { "timeout_ms": 5000, "on_timeout": "cancel" },
+            "cancellation": "cooperative"
+        }]
+    })
 }
 
 fn assert_array_contains(value: &Value, field: &str, expected: &str) {

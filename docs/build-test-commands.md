@@ -445,6 +445,7 @@ network-capable plugin policy review items,
 permission policy review items, redacted scheduler trigger review items, fail-closed
 subprocess enablement, installed subprocess minimal environment isolation,
 installed subprocess stdout/stderr byte limits, installed subprocess
+output-limit fail-closed behavior through the CLI IPC path, installed subprocess
 progress-frame response/audit redaction, repository-backed activity summary status/recent-audit
 evidence, bounded activity event streaming over server-sent events, redacted
 scheduler attention handoff, Swift bounded activity event parsing/model
