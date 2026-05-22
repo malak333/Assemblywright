@@ -650,6 +650,22 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         subprocess_run["audit_entry"]["payload"]["sandbox_process_started"],
         true
     );
+    assert_eq!(subprocess_run["progress_events"][0]["sequence"], 1);
+    assert_eq!(subprocess_run["progress_events"][0]["stage"], "prepare");
+    assert_eq!(
+        subprocess_run["progress_events"][0]["message"],
+        "validated request"
+    );
+    assert_eq!(subprocess_run["progress_events"][1]["sequence"], 2);
+    assert_eq!(subprocess_run["progress_events"][1]["stage"], "complete");
+    assert_eq!(
+        subprocess_run["audit_entry"]["payload"]["progress_event_count"],
+        2
+    );
+    let subprocess_run_encoded =
+        serde_json::to_string(&subprocess_run).expect("subprocess run JSON");
+    assert!(!subprocess_run_encoded.contains("raw stderr secret"));
+    assert!(!subprocess_run_encoded.contains("ignored"));
 
     let network_subprocess_plugin_dir = temp_dir.path().join("network-subprocess-plugin");
     fs::create_dir(&network_subprocess_plugin_dir).expect("create network subprocess plugin dir");
@@ -863,6 +879,10 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         "event_type",
         "installed_plugin_publisher_signature_verified",
     );
+    assert_array_contains(&all_audit, "event_type", "installed_plugin_progress");
+    let all_audit_encoded = serde_json::to_string(&all_audit).expect("all audit JSON");
+    assert!(!all_audit_encoded.contains("raw stderr secret"));
+    assert!(!all_audit_encoded.contains("ignored"));
 
     let approval_command = run_cli_json([
         "command",
@@ -2086,6 +2106,9 @@ import json
 import sys
 
 request = json.load(sys.stdin)
+print('{"jarvis_progress":true,"stage":"prepare","message":"validated request"}', file=sys.stderr)
+print('raw stderr secret should stay redacted', file=sys.stderr)
+print('{"jarvis_progress":true,"stage":"complete","message":"writing validated output","payload":{"ignored":"not exposed"}}', file=sys.stderr)
 json.dump({"path": request["input"]["path"]}, sys.stdout)
 "#,
     )

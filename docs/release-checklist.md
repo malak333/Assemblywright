@@ -127,6 +127,9 @@ stage or when a PR needs focused evidence for one ownership slice.
   provenance verification, safe command path checks, JSON stdin/stdout, timeout
   enforcement, output schema validation, durable audit evidence, and
   `side_effect_executed: false` when no side effect is allowed.
+- Confirm installed subprocess progress frames are bounded to parsed
+  sequence/stage/message events, append `installed_plugin_progress` audit
+  evidence, and do not expose raw stderr in responses or audit payloads.
 - Confirm persistent audit entries remain append-only in SQLite tests.
 - Confirm route, policy, approval, action, and failure evidence stay covered
   before claiming an end-to-end assistant release. The current command path

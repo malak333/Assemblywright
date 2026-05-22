@@ -400,6 +400,8 @@ pub struct InstalledPluginRunResponse {
     pub stderr_bytes: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
+    #[serde(default)]
+    pub progress_events: Vec<crate::PluginProgressEvent>,
     pub audit_entry: AuditEntry,
 }
 
@@ -1380,6 +1382,7 @@ impl IpcState {
             let mut stdout_bytes = None;
             let mut stderr_bytes = None;
             let mut exit_code = None;
+            let mut progress_events = Vec::new();
             let mut side_effect_executed = false;
 
             let (status, reason) = if let Err(error) = &manifest_validation {
@@ -1452,6 +1455,7 @@ impl IpcState {
                         stdout_bytes = Some(execution.stdout_bytes);
                         stderr_bytes = Some(execution.stderr_bytes);
                         exit_code = execution.exit_code;
+                        progress_events = execution.progress_events;
                         output = Some(execution.output);
                         (
                             "completed".to_string(),
@@ -1509,9 +1513,26 @@ impl IpcState {
                     "stdout_bytes": stdout_bytes,
                     "stderr_bytes": stderr_bytes,
                     "exit_code": exit_code,
+                    "progress_event_count": progress_events.len(),
                     "reason": reason,
                 }),
             );
+            for progress_event in &progress_events {
+                repository.append_audit_entry(&AuditEntry::new(
+                    None,
+                    "installed_plugin_progress",
+                    "installed subprocess plugin reported bounded progress",
+                    json!({
+                        "plugin_id": record.id,
+                        "action": request.action,
+                        "session_id": request.session_id,
+                        "sequence": progress_event.sequence,
+                        "stage": progress_event.stage,
+                        "message": progress_event.message,
+                        "stderr_redacted": true,
+                    }),
+                ))?;
+            }
             repository.append_audit_entry(&audit_entry)?;
 
             Ok(InstalledPluginRunResponse {
@@ -1531,6 +1552,7 @@ impl IpcState {
                 stdout_bytes,
                 stderr_bytes,
                 exit_code,
+                progress_events,
                 audit_entry,
             })
         })
@@ -3435,6 +3457,32 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         std::fs::set_permissions(&script, permissions).expect("chmod plugin runner");
     }
 
+    #[cfg(unix)]
+    fn write_progress_plugin_script(dir: &std::path::Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let script = dir.join("plugin-runner.py");
+        std::fs::write(
+            &script,
+            r#"#!/usr/bin/env python3
+import json
+import sys
+
+request = json.load(sys.stdin)
+print('{"jarvis_progress":true,"stage":"prepare","message":"validated request"}', file=sys.stderr)
+print('raw stderr secret should stay redacted', file=sys.stderr)
+print('{"jarvis_progress":true,"stage":"complete","message":"writing validated output","payload":{"ignored":"not exposed"}}', file=sys.stderr)
+json.dump({"path": request["input"]["path"]}, sys.stdout)
+"#,
+        )
+        .expect("write progress plugin runner");
+        let mut permissions = std::fs::metadata(&script)
+            .expect("script metadata")
+            .permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&script, permissions).expect("chmod plugin runner");
+    }
+
     #[test]
     fn health_reports_pause_and_scheduler_counts() {
         let state = IpcState::new();
@@ -3870,6 +3918,81 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             InstalledPluginIntegrityStatus::ChangedSinceInstall
         );
         assert!(!changed_response.side_effect_executed);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn installed_plugin_runner_records_subprocess_progress_events_without_raw_stderr() {
+        let repository = SqliteRepository::in_memory().unwrap();
+        let source_dir = tempfile::tempdir().unwrap();
+        let source_path_buf = source_dir.path().canonicalize().unwrap();
+        write_progress_plugin_script(&source_path_buf);
+        let source_path = source_path_buf.display().to_string();
+        let manifest_path = source_path_buf.join("jarvis-plugin.json");
+        std::fs::write(
+            &manifest_path,
+            serde_json::to_string(&local_subprocess_manifest(&source_path)).unwrap(),
+        )
+        .unwrap();
+        let installed = InstalledPlugin::from_local_manifest_path(&manifest_path).unwrap();
+        repository.install_plugin_metadata(installed).unwrap();
+        let state = IpcState::with_repository(repository).expect("state");
+        state
+            .verify_installed_plugin_provenance("local_runner_test")
+            .expect("verify provenance");
+        state
+            .set_installed_plugin_execution(
+                "local_runner_test",
+                InstalledPluginExecutionRequest {
+                    execution_enabled: true,
+                    execution_grant: InstalledPluginExecutionGrant::SubprocessStdio,
+                },
+            )
+            .expect("enable subprocess");
+
+        let response = state
+            .run_installed_plugin(
+                "local_runner_test",
+                InstalledPluginRunRequest {
+                    action: "inspect".to_string(),
+                    input: json!({ "path": "README.md" }),
+                    session_id: None,
+                    dry_run: false,
+                },
+            )
+            .expect("subprocess response");
+
+        assert_eq!(response.status, "completed");
+        assert_eq!(response.output, Some(json!({ "path": "README.md" })));
+        assert_eq!(response.progress_events.len(), 2);
+        assert_eq!(response.progress_events[0].sequence, 1);
+        assert_eq!(response.progress_events[0].stage, "prepare");
+        assert_eq!(response.progress_events[0].message, "validated request");
+        assert_eq!(response.progress_events[1].sequence, 2);
+        assert_eq!(response.progress_events[1].stage, "complete");
+        assert_eq!(
+            response.progress_events[1].message,
+            "writing validated output"
+        );
+        assert_eq!(response.audit_entry.payload["progress_event_count"], 2);
+
+        let audit_entries = state
+            .using_repository(|repository| repository.list_audit_entries(None))
+            .expect("audit entries");
+        let progress_entries = audit_entries
+            .iter()
+            .filter(|entry| entry.event_type == "installed_plugin_progress")
+            .collect::<Vec<_>>();
+        assert_eq!(progress_entries.len(), 2);
+        assert_eq!(progress_entries[0].payload["stage"], "prepare");
+        assert_eq!(progress_entries[0].payload["stderr_redacted"], true);
+
+        let encoded_response = serde_json::to_string(&response).expect("response JSON");
+        let encoded_audit = serde_json::to_string(&audit_entries).expect("audit JSON");
+        assert!(!encoded_response.contains("raw stderr secret"));
+        assert!(!encoded_response.contains("ignored"));
+        assert!(!encoded_audit.contains("raw stderr secret"));
+        assert!(!encoded_audit.contains("ignored"));
     }
 
     #[test]

@@ -202,6 +202,9 @@ Network-capable plugin actions must request `network` and declare
 and executable installed plugins with those actions require
 `subprocess_stdio_network`. This is runtime grant gating plus manifest
 governance, not OS-level network sandboxing or host-level egress filtering.
+Installed subprocess plugins can also emit bounded `jarvis_progress` stderr
+JSON frames. Jarvis exposes only parsed sequence/stage/message progress events
+and `installed_plugin_progress` audit entries; raw stderr remains redacted.
 Background scheduler execution is opt-in on `jarvis serve`; it does not start
 for default smoke or manual inspection sessions unless `--scheduler-background`
 is passed.
@@ -339,6 +342,13 @@ For the phase-3 docs architecture slice, the expected verification is the two
 `rg` checks above plus `git diff --check`; code gates belong to the executable
 phase-3 slices unless this branch starts changing code.
 
+For installed subprocess plugin progress-event changes, run the focused
+redaction/audit test before the full release gate:
+
+```sh
+cargo test -p jarvis-core installed_plugin_runner_records_subprocess_progress_events_without_raw_stderr -- --nocapture
+```
+
 ## Release Evidence Boundary
 
 Passing `./scripts/release-local.sh` proves the current Rust workspace builds,
@@ -355,7 +365,8 @@ provenance summary fields, operator-pinned publisher-origin verification,
 trusted-key publisher-signature verification,
 network-capable plugin policy review items,
 permission policy review items, redacted scheduler trigger review items, fail-closed
-subprocess enablement, repository-backed activity summary status/recent-audit
+subprocess enablement, installed subprocess progress-frame response/audit
+redaction, repository-backed activity summary status/recent-audit
 evidence, bounded activity event streaming over server-sent events, redacted
 scheduler attention handoff, scheduler due-job
 execution/reschedule audit evidence, redacted proactive scheduler policy

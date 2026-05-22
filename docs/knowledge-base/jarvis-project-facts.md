@@ -43,8 +43,12 @@ These notes capture durable facts for future agents working on this repository.
 - Repository-backed IPC also exposes `/activity/events`, and the CLI exposes
   `jarvis activity watch`, as bounded server-sent events carrying activity
   summary snapshots. This is local progress-streaming evidence for current
-  task/audit state, not per-token model streaming or plugin-internal progress
-  events.
+  task/audit state, not per-token model streaming.
+- Installed `local_subprocess` plugins can emit bounded newline-delimited
+  stderr JSON frames with `jarvis_progress: true`, `stage`, and `message`.
+  Jarvis records parsed sequence/stage/message events in the run response and
+  append-only audit entries while redacting raw stderr. This is post-run
+  audit-backed plugin progress evidence, not real-time plugin UI streaming.
 - `/contract` includes a `compatibility` block with supported version range,
   additive-change, deprecation, removed/deprecated endpoint, and client
   requirement policy, plus a `features` list with stable keys, status, proof,
@@ -409,7 +413,9 @@ These notes capture durable facts for future agents working on this repository.
   `execution_grant: subprocess_stdio` for non-network actions or
   `subprocess_stdio_network` for network-declaring actions, validate input and
   output schemas, run with the declared timeout, and emit audit evidence
-  including whether the subprocess started. Any broader executable path needs a
-  stronger sandbox,
+  including whether the subprocess started. Subprocess stderr may contain
+  bounded progress frames, but raw stderr remains redacted from response and
+  audit payloads. Any broader executable path or real-time plugin progress
+  stream needs a stronger sandbox,
   explicit grant state beyond `metadata_only`, policy checks,
   timeout/cancellation behavior, and E2E audit coverage.
