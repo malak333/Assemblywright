@@ -14,8 +14,9 @@ struct JarvisMacApp: App {
     @StateObject private var voice: VoiceStateModel
 
     init() {
-        let client = JarvisIPCClient()
-        _supervisor = StateObject(wrappedValue: JarvisCoreSupervisor(client: client))
+        let configuration = JarvisCoreSupervisorConfiguration()
+        let client = JarvisIPCClient(endpoint: configuration.endpoint)
+        _supervisor = StateObject(wrappedValue: JarvisCoreSupervisor(configuration: configuration, client: client))
         _console = StateObject(wrappedValue: CommandConsoleModel(client: client))
         _memory = StateObject(wrappedValue: MemoryManagerModel(client: client))
         _plugins = StateObject(wrappedValue: PluginManagerModel(client: client))
@@ -446,6 +447,10 @@ struct ApprovalCenterView: View {
             List {
                 PermissionSurfaceSummaryView(surface: model.permissionSurface)
 
+                if let grantSummary = model.grantSummary {
+                    PermissionGrantHistoryView(summary: grantSummary)
+                }
+
                 if let limitation = model.limitationText {
                     Text(limitation)
                         .font(.caption)
@@ -539,6 +544,44 @@ struct ApprovalCenterView: View {
     }
 }
 
+struct PermissionGrantHistoryView: View {
+    let summary: JarvisPermissionGrantSummary
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Grant history", systemImage: "clock.badge.checkmark")
+                .font(.subheadline)
+
+            Text(historyText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+
+            if !summary.installedPluginGrants.isEmpty {
+                Text(pluginGrantText)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var historyText: String {
+        let pending = summary.count(for: "pending")
+        let approved = summary.count(for: "approved")
+        let denied = summary.count(for: "denied")
+        let approvalGate = summary.sideEffectsRequireApproval ? "side effects approval-gated" : "approval gate unknown"
+        return "pending \(pending) | approved \(approved) | denied \(denied) | high-risk pending \(summary.highRiskPendingCount) | \(approvalGate)"
+    }
+
+    private var pluginGrantText: String {
+        summary.installedPluginGrants
+            .map { "\($0.pluginId): \($0.executionGrant), executable \($0.executionEnabled)" }
+            .joined(separator: " | ")
+    }
+}
+
 struct PermissionSurfaceSummaryView: View {
     let surface: JarvisPermissionSurfaceState
 
@@ -594,7 +637,9 @@ struct PermissionSurfaceSummaryView: View {
         let risks = surface.riskTierCounts.isEmpty
             ? "risk tiers: none declared"
             : "risk tiers: \(surface.riskTierCounts.map { "\($0.riskTier) \($0.count)" }.joined(separator: ", "))"
-        return "\(scopes) | \(risks) | proactive actions: \(surface.proactiveActionCount)"
+        let grants = "grants: approved \(surface.approvedGrantCount), denied \(surface.deniedGrantCount), installed \(surface.installedPluginGrantCount), executable \(surface.executableInstalledPluginGrantCount)"
+        let sideEffects = surface.sideEffectsRequireApproval ? "side effects gated" : "side effects gate unknown"
+        return "\(scopes) | \(risks) | proactive actions: \(surface.proactiveActionCount) | \(grants) | \(sideEffects)"
     }
 }
 
@@ -695,7 +740,7 @@ struct VoiceStateView: View {
 
             Toggle("Push to talk", isOn: .constant(model.isPushToTalkEnabled))
                 .disabled(true)
-            Text("This surface stages typed transcripts only; it does not claim microphone capture, speech recognition, or text-to-speech support.")
+            Text("This surface still stages typed transcripts; the macOS Speech/AVFoundation adapter boundary exists but live microphone capture needs entitlements and manual device validation.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

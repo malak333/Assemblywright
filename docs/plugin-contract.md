@@ -12,9 +12,14 @@ Each plugin manifest must declare:
 - `manifest_schema_version: 1`.
 - Name, version, author or source.
 - Source type. Local installation accepts only `local_development` or
-  `third_party` metadata; installed metadata cannot claim `first_party`.
+  `third_party` metadata, or `local_subprocess` for the constrained executable
+  subprocess boundary; installed metadata cannot claim `first_party`.
 - Absolute `source_path` for local installation metadata. The manifest file
   must be a readable file under that canonical directory.
+- `local_subprocess` manifests must declare a `subprocess` block with a command
+  under `source_path`, optional argument array, and `stdin: json` /
+  `stdout: json`. Jarvis starts the command directly and never interpolates it
+  through a shell.
 - Capabilities provided.
 - Required permission scopes.
 - Risk tier for each action.
@@ -63,18 +68,25 @@ to explain what happened:
 - A plugin cannot execute actions outside its manifest.
 - Unknown manifest fields are allowed only when versioned and ignored safely.
 - Missing required fields fail validation.
-- Local plugin installation is metadata-only in the current implementation.
-  Validated installed manifests are stored as `execution_enabled: false` with
-  `execution_grant: metadata_only`.
-- Local installed manifests do not create executable plugins. Runtime execution
-  remains limited to registered first-party in-process plugins until a safe
-  sandboxed runtime is explicitly implemented and tested.
+- Local plugin installation stays metadata-only by default. Validated installed
+  manifests are stored as `execution_enabled: false` with
+  `execution_grant: metadata_only`, including `local_subprocess` manifests.
+- Installed plugin execution requires a separate explicit enablement step that
+  sets `execution_enabled: true` and `execution_grant: subprocess_stdio`.
+  `metadata_only` can never execute.
 - Installed plugin run requests go through an explicit fail-closed runner
   boundary. The boundary revalidates the stored manifest/version metadata,
   checks the requested action is declared, validates input schema, honors
-  `execution_enabled` and `execution_grant`, appends audit evidence with
-  `side_effect_executed: false`, and returns `blocked` without dispatching
-  plugin code.
+  `execution_enabled` and `execution_grant`, checks that the stored source path
+  is canonical, and appends audit evidence.
+- Enabled installed plugin execution is limited to `local_subprocess` manifests
+  with the `subprocess_stdio` grant. The command must canonicalize under
+  `source_path`; parent-directory escapes, absolute commands outside
+  `source_path`, missing subprocess config, undeclared actions, invalid input,
+  malformed stdout JSON, and output-schema mismatches all fail closed with audit
+  evidence. Jarvis sends a JSON object containing `plugin_id`, `action`, and
+  `input` to stdin and accepts only JSON stdout that matches the action output
+  schema.
 - Installed plugin dry runs are contract-only. `dry_run: true` validates the
   stored manifest, action name, and input schema, then returns `dry_run` with
   `contract_validated: true` and `side_effect_executed: false`; it never loads
@@ -105,5 +117,7 @@ contract testing. Release verification should keep covering:
 - Local manifest install acceptance/rejection and disabled registry
   persistence.
 - Installed plugin run attempts fail closed with manifest/action/input
-  validation, disabled `metadata_only` execution-grant semantics, contract-only
-  dry-run evidence, and durable audit evidence.
+  validation, disabled `metadata_only` execution-grant semantics, explicit
+  enablement semantics, subprocess safe-path validation, contract-only dry-run
+  evidence, constrained subprocess execution evidence, and durable audit
+  evidence.

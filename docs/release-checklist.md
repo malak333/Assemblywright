@@ -57,6 +57,9 @@ stage or when a PR needs focused evidence for one ownership slice.
 - `cargo package --workspace --allow-dirty`
 - Focused supervision proof for branches that touch Swift core launch or bundle
   discovery: `./scripts/packaged-supervision-proof.sh`
+- Focused packaged app release smoke for branches that touch packaging,
+  app-supervised core launch, or Mac release evidence:
+  `./scripts/packaged-app-release-smoke.sh`
 - `swift test --package-path apps/mac`
 - `swift build --package-path apps/mac`
 - Optional manual CLI/IPC smoke against a running local server:
@@ -98,48 +101,62 @@ stage or when a PR needs focused evidence for one ownership slice.
 - Confirm route, policy, approval, action, and failure evidence stay covered
   before claiming an end-to-end assistant release. The current command path
   persists runtime, route, and deterministic first-party plugin audit evidence
-  when repository backing is used. Approval-required first-party command
+  when repository backing is used. It also persists append-only model-route
+  records in SQLite and exposes redacted `/model-routes` CLI/IPC inspection
+  that survives restart without retaining route context. Approval-required first-party command
   scaffolds persist inspectable pending approvals and record CLI/IPC grant or
   denial decisions without executing side effects. Bounded fake-model
   first-party tool calls and Ollama-compatible plus ChatGPT/OpenAI-compatible
   provider request/error behavior are covered in focused tests; Swift approval
   decision controls are covered by contract/model tests.
-- Confirm task, audit, memory, and plugin manifest inspection endpoints still
-  require or use the correct repository/plugin backing and are covered by local
-  smoke or focused IPC tests.
+- Confirm task, audit, model-route, memory, and plugin manifest inspection
+  endpoints still require or use the correct repository/plugin backing and are
+  covered by local smoke or focused IPC tests.
 - Confirm approval inspection and grant/deny endpoints require repository
   backing, preserve fail-closed execution behavior, and stay covered by local
   IPC tests.
+- Confirm `/permissions/grants` and `jarvis permissions grants` expose
+  read-only approval history/counts plus installed-plugin `metadata_only`
+  grant state, and that this inspection surface does not enable installed
+  plugin code execution.
 - Confirm scheduler job create/list/cancel and due-run execution state is
   restored and updated when repository backing is enabled. Due-run coverage
   proves explicit CLI/IPC runner behavior, including interval reschedule and
   fail-closed pause behavior, not background production trigger scheduling.
 - Confirm diagnostics export remains redacted and does not include command
-  bodies, scheduler commands, audit payloads, memory values, raw cancellation
-  reasons, or credentials.
+  bodies, scheduler commands, model route contexts, audit payloads, memory
+  values, raw cancellation reasons, or credentials.
 - Confirm the cross-process CLI E2E still covers command, plugin, audit,
-  memory create/update/review/delete, scheduler schedule/get/list/cancel,
-  scheduler run-due success/reschedule, scheduler fail-closed pause on
-  non-accepted due jobs, diagnostics redaction, persistence restart, and
-  emergency-pause blocking/resume behavior. Treat this as the minimum E2E
-  expectation for the current Rust/CLI foundation; packaged Mac E2E remains a
-  future release gate.
+  redacted model-route inspection and restart recovery, memory
+  create/update/review/delete, scheduler schedule/get/list/cancel, scheduler
+  run-due success/reschedule, scheduler fail-closed pause on non-accepted due
+  jobs, diagnostics redaction, persistence restart, and emergency-pause
+  blocking/resume behavior. Treat this as the minimum E2E expectation for the
+  current Rust/CLI foundation; packaged Mac release smoke is now covered by
+  `./scripts/packaged-app-release-smoke.sh` for the local assembled app
+  boundary.
 - Confirm local plugin metadata install/list/get coverage remains in that E2E
   path while installed plugin execution remains disabled.
 - For each new executable feature phase, confirm E2E coverage is either part of
   `local_ipc_e2e`, Swift package tests, a focused integration proof, or the
   future packaged Mac smoke lane. Docs-only changes should still name the
   existing proof boundary they preserve.
-- Confirm the Swift shell remains described as a scaffold until a signed
-  packaged app bundles/launches the Rust core, handles approval prompts, and
-  passes packaged app smoke checks. `./scripts/packaged-supervision-proof.sh`
+- Confirm the Swift shell remains described as a scaffold until a Developer ID
+  signed and notarized app exists. `./scripts/packaged-supervision-proof.sh`
   builds the Rust CLI, copies it into a temporary
   `Jarvis.app/Contents/Resources/bin/jarvis-cli` layout, points Swift
   supervisor tests at that executable, and starts the copied binary with a
   repository-backed database to verify health, command, audit, diagnostics,
-  emergency pause, blocked command, pause status, and resume surfaces. This is
-  stronger packaged-layout branch evidence, but it is not signed, notarized,
-  clean-profile packaged app release evidence.
+  emergency pause, blocked command, pause status, and resume surfaces.
+  `./scripts/packaged-app-release-smoke.sh` goes further by assembling a
+  deterministic SwiftPM-built `Jarvis.app`, writing release-smoke `Info.plist`
+  metadata, bundling `jarvis-cli`, ad-hoc signing with `codesign -` when
+  available, launching the app executable under a temporary HOME/profile, and
+  verifying app-supervised core health, command, audit, diagnostics, emergency
+  pause, blocked command, pause status, resume, and clean-profile SQLite state.
+  This is local packaged app evidence only; it is not Developer ID signing,
+  notarization, installer validation, entitlement validation, or App Store
+  release evidence.
 
 ## Documentation Gate
 
@@ -161,24 +178,37 @@ stage or when a PR needs focused evidence for one ownership slice.
 
 ## Mac App Smoke Test
 
-This is a future gate once a packaged `Jarvis.app` exists:
+Current local gate:
+
+- Run `./scripts/packaged-app-release-smoke.sh`.
+- The script builds `jarvis-cli` and `JarvisMacApp`, assembles a deterministic
+  `Jarvis.app` bundle, writes `Info.plist`, bundles the core at
+  `Contents/Resources/bin/jarvis-cli`, ad-hoc signs the bundle when
+  `codesign` is available, launches the app executable with isolated endpoint
+  and database environment, and verifies health, command, audit, diagnostics,
+  emergency pause, blocked command, pause status, resume, and temp-profile
+  SQLite state.
+
+Still future gates for production distribution:
 
 - Packaged app launches on a clean Mac user profile.
 - App starts and supervises `jarvis-core`.
 - Text command reaches the Rust core.
 - Text-transcript voice command parity is verified through the scaffold.
-- Real microphone voice command parity is verified only after the macOS
-  Speech/AVFoundation adapter is implemented and available.
+- The macOS Speech/AVFoundation adapter boundary compiles and has deterministic
+  fake-adapter state/error tests.
+- Real microphone voice command parity is verified only after the packaged app
+  has the required entitlements and manual device validation.
 - Activity view shows current task state.
 - Audit entry is written for the command.
 - Emergency pause stops new actions.
 - App exits cleanly and restarts with recoverable state.
 
-Until that packaged app gate exists, use
-`./scripts/packaged-supervision-proof.sh` only as local packaged-layout proof.
-It does not exercise Finder launch, code signing, notarization, entitlement
-validation, installer behavior, launch services, or clean-profile macOS
-permissions.
+The current script covers local app-executable launch and ad-hoc signing only.
+It does not prove Finder launch, LaunchServices registration, Developer ID
+signing, notarization, entitlement validation, installer behavior, App Store
+distribution, microphone permissions, real speech capture, or a separate
+clean-user manual QA pass.
 
 ## Release Notes
 

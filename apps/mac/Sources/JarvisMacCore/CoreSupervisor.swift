@@ -41,16 +41,21 @@ public struct JarvisCoreSupervisorConfiguration: Equatable, Sendable {
     public var healthPollIntervalNanoseconds: UInt64
 
     public init(
-        endpoint: JarvisEndpoint = JarvisEndpoint(),
-        bindAddress: String = "127.0.0.1:7787",
+        endpoint: JarvisEndpoint? = nil,
+        bindAddress: String? = nil,
         executableURL: URL? = JarvisCoreSupervisorConfiguration.defaultExecutableURL(),
         databaseURL: URL? = JarvisCoreSupervisorConfiguration.defaultDatabaseURL(),
         serveCommand: [String] = ["serve"],
         startupTimeoutSeconds: Double = 4,
-        healthPollIntervalNanoseconds: UInt64 = 200_000_000
+        healthPollIntervalNanoseconds: UInt64 = 200_000_000,
+        environment: [String: String] = ProcessInfo.processInfo.environment
     ) {
-        self.endpoint = endpoint
-        self.bindAddress = bindAddress
+        let resolvedBindAddress = bindAddress ?? Self.defaultBindAddress(environment: environment)
+        self.endpoint = endpoint ?? Self.defaultEndpoint(
+            bindAddress: resolvedBindAddress,
+            environment: environment
+        )
+        self.bindAddress = resolvedBindAddress
         self.executableURL = executableURL
         self.databaseURL = databaseURL
         self.serveCommand = serveCommand
@@ -128,6 +133,20 @@ public struct JarvisCoreSupervisorConfiguration: Equatable, Sendable {
         return candidates.first { fileManager.isExecutableFile(atPath: $0.path) }
     }
 
+    static func defaultBindAddress(environment: [String: String]) -> String {
+        environment["JARVIS_MAC_CORE_BIND_ADDRESS"].flatMap { $0.isEmpty ? nil : $0 } ?? "127.0.0.1:7787"
+    }
+
+    static func defaultEndpoint(bindAddress: String, environment: [String: String]) -> JarvisEndpoint {
+        if let value = environment["JARVIS_MAC_CORE_ENDPOINT"], !value.isEmpty,
+           let url = URL(string: value)
+        {
+            return JarvisEndpoint(baseURL: url)
+        }
+
+        return JarvisEndpoint(baseURL: URL(string: "http://\(bindAddress)")!)
+    }
+
     static func firstExecutableURL(
         named names: [String],
         in roots: [URL],
@@ -146,6 +165,10 @@ public struct JarvisCoreSupervisorConfiguration: Equatable, Sendable {
     }
 
     public static func defaultDatabaseURL(fileManager: FileManager = .default) -> URL? {
+        if let configuredPath = ProcessInfo.processInfo.environment["JARVIS_MAC_CORE_DATABASE"], !configuredPath.isEmpty {
+            return URL(fileURLWithPath: configuredPath)
+        }
+
         guard let support = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
             return nil
         }
