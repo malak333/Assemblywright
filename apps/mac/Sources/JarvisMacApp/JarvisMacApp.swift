@@ -10,6 +10,7 @@ struct JarvisMacApp: App {
     @StateObject private var approvals: ApprovalManagementModel
     @StateObject private var runs: RunManagementModel
     @StateObject private var scheduler: SchedulerModel
+    @StateObject private var schedulerNotifications: SchedulerNotificationModel
     @StateObject private var diagnostics: DiagnosticsModel
     @StateObject private var voice: VoiceStateModel
     @StateObject private var voiceAdapter: VoiceAdapterStateModel
@@ -26,6 +27,9 @@ struct JarvisMacApp: App {
         _approvals = StateObject(wrappedValue: ApprovalManagementModel(client: client))
         _runs = StateObject(wrappedValue: RunManagementModel(client: client))
         _scheduler = StateObject(wrappedValue: SchedulerModel(client: client))
+        _schedulerNotifications = StateObject(
+            wrappedValue: SchedulerNotificationModel(adapter: MacSchedulerNotificationAdapter())
+        )
         _diagnostics = StateObject(wrappedValue: DiagnosticsModel(client: client))
         _voice = StateObject(wrappedValue: voice)
         _voiceAdapter = StateObject(wrappedValue: VoiceAdapterStateModel(adapter: MacSpeechVoiceAdapter(), voiceState: voice))
@@ -42,6 +46,7 @@ struct JarvisMacApp: App {
                 approvals: approvals,
                 runs: runs,
                 scheduler: scheduler,
+                schedulerNotifications: schedulerNotifications,
                 diagnostics: diagnostics,
                 voice: voice,
                 voiceAdapter: voiceAdapter,
@@ -78,6 +83,7 @@ struct JarvisShellView: View {
     @ObservedObject var approvals: ApprovalManagementModel
     @ObservedObject var runs: RunManagementModel
     @ObservedObject var scheduler: SchedulerModel
+    @ObservedObject var schedulerNotifications: SchedulerNotificationModel
     @ObservedObject var diagnostics: DiagnosticsModel
     @ObservedObject var voice: VoiceStateModel
     @ObservedObject var voiceAdapter: VoiceAdapterStateModel
@@ -98,7 +104,7 @@ struct JarvisShellView: View {
                     .tabItem { Text("Approvals") }
                 RunManagementView(model: runs)
                     .tabItem { Text("Runs") }
-                SchedulerJobsView(model: scheduler)
+                SchedulerJobsView(model: scheduler, notifications: schedulerNotifications)
                     .tabItem { Text("Scheduler") }
                 DiagnosticsExportView(model: diagnostics)
                     .tabItem { Text("Diagnostics") }
@@ -534,6 +540,7 @@ struct PluginManagerView: View {
 
 struct SchedulerJobsView: View {
     @ObservedObject var model: SchedulerModel
+    @ObservedObject var notifications: SchedulerNotificationModel
     @State private var name = "manual check"
     @State private var command = "status check"
     @State private var runAt = "2026-05-20T13:00:00Z"
@@ -549,7 +556,7 @@ struct SchedulerJobsView: View {
         ) {
             VStack(spacing: 0) {
                 if let attention = model.attention {
-                    SchedulerAttentionSummaryView(attention: attention)
+                    SchedulerAttentionSummaryView(attention: attention, notifications: notifications)
                         .padding(.horizontal)
                         .padding(.bottom, 8)
                 }
@@ -660,6 +667,7 @@ struct SchedulerJobsView: View {
 
 struct SchedulerAttentionSummaryView: View {
     let attention: JarvisSchedulerAttentionSummary
+    @ObservedObject var notifications: SchedulerNotificationModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -689,6 +697,27 @@ struct SchedulerAttentionSummaryView: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
+
+            HStack(spacing: 8) {
+                Button {
+                    Task { await notifications.requestAuthorization() }
+                } label: {
+                    Label("Authorize", systemImage: "bell")
+                }
+
+                Button {
+                    Task { await notifications.notify(attention: attention) }
+                } label: {
+                    Label("Notify", systemImage: "bell.badge")
+                }
+                .disabled(!attention.attentionRequired || notifications.isWorking)
+
+                Text(notifications.status.label)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .buttonStyle(.bordered)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

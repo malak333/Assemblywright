@@ -195,6 +195,7 @@ cargo test -p jarvis-cli --test local_ipc_e2e -- --ignored
 ./scripts/packaged-supervision-proof.sh
 ./scripts/packaged-app-release-smoke.sh
 ./scripts/package-distribution.sh --check
+swift test --package-path apps/mac --filter JarvisMacCoreTests
 ```
 
 The non-ignored `local_ipc_e2e` test is the current cross-process E2E
@@ -223,6 +224,10 @@ resume, and temp-profile SQLite state. It is still local evidence only, not
 Developer ID signing, notarization, installer validation, entitlement
 validation, App Store distribution, Finder/LaunchServices validation, or real
 microphone/Speech/live audio-output coverage.
+`swift test --package-path apps/mac --filter JarvisMacCoreTests` is the focused
+Swift contract/model proof for Mac app model changes, including scheduler
+notification authorization, due/failed request creation, duplicate suppression,
+and denied-permission fail-closed behavior through a fake adapter.
 `./scripts/package-distribution.sh` is the stricter distribution packaging
 lane. Its `--check` mode validates local tool availability and the entitlements
 template without Apple credentials. Full mode requires
@@ -280,10 +285,11 @@ approval evidence, memory classification summary,
 memory create/update/review/delete/restore state, runs/audit,
 permission policy review, scheduler attention summaries, diagnostics,
 text-transcript voice handoff state, adapter-backed voice input controls,
-adapter-backed speech-output preview controls, and
+adapter-backed speech-output preview controls, adapter-backed scheduler
+notification controls, and
 Keychain-backed supervised-core credential injection
 without requiring live microphone access, live audio output, or real credentials
-in tests. It can supervise a configured local core process
+or live OS notification delivery in tests. It can supervise a configured local core process
 abstraction. It also covers Swift approval decision calls against the Rust IPC
 approval endpoints. The packaged supervision proof additionally checks the
 expected `Resources/bin/jarvis-cli` bundle layout with a locally built core

@@ -274,11 +274,12 @@ HTTP providers. The Swift app includes approval decision controls, management
 surfaces, memory classification plus create/update/review/delete/restore
 controls over the existing Rust IPC contract, voice input/output adapter
 controls, text-transcript command handoff, permission policy review,
-redacted scheduler attention handoff, and core supervision abstractions.
+redacted scheduler attention handoff, adapter-backed scheduler notification
+controls for due/failed attention items, and core supervision abstractions.
 The product still lacks
 signed/notarized release evidence, live microphone and audio-output validation,
 marketplace/WASM/network/signed-publisher plugin trust boundaries, richer
-proactive trigger policy, and OS-level app notifications. Swift supervision is
+proactive trigger policy, and live OS notification validation. Swift supervision is
 covered only as a scaffold for
 configured or packaged-style local core binaries.
 
@@ -289,7 +290,8 @@ reviewable PR slices, and docs-only synchronization work on
 `voice-adapter-production`, `packaged-app-release-smoke`,
 `permission-grants-ux`, and `phase3-docs-architecture`. Follow-on slices
 include Swift memory classification/CRUD/restore and local plugin provenance
-verification plus scheduler attention handoff and permission policy review.
+verification plus scheduler attention handoff, scheduler notification controls,
+and permission policy review.
 That workflow improves reviewability but is not readiness evidence by itself.
 Readiness language must be tied to checked-in code, documented diagrams,
 knowledge-base updates, and the specific local/E2E checks that passed.
