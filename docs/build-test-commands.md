@@ -176,6 +176,7 @@ cargo run -p jarvis-cli -- memory list
 cargo run -p jarvis-cli -- memory classification --include-deleted
 cargo run -p jarvis-cli -- memory create workflow release-gate "run local gate before PR" --provenance "manual note" --sensitivity workspace
 cargo run -p jarvis-cli -- memory restore <memory-id>
+cargo run -p jarvis-cli -- scheduler attention
 cargo run -p jarvis-cli -- diagnostics export
 ```
 
@@ -183,6 +184,7 @@ cargo run -p jarvis-cli -- diagnostics export
 
 ```sh
 cargo test -p jarvis-core
+cargo test -p jarvis-core scheduler_attention -- --nocapture
 cargo test -p jarvis-core --test e2e_scaffold
 cargo test -p jarvis-cli
 cargo test -p jarvis-cli --test local_ipc_e2e
@@ -259,9 +261,10 @@ grant/deny decisions, scheduler schedule/cancel and persistence, redacted
 diagnostics export, memory classification summary fields,
 memory create/update/review/delete/restore and persistence, plugin
 manifests, installed-plugin provenance verification, permission-grant
-provenance summary fields, fail-closed subprocess enablement, scheduler due-job
-execution/reschedule audit evidence, scheduler fail-closed emergency pause on
-non-accepted due jobs, and emergency-pause blocking/resume surfaces.
+provenance summary fields, fail-closed subprocess enablement, redacted
+scheduler attention handoff, scheduler due-job execution/reschedule audit
+evidence, scheduler fail-closed emergency pause on non-accepted due jobs, and
+emergency-pause blocking/resume surfaces.
 Runtime unit tests additionally prove bounded fake-model first-party tool-call
 orchestration, including policy checks, approval stops, validation failures, and
 tool-result feedback into later model steps. Focused provider tests prove typed
@@ -273,8 +276,9 @@ validated. The current Swift gate proves the
 Mac shell scaffold builds, decodes IPC contracts, exposes management models for
 approval evidence, memory classification summary,
 memory create/update/review/delete/restore state, runs/audit,
-scheduler, diagnostics, text-transcript voice handoff state, adapter-backed
-voice input controls, adapter-backed speech-output preview controls, and
+scheduler attention summaries, diagnostics, text-transcript voice handoff
+state, adapter-backed voice input controls, adapter-backed speech-output
+preview controls, and
 Keychain-backed supervised-core credential injection
 without requiring live microphone access, live audio output, or real credentials
 in tests. It can supervise a configured local core process

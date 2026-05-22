@@ -39,6 +39,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_array_contains(&contract["endpoints"], "path", "/plugins/installed/:id/run");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/model-routes");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/model-routes/:id");
+    assert_string_array_contains(&contract["safe_inspection_paths"], "/scheduler/attention");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/scheduler/jobs/:id");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/permissions/grants");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/approvals/:id");
@@ -692,6 +693,18 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         endpoint.as_str(),
     ]);
     let due_once_id = due_once["id"].as_str().expect("due once id").to_string();
+    let scheduler_attention =
+        run_cli_json(["scheduler", "attention", "--endpoint", endpoint.as_str()]);
+    assert_eq!(scheduler_attention["attention_required"], true);
+    assert_eq!(scheduler_attention["due_count"], 1);
+    assert_array_contains(
+        &scheduler_attention["items"],
+        "notification_kind",
+        "due_now",
+    );
+    assert!(!serde_json::to_string(&scheduler_attention)
+        .expect("scheduler attention JSON")
+        .contains("plugin status"));
     let due_interval = run_cli_json([
         "scheduler",
         "schedule",

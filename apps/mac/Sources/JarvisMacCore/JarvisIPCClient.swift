@@ -532,6 +532,52 @@ public struct JarvisSchedulerJob: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+public struct JarvisSchedulerAttentionSummary: Decodable, Equatable, Sendable {
+    public var generatedAt: String
+    public var emergencyPaused: Bool
+    public var attentionRequired: Bool
+    public var dueCount: Int
+    public var scheduledCount: Int
+    public var runningCount: Int
+    public var failedCount: Int
+    public var nextDueAt: String?
+    public var items: [JarvisSchedulerAttentionItem]
+
+    enum CodingKeys: String, CodingKey {
+        case generatedAt = "generated_at"
+        case emergencyPaused = "emergency_paused"
+        case attentionRequired = "attention_required"
+        case dueCount = "due_count"
+        case scheduledCount = "scheduled_count"
+        case runningCount = "running_count"
+        case failedCount = "failed_count"
+        case nextDueAt = "next_due_at"
+        case items
+    }
+}
+
+public struct JarvisSchedulerAttentionItem: Decodable, Equatable, Identifiable, Sendable {
+    public var id: UUID
+    public var name: String
+    public var trigger: JarvisSchedulerTrigger
+    public var status: String
+    public var due: Bool
+    public var nextDueAt: String?
+    public var notificationKind: String
+    public var notificationReason: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case trigger
+        case status
+        case due
+        case nextDueAt = "next_due_at"
+        case notificationKind = "notification_kind"
+        case notificationReason = "notification_reason"
+    }
+}
+
 public struct JarvisCreateSchedulerJobRequest: Encodable, Equatable, Sendable {
     public var name: String
     public var command: String
@@ -984,6 +1030,7 @@ public protocol JarvisCoreClient: Sendable {
     func restoreMemoryItem(id: UUID) async throws -> JarvisMemoryItem
     func listPluginManifests() async throws -> [JarvisPluginManifest]
     func listSchedulerJobs() async throws -> [JarvisSchedulerJob]
+    func schedulerAttention() async throws -> JarvisSchedulerAttentionSummary
     func schedulerJob(id: UUID) async throws -> JarvisSchedulerJob
     func createSchedulerJob(_ request: JarvisCreateSchedulerJobRequest) async throws -> JarvisSchedulerJob
     func cancelSchedulerJob(id: UUID) async throws -> JarvisSchedulerJob
@@ -1089,6 +1136,10 @@ public final class JarvisIPCClient: JarvisCoreClient {
 
     public func listSchedulerJobs() async throws -> [JarvisSchedulerJob] {
         try await send(path: "/scheduler/jobs", method: "GET", body: Optional<Data>.none)
+    }
+
+    public func schedulerAttention() async throws -> JarvisSchedulerAttentionSummary {
+        try await send(path: "/scheduler/attention", method: "GET", body: Optional<Data>.none)
     }
 
     public func schedulerJob(id: UUID) async throws -> JarvisSchedulerJob {

@@ -548,6 +548,12 @@ struct SchedulerJobsView: View {
             refresh: { await model.refresh() }
         ) {
             VStack(spacing: 0) {
+                if let attention = model.attention {
+                    SchedulerAttentionSummaryView(attention: attention)
+                        .padding(.horizontal)
+                        .padding(.bottom, 8)
+                }
+
                 schedulerForm
                     .padding(.horizontal)
                     .padding(.bottom, 8)
@@ -649,6 +655,42 @@ struct SchedulerJobsView: View {
         case let .interval(everySeconds):
             return "every \(everySeconds)s"
         }
+    }
+}
+
+struct SchedulerAttentionSummaryView: View {
+    let attention: JarvisSchedulerAttentionSummary
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 14) {
+                Label(
+                    attention.attentionRequired ? "Attention required" : "No scheduler attention",
+                    systemImage: attention.attentionRequired ? "bell.badge" : "bell"
+                )
+                Label("\(attention.dueCount) due", systemImage: "clock")
+                Label("\(attention.runningCount) running", systemImage: "play.circle")
+                Label("\(attention.failedCount) failed", systemImage: "exclamationmark.triangle")
+                if attention.emergencyPaused {
+                    Label("Paused", systemImage: "pause.circle")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(attention.attentionRequired ? .orange : .secondary)
+
+            if !attention.items.isEmpty {
+                Text(attention.items.prefix(4).map { "\($0.name): \($0.notificationKind)" }.joined(separator: " | "))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .textSelection(.enabled)
+            } else if let nextDueAt = attention.nextDueAt {
+                Text("Next scheduled handoff: \(nextDueAt)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
