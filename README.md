@@ -225,6 +225,10 @@ notarization, stapling, microphone entitlement packaging, and signed installer
 package creation when Apple credentials are provided. It still does not replace
 clean-profile installer run, Finder launch, App Store validation, or live
 microphone/Speech/audio-output validation.
+For those live checks, `./scripts/release-live-device-qa.sh --check` prints the
+required manual runbook and is part of the default local release gate. After the
+owner validates a signed installed app on a real Mac profile, rerun the script
+with `--assert-complete` and all required `JARVIS_QA_*` flags set to `true`.
 
 With a repository-backed server running, `jarvis release readiness`,
 `jarvis tasks`, `jarvis memory`, `jarvis activity summary`,

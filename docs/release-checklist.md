@@ -69,6 +69,7 @@ stage or when a PR needs focused evidence for one ownership slice.
 - `./scripts/release-operator-qa-smoke.sh`
 - `cargo package --workspace --allow-dirty`
 - `./scripts/package-distribution.sh --unsigned-launch-check`
+- `./scripts/release-live-device-qa.sh --check`
 - Focused supervision proof for branches that touch Swift core launch or bundle
   discovery: `./scripts/packaged-supervision-proof.sh`
 - Focused packaged app release smoke for branches that touch packaging,
@@ -79,6 +80,8 @@ stage or when a PR needs focused evidence for one ownership slice.
   `./scripts/package-distribution.sh --check`
 - Unsigned distribution launch proof is part of the default local gate:
   `./scripts/package-distribution.sh --unsigned-launch-check`
+- Live-device QA preflight is part of the default local gate:
+  `./scripts/release-live-device-qa.sh --check`
 - `swift test --package-path apps/mac`
 - `swift build --package-path apps/mac`
 - Optional manual CLI/IPC smoke against a running local server:
@@ -349,6 +352,11 @@ Still future gates for production distribution:
   has the required entitlements and manual device validation.
 - Live text-to-speech playback is verified only after packaged app audio-output
   validation on a real device.
+- Run `./scripts/release-live-device-qa.sh --check` before a release candidate
+  to print the live-device runbook. After clean-profile install, Finder launch,
+  microphone/Speech, live audio-output, notification, restart, and manual QA are
+  actually validated on the release machine, rerun it with `--assert-complete`
+  and all required `JARVIS_QA_*` flags set to `true`.
 - Activity view shows current task state, active/status counts, and recent
   audit progress through `/activity/summary`.
 - CLI activity watch receives bounded `/activity/events` progress events.
@@ -403,7 +411,9 @@ Distribution packaging gate:
   signature, app staple, and package staple.
 - Still perform clean-profile installer run, Finder launch, microphone/Speech,
   live audio-output, and manual QA before any broader production distribution
-  claim.
+  claim. `./scripts/release-live-device-qa.sh --assert-complete` is the
+  repo-owned way to record that those checks were completed; it remains an
+  owner assertion, not automated live-device proof.
 
 ## Release Notes
 
