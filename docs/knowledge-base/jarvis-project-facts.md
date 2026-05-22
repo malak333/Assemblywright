@@ -288,6 +288,9 @@ These notes capture durable facts for future agents working on this repository.
   is provided. Startup recovery runs the same stale recovery path before the
   server accepts IPC traffic, marks the audit payload with `automatic_recovery:
   true`, and remains bounded by age/limit flags.
+  Release-readiness feature metadata should describe this as explicit plus
+  opt-in startup recovery, with no default background recovery or distributed
+  lease claim.
   The Swift Scheduler tab renders this summary above the job list and now owns
   a protocol-backed notification model plus macOS `UserNotifications` adapter
   controls for due/failed attention items. Swift tests use a fake adapter to

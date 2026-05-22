@@ -294,6 +294,12 @@ struct JarvisMacCoreTests {
                   "boundary": "review visibility only"
                 },
                 {
+                  "key": "scheduler_stale_running_recovery",
+                  "status": "implemented",
+                  "proof": "explicit plus opt-in startup recovery covered by tests",
+                  "boundary": "bounded cleanup only; no default background recovery"
+                },
+                {
                   "key": "live_voice_loop",
                   "status": "pending_manual_validation",
                   "proof": "fake-adapter tests",
@@ -313,6 +319,7 @@ struct JarvisMacCoreTests {
         #expect(contract.endpoints.map(\.id).contains("GET /scheduler/jobs/:id"))
         #expect(contract.safeInspectionPaths.contains("/diagnostics/export"))
         #expect(contract.features.map(\.id).contains("scheduler_trigger_policy_review"))
+        #expect(contract.features.first { $0.key == "scheduler_stale_running_recovery" }?.proof.contains("opt-in startup recovery") == true)
         #expect(contract.features.first { $0.key == "live_voice_loop" }?.status == "pending_manual_validation")
         #expect(!contract.exposesApprovalActions)
         #expect(contract.exposesPermissionGrantSummary)
