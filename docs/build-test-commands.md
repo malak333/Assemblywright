@@ -115,6 +115,7 @@ cargo run -p jarvis-cli -- command --dry-run "status check"
 cargo run -p jarvis-cli -- plugins list
 cargo run -p jarvis-cli -- diagnostics export
 cargo run -p jarvis-cli -- permissions grants
+cargo run -p jarvis-cli -- activity summary
 cargo run -p jarvis-cli -- scheduler list
 cargo run -p jarvis-cli -- scheduler schedule "manual check" "status check"
 cargo run -p jarvis-cli -- scheduler schedule "approval fail closed" "plugin approval echo scheduler pause"
@@ -173,6 +174,7 @@ cargo run -p jarvis-cli -- approvals list --status pending
 cargo run -p jarvis-cli -- approvals approve <approval-id> --decided-by cli --reason "reviewed"
 cargo run -p jarvis-cli -- approvals deny <approval-id> --decided-by cli --reason "not safe"
 cargo run -p jarvis-cli -- permissions review
+cargo run -p jarvis-cli -- activity summary
 cargo run -p jarvis-cli -- memory list
 cargo run -p jarvis-cli -- memory classification --include-deleted
 cargo run -p jarvis-cli -- memory create workflow release-gate "run local gate before PR" --provenance "manual note" --sensitivity workspace
@@ -187,6 +189,7 @@ cargo run -p jarvis-cli -- diagnostics export
 cargo test -p jarvis-core
 cargo test -p jarvis-core permission_policy_review -- --nocapture
 cargo test -p jarvis-core scheduler_attention -- --nocapture
+cargo test -p jarvis-core repository_backed_state_endpoints_expose_tasks_and_audit -- --nocapture
 cargo test -p jarvis-core --test e2e_scaffold
 cargo test -p jarvis-cli
 cargo test -p jarvis-cli --test local_ipc_e2e
@@ -269,7 +272,8 @@ diagnostics export, memory classification summary fields,
 memory create/update/review/delete/restore and persistence, plugin
 manifests, installed-plugin provenance verification, permission-grant
 provenance summary fields, permission policy review items, fail-closed
-subprocess enablement, redacted scheduler attention handoff, scheduler due-job
+subprocess enablement, repository-backed activity summary status/recent-audit
+evidence, redacted scheduler attention handoff, scheduler due-job
 execution/reschedule audit evidence, scheduler fail-closed emergency pause on
 non-accepted due jobs, and emergency-pause blocking/resume surfaces.
 Runtime unit tests additionally prove bounded fake-model first-party tool-call
@@ -283,7 +287,7 @@ validated. The current Swift gate proves the
 Mac shell scaffold builds, decodes IPC contracts, exposes management models for
 approval evidence, memory classification summary,
 memory create/update/review/delete/restore state, runs/audit,
-permission policy review, scheduler attention summaries, diagnostics,
+activity summary, permission policy review, scheduler attention summaries, diagnostics,
 text-transcript voice handoff state, adapter-backed voice input controls,
 adapter-backed speech-output preview controls, adapter-backed scheduler
 notification controls, and

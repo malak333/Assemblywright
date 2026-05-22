@@ -275,6 +275,33 @@ public struct JarvisAuditEntry: Decodable, Equatable, Identifiable, Sendable {
     }
 }
 
+public struct JarvisActivityStatusCount: Decodable, Equatable, Sendable {
+    public var status: String
+    public var count: Int
+}
+
+public struct JarvisActivitySummary: Decodable, Equatable, Sendable {
+    public var generatedAt: String
+    public var repositoryBacked: Bool
+    public var taskCount: Int
+    public var auditEntryCount: Int
+    public var activeTaskCount: Int
+    public var statusCounts: [JarvisActivityStatusCount]
+    public var recentTasks: [JarvisTask]
+    public var recentAuditEntries: [JarvisAuditEntry]
+
+    enum CodingKeys: String, CodingKey {
+        case generatedAt = "generated_at"
+        case repositoryBacked = "repository_backed"
+        case taskCount = "task_count"
+        case auditEntryCount = "audit_entry_count"
+        case activeTaskCount = "active_task_count"
+        case statusCounts = "status_counts"
+        case recentTasks = "recent_tasks"
+        case recentAuditEntries = "recent_audit_entries"
+    }
+}
+
 public struct JarvisRuntimeStep: Decodable, Equatable, Sendable {
     public var index: Int
     public var message: String
@@ -1078,6 +1105,7 @@ public protocol JarvisCoreClient: Sendable {
     func listTasks() async throws -> [JarvisTask]
     func task(id: UUID) async throws -> JarvisTask
     func listAuditEntries(taskId: UUID?) async throws -> [JarvisAuditEntry]
+    func activitySummary() async throws -> JarvisActivitySummary
     func listMemoryItems(includeDeleted: Bool) async throws -> [JarvisMemoryItem]
     func memoryClassification(includeDeleted: Bool) async throws -> JarvisMemoryClassificationSummary
     func createMemoryItem(_ request: JarvisCreateMemoryItemRequest) async throws -> JarvisMemoryItem
@@ -1153,6 +1181,10 @@ public final class JarvisIPCClient: JarvisCoreClient {
     public func listAuditEntries(taskId: UUID? = nil) async throws -> [JarvisAuditEntry] {
         let path = taskId.map { "/tasks/\($0.uuidString)/audit" } ?? "/audit"
         return try await send(path: path, method: "GET", body: Optional<Data>.none)
+    }
+
+    public func activitySummary() async throws -> JarvisActivitySummary {
+        try await send(path: "/activity/summary", method: "GET", body: Optional<Data>.none)
     }
 
     public func listMemoryItems(includeDeleted: Bool = false) async throws -> [JarvisMemoryItem] {

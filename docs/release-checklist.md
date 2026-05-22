@@ -238,7 +238,8 @@ Still future gates for production distribution:
   has the required entitlements and manual device validation.
 - Live text-to-speech playback is verified only after packaged app audio-output
   validation on a real device.
-- Activity view shows current task state.
+- Activity view shows current task state, active/status counts, and recent
+  audit progress through `/activity/summary`.
 - Memory tab can create, edit mutable fields, mark reviewed, soft-delete,
   restore, and include deleted items through the supervised core IPC contract.
 - Audit entry is written for the command.

@@ -1025,20 +1025,26 @@ struct RunManagementView: View {
             refresh: { await model.refresh() }
         ) {
             HSplitView {
-                List(model.tasks) { task in
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(task.status)
-                            .font(.subheadline)
-                        Text(task.userInput)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                        Text(task.id.uuidString)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
+                List {
+                    if let activitySummary = model.activitySummary {
+                        RunActivitySummaryView(summary: activitySummary)
                     }
-                    .padding(.vertical, 4)
+
+                    ForEach(model.tasks) { task in
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(task.status)
+                                .font(.subheadline)
+                            Text(task.userInput)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                            Text(task.id.uuidString)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                        .padding(.vertical, 4)
+                    }
                 }
                 .frame(minWidth: 300)
 
@@ -1059,6 +1065,31 @@ struct RunManagementView: View {
                 .frame(minWidth: 320)
             }
         }
+    }
+}
+
+struct RunActivitySummaryView: View {
+    let summary: JarvisActivitySummary
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 12) {
+                Label("\(summary.activeTaskCount) active", systemImage: "waveform.path.ecg")
+                Label("\(summary.taskCount) tasks", systemImage: "list.bullet.rectangle")
+                Label("\(summary.auditEntryCount) audit", systemImage: "doc.text.magnifyingglass")
+            }
+            .font(.caption)
+            .foregroundStyle(summary.activeTaskCount > 0 ? .orange : .secondary)
+
+            if !summary.statusCounts.isEmpty {
+                Text(summary.statusCounts.map { "\($0.status) \($0.count)" }.joined(separator: " | "))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(.vertical, 4)
     }
 }
 

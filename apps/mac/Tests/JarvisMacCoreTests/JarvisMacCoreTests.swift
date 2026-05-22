@@ -268,6 +268,7 @@ struct JarvisMacCoreTests {
               "endpoints": [
                 { "method": "GET", "path": "/health", "repository_required": false, "redacted": true },
                 { "method": "GET", "path": "/scheduler/jobs/:id", "repository_required": false, "redacted": false },
+                { "method": "GET", "path": "/activity/summary", "repository_required": true, "redacted": false },
                 { "method": "GET", "path": "/permissions/grants", "repository_required": true, "redacted": false },
                 { "method": "GET", "path": "/permissions/policy-review", "repository_required": true, "redacted": false }
               ],
@@ -477,6 +478,8 @@ struct JarvisMacCoreTests {
                 return (response, schedulerAttentionJSON(id: jobId))
             case "/scheduler/jobs/\(jobId.uuidString)":
                 return (response, schedulerJobJSON(id: jobId))
+            case "/activity/summary":
+                return (response, activitySummaryJSON(taskId: jobId))
             case "/emergency-pause":
                 return (response, Data(#"{"paused":false,"reason":null,"paused_at":null,"resumed_at":"2026-05-20T12:00:00Z","cancelled_scheduler_jobs":0}"#.utf8))
             default:
@@ -520,6 +523,7 @@ struct JarvisMacCoreTests {
             )
         )
         _ = try await client.schedulerJob(id: jobId)
+        _ = try await client.activitySummary()
         _ = try await client.pauseStatus()
 
         #expect(requests.map(\.method) == [
@@ -536,6 +540,7 @@ struct JarvisMacCoreTests {
             "GET",
             "GET",
             "POST",
+            "GET",
             "GET",
             "GET"
         ])
@@ -554,6 +559,7 @@ struct JarvisMacCoreTests {
             "/scheduler/attention",
             "/scheduler/jobs",
             "/scheduler/jobs/\(jobId.uuidString)",
+            "/activity/summary",
             "/emergency-pause"
         ])
         #expect(requests[3].body?["key"] as? String == "release-gate")
@@ -605,6 +611,24 @@ struct JarvisMacCoreTests {
             "accepted": .bool(true),
             "attempt": .number(1)
         ]))
+    }
+
+    @Test("Activity summary decodes current progress counts and recent evidence")
+    func decodesActivitySummary() throws {
+        let taskId = UUID()
+        let summary = try JSONDecoder().decode(
+            JarvisActivitySummary.self,
+            from: activitySummaryJSON(taskId: taskId)
+        )
+
+        #expect(summary.repositoryBacked)
+        #expect(summary.taskCount == 2)
+        #expect(summary.auditEntryCount == 3)
+        #expect(summary.activeTaskCount == 1)
+        #expect(summary.statusCounts.contains(JarvisActivityStatusCount(status: "running", count: 1)))
+        #expect(summary.statusCounts.contains(JarvisActivityStatusCount(status: "completed", count: 1)))
+        #expect(summary.recentTasks.first?.id == taskId)
+        #expect(summary.recentAuditEntries.first?.eventType == "plugin_completed")
     }
 
     @Test("Management payloads decode memory items")
@@ -1641,6 +1665,11 @@ struct JarvisMacCoreTests {
 
         #expect(model.tasks == [task])
         #expect(model.auditEntries == [audit])
+        #expect(model.activitySummary?.taskCount == 1)
+        #expect(model.activitySummary?.auditEntryCount == 1)
+        #expect(model.activitySummary?.statusCounts == [
+            JarvisActivityStatusCount(status: "completed", count: 1)
+        ])
     }
 
     @Test("Supervisor configuration builds jarvis-cli serve arguments")
@@ -1917,6 +1946,44 @@ struct JarvisMacCoreTests {
                   "next_due_at": "2026-05-20T12:00:01Z",
                   "notification_kind": "due_now",
                   "notification_reason": "A scheduler job is due and ready for the app to surface."
+                }
+              ]
+            }
+            """.utf8
+        )
+    }
+
+    private func activitySummaryJSON(taskId: UUID) -> Data {
+        Data(
+            """
+            {
+              "generated_at": "2026-05-20T12:00:03Z",
+              "repository_backed": true,
+              "task_count": 2,
+              "audit_entry_count": 3,
+              "active_task_count": 1,
+              "status_counts": [
+                { "status": "running", "count": 1 },
+                { "status": "completed", "count": 1 }
+              ],
+              "recent_tasks": [
+                {
+                  "id": "\(taskId.uuidString)",
+                  "session_id": "\(UUID().uuidString)",
+                  "user_input": "status check",
+                  "status": "running",
+                  "created_at": "2026-05-20T12:00:00Z",
+                  "updated_at": "2026-05-20T12:00:01Z"
+                }
+              ],
+              "recent_audit_entries": [
+                {
+                  "id": "\(UUID().uuidString)",
+                  "task_id": "\(taskId.uuidString)",
+                  "event_type": "plugin_completed",
+                  "summary": "plugin completed",
+                  "payload": { "side_effect_executed": true },
+                  "created_at": "2026-05-20T12:00:02Z"
                 }
               ]
             }
@@ -2390,6 +2457,26 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
             return auditEntries.filter { $0.taskId == taskId }
         }
         return auditEntries
+    }
+
+    func activitySummary() async throws -> JarvisActivitySummary {
+        let activeStatuses = Set(["created", "running", "waiting_for_approval"])
+        let grouped = Dictionary(grouping: tasks, by: \.status)
+        let statusCounts = grouped
+            .map { status, tasks in
+                JarvisActivityStatusCount(status: status, count: tasks.count)
+            }
+            .sorted { $0.status < $1.status }
+        return JarvisActivitySummary(
+            generatedAt: "2026-05-20T12:00:03Z",
+            repositoryBacked: true,
+            taskCount: tasks.count,
+            auditEntryCount: auditEntries.count,
+            activeTaskCount: tasks.filter { activeStatuses.contains($0.status) }.count,
+            statusCounts: statusCounts,
+            recentTasks: Array(tasks.suffix(5).reversed()),
+            recentAuditEntries: Array(auditEntries.suffix(10).reversed())
+        )
     }
 
     func listMemoryItems(includeDeleted: Bool) async throws -> [JarvisMemoryItem] {
