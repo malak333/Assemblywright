@@ -432,6 +432,8 @@ struct JarvisMacCoreTests {
                 return (response, memoryItemJSON(id: memoryId))
             case "/memory/\(memoryId.uuidString)/review":
                 return (response, memoryItemJSON(id: memoryId))
+            case "/memory/\(memoryId.uuidString)/restore":
+                return (response, memoryItemJSON(id: memoryId))
             case "/plugins/manifests":
                 return (response, Data("[]".utf8))
             case "/scheduler/jobs":
@@ -471,6 +473,7 @@ struct JarvisMacCoreTests {
         )
         _ = try await client.reviewMemoryItem(id: memoryId)
         _ = try await client.deleteMemoryItem(id: memoryId)
+        _ = try await client.restoreMemoryItem(id: memoryId)
         _ = try await client.listPluginManifests()
         _ = try await client.listSchedulerJobs()
         _ = try await client.createSchedulerJob(
@@ -491,6 +494,7 @@ struct JarvisMacCoreTests {
             "PATCH",
             "POST",
             "DELETE",
+            "POST",
             "GET",
             "GET",
             "POST",
@@ -505,6 +509,7 @@ struct JarvisMacCoreTests {
             "/memory/\(memoryId.uuidString)",
             "/memory/\(memoryId.uuidString)/review",
             "/memory/\(memoryId.uuidString)",
+            "/memory/\(memoryId.uuidString)/restore",
             "/plugins/manifests",
             "/scheduler/jobs",
             "/scheduler/jobs",
@@ -513,7 +518,7 @@ struct JarvisMacCoreTests {
         ])
         #expect(requests[2].body?["key"] as? String == "release-gate")
         #expect(requests[4].body?["value"] as? String == "preview then sync")
-        #expect(requests[9].body?["command"] as? String == "status check")
+        #expect(requests[10].body?["command"] as? String == "status check")
     }
 
     @Test("Management payloads decode tasks and audit list")
@@ -1323,6 +1328,12 @@ struct JarvisMacCoreTests {
         await model.delete(id: created.id)
         #expect(!model.items.contains { $0.id == created.id })
         #expect(model.selectedItem == nil)
+
+        await model.refresh(includeDeleted: true)
+        await model.restore(id: created.id)
+        #expect(model.selectedItem?.id == created.id)
+        #expect(model.selectedItem?.deletedAt == nil)
+        #expect(model.items.contains { $0.id == created.id && $0.deletedAt == nil })
     }
 
     @MainActor
@@ -2181,6 +2192,17 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         var item = memoryItems[index]
         item.deletedAt = "2026-05-20T12:12:00Z"
         item.updatedAt = "2026-05-20T12:12:00Z"
+        memoryItems[index] = item
+        return item
+    }
+
+    func restoreMemoryItem(id: UUID) async throws -> JarvisMemoryItem {
+        guard let index = memoryItems.firstIndex(where: { $0.id == id }) else {
+            throw URLError(.fileDoesNotExist)
+        }
+        var item = memoryItems[index]
+        item.deletedAt = nil
+        item.updatedAt = "2026-05-20T12:13:00Z"
         memoryItems[index] = item
         return item
     }

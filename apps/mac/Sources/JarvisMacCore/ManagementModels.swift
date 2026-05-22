@@ -79,6 +79,12 @@ public final class MemoryManagerModel: ObservableObject {
         }
     }
 
+    public func restore(id: UUID) async {
+        await replace(id: id) {
+            try await self.client.restoreMemoryItem(id: id)
+        }
+    }
+
     private func replace(id: UUID, operation: @escaping () async throws -> JarvisMemoryItem) async {
         await run {
             let item = try await operation()

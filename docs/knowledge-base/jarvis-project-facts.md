@@ -90,9 +90,11 @@ These notes capture durable facts for future agents working on this repository.
   and local packaged-app smoke evidence. It is not a Developer ID signed or
   notarized packaged app.
 - The Swift Memory tab now uses the Rust IPC memory contract for list,
-  include-deleted refresh, create, load, update of mutable fields, review, and
-  soft-delete. Category and key remain creation-time fields in the current IPC
-  contract; the Swift edit path updates value, provenance, and sensitivity.
+  include-deleted refresh, create, load, update of mutable fields, review,
+  soft-delete, and restore. Category and key remain creation-time fields in
+  the current IPC contract; the Swift edit path updates value, provenance, and
+  sensitivity. Restore clears `deleted_at` through `/memory/:id/restore` and
+  stays subject to the active `(category, key)` uniqueness guard.
 - The Swift shell has a Keychain-backed launch credential boundary for
   app-supervised model provider secrets. `JarvisCoreCredentialProvider` reads
   known credentials such as the OpenAI API key from Keychain and injects only

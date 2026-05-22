@@ -344,6 +344,7 @@ struct MemoryManagerView: View {
                             Button("Edit") {
                                 loadIntoForm(item)
                             }
+                            .disabled(item.deletedAt != nil)
                             Button("Review") {
                                 Task { await model.review(id: item.id) }
                             }
@@ -352,6 +353,10 @@ struct MemoryManagerView: View {
                                 Task { await model.delete(id: item.id) }
                             }
                             .disabled(item.deletedAt != nil)
+                            Button("Restore") {
+                                Task { await model.restore(id: item.id) }
+                            }
+                            .disabled(item.deletedAt == nil)
                         }
                         .font(.caption)
                     }

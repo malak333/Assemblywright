@@ -982,6 +982,20 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         run_cli_json(["memory", "list", "--endpoint", restarted_endpoint.as_str()]);
     assert_array_lacks(&active_memory_after_delete, "id", &memory_id);
 
+    let restored_memory = run_cli_json([
+        "memory",
+        "restore",
+        memory_id.as_str(),
+        "--endpoint",
+        restarted_endpoint.as_str(),
+    ]);
+    assert_eq!(restored_memory["id"], memory_id);
+    assert!(restored_memory["deleted_at"].is_null());
+
+    let active_memory_after_restore =
+        run_cli_json(["memory", "list", "--endpoint", restarted_endpoint.as_str()]);
+    assert_array_contains(&active_memory_after_restore, "id", &memory_id);
+
     restarted.stop();
     drop(temp_dir);
 }

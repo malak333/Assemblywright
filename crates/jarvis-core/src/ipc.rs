@@ -1748,6 +1748,7 @@ pub fn router(state: IpcState) -> Router {
                 .delete(delete_memory_item),
         )
         .route("/memory/:id/review", post(review_memory_item))
+        .route("/memory/:id/restore", post(restore_memory_item))
         .route("/permissions/grants", get(permission_grant_summary))
         .route("/approvals", get(list_approvals))
         .route("/approvals/:id", get(get_approval))
@@ -1984,6 +1985,16 @@ async fn delete_memory_item(
         .map_err(error_response)
 }
 
+async fn restore_memory_item(
+    State(state): State<IpcState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<crate::MemoryItem>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .using_repository(|repository| repository.restore_memory_item(id))
+        .map(Json)
+        .map_err(error_response)
+}
+
 async fn list_approvals(
     State(state): State<IpcState>,
     Query(query): Query<HashMap<String, String>>,
@@ -2214,6 +2225,7 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
         endpoint("PATCH", "/memory/:id", true, false),
         endpoint("DELETE", "/memory/:id", true, false),
         endpoint("POST", "/memory/:id/review", true, false),
+        endpoint("POST", "/memory/:id/restore", true, false),
         endpoint("GET", "/permissions/grants", true, false),
         endpoint("GET", "/approvals", true, false),
         endpoint("GET", "/approvals/:id", true, false),
@@ -3009,10 +3021,20 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .expect("delete memory");
         assert!(deleted.deleted_at.is_some());
 
-        let Json(active) = list_memory_items(State(state), Query(HashMap::new()))
+        let Json(active) = list_memory_items(State(state.clone()), Query(HashMap::new()))
             .await
             .expect("list active memory");
         assert!(active.is_empty());
+
+        let Json(restored) = restore_memory_item(State(state.clone()), Path(created.id))
+            .await
+            .expect("restore memory");
+        assert!(restored.deleted_at.is_none());
+
+        let Json(active) = list_memory_items(State(state), Query(HashMap::new()))
+            .await
+            .expect("list restored memory");
+        assert_eq!(active.len(), 1);
     }
 
     #[tokio::test]

@@ -552,6 +552,29 @@ impl SqliteRepository {
         })
     }
 
+    pub fn restore_memory_item(&self, id: Uuid) -> JarvisResult<MemoryItem> {
+        let now = Utc::now();
+        let changed = self
+            .conn
+            .execute(
+                "UPDATE memory_items
+                 SET deleted_at = NULL, updated_at = ?1
+                 WHERE id = ?2 AND deleted_at IS NOT NULL",
+                params![to_db_time(now), id.to_string()],
+            )
+            .map_err(storage_error)?;
+
+        if changed == 0 {
+            return Err(JarvisError::Storage(format!(
+                "deleted memory item not found: {id}"
+            )));
+        }
+
+        self.get_memory_item(id)?.ok_or_else(|| {
+            JarvisError::Storage(format!("memory item not found after restore: {id}"))
+        })
+    }
+
     pub fn upsert_scheduler_job(&self, job: &SchedulerJob) -> JarvisResult<()> {
         self.conn
             .execute(
@@ -2300,6 +2323,10 @@ mod tests {
         assert!(deleted.deleted_at.is_some());
         assert!(repo.list_memory_items(false).unwrap().is_empty());
         assert_eq!(repo.list_memory_items(true).unwrap().len(), 1);
+
+        let restored = repo.restore_memory_item(memory.id).unwrap();
+        assert!(restored.deleted_at.is_none());
+        assert_eq!(repo.list_memory_items(false).unwrap().len(), 1);
     }
 
     #[test]
