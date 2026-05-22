@@ -20,6 +20,7 @@ cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo test --workspace -- --ignored
+./scripts/storage-migration-backup-smoke.sh
 cargo build --workspace
 cargo run -p jarvis-cli -- smoke
 cargo package --workspace --allow-dirty
@@ -181,6 +182,7 @@ cargo test -p jarvis-core --test e2e_scaffold
 cargo test -p jarvis-cli
 cargo test -p jarvis-cli --test local_ipc_e2e
 cargo test -p jarvis-cli --test local_ipc_e2e -- --ignored
+./scripts/storage-migration-backup-smoke.sh
 ./scripts/packaged-supervision-proof.sh
 ./scripts/packaged-app-release-smoke.sh
 ./scripts/package-distribution.sh --check
@@ -189,6 +191,11 @@ cargo test -p jarvis-cli --test local_ipc_e2e -- --ignored
 The non-ignored `local_ipc_e2e` test is the current cross-process E2E
 expectation for Rust/CLI changes. The ignored variant includes the opt-in
 release-proof smoke command and is run by `./scripts/release-local.sh`.
+`./scripts/storage-migration-backup-smoke.sh` is the focused storage recovery
+proof for migration changes: it runs Rust tests that create a legacy
+file-backed DB, verify preflight backup creation, corrupt the DB after backup
+to prove restore on migration-open failure, and verify newer schema versions
+fail with an explicit upgrade diagnostic.
 `./scripts/packaged-supervision-proof.sh` is the focused Swift/Rust bridge
 proof for supervision changes: it builds `jarvis-cli`, copies it into a
 temporary `Jarvis.app/Contents/Resources/bin/` layout, runs the Swift supervisor

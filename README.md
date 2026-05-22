@@ -57,6 +57,7 @@ cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo build --workspace
+./scripts/storage-migration-backup-smoke.sh
 swift test --package-path apps/mac
 swift build --package-path apps/mac
 ```
@@ -71,6 +72,17 @@ cargo run -p jarvis-cli -- health
 
 Use `cargo run -p jarvis-cli -- serve --db-path /tmp/jarvis.sqlite` when you
 want manual IPC commands to persist task and audit state locally.
+
+For branches that touch SQLite migrations or file-backed repository startup,
+run the focused storage recovery proof:
+
+```sh
+./scripts/storage-migration-backup-smoke.sh
+```
+
+That script proves legacy file-backed DB migration creates a preflight backup,
+failed migration-open restores the backup, and newer schema versions fail with
+an explicit upgrade diagnostic. It does not replace installer upgrade QA.
 
 For branches that touch Swift supervision or core binary discovery, run the
 focused packaged-supervision proof:

@@ -240,7 +240,8 @@ The packaged Mac app launches, starts the Rust core, handles a command, writes a
 - `Jarvis.app` bundles or installs the `jarvis-core` Rust executable.
 - The app supervises the core in v1; LaunchAgent support is deferred until needed.
 - Diagnostics export produces redacted logs, config summaries, schema versions, plugin state, model status, and recent failure reports.
-- SQLite migrations run predictably with backup or rollback behavior.
+- SQLite migrations run predictably with file-backed preflight backup and
+  restore-on-failure behavior before broader installer upgrade QA.
 - Crash and failure reporting is local-first initially. External reporting is deferred and user-approved only.
 - Releases use version numbers, changelog, migration notes, and smoke-test checklist.
 - Repo docs should include build/test commands, architecture map, plugin
