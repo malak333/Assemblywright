@@ -176,6 +176,12 @@ public struct JarvisContractResponse: Decodable, Equatable, Sendable {
         }
     }
 
+    public var exposesReleaseEvidenceStatus: Bool {
+        endpoints.contains { endpoint in
+            endpoint.method.uppercased() == "GET" && endpoint.path == "/release/evidence-status"
+        }
+    }
+
     public var exposesApprovalApproveAction: Bool {
         endpoints.contains { endpoint in
             endpoint.method.uppercased() == "POST" && endpoint.path == "/approvals/:id/approve"
@@ -230,6 +236,50 @@ public struct JarvisReleaseReadinessFeature: Decodable, Equatable, Identifiable,
     public var boundary: String
 
     public var id: String { key }
+}
+
+public struct JarvisReleaseEvidenceStatus: Decodable, Equatable, Sendable {
+    public var generatedAt: String
+    public var complete: Bool
+    public var satisfiedCount: Int
+    public var missingCount: Int
+    public var invalidCount: Int
+    public var items: [JarvisReleaseEvidenceStatusItem]
+    public var proofBoundary: String
+
+    enum CodingKeys: String, CodingKey {
+        case generatedAt = "generated_at"
+        case complete
+        case satisfiedCount = "satisfied_count"
+        case missingCount = "missing_count"
+        case invalidCount = "invalid_count"
+        case items
+        case proofBoundary = "proof_boundary"
+    }
+}
+
+public struct JarvisReleaseEvidenceStatusItem: Decodable, Equatable, Identifiable, Sendable {
+    public var key: String
+    public var label: String
+    public var path: String
+    public var kind: String
+    public var status: String
+    public var requiredForProduction: Bool
+    public var manualGate: Bool
+    public var detail: String
+
+    public var id: String { key }
+
+    enum CodingKeys: String, CodingKey {
+        case key
+        case label
+        case path
+        case kind
+        case status
+        case requiredForProduction = "required_for_production"
+        case manualGate = "manual_gate"
+        case detail
+    }
 }
 
 public struct JarvisDiagnosticsExport: Decodable, Equatable, Sendable {
@@ -1406,6 +1456,7 @@ public protocol JarvisCoreClient: Sendable {
     func health() async throws -> JarvisHealth
     func contract() async throws -> JarvisContractResponse
     func releaseReadiness() async throws -> JarvisReleaseReadiness
+    func releaseEvidenceStatus() async throws -> JarvisReleaseEvidenceStatus
     func submit(_ command: JarvisCommandRequest) async throws -> JarvisCommandResponse
     func pause(reason: String) async throws -> JarvisPauseResponse
     func resume() async throws -> JarvisPauseResponse
@@ -1463,6 +1514,10 @@ public final class JarvisIPCClient: JarvisCoreClient {
 
     public func releaseReadiness() async throws -> JarvisReleaseReadiness {
         try await send(path: "/release/readiness", method: "GET", body: Optional<Data>.none)
+    }
+
+    public func releaseEvidenceStatus() async throws -> JarvisReleaseEvidenceStatus {
+        try await send(path: "/release/evidence-status", method: "GET", body: Optional<Data>.none)
     }
 
     public func submit(_ command: JarvisCommandRequest) async throws -> JarvisCommandResponse {

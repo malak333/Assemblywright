@@ -1296,11 +1296,30 @@ struct ReleaseReadinessView: View {
             List {
                 if let readiness = model.readiness {
                     LabelValueRow(label: "Generated", value: readiness.generatedAt)
+                    if model.isShowingStaleReadiness {
+                        Label("Showing cached readiness; refresh failed.", systemImage: "clock.badge.exclamationmark")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
                     LabelValueRow(label: "Production Ready", value: readiness.productionReady ? "yes" : "no")
                     LabelValueRow(label: "Scope", value: readiness.readinessScope)
                     LabelValueRow(label: "Verified Features", value: String(readiness.verifiedFeatureCount))
                     LabelValueRow(label: "Pending Features", value: String(readiness.pendingFeatureCount))
                     LabelValueRow(label: "Proof Boundary", value: readiness.proofBoundary)
+
+                    if let evidence = model.evidenceStatus {
+                        Section("Evidence Status") {
+                            LabelValueRow(label: "Generated", value: evidence.generatedAt)
+                            LabelValueRow(label: "Complete", value: evidence.complete ? "yes" : "no")
+                            LabelValueRow(label: "Satisfied", value: String(evidence.satisfiedCount))
+                            LabelValueRow(label: "Missing", value: String(evidence.missingCount))
+                            LabelValueRow(label: "Invalid", value: String(evidence.invalidCount))
+                            LabelValueRow(label: "Proof Boundary", value: evidence.proofBoundary)
+                            ForEach(evidence.items) { item in
+                                ReleaseEvidenceStatusRow(item: item)
+                            }
+                        }
+                    }
 
                     Section("Blocking Gates") {
                         ForEach(readiness.blockingManualGates, id: \.self) { gate in
@@ -1336,6 +1355,32 @@ struct ReleaseReadinessView: View {
                 }
             }
         }
+    }
+}
+
+struct ReleaseEvidenceStatusRow: View {
+    let item: JarvisReleaseEvidenceStatusItem
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                Text(item.label)
+                    .font(.subheadline)
+                Spacer()
+                Text(item.status)
+                    .font(.caption)
+                    .foregroundStyle(item.status == "present" ? .green : .orange)
+            }
+            Text(item.path)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+            Text(item.detail)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+        }
+        .padding(.vertical, 4)
     }
 }
 

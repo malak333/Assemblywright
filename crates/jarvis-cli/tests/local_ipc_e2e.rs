@@ -62,6 +62,31 @@ fn release_readiness_cli_falls_back_without_running_server() {
 }
 
 #[test]
+fn release_evidence_status_cli_falls_back_without_running_server() {
+    let endpoint = format!("http://{}", unused_loopback_addr());
+
+    let evidence_status = run_cli_json([
+        "release",
+        "evidence-status",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+
+    assert_eq!(evidence_status["complete"], false);
+    assert!(evidence_status["items"]
+        .as_array()
+        .expect("evidence items")
+        .iter()
+        .any(|item| item["key"] == "release_evidence_bundle"
+            && item["kind"] == "json_report"
+            && item["manual_gate"] == true));
+    assert!(evidence_status["proof_boundary"]
+        .as_str()
+        .expect("evidence proof boundary")
+        .contains("does not sign"));
+}
+
+#[test]
 fn serve_exposes_local_ipc_contract_and_persists_state() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let db_path = temp_dir.path().join("jarvis-e2e.sqlite");
@@ -159,6 +184,10 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_array_contains(&contract["endpoints"], "path", "/plugins/installed/:id/run");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/model-routes");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/release/readiness");
+    assert_string_array_contains(
+        &contract["safe_inspection_paths"],
+        "/release/evidence-status",
+    );
     assert_string_array_contains(&contract["safe_inspection_paths"], "/model-routes/:id");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/scheduler/attention");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/scheduler/jobs/:id");
@@ -247,6 +276,25 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         .as_str()
         .expect("release readiness proof boundary")
         .contains("does not perform signing"));
+
+    let evidence_status = run_cli_json([
+        "release",
+        "evidence-status",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(evidence_status["complete"], false);
+    assert!(evidence_status["items"]
+        .as_array()
+        .expect("evidence items")
+        .iter()
+        .any(|item| item["key"] == "live_device_qa_report"
+            && item["kind"] == "json_report"
+            && item["manual_gate"] == true));
+    assert!(evidence_status["proof_boundary"]
+        .as_str()
+        .expect("evidence proof boundary")
+        .contains("does not sign"));
 
     let command = run_cli_json([
         "command",

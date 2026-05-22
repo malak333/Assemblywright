@@ -10,10 +10,10 @@ Run the full local release gate with:
 ./scripts/release-local.sh
 ```
 
-The script is a wrapper around the commands below and intentionally stays
-local-only. Use this gate as the default PR evidence for current foundation
-work unless a narrower docs-only change justifies a focused documentation
-check.
+The script is a wrapper around the ordered command set in this section and
+intentionally stays local-only. Use this gate as the default PR evidence for
+current foundation work unless a narrower docs-only change justifies a focused
+documentation check.
 
 ```sh
 cargo fmt --check
@@ -311,11 +311,22 @@ evidence bundle manifest, then reports present and missing evidence without
 failing the local gate. Its `--self-test` uses fake artifacts/reports to prove
 the inventory logic only; `--assert-complete` is reserved for release triage
 after real external evidence exists.
+`jarvis release evidence-status` exposes the same standard artifact/report
+inventory as structured JSON through `/release/evidence-status`; it is
+file/report inspection only and does not prove signing, notarization, installed
+app launch, live-device QA, marketplace review, malware scanning, or OS
+sandboxing.
 
 ## Useful Focused Commands
 
+These commands are targeted iteration checks. Use them to localize failures or
+prove a narrow surface, but do not report them as the local release gate for
+executable changes unless `./scripts/release-local.sh` also ran or the change is
+explicitly docs-only.
+
 ```sh
 cargo test -p jarvis-core
+cargo test -p jarvis-core release_evidence_status -- --nocapture
 cargo test -p jarvis-core permission_policy_review -- --nocapture
 cargo test -p jarvis-core permission_policy_review_summarizes_unreviewed_memory_without_values -- --nocapture
 cargo test -p jarvis-core diagnostics_export_is_redacted_and_counts_repository_state -- --nocapture
@@ -471,7 +482,8 @@ cargo test -p jarvis-core installed_plugin_runner_records_subprocess_progress_ev
 
 Passing `./scripts/release-local.sh` proves the current Rust workspace builds,
 passes standard and ignored release-proof tests, runs the CLI smoke command,
-packages the Rust crates, and passes the Swift package build/test gate. The
+packages the Rust crates, runs local release/runbook preflights and fake-fixture
+evidence self-tests, and passes the Swift package build/test gate. The
 cross-process IPC E2E test proves the local server and CLI can exchange JSON for
 health, runtime-backed command execution, deterministic first-party plugin
 execution, route/policy/plugin audit evidence, approval-required persistence and

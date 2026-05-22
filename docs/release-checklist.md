@@ -41,6 +41,12 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   Treat `production_ready: false` as authoritative until the external signing,
   notarization, install, Finder/LaunchServices, live-device, and manual QA
   gates are complete.
+- Confirm `jarvis release evidence-status` or `/release/evidence-status` reports
+  the standard signed artifact, live-device QA report, plugin-trust QA report,
+  and final evidence bundle inventory as structured JSON. Treat it as
+  file/report inspection only, not proof that signing, notarization,
+  installation, Finder launch, live-device QA, marketplace review, malware
+  scanning, or OS sandboxing was performed.
 - Confirm no Marvel branding, copyrighted visuals, or confusing product claims
   were introduced.
 - Confirm any autonomous sweep summary names the active ownership slices and
@@ -294,9 +300,15 @@ stage or when a PR needs focused evidence for one ownership slice.
   as a present/missing inventory of expected files, JSON flags, and release
   metadata only; it does not perform signing, notarization, live-device QA,
   plugin-trust QA, owner assertions, or final bundle creation.
+- Confirm `/release/evidence-status` and `jarvis release evidence-status` expose
+  the same standard release evidence inventory as structured, redacted status
+  items with `present`, `missing`, or `invalid` state, including JSON-report
+  required-field validation for owner-recorded live-device and plugin-trust
+  evidence.
 - Confirm the Swift Release tab decodes the same `/release/readiness` contract
   and renders blocking gates, recommended commands, implemented proofs, pending
-  features, and proof boundary without enabling release side effects.
+  features, proof boundary, stale cached-readiness state, and structured
+  `/release/evidence-status` inventory without enabling release side effects.
 - Confirm the cross-process CLI E2E still covers command, plugin, audit,
   redacted model-route inspection and restart recovery, memory
   classification summary, create/update/review/delete/restore, scheduler
