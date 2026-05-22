@@ -62,8 +62,9 @@ translated into the same bounded first-party path. Plain text remains
 supported, and this is not installed-plugin orchestration or broad third-party
 tool execution. Local plugin
 installation stores validated manifest metadata disabled by default and captures
-a local manifest/subprocess hash snapshot. Executable local subprocess plugins
-require the snapshot to verify as unchanged plus an explicit
+a local source-tree provenance snapshot, including manifest and subprocess
+entrypoint hashes. Executable local subprocess plugins require the snapshot to
+verify as unchanged plus an explicit
 `subprocess_stdio` grant, or `subprocess_stdio_network` when an action declares
 network access, and still run only through the constrained JSON stdin/stdout
 boundary. They may emit bounded `jarvis_progress` JSON frames on stderr; Jarvis

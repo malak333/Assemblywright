@@ -3727,7 +3727,7 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "installed_plugin_execution",
             "implemented",
-            "Local subprocess plugins require provenance verification plus explicit subprocess_stdio or subprocess_stdio_network grants, run with inherited environment cleared, enforce stdout/stderr byte limits, and are covered by Rust unit and CLI IPC E2E tests.",
+            "Local subprocess plugins require full source-tree provenance verification plus explicit subprocess_stdio or subprocess_stdio_network grants, run with inherited environment cleared, enforce stdout/stderr byte limits, and are covered by Rust unit and CLI IPC E2E tests.",
             "Constrained local subprocess execution only; not a WASM, OS-level, or marketplace sandbox.",
         ),
         feature(
@@ -4350,6 +4350,11 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let source_dir = tempfile::tempdir().unwrap();
         let source_path_buf = source_dir.path().canonicalize().unwrap();
         write_executable_plugin_script(&source_path_buf);
+        std::fs::write(
+            source_path_buf.join("helper-resource.txt"),
+            "original helper",
+        )
+        .unwrap();
         let source_path = source_path_buf.display().to_string();
         let manifest_path = source_path_buf.join("jarvis-plugin.json");
         std::fs::write(
@@ -4436,8 +4441,8 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert_eq!(response.audit_entry.payload["side_effect_executed"], true);
 
         std::fs::write(
-            source_path_buf.join("plugin-runner.py"),
-            "#!/usr/bin/env python3\nprint('{\"path\":\"changed\"}')\n",
+            source_path_buf.join("helper-resource.txt"),
+            "changed helper",
         )
         .unwrap();
         let changed_response = state

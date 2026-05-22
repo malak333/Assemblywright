@@ -440,7 +440,7 @@ execution, route/policy/plugin audit evidence, approval-required persistence and
 grant/deny decisions, scheduler schedule/cancel and persistence, redacted
 diagnostics export, memory classification summary fields,
 memory create/update/review/delete/restore and persistence, plugin
-manifests, installed-plugin provenance verification, permission-grant
+manifests, installed-plugin source-tree provenance verification, permission-grant
 provenance summary fields, operator-pinned publisher-origin verification,
 trusted-key publisher-signature verification,
 network-capable plugin policy review items,
