@@ -15,8 +15,8 @@ use tower_http::trace::TraceLayer;
 use uuid::Uuid;
 
 use crate::storage::{
-    EmergencyPauseState as StoredEmergencyPauseState, NewMemoryItem, NewPendingApproval,
-    PendingApproval, SqliteRepository,
+    EmergencyPauseState as StoredEmergencyPauseState, MemoryClassificationSummary, NewMemoryItem,
+    NewPendingApproval, PendingApproval, SqliteRepository,
 };
 use crate::{
     execute_installed_subprocess_plugin, plugin_permission_scopes, ApprovalDecision,
@@ -439,6 +439,7 @@ impl IpcState {
                 "/model-routes".to_string(),
                 "/model-routes/:id".to_string(),
                 "/memory".to_string(),
+                "/memory/classification".to_string(),
                 "/memory/:id".to_string(),
                 "/permissions/grants".to_string(),
                 "/approvals".to_string(),
@@ -1741,6 +1742,7 @@ pub fn router(state: IpcState) -> Router {
         .route("/model-routes", get(list_model_routes))
         .route("/model-routes/:id", get(get_model_route))
         .route("/memory", get(list_memory_items).post(create_memory_item))
+        .route("/memory/classification", get(memory_classification_summary))
         .route(
             "/memory/:id",
             get(get_memory_item)
@@ -1911,6 +1913,19 @@ async fn list_memory_items(
         .is_some_and(|value| value == "true" || value == "1");
     state
         .using_repository(|repository| repository.list_memory_items(include_deleted))
+        .map(Json)
+        .map_err(error_response)
+}
+
+async fn memory_classification_summary(
+    State(state): State<IpcState>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Result<Json<MemoryClassificationSummary>, (StatusCode, Json<ErrorResponse>)> {
+    let include_deleted = query
+        .get("include_deleted")
+        .is_some_and(|value| value == "true" || value == "1");
+    state
+        .using_repository(|repository| repository.memory_classification_summary(include_deleted))
         .map(Json)
         .map_err(error_response)
 }
@@ -2220,6 +2235,7 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
         endpoint("GET", "/model-routes", true, true),
         endpoint("GET", "/model-routes/:id", true, true),
         endpoint("GET", "/memory", true, false),
+        endpoint("GET", "/memory/classification", true, false),
         endpoint("POST", "/memory", true, false),
         endpoint("GET", "/memory/:id", true, false),
         endpoint("PATCH", "/memory/:id", true, false),
@@ -2997,6 +3013,14 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .await
             .expect("list memory");
         assert_eq!(listed.len(), 1);
+
+        let Json(summary) =
+            memory_classification_summary(State(state.clone()), Query(HashMap::new()))
+                .await
+                .expect("memory classification");
+        assert_eq!(summary.active_count, 1);
+        assert_eq!(summary.unreviewed_active_count, 1);
+        assert_eq!(summary.by_sensitivity[0].label, "workspace");
 
         let Json(updated) = update_memory_item(
             State(state.clone()),

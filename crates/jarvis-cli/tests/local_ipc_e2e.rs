@@ -643,6 +643,17 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     let memory_list = run_cli_json(["memory", "list", "--endpoint", endpoint.as_str()]);
     assert_array_contains(&memory_list, "id", &memory_id);
 
+    let memory_classification =
+        run_cli_json(["memory", "classification", "--endpoint", endpoint.as_str()]);
+    assert_eq!(memory_classification["active_count"], 1);
+    assert_eq!(memory_classification["deleted_count"], 0);
+    assert_array_contains(
+        &memory_classification["by_sensitivity"],
+        "label",
+        "workspace",
+    );
+    assert_array_contains(&memory_classification["by_category"], "label", "e2e");
+
     let scheduled = run_cli_json([
         "scheduler",
         "schedule",

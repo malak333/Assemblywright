@@ -140,11 +140,13 @@ stage or when a PR needs focused evidence for one ownership slice.
   values, raw cancellation reasons, or credentials.
 - Confirm the Swift Memory tab still uses the Rust IPC memory contract for
   create, load, update of mutable fields, review, soft-delete, include-deleted
-  refresh, restore, and filtering, with deterministic Swift package coverage.
+  refresh, restore, classification summary, and filtering, with deterministic
+  Swift package coverage.
 - Confirm the cross-process CLI E2E still covers command, plugin, audit,
   redacted model-route inspection and restart recovery, memory
-  create/update/review/delete/restore, scheduler schedule/get/list/cancel, scheduler
-  run-due success/reschedule, scheduler fail-closed pause on non-accepted due
+  classification summary, create/update/review/delete/restore, scheduler
+  schedule/get/list/cancel, scheduler run-due success/reschedule, scheduler
+  fail-closed pause on non-accepted due
   jobs, diagnostics redaction, persistence restart, and emergency-pause
   blocking/resume behavior. Treat this as the minimum E2E expectation for the
   current Rust/CLI foundation; packaged Mac release smoke is now covered by

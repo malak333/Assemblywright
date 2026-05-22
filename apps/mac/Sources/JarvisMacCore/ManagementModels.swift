@@ -3,6 +3,7 @@ import Foundation
 @MainActor
 public final class MemoryManagerModel: ObservableObject {
     @Published public private(set) var items: [JarvisMemoryItem]
+    @Published public private(set) var classification: JarvisMemoryClassificationSummary?
     @Published public private(set) var selectedItem: JarvisMemoryItem?
     @Published public private(set) var includeDeleted: Bool
     @Published public private(set) var isLoading: Bool
@@ -13,6 +14,7 @@ public final class MemoryManagerModel: ObservableObject {
     public init(client: any JarvisCoreClient = JarvisIPCClient()) {
         self.client = client
         self.items = []
+        self.classification = nil
         self.selectedItem = nil
         self.includeDeleted = false
         self.isLoading = false
@@ -22,7 +24,10 @@ public final class MemoryManagerModel: ObservableObject {
     public func refresh(includeDeleted: Bool = false) async {
         self.includeDeleted = includeDeleted
         await run {
-            self.items = try await self.client.listMemoryItems(includeDeleted: includeDeleted)
+            async let items = self.client.listMemoryItems(includeDeleted: includeDeleted)
+            async let classification = self.client.memoryClassification(includeDeleted: includeDeleted)
+            self.items = try await items
+            self.classification = try await classification
             if let selectedItem = self.selectedItem,
                let refreshed = self.items.first(where: { $0.id == selectedItem.id }) {
                 self.selectedItem = refreshed
@@ -45,6 +50,7 @@ public final class MemoryManagerModel: ObservableObject {
             )
             self.items.insert(item, at: 0)
             self.selectedItem = item
+            self.classification = try await self.client.memoryClassification(includeDeleted: self.includeDeleted)
         }
     }
 
@@ -103,6 +109,7 @@ public final class MemoryManagerModel: ObservableObject {
             } else if self.selectedItem?.id == id {
                 self.selectedItem = nil
             }
+            self.classification = try await self.client.memoryClassification(includeDeleted: self.includeDeleted)
         }
     }
 

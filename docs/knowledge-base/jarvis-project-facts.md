@@ -95,6 +95,12 @@ These notes capture durable facts for future agents working on this repository.
   the current IPC contract; the Swift edit path updates value, provenance, and
   sensitivity. Restore clears `deleted_at` through `/memory/:id/restore` and
   stays subject to the active `(category, key)` uniqueness guard.
+- Repository-backed IPC exposes `/memory/classification`, and the CLI exposes
+  `jarvis memory classification`, as a read-only memory corpus summary. It
+  groups memory by sensitivity and category, reports active/deleted/reviewed
+  and unreviewed-active counts, and never returns memory values beyond the
+  existing item list/get endpoints. The Swift Memory tab renders this summary
+  above the item list.
 - The Swift shell has a Keychain-backed launch credential boundary for
   app-supervised model provider secrets. `JarvisCoreCredentialProvider` reads
   known credentials such as the OpenAI API key from Keychain and injects only

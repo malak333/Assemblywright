@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -47,6 +48,29 @@ pub struct NewMemoryItem {
     pub value: String,
     pub provenance: String,
     pub sensitivity: Sensitivity,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MemoryClassificationSummary {
+    pub generated_at: DateTime<Utc>,
+    pub include_deleted: bool,
+    pub total_count: usize,
+    pub active_count: usize,
+    pub deleted_count: usize,
+    pub reviewed_count: usize,
+    pub unreviewed_active_count: usize,
+    pub sensitive_active_count: usize,
+    pub by_sensitivity: Vec<MemoryClassificationCount>,
+    pub by_category: Vec<MemoryClassificationCount>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MemoryClassificationCount {
+    pub label: String,
+    pub count: usize,
+    pub active_count: usize,
+    pub deleted_count: usize,
+    pub unreviewed_active_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -469,6 +493,54 @@ impl SqliteRepository {
             .query_map([], memory_item_from_row)
             .map_err(storage_error)?;
         collect_rows(rows)
+    }
+
+    pub fn memory_classification_summary(
+        &self,
+        include_deleted: bool,
+    ) -> JarvisResult<MemoryClassificationSummary> {
+        let items = self.list_memory_items(include_deleted)?;
+        let total_count = items.len();
+        let active_count = items
+            .iter()
+            .filter(|item| item.deleted_at.is_none())
+            .count();
+        let deleted_count = total_count - active_count;
+        let reviewed_count = items
+            .iter()
+            .filter(|item| item.reviewed_at.is_some())
+            .count();
+        let unreviewed_active_count = items
+            .iter()
+            .filter(|item| item.deleted_at.is_none() && item.reviewed_at.is_none())
+            .count();
+        let sensitive_active_count = items
+            .iter()
+            .filter(|item| {
+                item.deleted_at.is_none()
+                    && matches!(
+                        item.sensitivity,
+                        Sensitivity::Private
+                            | Sensitivity::CredentialAdjacent
+                            | Sensitivity::Restricted
+                    )
+            })
+            .count();
+
+        Ok(MemoryClassificationSummary {
+            generated_at: Utc::now(),
+            include_deleted,
+            total_count,
+            active_count,
+            deleted_count,
+            reviewed_count,
+            unreviewed_active_count,
+            sensitive_active_count,
+            by_sensitivity: classify_memory_items(&items, |item| {
+                sensitivity_to_str(item.sensitivity).to_string()
+            }),
+            by_category: classify_memory_items(&items, |item| item.category.clone()),
+        })
     }
 
     pub fn update_memory_item(
@@ -1766,6 +1838,38 @@ fn memory_item_from_row(row: &Row<'_>) -> rusqlite::Result<MemoryItem> {
     })
 }
 
+fn classify_memory_items(
+    items: &[MemoryItem],
+    label_for: impl Fn(&MemoryItem) -> String,
+) -> Vec<MemoryClassificationCount> {
+    let mut counts: BTreeMap<String, MemoryClassificationCount> = BTreeMap::new();
+
+    for item in items {
+        let label = label_for(item);
+        let entry = counts
+            .entry(label.clone())
+            .or_insert_with(|| MemoryClassificationCount {
+                label,
+                count: 0,
+                active_count: 0,
+                deleted_count: 0,
+                unreviewed_active_count: 0,
+            });
+        entry.count += 1;
+
+        if item.deleted_at.is_some() {
+            entry.deleted_count += 1;
+        } else {
+            entry.active_count += 1;
+            if item.reviewed_at.is_none() {
+                entry.unreviewed_active_count += 1;
+            }
+        }
+    }
+
+    counts.into_values().collect()
+}
+
 fn scheduler_job_from_row(row: &Row<'_>) -> rusqlite::Result<SchedulerJob> {
     Ok(SchedulerJob {
         id: parse_uuid(&row.get::<_, String>(0)?)?,
@@ -2323,10 +2427,17 @@ mod tests {
         assert!(deleted.deleted_at.is_some());
         assert!(repo.list_memory_items(false).unwrap().is_empty());
         assert_eq!(repo.list_memory_items(true).unwrap().len(), 1);
+        let deleted_summary = repo.memory_classification_summary(true).unwrap();
+        assert_eq!(deleted_summary.total_count, 1);
+        assert_eq!(deleted_summary.deleted_count, 1);
+        assert_eq!(deleted_summary.by_category[0].label, "preference");
 
         let restored = repo.restore_memory_item(memory.id).unwrap();
         assert!(restored.deleted_at.is_none());
         assert_eq!(repo.list_memory_items(false).unwrap().len(), 1);
+        let active_summary = repo.memory_classification_summary(false).unwrap();
+        assert_eq!(active_summary.active_count, 1);
+        assert_eq!(active_summary.unreviewed_active_count, 0);
     }
 
     #[test]

@@ -218,6 +218,13 @@ enum MemoryCommand {
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
+    /// Summarize memory items by sensitivity and category.
+    Classification {
+        #[arg(long)]
+        include_deleted: bool,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
     /// Create a persisted memory item.
     Create {
         category: String,
@@ -550,6 +557,17 @@ async fn main() -> anyhow::Result<()> {
                     "{}",
                     request(&endpoint, "GET", &format!("/memory/{id}"), None)?
                 );
+            }
+            MemoryCommand::Classification {
+                include_deleted,
+                endpoint,
+            } => {
+                let path = if include_deleted {
+                    "/memory/classification?include_deleted=true"
+                } else {
+                    "/memory/classification"
+                };
+                println!("{}", request(&endpoint, "GET", path, None)?);
             }
             MemoryCommand::Create {
                 category,
