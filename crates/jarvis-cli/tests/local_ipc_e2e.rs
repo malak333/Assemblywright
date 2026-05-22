@@ -161,6 +161,56 @@ fn release_readiness_cli_uses_explicit_live_voice_evidence() {
 }
 
 #[test]
+#[cfg(unix)]
+fn release_readiness_cli_computes_production_ready_only_from_external_complete_evidence_status() {
+    let temp_dir = tempfile::tempdir().expect("temp complete release evidence");
+    let fixture = write_complete_release_evidence_fixture(temp_dir.path());
+    let endpoint = format!("http://{}", unused_loopback_addr());
+
+    let evidence_env = fixture.env_refs();
+    let evidence_status = run_cli_json_with_env(
+        [
+            "release",
+            "evidence-status",
+            "--endpoint",
+            endpoint.as_str(),
+        ],
+        &evidence_env,
+    );
+    assert_eq!(evidence_status["complete"], true);
+    assert_eq!(evidence_status["missing_count"], 0);
+    assert_eq!(evidence_status["invalid_count"], 0);
+    assert_all_evidence_items_present(&evidence_status);
+
+    let conservative_readiness = run_cli_json_with_env(
+        ["release", "readiness", "--endpoint", endpoint.as_str()],
+        &evidence_env,
+    );
+    assert_eq!(conservative_readiness["production_ready"], false);
+
+    let external_env = fixture.env_refs_with_external_mode();
+    let external_readiness = run_cli_json_with_env(
+        ["release", "readiness", "--endpoint", endpoint.as_str()],
+        &external_env,
+    );
+    assert_eq!(external_readiness["production_ready"], true);
+    assert_eq!(external_readiness["pending_feature_count"], 0);
+    assert!(external_readiness["pending_features"]
+        .as_array()
+        .expect("pending features")
+        .is_empty());
+    assert!(external_readiness["blocking_manual_gates"]
+        .as_array()
+        .expect("blocking gates")
+        .is_empty());
+    assert_array_contains(
+        &external_readiness["implemented_features"],
+        "key",
+        "live_voice_loop",
+    );
+}
+
+#[test]
 fn release_readiness_rejects_semantically_invalid_live_voice_evidence() {
     let endpoint = format!("http://{}", unused_loopback_addr());
 
@@ -3810,6 +3860,82 @@ fn write_json_report(path: &Path, report: Value) {
         serde_json::to_string_pretty(&report).expect("serialize JSON report"),
     )
     .expect("write JSON report");
+}
+
+#[cfg(unix)]
+struct CompleteReleaseEvidenceFixture {
+    dist_dir: String,
+    live_report_path: String,
+    plugin_report_path: String,
+    bundle_path: String,
+}
+
+#[cfg(unix)]
+impl CompleteReleaseEvidenceFixture {
+    fn env_refs(&self) -> Vec<(&str, &str)> {
+        vec![
+            ("JARVIS_EVIDENCE_DIST_DIR", self.dist_dir.as_str()),
+            (
+                "JARVIS_EVIDENCE_LIVE_QA_REPORT",
+                self.live_report_path.as_str(),
+            ),
+            (
+                "JARVIS_EVIDENCE_PLUGIN_QA_REPORT",
+                self.plugin_report_path.as_str(),
+            ),
+            ("JARVIS_EVIDENCE_OUTPUT_PATH", self.bundle_path.as_str()),
+        ]
+    }
+
+    fn env_refs_with_external_mode(&self) -> Vec<(&str, &str)> {
+        let mut env = self.env_refs();
+        env.push(("JARVIS_RELEASE_READINESS_EVIDENCE_MODE", "external"));
+        env
+    }
+}
+
+#[cfg(unix)]
+fn write_complete_release_evidence_fixture(root: &Path) -> CompleteReleaseEvidenceFixture {
+    let dist_dir = write_placeholder_distribution(root);
+    let live_report_path = root.join("release-live-device-qa-report.json");
+    let plugin_report_path = root.join("release-plugin-trust-qa-report.json");
+    let bundle_path = root.join("release-evidence-bundle.json");
+
+    write_valid_live_device_qa_report(&live_report_path);
+    write_json_report(&plugin_report_path, valid_plugin_trust_qa_report());
+    write_json_report(&bundle_path, valid_release_evidence_bundle());
+
+    CompleteReleaseEvidenceFixture {
+        dist_dir: dist_dir.to_str().expect("dist dir utf8").to_string(),
+        live_report_path: live_report_path
+            .to_str()
+            .expect("live report path utf8")
+            .to_string(),
+        plugin_report_path: plugin_report_path
+            .to_str()
+            .expect("plugin report path utf8")
+            .to_string(),
+        bundle_path: bundle_path.to_str().expect("bundle path utf8").to_string(),
+    }
+}
+
+fn assert_all_evidence_items_present(evidence_status: &Value) {
+    for key in [
+        "signed_app_bundle",
+        "app_executable",
+        "bundled_core_executable",
+        "signed_app_zip",
+        "signed_installer_package",
+        "live_device_qa_report",
+        "plugin_trust_qa_report",
+        "release_evidence_bundle",
+    ] {
+        assert!(evidence_status["items"]
+            .as_array()
+            .expect("evidence items")
+            .iter()
+            .any(|item| item["key"] == key && item["status"] == "present"));
+    }
 }
 
 #[cfg(unix)]

@@ -827,12 +827,17 @@ impl IpcState {
             .filter(|feature| feature.status != "implemented")
             .map(ReleaseReadinessFeature::from)
             .collect::<Vec<_>>();
+        let production_ready = release_production_ready(
+            &evidence_status,
+            evidence_mode_enabled,
+            pending_features.is_empty(),
+        );
 
         ReleaseReadinessResponse {
             generated_at: Utc::now(),
-            production_ready: false,
+            production_ready,
             readiness_scope:
-                "local Rust/CLI foundation and Swift shell evidence only; full production distribution still has external manual gates"
+                "local Rust/CLI foundation and Swift shell evidence plus explicitly enabled external release evidence status"
                     .to_string(),
             verified_feature_count: implemented_features.len(),
             pending_feature_count: pending_features.len(),
@@ -3901,6 +3906,34 @@ fn release_evidence_item_present(status: &ReleaseEvidenceStatusResponse, key: &s
         .any(|item| item.key == key && item.status == ReleaseEvidenceItemStatus::Present)
 }
 
+fn release_production_ready(
+    evidence_status: &ReleaseEvidenceStatusResponse,
+    evidence_mode_enabled: bool,
+    no_pending_features: bool,
+) -> bool {
+    evidence_mode_enabled
+        && no_pending_features
+        && release_required_evidence_complete(evidence_status)
+}
+
+fn release_required_evidence_complete(evidence_status: &ReleaseEvidenceStatusResponse) -> bool {
+    const REQUIRED_RELEASE_EVIDENCE_KEYS: &[&str] = &[
+        "signed_app_bundle",
+        "app_executable",
+        "bundled_core_executable",
+        "signed_app_zip",
+        "signed_installer_package",
+        "live_device_qa_report",
+        "plugin_trust_qa_report",
+        "release_evidence_bundle",
+    ];
+
+    evidence_status.complete
+        && REQUIRED_RELEASE_EVIDENCE_KEYS
+            .iter()
+            .all(|key| release_evidence_item_present(evidence_status, key))
+}
+
 fn release_evidence_status_from_env() -> ReleaseEvidenceStatusResponse {
     let version = std::env::var("JARVIS_EVIDENCE_VERSION")
         .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string());
@@ -4390,6 +4423,10 @@ fn release_blocking_manual_gates(
     evidence_status: &ReleaseEvidenceStatusResponse,
     evidence_mode_enabled: bool,
 ) -> Vec<String> {
+    if evidence_mode_enabled && release_required_evidence_complete(evidence_status) {
+        return Vec::new();
+    }
+
     let live_device_qa_valid =
         release_evidence_item_present(evidence_status, "live_device_qa_report")
             && evidence_mode_enabled;
@@ -5024,6 +5061,31 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
     }
 
     #[test]
+    fn release_readiness_production_ready_requires_explicit_complete_evidence() {
+        let complete_evidence = release_complete_evidence_status_fixture();
+
+        assert!(!release_production_ready(&complete_evidence, false, true));
+        assert!(!release_production_ready(&complete_evidence, true, false));
+        assert!(release_production_ready(&complete_evidence, true, true));
+        assert!(release_blocking_manual_gates(&complete_evidence, true).is_empty());
+
+        let missing_evidence = release_evidence_status_fixture(ReleaseEvidenceItemStatus::Present);
+        assert!(!release_production_ready(&missing_evidence, true, true));
+        assert!(release_blocking_manual_gates(&missing_evidence, true)
+            .iter()
+            .any(|gate| gate.contains("final release evidence bundle")));
+
+        let invalid_evidence = release_complete_evidence_status_fixture_with_item_status(
+            "plugin_trust_qa_report",
+            ReleaseEvidenceItemStatus::Invalid,
+        );
+        assert!(!release_production_ready(&invalid_evidence, true, true));
+        assert!(release_blocking_manual_gates(&invalid_evidence, true)
+            .iter()
+            .any(|gate| gate.contains("marketplace trust")));
+    }
+
+    #[test]
     fn release_evidence_status_reports_missing_and_invalid_evidence_without_manual_claims() {
         let missing_path = PathBuf::from("target/jarvis-test-missing-release-report.json");
         let invalid_path = tempfile::NamedTempFile::new().expect("temp invalid report");
@@ -5473,6 +5535,67 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             invalid_count,
             items,
             proof_boundary: "test fixture".to_string(),
+        }
+    }
+
+    fn release_complete_evidence_status_fixture() -> ReleaseEvidenceStatusResponse {
+        release_complete_evidence_status_fixture_with_item_status(
+            "signed_app_bundle",
+            ReleaseEvidenceItemStatus::Present,
+        )
+    }
+
+    fn release_complete_evidence_status_fixture_with_item_status(
+        target_key: &str,
+        target_status: ReleaseEvidenceItemStatus,
+    ) -> ReleaseEvidenceStatusResponse {
+        let items = [
+            ("signed_app_bundle", ReleaseEvidenceKind::Directory),
+            ("app_executable", ReleaseEvidenceKind::Executable),
+            ("bundled_core_executable", ReleaseEvidenceKind::Executable),
+            ("signed_app_zip", ReleaseEvidenceKind::File),
+            ("signed_installer_package", ReleaseEvidenceKind::File),
+            ("live_device_qa_report", ReleaseEvidenceKind::JsonReport),
+            ("plugin_trust_qa_report", ReleaseEvidenceKind::JsonReport),
+            ("release_evidence_bundle", ReleaseEvidenceKind::JsonReport),
+        ]
+        .into_iter()
+        .map(|(key, kind)| ReleaseEvidenceStatusItem {
+            key: key.to_string(),
+            label: key.to_string(),
+            path: format!("target/release-fixture/{key}"),
+            kind,
+            status: if key == target_key {
+                target_status
+            } else {
+                ReleaseEvidenceItemStatus::Present
+            },
+            required_for_production: true,
+            manual_gate: true,
+            detail: "test fixture".to_string(),
+        })
+        .collect::<Vec<_>>();
+        let satisfied_count = items
+            .iter()
+            .filter(|item| item.status == ReleaseEvidenceItemStatus::Present)
+            .count();
+        let missing_count = items
+            .iter()
+            .filter(|item| item.status == ReleaseEvidenceItemStatus::Missing)
+            .count();
+        let invalid_count = items
+            .iter()
+            .filter(|item| item.status == ReleaseEvidenceItemStatus::Invalid)
+            .count();
+
+        ReleaseEvidenceStatusResponse {
+            generated_at: Utc::now(),
+            complete: missing_count == 0 && invalid_count == 0,
+            satisfied_count,
+            missing_count,
+            invalid_count,
+            items,
+            proof_boundary: "complete evidence fixture".to_string(),
         }
     }
 

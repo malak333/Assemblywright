@@ -42,11 +42,13 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   when no IPC server is running, while preserving the same production blockers.
   Treat default readiness as conservative inventory only. After owner-recorded
   evidence exists, rerun readiness with
-  `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external` and confirm only
-  report-backed blockers are cleared. Treat `production_ready: false` as
-  authoritative until the signed artifacts, notarization/stapling,
-  live-device QA report, plugin-trust report, and final evidence bundle all
-  validate.
+  `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external` and confirm
+  `production_ready: true` only appears when every required
+  `/release/evidence-status` item is present, no missing or invalid evidence
+  remains, and evidence-cleared features leave no pending readiness features.
+  Treat this as validated owner-recorded release evidence, not proof that
+  Jarvis performed signing, notarization, stapling, installation,
+  live-device QA, marketplace review, malware scanning, or OS sandboxing.
 - Confirm `jarvis release evidence-status` or `/release/evidence-status` reports
   the standard signed artifact, live-device QA report, plugin-trust QA report,
   and final evidence bundle inventory as structured JSON. Treat it as
