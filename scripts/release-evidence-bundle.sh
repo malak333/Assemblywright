@@ -143,6 +143,62 @@ if cursor is not True:
 PY
 }
 
+require_json_bool_false() {
+  local label="$1"
+  local path="$2"
+  local dotted_key="$3"
+  require_file "$label" "$path"
+  python3 - "$path" "$dotted_key" "$label" <<'PY'
+import json
+import sys
+
+path, dotted_key, label = sys.argv[1:4]
+with open(path, encoding="utf-8") as handle:
+    data = json.load(handle)
+
+cursor = data
+for segment in dotted_key.split("."):
+    if not isinstance(cursor, dict) or segment not in cursor:
+        raise SystemExit(f"{label} is missing required evidence flag: {dotted_key}")
+    cursor = cursor[segment]
+
+if cursor is not False:
+    raise SystemExit(f"{label} required evidence flag is not false: {dotted_key}")
+PY
+}
+
+require_json_number_equals() {
+  local label="$1"
+  local path="$2"
+  local dotted_key="$3"
+  local expected="$4"
+  require_file "$label" "$path"
+  python3 - "$path" "$dotted_key" "$expected" "$label" <<'PY'
+import json
+import sys
+
+path, dotted_key, expected, label = sys.argv[1:5]
+with open(path, encoding="utf-8") as handle:
+    data = json.load(handle)
+
+cursor = data
+for segment in dotted_key.split("."):
+    if not isinstance(cursor, dict) or segment not in cursor:
+        raise SystemExit(f"{label} is missing required evidence field: {dotted_key}")
+    cursor = cursor[segment]
+
+try:
+    expected_number = int(expected)
+except ValueError as exc:
+    raise SystemExit(f"invalid expected number: {expected}") from exc
+
+if cursor != expected_number:
+    raise SystemExit(
+        f"{label} evidence field {dotted_key} mismatch: expected {expected_number!r}, got {cursor!r}"
+    )
+PY
+}
+
 require_json_string_equals() {
   local label="$1"
   local path="$2"
@@ -354,6 +410,9 @@ if [[ "$SELF_TEST" == true ]]; then
   touch "$tmp_dir/dist/Jarvis-0.1.4.pkg"
   cat >"$tmp_dir/live.json" <<'JSON'
 {
+  "schema_version": 1,
+  "evidence_type": "owner_recorded_live_device_qa",
+  "self_test_fixture": false,
   "validation_flags": {
     "clean_profile": true,
     "finder_launch": true,
@@ -382,6 +441,13 @@ if [[ "$SELF_TEST" == true ]]; then
     "speech_permission_evidence_note": "Observed Speech permission prompt in the fake fixture.",
     "transcript_handoff_evidence_note": "Observed transcript handoff reach the command path in the fake fixture.",
     "audio_output_evidence_note": "Observed speech output playback in the fake fixture."
+  },
+  "voice_command_observation": {
+    "test_phrase": "Jarvis status check.",
+    "observed_transcript": "Jarvis status check.",
+    "observed_command_text": "status check",
+    "command_result_evidence_id": "self-test-task-id",
+    "audio_output_device_label": "self-test audio output"
   },
   "app_bundle": {
     "bundle_identifier": "com.nobiletechnology.jarvis",
@@ -611,8 +677,14 @@ done
 for flag in microphone_permission_prompt speech_permission_prompt spoken_transcript_handoff same_command_path speech_output_playback; do
   require_json_bool_true "live-device QA report" "$LIVE_QA_REPORT" "voice_loop.$flag"
 done
+require_json_number_equals "live-device QA report" "$LIVE_QA_REPORT" "schema_version" "1"
+require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "evidence_type" "owner_recorded_live_device_qa"
+require_json_bool_false "live-device QA report" "$LIVE_QA_REPORT" "self_test_fixture"
 for field in owner_name device_label profile_label voice_check_started_at voice_check_completed_at microphone_evidence_note speech_permission_evidence_note transcript_handoff_evidence_note audio_output_evidence_note; do
   require_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.$field"
+done
+for field in test_phrase observed_transcript observed_command_text command_result_evidence_id audio_output_device_label; do
+  require_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "voice_command_observation.$field"
 done
 require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.bundle_identifier" "$EXPECTED_BUNDLE_ID"
 require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.short_version" "$EXPECTED_VERSION"

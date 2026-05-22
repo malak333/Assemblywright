@@ -1406,7 +1406,7 @@ struct JarvisMacCoreTests {
         #expect(model.transcriptDraft.isEmpty)
         #expect(model.lastError?.contains("unavailable") == true)
         model.resetTextOnly()
-        #expect(model.statusText.contains("Speech recognition is not implemented"))
+        #expect(model.statusText.contains("Voice capture is idle"))
     }
 
     @MainActor
@@ -1601,6 +1601,37 @@ struct JarvisMacCoreTests {
         #expect(submittedHandoffs.map(\.dryRun) == [true])
         #expect(voice.transcriptDraft.isEmpty)
         #expect(voice.lastHandoff == submittedHandoffs.first)
+    }
+
+    @MainActor
+    @Test("Voice adapter auto-submit uses the console command path")
+    func voiceAdapterAutoSubmitFinalTranscriptUsesConsoleCommandPath() async throws {
+        let adapter = FakeVoiceAdapter()
+        let voice = VoiceStateModel()
+        let client = FakeCoreClient()
+        let console = CommandConsoleModel(client: client)
+        let model = VoiceAdapterStateModel(
+            adapter: adapter,
+            voiceState: voice,
+            submitFinalTranscript: { handoff in
+                await console.submit(input: handoff.text, dryRun: handoff.dryRun)
+            }
+        )
+
+        model.setFinalTranscriptAutoSubmitEnabled(true)
+        await model.startCapture()
+        adapter.emitFinal("  status check  ")
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        #expect(client.submittedCommands == [
+            JarvisCommandRequest(input: "status check", dryRun: true)
+        ])
+        #expect(console.transcript.map(\.text) == [
+            "status check",
+            "local response: status check"
+        ])
+        #expect(voice.lastHandoff?.source == "voice-final-transcript")
+        #expect(voice.transcriptDraft.isEmpty)
     }
 
     @MainActor

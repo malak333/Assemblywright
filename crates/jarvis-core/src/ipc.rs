@@ -3883,6 +3883,8 @@ fn release_evidence_status_from_env() -> ReleaseEvidenceStatusResponse {
             "Live-device QA report",
             live_qa_report,
             &[
+                "schema_version",
+                "evidence_type",
                 "validation_flags.clean_profile",
                 "validation_flags.finder_launch",
                 "validation_flags.microphone",
@@ -3911,6 +3913,11 @@ fn release_evidence_status_from_env() -> ReleaseEvidenceStatusResponse {
                 "owner_recorded_live_voice_evidence.speech_permission_evidence_note",
                 "owner_recorded_live_voice_evidence.transcript_handoff_evidence_note",
                 "owner_recorded_live_voice_evidence.audio_output_evidence_note",
+                "voice_command_observation.test_phrase",
+                "voice_command_observation.observed_transcript",
+                "voice_command_observation.observed_command_text",
+                "voice_command_observation.command_result_evidence_id",
+                "voice_command_observation.audio_output_device_label",
             ],
         ),
         release_json_report_item(
@@ -4019,7 +4026,7 @@ fn release_json_report_item(
     path: PathBuf,
     required_fields: &[&str],
 ) -> ReleaseEvidenceStatusItem {
-    let (status, detail) = inspect_release_json_report(&path, required_fields);
+    let (status, detail) = inspect_release_json_report(key, &path, required_fields);
     ReleaseEvidenceStatusItem {
         key: key.to_string(),
         label: label.to_string(),
@@ -4071,6 +4078,7 @@ fn inspect_release_path(
 }
 
 fn inspect_release_json_report(
+    key: &str,
     path: &FsPath,
     required_fields: &[&str],
 ) -> (ReleaseEvidenceItemStatus, String) {
@@ -4098,6 +4106,36 @@ fn inspect_release_json_report(
         .filter(|field| !json_field_is_present(&value, field))
         .collect::<Vec<_>>();
     if missing.is_empty() {
+        if key == "live_device_qa_report" {
+            if value
+                .get("schema_version")
+                .and_then(|schema| schema.as_i64())
+                != Some(1)
+            {
+                return (
+                    ReleaseEvidenceItemStatus::Invalid,
+                    "JSON report schema_version must be 1".to_string(),
+                );
+            }
+            if value.get("evidence_type").and_then(|kind| kind.as_str())
+                != Some("owner_recorded_live_device_qa")
+            {
+                return (
+                    ReleaseEvidenceItemStatus::Invalid,
+                    "JSON report evidence_type must be owner_recorded_live_device_qa".to_string(),
+                );
+            }
+            if value
+                .get("self_test_fixture")
+                .and_then(|fixture| fixture.as_bool())
+                .unwrap_or(true)
+            {
+                return (
+                    ReleaseEvidenceItemStatus::Invalid,
+                    "JSON report must not be marked as a self-test fixture".to_string(),
+                );
+            }
+        }
         (
             ReleaseEvidenceItemStatus::Present,
             "JSON report exists and required fields are present".to_string(),
@@ -4179,7 +4217,9 @@ fn release_verification_commands() -> Vec<String> {
         "./scripts/packaged-app-release-smoke.sh".to_string(),
         "./scripts/package-distribution.sh --unsigned-launch-check".to_string(),
         "./scripts/release-live-device-qa.sh --check".to_string(),
-        "JARVIS_QA_CLEAN_PROFILE_VALIDATED=true JARVIS_QA_FINDER_LAUNCH_VALIDATED=true JARVIS_QA_MICROPHONE_VALIDATED=true JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true JARVIS_QA_NOTIFICATION_VALIDATED=true JARVIS_QA_RESTART_VALIDATED=true JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true JARVIS_QA_OWNER_NAME='Release Operator' JARVIS_QA_DEVICE_LABEL='Clean-profile release Mac' JARVIS_QA_PROFILE_LABEL='Clean macOS QA profile' JARVIS_QA_VOICE_CHECK_STARTED_AT='2026-05-22T16:00:00Z' JARVIS_QA_VOICE_CHECK_COMPLETED_AT='2026-05-22T16:05:00Z' JARVIS_QA_MICROPHONE_EVIDENCE_NOTE='Microphone prompt and capture observed' JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE='Speech prompt and recognition observed' JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE='Spoken transcript reached the command path' JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE='Speech output playback observed' ./scripts/release-live-device-qa.sh --assert-complete".to_string(),
+        "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env".to_string(),
+        "set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete".to_string(),
+        "JARVIS_QA_CLEAN_PROFILE_VALIDATED=true JARVIS_QA_FINDER_LAUNCH_VALIDATED=true JARVIS_QA_MICROPHONE_VALIDATED=true JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true JARVIS_QA_NOTIFICATION_VALIDATED=true JARVIS_QA_RESTART_VALIDATED=true JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true JARVIS_QA_OWNER_NAME='Release Operator' JARVIS_QA_DEVICE_LABEL='Clean-profile release Mac' JARVIS_QA_PROFILE_LABEL='Clean macOS QA profile' JARVIS_QA_VOICE_CHECK_STARTED_AT='2026-05-22T16:00:00Z' JARVIS_QA_VOICE_CHECK_COMPLETED_AT='2026-05-22T16:05:00Z' JARVIS_QA_MICROPHONE_EVIDENCE_NOTE='Microphone prompt and capture observed' JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE='Speech prompt and recognition observed' JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE='Spoken transcript reached the command path' JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE='Speech output playback observed' JARVIS_QA_VOICE_TEST_PHRASE='Jarvis status check' JARVIS_QA_OBSERVED_TRANSCRIPT='Jarvis status check' JARVIS_QA_OBSERVED_COMMAND_TEXT='status check' JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task or audit id from the live command' JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL='Built-in speakers' ./scripts/release-live-device-qa.sh --assert-complete".to_string(),
         "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness".to_string(),
         "./scripts/release-plugin-trust-qa.sh --check".to_string(),
         "JARVIS_PLUGIN_QA_MARKETPLACE_REVIEW_VALIDATED=true JARVIS_PLUGIN_QA_MALWARE_SCAN_VALIDATED=true JARVIS_PLUGIN_QA_OS_SANDBOX_VALIDATED=true JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED=true JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_POLICY_VALIDATED=true JARVIS_PLUGIN_QA_MANUAL_TRUST_REVIEW_VALIDATED=true JARVIS_PLUGIN_QA_OWNER_NAME='Release Operator' JARVIS_PLUGIN_QA_REVIEW_STARTED_AT='2026-05-22T16:10:00Z' JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT='2026-05-22T16:20:00Z' JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE='Marketplace review evidence archived' JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE='Malware scan evidence archived' JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE='OS sandbox validation evidence archived' JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE='Host-level egress validation evidence archived' JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE='Signed publisher policy evidence archived' JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE='Manual plugin trust review evidence archived' ./scripts/release-plugin-trust-qa.sh --assert-complete".to_string(),
@@ -4676,10 +4716,16 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert!(readiness
             .recommended_verification_commands
             .iter()
+            .any(|command| command
+                == "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env"));
+        assert!(readiness
+            .recommended_verification_commands
+            .iter()
             .any(
                 |command| command.contains("JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true")
                     && command.contains("JARVIS_QA_OWNER_NAME=")
                     && command.contains("JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE=")
+                    && command.contains("JARVIS_QA_OBSERVED_COMMAND_TEXT=")
                     && command.contains("./scripts/release-live-device-qa.sh --assert-complete")
             ));
         assert!(readiness
@@ -4777,10 +4823,16 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let invalid_path = tempfile::NamedTempFile::new().expect("temp invalid report");
         std::fs::write(invalid_path.path(), "{not-json").expect("write invalid json");
 
-        let (missing_status, missing_detail) =
-            inspect_release_json_report(&missing_path, &["validation_flags.clean_profile"]);
-        let (invalid_status, invalid_detail) =
-            inspect_release_json_report(invalid_path.path(), &["validation_flags.clean_profile"]);
+        let (missing_status, missing_detail) = inspect_release_json_report(
+            "generic_report",
+            &missing_path,
+            &["validation_flags.clean_profile"],
+        );
+        let (invalid_status, invalid_detail) = inspect_release_json_report(
+            "generic_report",
+            invalid_path.path(),
+            &["validation_flags.clean_profile"],
+        );
 
         assert_eq!(missing_status, ReleaseEvidenceItemStatus::Missing);
         assert!(missing_detail.contains("missing"));
@@ -4797,6 +4849,109 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 && item.required_for_production
                 && item.manual_gate
         }));
+    }
+
+    #[test]
+    fn live_device_qa_report_rejects_self_test_fixture_identity() {
+        let report_path = tempfile::NamedTempFile::new().expect("temp live QA report");
+        std::fs::write(
+            report_path.path(),
+            serde_json::to_string_pretty(&json!({
+                "schema_version": 1,
+                "evidence_type": "owner_recorded_live_device_qa",
+                "self_test_fixture": true,
+                "validation_flags": {
+                    "clean_profile": true,
+                    "finder_launch": true,
+                    "microphone": true,
+                    "speech_permission": true,
+                    "transcript_handoff": true,
+                    "audio_output": true,
+                    "notification": true,
+                    "restart": true,
+                    "manual_release_qa": true
+                },
+                "voice_loop": {
+                    "microphone_permission_prompt": true,
+                    "speech_permission_prompt": true,
+                    "spoken_transcript_handoff": true,
+                    "same_command_path": true,
+                    "speech_output_playback": true
+                },
+                "app_bundle": {
+                    "bundle_identifier": "com.nobiletechnology.jarvis",
+                    "short_version": "0.1.4",
+                    "build_version": "0.1.4",
+                    "microphone_usage_description": "fixture",
+                    "speech_recognition_usage_description": "fixture"
+                },
+                "owner_recorded_live_voice_evidence": {
+                    "owner_name": "Release Operator",
+                    "device_label": "Clean-profile release Mac",
+                    "profile_label": "Clean macOS QA profile",
+                    "voice_check_started_at": "2026-05-22T16:00:00Z",
+                    "voice_check_completed_at": "2026-05-22T16:05:00Z",
+                    "microphone_evidence_note": "Microphone prompt observed.",
+                    "speech_permission_evidence_note": "Speech prompt observed.",
+                    "transcript_handoff_evidence_note": "Transcript handoff observed.",
+                    "audio_output_evidence_note": "Audio output observed."
+                },
+                "voice_command_observation": {
+                    "test_phrase": "Jarvis status check.",
+                    "observed_transcript": "Jarvis status check.",
+                    "observed_command_text": "status check",
+                    "command_result_evidence_id": "task:fixture",
+                    "audio_output_device_label": "Built-in speakers"
+                }
+            }))
+            .expect("serialize live QA fixture"),
+        )
+        .expect("write live QA fixture");
+
+        let (status, detail) = inspect_release_json_report(
+            "live_device_qa_report",
+            report_path.path(),
+            &[
+                "schema_version",
+                "evidence_type",
+                "validation_flags.clean_profile",
+                "validation_flags.finder_launch",
+                "validation_flags.microphone",
+                "validation_flags.speech_permission",
+                "validation_flags.transcript_handoff",
+                "validation_flags.audio_output",
+                "validation_flags.notification",
+                "validation_flags.restart",
+                "validation_flags.manual_release_qa",
+                "voice_loop.microphone_permission_prompt",
+                "voice_loop.speech_permission_prompt",
+                "voice_loop.spoken_transcript_handoff",
+                "voice_loop.same_command_path",
+                "voice_loop.speech_output_playback",
+                "app_bundle.bundle_identifier",
+                "app_bundle.short_version",
+                "app_bundle.build_version",
+                "app_bundle.microphone_usage_description",
+                "app_bundle.speech_recognition_usage_description",
+                "owner_recorded_live_voice_evidence.owner_name",
+                "owner_recorded_live_voice_evidence.device_label",
+                "owner_recorded_live_voice_evidence.profile_label",
+                "owner_recorded_live_voice_evidence.voice_check_started_at",
+                "owner_recorded_live_voice_evidence.voice_check_completed_at",
+                "owner_recorded_live_voice_evidence.microphone_evidence_note",
+                "owner_recorded_live_voice_evidence.speech_permission_evidence_note",
+                "owner_recorded_live_voice_evidence.transcript_handoff_evidence_note",
+                "owner_recorded_live_voice_evidence.audio_output_evidence_note",
+                "voice_command_observation.test_phrase",
+                "voice_command_observation.observed_transcript",
+                "voice_command_observation.observed_command_text",
+                "voice_command_observation.command_result_evidence_id",
+                "voice_command_observation.audio_output_device_label",
+            ],
+        );
+
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("self-test fixture"));
     }
 
     fn release_evidence_status_fixture(

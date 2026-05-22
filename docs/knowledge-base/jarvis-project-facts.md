@@ -289,16 +289,17 @@ These notes capture durable facts for future agents working on this repository.
   subprocess execution.
 - A local packaged app release smoke exists, and installed plugin execution now
   has a constrained local subprocess proof. Developer ID signing,
-  notarization, installer validation, App Store distribution, real voice loop,
-  broader plugin marketplace/WASM/OS-network sandboxing, plugin malware
-  analysis, and broader production operations are not yet implemented in this
-  worktree.
+  notarization, installer validation, App Store distribution, owner-recorded
+  live-device voice-loop validation, broader plugin
+  marketplace/WASM/OS-network sandboxing, plugin malware analysis, and broader
+  production operations are not yet complete in this worktree.
   The SwiftUI shell scaffold and IPC client live under `apps/mac`, including a
   command transcript, activity/audit panel, approval decision and approved-run
   controls,
   management tabs, permission grant-history summary, degraded-mode handling,
-  text-only voice command handoff, and a core supervisor abstraction for
-  configured or bundled local core binaries.
+  typed transcript staging, adapter-backed voice input/output controls,
+  final-transcript handoff into the text command path, and a core supervisor
+  abstraction for configured or bundled local core binaries.
 - The architecture docs must preserve two diagrams: the current implemented
   Rust/Swift scaffold and the end-goal production architecture. Keep the
   current-vs-target phase table aligned with code before answering readiness
@@ -520,9 +521,10 @@ These notes capture durable facts for future agents working on this repository.
   report to `JARVIS_QA_REPORT_PATH` or
   `target/release-live-device-qa-report.json`. The report records installed-app
   metadata, voice-loop evidence fields, owner-recorded live voice evidence
-  fields for owner/device/profile/timestamps/notes, validation flags, and proof
-  boundary. This standardizes manual evidence only; `--check` does not prove
-  live device behavior, and the report remains an owner assertion. When the
+  fields for owner/device/profile/timestamps/notes, structured spoken-command
+  observation fields, validation flags, schema identity, and proof boundary.
+  This standardizes manual evidence only; `--check` does not prove live device
+  behavior, and the report remains an owner assertion. When the
   release operator explicitly enables evidence-aware readiness, this report can
   support the narrow claim that the live voice loop was validated for that
   release candidate, not a generalized claim that voice is validated for every

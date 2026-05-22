@@ -3107,6 +3107,9 @@ fn run_cli_with_env<const N: usize>(args: [&str; N], env: &[(&str, &str)]) -> Ou
 
 fn write_valid_live_device_qa_report(path: &Path) {
     let report = json!({
+        "schema_version": 1,
+        "evidence_type": "owner_recorded_live_device_qa",
+        "self_test_fixture": false,
         "generated_at": "2026-05-22T16:06:00Z",
         "installed_app_path": "/Applications/Jarvis.app",
         "app_bundle": {
@@ -3144,6 +3147,13 @@ fn write_valid_live_device_qa_report(path: &Path) {
             "speech_permission_evidence_note": "Speech prompt and recognition observed.",
             "transcript_handoff_evidence_note": "Spoken transcript reached the command path.",
             "audio_output_evidence_note": "Speech output playback observed."
+        },
+        "voice_command_observation": {
+            "test_phrase": "Jarvis status check.",
+            "observed_transcript": "Jarvis status check.",
+            "observed_command_text": "status check",
+            "command_result_evidence_id": "task:release-voice-fixture",
+            "audio_output_device_label": "Built-in speakers"
         },
         "proof_boundary": "Owner-recorded live device QA fixture for CLI E2E."
     });

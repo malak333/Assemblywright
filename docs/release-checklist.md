@@ -411,7 +411,8 @@ Still future gates for production distribution:
 - Packaged app launches on a clean Mac user profile.
 - App starts and supervises `jarvis-core`.
 - Text command reaches the Rust core.
-- Text-transcript voice command parity is verified through the scaffold.
+- Typed transcript staging and fake-adapter final-transcript handoff into the
+  text command path are verified locally.
 - Scheduler attention produces OS-level user notifications with user-visible
   permission handling for due, failed, and emergency-pause-blocked attention.
   The Swift adapter boundary is implemented and tested with fakes; live
@@ -421,22 +422,27 @@ Still future gates for production distribution:
   fake-adapter state/error tests.
 - The AVFoundation speech-output adapter boundary compiles and has
   deterministic fake-adapter state/error tests.
-- Real microphone voice command parity is verified only after the packaged app
-  has the required entitlements and manual device validation.
+- Live microphone/Speech capture, spoken transcript handoff into the same
+  command path, and live audio-output playback are verified only after the
+  packaged app has the required entitlements and owner-recorded manual device
+  validation.
 - Live text-to-speech playback is verified only after packaged app audio-output
   validation on a real device.
 - Run `./scripts/release-live-device-qa.sh --check` before a release candidate
   to print the live-device runbook. After clean-profile install, Finder launch,
   microphone/Speech permission prompts, spoken transcript handoff into the
   command path, live audio-output, notification, restart, and manual QA are
-  actually validated on the release machine, rerun it with `--assert-complete`
-  and all required `JARVIS_QA_*` flags set to `true`, including
+  actually validated on the release machine, run
+  `./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env`,
+  fill the generated template, source it, and rerun with `--assert-complete`.
+  All required `JARVIS_QA_*` flags must be set to `true`, including
   `JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true`, plus the required
-  owner/device/profile/timestamp and voice evidence-note fields. Confirm the
-  generated report includes installed-app metadata, `voice_loop`,
-  `owner_recorded_live_voice_evidence`, validation flags, and proof boundary,
-  then preserve the `target/release-live-device-qa-report.json` artifact, or
-  the `JARVIS_QA_REPORT_PATH` override, with the release notes.
+  owner/device/profile/UTC timestamp, voice evidence-note, and structured
+  spoken-command observation fields. Confirm the generated report includes
+  installed-app metadata, `voice_loop`, `owner_recorded_live_voice_evidence`,
+  `voice_command_observation`, validation flags, schema identity, and proof
+  boundary, then preserve the `target/release-live-device-qa-report.json`
+  artifact, or the `JARVIS_QA_REPORT_PATH` override, with the release notes.
   Then rerun `jarvis release evidence-status` and
   `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external jarvis release readiness`
   against that report and confirm the live voice/audio readiness item is
@@ -500,7 +506,8 @@ Distribution packaging gate:
   to record that those checks were completed; it remains an owner assertion,
   not automated live-device proof. The resulting JSON report records
   owner-asserted validation flags, voice-loop evidence fields, owner-recorded
-  live voice evidence notes, installed-app metadata, and proof boundary.
+  live voice evidence notes, structured spoken-command observation fields,
+  installed-app metadata, schema identity, and proof boundary.
   Confirm the same report is visible through `jarvis release evidence-status`
   before using evidence-aware readiness language.
 

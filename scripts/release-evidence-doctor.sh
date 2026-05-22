@@ -96,6 +96,55 @@ raise SystemExit(0 if cursor is True else 1)
 PY
 }
 
+json_bool_false() {
+  local path="$1"
+  local dotted_key="$2"
+  python3 - "$path" "$dotted_key" <<'PY'
+import json
+import sys
+
+path, dotted_key = sys.argv[1:3]
+try:
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+except Exception:
+    raise SystemExit(1)
+
+cursor = data
+for segment in dotted_key.split("."):
+    if not isinstance(cursor, dict) or segment not in cursor:
+        raise SystemExit(1)
+    cursor = cursor[segment]
+
+raise SystemExit(0 if cursor is False else 1)
+PY
+}
+
+json_number_equals() {
+  local path="$1"
+  local dotted_key="$2"
+  local expected="$3"
+  python3 - "$path" "$dotted_key" "$expected" <<'PY'
+import json
+import sys
+
+path, dotted_key, expected = sys.argv[1:4]
+try:
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+except Exception:
+    raise SystemExit(1)
+
+cursor = data
+for segment in dotted_key.split("."):
+    if not isinstance(cursor, dict) or segment not in cursor:
+        raise SystemExit(1)
+    cursor = cursor[segment]
+
+raise SystemExit(0 if cursor == int(expected) else 1)
+PY
+}
+
 json_string_equals() {
   local path="$1"
   local dotted_key="$2"
@@ -183,6 +232,31 @@ check_json_flag() {
   fi
 }
 
+check_json_false_flag() {
+  local label="$1"
+  local path="$2"
+  local dotted_key="$3"
+
+  if json_bool_false "$path" "$dotted_key"; then
+    record_satisfied "$label: $dotted_key=false"
+  else
+    record_missing "$label missing false flag: $dotted_key in $path"
+  fi
+}
+
+check_json_number() {
+  local label="$1"
+  local path="$2"
+  local dotted_key="$3"
+  local expected="$4"
+
+  if json_number_equals "$path" "$dotted_key" "$expected"; then
+    record_satisfied "$label: $dotted_key=$expected"
+  else
+    record_missing "$label mismatch or missing: $dotted_key expected $expected in $path"
+  fi
+}
+
 check_json_string() {
   local label="$1"
   local path="$2"
@@ -224,8 +298,14 @@ check_release_evidence() {
     for flag in microphone_permission_prompt speech_permission_prompt spoken_transcript_handoff same_command_path speech_output_playback; do
       check_json_flag "live-device QA report" "$LIVE_QA_REPORT" "voice_loop.$flag"
     done
+    check_json_number "live-device QA report" "$LIVE_QA_REPORT" "schema_version" "1"
+    check_json_string "live-device QA report" "$LIVE_QA_REPORT" "evidence_type" "owner_recorded_live_device_qa"
+    check_json_false_flag "live-device QA report" "$LIVE_QA_REPORT" "self_test_fixture"
     for field in owner_name device_label profile_label voice_check_started_at voice_check_completed_at microphone_evidence_note speech_permission_evidence_note transcript_handoff_evidence_note audio_output_evidence_note; do
       check_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.$field"
+    done
+    for field in test_phrase observed_transcript observed_command_text command_result_evidence_id audio_output_device_label; do
+      check_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "voice_command_observation.$field"
     done
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.bundle_identifier" "$EXPECTED_BUNDLE_ID"
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.short_version" "$EXPECTED_VERSION"
@@ -293,6 +373,9 @@ write_fixture_reports() {
 
   cat >"$live_path" <<'JSON'
 {
+  "schema_version": 1,
+  "evidence_type": "owner_recorded_live_device_qa",
+  "self_test_fixture": false,
   "validation_flags": {
     "clean_profile": true,
     "finder_launch": true,
@@ -321,6 +404,13 @@ write_fixture_reports() {
     "speech_permission_evidence_note": "Observed Speech permission prompt in the fake fixture.",
     "transcript_handoff_evidence_note": "Observed transcript handoff reach the command path in the fake fixture.",
     "audio_output_evidence_note": "Observed speech output playback in the fake fixture."
+  },
+  "voice_command_observation": {
+    "test_phrase": "Jarvis status check.",
+    "observed_transcript": "Jarvis status check.",
+    "observed_command_text": "status check",
+    "command_result_evidence_id": "self-test-task-id",
+    "audio_output_device_label": "self-test audio output"
   },
   "app_bundle": {
     "bundle_identifier": "com.nobiletechnology.jarvis",
