@@ -78,6 +78,13 @@ execution, `/commands` now returns a normal failed command response with
 redacted `model_step_failed` audit evidence and route evidence instead of an
 IPC transport error.
 
+Ollama-compatible and ChatGPT/OpenAI-compatible text responses may also return
+a strict JSON envelope with `message`, `complete`, and `tool_requests`.
+Accepted `tool_requests` are fed into the same bounded first-party schema,
+policy, approval, and audit path as fake-model tool plans; malformed envelopes
+fail with redacted diagnostics. This is provider-envelope compatibility, not
+native OpenAI function calling or installed-plugin orchestration.
+
 For durable local task and audit state during manual inspection, pass a SQLite
 path:
 
@@ -228,6 +235,10 @@ cargo test -p jarvis-core run_due_scheduler_jobs_executes_and_persists_visible_t
 cargo test -p jarvis-core scheduler_proactive_policy_audit_matches_policy_review_classification -- --nocapture
 cargo test -p jarvis-core detects_stale_running_jobs_in_oldest_first_order -- --nocapture
 cargo test -p jarvis-core recover_stale_scheduler_jobs_marks_running_jobs_failed_and_audits_redacted -- --nocapture
+cargo test -p jarvis-core ollama_http_provider_parses_tool_request_envelope -- --nocapture
+cargo test -p jarvis-core chatgpt_http_provider_parses_tool_request_envelope -- --nocapture
+cargo test -p jarvis-core provider_tool_request_envelope_rejects_malformed_tool_requests_without_leaking_prompt -- --nocapture
+cargo test -p jarvis-core provider_originated_tool_request_executes_first_party_tool_and_feeds_result -- --nocapture
 cargo test -p jarvis-core model_provider_failure_returns_failed_response_with_route_evidence -- --nocapture
 cargo test -p jarvis-core command_schema_returns_failed_runtime_response_for_model_provider_error -- --nocapture
 cargo test -p jarvis-core repository_backed_state_endpoints_expose_tasks_and_audit -- --nocapture
@@ -235,6 +246,7 @@ cargo test -p jarvis-core contract_endpoint_documents_safe_inspection_paths -- -
 cargo test -p jarvis-core --test e2e_scaffold
 cargo test -p jarvis-cli
 cargo test -p jarvis-cli --test local_ipc_e2e
+cargo test -p jarvis-cli --test local_ipc_e2e serve_executes_ollama_provider_tool_request_envelope -- --nocapture
 cargo test -p jarvis-cli --test local_ipc_e2e -- --ignored
 ./scripts/storage-migration-backup-smoke.sh
 ./scripts/packaged-supervision-proof.sh
@@ -330,12 +342,17 @@ audit evidence before due command submission, explicit stale-running scheduler
 recovery after persisted running jobs survive restart, scheduler fail-closed
 emergency pause on non-accepted due jobs, and emergency-pause blocking/resume
 surfaces.
-Runtime unit tests additionally prove bounded fake-model first-party tool-call
-orchestration, including policy checks, approval stops, validation failures, and
-tool-result feedback into later model steps. Focused provider tests prove typed
-Ollama-compatible request/error behavior and structured failed command
-responses for selected model-provider failures without requiring a live model
-during the default release gate. They do not prove live ChatGPT service execution,
+Runtime unit tests additionally prove bounded fake-model and provider-envelope
+first-party tool-call orchestration, including policy checks, approval stops,
+validation failures, and tool-result feedback into later model steps. Focused
+provider tests prove typed Ollama-compatible request/error behavior, strict
+Ollama-compatible and ChatGPT/OpenAI-compatible response-envelope parsing,
+malformed envelope redaction, and structured failed command responses for
+selected model-provider failures without requiring a live model during the
+default release gate. The cross-process local IPC E2E includes an
+Ollama-compatible stub that emits a provider tool-request envelope and proves
+the runtime executes the first-party tool before returning the provider's final
+message. They do not prove live ChatGPT service execution,
 advanced memory classification policy beyond the current summary surface, live
 microphone capture, or live audio output until those surfaces are manually
 validated. The current Swift gate proves the

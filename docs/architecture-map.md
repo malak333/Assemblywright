@@ -64,7 +64,10 @@ flowchart TB
         Runtime --> ModelExec["ModelExecutor trait"]
         ModelExec --> FakeLocal["FakeLocalModel default"]
         ModelExec --> OllamaLocal["Ollama-compatible local HTTP provider"]
-        Runtime --> ToolPlan["bounded model-planned tool requests"]
+        ModelExec --> ChatGPTProvider["ChatGPT/OpenAI-compatible HTTP provider"]
+        ModelExec --> ProviderEnvelope["strict JSON provider response envelope"]
+        ProviderEnvelope --> ToolPlan["bounded first-party tool requests"]
+        Runtime --> ToolPlan
         ToolPlan --> PluginPolicy
         Runtime --> RuntimeControl["RuntimeControl pause/cancel flags"]
         Runtime --> RuntimeStore["RuntimeCommandStore persistence hook"]
@@ -135,18 +138,22 @@ flowchart TB
 
 The current IPC `/commands` endpoint invokes `ConversationRuntime` with the
 deterministic `FakeLocalModel` by default or an opt-in Ollama-compatible local
-HTTP provider selected from typed env config. It returns runtime steps, route
-metadata, plugin results, and audit entries, and can persist task, audit, and
-redacted append-only model-route state through `SqliteRepository` when the
-state is constructed with repository backing. It also records local-first
-`ModelRouter` evidence and can execute
-deterministic first-party plugin commands through the policy engine. The
-runtime also supports bounded model-planned first-party tool calls with schema
-validation, policy checks, approval stops, and audit evidence. Model-provider
-execution failures now stay inside the command contract: the runtime marks the
-task failed, appends `model_step_failed` with redacted provider diagnostics,
-and returns route evidence instead of letting IPC translate the failure into a
-transport error.
+HTTP or ChatGPT/OpenAI-compatible provider selected from typed env config. It
+returns runtime steps, route metadata, plugin results, and audit entries, and
+can persist task, audit, and redacted append-only model-route state through
+`SqliteRepository` when the state is constructed with repository backing. It
+also records local-first `ModelRouter` evidence and can execute deterministic
+first-party plugin commands through the policy engine. The runtime supports
+bounded model-planned first-party tool calls with schema validation, policy
+checks, approval stops, and audit evidence. Ollama-compatible and
+ChatGPT/OpenAI-compatible text responses can now use a strict JSON envelope
+with `message`, `complete`, and `tool_requests`, which feeds the same bounded
+first-party tool path; plain text remains backward-compatible. This is not
+native provider function-calling, installed-plugin orchestration, or broad
+third-party tool execution. Model-provider execution failures now stay inside
+the command contract: the runtime marks the task failed, appends
+`model_step_failed` with redacted provider diagnostics, and returns route
+evidence instead of letting IPC translate the failure into a transport error.
 Repository-backed IPC state stores approval-required plugin command decisions
 in `pending_approvals`, exposes them through CLI/IPC inspection endpoints, and
 lets a user grant or deny the pending record without executing the side effect.
@@ -265,7 +272,7 @@ sequenceDiagram
     Runtime->>Store: create task and append runtime audit when configured
     Runtime->>Router: select local-first route and provider evidence
     Runtime->>Store: append redacted model_route_records when configured
-    alt model plans first-party tool call
+    alt model envelope plans first-party tool call
         Runtime->>Policy: validate declared scopes, risk, sensitivity
         alt approval required or blocked
             Runtime->>Store: append approval/block audit when configured
@@ -348,8 +355,9 @@ sequenceDiagram
   task/audit durability.
 - `jarvis-core::model`: `ModelExecutor` trait, model request/response/tool
   contracts, route metadata, deterministic `FakeLocalModel`, typed provider
-  env config, redacted provider errors, and an Ollama-compatible local HTTP
-  provider.
+  env config, strict provider response envelope parsing for first-party tool
+  requests, redacted provider errors, and Ollama-compatible plus
+  ChatGPT/OpenAI-compatible HTTP providers.
 - `jarvis-core::router`: Local-first model route selection, ChatGPT opt-in gate,
   restricted-data blocking, approval delegation to `PermissionEngine`, and
   simple secret-token redaction before ChatGPT routing.
@@ -411,6 +419,9 @@ flowchart TB
 
         ModelRouterProd --> LocalModels["real local model providers by default"]
         ModelRouterProd --> ChatGPT["ChatGPT only after enablement, approval, redaction, and audit"]
+        LocalModels --> NativeToolCalls["native provider tool-call or strict envelope adapter"]
+        ChatGPT --> NativeToolCalls
+        NativeToolCalls --> PluginHostProd
 
         PluginHostProd --> FirstPartyPlugins["first-party plugins"]
         PluginHostProd --> InstalledPlugins["installed local plugins with manifests"]
@@ -465,9 +476,9 @@ operation.
 | --- | --- | --- | --- |
 | Mac shell | Buildable Swift/SwiftUI scaffold with health, command transcript, pause/resume, activity/audit rendering, memory classification and create/update/review/delete/restore controls, plugin/scheduler/diagnostics tabs, degraded-mode handling, and a `JarvisCoreSupervisor` abstraction for configured or bundled local core binaries. The local packaged app smoke assembles and ad-hoc signs a deterministic `Jarvis.app` for temp-profile launch proof. | Packaged `Jarvis.app` supervises the core, owns voice/text UX, settings, memory and permission surfaces, diagnostics export, and recovery states. | Shell supervision scaffold, Swift memory management surface, and local assembled-app smoke implemented; Developer ID signing, notarization, installer/restart proof, and production release QA pending. |
 | IPC boundary | Axum loopback HTTP JSON API for health, commands, task/audit/activity-summary/activity-events/model-route/memory/approval inspection, plugin manifests, emergency pause, scheduler jobs, and `/contract` compatibility plus feature metadata that lists implemented surfaces with proof and production boundaries. Diagnostics export includes aggregate unreviewed/sensitive memory counts without memory values. | Versioned, compatibility-tested app/core API with packaged app smoke coverage, feature/boundary negotiation, and clear degraded-mode handling. | Core IPC plus compatibility and feature/boundary contract metadata implemented; broader production compatibility rollout policy pending. |
-| Command runtime | `ConversationRuntime` creates tasks, runs a routed `ModelExecutor` (`FakeLocalModel` by default, Ollama-compatible HTTP or ChatGPT/OpenAI-compatible HTTP when explicitly enabled), records structured audit entries, handles pause/cancel, enforces max steps, can persist task/audit/model-route state through `RuntimeCommandStore`, exposes repository-backed activity summaries and bounded server-sent activity events for progress visibility, can execute bounded model-planned first-party tool calls after schema and policy checks, and returns structured failed command responses when a selected model provider fails. | Multi-step assistant runtime with production model responses, installed plugin/tool orchestration, streaming progress, approval UI handoff, and robust recovery. | Bounded fake-model tool orchestration, opt-in local and ChatGPT provider boundaries, structured provider-failure recovery, explicit installed-plugin subprocess runner, CLI/IPC/Swift approval scaffold, pollable activity summaries, and bounded activity event streaming implemented; per-token model streaming and plugin-internal progress bus pending. |
-| Model routing | Local-first `ModelRouter` exists with sensitivity checks, provider-status route evidence, ChatGPT opt-in gate, approval delegation, and redaction logic. The active `/commands` path can call a configured local provider or opt-in ChatGPT/OpenAI-compatible provider after policy allows the route. Repository-backed command execution persists append-only SQLite model-route records and exposes redacted IPC/CLI inspection without storing route context. Provider failures keep the selected route evidence in the failed command response. | Local provider integration, explicit ChatGPT escalation, minimized cloud context, user approval where required, and durable route evidence in every relevant task. | Local and ChatGPT provider boundaries plus SQLite route recovery evidence and structured failure-response evidence implemented with tests; broader production model operations pending. |
-| Plugins and tools | Deterministic in-process first-party plugins (`fake_echo`, `fake_status`) execute through command-pattern dispatch and bounded model-planned runtime calls, with manifest validation, policy checks, timeout, cancellation, approval stops, pending approval persistence for approval-gated command scaffolds, and audit evidence. Local plugin installation validates manifest metadata and safe source paths, captures local manifest/subprocess SHA-256 provenance, stores disabled registry records with `execution_enabled=false` and `execution_grant=metadata_only`, supports contract-only dry runs with `side_effect_executed=false`, and can run `local_subprocess` plugins only after local provenance verification plus an explicit `subprocess_stdio` grant, or `subprocess_stdio_network` for network-declaring actions, through the constrained JSON stdin/stdout runner. Publisher-origin claims can be operator-pinned only after provenance matches and the supplied trusted origin exactly equals the manifest author claim. Signed manifests can also be verified with an Ed25519 signature and an explicit trusted public key after provenance matches. Network-capable actions must request `network`, declare exact allowed hostnames, appear in policy review, and use the network-specific execution grant. | First-party production plugins plus installed local plugins behind manifests, sandboxing, user grants, UI approval, proactive gating, and real model-generated tool-call execution. | Contract, deterministic first-party paths, metadata-only local install, local provenance snapshot verification, operator-pinned publisher-origin review, trusted-key publisher-signature verification, manifest-level network host governance, explicit subprocess and subprocess-network execution grants, and constrained installed-plugin runner implemented; broader WASM/OS-network/plugin-marketplace trust pending. |
+| Command runtime | `ConversationRuntime` creates tasks, runs a routed `ModelExecutor` (`FakeLocalModel` by default, Ollama-compatible HTTP or ChatGPT/OpenAI-compatible HTTP when explicitly enabled), records structured audit entries, handles pause/cancel, enforces max steps, can persist task/audit/model-route state through `RuntimeCommandStore`, exposes repository-backed activity summaries and bounded server-sent activity events for progress visibility, can execute bounded model-planned first-party tool calls after schema and policy checks, accepts strict provider response envelopes for the same first-party tool path, and returns structured failed command responses when a selected model provider fails. | Multi-step assistant runtime with production model responses, installed plugin/tool orchestration, streaming progress, approval UI handoff, native provider function-calling where appropriate, and robust recovery. | Bounded fake-model and provider-envelope first-party tool orchestration, opt-in local and ChatGPT provider boundaries, structured provider-failure recovery, explicit installed-plugin subprocess runner, CLI/IPC/Swift approval scaffold, pollable activity summaries, and bounded activity event streaming implemented; native provider function-calling, per-token model streaming, and plugin-internal progress bus pending. |
+| Model routing | Local-first `ModelRouter` exists with sensitivity checks, provider-status route evidence, ChatGPT opt-in gate, approval delegation, and redaction logic. The active `/commands` path can call a configured local provider or opt-in ChatGPT/OpenAI-compatible provider after policy allows the route, and those provider text responses can return a strict JSON envelope with first-party `tool_requests`. Repository-backed command execution persists append-only SQLite model-route records and exposes redacted IPC/CLI inspection without storing route context. Provider failures keep the selected route evidence in the failed command response. | Local provider integration, explicit ChatGPT escalation, minimized cloud context, user approval where required, native tool-call support where useful, and durable route evidence in every relevant task. | Local and ChatGPT provider boundaries, strict provider-envelope first-party tool requests, SQLite route recovery evidence, and structured failure-response evidence implemented with tests; broader production model operations pending. |
+| Plugins and tools | Deterministic in-process first-party plugins (`fake_echo`, `fake_status`) execute through command-pattern dispatch, bounded fake-model runtime calls, and strict provider-envelope runtime calls, with manifest validation, policy checks, timeout, cancellation, approval stops, pending approval persistence for approval-gated command scaffolds, and audit evidence. Local plugin installation validates manifest metadata and safe source paths, captures local manifest/subprocess SHA-256 provenance, stores disabled registry records with `execution_enabled=false` and `execution_grant=metadata_only`, supports contract-only dry runs with `side_effect_executed=false`, and can run `local_subprocess` plugins only after local provenance verification plus an explicit `subprocess_stdio` grant, or `subprocess_stdio_network` for network-declaring actions, through the constrained JSON stdin/stdout runner. Publisher-origin claims can be operator-pinned only after provenance matches and the supplied trusted origin exactly equals the manifest author claim. Signed manifests can also be verified with an Ed25519 signature and an explicit trusted public key after provenance matches. Network-capable actions must request `network`, declare exact allowed hostnames, appear in policy review, and use the network-specific execution grant. | First-party production plugins plus installed local plugins behind manifests, sandboxing, user grants, UI approval, proactive gating, and production model-generated tool-call execution. | Contract, deterministic first-party paths, provider-envelope first-party tool calls, metadata-only local install, local provenance snapshot verification, operator-pinned publisher-origin review, trusted-key publisher-signature verification, manifest-level network host governance, explicit subprocess and subprocess-network execution grants, and constrained installed-plugin runner implemented; broader WASM/OS-network/plugin-marketplace trust pending. |
 | Scheduler | Inspectable scheduler jobs with manual, one-time, interval trigger contracts, explicit run-due execution, an opt-in bounded background trigger loop on `jarvis serve --scheduler-background`, a redacted `/scheduler/attention` handoff for due, running, and failed jobs, scheduler trigger items in `/permissions/policy-review` that redact command text, redacted `scheduler_proactive_policy_checked` audit evidence before due command submission, explicit `scheduler recover-stale` operator recovery for persisted stale `Running` jobs, and a Swift protocol-backed notification model with macOS `UserNotifications` adapter controls for due/failed attention items. Each tick uses the same visible task/audit records, deterministic due ordering, per-tick limit, policy-review trigger classification, and fail-closed emergency-pause behavior as manual run-due. Repository-backed IPC state restores and updates jobs through SQLite. Emergency pause cancels active scheduler jobs, unsafe due commands fail closed by pausing and cancelling remaining open jobs, and stale recovery marks stuck running jobs failed with redacted audit evidence. | Durable scheduler and trigger engine for approved proactive routines, persisted job state, visible task records, policy-gated execution, stale-run recovery, and OS-level app notifications. | Durable job state, explicit run-due execution, opt-in bounded background loop, redacted app handoff summary, scheduler trigger review, redacted proactive policy audit, explicit stale-running recovery, and adapter-backed Swift notification controls implemented; richer production trigger policy, automatic lease recovery, and live OS notification validation pending. |
 | Storage and memory | SQLite migrations store tasks, append-only audit entries, append-only redacted model-route records, emergency pause, memory items with provenance/sensitivity/review/soft-delete/restore behavior, scheduler jobs, pending approval records, and disabled installed-plugin registry metadata. File-backed repository open creates a preflight migration backup for older schema versions and restores the original DB/WAL/SHM files if opening/configuring/migrating fails. CLI/IPC can inspect model routes, memory classification summaries, memory items, approval decisions, and plugin metadata when repository backing is enabled. The Mac shell can summarize by category/sensitivity, list, filter, create, load, update mutable memory fields, mark reviewed, soft-delete, restore deleted items, and inspect deleted memory through the existing IPC surface. Policy review surfaces unreviewed memory items without values, and diagnostics export includes aggregate memory review counts. It can also read provider credentials from Keychain at supervised-core launch and inject missing secret env vars without storing them in SQLite or diagnostics. | SQLite also owns permissions, executable plugin grants, migration backup/rollback, and memory UX review flows; Keychain owns secrets; vector indexes remain rebuildable. | Core local state, route recovery evidence, plugin metadata registry, migration preflight backup/restore, Swift memory classification/CRUD/review/restore UI, memory policy-review visibility, diagnostics counters, and Keychain launch credential boundary implemented; autonomous retention/rewrite policy and vector governance pending. |
 | Safety and approvals | Capability scopes, risk tiers, emergency-pause fail-closed behavior, audit-required flags, and approval-required decisions exist in Rust. Repository-backed IPC persists pending approvals and supports CLI and Swift grant/deny decisions without executing side effects. `/permissions/grants` also exposes approval history/counts plus installed-plugin grant and provenance integrity state. `/permissions/policy-review` exposes severity-ranked pending approval, high-risk action, provenance, origin, network-access, active scheduler trigger, and memory-review items, and the Swift permission center renders both grant history and policy review status. | Human approval prompts, permission center, grants history, policy review, signed-publisher trust, memory review workflows, and no bypass for high-risk side effects. | Policy engine plus CLI/IPC/Swift approval decision surface, provenance-aware permission grant inspection, read-only policy review, scheduler trigger review, memory review visibility, operator-pinned publisher-origin review, trusted-key publisher-signature verification, and network-action review implemented; broader plugin marketplace and autonomous memory governance pending. |
@@ -595,8 +606,8 @@ erDiagram
 
 Current evidence supports a local foundation claim: the workspace has typed
 contracts and tested scaffolding for IPC, policy, routing, runtime, storage,
-plugins, scheduler, CLI behavior, bounded fake-model first-party tool
-orchestration, and a first Swift command/management shell with core supervision
+plugins, scheduler, CLI behavior, bounded fake-model and provider-envelope
+first-party tool orchestration, and a first Swift command/management shell with core supervision
 abstractions. It does not support a claim that Jarvis is a finished
 voice assistant, packaged Mac app, autonomous external-action agent, plugin
 marketplace, or production cloud-integrated system.

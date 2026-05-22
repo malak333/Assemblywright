@@ -3,7 +3,8 @@
 Jarvis is a local-first macOS assistant foundation. The current repo implements
 the Rust core described in [DESIGN.md](DESIGN.md): durable task/audit
 primitives, policy-gated first-party plugin commands, bounded model-planned
-first-party tool orchestration, local-first model routing evidence, opt-in
+first-party tool orchestration, strict provider response envelopes for
+first-party tool requests, local-first model routing evidence, opt-in
 Ollama-compatible local HTTP and ChatGPT/OpenAI-compatible provider boundaries,
 structured provider-failure responses with route/audit evidence, plugin
 contracts, metadata-only local plugin installation, local plugin
@@ -47,7 +48,12 @@ typed env opt-in with `JARVIS_CHATGPT_ENABLED=true`,
 `JARVIS_OPENAI_BASE_URL`, and `JARVIS_CHATGPT_TIMEOUT_MS`; route policy still
 blocks restricted data and sends only redacted route context. Provider failures
 return failed command responses with redacted diagnostics instead of becoming
-IPC transport errors. Local plugin
+IPC transport errors. Provider text responses may also use a strict JSON
+envelope with `message`, `complete`, and `tool_requests`; accepted tool
+requests still pass through the existing first-party schema, policy, approval,
+and audit path. Plain text remains supported, and this is not native OpenAI
+function calling, installed-plugin orchestration, or broad third-party tool
+execution. Local plugin
 installation stores validated manifest metadata disabled by default and captures
 a local manifest/subprocess hash snapshot. Executable local subprocess plugins
 require the snapshot to verify as unchanged plus an explicit
@@ -81,7 +87,9 @@ CRUD, local plugin provenance verification, scheduler attention handoff, and
 permission policy review plus scheduler trigger review and notification
 controls, including redacted proactive scheduler policy audit before due
 command execution and explicit stale-running scheduler recovery. Later slices
-continue the same branch/PR discipline;
+continue the same branch/PR discipline, including strict provider tool-request
+envelope coverage for Ollama-compatible and ChatGPT/OpenAI-compatible text
+responses;
 release language should describe only the merged repo-owned surfaces with
 recorded focused E2E or integration proof.
 The permission center now surfaces installed-plugin provenance status from
