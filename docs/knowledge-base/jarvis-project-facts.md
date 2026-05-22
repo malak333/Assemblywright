@@ -80,6 +80,11 @@ These notes capture durable facts for future agents working on this repository.
 - The Swift shell is currently a scaffold with a core supervisor abstraction
   and local packaged-app smoke evidence. It is not a Developer ID signed or
   notarized packaged app.
+- The Swift shell has a Keychain-backed launch credential boundary for
+  app-supervised model provider secrets. `JarvisCoreCredentialProvider` reads
+  known credentials such as the OpenAI API key from Keychain and injects only
+  missing process environment values when launching the bundled core; explicit
+  environment values still win, and the provider does not auto-enable ChatGPT.
 - The Swift shell now exposes production-facing scaffold tabs for approval
   evidence, runs/audit, scheduler create/inspect/cancel, redacted diagnostics,
   and voice state. Voice supports typed transcript staging and hands the

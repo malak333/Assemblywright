@@ -111,6 +111,26 @@ private final class FakeVoiceAdapter: JarvisVoiceAdapter {
     }
 }
 
+private final class FakeCredentialStore: JarvisCredentialStore, @unchecked Sendable {
+    var values: [JarvisCredentialKey: String]
+
+    init(values: [JarvisCredentialKey: String] = [:]) {
+        self.values = values
+    }
+
+    func readCredential(_ key: JarvisCredentialKey) throws -> String? {
+        values[key]
+    }
+
+    func saveCredential(_ value: String, for key: JarvisCredentialKey) throws {
+        values[key] = value
+    }
+
+    func deleteCredential(_ key: JarvisCredentialKey) throws {
+        values.removeValue(forKey: key)
+    }
+}
+
 @Suite("Jarvis Mac core contracts", .serialized)
 struct JarvisMacCoreTests {
     @Test("Endpoint appends paths to the configured core URL")
@@ -1274,6 +1294,20 @@ struct JarvisMacCoreTests {
         #expect(configuration.launchArguments == ["serve", "--bind", "127.0.0.1:18999"])
     }
 
+    @Test("Credential provider injects missing provider secrets without overriding explicit environment")
+    func credentialProviderInjectsMissingProviderSecrets() {
+        let provider = JarvisCoreCredentialProvider(
+            store: FakeCredentialStore(values: [.openAIAPIKey: "keychain-token"])
+        )
+
+        let injected = provider.launchEnvironment(base: ["JARVIS_CHATGPT_ENABLED": "true"])
+        #expect(injected["JARVIS_OPENAI_API_KEY"] == "keychain-token")
+        #expect(injected["JARVIS_CHATGPT_ENABLED"] == "true")
+
+        let explicit = provider.launchEnvironment(base: ["JARVIS_OPENAI_API_KEY": "env-token"])
+        #expect(explicit["JARVIS_OPENAI_API_KEY"] == "env-token")
+    }
+
     @Test("Supervisor resolves configured executable before packaged candidates")
     func supervisorResolvesConfiguredExecutableFirst() {
         let configuredURL = JarvisCoreSupervisorConfiguration.configuredExecutableURL(
@@ -1375,6 +1409,9 @@ struct JarvisMacCoreTests {
     @Test("Supervisor launches configured core and waits for health")
     func supervisorLaunchesConfiguredCore() async {
         let launcher = FakeProcessLauncher()
+        let credentialProvider = JarvisCoreCredentialProvider(
+            store: FakeCredentialStore(values: [.openAIAPIKey: "keychain-token"])
+        )
         let supervisor = JarvisCoreSupervisor(
             configuration: JarvisCoreSupervisorConfiguration(
                 bindAddress: "127.0.0.1:9901",
@@ -1387,7 +1424,8 @@ struct JarvisMacCoreTests {
                 .failure(URLError(.cannotConnectToHost)),
                 .success(sampleHealth())
             ]),
-            processLauncher: launcher
+            processLauncher: launcher,
+            credentialProvider: credentialProvider
         )
 
         await supervisor.start()
@@ -1396,6 +1434,7 @@ struct JarvisMacCoreTests {
         #expect(launcher.launches.count == 1)
         #expect(launcher.launches.first?.executableURL.path == "/tmp/jarvis-cli")
         #expect(launcher.launches.first?.arguments == ["serve", "--bind", "127.0.0.1:9901"])
+        #expect(launcher.launches.first?.environment["JARVIS_OPENAI_API_KEY"] == "keychain-token")
         #expect(supervisor.lastHealth?.status == "ok")
         #expect(supervisor.smokeSnapshot.canAttemptPackagedCoreSmoke)
         #expect(supervisor.smokeSnapshot.summary.contains("jarvis-cli"))
@@ -1720,6 +1759,7 @@ private final class FakeProcessLauncher: JarvisCoreProcessLaunching, @unchecked 
     struct Launch: Equatable {
         var executableURL: URL
         var arguments: [String]
+        var environment: [String: String]
     }
 
     private(set) var launches: [Launch] = []
@@ -1729,7 +1769,7 @@ private final class FakeProcessLauncher: JarvisCoreProcessLaunching, @unchecked 
         arguments: [String],
         environment: [String: String]
     ) throws -> any JarvisCoreProcess {
-        launches.append(Launch(executableURL: executableURL, arguments: arguments))
+        launches.append(Launch(executableURL: executableURL, arguments: arguments, environment: environment))
         return FakeProcess()
     }
 }
