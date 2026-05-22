@@ -299,6 +299,12 @@ enum PluginsCommand {
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
+    /// Verify local installed plugin files against the install-time provenance snapshot.
+    VerifyInstalled {
+        id: String,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
     /// Request an installed plugin run through the fail-closed runner boundary.
     RunInstalled {
         id: String,
@@ -649,6 +655,17 @@ async fn main() -> anyhow::Result<()> {
                         "POST",
                         &format!("/plugins/installed/{id}/execution"),
                         Some(&body)
+                    )?
+                );
+            }
+            PluginsCommand::VerifyInstalled { id, endpoint } => {
+                println!(
+                    "{}",
+                    request(
+                        &endpoint,
+                        "POST",
+                        &format!("/plugins/installed/{id}/provenance/verify"),
+                        None
                     )?
                 );
             }

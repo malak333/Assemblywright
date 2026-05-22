@@ -1,9 +1,11 @@
 # Plugin Contract
 
 Jarvis plugins are executable capabilities behind an explicit manifest and the
-same policy engine used for built-in tools. The first implementation can be
-first-party Rust modules, subprocess plugins over JSON-RPC, or WASM plugins;
-the stable commitment is the manifest and audit contract.
+same policy engine used for built-in tools. The implemented local plugin
+boundary supports first-party Rust modules and local subprocess plugins over
+JSON stdin/stdout. The stable commitment is the manifest, local provenance
+snapshot, and audit contract; marketplace, WASM, network, and signed-publisher
+trust remain target architecture.
 
 ## Manifest Fields
 
@@ -16,6 +18,10 @@ Each plugin manifest must declare:
   subprocess boundary; installed metadata cannot claim `first_party`.
 - Absolute `source_path` for local installation metadata. The manifest file
   must be a readable file under that canonical directory.
+- Local installs capture an install-time provenance snapshot with canonical
+  manifest path, manifest SHA-256, canonical source path, optional subprocess
+  command path, optional subprocess command SHA-256, capture time, verification
+  time, and integrity status. Origin claims remain unverified local labels.
 - `local_subprocess` manifests must declare a `subprocess` block with a command
   under `source_path`, optional argument array, and `stdin: json` /
   `stdout: json`. Jarvis starts the command directly and never interpolates it
@@ -73,12 +79,14 @@ to explain what happened:
   `execution_grant: metadata_only`, including `local_subprocess` manifests.
 - Installed plugin execution requires a separate explicit enablement step that
   sets `execution_enabled: true` and `execution_grant: subprocess_stdio`.
-  `metadata_only` can never execute.
+  `metadata_only` can never execute. Enablement also requires the local
+  provenance snapshot to verify as `matches_install_snapshot`.
 - Installed plugin run requests go through an explicit fail-closed runner
   boundary. The boundary revalidates the stored manifest/version metadata,
-  checks the requested action is declared, validates input schema, honors
-  `execution_enabled` and `execution_grant`, checks that the stored source path
-  is canonical, and appends audit evidence.
+  checks the requested action is declared, validates input schema, verifies the
+  local manifest/subprocess snapshot, honors `execution_enabled` and
+  `execution_grant`, checks that the stored source path is canonical, and
+  appends audit evidence.
 - Enabled installed plugin execution is limited to `local_subprocess` manifests
   with the `subprocess_stdio` grant. The command must canonicalize under
   `source_path`; parent-directory escapes, absolute commands outside
@@ -115,9 +123,9 @@ contract testing. Release verification should keep covering:
   cancelled actions.
 - Proactive action gating.
 - Local manifest install acceptance/rejection and disabled registry
-  persistence.
+  persistence, including local provenance snapshot fields.
 - Installed plugin run attempts fail closed with manifest/action/input
   validation, disabled `metadata_only` execution-grant semantics, explicit
-  enablement semantics, subprocess safe-path validation, contract-only dry-run
-  evidence, constrained subprocess execution evidence, and durable audit
-  evidence.
+  enablement semantics, local provenance verification, subprocess safe-path
+  validation, contract-only dry-run evidence, constrained subprocess execution
+  evidence, and durable audit evidence.

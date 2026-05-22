@@ -70,8 +70,10 @@ flowchart TB
         PluginHost --> FirstParty["fake_echo and fake_status plugins"]
         PluginHost --> TimeoutCancel["timeout and cancellation handling"]
         InstalledRunner --> InstalledValidation["stored manifest/action/input/output validation"]
+        InstalledRunner --> ProvenanceCheck["local manifest and command hash verification"]
         InstalledRunner --> InstalledGrant["disabled-by-default metadata_only grant"]
         InstalledRunner --> InstalledEnable["/plugins/installed/:id/execution explicit subprocess_stdio grant"]
+        ProvenanceCheck --> InstalledEnable
         InstalledRunner --> SubprocessRunner["local_subprocess direct Command JSON stdin/stdout runner"]
         SubprocessRunner --> SafePath["canonical command under source_path, no shell interpolation"]
         SubprocessRunner --> InstalledAudit["blocked, dry-run, completed, or failed audit evidence"]
@@ -120,14 +122,17 @@ high-risk pending counts, and installed-plugin execution-grant state into one
 permission-center surface for CLI and Swift inspection.
 Installed plugin run requests have an explicit fail-closed boundary that
 revalidates stored manifest metadata, checks the requested action, validates
-input schema, honors disabled-by-default `metadata_only` semantics, and appends
-audit evidence. Contract-only dry runs can return `dry_run` after
+input schema, verifies the local install provenance snapshot, honors
+disabled-by-default `metadata_only` semantics, and appends audit evidence.
+Contract-only dry runs can return `dry_run` after
 manifest/action/input validation with `side_effect_executed=false`.
 `local_subprocess` manifests can be explicitly enabled through
 `/plugins/installed/:id/execution` with `execution_grant: subprocess_stdio`;
-only then can the runner start the declared command directly with JSON stdin and
-JSON stdout, with canonical source-path checks, timeout enforcement, output
-schema validation, and audit evidence recording whether the subprocess started.
+only after `/plugins/installed/:id/provenance/verify` confirms the manifest and
+subprocess command still match the install-time hash snapshot can the runner
+start the declared command directly with JSON stdin and JSON stdout, with
+canonical source-path checks, timeout enforcement, output schema validation,
+and audit evidence recording whether the subprocess started.
 It supports opt-in
 ChatGPT/OpenAI-compatible execution only after route policy allows it. It does
 not yet support a broader WASM/network/plugin-marketplace sandbox or a signed
@@ -382,7 +387,7 @@ operation.
 | IPC boundary | Axum loopback HTTP JSON API for health, commands, task/audit/model-route/memory/approval inspection, plugin manifests, emergency pause, and scheduler jobs. | Versioned, compatibility-tested app/core API with packaged app smoke coverage and clear degraded-mode handling. | Core IPC implemented; production app contract hardening pending. |
 | Command runtime | `ConversationRuntime` creates tasks, runs a routed `ModelExecutor` (`FakeLocalModel` by default, Ollama-compatible HTTP or ChatGPT/OpenAI-compatible HTTP when explicitly enabled), records structured audit entries, handles pause/cancel, enforces max steps, can persist task/audit/model-route state through `RuntimeCommandStore`, and can execute bounded model-planned first-party tool calls after schema and policy checks. | Multi-step assistant runtime with production model responses, installed plugin/tool orchestration, streaming progress, approval UI handoff, and robust recovery. | Bounded fake-model tool orchestration, opt-in local and ChatGPT provider boundaries, explicit installed-plugin subprocess runner, and CLI/IPC/Swift approval scaffold implemented; streaming pending. |
 | Model routing | Local-first `ModelRouter` exists with sensitivity checks, provider-status route evidence, ChatGPT opt-in gate, approval delegation, and redaction logic. The active `/commands` path can call a configured local provider or opt-in ChatGPT/OpenAI-compatible provider after policy allows the route. Repository-backed command execution persists append-only SQLite model-route records and exposes redacted IPC/CLI inspection without storing route context. | Local provider integration, explicit ChatGPT escalation, minimized cloud context, user approval where required, and durable route evidence in every relevant task. | Local and ChatGPT provider boundaries plus SQLite route recovery evidence implemented with tests; broader production model operations pending. |
-| Plugins and tools | Deterministic in-process first-party plugins (`fake_echo`, `fake_status`) execute through command-pattern dispatch and bounded model-planned runtime calls, with manifest validation, policy checks, timeout, cancellation, approval stops, pending approval persistence for approval-gated command scaffolds, and audit evidence. Local plugin installation validates manifest metadata and safe source paths, stores disabled registry records with `execution_enabled=false` and `execution_grant=metadata_only`, supports contract-only dry runs with `side_effect_executed=false`, and can run `local_subprocess` plugins only after an explicit `subprocess_stdio` grant through the constrained JSON stdin/stdout runner. | First-party production plugins plus installed local plugins behind manifests, sandboxing, user grants, UI approval, proactive gating, and real model-generated tool-call execution. | Contract, deterministic first-party paths, metadata-only local install, explicit subprocess execution grant, and constrained installed-plugin runner implemented; broader WASM/network/plugin-marketplace trust pending. |
+| Plugins and tools | Deterministic in-process first-party plugins (`fake_echo`, `fake_status`) execute through command-pattern dispatch and bounded model-planned runtime calls, with manifest validation, policy checks, timeout, cancellation, approval stops, pending approval persistence for approval-gated command scaffolds, and audit evidence. Local plugin installation validates manifest metadata and safe source paths, captures local manifest/subprocess SHA-256 provenance, stores disabled registry records with `execution_enabled=false` and `execution_grant=metadata_only`, supports contract-only dry runs with `side_effect_executed=false`, and can run `local_subprocess` plugins only after local provenance verification plus an explicit `subprocess_stdio` grant through the constrained JSON stdin/stdout runner. | First-party production plugins plus installed local plugins behind manifests, sandboxing, user grants, UI approval, proactive gating, and real model-generated tool-call execution. | Contract, deterministic first-party paths, metadata-only local install, local provenance snapshot verification, explicit subprocess execution grant, and constrained installed-plugin runner implemented; broader WASM/network/plugin-marketplace/signed-publisher trust pending. |
 | Scheduler | Inspectable scheduler jobs with manual, one-time, interval trigger contracts, explicit run-due execution, and an opt-in bounded background trigger loop on `jarvis serve --scheduler-background`. Each tick uses the same visible task/audit records, deterministic due ordering, per-tick limit, and fail-closed emergency-pause behavior as manual run-due. Repository-backed IPC state restores and updates jobs through SQLite. Emergency pause cancels active scheduler jobs, and unsafe due commands fail closed by pausing and cancelling remaining open jobs. | Durable scheduler and trigger engine for approved proactive routines, persisted job state, visible task records, and policy-gated execution. | Durable job state, explicit run-due execution, and opt-in bounded background loop implemented; richer production trigger policy and app notification handoff pending. |
 | Storage and memory | SQLite migrations store tasks, append-only audit entries, append-only redacted model-route records, emergency pause, memory items with provenance/sensitivity/review/soft-delete fields, scheduler jobs, pending approval records, and disabled installed-plugin registry metadata. File-backed repository open creates a preflight migration backup for older schema versions and restores the original DB/WAL/SHM files if opening/configuring/migrating fails. CLI/IPC can inspect model routes, memory items, approval decisions, and plugin metadata when repository backing is enabled. The Mac shell can list, filter, create, load, update mutable memory fields, mark reviewed, soft-delete, and inspect deleted memory through the existing IPC surface. It can also read provider credentials from Keychain at supervised-core launch and inject missing secret env vars without storing them in SQLite or diagnostics. | SQLite also owns permissions, executable plugin grants, migration backup/rollback, and memory UX review flows; Keychain owns secrets; vector indexes remain rebuildable. | Core local state, route recovery evidence, plugin metadata registry, migration preflight backup/restore, Swift memory CRUD/review UI, and Keychain launch credential boundary implemented; richer memory restore/classification UX pending. |
 | Safety and approvals | Capability scopes, risk tiers, emergency-pause fail-closed behavior, audit-required flags, and approval-required decisions exist in Rust. Repository-backed IPC persists pending approvals and supports CLI and Swift grant/deny decisions without executing side effects. | Human approval prompts, permission center, grants history, policy review, and no bypass for high-risk side effects. | Policy engine plus CLI/IPC/Swift approval decision surface implemented; richer permission center pending. |
@@ -495,6 +500,7 @@ erDiagram
         text id PK
         text manifest_json
         text source_path
+        text provenance_json
         integer execution_enabled
         text execution_grant
         text installed_at

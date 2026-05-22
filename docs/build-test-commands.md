@@ -152,7 +152,10 @@ validation. Swift approval and voice controls are covered by the Swift
 contract/model tests.
 Local plugin install is metadata-only:
 `jarvis plugins install /absolute/path/to/jarvis-plugin.json` validates and
-stores a disabled registry record when repository backing is enabled.
+stores a disabled registry record with local provenance hashes when repository
+backing is enabled. Use `jarvis plugins verify-installed <id>` before enabling
+local subprocess execution; enablement fails closed unless the manifest and
+subprocess command still match the install snapshot.
 Background scheduler execution is opt-in on `jarvis serve`; it does not start
 for default smoke or manual inspection sessions unless `--scheduler-background`
 is passed.
@@ -252,7 +255,8 @@ health, runtime-backed command execution, deterministic first-party plugin
 execution, route/policy/plugin audit evidence, approval-required persistence and
 grant/deny decisions, scheduler schedule/cancel and persistence, redacted
 diagnostics export, memory create/update/review/delete and persistence, plugin
-manifests, scheduler due-job execution/reschedule audit evidence, scheduler
+manifests, installed-plugin provenance verification, fail-closed subprocess
+enablement, scheduler due-job execution/reschedule audit evidence, scheduler
 fail-closed emergency pause on non-accepted due jobs, and emergency-pause
 blocking/resume surfaces.
 Runtime unit tests additionally prove bounded fake-model first-party tool-call

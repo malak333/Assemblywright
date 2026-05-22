@@ -5,9 +5,10 @@ the Rust core described in [DESIGN.md](DESIGN.md): durable task/audit
 primitives, policy-gated first-party plugin commands, bounded model-planned
 first-party tool orchestration, local-first model routing evidence, opt-in
 Ollama-compatible local HTTP and ChatGPT/OpenAI-compatible provider boundaries,
-plugin contracts, metadata-only local plugin installation, scheduler state,
-redacted diagnostics export, a loopback IPC surface, and CLI smoke paths for
-the Swift shell scaffold and future packaged app.
+plugin contracts, metadata-only local plugin installation, local plugin
+provenance snapshots, scheduler state, redacted diagnostics export, a loopback
+IPC surface, and CLI smoke paths for the Swift shell scaffold and future
+packaged app.
 It also includes the first buildable Swift/SwiftUI Mac shell scaffold under
 `apps/mac`, with a tested IPC client, command-console state model,
 activity/audit panel for command evidence, memory create/update/review/delete
@@ -20,8 +21,8 @@ and not an autonomous external-communication system. Risky side effects must be
 blocked or require approval, and every meaningful decision should be auditable.
 The current implementation should not be described as a finished production
 assistant: distribution signing/notarization, live microphone validation,
-third-party plugin trust, richer permission-center UX, and manual release QA
-are still target architecture. The
+marketplace or signed-publisher plugin trust, richer permission-center UX, and
+manual release QA are still target architecture. The
 default command path still uses `FakeLocalModel`; set
 `JARVIS_LOCAL_MODEL_PROVIDER=ollama`, `JARVIS_LOCAL_MODEL`, and optionally
 `JARVIS_OLLAMA_BASE_URL`/`JARVIS_LOCAL_MODEL_TIMEOUT_MS` to exercise the local
@@ -30,9 +31,11 @@ typed env opt-in with `JARVIS_CHATGPT_ENABLED=true`,
 `JARVIS_OPENAI_API_KEY`, and optional `JARVIS_CHATGPT_MODEL`,
 `JARVIS_OPENAI_BASE_URL`, and `JARVIS_CHATGPT_TIMEOUT_MS`; route policy still
 blocks restricted data and sends only redacted route context. Local plugin
-installation stores validated manifest metadata disabled by default; executable
-local subprocess plugins require an explicit `subprocess_stdio` grant and still
-run only through the constrained JSON stdin/stdout boundary.
+installation stores validated manifest metadata disabled by default and captures
+a local manifest/subprocess hash snapshot. Executable local subprocess plugins
+require the snapshot to verify as unchanged plus an explicit
+`subprocess_stdio` grant, and still run only through the constrained JSON
+stdin/stdout boundary.
 
 ## Production Work Protocol
 
@@ -46,7 +49,8 @@ claim; it is not proof of a finished packaged assistant.
 Phase 3 landed through separate worktrees for model route persistence, plugin
 subprocess sandboxing, voice input controls, packaged app release smoke,
 permission grants UX, docs architecture alignment, distribution packaging, and
-Keychain launch credential injection. Follow-on slices continue the same
+Keychain launch credential injection. Follow-on slices have added Swift memory
+CRUD and local plugin provenance verification. Later slices continue the same
 branch/PR discipline; release language should describe only the merged
 repo-owned surfaces with recorded focused E2E or integration proof.
 

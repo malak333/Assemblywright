@@ -27,11 +27,11 @@ pub use model::{
 pub use plugin::{
     execute_installed_subprocess_plugin, plugin_permission_scopes, CancellationBehavior,
     CancellationSignal, EchoPlugin, InProcessPlugin, InstalledPlugin,
-    InstalledPluginExecutionGrant, JsonSchema, PluginAccess, PluginActionManifest,
-    PluginCallMetadata, PluginCallRequest, PluginCallResult, PluginCallStatus, PluginHost,
-    PluginManifest, PluginPermission, PluginSource, PluginSubprocessManifest,
-    PluginSubprocessStream, PluginTimeout, PluginTimeoutAction, StatusPlugin,
-    SubprocessPluginExecution,
+    InstalledPluginExecutionGrant, InstalledPluginIntegrityStatus, InstalledPluginProvenance,
+    JsonSchema, PluginAccess, PluginActionManifest, PluginCallMetadata, PluginCallRequest,
+    PluginCallResult, PluginCallStatus, PluginHost, PluginManifest, PluginPermission, PluginSource,
+    PluginSubprocessManifest, PluginSubprocessStream, PluginTimeout, PluginTimeoutAction,
+    StatusPlugin, SubprocessPluginExecution,
 };
 pub use policy::{
     ApprovalDecision, ApprovalGrant, CapabilityScope, PermissionEngine, PolicyDecision,

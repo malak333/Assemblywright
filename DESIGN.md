@@ -265,8 +265,9 @@ Implementation should begin with the smallest product-grade foundation:
 
 Current implementation status: the repo structure, IPC health/command surface,
 durable task/audit/emergency-pause/memory/scheduler schema, fake local model,
-first-party plugin contracts, metadata-only local plugin installation, CLI
-smoke path, redacted diagnostics export, and buildable Swift command/activity
+first-party plugin contracts, metadata-only local plugin installation, local
+plugin provenance snapshot verification, CLI smoke path, redacted diagnostics
+export, and buildable Swift command/activity
 shell scaffold are implemented. The command runtime can route to fake local,
 Ollama-compatible local HTTP, or explicitly enabled ChatGPT/OpenAI-compatible
 HTTP providers. The Swift app includes approval decision controls, management
@@ -274,8 +275,9 @@ surfaces, memory create/update/review/delete controls over the existing Rust
 IPC contract, voice input/output adapter controls, text-transcript command
 handoff, and core supervision abstractions. The product still lacks
 signed/notarized release evidence, live microphone and audio-output validation,
-broader production plugin trust boundaries, richer proactive trigger policy,
-and app notification handoff. Swift supervision is covered only as a scaffold for
+marketplace/WASM/network/signed-publisher plugin trust boundaries, richer
+proactive trigger policy, and app notification handoff. Swift supervision is
+covered only as a scaffold for
 configured or packaged-style local core binaries.
 
 The active phase-3 production sweep uses isolated worktrees, topic branches,
@@ -283,9 +285,10 @@ reviewable PR slices, and docs-only synchronization work on
 `codex/phase3-docs-architecture`. The phase-3 lanes are
 `model-route-persistence`, `plugin-subprocess-sandbox`,
 `voice-adapter-production`, `packaged-app-release-smoke`,
-`permission-grants-ux`, and `phase3-docs-architecture`. That workflow improves
-reviewability but is not readiness evidence by itself. Readiness language must
-be tied to checked-in code, documented diagrams, knowledge-base updates, and the
-specific local/E2E checks that passed.
+`permission-grants-ux`, and `phase3-docs-architecture`. Follow-on slices
+include Swift memory CRUD and local plugin provenance verification. That
+workflow improves reviewability but is not readiness evidence by itself.
+Readiness language must be tied to checked-in code, documented diagrams,
+knowledge-base updates, and the specific local/E2E checks that passed.
 
 Before implementation, the design should be reviewed through a multi-agent brainstorming pass because Jarvis is high-autonomy, security-sensitive, and product-grade.

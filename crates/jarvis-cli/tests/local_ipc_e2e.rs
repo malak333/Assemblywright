@@ -155,6 +155,21 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_eq!(installed_plugin["execution_enabled"], false);
     assert_eq!(installed_plugin["execution_grant"], "metadata_only");
     assert_eq!(installed_plugin["manifest"]["source"], "local_development");
+    assert_eq!(
+        installed_plugin["provenance"]["integrity_status"],
+        "not_verified"
+    );
+    assert_eq!(
+        installed_plugin["provenance"]["capture_method"],
+        "local_manifest_snapshot"
+    );
+    assert!(
+        installed_plugin["provenance"]["manifest_sha256"]
+            .as_str()
+            .expect("manifest hash")
+            .len()
+            == 64
+    );
 
     let installed_plugins = run_cli_json(["plugins", "installed", "--endpoint", endpoint.as_str()]);
     assert_array_contains(&installed_plugins, "id", "local_e2e_plugin");
@@ -294,6 +309,38 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_eq!(subprocess_installed["id"], "local_subprocess_e2e");
     assert_eq!(subprocess_installed["execution_enabled"], false);
     assert_eq!(subprocess_installed["execution_grant"], "metadata_only");
+    assert_eq!(
+        subprocess_installed["provenance"]["integrity_status"],
+        "not_verified"
+    );
+    assert!(
+        subprocess_installed["provenance"]["subprocess_command_sha256"]
+            .as_str()
+            .expect("subprocess hash")
+            .len()
+            == 64
+    );
+
+    let subprocess_enable_unverified = run_cli_failure([
+        "plugins",
+        "enable-installed",
+        "local_subprocess_e2e",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert!(subprocess_enable_unverified.contains("requires local provenance verification"));
+
+    let subprocess_verified = run_cli_json([
+        "plugins",
+        "verify-installed",
+        "local_subprocess_e2e",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(
+        subprocess_verified["provenance"]["integrity_status"],
+        "matches_install_snapshot"
+    );
 
     let subprocess_enabled = run_cli_json([
         "plugins",
@@ -318,6 +365,10 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_eq!(subprocess_run["status"], "completed");
     assert_eq!(subprocess_run["execution_enabled"], true);
     assert_eq!(subprocess_run["execution_grant"], "subprocess_stdio");
+    assert_eq!(
+        subprocess_run["provenance"]["integrity_status"],
+        "matches_install_snapshot"
+    );
     assert_eq!(subprocess_run["output"]["path"], "README.md");
     assert_eq!(subprocess_run["side_effect_executed"], true);
     assert_eq!(
@@ -655,7 +706,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
 
     let diagnostics = run_cli_json(["diagnostics", "export", "--endpoint", endpoint.as_str()]);
     assert_eq!(diagnostics["repository_backed"], true);
-    assert_eq!(diagnostics["schema_version"], 7);
+    assert_eq!(diagnostics["schema_version"], 8);
     assert_eq!(
         diagnostics["health"]["contract"]["name"],
         "jarvis.local-ipc"
