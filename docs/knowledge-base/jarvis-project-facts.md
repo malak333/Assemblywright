@@ -202,6 +202,12 @@ These notes capture durable facts for future agents working on this repository.
   audit entry before command submission. The audit uses the same trigger
   classification as `/permissions/policy-review`, marks `command_redacted:
   true`, and keeps scheduler command text out of the policy audit payload.
+  `jarvis scheduler recover-stale` and `/scheduler/recover-stale` provide
+  explicit operator recovery for persisted stale `Running` jobs after a crash
+  or killed process. Recovery marks matching jobs failed, returns diagnostic
+  scheduler job fields without commands, and records
+  `scheduler_stale_running_recovered` with command redaction evidence. This is
+  explicit recovery, not automatic background lease recovery.
   The Swift Scheduler tab renders this summary above the job list and now owns
   a protocol-backed notification model plus macOS `UserNotifications` adapter
   controls for due/failed attention items. Swift tests use a fake adapter to
@@ -225,6 +231,9 @@ These notes capture durable facts for future agents working on this repository.
   The E2E covers scheduler proactive policy audit evidence during `scheduler
   run-due` by asserting both one-time and recurring due jobs emit redacted
   `scheduler_proactive_policy_checked` audit entries.
+  It also covers stale-running scheduler recovery by persisting a running job
+  across restart, running `scheduler recover-stale`, and asserting redacted
+  recovery output plus `scheduler_stale_running_recovered` audit evidence.
 - Focused provider-failure recovery coverage is
   `cargo test -p jarvis-core model_provider_failure_returns_failed_response_with_route_evidence -- --nocapture`
   plus

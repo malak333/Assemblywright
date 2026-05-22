@@ -164,6 +164,11 @@ stage or when a PR needs focused evidence for one ownership slice.
   `scheduler_proactive_policy_checked` before command submission, reuses the
   policy-review trigger classification, marks command redaction explicitly, and
   does not expose scheduler command bodies in that policy audit.
+- Confirm scheduler stale-running recovery is explicit and operator-triggered:
+  `/scheduler/recover-stale` or `jarvis scheduler recover-stale` marks stale
+  `Running` jobs failed, returns redacted diagnostic job fields, and appends
+  `scheduler_stale_running_recovered` without exposing scheduler command
+  bodies.
 - Confirm permission policy review includes unreviewed memory items without
   exposing memory values, and diagnostics export exposes only aggregate active,
   unreviewed, and sensitive memory counts.
@@ -193,6 +198,7 @@ stage or when a PR needs focused evidence for one ownership slice.
   schedule/get/list/cancel, redacted scheduler trigger policy review,
   redacted scheduler attention handoff, scheduler run-due success/reschedule,
   redacted proactive scheduler policy audit before due command submission,
+  explicit stale-running scheduler recovery after persisted running state,
   scheduler fail-closed pause on non-accepted due
   jobs, diagnostics redaction, persistence restart, and emergency-pause
   blocking/resume behavior. Treat this as the minimum E2E expectation for the

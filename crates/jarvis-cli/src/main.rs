@@ -158,6 +158,15 @@ enum SchedulerCommand {
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
+    /// Mark stale running scheduler jobs failed after explicit operator review.
+    RecoverStale {
+        #[arg(long, default_value_t = 3600)]
+        older_than_seconds: u64,
+        #[arg(long, default_value_t = 16)]
+        limit: usize,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
     /// Cancel a scheduler job by id.
     Cancel {
         id: String,
@@ -555,6 +564,23 @@ async fn main() -> anyhow::Result<()> {
                         &endpoint,
                         "POST",
                         &format!("/scheduler/run-due?limit={limit}"),
+                        None,
+                    )?
+                );
+            }
+            SchedulerCommand::RecoverStale {
+                older_than_seconds,
+                limit,
+                endpoint,
+            } => {
+                println!(
+                    "{}",
+                    request(
+                        &endpoint,
+                        "POST",
+                        &format!(
+                            "/scheduler/recover-stale?older_than_seconds={older_than_seconds}&limit={limit}"
+                        ),
                         None,
                     )?
                 );

@@ -271,6 +271,22 @@ pub struct SchedulerRunResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SchedulerStaleRecoveryResponse {
+    pub checked_at: DateTime<Utc>,
+    pub older_than_seconds: u64,
+    pub limit: usize,
+    pub recovered: Vec<SchedulerStaleRecoveryItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SchedulerStaleRecoveryItem {
+    pub job: DiagnosticSchedulerJob,
+    pub stale_since: DateTime<Utc>,
+    pub stale_for_seconds: i64,
+    pub audit_entry: AuditEntry,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SchedulerJobExecution {
     pub job: SchedulerJob,
     pub task: TaskRecord,
@@ -1974,6 +1990,64 @@ impl IpcState {
         })
     }
 
+    pub fn recover_stale_scheduler_jobs(
+        &self,
+        older_than_seconds: u64,
+        limit: usize,
+    ) -> JarvisResult<SchedulerStaleRecoveryResponse> {
+        let checked_at = Utc::now();
+        let seconds = i64::try_from(older_than_seconds).map_err(|_| {
+            JarvisError::Validation(
+                "older_than_seconds must fit into a signed duration".to_string(),
+            )
+        })?;
+        let limit = limit.max(1);
+        let stale_jobs =
+            self.scheduler
+                .stale_running_jobs(checked_at, Duration::seconds(seconds), limit);
+        let mut recovered = Vec::new();
+
+        for stale_job in stale_jobs {
+            let stale_since = stale_job.updated_at;
+            let stale_for_seconds = checked_at
+                .signed_duration_since(stale_since)
+                .num_seconds()
+                .max(0);
+            let failed = self.fail_scheduler_job(stale_job.id)?;
+            let audit_entry = self.append_scheduler_audit_entry(
+                None,
+                "scheduler_stale_running_recovered",
+                "scheduler marked a stale running job failed for explicit operator recovery",
+                json!({
+                    "checked_at": checked_at,
+                    "scheduler_job_id": failed.id,
+                    "scheduler_job_name": failed.name,
+                    "trigger": failed.trigger,
+                    "job_status": failed.status,
+                    "previous_status": SchedulerJobStatus::Running,
+                    "stale_since": stale_since,
+                    "stale_for_seconds": stale_for_seconds,
+                    "older_than_seconds": older_than_seconds,
+                    "command_redacted": true,
+                    "automatic_recovery": false,
+                }),
+            )?;
+            recovered.push(SchedulerStaleRecoveryItem {
+                job: DiagnosticSchedulerJob::from(failed),
+                stale_since,
+                stale_for_seconds,
+                audit_entry,
+            });
+        }
+
+        Ok(SchedulerStaleRecoveryResponse {
+            checked_at,
+            older_than_seconds,
+            limit,
+            recovered,
+        })
+    }
+
     pub fn scheduler_attention(&self) -> SchedulerAttentionSummary {
         let generated_at = Utc::now();
         let emergency_paused = self.runtime_control.is_emergency_paused();
@@ -2543,6 +2617,10 @@ pub fn router(state: IpcState) -> Router {
         .route("/scheduler/attention", get(scheduler_attention))
         .route("/scheduler/run-due", post(run_due_scheduler_jobs))
         .route(
+            "/scheduler/recover-stale",
+            post(recover_stale_scheduler_jobs),
+        )
+        .route(
             "/scheduler/jobs/:id",
             get(get_scheduler_job).delete(cancel_scheduler_job),
         )
@@ -3056,6 +3134,24 @@ async fn run_due_scheduler_jobs(
         .map_err(error_response)
 }
 
+async fn recover_stale_scheduler_jobs(
+    State(state): State<IpcState>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Result<Json<SchedulerStaleRecoveryResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let older_than_seconds = query
+        .get("older_than_seconds")
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(3600);
+    let limit = query
+        .get("limit")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(16);
+    state
+        .recover_stale_scheduler_jobs(older_than_seconds, limit)
+        .map(Json)
+        .map_err(error_response)
+}
+
 async fn cancel_scheduler_job(
     State(state): State<IpcState>,
     Path(id): Path<Uuid>,
@@ -3126,6 +3222,7 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
         endpoint("POST", "/scheduler/jobs", false, false),
         endpoint("GET", "/scheduler/attention", false, true),
         endpoint("POST", "/scheduler/run-due", false, false),
+        endpoint("POST", "/scheduler/recover-stale", false, false),
         endpoint("GET", "/scheduler/jobs/:id", false, false),
         endpoint("DELETE", "/scheduler/jobs/:id", false, false),
     ]
@@ -3156,6 +3253,12 @@ fn contract_features() -> Vec<ContractFeature> {
             "implemented",
             "Active scheduler triggers appear in `/permissions/policy-review` without scheduler command text and are covered by Rust unit and CLI IPC E2E tests.",
             "Review visibility only; richer proactive trigger policy and manual notification validation remain pending.",
+        ),
+        feature(
+            "scheduler_stale_running_recovery",
+            "implemented",
+            "Explicit `/scheduler/recover-stale` marks stale running jobs failed with redacted audit evidence and is covered by Rust unit plus CLI IPC E2E tests.",
+            "Operator-triggered recovery only; no automatic background recovery or distributed lease claim.",
         ),
         feature(
             "memory_policy_review",
@@ -4721,6 +4824,58 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         );
         let encoded = serde_json::to_string(policy_audit).expect("policy audit JSON");
         assert!(!encoded.contains("plugin status"));
+    }
+
+    #[tokio::test]
+    async fn recover_stale_scheduler_jobs_marks_running_jobs_failed_and_audits_redacted() {
+        let repository = SqliteRepository::in_memory().unwrap();
+        let state = IpcState::with_repository(repository).expect("state");
+        let stale = state
+            .schedule_scheduler_job(SchedulerJobSpec {
+                name: "stale running".to_string(),
+                command: "do not expose stale command".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .expect("schedule stale");
+        let scheduled = state
+            .schedule_scheduler_job(SchedulerJobSpec {
+                name: "still scheduled".to_string(),
+                command: "do not recover scheduled".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .expect("schedule");
+        state
+            .mark_scheduler_job_running(stale.id)
+            .expect("mark running");
+
+        let response = state
+            .recover_stale_scheduler_jobs(0, 16)
+            .expect("recover stale");
+
+        assert_eq!(response.recovered.len(), 1);
+        assert_eq!(response.recovered[0].job.id, stale.id);
+        assert_eq!(response.recovered[0].job.status, SchedulerJobStatus::Failed);
+        assert!(response.recovered[0].stale_for_seconds >= 0);
+        assert_eq!(
+            state.get_scheduler_job(stale.id).expect("stale").status,
+            SchedulerJobStatus::Failed
+        );
+        assert_eq!(
+            state
+                .get_scheduler_job(scheduled.id)
+                .expect("scheduled")
+                .status,
+            SchedulerJobStatus::Scheduled
+        );
+        let audit = state
+            .using_repository(|repository| repository.list_audit_entries(None))
+            .expect("audit");
+        assert!(audit
+            .iter()
+            .any(|entry| entry.event_type == "scheduler_stale_running_recovered"));
+        let encoded = serde_json::to_string(&response).expect("recovery JSON");
+        assert!(!encoded.contains("do not expose stale command"));
+        assert!(!encoded.contains("do not recover scheduled"));
     }
 
     #[tokio::test]

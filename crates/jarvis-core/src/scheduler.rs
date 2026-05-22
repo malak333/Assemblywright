@@ -161,6 +161,30 @@ impl Scheduler {
         due
     }
 
+    pub fn stale_running_jobs(
+        &self,
+        now: DateTime<Utc>,
+        older_than: Duration,
+        limit: usize,
+    ) -> Vec<SchedulerJob> {
+        if limit == 0 {
+            return Vec::new();
+        }
+
+        let cutoff = now - older_than;
+        let mut stale = self
+            .jobs
+            .lock()
+            .expect("scheduler jobs lock poisoned")
+            .values()
+            .filter(|job| job.status == SchedulerJobStatus::Running && job.updated_at <= cutoff)
+            .cloned()
+            .collect::<Vec<_>>();
+        stale.sort_by_key(|job| (job.updated_at, job.created_at, job.id));
+        stale.truncate(limit);
+        stale
+    }
+
     pub fn get(&self, id: Uuid) -> Option<SchedulerJob> {
         self.jobs
             .lock()
@@ -462,6 +486,59 @@ mod tests {
         assert!(due.iter().any(|job| job.id == past_once.id));
         assert!(due.iter().any(|job| job.id == interval.id));
         assert_eq!(scheduler.due_jobs(now + Duration::seconds(31), 2).len(), 2);
+    }
+
+    #[test]
+    fn detects_stale_running_jobs_in_oldest_first_order() {
+        let scheduler = Scheduler::new();
+        let now = Utc::now();
+        let first = scheduler
+            .schedule(SchedulerJobSpec {
+                name: "first".to_string(),
+                command: "do first".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .expect("first");
+        let second = scheduler
+            .schedule(SchedulerJobSpec {
+                name: "second".to_string(),
+                command: "do second".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .expect("second");
+        let fresh = scheduler
+            .schedule(SchedulerJobSpec {
+                name: "fresh".to_string(),
+                command: "do fresh".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .expect("fresh");
+        let scheduled = scheduler
+            .schedule(SchedulerJobSpec {
+                name: "scheduled".to_string(),
+                command: "not running".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .expect("scheduled");
+
+        scheduler.mark_running(first.id).expect("first running");
+        scheduler.mark_running(second.id).expect("second running");
+        scheduler.mark_running(fresh.id).expect("fresh running");
+        {
+            let mut jobs = scheduler.jobs.lock().expect("jobs lock");
+            jobs.get_mut(&first.id).expect("first").updated_at = now - Duration::seconds(120);
+            jobs.get_mut(&second.id).expect("second").updated_at = now - Duration::seconds(90);
+            jobs.get_mut(&fresh.id).expect("fresh").updated_at = now - Duration::seconds(10);
+        }
+
+        let stale = scheduler.stale_running_jobs(now, Duration::seconds(60), 10);
+
+        assert_eq!(
+            stale.iter().map(|job| job.id).collect::<Vec<_>>(),
+            vec![first.id, second.id]
+        );
+        assert!(!stale.iter().any(|job| job.id == fresh.id));
+        assert!(!stale.iter().any(|job| job.id == scheduled.id));
     }
 
     #[test]

@@ -24,6 +24,9 @@ Scheduler due execution records a redacted proactive policy audit before
 submitting commands, using the same trigger classification as
 `/permissions/policy-review`, so proactive routines stay inspectable without
 exposing scheduler command text.
+Operators can also run `jarvis scheduler recover-stale` to mark persisted
+stale `Running` scheduler jobs failed with redacted audit evidence after a
+crash or killed process leaves a job leased but unfinished.
 
 ## Current Scope
 
@@ -77,7 +80,8 @@ Keychain launch credential injection. Follow-on slices have added Swift memory
 CRUD, local plugin provenance verification, scheduler attention handoff, and
 permission policy review plus scheduler trigger review and notification
 controls, including redacted proactive scheduler policy audit before due
-command execution. Later slices continue the same branch/PR discipline;
+command execution and explicit stale-running scheduler recovery. Later slices
+continue the same branch/PR discipline;
 release language should describe only the merged repo-owned surfaces with
 recorded focused E2E or integration proof.
 The permission center now surfaces installed-plugin provenance status from
