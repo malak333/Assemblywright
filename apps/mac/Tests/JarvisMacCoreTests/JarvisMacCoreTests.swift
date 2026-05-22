@@ -265,6 +265,18 @@ struct JarvisMacCoreTests {
                 "version": 1,
                 "core_version": "0.1.0"
               },
+              "compatibility": {
+                "minimum_supported_version": 1,
+                "current_version": 1,
+                "additive_changes_allowed": true,
+                "breaking_change_policy": "version bump required",
+                "deprecation_policy": "list before removal",
+                "client_requirements": [
+                  "Clients must ignore unknown JSON fields."
+                ],
+                "removed_endpoints": [],
+                "deprecated_endpoints": []
+              },
               "endpoints": [
                 { "method": "GET", "path": "/health", "repository_required": false, "redacted": true },
                 { "method": "GET", "path": "/scheduler/jobs/:id", "repository_required": false, "redacted": false },
@@ -294,6 +306,9 @@ struct JarvisMacCoreTests {
         let contract = try JSONDecoder().decode(JarvisContractResponse.self, from: data)
 
         #expect(contract.contract.name == "jarvis.local-ipc")
+        #expect(contract.compatibility?.supportsCurrentClient == true)
+        #expect(contract.compatibility?.additiveChangesAllowed == true)
+        #expect(contract.compatibility?.clientRequirements.contains("Clients must ignore unknown JSON fields.") == true)
         #expect(contract.endpoints.map(\.id).contains("GET /scheduler/jobs/:id"))
         #expect(contract.safeInspectionPaths.contains("/diagnostics/export"))
         #expect(contract.features.map(\.id).contains("scheduler_trigger_policy_review"))
