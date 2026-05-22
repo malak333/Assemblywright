@@ -58,6 +58,10 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   bundle ID, short/build version, non-self-test identity, and ordered UTC
   voice-check timestamps; weak or stale hand-written reports must keep
   `live_voice_loop` pending.
+- Confirm plugin-trust and final bundle reports are `present`, not `invalid`.
+  Evidence-status checks plugin-trust review timestamps, final bundle version,
+  SHA-256 digest shape, and local signature-validation status before treating
+  those reports as usable evidence.
 - Confirm `jarvis release --help`, `jarvis release readiness --help`, and
   `jarvis release evidence-status --help` preserve the same read-only,
   IPC-first/local-fallback, evidence-mode, and file/report-inspection
@@ -324,8 +328,8 @@ stage or when a PR needs focused evidence for one ownership slice.
 - Confirm `/release/evidence-status` and `jarvis release evidence-status` expose
   the same standard release evidence inventory as structured, redacted status
   items with `present`, `missing`, or `invalid` state, including JSON-report
-  required-field validation for owner-recorded live-device and plugin-trust
-  evidence.
+  required-field and semantic validation for owner-recorded live-device,
+  plugin-trust, and final bundle evidence.
 - Confirm the Swift Release tab decodes the same `/release/readiness` contract
   and renders blocking gates, recommended commands, implemented proofs, pending
   features, proof boundary, stale cached-readiness state, and structured

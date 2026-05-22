@@ -86,6 +86,47 @@ const LIVE_DEVICE_QA_REQUIRED_FIELDS: &[&str] = &[
     "voice_command_observation.command_result_evidence_id",
     "voice_command_observation.audio_output_device_label",
 ];
+const PLUGIN_TRUST_QA_REQUIRED_FIELDS: &[&str] = &[
+    "generated_at",
+    "review_source",
+    "validation_flags.marketplace_review",
+    "validation_flags.malware_scan",
+    "validation_flags.os_sandbox",
+    "validation_flags.egress_enforcement",
+    "validation_flags.signed_publisher_policy",
+    "validation_flags.manual_trust_review",
+    "owner_recorded_plugin_trust_evidence.owner_name",
+    "owner_recorded_plugin_trust_evidence.review_started_at",
+    "owner_recorded_plugin_trust_evidence.review_completed_at",
+    "owner_recorded_plugin_trust_evidence.marketplace_evidence_note",
+    "owner_recorded_plugin_trust_evidence.malware_scan_evidence_note",
+    "owner_recorded_plugin_trust_evidence.os_sandbox_evidence_note",
+    "owner_recorded_plugin_trust_evidence.egress_evidence_note",
+    "owner_recorded_plugin_trust_evidence.signed_publisher_evidence_note",
+    "owner_recorded_plugin_trust_evidence.manual_review_evidence_note",
+    "proof_boundary",
+];
+const RELEASE_EVIDENCE_BUNDLE_REQUIRED_FIELDS: &[&str] = &[
+    "generated_at",
+    "version",
+    "artifacts.app_path",
+    "artifacts.zip_path",
+    "artifacts.pkg_path",
+    "artifacts.zip_sha256",
+    "artifacts.pkg_sha256",
+    "reports.live_device_qa_report",
+    "reports.plugin_trust_qa_report",
+    "reports.live_device_qa_sha256",
+    "reports.plugin_trust_qa_sha256",
+    "validation_flags.signed_distribution",
+    "validation_flags.notarization",
+    "validation_flags.clean_profile",
+    "validation_flags.live_device_qa",
+    "validation_flags.plugin_trust_qa",
+    "validation_flags.reports_archived",
+    "validation_flags.local_signature_validation",
+    "proof_boundary",
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContractMetadata {
@@ -3929,37 +3970,13 @@ fn release_evidence_status_from_env() -> ReleaseEvidenceStatusResponse {
             "plugin_trust_qa_report",
             "Plugin-trust QA report",
             plugin_qa_report,
-            &[
-                "validation_flags.marketplace_review",
-                "validation_flags.malware_scan",
-                "validation_flags.os_sandbox",
-                "validation_flags.egress_enforcement",
-                "validation_flags.signed_publisher_policy",
-                "validation_flags.manual_trust_review",
-                "owner_recorded_plugin_trust_evidence.owner_name",
-                "owner_recorded_plugin_trust_evidence.review_started_at",
-                "owner_recorded_plugin_trust_evidence.review_completed_at",
-                "owner_recorded_plugin_trust_evidence.marketplace_evidence_note",
-                "owner_recorded_plugin_trust_evidence.malware_scan_evidence_note",
-                "owner_recorded_plugin_trust_evidence.os_sandbox_evidence_note",
-                "owner_recorded_plugin_trust_evidence.egress_evidence_note",
-                "owner_recorded_plugin_trust_evidence.signed_publisher_evidence_note",
-                "owner_recorded_plugin_trust_evidence.manual_review_evidence_note",
-            ],
+            PLUGIN_TRUST_QA_REQUIRED_FIELDS,
         ),
         release_json_report_item(
             "release_evidence_bundle",
             "Release evidence bundle",
             bundle_path,
-            &[
-                "validation_flags.signed_distribution",
-                "validation_flags.notarization",
-                "validation_flags.clean_profile",
-                "validation_flags.live_device_qa",
-                "validation_flags.plugin_trust_qa",
-                "validation_flags.reports_archived",
-                "version",
-            ],
+            RELEASE_EVIDENCE_BUNDLE_REQUIRED_FIELDS,
         ),
     ];
 
@@ -3993,7 +4010,7 @@ fn release_evidence_status_from_env() -> ReleaseEvidenceStatusResponse {
         invalid_count,
         items,
         proof_boundary:
-            "File/report inventory only; complete means expected paths are present and JSON reports pass required field checks plus live-device QA release-metadata and timestamp semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
+            "File/report inventory only; complete means expected paths are present and JSON reports pass required field checks plus live-device QA release-metadata/timestamp semantics, plugin-trust timestamp semantics, and final evidence-bundle version/SHA/signature-validation semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
                 .to_string(),
     }
 }
@@ -4124,6 +4141,14 @@ fn inspect_release_json_report(
             if let Err(error) = validate_live_device_qa_report(&value) {
                 return (ReleaseEvidenceItemStatus::Invalid, error);
             }
+        } else if key == "plugin_trust_qa_report" {
+            if let Err(error) = validate_plugin_trust_qa_report(&value) {
+                return (ReleaseEvidenceItemStatus::Invalid, error);
+            }
+        } else if key == "release_evidence_bundle" {
+            if let Err(error) = validate_release_evidence_bundle(&value) {
+                return (ReleaseEvidenceItemStatus::Invalid, error);
+            }
         }
         (
             ReleaseEvidenceItemStatus::Present,
@@ -4186,6 +4211,54 @@ fn validate_live_device_qa_report(value: &serde_json::Value) -> Result<(), Strin
     Ok(())
 }
 
+fn validate_plugin_trust_qa_report(value: &serde_json::Value) -> Result<(), String> {
+    let generated_at = require_utc_report_timestamp(value, "generated_at")?;
+    let started_at = require_utc_report_timestamp(
+        value,
+        "owner_recorded_plugin_trust_evidence.review_started_at",
+    )?;
+    let completed_at = require_utc_report_timestamp(
+        value,
+        "owner_recorded_plugin_trust_evidence.review_completed_at",
+    )?;
+    if completed_at < started_at {
+        return Err(
+            "JSON report review_completed_at must be greater than or equal to review_started_at"
+                .to_string(),
+        );
+    }
+    if generated_at < completed_at {
+        return Err(
+            "JSON report generated_at must be greater than or equal to review_completed_at"
+                .to_string(),
+        );
+    }
+    if json_string_at(value, "review_source")
+        .map(|source| source == "self-test-fixture")
+        .unwrap_or(false)
+    {
+        return Err("JSON report review_source must not be self-test-fixture".to_string());
+    }
+
+    Ok(())
+}
+
+fn validate_release_evidence_bundle(value: &serde_json::Value) -> Result<(), String> {
+    require_utc_report_timestamp(value, "generated_at")?;
+    require_json_string_value(value, "version", &expected_release_evidence_version())?;
+    require_json_bool_value(value, "validation_flags.local_signature_validation", true)?;
+    for field in [
+        "artifacts.zip_sha256",
+        "artifacts.pkg_sha256",
+        "reports.live_device_qa_sha256",
+        "reports.plugin_trust_qa_sha256",
+    ] {
+        require_json_sha256_value(value, field)?;
+    }
+
+    Ok(())
+}
+
 fn env_value_alias(primary: &str, alias: &str, default: &str) -> String {
     std::env::var(primary)
         .or_else(|_| std::env::var(alias))
@@ -4195,6 +4268,11 @@ fn env_value_alias(primary: &str, alias: &str, default: &str) -> String {
 fn expected_live_qa_version() -> String {
     std::env::var("JARVIS_QA_EXPECTED_VERSION")
         .or_else(|_| std::env::var("JARVIS_EVIDENCE_VERSION"))
+        .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string())
+}
+
+fn expected_release_evidence_version() -> String {
+    std::env::var("JARVIS_EVIDENCE_VERSION")
         .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string())
 }
 
@@ -4210,6 +4288,38 @@ fn require_json_string_value(
     } else {
         Err(format!(
             "JSON report {dotted_path} mismatch: expected {expected}, got {found}"
+        ))
+    }
+}
+
+fn require_json_bool_value(
+    value: &serde_json::Value,
+    dotted_path: &str,
+    expected: bool,
+) -> Result<(), String> {
+    let found = dotted_path
+        .split('.')
+        .try_fold(value, |current, key| current.get(key))
+        .and_then(|found| found.as_bool())
+        .ok_or_else(|| format!("JSON report is missing required boolean field: {dotted_path}"))?;
+    if found == expected {
+        Ok(())
+    } else {
+        Err(format!(
+            "JSON report {dotted_path} must be {expected}, got {found}"
+        ))
+    }
+}
+
+fn require_json_sha256_value(value: &serde_json::Value, dotted_path: &str) -> Result<(), String> {
+    let found = json_string_at(value, dotted_path)
+        .ok_or_else(|| format!("JSON report is missing required field: {dotted_path}"))?;
+    let is_sha256 = found.len() == 64 && found.bytes().all(|byte| byte.is_ascii_hexdigit());
+    if is_sha256 {
+        Ok(())
+    } else {
+        Err(format!(
+            "JSON report {dotted_path} must be a SHA-256 hex digest"
         ))
     }
 }
@@ -4240,8 +4350,9 @@ fn json_string_at(value: &serde_json::Value, dotted_path: &str) -> Option<String
 
 fn release_json_present_detail(key: &str) -> String {
     match key {
-        "release_evidence_bundle" => "JSON report exists and required owner-recorded fields are present; signed_distribution and notarization are report flags and are not revalidated by evidence-status".to_string(),
+        "release_evidence_bundle" => "JSON report exists, expected release version matches, artifact/report SHA-256 digests are present, and local signature validation is true; signed_distribution and notarization remain owner-recorded external evidence".to_string(),
         "live_device_qa_report" => "JSON report exists, required owner-recorded fields are present, and release metadata plus timestamps match expected values; live-device claims are still owner-recorded external evidence".to_string(),
+        "plugin_trust_qa_report" => "JSON report exists, required owner-recorded fields are present, and review timestamps are valid and ordered; marketplace, malware, sandbox, and egress claims remain owner-recorded external evidence".to_string(),
         _ => "JSON report exists and required owner-recorded fields are present; external claims are not revalidated by evidence-status".to_string(),
     }
 }
@@ -4414,7 +4525,7 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "release_evidence_status",
             "implemented",
-            "`/release/evidence-status` and `jarvis release evidence-status` expose structured present, missing, or invalid status for standard signed artifacts, QA reports, and final evidence bundle paths, including live-device QA bundle/version/timestamp semantic validation, with Rust, CLI E2E, and Swift model coverage.",
+            "`/release/evidence-status` and `jarvis release evidence-status` expose structured present, missing, or invalid status for standard signed artifacts, QA reports, and final evidence bundle paths, including live-device QA bundle/version/timestamp checks, plugin-trust timestamp checks, and final evidence-bundle version/SHA/signature-validation checks, with Rust, CLI E2E, and Swift model coverage.",
             "Read-only file/report inventory plus report semantic validation only; it does not sign, notarize, install, Finder-launch, run live-device QA, review marketplace trust, scan malware, or enforce OS sandboxing.",
         ),
         feature(
@@ -4939,6 +5050,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert!(!status.proof_boundary.contains("production ready"));
         assert!(status.proof_boundary.contains("live-device QA"));
         assert!(status.proof_boundary.contains("timestamp semantics"));
+        assert!(status.proof_boundary.contains("plugin-trust"));
         assert!(status.proof_boundary.contains("does not sign"));
         assert!(status.items.iter().any(|item| {
             item.key == "release_evidence_bundle"
@@ -4992,10 +5104,15 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert!(live_detail.contains("owner-recorded external evidence"));
 
         let bundle_detail = release_json_present_detail("release_evidence_bundle");
-        assert!(bundle_detail.contains("signed_distribution"));
-        assert!(bundle_detail.contains("notarization"));
-        assert!(bundle_detail.contains("report flags"));
-        assert!(bundle_detail.contains("not revalidated by evidence-status"));
+        assert!(bundle_detail.contains("expected release version"));
+        assert!(bundle_detail.contains("SHA-256"));
+        assert!(bundle_detail.contains("local signature validation"));
+        assert!(bundle_detail.contains("owner-recorded external evidence"));
+
+        let plugin_detail = release_json_present_detail("plugin_trust_qa_report");
+        assert!(plugin_detail.contains("review timestamps"));
+        assert!(plugin_detail.contains("marketplace"));
+        assert!(plugin_detail.contains("owner-recorded external evidence"));
     }
 
     fn valid_live_device_qa_report_json() -> serde_json::Value {
@@ -5063,6 +5180,98 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             "live_device_qa_report",
             report_path.path(),
             LIVE_DEVICE_QA_REQUIRED_FIELDS,
+        )
+    }
+
+    fn valid_plugin_trust_qa_report_json() -> serde_json::Value {
+        json!({
+            "generated_at": "2026-05-22T16:21:00Z",
+            "review_source": "owner-asserted-manual-review",
+            "validation_flags": {
+                "marketplace_review": true,
+                "malware_scan": true,
+                "os_sandbox": true,
+                "egress_enforcement": true,
+                "signed_publisher_policy": true,
+                "manual_trust_review": true
+            },
+            "owner_recorded_plugin_trust_evidence": {
+                "owner_name": "Release Operator",
+                "review_started_at": "2026-05-22T16:10:00Z",
+                "review_completed_at": "2026-05-22T16:20:00Z",
+                "marketplace_evidence_note": "Marketplace review evidence archived.",
+                "malware_scan_evidence_note": "Malware scan evidence archived.",
+                "os_sandbox_evidence_note": "OS sandbox validation evidence archived.",
+                "egress_evidence_note": "Host-level egress validation evidence archived.",
+                "signed_publisher_evidence_note": "Signed publisher policy evidence archived.",
+                "manual_review_evidence_note": "Manual plugin trust review evidence archived."
+            },
+            "proof_boundary": "Owner-recorded plugin trust fixture."
+        })
+    }
+
+    fn inspect_plugin_trust_qa_report_value(
+        value: serde_json::Value,
+    ) -> (ReleaseEvidenceItemStatus, String) {
+        let report_path = tempfile::NamedTempFile::new().expect("temp plugin QA report");
+        std::fs::write(
+            report_path.path(),
+            serde_json::to_string_pretty(&value).expect("serialize plugin QA fixture"),
+        )
+        .expect("write plugin QA fixture");
+
+        inspect_release_json_report(
+            "plugin_trust_qa_report",
+            report_path.path(),
+            PLUGIN_TRUST_QA_REQUIRED_FIELDS,
+        )
+    }
+
+    fn valid_release_evidence_bundle_json() -> serde_json::Value {
+        let digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        json!({
+            "generated_at": "2026-05-22T17:00:00Z",
+            "version": "0.1.4",
+            "artifacts": {
+                "app_path": "target/distribution/Jarvis.app",
+                "zip_path": "target/distribution/Jarvis-0.1.4.zip",
+                "pkg_path": "target/distribution/Jarvis-0.1.4.pkg",
+                "zip_sha256": digest,
+                "pkg_sha256": digest
+            },
+            "reports": {
+                "live_device_qa_report": "target/release-live-device-qa-report.json",
+                "plugin_trust_qa_report": "target/release-plugin-trust-qa-report.json",
+                "live_device_qa_sha256": digest,
+                "plugin_trust_qa_sha256": digest
+            },
+            "validation_flags": {
+                "signed_distribution": true,
+                "notarization": true,
+                "clean_profile": true,
+                "live_device_qa": true,
+                "plugin_trust_qa": true,
+                "reports_archived": true,
+                "local_signature_validation": true
+            },
+            "proof_boundary": "Evidence bundle fixture."
+        })
+    }
+
+    fn inspect_release_evidence_bundle_value(
+        value: serde_json::Value,
+    ) -> (ReleaseEvidenceItemStatus, String) {
+        let report_path = tempfile::NamedTempFile::new().expect("temp evidence bundle");
+        std::fs::write(
+            report_path.path(),
+            serde_json::to_string_pretty(&value).expect("serialize evidence bundle fixture"),
+        )
+        .expect("write evidence bundle fixture");
+
+        inspect_release_json_report(
+            "release_evidence_bundle",
+            report_path.path(),
+            RELEASE_EVIDENCE_BUNDLE_REQUIRED_FIELDS,
         )
     }
 
@@ -5143,6 +5352,81 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let (status, detail) = inspect_live_device_qa_report_value(report);
         assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
         assert!(detail.contains("voice_check_completed_at"), "{detail}");
+    }
+
+    #[test]
+    fn plugin_trust_qa_report_accepts_semantically_valid_owner_report() {
+        let (status, detail) =
+            inspect_plugin_trust_qa_report_value(valid_plugin_trust_qa_report_json());
+        assert_eq!(status, ReleaseEvidenceItemStatus::Present);
+        assert!(detail.contains("review timestamps"), "{detail}");
+    }
+
+    #[test]
+    fn plugin_trust_qa_report_rejects_bad_started_timestamp() {
+        let mut report = valid_plugin_trust_qa_report_json();
+        report["owner_recorded_plugin_trust_evidence"]["review_started_at"] =
+            json!("not-a-timestamp");
+        let (status, detail) = inspect_plugin_trust_qa_report_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("review_started_at"), "{detail}");
+    }
+
+    #[test]
+    fn plugin_trust_qa_report_rejects_reversed_timestamps() {
+        let mut report = valid_plugin_trust_qa_report_json();
+        report["owner_recorded_plugin_trust_evidence"]["review_started_at"] =
+            json!("2026-05-22T16:20:00Z");
+        report["owner_recorded_plugin_trust_evidence"]["review_completed_at"] =
+            json!("2026-05-22T16:10:00Z");
+        let (status, detail) = inspect_plugin_trust_qa_report_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("review_completed_at"), "{detail}");
+    }
+
+    #[test]
+    fn plugin_trust_qa_report_rejects_self_test_source() {
+        let mut report = valid_plugin_trust_qa_report_json();
+        report["review_source"] = json!("self-test-fixture");
+        let (status, detail) = inspect_plugin_trust_qa_report_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("self-test-fixture"), "{detail}");
+    }
+
+    #[test]
+    fn release_evidence_bundle_accepts_semantically_valid_manifest() {
+        let (status, detail) =
+            inspect_release_evidence_bundle_value(valid_release_evidence_bundle_json());
+        assert_eq!(status, ReleaseEvidenceItemStatus::Present);
+        assert!(detail.contains("SHA-256"), "{detail}");
+    }
+
+    #[test]
+    fn release_evidence_bundle_rejects_wrong_version() {
+        let mut report = valid_release_evidence_bundle_json();
+        report["version"] = json!("9.9.9");
+        let (status, detail) = inspect_release_evidence_bundle_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("version"), "{detail}");
+    }
+
+    #[test]
+    fn release_evidence_bundle_rejects_invalid_sha256() {
+        let mut report = valid_release_evidence_bundle_json();
+        report["reports"]["plugin_trust_qa_sha256"] = json!("not-a-digest");
+        let (status, detail) = inspect_release_evidence_bundle_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("plugin_trust_qa_sha256"), "{detail}");
+        assert!(detail.contains("SHA-256"), "{detail}");
+    }
+
+    #[test]
+    fn release_evidence_bundle_rejects_disabled_local_signature_validation() {
+        let mut report = valid_release_evidence_bundle_json();
+        report["validation_flags"]["local_signature_validation"] = json!(false);
+        let (status, detail) = inspect_release_evidence_bundle_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("local_signature_validation"), "{detail}");
     }
 
     fn release_evidence_status_fixture(
