@@ -908,6 +908,30 @@ impl IpcState {
                         action: Some(action.name.clone()),
                     });
                 }
+
+                for action in plugin.manifest.actions.iter().filter(|action| {
+                    action.network_access.mode != crate::PluginNetworkAccessMode::None
+                }) {
+                    items.push(PermissionPolicyReviewItem {
+                        item_type: "network_plugin_action".to_string(),
+                        severity: if plugin.execution_enabled {
+                            "high"
+                        } else {
+                            "medium"
+                        }
+                        .to_string(),
+                        title: "Plugin declares network access".to_string(),
+                        detail: format!(
+                            "{} declares {} network access to {:?}; this is manifest governance, not an OS network sandbox",
+                            plugin.manifest.name,
+                            action.name,
+                            action.network_access.allowed_hosts
+                        ),
+                        approval_id: None,
+                        plugin_id: Some(plugin.id.clone()),
+                        action: Some(action.name.clone()),
+                    });
+                }
             }
 
             items.sort_by_key(|item| {
@@ -3488,6 +3512,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 proactive: false,
                 memory_access: crate::PluginAccess::None,
                 model_access: crate::PluginAccess::None,
+                network_access: crate::PluginNetworkAccess::default(),
                 audit_fields: vec!["path".to_string()],
                 timeout: crate::PluginTimeout::default_for_action(),
                 cancellation: crate::CancellationBehavior::Cooperative,
@@ -3529,6 +3554,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 proactive: false,
                 memory_access: crate::PluginAccess::None,
                 model_access: crate::PluginAccess::None,
+                network_access: crate::PluginNetworkAccess::default(),
                 audit_fields: vec!["path".to_string()],
                 timeout: crate::PluginTimeout::default_for_action(),
                 cancellation: crate::CancellationBehavior::Cooperative,

@@ -181,7 +181,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
             "actions": [{
                 "name": "inspect",
                 "description": "Validate local install metadata.",
-                "permissions": ["read_workspace"],
+                "permissions": ["read_workspace", "network"],
                 "risk_tier": "low",
                 "input_schema": {
                     "schema": {
@@ -195,6 +195,10 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
                 "proactive": false,
                 "memory_access": "none",
                 "model_access": "none",
+                "network_access": {
+                    "mode": "declared_hosts",
+                    "allowed_hosts": ["api.jarvis.local"]
+                },
                 "audit_fields": ["path"],
                 "timeout": { "timeout_ms": 5000, "on_timeout": "cancel" },
                 "cancellation": "cooperative"
@@ -290,6 +294,11 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         &initial_policy_review["items"],
         "item_type",
         "publisher_identity",
+    );
+    assert_array_contains(
+        &initial_policy_review["items"],
+        "item_type",
+        "network_plugin_action",
     );
     assert_array_contains(&initial_policy_review["items"], "severity", "medium");
 
@@ -452,6 +461,11 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         &publisher_policy_review["items"],
         "item_type",
         "publisher_identity",
+    );
+    assert_array_contains(
+        &publisher_policy_review["items"],
+        "item_type",
+        "network_plugin_action",
     );
 
     let subprocess_plugin_dir = temp_dir.path().join("local-subprocess-plugin");

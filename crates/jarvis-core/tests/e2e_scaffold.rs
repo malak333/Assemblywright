@@ -2,8 +2,9 @@ use jarvis_core::{
     plugin_permission_scopes, ApprovalDecision, ApprovalGrant, ApprovalStatus, AuditEntry,
     CancellationBehavior, CancellationSignal, CapabilityScope, InProcessPlugin, JarvisError,
     JarvisResult, JsonSchema, PermissionEngine, PluginAccess, PluginActionManifest,
-    PluginCallRequest, PluginCallStatus, PluginHost, PluginManifest, PluginPermission,
-    PluginSource, PluginTimeout, PolicyRequest, RiskTier, Sensitivity, TaskRecord, TaskStatus,
+    PluginCallRequest, PluginCallStatus, PluginHost, PluginManifest, PluginNetworkAccess,
+    PluginPermission, PluginSource, PluginTimeout, PolicyRequest, RiskTier, Sensitivity,
+    TaskRecord, TaskStatus,
 };
 use serde_json::json;
 use std::sync::{
@@ -188,6 +189,7 @@ fn plugin_manifest_rejects_actions_outside_declared_scopes() {
             proactive: false,
             memory_access: PluginAccess::Write,
             model_access: PluginAccess::None,
+            network_access: PluginNetworkAccess::default(),
             audit_fields: vec!["memory_access".to_string()],
             timeout: PluginTimeout::default_for_action(),
             cancellation: CancellationBehavior::Cooperative,
@@ -281,6 +283,7 @@ impl InProcessPlugin for ConfirmWritePlugin {
                 proactive: false,
                 memory_access: PluginAccess::None,
                 model_access: PluginAccess::None,
+                network_access: PluginNetworkAccess::default(),
                 audit_fields: vec!["note".to_string()],
                 timeout: PluginTimeout::default_for_action(),
                 cancellation: CancellationBehavior::Cooperative,

@@ -165,6 +165,10 @@ operator-reviewed. For signed manifests, use
 after provenance matches; this verifies the manifest signature against the
 explicit trusted key, but still does not prove marketplace approval or malware
 safety.
+Network-capable plugin actions must request `network` and declare
+`network_access.mode: declared_hosts` with exact plain-hostname
+`allowed_hosts`; policy review surfaces them as `network_plugin_action` items.
+This is manifest governance, not OS-level network sandboxing.
 Background scheduler execution is opt-in on `jarvis serve`; it does not start
 for default smoke or manual inspection sessions unless `--scheduler-background`
 is passed.
@@ -285,6 +289,7 @@ memory create/update/review/delete/restore and persistence, plugin
 manifests, installed-plugin provenance verification, permission-grant
 provenance summary fields, operator-pinned publisher-origin verification,
 trusted-key publisher-signature verification,
+network-capable plugin policy review items,
 permission policy review items, fail-closed
 subprocess enablement, repository-backed activity summary status/recent-audit
 evidence, bounded activity event streaming over server-sent events, redacted

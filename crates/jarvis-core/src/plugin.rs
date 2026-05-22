@@ -66,6 +66,31 @@ impl PluginAccess {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginNetworkAccess {
+    #[serde(default)]
+    pub mode: PluginNetworkAccessMode,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_hosts: Vec<String>,
+}
+
+impl Default for PluginNetworkAccess {
+    fn default() -> Self {
+        Self {
+            mode: PluginNetworkAccessMode::None,
+            allowed_hosts: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginNetworkAccessMode {
+    #[default]
+    None,
+    DeclaredHosts,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CancellationBehavior {
@@ -243,6 +268,8 @@ pub struct PluginActionManifest {
     pub proactive: bool,
     pub memory_access: PluginAccess,
     pub model_access: PluginAccess,
+    #[serde(default)]
+    pub network_access: PluginNetworkAccess,
     pub audit_fields: Vec<String>,
     pub timeout: PluginTimeout,
     pub cancellation: CancellationBehavior,
@@ -304,6 +331,8 @@ impl PluginActionManifest {
             )));
         }
 
+        self.validate_network_access(plugin_id)?;
+
         if self.risk_tier == RiskTier::Block {
             return Err(JarvisError::Validation(format!(
                 "{plugin_id}.{} cannot register as blocked",
@@ -311,6 +340,49 @@ impl PluginActionManifest {
             )));
         }
 
+        Ok(())
+    }
+
+    fn validate_network_access(&self, plugin_id: &str) -> JarvisResult<()> {
+        let has_network_permission = self.permissions.contains(&PluginPermission::Network);
+        match self.network_access.mode {
+            PluginNetworkAccessMode::None => {
+                if !self.network_access.allowed_hosts.is_empty() {
+                    return Err(JarvisError::Validation(format!(
+                        "{plugin_id}.{} network_access none cannot declare allowed_hosts",
+                        self.name
+                    )));
+                }
+                if has_network_permission {
+                    return Err(JarvisError::Validation(format!(
+                        "{plugin_id}.{} network permission requires network_access declared_hosts",
+                        self.name
+                    )));
+                }
+            }
+            PluginNetworkAccessMode::DeclaredHosts => {
+                if !has_network_permission {
+                    return Err(JarvisError::Validation(format!(
+                        "{plugin_id}.{} network_access declared_hosts requires network permission",
+                        self.name
+                    )));
+                }
+                if self.network_access.allowed_hosts.is_empty() {
+                    return Err(JarvisError::Validation(format!(
+                        "{plugin_id}.{} network_access declared_hosts requires allowed_hosts",
+                        self.name
+                    )));
+                }
+                for host in &self.network_access.allowed_hosts {
+                    validate_network_host(host).map_err(|err| {
+                        JarvisError::Validation(format!(
+                            "{plugin_id}.{} network host {host:?} is invalid: {err}",
+                            self.name
+                        ))
+                    })?;
+                }
+            }
+        }
         Ok(())
     }
 }
@@ -972,6 +1044,40 @@ fn validate_identifier(value: &str, label: &str) -> JarvisResult<()> {
     Ok(())
 }
 
+fn validate_network_host(host: &str) -> Result<(), &'static str> {
+    if host.is_empty() {
+        return Err("host is required");
+    }
+    if host.len() > 253 {
+        return Err("host is too long");
+    }
+    if host.contains('*')
+        || host.contains('/')
+        || host.contains(':')
+        || host.chars().any(char::is_whitespace)
+    {
+        return Err(
+            "host must be a plain hostname without wildcard, scheme, path, port, or whitespace",
+        );
+    }
+    if !host
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || character == '.' || character == '-')
+    {
+        return Err("host must use ascii letters, digits, dots, or hyphens");
+    }
+    if host.starts_with('.') || host.ends_with('.') {
+        return Err("host cannot start or end with a dot");
+    }
+    if host
+        .split('.')
+        .any(|label| label.is_empty() || label.starts_with('-') || label.ends_with('-'))
+    {
+        return Err("host labels cannot be empty or start/end with hyphen");
+    }
+    Ok(())
+}
+
 fn validate_non_empty(value: &str, label: &str) -> JarvisResult<()> {
     if value.trim().is_empty() {
         return Err(JarvisError::Validation(format!("{label} is required")));
@@ -1345,6 +1451,7 @@ impl InProcessPlugin for EchoPlugin {
                     proactive: false,
                     memory_access: PluginAccess::None,
                     model_access: PluginAccess::None,
+                    network_access: PluginNetworkAccess::default(),
                     audit_fields: vec!["message".to_string()],
                     timeout: PluginTimeout::default_for_action(),
                     cancellation: CancellationBehavior::Cooperative,
@@ -1364,6 +1471,7 @@ impl InProcessPlugin for EchoPlugin {
                     proactive: false,
                     memory_access: PluginAccess::None,
                     model_access: PluginAccess::None,
+                    network_access: PluginNetworkAccess::default(),
                     audit_fields: vec!["message".to_string()],
                     timeout: PluginTimeout::default_for_action(),
                     cancellation: CancellationBehavior::Cooperative,
@@ -1421,6 +1529,7 @@ impl InProcessPlugin for StatusPlugin {
                 proactive: true,
                 memory_access: PluginAccess::None,
                 model_access: PluginAccess::None,
+                network_access: PluginNetworkAccess::default(),
                 audit_fields: vec!["status".to_string()],
                 timeout: PluginTimeout::default_for_action(),
                 cancellation: CancellationBehavior::Cooperative,
@@ -1492,6 +1601,42 @@ mod tests {
         assert!(error
             .to_string()
             .contains("model access requires call_model permission"));
+
+        let mut network_access = EchoPlugin.manifest();
+        network_access.actions[0].network_access = PluginNetworkAccess {
+            mode: PluginNetworkAccessMode::DeclaredHosts,
+            allowed_hosts: vec!["api.example.com".to_string()],
+        };
+        let error = network_access
+            .validate()
+            .expect_err("network access must require permission");
+        assert!(error
+            .to_string()
+            .contains("network_access declared_hosts requires network permission"));
+
+        let mut network_without_hosts = EchoPlugin.manifest();
+        network_without_hosts.actions[0]
+            .permissions
+            .push(PluginPermission::Network);
+        let error = network_without_hosts
+            .validate()
+            .expect_err("network permission must declare hosts");
+        assert!(error
+            .to_string()
+            .contains("network permission requires network_access declared_hosts"));
+
+        let mut invalid_network_host = EchoPlugin.manifest();
+        invalid_network_host.actions[0]
+            .permissions
+            .push(PluginPermission::Network);
+        invalid_network_host.actions[0].network_access = PluginNetworkAccess {
+            mode: PluginNetworkAccessMode::DeclaredHosts,
+            allowed_hosts: vec!["https://api.example.com".to_string()],
+        };
+        let error = invalid_network_host
+            .validate()
+            .expect_err("network host must be plain hostname");
+        assert!(error.to_string().contains("network host"));
 
         let mut blocked = EchoPlugin.manifest();
         blocked.actions[0].risk_tier = RiskTier::Block;
@@ -1856,6 +2001,7 @@ mod tests {
                     proactive: false,
                     memory_access: PluginAccess::None,
                     model_access: PluginAccess::None,
+                    network_access: PluginNetworkAccess::default(),
                     audit_fields: vec!["message".to_string()],
                     timeout: PluginTimeout::default_for_action(),
                     cancellation: CancellationBehavior::Cooperative,
@@ -1897,6 +2043,7 @@ mod tests {
                     proactive: false,
                     memory_access: PluginAccess::None,
                     model_access: PluginAccess::None,
+                    network_access: PluginNetworkAccess::default(),
                     audit_fields: Vec::new(),
                     timeout: PluginTimeout {
                         timeout_ms: 10,

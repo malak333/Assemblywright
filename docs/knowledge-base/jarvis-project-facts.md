@@ -81,6 +81,12 @@ These notes capture durable facts for future agents working on this repository.
   key reference. This proves the manifest was signed by the trusted key; it
   still does not prove marketplace approval, malware safety, or runtime sandbox
   completeness.
+- Plugin actions that request the existing `network` permission must now
+  declare `network_access.mode: declared_hosts` and exact plain-hostname
+  `allowed_hosts`. Invalid host declarations fail manifest validation, and
+  `/permissions/policy-review` emits `network_plugin_action` items for installed
+  plugins with declared network access. This is manifest governance and review
+  evidence, not OS-level network sandboxing.
 - Repository-backed IPC exposes `/permissions/grants`, and the CLI exposes
   `jarvis permissions grants`, as a read-only permission-center summary. It
   combines approval status counts/history, high-risk pending approval count,
@@ -94,10 +100,10 @@ These notes capture durable facts for future agents working on this repository.
 - Repository-backed IPC also exposes `/permissions/policy-review`, and the CLI
   exposes `jarvis permissions review`, as a read-only policy review surface. It
   converts pending approvals, high-risk plugin actions, unverified installed
-  plugin provenance, and unverified publisher-origin claims into explicit
-  severity-ranked review items. The Swift Approval Center renders this summary
-  alongside grant history. It is inspection-only and does not execute or enable
-  plugin side effects.
+  plugin provenance, unverified publisher-origin claims, and network-capable
+  plugin actions into explicit severity-ranked review items. The Swift
+  Approval Center renders this summary alongside grant history. It is
+  inspection-only and does not execute or enable plugin side effects.
 - The CLI has matching `tasks`, `memory`, `scheduler`, `diagnostics`, and
   `plugins` subcommands, including `plugins install`, `plugins installed`,
   `plugins installed-get`, `plugins enable-installed`, `plugins
@@ -109,8 +115,9 @@ These notes capture durable facts for future agents working on this repository.
 - A local packaged app release smoke exists, and installed plugin execution now
   has a constrained local subprocess proof. Developer ID signing,
   notarization, installer validation, App Store distribution, real voice loop,
-  broader plugin marketplace/WASM/network sandboxing, plugin malware analysis,
-  and broader production operations are not yet implemented in this worktree.
+  broader plugin marketplace/WASM/OS-network sandboxing, plugin malware
+  analysis, and broader production operations are not yet implemented in this
+  worktree.
   The SwiftUI shell scaffold and IPC client live under `apps/mac`, including a
   command transcript, activity/audit panel, approval decision controls,
   management tabs, permission grant-history summary, degraded-mode handling,

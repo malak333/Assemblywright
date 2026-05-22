@@ -4,8 +4,9 @@ Jarvis plugins are executable capabilities behind an explicit manifest and the
 same policy engine used for built-in tools. The implemented local plugin
 boundary supports first-party Rust modules and local subprocess plugins over
 JSON stdin/stdout. The stable commitment is the manifest, local provenance
-snapshot, optional trusted-key publisher signature verification, and audit
-contract; marketplace, WASM, network, and malware-analysis trust remain target
+snapshot, optional trusted-key publisher signature verification,
+manifest-level network host declarations, and audit contract; marketplace,
+WASM, OS-level network sandboxing, and malware-analysis trust remain target
 architecture.
 
 ## Manifest Fields
@@ -30,6 +31,11 @@ Each plugin manifest must declare:
   `publisher_signature` omitted. Signature verification requires local
   provenance to match first and a trusted public key supplied by the operator;
   an embedded public key cannot self-authorize.
+- Optional per-action `network_access`. Actions that request the `network`
+  permission must set `network_access.mode: declared_hosts` and provide
+  non-empty `allowed_hosts` with plain hostnames only. Wildcards, schemes,
+  paths, ports, whitespace, and non-ASCII hostnames fail manifest validation.
+  This is manifest governance and review evidence, not an OS network sandbox.
 - `local_subprocess` manifests must declare a `subprocess` block with a command
   under `source_path`, optional argument array, and `stdin: json` /
   `stdout: json`. Jarvis starts the command directly and never interpolates it
@@ -102,6 +108,7 @@ to explain what happened:
   malformed stdout JSON, and output-schema mismatches all fail closed with audit
   evidence. Jarvis sends a JSON object containing `plugin_id`, `action`, and
   `input` to stdin and accepts only JSON stdout that matches the action output
+  schema.
 - Publisher signature verification uses
   `/plugins/installed/:id/publisher/signature/verify` or
   `jarvis plugins verify-publisher-signature`. It fails closed until local
@@ -110,15 +117,18 @@ to explain what happened:
   appends `installed_plugin_publisher_signature_verified` audit evidence.
   This proves the manifest was signed by the trusted key; it does not prove
   marketplace approval, malware safety, or sandbox completeness.
-  schema.
+- Policy review emits `network_plugin_action` items for installed plugin
+  actions that declare network access so the operator can inspect
+  network-capable plugins before enabling execution.
 - Installed plugin dry runs are contract-only. `dry_run: true` validates the
   stored manifest, action name, and input schema, then returns `dry_run` with
   `contract_validated: true` and `side_effect_executed: false`; it never loads
   or executes plugin code.
 - Local manifest validation rejects invalid schemas, blocked action risk tiers,
-  missing proactive/memory/model permissions, zero or excessive timeouts,
-  first-party source claims, relative source paths, unreadable source
-  directories, and manifests outside the declared source directory.
+  missing proactive/memory/model/network permissions, invalid network host
+  declarations, zero or excessive timeouts, first-party source claims, relative
+  source paths, unreadable source directories, and manifests outside the
+  declared source directory.
 - Side-effecting actions require policy evaluation even for first-party plugins.
 - Proactive actions must be opt-in and visible in scheduler state.
 - Memory access must be scoped by category and sensitivity label.
@@ -143,6 +153,6 @@ contract testing. Release verification should keep covering:
 - Installed plugin run attempts fail closed with manifest/action/input
   validation, disabled `metadata_only` execution-grant semantics, explicit
   enablement semantics, local provenance verification, subprocess safe-path
-  validation, contract-only dry-run evidence, constrained subprocess execution
-  evidence, publisher-origin/signature verification evidence, and durable audit
-  evidence.
+  validation, network declaration validation, contract-only dry-run evidence,
+  constrained subprocess execution evidence, publisher-origin/signature
+  verification evidence, and durable audit evidence.

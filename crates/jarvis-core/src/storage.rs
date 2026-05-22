@@ -2697,6 +2697,7 @@ mod tests {
                 proactive: false,
                 memory_access: crate::PluginAccess::None,
                 model_access: crate::PluginAccess::None,
+                network_access: crate::PluginNetworkAccess::default(),
                 audit_fields: Vec::new(),
                 timeout: crate::PluginTimeout::default_for_action(),
                 cancellation: crate::CancellationBehavior::Cooperative,
