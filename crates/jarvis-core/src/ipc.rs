@@ -172,6 +172,24 @@ pub struct CommandResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActivityStatusCount {
+    pub status: TaskStatus,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActivitySummary {
+    pub generated_at: DateTime<Utc>,
+    pub repository_backed: bool,
+    pub task_count: usize,
+    pub audit_entry_count: usize,
+    pub active_task_count: usize,
+    pub status_counts: Vec<ActivityStatusCount>,
+    pub recent_tasks: Vec<TaskRecord>,
+    pub recent_audit_entries: Vec<AuditEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApprovalDecisionRequest {
     #[serde(default = "default_decided_by")]
     pub decided_by: String,
@@ -488,6 +506,7 @@ impl IpcState {
                 "/scheduler/jobs".to_string(),
                 "/scheduler/attention".to_string(),
                 "/scheduler/jobs/:id".to_string(),
+                "/activity/summary".to_string(),
                 "/model-routes".to_string(),
                 "/model-routes/:id".to_string(),
                 "/memory".to_string(),
@@ -573,6 +592,61 @@ impl IpcState {
             audit_entry_count,
             model_route_record_count,
             active_memory_item_count,
+        })
+    }
+
+    pub fn activity_summary(&self) -> JarvisResult<ActivitySummary> {
+        self.using_repository(|repository| {
+            let tasks = repository.list_tasks()?;
+            let audit_entries = repository.list_audit_entries(None)?;
+            let active_statuses = [
+                TaskStatus::Created,
+                TaskStatus::Running,
+                TaskStatus::WaitingForApproval,
+            ];
+            let all_statuses = [
+                TaskStatus::Created,
+                TaskStatus::Running,
+                TaskStatus::WaitingForApproval,
+                TaskStatus::Blocked,
+                TaskStatus::Completed,
+                TaskStatus::Failed,
+                TaskStatus::Cancelled,
+            ];
+
+            let status_counts = all_statuses
+                .iter()
+                .filter_map(|status| {
+                    let count = tasks.iter().filter(|task| &task.status == status).count();
+                    (count > 0).then_some(ActivityStatusCount {
+                        status: status.clone(),
+                        count,
+                    })
+                })
+                .collect::<Vec<_>>();
+
+            let active_task_count = tasks
+                .iter()
+                .filter(|task| active_statuses.contains(&task.status))
+                .count();
+            let recent_tasks = tasks.iter().rev().take(5).cloned().collect::<Vec<_>>();
+            let recent_audit_entries = audit_entries
+                .iter()
+                .rev()
+                .take(10)
+                .cloned()
+                .collect::<Vec<_>>();
+
+            Ok(ActivitySummary {
+                generated_at: Utc::now(),
+                repository_backed: true,
+                task_count: tasks.len(),
+                audit_entry_count: audit_entries.len(),
+                active_task_count,
+                status_counts,
+                recent_tasks,
+                recent_audit_entries,
+            })
         })
     }
 
@@ -2068,6 +2142,7 @@ pub fn router(state: IpcState) -> Router {
         .route("/tasks/:id", get(get_task))
         .route("/tasks/:id/audit", get(list_task_audit_entries))
         .route("/audit", get(list_audit_entries))
+        .route("/activity/summary", get(activity_summary))
         .route("/model-routes", get(list_model_routes))
         .route("/model-routes/:id", get(get_model_route))
         .route("/memory", get(list_memory_items).post(create_memory_item))
@@ -2200,6 +2275,12 @@ async fn list_audit_entries(
         .using_repository(|repository| repository.list_audit_entries(None))
         .map(Json)
         .map_err(error_response)
+}
+
+async fn activity_summary(
+    State(state): State<IpcState>,
+) -> Result<Json<ActivitySummary>, (StatusCode, Json<ErrorResponse>)> {
+    state.activity_summary().map(Json).map_err(error_response)
 }
 
 async fn list_model_routes(
@@ -2576,6 +2657,7 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
         endpoint("GET", "/tasks/:id", true, false),
         endpoint("GET", "/tasks/:id/audit", true, false),
         endpoint("GET", "/audit", true, false),
+        endpoint("GET", "/activity/summary", true, false),
         endpoint("GET", "/model-routes", true, true),
         endpoint("GET", "/model-routes/:id", true, true),
         endpoint("GET", "/memory", true, false),
@@ -2739,6 +2821,15 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .iter()
             .any(|endpoint| endpoint.method == "POST"
                 && endpoint.path == "/plugins/installed/:id/run"
+                && endpoint.repository_required));
+        assert!(contract
+            .safe_inspection_paths
+            .contains(&"/activity/summary".to_string()));
+        assert!(contract
+            .endpoints
+            .iter()
+            .any(|endpoint| endpoint.method == "GET"
+                && endpoint.path == "/activity/summary"
                 && endpoint.repository_required));
     }
 
@@ -3358,6 +3449,23 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .await
             .expect("task audit");
         assert!(entries
+            .iter()
+            .any(|entry| entry.event_type == "plugin_completed"));
+
+        let Json(summary) = activity_summary(State(state.clone()))
+            .await
+            .expect("activity summary");
+        assert!(summary.repository_backed);
+        assert_eq!(summary.task_count, 1);
+        assert_eq!(summary.active_task_count, 0);
+        assert!(summary.audit_entry_count >= entries.len());
+        assert_eq!(summary.recent_tasks[0].id, response.task.id);
+        assert!(summary
+            .status_counts
+            .iter()
+            .any(|count| count.status == TaskStatus::Completed && count.count == 1));
+        assert!(summary
+            .recent_audit_entries
             .iter()
             .any(|entry| entry.event_type == "plugin_completed"));
 

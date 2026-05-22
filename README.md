@@ -7,12 +7,13 @@ first-party tool orchestration, local-first model routing evidence, opt-in
 Ollama-compatible local HTTP and ChatGPT/OpenAI-compatible provider boundaries,
 plugin contracts, metadata-only local plugin installation, local plugin
 provenance snapshots, scheduler state, redacted diagnostics export, a loopback
-IPC surface, and CLI smoke paths for the Swift shell scaffold and future
-packaged app.
+IPC surface, repository-backed activity summary, and CLI smoke paths for the
+Swift shell scaffold and future packaged app.
 It also includes the first buildable Swift/SwiftUI Mac shell scaffold under
 `apps/mac`, with a tested IPC client, command-console state model,
-activity/audit panel for command evidence, memory create/update/review/delete
-and restore management, memory classification summary, provenance-aware
+activity/audit panel with current progress summary, memory
+create/update/review/delete and restore management, memory classification
+summary, provenance-aware
 permission/grant inspection, permission policy review items, redacted scheduler
 attention summaries for app handoff, adapter-backed scheduler notification
 controls, degraded-mode handling, and a core supervisor abstraction.
@@ -124,9 +125,10 @@ launch, installer/App Store validation, or live microphone/Speech/audio-output
 validation.
 
 With a repository-backed server running, `jarvis tasks`, `jarvis memory`,
-`jarvis scheduler`, `jarvis diagnostics`, and `jarvis plugins` expose the
-current durable state, redacted scheduler attention handoff, redacted
-diagnostics, first-party plugin manifests, disabled installed-plugin
+`jarvis activity summary`, `jarvis scheduler`, `jarvis diagnostics`, and
+`jarvis plugins` expose the current durable state, status counts, recent
+task/audit progress, redacted scheduler attention handoff, redacted
+diagnostics, first-party plugin manifests, and disabled installed-plugin
 registry metadata over IPC.
 
 ## Docs

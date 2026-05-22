@@ -267,13 +267,14 @@ Current implementation status: the repo structure, IPC health/command surface,
 durable task/audit/emergency-pause/memory/scheduler schema, fake local model,
 first-party plugin contracts, metadata-only local plugin installation, local
 plugin provenance snapshot verification, CLI smoke path, redacted diagnostics
-export, and buildable Swift command/activity
+export, repository-backed activity summary, and buildable Swift command/activity
 shell scaffold are implemented. The command runtime can route to fake local,
 Ollama-compatible local HTTP, or explicitly enabled ChatGPT/OpenAI-compatible
 HTTP providers. The Swift app includes approval decision controls, management
 surfaces, memory classification plus create/update/review/delete/restore
-controls over the existing Rust IPC contract, voice input/output adapter
-controls, text-transcript command handoff, permission policy review,
+controls over the existing Rust IPC contract, run activity summary,
+voice input/output adapter controls, text-transcript command handoff,
+permission policy review,
 redacted scheduler attention handoff, adapter-backed scheduler notification
 controls for due/failed attention items, and core supervision abstractions.
 The product still lacks

@@ -89,6 +89,11 @@ enum CliCommand {
         #[command(subcommand)]
         command: TasksCommand,
     },
+    /// Inspect current task and audit activity summary.
+    Activity {
+        #[command(subcommand)]
+        command: ActivityCommand,
+    },
     /// Inspect persisted model route evidence.
     Routes {
         #[command(subcommand)]
@@ -186,6 +191,15 @@ enum TasksCommand {
     Audit {
         #[arg(long)]
         task_id: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ActivityCommand {
+    /// Summarize current task statuses and recent audit progress.
+    Summary {
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
@@ -540,6 +554,11 @@ async fn main() -> anyhow::Result<()> {
                     .map(|id| format!("/tasks/{id}/audit"))
                     .unwrap_or_else(|| "/audit".to_string());
                 println!("{}", request(&endpoint, "GET", &path, None)?);
+            }
+        },
+        CliCommand::Activity { command } => match command {
+            ActivityCommand::Summary { endpoint } => {
+                println!("{}", request(&endpoint, "GET", "/activity/summary", None)?);
             }
         },
         CliCommand::Routes { command } => match command {
@@ -968,6 +987,14 @@ async fn run_smoke() -> anyhow::Result<()> {
     let tasks = request(&persistent_endpoint, "GET", "/tasks", None)?;
     let tasks_json: serde_json::Value = serde_json::from_str(&tasks)?;
     require_array_field(&tasks_json, "root")?;
+
+    let activity = request(&persistent_endpoint, "GET", "/activity/summary", None)?;
+    let activity_json: serde_json::Value = serde_json::from_str(&activity)?;
+    require_bool_field(&activity_json, "repository_backed", true)?;
+    require_number_at_least(&activity_json, "task_count", 1)?;
+    require_number_at_least(&activity_json, "audit_entry_count", 1)?;
+    require_array_field(&activity_json, "recent_tasks")?;
+    require_array_field(&activity_json, "recent_audit_entries")?;
 
     let memory_body = serde_json::to_string(&CreateMemoryItemRequest {
         category: "smoke".to_string(),

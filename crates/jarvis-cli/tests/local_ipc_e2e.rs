@@ -31,6 +31,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_array_contains(&contract["endpoints"], "path", "/permissions/grants");
     assert_array_contains(&contract["endpoints"], "path", "/permissions/policy-review");
     assert_array_contains(&contract["endpoints"], "path", "/model-routes");
+    assert_array_contains(&contract["endpoints"], "path", "/activity/summary");
     assert_array_contains(&contract["endpoints"], "path", "/approvals/:id/approve");
     assert_array_contains(
         &contract["endpoints"],
@@ -48,6 +49,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         "/permissions/policy-review",
     );
     assert_string_array_contains(&contract["safe_inspection_paths"], "/approvals/:id");
+    assert_string_array_contains(&contract["safe_inspection_paths"], "/activity/summary");
 
     let command = run_cli_json([
         "command",
@@ -99,6 +101,24 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     let manifests = run_cli_json(["plugins", "list", "--endpoint", endpoint.as_str()]);
     assert_array_contains(&manifests, "id", "fake_echo");
     assert_array_contains(&manifests, "id", "fake_status");
+
+    let activity = run_cli_json(["activity", "summary", "--endpoint", endpoint.as_str()]);
+    assert_eq!(activity["repository_backed"], true);
+    assert!(
+        activity["task_count"].as_u64().unwrap_or_default() >= 1,
+        "{activity}"
+    );
+    assert!(
+        activity["audit_entry_count"].as_u64().unwrap_or_default() >= 1,
+        "{activity}"
+    );
+    assert_array_contains(&activity["status_counts"], "status", "completed");
+    assert_array_contains(&activity["recent_tasks"], "id", &task_id);
+    assert_array_contains(
+        &activity["recent_audit_entries"],
+        "event_type",
+        "plugin_completed",
+    );
 
     let fake_echo_manifest = run_cli_json([
         "plugins",

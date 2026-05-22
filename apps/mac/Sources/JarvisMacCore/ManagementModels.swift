@@ -241,6 +241,7 @@ public final class SchedulerModel: ObservableObject {
 public final class RunManagementModel: ObservableObject {
     @Published public private(set) var tasks: [JarvisTask]
     @Published public private(set) var auditEntries: [JarvisAuditEntry]
+    @Published public private(set) var activitySummary: JarvisActivitySummary?
     @Published public private(set) var isLoading: Bool
     @Published public private(set) var lastError: String?
 
@@ -250,6 +251,7 @@ public final class RunManagementModel: ObservableObject {
         self.client = client
         self.tasks = []
         self.auditEntries = []
+        self.activitySummary = nil
         self.isLoading = false
         self.lastError = nil
     }
@@ -258,8 +260,10 @@ public final class RunManagementModel: ObservableObject {
         await run {
             async let tasks = self.client.listTasks()
             async let audit = self.client.listAuditEntries(taskId: nil)
+            async let activitySummary = self.client.activitySummary()
             self.tasks = try await tasks
             self.auditEntries = try await audit
+            self.activitySummary = try await activitySummary
         }
     }
 
