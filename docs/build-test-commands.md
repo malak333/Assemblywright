@@ -169,6 +169,7 @@ cargo test -p jarvis-cli
 cargo test -p jarvis-cli --test local_ipc_e2e
 cargo test -p jarvis-cli --test local_ipc_e2e -- --ignored
 ./scripts/packaged-supervision-proof.sh
+./scripts/packaged-app-release-smoke.sh
 ```
 
 The non-ignored `local_ipc_e2e` test is the current cross-process E2E
@@ -181,6 +182,17 @@ coverage against that configured executable, starts the copied binary with a
 repository-backed database, verifies packaged-layout health, command, audit,
 diagnostics, emergency pause, blocked command, pause status, and resume
 surfaces, and then runs the CLI smoke command.
+`./scripts/packaged-app-release-smoke.sh` is the stronger local packaged app
+proof for packaging/release changes: it builds the Swift app executable,
+assembles a deterministic `Jarvis.app`, writes `Info.plist`, bundles
+`jarvis-cli` in `Contents/Resources/bin/`, ad-hoc signs with `codesign -` when
+available, launches the app executable under a temporary HOME/profile with an
+isolated endpoint and database path, and verifies app-supervised core health,
+command, audit, diagnostics, emergency pause, blocked command, pause status,
+resume, and temp-profile SQLite state. It is still local evidence only, not
+Developer ID signing, notarization, installer validation, entitlement
+validation, App Store distribution, Finder/LaunchServices validation, or real
+microphone/Speech/TTS coverage.
 Docs-only branches should at least run a render/lint-oriented documentation
 check when available, plus `cargo fmt --check` if the branch also touches Rust
 examples or scripts. Record any skipped full-gate stage as a blocker, not as
@@ -215,10 +227,9 @@ Runtime unit tests additionally prove bounded fake-model first-party tool-call
 orchestration, including policy checks, approval stops, validation failures, and
 tool-result feedback into later model steps. Focused provider tests prove typed
 Ollama-compatible request/error behavior without requiring a live model during
-the default release gate. They do not prove signed app packaging, ChatGPT
-execution, installed plugin sandboxing/execution, memory UX beyond the
-scaffold, Swift approval decision UI, voice loop, or packaged Mac release smoke
-test until those surfaces exist and are covered. The current Swift gate proves
+the default release gate. They do not prove ChatGPT execution, installed plugin
+sandboxing/execution, memory UX beyond the scaffold, Swift approval decision
+UI, or voice loop until those surfaces exist and are covered. The current Swift gate proves
 the Mac shell scaffold builds, decodes IPC contracts, exposes management models
 for approval evidence, runs/audit, scheduler, diagnostics, and text-only voice
 transcript handoff state, and can supervise a configured local core process
@@ -226,9 +237,12 @@ abstraction. It also covers Swift approval decision calls against the Rust IPC
 approval endpoints. The packaged supervision proof additionally checks the
 expected `Resources/bin/jarvis-cli` bundle layout with a locally built core
 binary and exercises repository-backed command, audit, diagnostics, and
-emergency-pause IPC through that copied binary. These gates still do not prove
-a signed packaged app release, notarization, clean-profile launch, microphone
-permissions, live speech-to-text, or text-to-speech.
+emergency-pause IPC through that copied binary. The packaged app release smoke
+assembles and ad-hoc signs a local `Jarvis.app`, launches it with isolated
+profile state, and verifies app-supervised core IPC through the bundled
+`jarvis-cli`. These gates still do not prove Developer ID signing,
+notarization, installer behavior, entitlement validation, Finder/LaunchServices
+launch, microphone permissions, live speech-to-text, or text-to-speech.
 
 The public-repo production workflow expects isolated worktrees, topic branches,
 reviewable PRs, and clear ownership. A six-agent autonomous sweep can reduce

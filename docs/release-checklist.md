@@ -52,6 +52,9 @@ stage or when a PR needs focused evidence for one ownership slice.
 - `cargo package --workspace --allow-dirty`
 - Focused supervision proof for branches that touch Swift core launch or bundle
   discovery: `./scripts/packaged-supervision-proof.sh`
+- Focused packaged app release smoke for branches that touch packaging,
+  app-supervised core launch, or Mac release evidence:
+  `./scripts/packaged-app-release-smoke.sh`
 - `swift test --package-path apps/mac`
 - `swift build --package-path apps/mac`
 - Optional manual CLI/IPC smoke against a running local server:
@@ -117,24 +120,31 @@ stage or when a PR needs focused evidence for one ownership slice.
   scheduler run-due success/reschedule, scheduler fail-closed pause on
   non-accepted due jobs, diagnostics redaction, persistence restart, and
   emergency-pause blocking/resume behavior. Treat this as the minimum E2E
-  expectation for the current Rust/CLI foundation; packaged Mac E2E remains a
-  future release gate.
+  expectation for the current Rust/CLI foundation; packaged Mac release smoke
+  is now covered by `./scripts/packaged-app-release-smoke.sh` for the local
+  assembled app boundary.
 - Confirm local plugin metadata install/list/get coverage remains in that E2E
   path while installed plugin execution remains disabled.
 - For each new executable feature phase, confirm E2E coverage is either part of
   `local_ipc_e2e`, Swift package tests, a focused integration proof, or the
   future packaged Mac smoke lane. Docs-only changes should still name the
   existing proof boundary they preserve.
-- Confirm the Swift shell remains described as a scaffold until a signed
-  packaged app bundles/launches the Rust core, handles approval prompts, and
-  passes packaged app smoke checks. `./scripts/packaged-supervision-proof.sh`
+- Confirm the Swift shell remains described as a scaffold until a Developer ID
+  signed and notarized app exists. `./scripts/packaged-supervision-proof.sh`
   builds the Rust CLI, copies it into a temporary
   `Jarvis.app/Contents/Resources/bin/jarvis-cli` layout, points Swift
   supervisor tests at that executable, and starts the copied binary with a
   repository-backed database to verify health, command, audit, diagnostics,
-  emergency pause, blocked command, pause status, and resume surfaces. This is
-  stronger packaged-layout branch evidence, but it is not signed, notarized,
-  clean-profile packaged app release evidence.
+  emergency pause, blocked command, pause status, and resume surfaces.
+  `./scripts/packaged-app-release-smoke.sh` goes further by assembling a
+  deterministic SwiftPM-built `Jarvis.app`, writing release-smoke `Info.plist`
+  metadata, bundling `jarvis-cli`, ad-hoc signing with `codesign -` when
+  available, launching the app executable under a temporary HOME/profile, and
+  verifying app-supervised core health, command, audit, diagnostics, emergency
+  pause, blocked command, pause status, resume, and clean-profile SQLite state.
+  This is local packaged app evidence only; it is not Developer ID signing,
+  notarization, installer validation, entitlement validation, or App Store
+  release evidence.
 
 ## Documentation Gate
 
@@ -156,7 +166,18 @@ stage or when a PR needs focused evidence for one ownership slice.
 
 ## Mac App Smoke Test
 
-This is a future gate once a packaged `Jarvis.app` exists:
+Current local gate:
+
+- Run `./scripts/packaged-app-release-smoke.sh`.
+- The script builds `jarvis-cli` and `JarvisMacApp`, assembles a deterministic
+  `Jarvis.app` bundle, writes `Info.plist`, bundles the core at
+  `Contents/Resources/bin/jarvis-cli`, ad-hoc signs the bundle when
+  `codesign` is available, launches the app executable with isolated endpoint
+  and database environment, and verifies health, command, audit, diagnostics,
+  emergency pause, blocked command, pause status, resume, and temp-profile
+  SQLite state.
+
+Still future gates for production distribution:
 
 - Packaged app launches on a clean Mac user profile.
 - App starts and supervises `jarvis-core`.
@@ -169,11 +190,11 @@ This is a future gate once a packaged `Jarvis.app` exists:
 - Emergency pause stops new actions.
 - App exits cleanly and restarts with recoverable state.
 
-Until that packaged app gate exists, use
-`./scripts/packaged-supervision-proof.sh` only as local packaged-layout proof.
-It does not exercise Finder launch, code signing, notarization, entitlement
-validation, installer behavior, launch services, or clean-profile macOS
-permissions.
+The current script covers local app-executable launch and ad-hoc signing only.
+It does not prove Finder launch, LaunchServices registration, Developer ID
+signing, notarization, entitlement validation, installer behavior, App Store
+distribution, microphone permissions, real speech capture, or a separate
+clean-user manual QA pass.
 
 ## Release Notes
 

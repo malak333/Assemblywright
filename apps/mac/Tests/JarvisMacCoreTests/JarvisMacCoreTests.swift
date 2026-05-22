@@ -1038,6 +1038,22 @@ struct JarvisMacCoreTests {
         ])
     }
 
+    @Test("Supervisor configuration accepts packaged smoke endpoint environment")
+    func supervisorConfigurationAcceptsPackagedSmokeEnvironment() {
+        let configuration = JarvisCoreSupervisorConfiguration(
+            executableURL: URL(fileURLWithPath: "/tmp/jarvis-cli"),
+            databaseURL: nil,
+            environment: [
+                "JARVIS_MAC_CORE_BIND_ADDRESS": "127.0.0.1:18999",
+                "JARVIS_MAC_CORE_ENDPOINT": "http://127.0.0.1:18999"
+            ]
+        )
+
+        #expect(configuration.bindAddress == "127.0.0.1:18999")
+        #expect(configuration.endpoint.baseURL.absoluteString == "http://127.0.0.1:18999")
+        #expect(configuration.launchArguments == ["serve", "--bind", "127.0.0.1:18999"])
+    }
+
     @Test("Supervisor resolves configured executable before packaged candidates")
     func supervisorResolvesConfiguredExecutableFirst() {
         let configuredURL = JarvisCoreSupervisorConfiguration.configuredExecutableURL(

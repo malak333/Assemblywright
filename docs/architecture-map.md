@@ -20,6 +20,10 @@ flowchart TB
     LocalGate --> Smoke["jarvis-cli smoke"]
     LocalGate --> SwiftGate["Swift package build/test"]
     LocalGate --> CargoGate["fmt, clippy, tests, build, package"]
+    AppReleaseSmoke["packaged-app-release-smoke.sh"] --> LocalApp["temp Jarvis.app bundle"]
+    LocalApp --> AppMetadata["Info.plist plus ad-hoc codesign when available"]
+    LocalApp --> BundledCLI["Contents/Resources/bin/jarvis-cli"]
+    AppReleaseSmoke --> CleanProfile["temporary HOME and SQLite app state"]
     MacShell --> MacCore["JarvisMacCore IPC client, supervisor, and view models"]
     MacCore --> Supervisor["JarvisCoreSupervisor configured or bundled process"]
     Supervisor --> CLI
@@ -112,7 +116,14 @@ can inspect durable local state without reaching into SQLite directly.
 The release-proof path remains local: `./scripts/release-local.sh` runs Rust
 formatting, linting, tests, ignored release-proof tests, build/package, CLI
 smoke, and Swift package build/test. That evidence proves only the current
-implemented foundation surfaces.
+implemented foundation surfaces. `./scripts/packaged-app-release-smoke.sh`
+adds local packaged app evidence by assembling a SwiftPM-built `Jarvis.app`
+with `Info.plist`, bundled `jarvis-cli`, ad-hoc signing when `codesign` is
+available, temp-profile launch, app-supervised core health, command, audit,
+diagnostics, pause, blocked command, resume, and SQLite state checks. It does
+not prove Developer ID signing, notarization, installer behavior,
+entitlements, Finder/LaunchServices validation, App Store distribution, or real
+voice permissions.
 
 The current production sweep is coordinated through isolated worktrees and
 topic branches against the public repository
@@ -324,7 +335,7 @@ operation.
 
 | Area | Current implementation | Target production state | Phase |
 | --- | --- | --- | --- |
-| Mac shell | Buildable Swift/SwiftUI scaffold with health, command transcript, pause/resume, activity/audit rendering, memory/plugin/scheduler/diagnostics tabs, degraded-mode handling, and a `JarvisCoreSupervisor` abstraction for configured or bundled local core binaries. It is not signed or packaged as a release app. | Packaged `Jarvis.app` supervises the core, owns voice/text UX, settings, memory and permission surfaces, diagnostics export, and recovery states. | Shell supervision scaffold implemented; signed packaging and packaged smoke pending. |
+| Mac shell | Buildable Swift/SwiftUI scaffold with health, command transcript, pause/resume, activity/audit rendering, memory/plugin/scheduler/diagnostics tabs, degraded-mode handling, and a `JarvisCoreSupervisor` abstraction for configured or bundled local core binaries. The local packaged app smoke assembles and ad-hoc signs a deterministic `Jarvis.app` for temp-profile launch proof. | Packaged `Jarvis.app` supervises the core, owns voice/text UX, settings, memory and permission surfaces, diagnostics export, and recovery states. | Shell supervision scaffold and local assembled-app smoke implemented; Developer ID signing, notarization, installer/restart proof, and production release QA pending. |
 | IPC boundary | Axum loopback HTTP JSON API for health, commands, task/audit/memory/approval inspection, plugin manifests, emergency pause, and scheduler jobs. | Versioned, compatibility-tested app/core API with packaged app smoke coverage and clear degraded-mode handling. | Core IPC implemented; production app contract hardening pending. |
 | Command runtime | `ConversationRuntime` creates tasks, runs a routed `ModelExecutor` (`FakeLocalModel` by default, Ollama-compatible HTTP or ChatGPT/OpenAI-compatible HTTP when explicitly enabled), records structured audit entries, handles pause/cancel, enforces max steps, can persist task/audit state through `RuntimeCommandStore`, and can execute bounded model-planned first-party tool calls after schema and policy checks. | Multi-step assistant runtime with production model responses, installed plugin/tool orchestration, streaming progress, approval UI handoff, and robust recovery. | Bounded fake-model tool orchestration, opt-in local and ChatGPT provider boundaries, and CLI/IPC/Swift approval scaffold implemented; installed plugins and streaming pending. |
 | Model routing | Local-first `ModelRouter` exists with sensitivity checks, provider-status route evidence, ChatGPT opt-in gate, approval delegation, and redaction logic. The active `/commands` path can call a configured local provider or opt-in ChatGPT/OpenAI-compatible provider after policy allows the route. | Local provider integration, explicit ChatGPT escalation, minimized cloud context, user approval where required, and route evidence in every relevant task. | Local and ChatGPT provider boundaries implemented with tests; broader production model operations pending. |
@@ -333,9 +344,9 @@ operation.
 | Storage and memory | SQLite migrations store tasks, append-only audit entries, emergency pause, memory items with provenance/sensitivity/review/soft-delete fields, scheduler jobs, pending approval records, and disabled installed-plugin registry metadata. CLI/IPC can inspect and mutate memory items, approval decisions, and plugin metadata when repository backing is enabled. | SQLite also owns permissions, executable plugin grants, model-route records, migrations with backup/rollback, and memory UX review flows; vector indexes remain rebuildable. | Core local state and plugin metadata registry implemented; broader production schema pending. |
 | Safety and approvals | Capability scopes, risk tiers, emergency-pause fail-closed behavior, audit-required flags, and approval-required decisions exist in Rust. Repository-backed IPC persists pending approvals and supports CLI and Swift grant/deny decisions without executing side effects. | Human approval prompts, permission center, grants history, policy review, and no bypass for high-risk side effects. | Policy engine plus CLI/IPC/Swift approval decision surface implemented; richer permission center pending. |
 | Voice and diagnostics | Swift now has a text-only voice state/action scaffold with typed transcript staging, unavailable/degraded states, and handoff into the same `CommandConsoleModel.submit` path used by text commands. It does not use microphone, Speech, AVFoundation, or TTS APIs. Redacted diagnostics export exists over CLI/IPC and omits command bodies, scheduler commands, audit payloads, memory values, and cancellation reason text. | Voice input/output loop, interruption/cancel behavior, microphone degraded modes, and local diagnostics export integrated into the packaged app. | Text-parity voice scaffold and diagnostics foundation implemented; real voice and packaged UX pending. |
-| Release proof | Local Rust and Swift build/test/smoke commands plus the ignored cross-process `local_ipc_e2e` release-proof test document the current proof boundary. | Signed/packaged app release with clean-profile Mac smoke, app-supervised core, command, audit, pause, restart, migration, recovery, diagnostics, and real-provider checks. | Local foundation proof only. |
+| Release proof | Local Rust and Swift build/test/smoke commands plus the ignored cross-process `local_ipc_e2e` release-proof test document the foundation boundary. `packaged-app-release-smoke.sh` adds local assembled-app launch evidence for app-supervised core health, command, audit, diagnostics, pause, blocked command, resume, and temp SQLite state. | Developer ID signed and notarized packaged app release with clean-profile Mac smoke, app-supervised core, command, audit, pause, restart, migration, recovery, diagnostics, and real-provider checks. | Local foundation proof and assembled-app smoke implemented; distribution-grade signing/notarization/restart/manual QA pending. |
 | Production workflow | Current production effort uses isolated worktrees, topic branches, reviewable PRs, and parallel ownership slices; this docs slice is branch `codex/production-docs-sync` in `/Users/michaelnobile/Antigravity/jarvis-worktrees/production-docs-sync`. | Public repo release train with PR evidence, reproducible local gates, owner-reviewed release notes, and no hidden readiness claims. | Workflow documented; release governance still manual. |
-| Docs, KB, and E2E discipline | Docs and knowledge-base files record implementation boundaries, the current/end-goal diagrams, and local proof commands. Current E2E evidence is Rust/CLI cross-process plus Swift package contract/model coverage; packaged Mac E2E remains pending. | Every feature phase updates docs and durable KB facts, adds or names the relevant E2E coverage, and blocks broader readiness claims when coverage is missing. | Phase discipline documented; broader packaged-app E2E pending. |
+| Docs, KB, and E2E discipline | Docs and knowledge-base files record implementation boundaries, the current/end-goal diagrams, and local proof commands. Current E2E evidence is Rust/CLI cross-process, Swift package contract/model coverage, packaged-layout supervision proof, and local assembled-app smoke. | Every feature phase updates docs and durable KB facts, adds or names the relevant E2E coverage, and blocks broader readiness claims when coverage is missing. | Phase discipline documented; broader distribution E2E pending. |
 
 ## Data Ownership
 
