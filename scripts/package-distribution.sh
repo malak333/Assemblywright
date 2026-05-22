@@ -13,6 +13,7 @@ ENTITLEMENTS="$ROOT_DIR/packaging/Jarvis.entitlements"
 DIST_DIR="${JARVIS_DISTRIBUTION_DIR:-$ROOT_DIR/target/distribution}"
 APP_PATH="$DIST_DIR/$APP_NAME.app"
 ZIP_PATH="$DIST_DIR/$APP_NAME-$VERSION.zip"
+PKG_PATH="$DIST_DIR/$APP_NAME-$VERSION.pkg"
 CHECK_ONLY=false
 
 usage() {
@@ -20,10 +21,12 @@ usage() {
 Usage: scripts/package-distribution.sh [--check]
 
 Build a distribution-shaped Jarvis.app bundle, sign it with Developer ID, zip it,
-submit it for notarization, and staple the ticket.
+submit it for notarization, staple the ticket, then build, sign, notarize, and
+staple a Developer ID Installer package for /Applications installation.
 
 Required for full distribution packaging:
   JARVIS_DEVELOPER_ID_APPLICATION  Developer ID Application signing identity
+  JARVIS_DEVELOPER_ID_INSTALLER     Developer ID Installer signing identity
 
 Required for notarization, choose one:
   JARVIS_NOTARYTOOL_PROFILE        Stored notarytool keychain profile
@@ -89,6 +92,8 @@ require_command plutil
 require_command codesign
 require_command xcrun
 require_command ditto
+require_command pkgbuild
+require_command pkgutil
 
 [[ -f "$ENTITLEMENTS" ]] || fail "missing entitlements file: $ENTITLEMENTS"
 run plutil -lint "$ENTITLEMENTS"
@@ -96,6 +101,9 @@ run plutil -lint "$ENTITLEMENTS"
 if [[ "$CHECK_ONLY" == true ]]; then
   if [[ -z "${JARVIS_DEVELOPER_ID_APPLICATION:-}" ]]; then
     printf 'warning: JARVIS_DEVELOPER_ID_APPLICATION is not set; full signing will fail until configured.\n' >&2
+  fi
+  if [[ -z "${JARVIS_DEVELOPER_ID_INSTALLER:-}" ]]; then
+    printf 'warning: JARVIS_DEVELOPER_ID_INSTALLER is not set; full installer signing will fail until configured.\n' >&2
   fi
   if [[ ${#notary_args[@]} -eq 0 ]]; then
     printf 'warning: notarization credentials are not set; full notarization will fail until configured.\n' >&2
@@ -107,6 +115,8 @@ fi
 
 [[ -n "${JARVIS_DEVELOPER_ID_APPLICATION:-}" ]] ||
   fail "JARVIS_DEVELOPER_ID_APPLICATION must name a Developer ID Application identity"
+[[ -n "${JARVIS_DEVELOPER_ID_INSTALLER:-}" ]] ||
+  fail "JARVIS_DEVELOPER_ID_INSTALLER must name a Developer ID Installer identity"
 [[ ${#notary_args[@]} -gt 0 ]] ||
   fail "notarization credentials are required; set JARVIS_NOTARYTOOL_PROFILE or Apple ID/team/password vars"
 
@@ -182,7 +192,21 @@ run xcrun notarytool submit "$ZIP_PATH" "${notary_args[@]}" --wait
 run xcrun stapler staple "$APP_PATH"
 run xcrun stapler validate "$APP_PATH"
 
+rm -f "$PKG_PATH"
+run pkgbuild \
+  --component "$APP_PATH" \
+  --install-location /Applications \
+  --identifier "$BUNDLE_ID.pkg" \
+  --version "$VERSION" \
+  --sign "$JARVIS_DEVELOPER_ID_INSTALLER" \
+  "$PKG_PATH"
+run pkgutil --check-signature "$PKG_PATH"
+run xcrun notarytool submit "$PKG_PATH" "${notary_args[@]}" --wait
+run xcrun stapler staple "$PKG_PATH"
+run xcrun stapler validate "$PKG_PATH"
+
 printf '\nJarvis distribution package: ok\n'
 printf 'App: %s\n' "$APP_PATH"
 printf 'Zip: %s\n' "$ZIP_PATH"
-printf 'Proof boundary: signed and notarized package only; clean-profile Finder launch, live microphone/Speech validation, and installer/App Store validation remain manual release checks.\n'
+printf 'Pkg: %s\n' "$PKG_PATH"
+printf 'Proof boundary: signed, notarized app zip and signed, notarized installer package only; clean-profile install, Finder launch, live microphone/Speech validation, live audio-output validation, and App Store validation remain manual release checks.\n'
