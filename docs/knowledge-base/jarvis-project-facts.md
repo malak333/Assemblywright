@@ -135,9 +135,12 @@ These notes capture durable facts for future agents working on this repository.
   behavior as manual execution. Repository-backed IPC exposes
   `/scheduler/attention`, and the CLI exposes `jarvis scheduler attention`, as
   a redacted app handoff summary for due, running, and failed scheduler jobs.
-  The Swift Scheduler tab renders this summary above the job list. Richer
-  proactive trigger policy and OS-level app notifications remain target
-  architecture.
+  The Swift Scheduler tab renders this summary above the job list and now owns
+  a protocol-backed notification model plus macOS `UserNotifications` adapter
+  controls for due/failed attention items. Swift tests use a fake adapter to
+  cover authorization, delivery, duplicate suppression, and denied-permission
+  fail-closed behavior. Richer proactive trigger policy and live OS
+  notification validation remain target architecture.
 
 ## Proof Boundaries
 
@@ -184,6 +187,11 @@ These notes capture durable facts for future agents working on this repository.
   signing, notarization, installer validation, entitlement validation,
   Finder/LaunchServices validation, App Store distribution, or real
   microphone/Speech/live audio-output coverage.
+- Swift scheduler notification controls are repo-owned adapter evidence: the
+  core model can request authorization, build due/failed notification requests,
+  suppress duplicate deliveries for the same attention item, and fail closed
+  when permission is denied. This is not a substitute for manual clean-profile
+  macOS notification prompt and delivery validation.
 - `./scripts/package-distribution.sh` is the repo-owned distribution packaging
   lane. Its `--check` mode is credential-free and validates local tools plus
   entitlements. Full mode requires the owner's Developer ID and notarytool
@@ -214,6 +222,9 @@ These notes capture durable facts for future agents working on this repository.
   `voice-adapter-production`, `packaged-app-release-smoke`,
   `permission-grants-ux`, and `phase3-docs-architecture`. Treat those names as
   coordination context until each slice is merged and verified on main.
+- Follow-on Swift scheduler notification work uses
+  `codex/scheduler-notifications` in
+  `/Users/michaelnobile/Antigravity/jarvis-worktrees-continuation/scheduler-notifications`.
 - When multiple agents are active, stay inside assigned ownership. For docs-only
   architecture work, use `apply_patch` and do not touch implementation files.
 - Do not revert or overwrite unrelated work from other agents.

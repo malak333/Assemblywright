@@ -164,6 +164,34 @@ private final class FakeSpeechOutputAdapter: JarvisSpeechOutputAdapter {
     }
 }
 
+@MainActor
+private final class FakeSchedulerNotificationAdapter: JarvisSchedulerNotificationAdapter {
+    var authorizationResult: Result<Bool, Error>
+    var deliveryResult: Result<Void, Error>
+    private(set) var authorizationRequestCount: Int
+    private(set) var deliveredRequests: [JarvisSchedulerNotificationRequest]
+
+    init(
+        authorizationResult: Result<Bool, Error> = .success(true),
+        deliveryResult: Result<Void, Error> = .success(())
+    ) {
+        self.authorizationResult = authorizationResult
+        self.deliveryResult = deliveryResult
+        self.authorizationRequestCount = 0
+        self.deliveredRequests = []
+    }
+
+    func requestAuthorization() async throws -> Bool {
+        authorizationRequestCount += 1
+        return try authorizationResult.get()
+    }
+
+    func deliver(_ request: JarvisSchedulerNotificationRequest) async throws {
+        try deliveryResult.get()
+        deliveredRequests.append(request)
+    }
+}
+
 private final class FakeCredentialStore: JarvisCredentialStore, @unchecked Sendable {
     var values: [JarvisCredentialKey: String]
 
@@ -752,6 +780,65 @@ struct JarvisMacCoreTests {
         #expect(item.id == id)
         #expect(item.notificationKind == "due_now")
         #expect(item.notificationReason.contains("scheduler job is due"))
+    }
+
+    @Test("Scheduler notification model requests authorization and delivers due attention")
+    @MainActor
+    func schedulerNotificationsDeliverDueAttention() async throws {
+        let id = UUID()
+        let attention = try JSONDecoder().decode(
+            JarvisSchedulerAttentionSummary.self,
+            from: schedulerAttentionJSON(id: id)
+        )
+        let adapter = FakeSchedulerNotificationAdapter()
+        let model = SchedulerNotificationModel(adapter: adapter)
+
+        let deliveredCount = await model.notify(attention: attention)
+        let delivered = try #require(adapter.deliveredRequests.first)
+
+        #expect(deliveredCount == 1)
+        #expect(adapter.authorizationRequestCount == 1)
+        #expect(delivered.schedulerJobId == id)
+        #expect(delivered.notificationKind == "due_now")
+        #expect(delivered.title == "Scheduler job ready: one shot")
+        #expect(model.status == .delivered(1))
+    }
+
+    @Test("Scheduler notification model avoids duplicate notifications for the same attention item")
+    @MainActor
+    func schedulerNotificationsAvoidDuplicates() async throws {
+        let attention = try JSONDecoder().decode(
+            JarvisSchedulerAttentionSummary.self,
+            from: schedulerAttentionJSON(id: UUID())
+        )
+        let adapter = FakeSchedulerNotificationAdapter()
+        let model = SchedulerNotificationModel(adapter: adapter)
+
+        let firstCount = await model.notify(attention: attention)
+        let secondCount = await model.notify(attention: attention)
+
+        #expect(firstCount == 1)
+        #expect(secondCount == 0)
+        #expect(adapter.deliveredRequests.count == 1)
+        #expect(model.status == .delivered(0))
+    }
+
+    @Test("Scheduler notification model fails closed when notification authorization is denied")
+    @MainActor
+    func schedulerNotificationsFailClosedWhenDenied() async throws {
+        let attention = try JSONDecoder().decode(
+            JarvisSchedulerAttentionSummary.self,
+            from: schedulerAttentionJSON(id: UUID())
+        )
+        let adapter = FakeSchedulerNotificationAdapter(authorizationResult: .success(false))
+        let model = SchedulerNotificationModel(adapter: adapter)
+
+        let deliveredCount = await model.notify(attention: attention)
+
+        #expect(deliveredCount == 0)
+        #expect(adapter.authorizationRequestCount == 1)
+        #expect(adapter.deliveredRequests.isEmpty)
+        #expect(model.status == .denied)
     }
 
     @Test("Pause status decodes detailed timestamps")
