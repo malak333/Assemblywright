@@ -325,6 +325,32 @@ pub struct PermissionGrantSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionPolicyReview {
+    pub generated_at: DateTime<Utc>,
+    pub status: String,
+    pub review_item_count: usize,
+    pub high_risk_pending_count: usize,
+    pub executable_installed_plugin_count: usize,
+    pub unverified_installed_plugin_count: usize,
+    pub side_effects_require_approval: bool,
+    pub items: Vec<PermissionPolicyReviewItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionPolicyReviewItem {
+    pub item_type: String,
+    pub severity: String,
+    pub title: String,
+    pub detail: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approval_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApprovalStatusCount {
     pub status: ApprovalStatus,
     pub count: usize,
@@ -468,6 +494,7 @@ impl IpcState {
                 "/memory/classification".to_string(),
                 "/memory/:id".to_string(),
                 "/permissions/grants".to_string(),
+                "/permissions/policy-review".to_string(),
                 "/approvals".to_string(),
                 "/approvals/:id".to_string(),
             ],
@@ -651,6 +678,155 @@ impl IpcState {
                 executable_installed_plugin_count,
                 unverified_installed_plugin_count,
                 side_effects_require_approval: true,
+            })
+        })
+    }
+
+    pub fn permission_policy_review(&self) -> JarvisResult<PermissionPolicyReview> {
+        self.using_repository(|repository| {
+            let approvals = repository.list_pending_approvals(None)?;
+            let installed_plugins = repository.list_installed_plugins()?;
+            let mut items = Vec::new();
+
+            let high_risk_pending_count = approvals
+                .iter()
+                .filter(|approval| {
+                    approval.status == ApprovalStatus::Pending
+                        && matches!(
+                            approval.risk_tier,
+                            crate::RiskTier::Confirm | crate::RiskTier::Block
+                        )
+                })
+                .count();
+
+            for approval in approvals
+                .iter()
+                .filter(|approval| approval.status == ApprovalStatus::Pending)
+            {
+                let severity = match approval.risk_tier {
+                    crate::RiskTier::Block => "critical",
+                    crate::RiskTier::Confirm => "high",
+                    crate::RiskTier::Notify => "medium",
+                    crate::RiskTier::Low => "low",
+                };
+                items.push(PermissionPolicyReviewItem {
+                    item_type: "pending_approval".to_string(),
+                    severity: severity.to_string(),
+                    title: "Pending approval requires review".to_string(),
+                    detail: format!(
+                        "{} requests {:?} access for {:?} data",
+                        approval.action, approval.risk_tier, approval.sensitivity
+                    ),
+                    approval_id: Some(approval.id),
+                    plugin_id: None,
+                    action: Some(approval.action.clone()),
+                });
+            }
+
+            let executable_installed_plugin_count = installed_plugins
+                .iter()
+                .filter(|plugin| plugin.execution_enabled)
+                .count();
+            let unverified_installed_plugin_count = installed_plugins
+                .iter()
+                .filter(|plugin| {
+                    plugin.provenance.integrity_status
+                        != crate::InstalledPluginIntegrityStatus::MatchesInstallSnapshot
+                })
+                .count();
+
+            for plugin in installed_plugins {
+                if plugin.provenance.integrity_status
+                    != crate::InstalledPluginIntegrityStatus::MatchesInstallSnapshot
+                {
+                    items.push(PermissionPolicyReviewItem {
+                        item_type: "installed_plugin_provenance".to_string(),
+                        severity: if plugin.execution_enabled {
+                            "critical"
+                        } else {
+                            "medium"
+                        }
+                        .to_string(),
+                        title: "Installed plugin provenance is not verified".to_string(),
+                        detail: format!(
+                            "{} integrity status is {:?}; execution remains fail-closed until the install snapshot verifies",
+                            plugin.manifest.name, plugin.provenance.integrity_status
+                        ),
+                        approval_id: None,
+                        plugin_id: Some(plugin.id.clone()),
+                        action: None,
+                    });
+                }
+
+                if plugin
+                    .provenance
+                    .origin_claim
+                    .as_ref()
+                    .is_some_and(|_| !plugin.provenance.origin_claim_verified)
+                {
+                    items.push(PermissionPolicyReviewItem {
+                        item_type: "publisher_identity".to_string(),
+                        severity: "medium".to_string(),
+                        title: "Plugin publisher origin is unverified".to_string(),
+                        detail: format!(
+                            "{} declares a publisher origin that has not been verified",
+                            plugin.manifest.name
+                        ),
+                        approval_id: None,
+                        plugin_id: Some(plugin.id.clone()),
+                        action: None,
+                    });
+                }
+
+                for action in plugin.manifest.actions.iter().filter(|action| {
+                    matches!(
+                        action.risk_tier,
+                        crate::RiskTier::Confirm | crate::RiskTier::Block
+                    )
+                }) {
+                    items.push(PermissionPolicyReviewItem {
+                        item_type: "high_risk_plugin_action".to_string(),
+                        severity: if plugin.execution_enabled {
+                            "high"
+                        } else {
+                            "low"
+                        }
+                        .to_string(),
+                        title: "Plugin declares high-risk action".to_string(),
+                        detail: format!(
+                            "{} declares {} as {:?}; side effects require explicit approval",
+                            plugin.manifest.name, action.name, action.risk_tier
+                        ),
+                        approval_id: None,
+                        plugin_id: Some(plugin.id.clone()),
+                        action: Some(action.name.clone()),
+                    });
+                }
+            }
+
+            items.sort_by_key(|item| {
+                (
+                    permission_review_severity_rank(&item.severity),
+                    item.item_type.clone(),
+                    item.title.clone(),
+                    item.plugin_id.clone(),
+                    item.approval_id,
+                )
+            });
+
+            Ok(PermissionPolicyReview {
+                generated_at: Utc::now(),
+                status: if items.is_empty() {
+                    "clear".to_string()
+                } else {
+                    "review_required".to_string()
+                },
+                review_item_count: items.len(),
+                high_risk_pending_count,
+                executable_installed_plugin_count,
+                unverified_installed_plugin_count,
+                side_effects_require_approval: true,
+                items,
             })
         })
     }
@@ -1765,6 +1941,16 @@ fn scheduler_notification_priority(kind: &str) -> u8 {
     }
 }
 
+fn permission_review_severity_rank(severity: &str) -> u8 {
+    match severity {
+        "critical" => 0,
+        "high" => 1,
+        "medium" => 2,
+        "low" => 3,
+        _ => 4,
+    }
+}
+
 fn sensitivity_from_context(context: &serde_json::Value) -> Option<Sensitivity> {
     let value = context.get("sensitivity")?.as_str()?;
     match value {
@@ -1895,6 +2081,7 @@ pub fn router(state: IpcState) -> Router {
         .route("/memory/:id/review", post(review_memory_item))
         .route("/memory/:id/restore", post(restore_memory_item))
         .route("/permissions/grants", get(permission_grant_summary))
+        .route("/permissions/policy-review", get(permission_policy_review))
         .route("/approvals", get(list_approvals))
         .route("/approvals/:id", get(get_approval))
         .route("/approvals/:id/approve", post(approve_approval))
@@ -2178,6 +2365,15 @@ async fn permission_grant_summary(
         .map_err(error_response)
 }
 
+async fn permission_policy_review(
+    State(state): State<IpcState>,
+) -> Result<Json<PermissionPolicyReview>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .permission_policy_review()
+        .map(Json)
+        .map_err(error_response)
+}
+
 async fn get_approval(
     State(state): State<IpcState>,
     Path(id): Path<Uuid>,
@@ -2391,6 +2587,7 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
         endpoint("POST", "/memory/:id/review", true, false),
         endpoint("POST", "/memory/:id/restore", true, false),
         endpoint("GET", "/permissions/grants", true, false),
+        endpoint("GET", "/permissions/policy-review", true, false),
         endpoint("GET", "/approvals", true, false),
         endpoint("GET", "/approvals/:id", true, false),
         endpoint("POST", "/approvals/:id/approve", true, false),
@@ -3007,6 +3204,35 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 cancellation: crate::CancellationBehavior::Cooperative,
             }],
         }
+    }
+
+    #[tokio::test]
+    async fn permission_policy_review_summarizes_pending_approvals() {
+        let repository = SqliteRepository::in_memory().unwrap();
+        let state = IpcState::with_repository(repository).expect("state");
+        let response = state
+            .submit_command(CommandRequest {
+                input: "plugin approval echo review me".to_string(),
+                session_id: None,
+                context: json!({"surface": "test"}),
+                dry_run: false,
+                sensitivity: Some(Sensitivity::Workspace),
+            })
+            .await
+            .expect("approval command");
+        assert_eq!(response.task.status, TaskStatus::WaitingForApproval);
+
+        let review = state.permission_policy_review().expect("policy review");
+        assert_eq!(review.status, "review_required");
+        assert_eq!(review.high_risk_pending_count, 1);
+        assert_eq!(review.review_item_count, 1);
+        assert_eq!(review.items[0].item_type, "pending_approval");
+        assert_eq!(review.items[0].severity, "high");
+        assert_eq!(
+            review.items[0].action.as_deref(),
+            Some("fake_echo.approval_echo")
+        );
+        assert!(review.side_effects_require_approval);
     }
 
     #[tokio::test]

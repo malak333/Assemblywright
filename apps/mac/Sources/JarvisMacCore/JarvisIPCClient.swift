@@ -109,6 +109,12 @@ public struct JarvisContractResponse: Decodable, Equatable, Sendable {
         }
     }
 
+    public var exposesPermissionPolicyReview: Bool {
+        endpoints.contains { endpoint in
+            endpoint.method.uppercased() == "GET" && endpoint.path == "/permissions/policy-review"
+        }
+    }
+
     public var exposesApprovalApproveAction: Bool {
         endpoints.contains { endpoint in
             endpoint.method.uppercased() == "POST" && endpoint.path == "/approvals/:id/approve"
@@ -943,6 +949,58 @@ public struct JarvisPermissionGrantSummary: Decodable, Equatable, Sendable {
     }
 }
 
+public struct JarvisPermissionPolicyReview: Decodable, Equatable, Sendable {
+    public var generatedAt: String
+    public var status: String
+    public var reviewItemCount: Int
+    public var highRiskPendingCount: Int
+    public var executableInstalledPluginCount: Int
+    public var unverifiedInstalledPluginCount: Int
+    public var sideEffectsRequireApproval: Bool
+    public var items: [JarvisPermissionPolicyReviewItem]
+
+    enum CodingKeys: String, CodingKey {
+        case generatedAt = "generated_at"
+        case status
+        case reviewItemCount = "review_item_count"
+        case highRiskPendingCount = "high_risk_pending_count"
+        case executableInstalledPluginCount = "executable_installed_plugin_count"
+        case unverifiedInstalledPluginCount = "unverified_installed_plugin_count"
+        case sideEffectsRequireApproval = "side_effects_require_approval"
+        case items
+    }
+}
+
+public struct JarvisPermissionPolicyReviewItem: Decodable, Equatable, Identifiable, Sendable {
+    public var itemType: String
+    public var severity: String
+    public var title: String
+    public var detail: String
+    public var approvalId: UUID?
+    public var pluginId: String?
+    public var action: String?
+
+    public var id: String {
+        [
+            itemType,
+            severity,
+            approvalId?.uuidString ?? "",
+            pluginId ?? "",
+            action ?? title
+        ].joined(separator: ":")
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case itemType = "item_type"
+        case severity
+        case title
+        case detail
+        case approvalId = "approval_id"
+        case pluginId = "plugin_id"
+        case action
+    }
+}
+
 public struct JarvisApprovalStatusCount: Decodable, Equatable, Sendable {
     public var status: String
     public var count: Int
@@ -1036,6 +1094,7 @@ public protocol JarvisCoreClient: Sendable {
     func cancelSchedulerJob(id: UUID) async throws -> JarvisSchedulerJob
     func diagnosticsExport() async throws -> JarvisDiagnosticsExport
     func permissionGrantSummary() async throws -> JarvisPermissionGrantSummary
+    func permissionPolicyReview() async throws -> JarvisPermissionPolicyReview
     func listApprovals(status: String?) async throws -> [JarvisPendingApproval]
     func approval(id: UUID) async throws -> JarvisPendingApproval
     func approveApproval(id: UUID, request: JarvisApprovalDecisionRequest) async throws -> JarvisPendingApproval
@@ -1160,6 +1219,10 @@ public final class JarvisIPCClient: JarvisCoreClient {
 
     public func permissionGrantSummary() async throws -> JarvisPermissionGrantSummary {
         try await send(path: "/permissions/grants", method: "GET", body: Optional<Data>.none)
+    }
+
+    public func permissionPolicyReview() async throws -> JarvisPermissionPolicyReview {
+        try await send(path: "/permissions/policy-review", method: "GET", body: Optional<Data>.none)
     }
 
     public func listApprovals(status: String? = nil) async throws -> [JarvisPendingApproval] {

@@ -131,6 +131,12 @@ stage or when a PR needs focused evidence for one ownership slice.
   provenance integrity status, unverified plugin counts, and the
   `side_effects_require_approval` invariant. This inspection surface must not
   enable installed plugin code execution.
+- Confirm `/permissions/policy-review` and `jarvis permissions review` expose
+  read-only severity-ranked review items for pending approvals, high-risk
+  plugin actions, unverified provenance, and unverified origin claims without
+  enabling side effects.
+- Confirm the Swift Approval Center renders permission policy review status
+  alongside grant history when the IPC contract exposes the endpoint.
 - Confirm scheduler job create/list/cancel and due-run execution state is
   restored and updated when repository backing is enabled. Due-run coverage
   proves explicit CLI/IPC runner behavior, including interval reschedule and

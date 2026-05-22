@@ -287,6 +287,7 @@ public final class ApprovalManagementModel: ObservableObject {
     @Published public private(set) var contract: JarvisContractResponse?
     @Published public private(set) var pendingItems: [JarvisApprovalQueueItem]
     @Published public private(set) var grantSummary: JarvisPermissionGrantSummary?
+    @Published public private(set) var policyReview: JarvisPermissionPolicyReview?
     @Published public private(set) var permissionSurface: JarvisPermissionSurfaceState
     @Published public private(set) var lastDecision: JarvisPendingApproval?
     @Published public private(set) var isLoading: Bool
@@ -310,6 +311,7 @@ public final class ApprovalManagementModel: ObservableObject {
         self.contract = nil
         self.pendingItems = []
         self.grantSummary = nil
+        self.policyReview = nil
         self.permissionSurface = .empty
         self.lastDecision = nil
         self.isLoading = false
@@ -324,6 +326,9 @@ public final class ApprovalManagementModel: ObservableObject {
             self.pluginManifests = try await self.client.listPluginManifests()
             self.grantSummary = loadedContract.exposesPermissionGrantSummary
                 ? try await self.client.permissionGrantSummary()
+                : nil
+            self.policyReview = loadedContract.exposesPermissionPolicyReview
+                ? try await self.client.permissionPolicyReview()
                 : nil
 
             if loadedContract.exposesApprovalList {
@@ -386,6 +391,9 @@ public final class ApprovalManagementModel: ObservableObject {
             self.pendingItems.removeAll { $0.id == id }
             if self.contract?.exposesPermissionGrantSummary == true {
                 self.grantSummary = try await self.client.permissionGrantSummary()
+            }
+            if self.contract?.exposesPermissionPolicyReview == true {
+                self.policyReview = try await self.client.permissionPolicyReview()
             }
             self.permissionSurface = JarvisPermissionSurfaceState.current(
                 pendingItems: self.pendingItems,

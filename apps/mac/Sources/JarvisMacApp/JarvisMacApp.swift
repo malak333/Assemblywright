@@ -712,6 +712,10 @@ struct ApprovalCenterView: View {
                     PermissionGrantHistoryView(summary: grantSummary)
                 }
 
+                if let policyReview = model.policyReview {
+                    PermissionPolicyReviewView(review: policyReview)
+                }
+
                 if let limitation = model.limitationText {
                     Text(limitation)
                         .font(.caption)
@@ -856,6 +860,67 @@ struct PermissionGrantHistoryView: View {
             grant.originClaimVerified ? "origin \($0) verified" : "origin \($0) unverified"
         } ?? "origin unknown"
         return "\(grant.pluginId): \(grant.executionGrant), \(executable), \(grant.captureMethod), \(verifiedAt), \(origin), high-risk actions \(grant.highRiskActionCount)"
+    }
+}
+
+struct PermissionPolicyReviewView: View {
+    let review: JarvisPermissionPolicyReview
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Label(statusTitle, systemImage: review.reviewItemCount == 0 ? "checkmark.shield" : "shield.lefthalf.filled")
+                    .font(.subheadline)
+                Spacer()
+                Text("\(review.reviewItemCount) item(s)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(summaryText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+
+            ForEach(review.items.prefix(6)) { item in
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack {
+                        Text(item.title)
+                            .font(.caption)
+                        Spacer()
+                        Text(item.severity)
+                            .font(.caption2)
+                            .foregroundStyle(severityColor(item.severity))
+                    }
+                    Text(item.detail)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .textSelection(.enabled)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var statusTitle: String {
+        review.status == "clear" ? "Policy review clear" : "Policy review required"
+    }
+
+    private var summaryText: String {
+        let gate = review.sideEffectsRequireApproval ? "side effects approval-gated" : "approval gate unknown"
+        return "high-risk pending \(review.highRiskPendingCount) | executable plugins \(review.executableInstalledPluginCount) | unverified plugins \(review.unverifiedInstalledPluginCount) | \(gate)"
+    }
+
+    private func severityColor(_ severity: String) -> Color {
+        switch severity {
+        case "critical", "high":
+            return .red
+        case "medium":
+            return .orange
+        default:
+            return .secondary
+        }
     }
 }
 
