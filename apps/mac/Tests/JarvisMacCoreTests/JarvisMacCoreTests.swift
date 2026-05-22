@@ -32,6 +32,85 @@ private final class IPCURLProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
+@MainActor
+private final class FakeVoiceAdapter: JarvisVoiceAdapter {
+    var phase: JarvisVoiceAdapterPhase
+    var permissionResult: Result<Void, JarvisVoiceAdapterError>
+    var startResult: Result<Void, JarvisVoiceAdapterError>
+    var stopResult: Result<Void, JarvisVoiceAdapterError>
+    var interruptResult: Result<Void, JarvisVoiceAdapterError>
+    private(set) var callbacks: JarvisVoiceCaptureCallbacks?
+
+    init(
+        phase: JarvisVoiceAdapterPhase = .idle,
+        permissionResult: Result<Void, JarvisVoiceAdapterError> = .success(()),
+        startResult: Result<Void, JarvisVoiceAdapterError> = .success(()),
+        stopResult: Result<Void, JarvisVoiceAdapterError> = .success(()),
+        interruptResult: Result<Void, JarvisVoiceAdapterError> = .success(())
+    ) {
+        self.phase = phase
+        self.permissionResult = permissionResult
+        self.startResult = startResult
+        self.stopResult = stopResult
+        self.interruptResult = interruptResult
+    }
+
+    func requestPermissions() async -> Result<Void, JarvisVoiceAdapterError> {
+        switch permissionResult {
+        case .success:
+            phase = .idle
+        case let .failure(error):
+            phase = .unavailable(reason: error.description)
+        }
+        return permissionResult
+    }
+
+    func startCapture(callbacks: JarvisVoiceCaptureCallbacks) async -> Result<Void, JarvisVoiceAdapterError> {
+        switch startResult {
+        case .success:
+            self.callbacks = callbacks
+            phase = .listening
+        case let .failure(error):
+            phase = .unavailable(reason: error.description)
+        }
+        return startResult
+    }
+
+    func stopCapture() async -> Result<Void, JarvisVoiceAdapterError> {
+        switch stopResult {
+        case .success:
+            callbacks = nil
+            phase = .idle
+        case let .failure(error):
+            phase = .unavailable(reason: error.description)
+        }
+        return stopResult
+    }
+
+    func interrupt(reason: String) async -> Result<Void, JarvisVoiceAdapterError> {
+        switch interruptResult {
+        case .success:
+            callbacks = nil
+            phase = .interrupted(reason: reason)
+        case let .failure(error):
+            phase = .unavailable(reason: error.description)
+        }
+        return interruptResult
+    }
+
+    func emitPartial(_ transcript: String) {
+        callbacks?.onPartialTranscript(transcript)
+    }
+
+    func emitFinal(_ transcript: String) {
+        callbacks?.onFinalTranscript(transcript)
+    }
+
+    func emitError(_ error: JarvisVoiceAdapterError) {
+        callbacks?.onError(error)
+    }
+}
+
 @Suite("Jarvis Mac core contracts", .serialized)
 struct JarvisMacCoreTests {
     @Test("Endpoint appends paths to the configured core URL")
@@ -909,6 +988,104 @@ struct JarvisMacCoreTests {
         let handoff = model.apply(.submitTranscript)
 
         #expect(handoff?.text == "typed fallback after reset")
+    }
+
+    @MainActor
+    @Test("Voice adapter model starts capture and stages deterministic transcripts")
+    func voiceAdapterModelStagesPartialAndFinalTranscripts() async {
+        let adapter = FakeVoiceAdapter()
+        let voice = VoiceStateModel()
+        let model = VoiceAdapterStateModel(adapter: adapter, voiceState: voice)
+
+        await model.requestPermissions()
+        #expect(model.phase == .idle)
+        #expect(model.lastError == nil)
+
+        await model.startCapture()
+        #expect(model.phase == .listening)
+        #expect(voice.statusText.contains("Voice transcript staging"))
+
+        adapter.emitPartial("open")
+        #expect(model.phase == .transcribing)
+        #expect(voice.transcriptDraft == "open")
+        adapter.emitFinal("open diagnostics")
+        #expect(model.phase == .idle)
+        #expect(voice.transcriptDraft == "open diagnostics")
+
+        let handoff = voice.apply(.submitTranscript)
+        #expect(handoff?.text == "open diagnostics")
+        #expect(handoff?.source == "voice-transcript-scaffold")
+    }
+
+    @MainActor
+    @Test("Voice adapter model fails closed on permission errors")
+    func voiceAdapterModelFailsClosedOnPermissionErrors() async {
+        let adapter = FakeVoiceAdapter(
+            permissionResult: .failure(.permissionDenied("Microphone permission was denied."))
+        )
+        let voice = VoiceStateModel()
+        let model = VoiceAdapterStateModel(adapter: adapter, voiceState: voice)
+
+        await model.requestPermissions()
+
+        #expect(model.phase == .unavailable(reason: "Voice permission denied: Microphone permission was denied."))
+        #expect(model.lastError == .permissionDenied("Microphone permission was denied."))
+        #expect(voice.statusText.contains("Voice unavailable"))
+        #expect(voice.statusText.contains("Microphone permission was denied"))
+        #expect(voice.apply(.submitTranscript) == nil)
+        #expect(voice.lastError == "Voice input is unavailable; transcript cannot be submitted.")
+    }
+
+    @MainActor
+    @Test("Voice adapter model exposes capture start failures without silent fallback")
+    func voiceAdapterModelExposesCaptureStartFailures() async {
+        let adapter = FakeVoiceAdapter(
+            startResult: .failure(.captureStartFailed("No input device selected."))
+        )
+        let voice = VoiceStateModel()
+        let model = VoiceAdapterStateModel(adapter: adapter, voiceState: voice)
+
+        await model.startCapture()
+
+        #expect(model.phase == .unavailable(reason: "Voice capture failed to start: No input device selected."))
+        #expect(model.lastError == .captureStartFailed("No input device selected."))
+        #expect(voice.transcriptDraft.isEmpty)
+        #expect(voice.statusText.contains("Voice unavailable"))
+    }
+
+    @MainActor
+    @Test("Voice adapter model preserves interruption as an explicit state")
+    func voiceAdapterModelInterruptsActiveCaptureExplicitly() async {
+        let adapter = FakeVoiceAdapter()
+        let voice = VoiceStateModel()
+        let model = VoiceAdapterStateModel(adapter: adapter, voiceState: voice)
+
+        await model.startCapture()
+        adapter.emitPartial("status check")
+        await model.interrupt(reason: "User stopped push-to-talk.")
+
+        #expect(model.phase == .interrupted(reason: "User stopped push-to-talk."))
+        #expect(model.lastError == nil)
+        #expect(voice.statusText.contains("interrupted"))
+        #expect(voice.transcriptDraft == "status check")
+        #expect(voice.apply(.submitTranscript) == nil)
+        #expect(voice.lastError == "Voice transcript is interrupted; resume or cancel before submitting.")
+    }
+
+    @MainActor
+    @Test("Voice adapter callback errors mark voice unavailable")
+    func voiceAdapterCallbackErrorsMarkVoiceUnavailable() async {
+        let adapter = FakeVoiceAdapter()
+        let voice = VoiceStateModel()
+        let model = VoiceAdapterStateModel(adapter: adapter, voiceState: voice)
+
+        await model.startCapture()
+        adapter.emitError(.recognitionFailed("Recognition task cancelled."))
+
+        #expect(model.phase == .unavailable(reason: "Speech recognition failed: Recognition task cancelled."))
+        #expect(model.lastError == .recognitionFailed("Recognition task cancelled."))
+        #expect(voice.statusText.contains("Voice unavailable"))
+        #expect(voice.statusText.contains("Recognition task cancelled"))
     }
 
     @MainActor

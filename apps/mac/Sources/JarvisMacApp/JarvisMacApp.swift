@@ -739,7 +739,7 @@ struct VoiceStateView: View {
 
             Toggle("Push to talk", isOn: .constant(model.isPushToTalkEnabled))
                 .disabled(true)
-            Text("This surface stages typed transcripts only; it does not claim microphone capture, speech recognition, or text-to-speech support.")
+            Text("This surface still stages typed transcripts; the macOS Speech/AVFoundation adapter boundary exists but live microphone capture needs entitlements and manual device validation.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

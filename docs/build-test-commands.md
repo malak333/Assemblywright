@@ -228,10 +228,11 @@ execution, installed plugin sandboxing/execution, memory UX beyond the
 scaffold, Swift approval decision UI, voice loop, or packaged Mac release smoke
 test until those surfaces exist and are covered. The current Swift gate proves
 the Mac shell scaffold builds, decodes IPC contracts, exposes management models
-for approval evidence, runs/audit, scheduler, diagnostics, and text-only voice
-transcript handoff state, and can supervise a configured local core process
-abstraction. It also covers Swift approval decision calls against the Rust IPC
-approval endpoints. The packaged supervision proof additionally checks the
+for approval evidence, runs/audit, scheduler, diagnostics, text-transcript voice
+handoff state, and the protocol-backed macOS voice adapter boundary without
+requiring live microphone access in tests. It can supervise a configured local
+core process abstraction. It also covers Swift approval decision calls against
+the Rust IPC approval endpoints. The packaged supervision proof additionally checks the
 expected `Resources/bin/jarvis-cli` bundle layout with a locally built core
 binary and exercises repository-backed command, audit, diagnostics, and
 emergency-pause IPC through that copied binary. These gates still do not prove
