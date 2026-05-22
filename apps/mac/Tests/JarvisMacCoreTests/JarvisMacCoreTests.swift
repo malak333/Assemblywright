@@ -338,6 +338,7 @@ struct JarvisMacCoreTests {
         #expect(readiness.recommendedVerificationCommands.contains("./scripts/release-local.sh"))
         #expect(readiness.recommendedVerificationCommands.contains("./scripts/release-operator-qa-smoke.sh"))
         #expect(readiness.recommendedVerificationCommands.contains("./scripts/release-live-device-qa.sh --check"))
+        #expect(readiness.recommendedVerificationCommands.contains("./scripts/release-plugin-trust-qa.sh --check"))
         #expect(readiness.proofBoundary.contains("does not perform signing"))
     }
 
@@ -2503,7 +2504,9 @@ private func releaseReadinessJSON() -> Data {
             "./scripts/release-operator-qa-smoke.sh",
             "./scripts/package-distribution.sh --unsigned-launch-check",
             "./scripts/release-live-device-qa.sh --check",
-            "JARVIS_QA_CLEAN_PROFILE_VALIDATED=true JARVIS_QA_FINDER_LAUNCH_VALIDATED=true JARVIS_QA_MICROPHONE_VALIDATED=true JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true JARVIS_QA_NOTIFICATION_VALIDATED=true JARVIS_QA_RESTART_VALIDATED=true JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true ./scripts/release-live-device-qa.sh --assert-complete"
+            "JARVIS_QA_CLEAN_PROFILE_VALIDATED=true JARVIS_QA_FINDER_LAUNCH_VALIDATED=true JARVIS_QA_MICROPHONE_VALIDATED=true JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true JARVIS_QA_NOTIFICATION_VALIDATED=true JARVIS_QA_RESTART_VALIDATED=true JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true ./scripts/release-live-device-qa.sh --assert-complete",
+            "./scripts/release-plugin-trust-qa.sh --check",
+            "JARVIS_PLUGIN_QA_MARKETPLACE_REVIEW_VALIDATED=true JARVIS_PLUGIN_QA_MALWARE_SCAN_VALIDATED=true JARVIS_PLUGIN_QA_OS_SANDBOX_VALIDATED=true JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED=true JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_POLICY_VALIDATED=true JARVIS_PLUGIN_QA_MANUAL_TRUST_REVIEW_VALIDATED=true ./scripts/release-plugin-trust-qa.sh --assert-complete"
           ],
           "proof_boundary": "Read-only summary derived from /contract feature metadata and release checklist blockers; it does not perform signing, notarization, installation, Finder/LaunchServices validation, live microphone/Speech validation, live audio-output validation, App Store review, marketplace plugin review, malware analysis, or OS sandbox enforcement."
         }

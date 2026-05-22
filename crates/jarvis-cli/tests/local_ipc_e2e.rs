@@ -168,6 +168,10 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         &release_readiness["recommended_verification_commands"],
         "./scripts/release-live-device-qa.sh --check",
     );
+    assert_string_array_contains(
+        &release_readiness["recommended_verification_commands"],
+        "./scripts/release-plugin-trust-qa.sh --check",
+    );
     assert!(release_readiness["proof_boundary"]
         .as_str()
         .expect("release readiness proof boundary")
