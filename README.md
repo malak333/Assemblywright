@@ -25,8 +25,9 @@ and not an autonomous external-communication system. Risky side effects must be
 blocked or require approval, and every meaningful decision should be auditable.
 The current implementation should not be described as a finished production
 assistant: distribution signing/notarization, live microphone validation,
-marketplace plugin trust, live OS-level scheduler notification validation, and
-manual release QA are still target architecture. The
+marketplace plugin trust, OS-level plugin network sandboxing, live OS-level
+scheduler notification validation, and manual release QA are still target
+architecture. The
 default command path still uses `FakeLocalModel`; set
 `JARVIS_LOCAL_MODEL_PROVIDER=ollama`, `JARVIS_LOCAL_MODEL`, and optionally
 `JARVIS_OLLAMA_BASE_URL`/`JARVIS_LOCAL_MODEL_TIMEOUT_MS` to exercise the local
@@ -44,6 +45,9 @@ after local provenance matches the install snapshot; this is an auditable
 local review step. Manifests can also carry an Ed25519 publisher signature,
 which Jarvis verifies only against an explicit trusted public key after local
 provenance matches; this is not marketplace trust or malware analysis.
+Network-capable plugin actions must declare exact allowed hosts in the manifest
+and appear in policy review; this is manifest governance, not an OS-level
+network sandbox.
 
 ## Production Work Protocol
 
@@ -66,8 +70,9 @@ recorded focused E2E or integration proof.
 The permission center now surfaces installed-plugin provenance status from
 `/permissions/grants`, including unverified plugin counts and local integrity
 state. `/permissions/policy-review` turns pending approvals and installed
-plugin provenance/grant concerns into explicit review items, but it still does
-not grant broader plugin trust or cryptographic publisher identity.
+plugin provenance/grant/network concerns into explicit review items, but it
+still does not grant broader marketplace trust, malware safety, or OS-level
+network sandboxing.
 
 ## Build
 

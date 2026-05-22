@@ -191,6 +191,7 @@ A plugin declares:
 - Whether it can run proactively.
 - Whether it can access memory.
 - Whether it can call models.
+- Whether it can access the network and, if so, exact allowed hostnames.
 - Audit fields it must emit.
 - Timeout and cancellation behavior.
 
@@ -284,9 +285,12 @@ matches the manifest author claim. Signed manifests can also be verified with
 an Ed25519 `publisher_signature` against an explicit trusted public key after
 local provenance matches; this is audit-backed trusted-key verification, not
 marketplace approval or malware analysis.
+Network-capable actions must request the `network` permission and declare
+plain-hostname allowlists in `network_access`; policy review surfaces those
+actions, but OS-level network sandbox enforcement remains target architecture.
 The product still lacks
 signed/notarized release evidence, live microphone and audio-output validation,
-marketplace/WASM/network plugin trust boundaries, richer
+marketplace/WASM/OS-network-sandbox plugin trust boundaries, richer
 proactive trigger policy, and live OS notification validation. Swift supervision is
 covered only as a scaffold for
 configured or packaged-style local core binaries.

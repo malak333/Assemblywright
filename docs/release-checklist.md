@@ -114,6 +114,10 @@ stage or when a PR needs focused evidence for one ownership slice.
   persists `origin_claim_verified: true`, and appends
   `installed_plugin_publisher_signature_verified` audit evidence with a hashed
   trusted-key reference.
+- Confirm network-capable plugin actions must request the `network` permission,
+  declare `network_access.mode: declared_hosts`, and list exact plain-hostname
+  `allowed_hosts`; invalid hosts, wildcard/scheme/path/port declarations, and
+  missing host declarations must fail manifest validation.
 - Confirm installed plugin run attempts fail closed with manifest/version and
   action validation, default `execution_enabled: false` semantics, local
   provenance verification, safe command path checks, JSON stdin/stdout, timeout
@@ -145,8 +149,9 @@ stage or when a PR needs focused evidence for one ownership slice.
 - Confirm `/permissions/policy-review` and `jarvis permissions review` expose
   read-only severity-ranked review items for pending approvals, high-risk
   plugin actions, unverified provenance, and unverified origin claims without
-  enabling side effects, and that operator-pinned publisher verification clears
-  the unverified-origin review item for that plugin.
+  enabling side effects, include network-capable plugin actions, and that
+  operator-pinned publisher verification clears the unverified-origin review
+  item for that plugin.
 - Confirm the Swift Approval Center renders permission policy review status
   alongside grant history when the IPC contract exposes the endpoint.
 - Confirm scheduler job create/list/cancel and due-run execution state is

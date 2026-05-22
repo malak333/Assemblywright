@@ -33,9 +33,10 @@ pub use plugin::{
     CancellationSignal, EchoPlugin, InProcessPlugin, InstalledPlugin,
     InstalledPluginExecutionGrant, InstalledPluginIntegrityStatus, InstalledPluginProvenance,
     JsonSchema, PluginAccess, PluginActionManifest, PluginCallMetadata, PluginCallRequest,
-    PluginCallResult, PluginCallStatus, PluginHost, PluginManifest, PluginPermission,
-    PluginPublisherSignature, PluginSource, PluginSubprocessManifest, PluginSubprocessStream,
-    PluginTimeout, PluginTimeoutAction, StatusPlugin, SubprocessPluginExecution,
+    PluginCallResult, PluginCallStatus, PluginHost, PluginManifest, PluginNetworkAccess,
+    PluginNetworkAccessMode, PluginPermission, PluginPublisherSignature, PluginSource,
+    PluginSubprocessManifest, PluginSubprocessStream, PluginTimeout, PluginTimeoutAction,
+    StatusPlugin, SubprocessPluginExecution,
 };
 pub use policy::{
     ApprovalDecision, ApprovalGrant, CapabilityScope, PermissionEngine, PolicyDecision,
