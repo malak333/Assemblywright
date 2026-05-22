@@ -1304,9 +1304,14 @@ impl IpcState {
             };
             let input_valid = action_declared && input_validation.is_ok();
             let contract_validated = manifest_valid && action_declared && input_valid;
+            let action_requires_network_grant = action_manifest
+                .is_some_and(|action| action.network_access.mode != crate::PluginNetworkAccessMode::None);
             let execution_ready = contract_validated
                 && record.execution_enabled
-                && record.execution_grant == InstalledPluginExecutionGrant::SubprocessStdio
+                && installed_plugin_grant_allows_action(
+                    record.execution_grant,
+                    action_requires_network_grant,
+                )
                 && record.provenance.integrity_status
                     == InstalledPluginIntegrityStatus::MatchesInstallSnapshot
                 && record.manifest.source == PluginSource::LocalSubprocess
@@ -1339,6 +1344,14 @@ impl IpcState {
                 (
                     "blocked".to_string(),
                     "installed plugin execution grant is metadata_only; only contract dry runs are allowed"
+                        .to_string(),
+                )
+            } else if action_requires_network_grant
+                && record.execution_grant != InstalledPluginExecutionGrant::SubprocessStdioNetwork
+            {
+                (
+                    "blocked".to_string(),
+                    "installed plugin action declares network access; execution requires subprocess_stdio_network grant"
                         .to_string(),
                 )
             } else if !record.execution_enabled {
@@ -1427,6 +1440,7 @@ impl IpcState {
                     "dry_run": request.dry_run,
                     "manifest_valid": manifest_valid,
                     "action_declared": action_declared,
+                    "action_requires_network_grant": action_requires_network_grant,
                     "input_valid": input_valid,
                     "contract_validated": contract_validated,
                     "input_provided": !request.input.is_null(),
@@ -1474,7 +1488,20 @@ impl IpcState {
             validate_installed_plugin_record(&record)?;
 
             if request.execution_enabled {
-                if request.execution_grant != InstalledPluginExecutionGrant::SubprocessStdio {
+                let has_network_action = record
+                    .manifest
+                    .actions
+                    .iter()
+                    .any(|action| action.network_access.mode != crate::PluginNetworkAccessMode::None);
+                if has_network_action {
+                    if request.execution_grant
+                        != InstalledPluginExecutionGrant::SubprocessStdioNetwork
+                    {
+                        return Err(JarvisError::Validation(
+                            "network-capable installed plugin execution requires subprocess_stdio_network grant".to_string(),
+                        ));
+                    }
+                } else if request.execution_grant != InstalledPluginExecutionGrant::SubprocessStdio {
                     return Err(JarvisError::Validation(
                         "installed plugin execution requires subprocess_stdio grant".to_string(),
                     ));
@@ -3044,7 +3071,7 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "installed_plugin_execution",
             "implemented",
-            "Local subprocess plugins require provenance verification plus explicit subprocess_stdio grant and are covered by Rust unit and CLI IPC E2E tests.",
+            "Local subprocess plugins require provenance verification plus explicit subprocess_stdio or subprocess_stdio_network grants and are covered by Rust unit and CLI IPC E2E tests.",
             "Constrained local subprocess execution only; not a WASM, OS-level, or marketplace sandbox.",
         ),
         feature(
@@ -3056,8 +3083,8 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "plugin_network_governance",
             "implemented",
-            "Network-capable plugin actions must declare exact allowed hosts and appear in permission policy review.",
-            "Manifest governance only; not OS-level network sandbox enforcement.",
+            "Network-capable plugin actions must declare exact allowed hosts, appear in permission policy review, and require the explicit subprocess_stdio_network execution grant.",
+            "Runtime grant gate plus manifest governance only; not OS-level network sandbox enforcement or host-level egress filtering.",
         ),
         feature(
             "packaged_app_smoke",
@@ -3113,6 +3140,18 @@ fn feature(
 fn sha256_text(value: &str) -> String {
     let digest = Sha256::digest(value.as_bytes());
     format!("{digest:x}")
+}
+
+fn installed_plugin_grant_allows_action(
+    grant: InstalledPluginExecutionGrant,
+    action_requires_network_grant: bool,
+) -> bool {
+    match (grant, action_requires_network_grant) {
+        (InstalledPluginExecutionGrant::SubprocessStdioNetwork, _) => true,
+        (InstalledPluginExecutionGrant::SubprocessStdio, false) => true,
+        (InstalledPluginExecutionGrant::MetadataOnly, _)
+        | (InstalledPluginExecutionGrant::SubprocessStdio, true) => false,
+    }
 }
 
 fn endpoint(
@@ -3644,6 +3683,112 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert!(error
             .to_string()
             .contains("requires subprocess_stdio grant"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn installed_plugin_runner_blocks_network_action_without_network_grant() {
+        let repository = SqliteRepository::in_memory().unwrap();
+        let source_dir = tempfile::tempdir().unwrap();
+        let source_path_buf = source_dir.path().canonicalize().unwrap();
+        write_executable_plugin_script(&source_path_buf);
+        let source_path = source_path_buf.display().to_string();
+        let mut manifest = local_subprocess_manifest(&source_path);
+        manifest.actions[0]
+            .permissions
+            .push(crate::PluginPermission::Network);
+        manifest.actions[0].network_access = crate::PluginNetworkAccess {
+            mode: crate::PluginNetworkAccessMode::DeclaredHosts,
+            allowed_hosts: vec!["api.jarvis.local".to_string()],
+        };
+        let manifest_path = source_path_buf.join("jarvis-plugin.json");
+        std::fs::write(&manifest_path, serde_json::to_string(&manifest).unwrap()).unwrap();
+        let installed = InstalledPlugin::from_local_manifest_path(&manifest_path).unwrap();
+        repository.install_plugin_metadata(installed).unwrap();
+        let state = IpcState::with_repository(repository).expect("state");
+        state
+            .verify_installed_plugin_provenance("local_runner_test")
+            .expect("verify provenance");
+
+        let default_grant_error = state
+            .set_installed_plugin_execution(
+                "local_runner_test",
+                InstalledPluginExecutionRequest {
+                    execution_enabled: true,
+                    execution_grant: InstalledPluginExecutionGrant::SubprocessStdio,
+                },
+            )
+            .expect_err("network action requires network grant");
+        assert!(default_grant_error
+            .to_string()
+            .contains("requires subprocess_stdio_network grant"));
+
+        let stored = state
+            .using_repository(|repository| {
+                repository.set_installed_plugin_execution(
+                    "local_runner_test",
+                    true,
+                    InstalledPluginExecutionGrant::SubprocessStdio,
+                )
+            })
+            .expect("force legacy grant for runtime regression coverage");
+        assert!(stored.execution_enabled);
+        assert_eq!(
+            stored.execution_grant,
+            InstalledPluginExecutionGrant::SubprocessStdio
+        );
+
+        let blocked = state
+            .run_installed_plugin(
+                "local_runner_test",
+                InstalledPluginRunRequest {
+                    action: "inspect".to_string(),
+                    input: json!({ "path": "README.md" }),
+                    session_id: None,
+                    dry_run: false,
+                },
+            )
+            .expect("network action blocks under stdio grant");
+        assert_eq!(blocked.status, "blocked");
+        assert!(!blocked.side_effect_executed);
+        assert_eq!(
+            blocked.execution_grant,
+            InstalledPluginExecutionGrant::SubprocessStdio
+        );
+        assert!(blocked
+            .reason
+            .contains("requires subprocess_stdio_network grant"));
+        assert_eq!(
+            blocked.audit_entry.payload["action_requires_network_grant"],
+            true
+        );
+
+        state
+            .using_repository(|repository| {
+                repository.set_installed_plugin_execution(
+                    "local_runner_test",
+                    true,
+                    InstalledPluginExecutionGrant::SubprocessStdioNetwork,
+                )
+            })
+            .expect("force network grant");
+        let completed = state
+            .run_installed_plugin(
+                "local_runner_test",
+                InstalledPluginRunRequest {
+                    action: "inspect".to_string(),
+                    input: json!({ "path": "README.md" }),
+                    session_id: None,
+                    dry_run: false,
+                },
+            )
+            .expect("network action runs under network grant");
+        assert_eq!(completed.status, "completed");
+        assert!(completed.side_effect_executed);
+        assert_eq!(
+            completed.execution_grant,
+            InstalledPluginExecutionGrant::SubprocessStdioNetwork
+        );
     }
 
     #[tokio::test]
@@ -4517,7 +4662,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .expect("diagnostics export");
         assert_eq!(export.health.status, "ok");
         assert!(export.repository_backed);
-        assert_eq!(export.schema_version, Some(8));
+        assert_eq!(export.schema_version, Some(9));
         assert_eq!(export.task_count, Some(1));
         assert!(export.audit_entry_count.unwrap_or_default() >= 2);
         assert_eq!(export.model_route_record_count, Some(1));

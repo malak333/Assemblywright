@@ -851,6 +851,7 @@ pub enum InstalledPluginExecutionGrant {
     #[default]
     MetadataOnly,
     SubprocessStdio,
+    SubprocessStdioNetwork,
 }
 
 impl InstalledPluginExecutionGrant {
@@ -858,6 +859,7 @@ impl InstalledPluginExecutionGrant {
         match self {
             Self::MetadataOnly => "metadata_only",
             Self::SubprocessStdio => "subprocess_stdio",
+            Self::SubprocessStdioNetwork => "subprocess_stdio_network",
         }
     }
 
@@ -865,6 +867,7 @@ impl InstalledPluginExecutionGrant {
         match value {
             "metadata_only" => Ok(Self::MetadataOnly),
             "subprocess_stdio" => Ok(Self::SubprocessStdio),
+            "subprocess_stdio_network" => Ok(Self::SubprocessStdioNetwork),
             _ => Err(JarvisError::Validation(format!(
                 "unknown installed plugin execution grant: {value}"
             ))),

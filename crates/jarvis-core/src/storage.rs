@@ -18,7 +18,7 @@ use crate::{
     TaskStatus, TriggerKind,
 };
 
-const CURRENT_SCHEMA_VERSION: i64 = 8;
+const CURRENT_SCHEMA_VERSION: i64 = 9;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EmergencyPauseState {
@@ -1253,6 +1253,9 @@ impl SqliteRepository {
         if version < 8 {
             self.apply_migration_8()?;
         }
+        if version < 9 {
+            self.apply_migration_9()?;
+        }
 
         let migrated = self.schema_version()?;
         if migrated != CURRENT_SCHEMA_VERSION {
@@ -1688,6 +1691,60 @@ impl SqliteRepository {
         tx.execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
             params![8, now],
+        )
+        .map_err(storage_error)?;
+
+        tx.commit().map_err(storage_error)?;
+        Ok(())
+    }
+
+    fn apply_migration_9(&self) -> JarvisResult<()> {
+        let now = to_db_time(Utc::now());
+        let tx = self.conn.unchecked_transaction().map_err(storage_error)?;
+
+        tx.execute_batch(
+            "
+                ALTER TABLE installed_plugins RENAME TO installed_plugins_v8;
+
+                CREATE TABLE installed_plugins (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    manifest_json TEXT NOT NULL,
+                    source_path TEXT NOT NULL,
+                    provenance_json TEXT NOT NULL,
+                    execution_enabled INTEGER NOT NULL CHECK (execution_enabled IN (0, 1)),
+                    execution_grant TEXT NOT NULL CHECK (
+                        execution_grant IN (
+                            'metadata_only',
+                            'subprocess_stdio',
+                            'subprocess_stdio_network'
+                        )
+                    ),
+                    installed_at TEXT NOT NULL
+                );
+
+                INSERT INTO installed_plugins
+                    (id, manifest_json, source_path, provenance_json, execution_enabled, execution_grant, installed_at)
+                SELECT
+                    id,
+                    manifest_json,
+                    source_path,
+                    provenance_json,
+                    execution_enabled,
+                    execution_grant,
+                    installed_at
+                FROM installed_plugins_v8;
+
+                DROP TABLE installed_plugins_v8;
+
+                CREATE INDEX idx_installed_plugins_installed_at
+                    ON installed_plugins (installed_at);
+                ",
+        )
+        .map_err(storage_error)?;
+
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+            params![9, now],
         )
         .map_err(storage_error)?;
 
@@ -2220,7 +2277,7 @@ mod tests {
                 DROP TRIGGER model_route_records_no_delete;
                 DROP TRIGGER model_route_records_no_update;
                 DROP TABLE model_route_records;
-                DELETE FROM schema_migrations WHERE version IN (7, 8);
+                DELETE FROM schema_migrations WHERE version IN (7, 8, 9);
                 ",
             )
             .unwrap();
@@ -2287,7 +2344,7 @@ mod tests {
                 DROP TRIGGER model_route_records_no_delete;
                 DROP TRIGGER model_route_records_no_update;
                 DROP TABLE model_route_records;
-                DELETE FROM schema_migrations WHERE version IN (7, 8);
+                DELETE FROM schema_migrations WHERE version IN (7, 8, 9);
                 ",
             )
             .unwrap();

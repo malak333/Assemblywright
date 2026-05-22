@@ -328,6 +328,7 @@ enum PluginsCommand {
         endpoint: String,
     },
     /// Enable an installed local subprocess plugin with an explicit execution grant.
+    /// Network-declaring actions require --grant subprocess_stdio_network.
     EnableInstalled {
         id: String,
         #[arg(long, default_value = "subprocess_stdio")]

@@ -93,8 +93,10 @@ to explain what happened:
   `execution_grant: metadata_only`, including `local_subprocess` manifests.
 - Installed plugin execution requires a separate explicit enablement step that
   sets `execution_enabled: true` and `execution_grant: subprocess_stdio`.
-  `metadata_only` can never execute. Enablement also requires the local
-  provenance snapshot to verify as `matches_install_snapshot`.
+  Actions that declare network access require
+  `execution_grant: subprocess_stdio_network` instead. `metadata_only` can
+  never execute. Enablement also requires the local provenance snapshot to
+  verify as `matches_install_snapshot`.
 - Installed plugin run requests go through an explicit fail-closed runner
   boundary. The boundary revalidates the stored manifest/version metadata,
   checks the requested action is declared, validates input schema, verifies the
@@ -102,10 +104,12 @@ to explain what happened:
   `execution_grant`, checks that the stored source path is canonical, and
   appends audit evidence.
 - Enabled installed plugin execution is limited to `local_subprocess` manifests
-  with the `subprocess_stdio` grant. The command must canonicalize under
-  `source_path`; parent-directory escapes, absolute commands outside
-  `source_path`, missing subprocess config, undeclared actions, invalid input,
-  malformed stdout JSON, and output-schema mismatches all fail closed with audit
+  with the `subprocess_stdio` grant for non-network actions and
+  `subprocess_stdio_network` for network-declaring actions. The command must
+  canonicalize under `source_path`; parent-directory escapes, absolute commands
+  outside `source_path`, missing subprocess config, undeclared actions, invalid
+  input, malformed stdout JSON, output-schema mismatches, and network actions
+  enabled without `subprocess_stdio_network` all fail closed with audit
   evidence. Jarvis sends a JSON object containing `plugin_id`, `action`, and
   `input` to stdin and accepts only JSON stdout that matches the action output
   schema.

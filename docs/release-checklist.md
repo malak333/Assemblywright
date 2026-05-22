@@ -102,7 +102,8 @@ stage or when a PR needs focused evidence for one ownership slice.
 - Confirm installed plugin metadata remains disabled by default and becomes
   executable only after local provenance verification reports
   `matches_install_snapshot` and an explicit `subprocess_stdio` execution
-  grant is set.
+  grant is set for non-network actions, or `subprocess_stdio_network` is set
+  for actions that declare network access.
 - Confirm publisher-origin verification fails closed until local provenance
   matches the install snapshot, requires `trusted_origin` to exactly match the
   installed manifest author claim, persists `origin_claim_verified: true`, and
@@ -117,7 +118,9 @@ stage or when a PR needs focused evidence for one ownership slice.
 - Confirm network-capable plugin actions must request the `network` permission,
   declare `network_access.mode: declared_hosts`, and list exact plain-hostname
   `allowed_hosts`; invalid hosts, wildcard/scheme/path/port declarations, and
-  missing host declarations must fail manifest validation.
+  missing host declarations must fail manifest validation. Confirm executable
+  installed plugins with network-declaring actions fail closed under the default
+  `subprocess_stdio` grant and run only after `subprocess_stdio_network`.
 - Confirm installed plugin run attempts fail closed with manifest/version and
   action validation, default `execution_enabled: false` semantics, local
   provenance verification, safe command path checks, JSON stdin/stdout, timeout
