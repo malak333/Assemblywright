@@ -3827,6 +3827,70 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .any(|entry| entry.event_type == "model_route_selected"));
     }
 
+    #[tokio::test]
+    async fn command_schema_returns_failed_runtime_response_for_model_provider_error() {
+        async fn failing_chatgpt() -> (StatusCode, Json<serde_json::Value>) {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "provider failed with token=sk-test" })),
+            )
+        }
+
+        let app = Router::new().route("/chat/completions", post(failing_chatgpt));
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let address = listener.local_addr().expect("address");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("test server");
+        });
+
+        let state = IpcState::with_provider_config(ProviderConfig {
+            local: crate::LocalModelConfig {
+                enabled: false,
+                ..crate::LocalModelConfig::default()
+            },
+            chatgpt: crate::ChatGptProviderConfig {
+                enabled: true,
+                model: "gpt-test".to_string(),
+                base_url: format!("http://{address}"),
+                api_key: Some("test-token".to_string()),
+                requires_approval: true,
+                timeout_ms: 2_000,
+            },
+        });
+
+        let response = state
+            .submit_command(CommandRequest {
+                input: "cloud provider should fail structurally".to_string(),
+                session_id: None,
+                context: json!({"surface": "test"}),
+                dry_run: false,
+                sensitivity: Some(Sensitivity::Workspace),
+            })
+            .await
+            .expect("provider failure should not become an IPC transport error");
+
+        assert!(!response.accepted);
+        assert_eq!(response.task.status, TaskStatus::Failed);
+        assert!(response
+            .message
+            .contains("Model execution failed during step 0"));
+        assert!(response.plugin_results.is_empty());
+        assert_eq!(response.audit_entry.event_type, "model_step_failed");
+        let route = response.route_evidence.as_ref().expect("route evidence");
+        assert_eq!(route.outcome, crate::RouteOutcome::Selected);
+        assert_eq!(
+            route.selected_provider,
+            Some(crate::RoutedModelProvider::ChatGpt)
+        );
+        assert!(response
+            .audit_entries
+            .iter()
+            .any(|entry| entry.event_type == "model_route_selected"));
+        let encoded = serde_json::to_string(&response).expect("response JSON");
+        assert!(!encoded.contains("sk-test"));
+        assert!(!encoded.contains("test-token"));
+    }
+
     fn local_installed_manifest(source_path: &str) -> PluginManifest {
         PluginManifest {
             manifest_schema_version: 1,

@@ -31,6 +31,11 @@ These notes capture durable facts for future agents working on this repository.
   records. The stored and inspectable route copy keeps provider/outcome/policy
   evidence but omits `context_for_model`, so restart recovery can prove route
   selection without retaining raw command bodies or route context.
+- Selected model-provider failures are returned as structured failed command
+  responses. `ConversationRuntime` marks the task failed, appends
+  `model_step_failed` with redacted diagnostics, preserves selected route
+  evidence, and lets IPC return `accepted: false` instead of a transport-level
+  command error.
 - Repository-backed IPC exposes `/activity/summary`, and the CLI exposes
   `jarvis activity summary`, as a pollable progress surface for task status
   counts, active task count, recent tasks, and recent audit entries. It is
@@ -206,6 +211,10 @@ These notes capture durable facts for future agents working on this repository.
 - The current E2E expectation for Rust/CLI foundation changes is
   `cargo test -p jarvis-cli --test local_ipc_e2e`; the ignored variant is
   release-proof coverage and is included by `./scripts/release-local.sh`.
+- Focused provider-failure recovery coverage is
+  `cargo test -p jarvis-core model_provider_failure_returns_failed_response_with_route_evidence -- --nocapture`
+  plus
+  `cargo test -p jarvis-core command_schema_returns_failed_runtime_response_for_model_provider_error -- --nocapture`.
 - The focused repository-state test for progress visibility is
   `cargo test -p jarvis-core repository_backed_state_endpoints_expose_tasks_and_audit -- --nocapture`.
   Contract coverage for the activity stream is in

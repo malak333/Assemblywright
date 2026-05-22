@@ -547,11 +547,25 @@ where
                             "model step failed",
                             json!({
                                 "step_index": step_index,
-                                "error": error.to_string(),
+                                "error": redacted_model_error(&error),
+                                "error_kind": model_error_kind(&error),
+                                "selected_provider": route_evidence
+                                    .as_ref()
+                                    .and_then(|record| record.selected_provider),
+                                "route_id": route_evidence.as_ref().map(|record| record.id),
                             }),
                         ),
                     )?;
-                    return Err(error);
+                    let failed_route =
+                        route.or_else(|| route_evidence.as_ref().and_then(route_from_evidence));
+                    return Ok(self.finish(
+                        task,
+                        model_failure_message(step_index),
+                        failed_route,
+                        route_evidence,
+                        steps,
+                        audit_entries,
+                    ));
                 }
             };
             route = Some(model_response.route.clone());
@@ -969,6 +983,66 @@ fn model_tool_result(result: &PluginCallResult) -> ModelToolResult {
     }
 }
 
+fn route_from_evidence(record: &ModelRouteRecord) -> Option<ModelRoute> {
+    match record.selected_provider {
+        Some(crate::router::ModelProvider::Local) => Some(ModelRoute::local(
+            record.evidence.local_model.clone(),
+            record.reason.clone(),
+        )),
+        Some(crate::router::ModelProvider::ChatGpt) => {
+            Some(ModelRoute::chatgpt("chatgpt", record.reason.clone()))
+        }
+        None => None,
+    }
+}
+
+fn model_failure_message(step_index: u32) -> String {
+    format!(
+        "Model execution failed during step {step_index}. The task was marked failed; inspect audit entries for redacted provider diagnostics."
+    )
+}
+
+fn model_error_kind(error: &crate::JarvisError) -> &'static str {
+    match error {
+        crate::JarvisError::PolicyBlocked(_) => "policy_blocked",
+        crate::JarvisError::ApprovalRequired(_) => "approval_required",
+        crate::JarvisError::Validation(_) => "validation",
+        crate::JarvisError::Storage(_) => "storage",
+        crate::JarvisError::Plugin(_) => "plugin",
+        crate::JarvisError::Model(_) => "model",
+        crate::JarvisError::Other(_) => "other",
+    }
+}
+
+fn redacted_model_error(error: &crate::JarvisError) -> String {
+    error
+        .to_string()
+        .split_whitespace()
+        .map(redact_error_token)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn redact_error_token(token: &str) -> String {
+    let normalized = token
+        .trim_matches(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-')
+        .to_ascii_lowercase();
+    if normalized.contains("api_key")
+        || normalized.contains("token")
+        || normalized.contains("secret")
+        || normalized.contains("password")
+        || normalized.starts_with("sk-")
+    {
+        return "[REDACTED]".to_string();
+    }
+
+    if token.contains("://") && token.contains('@') {
+        return "[REDACTED_URL]".to_string();
+    }
+
+    token.to_string()
+}
+
 fn route_audit_entry(task_id: Uuid, record: &ModelRouteRecord) -> AuditEntry {
     AuditEntry::new(
         Some(task_id),
@@ -1132,6 +1206,44 @@ mod tests {
         assert_eq!(route.outcome, RouteOutcome::Blocked);
         assert!(route.reason.contains("ChatGPT routing is disabled"));
         assert!(!route.evidence.chatgpt_enabled);
+    }
+
+    #[tokio::test]
+    async fn model_provider_failure_returns_failed_response_with_route_evidence() {
+        let runtime = ConversationRuntime::with_parts(
+            RuntimeConfig::default(),
+            RuntimeControl::default(),
+            FailingModel,
+            NoopRuntimeHooks,
+        );
+
+        let response = runtime
+            .execute_command(CommandRequest::new("provider failure"))
+            .await
+            .expect("provider failure should return structured response");
+
+        assert_eq!(response.task.status, TaskStatus::Failed);
+        assert!(response
+            .message
+            .contains("Model execution failed during step 0"));
+        assert!(!response.message.contains("sk-test"));
+        assert!(response.steps.is_empty());
+        assert_eq!(
+            response.route.as_ref().expect("failed route").provider,
+            ModelProvider::Local
+        );
+        let route = response.route_evidence.as_ref().expect("route evidence");
+        assert_eq!(route.outcome, RouteOutcome::Selected);
+        assert_eq!(route.selected_provider, Some(RoutedModelProvider::Local));
+        let failure = response
+            .audit_entries
+            .iter()
+            .find(|entry| entry.event_type == "model_step_failed")
+            .expect("failure audit");
+        assert_eq!(failure.payload["error_kind"], "model");
+        assert_eq!(failure.payload["selected_provider"], "local");
+        let encoded = serde_json::to_string(&response).expect("response JSON");
+        assert!(!encoded.contains("sk-test"));
     }
 
     #[tokio::test]
@@ -1528,6 +1640,17 @@ mod tests {
                 complete: true,
                 tool_requests: Vec::new(),
             })
+        }
+    }
+
+    struct FailingModel;
+
+    #[async_trait::async_trait]
+    impl ModelExecutor for FailingModel {
+        async fn execute(&self, _request: ModelRequest) -> JarvisResult<ModelResponse> {
+            Err(crate::JarvisError::Model(
+                "provider failed with token=sk-test".to_string(),
+            ))
         }
     }
 
