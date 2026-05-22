@@ -22,6 +22,7 @@ use uuid::Uuid;
 
 use futures_util::StreamExt as FuturesStreamExt;
 
+use crate::model::{model_tool_definitions_from_manifests, ModelToolDefinition};
 use crate::storage::{
     EmergencyPauseState as StoredEmergencyPauseState, MemoryClassificationSummary, NewMemoryItem,
     NewPendingApproval, PendingApproval, SqliteRepository,
@@ -91,6 +92,14 @@ pub struct ContractResponse {
     pub endpoints: Vec<ContractEndpoint>,
     pub safe_inspection_paths: Vec<String>,
     pub features: Vec<ContractFeature>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelToolCatalogResponse {
+    pub generated_at: DateTime<Utc>,
+    pub source: String,
+    pub tools: Vec<ModelToolDefinition>,
+    pub proof_boundary: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -681,6 +690,7 @@ impl IpcState {
                 "/release/readiness".to_string(),
                 "/release/evidence-status".to_string(),
                 "/diagnostics/export".to_string(),
+                "/tools/model".to_string(),
                 "/plugins/manifests".to_string(),
                 "/plugins/manifests/:id".to_string(),
                 "/plugins/installed".to_string(),
@@ -700,6 +710,10 @@ impl IpcState {
             ],
             features: contract_features(),
         }
+    }
+
+    pub fn model_tool_catalog(&self) -> JarvisResult<ModelToolCatalogResponse> {
+        registered_first_party_model_tool_catalog()
     }
 
     pub fn health(&self) -> HealthResponse {
@@ -2985,6 +2999,7 @@ pub fn router(state: IpcState) -> Router {
         .route("/release/readiness", get(release_readiness))
         .route("/release/evidence-status", get(release_evidence_status))
         .route("/diagnostics/export", get(diagnostics_export))
+        .route("/tools/model", get(model_tool_catalog))
         .route("/commands", post(command))
         .route("/tasks", get(list_tasks))
         .route("/tasks/:id", get(get_task))
@@ -3083,6 +3098,12 @@ async fn release_evidence_status(
     State(state): State<IpcState>,
 ) -> Json<ReleaseEvidenceStatusResponse> {
     Json(state.release_evidence_status())
+}
+
+async fn model_tool_catalog(
+    State(state): State<IpcState>,
+) -> Result<Json<ModelToolCatalogResponse>, (StatusCode, Json<ErrorResponse>)> {
+    state.model_tool_catalog().map(Json).map_err(error_response)
 }
 
 async fn diagnostics_export(
@@ -3489,6 +3510,19 @@ async fn get_plugin_manifest(
         .map_err(error_response)
 }
 
+fn registered_first_party_model_tool_catalog() -> JarvisResult<ModelToolCatalogResponse> {
+    let host = PluginHost::with_first_party_plugins()?;
+    let tools = model_tool_definitions_from_manifests(host.manifests()?);
+    Ok(ModelToolCatalogResponse {
+        generated_at: Utc::now(),
+        source: "registered_first_party_plugins".to_string(),
+        tools,
+        proof_boundary:
+            "Read-only model-tool catalog derived from validated first-party plugin manifests only; installed plugins, local paths, subprocess configuration, provenance hashes, audit payloads, memory values, and provider route context are excluded."
+                .to_string(),
+    })
+}
+
 async fn list_installed_plugins(
     State(state): State<IpcState>,
 ) -> Result<Json<Vec<InstalledPluginRecord>>, (StatusCode, Json<ErrorResponse>)> {
@@ -3680,6 +3714,7 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
         endpoint("GET", "/release/readiness", false, true),
         endpoint("GET", "/release/evidence-status", false, true),
         endpoint("GET", "/diagnostics/export", false, true),
+        endpoint("GET", "/tools/model", false, true),
         endpoint("POST", "/commands", false, false),
         endpoint("GET", "/tasks", true, false),
         endpoint("GET", "/tasks/:id", true, false),
@@ -4200,6 +4235,12 @@ fn contract_features() -> Vec<ContractFeature> {
             "Explicit replay only for first-party plugin commands; grant/deny remains side-effect-free and this is not broad autonomous execution.",
         ),
         feature(
+            "model_tool_catalog_grounding",
+            "implemented",
+            "`/tools/model` exposes the redacted registered first-party model-tool catalog, Ollama prompts use the same JSON allowlist, ChatGPT/OpenAI-compatible tool schemas are derived from the same catalog, and invalid model-planned plugin IDs/actions are rejected before policy or execution with registered-tool audit guidance and CLI IPC E2E coverage.",
+            "First-party model-tool grounding only; installed plugins are excluded from model planning, and this is not broad third-party tool execution, marketplace trust, malware analysis, or OS-level sandboxing.",
+        ),
+        feature(
             "installed_plugin_execution",
             "implemented",
             "Local subprocess plugins require full source-tree provenance verification plus explicit subprocess_stdio or subprocess_stdio_network grants, run with inherited environment cleared, enforce stdout/stderr byte limits, and are covered by Rust unit and CLI IPC E2E tests.",
@@ -4463,6 +4504,9 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .contains(&"/diagnostics/export".to_string()));
         assert!(contract
             .safe_inspection_paths
+            .contains(&"/tools/model".to_string()));
+        assert!(contract
+            .safe_inspection_paths
             .contains(&"/plugins/manifests/:id".to_string()));
         assert!(contract
             .safe_inspection_paths
@@ -4491,6 +4535,13 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .iter()
             .any(|endpoint| endpoint.method == "GET"
                 && endpoint.path == "/release/evidence-status"
+                && !endpoint.repository_required
+                && endpoint.redacted));
+        assert!(contract
+            .endpoints
+            .iter()
+            .any(|endpoint| endpoint.method == "GET"
+                && endpoint.path == "/tools/model"
                 && !endpoint.repository_required
                 && endpoint.redacted));
         assert!(contract
@@ -6837,6 +6888,30 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 .await
                 .expect("fake_echo manifest");
         assert_eq!(manifest.id, "fake_echo");
+    }
+
+    #[tokio::test]
+    async fn model_tool_catalog_exposes_first_party_tools_without_installed_plugin_metadata() {
+        let Json(catalog) = model_tool_catalog(State(IpcState::new()))
+            .await
+            .expect("model tool catalog");
+
+        assert_eq!(catalog.source, "registered_first_party_plugins");
+        assert!(catalog
+            .tools
+            .iter()
+            .any(|tool| tool.plugin_id == "fake_echo" && tool.action == "echo"));
+        assert!(catalog
+            .tools
+            .iter()
+            .any(|tool| tool.plugin_id == "fake_status" && tool.action == "status"));
+        assert!(catalog.proof_boundary.contains("installed plugins"));
+
+        let encoded_tools = serde_json::to_string(&catalog.tools).expect("catalog tools JSON");
+        assert!(!encoded_tools.contains("source_path"));
+        assert!(!encoded_tools.contains("provenance"));
+        assert!(!encoded_tools.contains("subprocess"));
+        assert!(!encoded_tools.contains("manifest_sha256"));
     }
 
     #[tokio::test]

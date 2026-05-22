@@ -60,12 +60,14 @@ and audit path. ChatGPT/OpenAI-compatible responses may also return native
 OpenAI `tool_calls` for the advertised first-party tool definitions; those are
 translated into the same bounded first-party path. Plain text remains
 supported, and this is not installed-plugin orchestration or broad third-party
-tool execution. Local-model prompts now include the exact registered
-first-party plugin/action inventory, and hallucinated or invalid model-planned
-plugin IDs/actions fail closed before policy checks or tool execution, then
-feed registered-tool guidance back to the model as rejected tool results for
-bounded recovery. Mixed prose plus JSON `tool_requests` is treated as malformed
-provider output instead of a normal answer.
+tool execution. `/tools/model` and `jarvis tools list` expose the same redacted
+registered first-party model-tool catalog that providers receive. Local-model
+prompts now include that catalog as a JSON allowlist of exact `plugin_id` and
+`action` pairs, and hallucinated or invalid model-planned plugin IDs/actions
+fail closed before policy checks or tool execution, then feed registered-tool
+guidance back to the model as rejected tool results for bounded recovery. Mixed
+prose plus JSON `tool_requests` is treated as malformed provider output instead
+of a normal answer.
 Live Ollama testing has proven the opt-in local HTTP route can complete real
 model commands; model-specific tool discipline can still vary, so the runtime
 boundary remains authoritative. Local plugin

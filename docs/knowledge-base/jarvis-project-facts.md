@@ -100,9 +100,10 @@ These notes capture durable facts for future agents working on this repository.
   broad third-party tool execution.
 - Live local testing with Ollama `llama3.2` has proven the opt-in
   Ollama-compatible HTTP route can complete real model commands. The runtime
-  derives the provider-visible first-party tool inventory from the registered
-  runtime `PluginHost` manifests, advertises that exact inventory in the Ollama
-  prompt and ChatGPT/OpenAI-compatible native tool definitions, and rejects
+  derives the provider-visible first-party tool catalog from validated
+  first-party manifests, exposes the same redacted catalog through
+  `/tools/model` and `jarvis tools list`, advertises it as an Ollama JSON
+  allowlist and ChatGPT/OpenAI-compatible native tool definitions, and rejects
   hallucinated provider plugin IDs/actions before policy checks or tool
   execution. Those recoverable validation misses emit `tool_request_rejected`
   audit evidence plus registered-tool guidance and are fed back to the next
@@ -112,9 +113,11 @@ These notes capture durable facts for future agents working on this repository.
 - The registered model-tool contract is first-party only. Ollama envelope
   requests use `plugin_id` plus `action`; native ChatGPT/OpenAI-compatible tool
   names use `plugin__action`; both must map back to the same registered
-  first-party manifest inventory before any policy check or execution.
-  Installed plugin registry records are inspectable and separately executable
-  through explicit grants, but model-originated tool calls cannot target them.
+  first-party catalog before any policy check or execution. Installed plugin
+  registry records are inspectable and separately executable through explicit
+  grants, but model-originated tool calls cannot target them and `/tools/model`
+  excludes installed plugin paths, subprocess configuration, provenance hashes,
+  audit payloads, memory values, and provider route context.
 - Provider-envelope coverage includes
   `ollama_http_provider_parses_tool_request_envelope`,
   `chatgpt_http_provider_parses_tool_request_envelope`,
@@ -125,7 +128,9 @@ These notes capture durable facts for future agents working on this repository.
   `provider_originated_tool_request_executes_first_party_tool_and_feeds_result`,
   and the cross-process `serve_executes_ollama_provider_tool_request_envelope`
   E2E with an Ollama-compatible stub that asserts the advertised registered
-  first-party inventory excludes invented browser plugin IDs.
+  first-party catalog is a JSON allowlist and excludes invented browser plugin
+  IDs. CLI smoke and local IPC E2E also cover `jarvis tools list` over
+  `/tools/model`.
 - Native ChatGPT/OpenAI-compatible tool-call coverage includes
   `chatgpt_http_provider_parses_native_tool_calls` and the cross-process
   `serve_executes_chatgpt_native_tool_call` E2E.
@@ -140,7 +145,7 @@ These notes capture durable facts for future agents working on this repository.
 - Repository-backed IPC state exposes task, audit, model-route, and memory
   inspection routes, persists scheduler jobs, restores them at startup, and all
   IPC states expose `/plugins/manifests` for deterministic first-party plugin
-  manifests.
+  manifests plus `/tools/model` for the redacted first-party model-tool catalog.
   Repository-backed IPC also exposes `/plugins/installed` for metadata-only
   local plugin installation. Installed records are persisted with
   `execution_enabled: false` and `execution_grant: metadata_only` by default.

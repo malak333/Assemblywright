@@ -886,7 +886,7 @@ fn ollama_prompt(request: &ModelRequest) -> JarvisResult<String> {
     };
 
     Ok(format!(
-        "You are Jarvis, a local-first assistant. Answer the user directly. Do not claim cloud access. Registered first-party tools are exactly: {}. Never invent plugin_id or action values. Choose exactly one response mode: plain natural language with no JSON-looking tool fields, or one strict JSON object with no surrounding prose. If a first-party tool is needed, copy one exact registered plugin_id and action into this JSON shape: {{\"message\":\"short reason\",\"complete\":false,\"tool_requests\":[{{\"plugin_id\":\"<registered plugin_id>\",\"action\":\"<registered action>\",\"input\":{{}}}}]}}. If no registered tool fits, answer directly without tool_requests. Task: {}\nStep: {}\nTool results: {}",
+        "You are Jarvis, a local-first assistant. Answer the user directly. Do not claim cloud access. Registered first-party tools are exactly this JSON allowlist: {}. Never invent plugin_id or action values. The plugin_id must equal one listed plugin_id exactly; action names, command aliases, endpoints, and capability names are invalid plugin ids. Choose exactly one response mode: plain natural language with no JSON-looking tool fields, or one strict JSON object with no surrounding prose. If a first-party tool is needed, copy one exact registered plugin_id and action into this JSON shape: {{\"message\":\"short reason\",\"complete\":false,\"tool_requests\":[{{\"plugin_id\":\"<registered plugin_id>\",\"action\":\"<registered action>\",\"input\":{{}}}}]}}. If no registered tool fits, answer directly without tool_requests. Task: {}\nStep: {}\nTool results: {}",
         first_party_tool_inventory_text(&request.first_party_tools),
         request.user_input,
         request.step_index,
@@ -1055,15 +1055,18 @@ fn first_party_tool_inventory_text(tools: &[ModelToolDefinition]) -> String {
     let tools = sorted_model_tool_definitions(tools)
         .into_iter()
         .map(|tool| {
-            let input =
-                serde_json::to_string(&tool.input_schema).unwrap_or_else(|_| "{}".to_string());
-            format!("{}.{} input_schema={}", tool.plugin_id, tool.action, input)
+            json!({
+                "plugin_id": tool.plugin_id,
+                "action": tool.action,
+                "description": tool.description,
+                "input_schema": tool.input_schema,
+            })
         })
         .collect::<Vec<_>>();
     if tools.is_empty() {
-        "none".to_string()
+        "[]".to_string()
     } else {
-        tools.join("; ")
+        serde_json::to_string(&tools).unwrap_or_else(|_| "[]".to_string())
     }
 }
 
@@ -1386,8 +1389,13 @@ mod tests {
         })
         .expect("prompt");
 
-        assert!(prompt.contains("runtime_status.inspect"));
-        assert!(prompt.contains("input_schema="));
+        assert!(prompt.contains("\"plugin_id\":\"runtime_status\""));
+        assert!(prompt.contains("\"action\":\"inspect\""));
+        assert!(prompt.contains("\"input_schema\""));
+        assert!(prompt.contains("JSON allowlist"));
+        assert!(prompt.contains(
+            "action names, command aliases, endpoints, and capability names are invalid plugin ids"
+        ));
         assert!(!prompt.contains("fake_status.status"));
         assert!(!prompt.contains("fake_echo.echo"));
     }
@@ -1411,10 +1419,12 @@ mod tests {
             assert_eq!(body["stream"], false);
             let prompt = body["prompt"].as_str().expect("prompt");
             assert!(prompt.contains("hello local"));
-            assert!(prompt.contains("Registered first-party tools are exactly"));
-            assert!(prompt.contains("fake_status.status"));
-            assert!(prompt.contains("fake_echo.echo"));
+            assert!(prompt.contains("Registered first-party tools are exactly this JSON allowlist"));
+            assert!(prompt.contains("\"plugin_id\":\"fake_status\""));
+            assert!(prompt.contains("\"action\":\"status\""));
+            assert!(prompt.contains("\"plugin_id\":\"fake_echo\""));
             assert!(prompt.contains("Never invent plugin_id or action values"));
+            assert!(prompt.contains("action names, command aliases, endpoints, and capability names are invalid plugin ids"));
             assert!(prompt.contains("one strict JSON object with no surrounding prose"));
             assert!(prompt.contains("<registered plugin_id>"));
             Json(json!({ "response": "local answer", "done": true }))

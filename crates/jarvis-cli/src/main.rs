@@ -121,6 +121,11 @@ enum CliCommand {
         #[command(subcommand)]
         command: PluginsCommand,
     },
+    /// Inspect model-visible registered first-party tools.
+    Tools {
+        #[command(subcommand)]
+        command: ToolsCommand,
+    },
     /// Inspect and decide approval-required actions.
     Approvals {
         #[command(subcommand)]
@@ -414,6 +419,15 @@ enum PluginsCommand {
         input: String,
         #[arg(long)]
         dry_run: bool,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ToolsCommand {
+    /// List the registered first-party tools that models may request.
+    List {
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
@@ -931,6 +945,11 @@ async fn main() -> anyhow::Result<()> {
                 );
             }
         },
+        CliCommand::Tools { command } => match command {
+            ToolsCommand::List { endpoint } => {
+                println!("{}", model_tool_catalog(&endpoint)?);
+            }
+        },
         CliCommand::Approvals { command } => match command {
             ApprovalsCommand::List { status, endpoint } => {
                 let path = status
@@ -1057,6 +1076,17 @@ fn release_evidence_status(endpoint: &str) -> anyhow::Result<String> {
     }
 }
 
+fn model_tool_catalog(endpoint: &str) -> anyhow::Result<String> {
+    match request(endpoint, "GET", "/tools/model", None) {
+        Ok(response) => Ok(response),
+        Err(error) if is_transport_unavailable(&error) => {
+            let catalog = jarvis_core::IpcState::new().model_tool_catalog()?;
+            Ok(serde_json::to_string(&catalog)?)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 fn is_transport_unavailable(error: &anyhow::Error) -> bool {
     let Some(error) = error.downcast_ref::<std::io::Error>() else {
         return false;
@@ -1131,6 +1161,7 @@ async fn run_smoke() -> anyhow::Result<()> {
         "path",
         "/diagnostics/export",
     )?;
+    require_array_contains_object_field(&contract_json["endpoints"], "path", "/tools/model")?;
     require_array_contains_object_field(&contract_json["endpoints"], "path", "/model-routes")?;
 
     let command_body = serde_json::to_string(&CommandRequest {
@@ -1151,6 +1182,11 @@ async fn run_smoke() -> anyhow::Result<()> {
     let manifests = request(&endpoint, "GET", "/plugins/manifests", None)?;
     let manifests_json: serde_json::Value = serde_json::from_str(&manifests)?;
     require_array_contains_object_field(&manifests_json, "id", "fake_echo")?;
+
+    let tools = request(&endpoint, "GET", "/tools/model", None)?;
+    let tools_json: serde_json::Value = serde_json::from_str(&tools)?;
+    require_json_field(&tools_json, "source", "registered_first_party_plugins")?;
+    require_array_contains_object_field(&tools_json["tools"], "plugin_id", "fake_status")?;
 
     let diagnostics = request(&endpoint, "GET", "/diagnostics/export", None)?;
     let diagnostics_json: serde_json::Value = serde_json::from_str(&diagnostics)?;
