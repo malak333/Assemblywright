@@ -245,11 +245,11 @@ cargo run -p jarvis-cli -- diagnostics export
 ```
 
 `jarvis permissions review` includes pending approvals, plugin review items,
-active scheduler triggers, and unreviewed memory items. Memory review items
-include category/key and sensitivity only; memory values stay out of policy
-review and diagnostics export. `jarvis diagnostics export` exposes aggregate
-active, unreviewed, and sensitive memory counts when repository backing is
-enabled.
+active scheduler triggers, unreviewed memory items, and deleted sensitive
+memory retained in local storage. Memory review items include category/key and
+sensitivity only; memory values stay out of policy review and diagnostics
+export. `jarvis diagnostics export` exposes aggregate active, unreviewed, and
+sensitive memory counts when repository backing is enabled.
 
 ## Useful Focused Commands
 

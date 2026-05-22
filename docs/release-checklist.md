@@ -195,9 +195,10 @@ stage or when a PR needs focused evidence for one ownership slice.
   controls, return redacted diagnostic job fields, and append
   `scheduler_stale_running_recovered` without exposing scheduler command bodies
   or running stale job side effects.
-- Confirm permission policy review includes unreviewed memory items without
-  exposing memory values, and diagnostics export exposes only aggregate active,
-  unreviewed, and sensitive memory counts.
+- Confirm permission policy review includes unreviewed memory items and deleted
+  sensitive memory retained in local storage without exposing memory values, and
+  diagnostics export exposes only aggregate active, unreviewed, and sensitive
+  memory counts.
 - Confirm the Swift Approval Center renders permission policy review status
   alongside grant history when the IPC contract exposes the endpoint, stages
   approved-unexecuted first-party approvals for Run Approved, and hides

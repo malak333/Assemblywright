@@ -1145,7 +1145,7 @@ struct JarvisMacCoreTests {
         let item = try #require(review.items.first)
 
         #expect(review.status == "review_required")
-        #expect(review.reviewItemCount == 3)
+        #expect(review.reviewItemCount == 4)
         #expect(review.highRiskPendingCount == 1)
         #expect(review.unverifiedInstalledPluginCount == 1)
         #expect(review.unreviewedMemoryItemCount == 1)
@@ -1157,6 +1157,10 @@ struct JarvisMacCoreTests {
         #expect(memoryItem.memoryId != nil)
         #expect(memoryItem.action == "preference/voice")
         #expect(!memoryItem.detail.contains("never expose"))
+        let retentionItem = try #require(review.items.first { $0.itemType == "memory_retention_review" })
+        #expect(retentionItem.memoryId != nil)
+        #expect(retentionItem.action == "retention/deleted-secret")
+        #expect(!retentionItem.detail.contains("deleted secret value"))
     }
 
     @Test("Approval client methods send Rust IPC decision requests")
@@ -1223,7 +1227,7 @@ struct JarvisMacCoreTests {
 
         #expect(pending.first?.id == approvalId)
         #expect(grants.highRiskPendingCount == 1)
-        #expect(review.reviewItemCount == 3)
+        #expect(review.reviewItemCount == 4)
         #expect(approved.status == "approved")
         #expect(denied.status == "denied")
         #expect(executed.accepted)
@@ -1673,7 +1677,7 @@ struct JarvisMacCoreTests {
         #expect(model.permissionSurface.approvedGrantCount == 2)
         #expect(model.permissionSurface.sideEffectsRequireApproval)
         #expect(model.permissionSurface.unverifiedInstalledPluginGrantCount == 1)
-        #expect(model.policyReview?.reviewItemCount == 3)
+        #expect(model.policyReview?.reviewItemCount == 4)
         #expect(model.policyReview?.status == "review_required")
     }
 
@@ -2409,7 +2413,7 @@ private func permissionPolicyReviewJSON(approvalId: UUID = UUID()) -> Data {
         {
           "generated_at": "2026-05-20T12:03:00Z",
           "status": "review_required",
-          "review_item_count": 3,
+          "review_item_count": 4,
           "high_risk_pending_count": 1,
           "executable_installed_plugin_count": 0,
           "unverified_installed_plugin_count": 1,
@@ -2439,6 +2443,14 @@ private func permissionPolicyReviewJSON(approvalId: UUID = UUID()) -> Data {
               "detail": "Memory item preference/voice is Private and unreviewed; value text is redacted from policy review",
               "memory_id": "\(UUID().uuidString)",
               "action": "preference/voice"
+            },
+            {
+              "item_type": "memory_retention_review",
+              "severity": "high",
+              "title": "Deleted sensitive memory is retained locally",
+              "detail": "Deleted memory item retention/deleted-secret is Private and still retained in local storage; value text is redacted from policy review",
+              "memory_id": "\(UUID().uuidString)",
+              "action": "retention/deleted-secret"
             }
           ]
         }
