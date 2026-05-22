@@ -16,10 +16,11 @@ ZIP_PATH="$DIST_DIR/$APP_NAME-$VERSION.zip"
 PKG_PATH="$DIST_DIR/$APP_NAME-$VERSION.pkg"
 CHECK_ONLY=false
 UNSIGNED_STRUCTURE_CHECK=false
+UNSIGNED_LAUNCH_CHECK=false
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/package-distribution.sh [--check] [--unsigned-structure-check]
+Usage: scripts/package-distribution.sh [--check] [--unsigned-structure-check] [--unsigned-launch-check]
 
 Build a distribution-shaped Jarvis.app bundle, sign it with Developer ID, zip it,
 submit it for notarization, staple the ticket, then build, sign, notarize, and
@@ -44,6 +45,10 @@ Optional:
 --unsigned-structure-check builds and inspects an unsigned app/pkg layout without
 Developer ID credentials, notarization, stapling, Finder launch, or live device
 validation.
+--unsigned-launch-check also launches the release-built app executable with an
+isolated HOME and exercises the supervised core over loopback IPC. It still does
+not prove Developer ID signing, notarization, stapling, Finder launch, or live
+device validation.
 USAGE
 }
 
@@ -68,6 +73,22 @@ require_output_contains() {
   fi
 }
 
+select_port() {
+  if [[ -n "${JARVIS_DISTRIBUTION_LAUNCH_CHECK_PORT:-}" ]]; then
+    printf '%s\n' "$JARVIS_DISTRIBUTION_LAUNCH_CHECK_PORT"
+    return
+  fi
+
+  for port in 18817 18818 18819 18820 18821; do
+    if ! nc -z 127.0.0.1 "$port" >/dev/null 2>&1; then
+      printf '%s\n' "$port"
+      return
+    fi
+  done
+
+  fail "no distribution launch-check port is available"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --check)
@@ -76,6 +97,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --unsigned-structure-check)
       UNSIGNED_STRUCTURE_CHECK=true
+      shift
+      ;;
+    --unsigned-launch-check)
+      UNSIGNED_LAUNCH_CHECK=true
       shift
       ;;
     -h|--help)
@@ -88,8 +113,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ "$CHECK_ONLY" == true && "$UNSIGNED_STRUCTURE_CHECK" == true ]]; then
-  fail "--check and --unsigned-structure-check are mutually exclusive"
+if [[ "$CHECK_ONLY" == true && "$UNSIGNED_STRUCTURE_CHECK" == true ]] ||
+  [[ "$CHECK_ONLY" == true && "$UNSIGNED_LAUNCH_CHECK" == true ]] ||
+  [[ "$UNSIGNED_STRUCTURE_CHECK" == true && "$UNSIGNED_LAUNCH_CHECK" == true ]]; then
+  fail "--check, --unsigned-structure-check, and --unsigned-launch-check are mutually exclusive"
 fi
 
 require_command() {
@@ -176,7 +203,7 @@ require_command plutil
 require_command pkgbuild
 require_command pkgutil
 
-if [[ "$UNSIGNED_STRUCTURE_CHECK" != true ]]; then
+if [[ "$UNSIGNED_STRUCTURE_CHECK" != true && "$UNSIGNED_LAUNCH_CHECK" != true ]]; then
   require_command codesign
   require_command xcrun
   require_command ditto
@@ -200,7 +227,7 @@ if [[ "$CHECK_ONLY" == true ]]; then
   exit 0
 fi
 
-if [[ "$UNSIGNED_STRUCTURE_CHECK" == true ]]; then
+run_unsigned_structure_check() {
   build_app_bundle
 
   SIGNING_STATUS="not attempted"
@@ -231,6 +258,136 @@ if [[ "$UNSIGNED_STRUCTURE_CHECK" == true ]]; then
   printf 'Pkg: %s\n' "$PKG_PATH"
   printf 'Signing: %s\n' "$SIGNING_STATUS"
   printf 'Proof boundary: release app and unsigned installer payload structure only; no Developer ID signing, notarization, stapling, /Applications install, Finder launch, live microphone/Speech validation, live audio-output validation, App Store validation, or manual QA.\n'
+}
+
+run_unsigned_launch_check() {
+  build_app_bundle
+
+  SIGNING_STATUS="not attempted"
+  if command -v codesign >/dev/null 2>&1; then
+    run codesign --force --sign - --entitlements "$ENTITLEMENTS" "$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
+    run codesign --force --sign - --entitlements "$ENTITLEMENTS" "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME"
+    run codesign --force --sign - --entitlements "$ENTITLEMENTS" "$APP_PATH"
+    run codesign --verify --deep --strict "$APP_PATH"
+    SIGNING_STATUS="ad-hoc signed with codesign -"
+  fi
+
+  PKG_PATH="$DIST_DIR/$APP_NAME-$VERSION-unsigned-launch.pkg"
+  rm -f "$PKG_PATH"
+  run pkgbuild \
+    --component "$APP_PATH" \
+    --install-location /Applications \
+    --identifier "$BUNDLE_ID.unsigned-launch.pkg" \
+    --version "$VERSION" \
+    "$PKG_PATH"
+
+  PAYLOAD_OUTPUT="$(pkgutil --payload-files "$PKG_PATH")"
+  require_output_contains "unsigned package payload" "$PAYLOAD_OUTPUT" "Jarvis.app/Contents/MacOS/$APP_EXECUTABLE_NAME"
+  require_output_contains "unsigned package payload" "$PAYLOAD_OUTPUT" "Jarvis.app/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
+  require_output_contains "unsigned package payload" "$PAYLOAD_OUTPUT" "Jarvis.app/Contents/Info.plist"
+
+  LAUNCH_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/jarvis-distribution-launch.XXXXXX")"
+  APP_PID=""
+  PORT="$(select_port)"
+  ENDPOINT="http://127.0.0.1:$PORT"
+  CLEAN_HOME="$LAUNCH_TMP_DIR/home"
+  APP_DB="$CLEAN_HOME/Library/Application Support/Jarvis/jarvis.sqlite"
+  APP_LOG="$LAUNCH_TMP_DIR/JarvisMacApp.log"
+  mkdir -p "$CLEAN_HOME"
+
+  cleanup_launch() {
+    if [[ -n "$APP_PID" ]] && kill -0 "$APP_PID" 2>/dev/null; then
+      kill "$APP_PID" 2>/dev/null || true
+      wait "$APP_PID" 2>/dev/null || true
+    fi
+
+    if command -v lsof >/dev/null 2>&1; then
+      while IFS= read -r pid; do
+        if [[ -n "$pid" ]]; then
+          kill "$pid" 2>/dev/null || true
+        fi
+      done < <(lsof -ti "tcp:$PORT" 2>/dev/null || true)
+    fi
+
+    rm -rf "$LAUNCH_TMP_DIR"
+  }
+  trap cleanup_launch EXIT
+
+  printf '\n==> Launching release app %s with HOME=%s and endpoint %s\n' "$APP_PATH" "$CLEAN_HOME" "$ENDPOINT"
+  env \
+    HOME="$CLEAN_HOME" \
+    JARVIS_MAC_CORE_BIND_ADDRESS="127.0.0.1:$PORT" \
+    JARVIS_MAC_CORE_ENDPOINT="$ENDPOINT" \
+    JARVIS_MAC_CORE_DATABASE="$APP_DB" \
+    "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME" >"$APP_LOG" 2>&1 &
+  APP_PID="$!"
+
+  HEALTH_OUTPUT=""
+  for _ in {1..60}; do
+    if ! kill -0 "$APP_PID" 2>/dev/null; then
+      printf 'error: release app exited before core became healthy; app log follows\n' >&2
+      cat "$APP_LOG" >&2 || true
+      exit 1
+    fi
+
+    if HEALTH_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" health --endpoint "$ENDPOINT" 2>/dev/null)"; then
+      require_output_contains "release app health" "$HEALTH_OUTPUT" "jarvis-core: ok"
+      require_output_contains "release app health" "$HEALTH_OUTPUT" "runtime: routed-fake-local-model+first-party-plugins"
+      break
+    fi
+    sleep 0.25
+  done
+
+  if [[ -z "$HEALTH_OUTPUT" ]]; then
+    printf 'error: release app did not supervise a healthy core; app log follows\n' >&2
+    cat "$APP_LOG" >&2 || true
+    exit 1
+  fi
+
+  COMMAND_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" command "plugin echo unsigned distribution launch smoke" --endpoint "$ENDPOINT")"
+  require_output_contains "release app command" "$COMMAND_OUTPUT" '"accepted":true'
+  require_output_contains "release app command" "$COMMAND_OUTPUT" '"status":"completed"'
+  require_output_contains "release app command" "$COMMAND_OUTPUT" '"event_type":"plugin_completed"'
+
+  AUDIT_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" tasks audit --endpoint "$ENDPOINT")"
+  require_output_contains "release app audit" "$AUDIT_OUTPUT" '"event_type":"plugin_completed"'
+  require_output_contains "release app audit" "$AUDIT_OUTPUT" '"event_type":"task_completed"'
+
+  DIAGNOSTICS_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" diagnostics export --endpoint "$ENDPOINT")"
+  require_output_contains "release app diagnostics" "$DIAGNOSTICS_OUTPUT" '"repository_backed":true'
+  require_output_contains "release app diagnostics" "$DIAGNOSTICS_OUTPUT" '"task_count":1'
+  require_output_contains "release app diagnostics" "$DIAGNOSTICS_OUTPUT" '"redaction":"diagnostics export omits command bodies'
+
+  PAUSE_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" pause --endpoint "$ENDPOINT" --reason "unsigned distribution launch smoke")"
+  require_output_contains "release app pause" "$PAUSE_OUTPUT" '"paused":true'
+
+  BLOCKED_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" command "plugin echo blocked by unsigned distribution launch smoke" --endpoint "$ENDPOINT" --dry-run)"
+  require_output_contains "release app blocked command" "$BLOCKED_OUTPUT" '"accepted":false'
+  require_output_contains "release app blocked command" "$BLOCKED_OUTPUT" '"status":"blocked"'
+
+  RESUME_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" resume --endpoint "$ENDPOINT")"
+  require_output_contains "release app resume" "$RESUME_OUTPUT" '"paused":false'
+
+  if [[ ! -s "$APP_DB" ]]; then
+    printf 'error: clean HOME database was not created at %s\n' "$APP_DB" >&2
+    exit 1
+  fi
+
+  printf '\nJarvis unsigned distribution launch check: ok\n'
+  printf 'App: %s\n' "$APP_PATH"
+  printf 'Pkg: %s\n' "$PKG_PATH"
+  printf 'Signing: %s\n' "$SIGNING_STATUS"
+  printf 'Clean HOME database: %s\n' "$APP_DB"
+  printf 'Proof boundary: release-built app executable, bundled core, unsigned installer payload structure, isolated HOME launch, command/audit/diagnostics/pause smoke, and optional ad-hoc signing only; no Developer ID signing, notarization, stapling, /Applications install, Finder/LaunchServices validation, live microphone/Speech validation, live audio-output validation, App Store validation, or manual QA.\n'
+}
+
+if [[ "$UNSIGNED_STRUCTURE_CHECK" == true ]]; then
+  run_unsigned_structure_check
+  exit 0
+fi
+
+if [[ "$UNSIGNED_LAUNCH_CHECK" == true ]]; then
+  run_unsigned_launch_check
   exit 0
 fi
 

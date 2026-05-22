@@ -178,6 +178,7 @@ For distribution packaging work, run:
 ```sh
 ./scripts/package-distribution.sh --check
 ./scripts/package-distribution.sh --unsigned-structure-check
+./scripts/package-distribution.sh --unsigned-launch-check
 ```
 
 The unsigned structure check builds release Rust and Swift artifacts, assembles
@@ -185,6 +186,10 @@ the distribution-shaped `Jarvis.app`, optionally ad-hoc signs it when
 `codesign` is available, creates an unsigned `/Applications` installer package,
 and inspects the package payload for the app executable, bundled core, and
 `Info.plist`.
+The unsigned launch check additionally launches the release-built app
+executable with an isolated temporary HOME and verifies app-supervised core
+health, command, audit, diagnostics, pause/block/resume behavior, and SQLite
+state through the bundled core.
 The full `package-distribution.sh` lane owns Developer ID signing,
 notarization, stapling, microphone entitlement packaging, and signed installer
 package creation when Apple credentials are provided. It still does not replace
