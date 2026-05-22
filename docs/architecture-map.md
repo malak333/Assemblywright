@@ -20,6 +20,7 @@ flowchart TB
     LocalGate --> Smoke["jarvis-cli smoke"]
     LocalGate --> SwiftGate["Swift package build/test"]
     LocalGate --> CargoGate["fmt, clippy, tests, build, package"]
+    LocalGate --> MigrationSmoke["storage-migration-backup-smoke.sh"]
     AppReleaseSmoke["packaged-app-release-smoke.sh"] --> LocalApp["temp Jarvis.app bundle"]
     LocalApp --> AppMetadata["Info.plist plus ad-hoc codesign when available"]
     LocalApp --> BundledCLI["Contents/Resources/bin/jarvis-cli"]
@@ -88,6 +89,9 @@ flowchart TB
     RepoState --> StoredPause["emergency_pause"]
     RepoState --> StoredScheduler["scheduler_jobs"]
     RepoState --> StoredApprovals["pending_approvals"]
+    RepoState --> SchemaMigrationsCurrent["schema_migrations"]
+    RepoState --> MigrationBackups[".jarvis-migration-backups app-owned snapshots"]
+    MigrationBackups --> RestorePath["restore original DB/WAL/SHM on migration-open failure"]
 
     Types["shared contract types"] --> Runtime
     Types --> IPC
@@ -126,6 +130,10 @@ It supports opt-in
 ChatGPT/OpenAI-compatible execution only after route policy allows it. It does
 not yet support a broader WASM/network/plugin-marketplace sandbox or a signed
 packaged Mac approval flow.
+File-backed `SqliteRepository::open` creates a preflight migration backup for
+existing databases below the current schema version and restores the original
+DB/WAL/SHM files if opening/configuring/migrating fails. The backup is
+app-owned local state, not a redacted export.
 Repository-backed IPC state also exposes task, audit, model-route, memory,
 permission-grant, scheduler, plugin manifest, installed-plugin, and
 installed-plugin execution-grant inspection endpoints, so the CLI and Swift
@@ -312,6 +320,7 @@ flowchart TB
         RuntimeProd --> SchedulerProd["scheduler and trigger engine"]
         RuntimeProd --> MemoryPolicy["memory classification and review flow"]
         RuntimeProd --> RepoProd["SqliteRepository"]
+        RepoProd --> BackupManager["migration backup and restore manager"]
         RuntimeProd --> DiagnosticsProd["diagnostics and redacted export data"]
 
         ModelRouterProd --> LocalModels["real local model providers by default"]
@@ -338,6 +347,8 @@ flowchart TB
     RepoProd --> PermissionGrantStore["approval history and execution grants"]
     RepoProd --> SchedulerStore["durable scheduler jobs"]
     RepoProd --> SchemaMigrations["schema migrations and recovery points"]
+    BackupManager --> AppOwnedBackupFiles["app-owned SQLite backup files"]
+    BackupManager --> RestoreValidation["restore validation and failure diagnostics"]
 
     MacKeychain["macOS Keychain"] --> Supervisor
     AppFiles["app-owned files and plugin bundles"] --> RuntimeProd
@@ -369,10 +380,10 @@ operation.
 | Model routing | Local-first `ModelRouter` exists with sensitivity checks, provider-status route evidence, ChatGPT opt-in gate, approval delegation, and redaction logic. The active `/commands` path can call a configured local provider or opt-in ChatGPT/OpenAI-compatible provider after policy allows the route. Repository-backed command execution persists append-only SQLite model-route records and exposes redacted IPC/CLI inspection without storing route context. | Local provider integration, explicit ChatGPT escalation, minimized cloud context, user approval where required, and durable route evidence in every relevant task. | Local and ChatGPT provider boundaries plus SQLite route recovery evidence implemented with tests; broader production model operations pending. |
 | Plugins and tools | Deterministic in-process first-party plugins (`fake_echo`, `fake_status`) execute through command-pattern dispatch and bounded model-planned runtime calls, with manifest validation, policy checks, timeout, cancellation, approval stops, pending approval persistence for approval-gated command scaffolds, and audit evidence. Local plugin installation validates manifest metadata and safe source paths, stores disabled registry records with `execution_enabled=false` and `execution_grant=metadata_only`, supports contract-only dry runs with `side_effect_executed=false`, and can run `local_subprocess` plugins only after an explicit `subprocess_stdio` grant through the constrained JSON stdin/stdout runner. | First-party production plugins plus installed local plugins behind manifests, sandboxing, user grants, UI approval, proactive gating, and real model-generated tool-call execution. | Contract, deterministic first-party paths, metadata-only local install, explicit subprocess execution grant, and constrained installed-plugin runner implemented; broader WASM/network/plugin-marketplace trust pending. |
 | Scheduler | Inspectable scheduler jobs with manual, one-time, interval trigger contracts, explicit run-due execution, and an opt-in bounded background trigger loop on `jarvis serve --scheduler-background`. Each tick uses the same visible task/audit records, deterministic due ordering, per-tick limit, and fail-closed emergency-pause behavior as manual run-due. Repository-backed IPC state restores and updates jobs through SQLite. Emergency pause cancels active scheduler jobs, and unsafe due commands fail closed by pausing and cancelling remaining open jobs. | Durable scheduler and trigger engine for approved proactive routines, persisted job state, visible task records, and policy-gated execution. | Durable job state, explicit run-due execution, and opt-in bounded background loop implemented; richer production trigger policy and app notification handoff pending. |
-| Storage and memory | SQLite migrations store tasks, append-only audit entries, append-only redacted model-route records, emergency pause, memory items with provenance/sensitivity/review/soft-delete fields, scheduler jobs, pending approval records, and disabled installed-plugin registry metadata. CLI/IPC can inspect model routes, memory items, approval decisions, and plugin metadata when repository backing is enabled. The Mac shell can read provider credentials from Keychain at supervised-core launch and inject missing secret env vars without storing them in SQLite or diagnostics. | SQLite also owns permissions, executable plugin grants, migrations with backup/rollback, and memory UX review flows; Keychain owns secrets; vector indexes remain rebuildable. | Core local state, route recovery evidence, plugin metadata registry, and Keychain launch credential boundary implemented; broader migration backup/rollback and memory UX pending. |
+| Storage and memory | SQLite migrations store tasks, append-only audit entries, append-only redacted model-route records, emergency pause, memory items with provenance/sensitivity/review/soft-delete fields, scheduler jobs, pending approval records, and disabled installed-plugin registry metadata. File-backed repository open creates a preflight migration backup for older schema versions and restores the original DB/WAL/SHM files if opening/configuring/migrating fails. CLI/IPC can inspect model routes, memory items, approval decisions, and plugin metadata when repository backing is enabled. The Mac shell can read provider credentials from Keychain at supervised-core launch and inject missing secret env vars without storing them in SQLite or diagnostics. | SQLite also owns permissions, executable plugin grants, migration backup/rollback, and memory UX review flows; Keychain owns secrets; vector indexes remain rebuildable. | Core local state, route recovery evidence, plugin metadata registry, migration preflight backup/restore, and Keychain launch credential boundary implemented; broader memory UX pending. |
 | Safety and approvals | Capability scopes, risk tiers, emergency-pause fail-closed behavior, audit-required flags, and approval-required decisions exist in Rust. Repository-backed IPC persists pending approvals and supports CLI and Swift grant/deny decisions without executing side effects. | Human approval prompts, permission center, grants history, policy review, and no bypass for high-risk side effects. | Policy engine plus CLI/IPC/Swift approval decision surface implemented; richer permission center pending. |
 | Voice and diagnostics | Swift has a text-transcript voice state/action scaffold with typed transcript staging, unavailable/degraded/interrupted states, and handoff into the same `CommandConsoleModel.submit` path used by text commands. The Voice tab now owns the protocol-backed macOS Speech/AVFoundation input adapter model and exposes permission request, start/stop capture, and interruption controls, with deterministic fake-adapter tests for permission, capture, transcript, interruption, and error states. It also owns a protocol-backed AVFoundation speech-output adapter with preview, stop, and interrupt controls, plus deterministic fake-adapter tests for playback state and failures. Live microphone capture and live audio output are still release claims only after entitlement packaging and manual device validation. Redacted diagnostics export exists over CLI/IPC and omits command bodies, scheduler commands, model route contexts, audit payloads, memory values, and cancellation reason text. | Voice input/output loop, interruption/cancel behavior, microphone degraded modes, and local diagnostics export integrated into the packaged app. | Adapter-backed SwiftUI voice input/output controls and text-parity scaffold implemented; live microphone/audio validation pending. |
-| Release proof | Local Rust and Swift build/test/smoke commands plus the ignored cross-process `local_ipc_e2e` release-proof test document the foundation boundary. `packaged-app-release-smoke.sh` adds local assembled-app launch evidence for app-supervised core health, command, audit, diagnostics, pause, blocked command, resume, and temp SQLite state. | Developer ID signed and notarized packaged app release with clean-profile Mac smoke, app-supervised core, command, audit, pause, restart, migration, recovery, diagnostics, and real-provider checks. | Local foundation proof and assembled-app smoke implemented; distribution-grade signing/notarization/restart/manual QA pending. |
+| Release proof | Local Rust and Swift build/test/smoke commands plus the ignored cross-process `local_ipc_e2e` release-proof test document the foundation boundary. `storage-migration-backup-smoke.sh` proves legacy DB backup creation, restore after migration-open failure, and newer-schema diagnostics. `packaged-app-release-smoke.sh` adds local assembled-app launch evidence for app-supervised core health, command, audit, diagnostics, pause, blocked command, resume, and temp SQLite state. | Developer ID signed and notarized packaged app release with clean-profile Mac smoke, app-supervised core, command, audit, pause, restart, migration, recovery, diagnostics, and real-provider checks. | Local foundation proof, migration backup proof, and assembled-app smoke implemented; distribution-grade signing/notarization/restart/manual QA pending. |
 | Production workflow | Phase 3 was split into isolated branches/worktrees for model route persistence, plugin subprocess sandboxing, voice adapter production, packaged app release smoke, permission grants UX, and docs architecture alignment. Follow-on slices continue in isolated worktrees, including `codex/speech-output-adapter` in `/Users/michaelnobile/Antigravity/jarvis-worktrees-continuation/speech-output-adapter`. | Public repo release train with PR evidence, reproducible local gates, owner-reviewed release notes, and no hidden readiness claims. | Phase-3 workflow documented; release governance still manual. |
 | Docs, KB, and E2E discipline | Docs and knowledge-base files record implementation boundaries, the current/end-goal diagrams, and local proof commands. Current E2E evidence is Rust/CLI cross-process, Swift package contract/model coverage, packaged-layout supervision proof, and local assembled-app smoke. | Every feature phase updates docs and durable KB facts, adds or names the relevant E2E coverage, and blocks broader readiness claims when coverage is missing. | Phase discipline documented; broader distribution E2E pending. |
 
@@ -381,6 +392,11 @@ operation.
 - SQLite is the implemented structured-state backend for tasks, audit entries,
   redacted model-route records, emergency pause, memory items, scheduler jobs,
   pending approvals, and installed plugin registry/grant metadata.
+- Migration backup snapshots are app-owned local files under
+  `.jarvis-migration-backups` by default. They copy the SQLite DB plus WAL/SHM
+  sidecars when present, may contain personal memory/audit/plugin metadata, and
+  must not be treated as redacted diagnostics exports. Keychain secrets are not
+  stored in SQLite backups.
 - Audit entries are protected by SQLite triggers that reject update and delete
   operations.
 - Memory items carry provenance, sensitivity, review timestamps, and soft-delete
@@ -494,6 +510,10 @@ orchestration, and a first Swift command/management shell with core supervision
 abstractions. It does not support a claim that Jarvis is a finished
 voice assistant, packaged Mac app, autonomous external-action agent, plugin
 marketplace, or production cloud-integrated system.
+The storage migration proof shows preflight file-backed SQLite backups,
+restore after migration-open failure, and newer-schema diagnostics. It does not
+prove installer upgrade behavior, broad v1-through-v7 fixture preservation, or
+Finder/LaunchServices recovery UX.
 The six-agent autonomous sweep model is a workflow convention, not proof by
 itself. Only checked-in implementation, documented commands, and captured local
 verification output should be used as release evidence. For each new feature

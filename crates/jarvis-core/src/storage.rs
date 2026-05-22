@@ -1,7 +1,8 @@
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection, OptionalExtension, Row};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
@@ -88,6 +89,16 @@ pub struct SqliteRepository {
     conn: Connection,
 }
 
+#[derive(Debug)]
+struct MigrationBackup {
+    original_path: PathBuf,
+    backup_path: PathBuf,
+    original_wal_path: PathBuf,
+    backup_wal_path: Option<PathBuf>,
+    original_shm_path: PathBuf,
+    backup_shm_path: Option<PathBuf>,
+}
+
 impl std::fmt::Debug for SqliteRepository {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -98,11 +109,14 @@ impl std::fmt::Debug for SqliteRepository {
 
 impl SqliteRepository {
     pub fn open(path: impl AsRef<Path>) -> JarvisResult<Self> {
-        let conn = Connection::open(path).map_err(storage_error)?;
-        let repo = Self { conn };
-        repo.configure()?;
-        repo.migrate()?;
-        Ok(repo)
+        Self::open_with_migration_backup_dir(path, None::<&Path>)
+    }
+
+    pub fn open_with_migration_backup_dir(
+        path: impl AsRef<Path>,
+        backup_dir: Option<impl AsRef<Path>>,
+    ) -> JarvisResult<Self> {
+        open_with_migration_backup_dir_and_hook(path, backup_dir, |_| Ok(()))
     }
 
     pub fn in_memory() -> JarvisResult<Self> {
@@ -995,6 +1009,11 @@ impl SqliteRepository {
             .map_err(storage_error)?;
 
         let version = self.schema_version()?;
+        if version > CURRENT_SCHEMA_VERSION {
+            return Err(JarvisError::Storage(format!(
+                "database schema version {version} is newer than this Jarvis build supports ({CURRENT_SCHEMA_VERSION}); upgrade Jarvis before opening this database"
+            )));
+        }
         if version < 1 {
             self.apply_migration_1()?;
         }
@@ -1397,6 +1416,155 @@ impl SqliteRepository {
     }
 }
 
+fn open_with_migration_backup_dir_and_hook(
+    path: impl AsRef<Path>,
+    backup_dir: Option<impl AsRef<Path>>,
+    before_open: impl FnOnce(&Path) -> JarvisResult<()>,
+) -> JarvisResult<SqliteRepository> {
+    let path = path.as_ref();
+    let backup_dir = backup_dir.as_ref().map(|dir| dir.as_ref());
+    let backup = prepare_migration_backup(path, backup_dir)?;
+    before_open(path)?;
+
+    let conn = match Connection::open(path).map_err(storage_error) {
+        Ok(conn) => conn,
+        Err(error) => {
+            restore_after_open_failure(backup, error)?;
+            unreachable!("restore_after_open_failure always returns Err");
+        }
+    };
+    let repo = SqliteRepository { conn };
+
+    if let Err(error) = repo.configure().and_then(|()| repo.migrate()) {
+        drop(repo);
+        restore_after_open_failure(backup, error)?;
+        unreachable!("restore_after_open_failure always returns Err");
+    }
+
+    Ok(repo)
+}
+
+fn prepare_migration_backup(
+    db_path: &Path,
+    backup_dir: Option<&Path>,
+) -> JarvisResult<Option<MigrationBackup>> {
+    if !db_path.exists() || db_path.metadata().map_err(storage_io_error)?.len() == 0 {
+        return Ok(None);
+    }
+
+    let schema_version = schema_version_for_existing_database(db_path).unwrap_or(0);
+    if schema_version >= CURRENT_SCHEMA_VERSION {
+        return Ok(None);
+    }
+
+    let backup_root = backup_dir.map(PathBuf::from).unwrap_or_else(|| {
+        db_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(".jarvis-migration-backups")
+    });
+    fs::create_dir_all(&backup_root).map_err(storage_io_error)?;
+
+    let db_file_name = db_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("jarvis.sqlite");
+    let timestamp = Utc::now().format("%Y%m%dT%H%M%S%.fZ");
+    let backup_file_name = format!("{db_file_name}.schema-v{schema_version}.{timestamp}.bak");
+    let backup_path = backup_root.join(backup_file_name);
+    fs::copy(db_path, &backup_path).map_err(storage_io_error)?;
+
+    let original_wal_path = sqlite_companion_path(db_path, "-wal");
+    let backup_wal_path = copy_companion_if_present(&original_wal_path, &backup_path, "-wal")?;
+    let original_shm_path = sqlite_companion_path(db_path, "-shm");
+    let backup_shm_path = copy_companion_if_present(&original_shm_path, &backup_path, "-shm")?;
+
+    Ok(Some(MigrationBackup {
+        original_path: db_path.to_path_buf(),
+        backup_path,
+        original_wal_path,
+        backup_wal_path,
+        original_shm_path,
+        backup_shm_path,
+    }))
+}
+
+fn restore_after_open_failure(
+    backup: Option<MigrationBackup>,
+    original_error: JarvisError,
+) -> JarvisResult<SqliteRepository> {
+    if let Some(backup) = backup {
+        if let Err(restore_error) = restore_migration_backup(&backup) {
+            return Err(JarvisError::Storage(format!(
+                "migration failed: {original_error}; restore from {} failed: {restore_error}",
+                backup.backup_path.display()
+            )));
+        }
+    }
+    Err(original_error)
+}
+
+fn restore_migration_backup(backup: &MigrationBackup) -> JarvisResult<()> {
+    fs::copy(&backup.backup_path, &backup.original_path).map_err(storage_io_error)?;
+    restore_companion(backup.backup_wal_path.as_deref(), &backup.original_wal_path)?;
+    restore_companion(backup.backup_shm_path.as_deref(), &backup.original_shm_path)?;
+    Ok(())
+}
+
+fn restore_companion(backup_path: Option<&Path>, original_path: &Path) -> JarvisResult<()> {
+    if let Some(backup_path) = backup_path {
+        fs::copy(backup_path, original_path).map_err(storage_io_error)?;
+    } else if original_path.exists() {
+        fs::remove_file(original_path).map_err(storage_io_error)?;
+    }
+    Ok(())
+}
+
+fn copy_companion_if_present(
+    original_path: &Path,
+    backup_path: &Path,
+    suffix: &str,
+) -> JarvisResult<Option<PathBuf>> {
+    if !original_path.exists() {
+        return Ok(None);
+    }
+    let companion_backup_path = sqlite_companion_path(backup_path, suffix);
+    fs::copy(original_path, &companion_backup_path).map_err(storage_io_error)?;
+    Ok(Some(companion_backup_path))
+}
+
+fn sqlite_companion_path(path: &Path, suffix: &str) -> PathBuf {
+    let mut value = path.as_os_str().to_owned();
+    value.push(suffix);
+    PathBuf::from(value)
+}
+
+fn schema_version_for_existing_database(path: &Path) -> JarvisResult<i64> {
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(storage_error)?;
+    let has_migration_table: Option<i64> = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(storage_error)?;
+
+    if has_migration_table.is_none() {
+        return Ok(0);
+    }
+
+    conn.query_row(
+        "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1",
+        [],
+        |row| row.get(0),
+    )
+    .optional()
+    .map(|version| version.unwrap_or(0))
+    .map_err(storage_error)
+}
+
 fn task_from_row(row: &Row<'_>) -> rusqlite::Result<TaskRecord> {
     Ok(TaskRecord {
         id: parse_uuid(&row.get::<_, String>(0)?)?,
@@ -1694,6 +1862,10 @@ fn storage_error(error: rusqlite::Error) -> JarvisError {
     JarvisError::Storage(error.to_string())
 }
 
+fn storage_io_error(error: std::io::Error) -> JarvisError {
+    JarvisError::Storage(error.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1715,6 +1887,129 @@ mod tests {
 
         let reopened = SqliteRepository::open(db_path).unwrap();
         assert_eq!(reopened.schema_version().unwrap(), CURRENT_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn migrating_legacy_file_database_creates_backup_snapshot() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("jarvis.sqlite");
+        let backup_dir = dir.path().join("migration-backups");
+
+        let repo = SqliteRepository::open(&db_path).unwrap();
+        repo.raw_connection()
+            .execute_batch(
+                "
+                DROP TRIGGER model_route_records_no_delete;
+                DROP TRIGGER model_route_records_no_update;
+                DROP TABLE model_route_records;
+                DELETE FROM schema_migrations WHERE version = 7;
+                ",
+            )
+            .unwrap();
+        assert_eq!(repo.schema_version().unwrap(), 6);
+        drop(repo);
+
+        let migrated =
+            SqliteRepository::open_with_migration_backup_dir(&db_path, Some(&backup_dir)).unwrap();
+        assert_eq!(migrated.schema_version().unwrap(), CURRENT_SCHEMA_VERSION);
+        assert_eq!(
+            migrated
+                .raw_connection()
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'model_route_records'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
+
+        let backups = fs::read_dir(&backup_dir)
+            .unwrap()
+            .filter(|entry| {
+                entry
+                    .as_ref()
+                    .ok()
+                    .and_then(|entry| entry.file_name().into_string().ok())
+                    .is_some_and(|name| name.ends_with(".bak"))
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(backups.len(), 1);
+
+        let backup_conn = Connection::open(backups[0].path()).unwrap();
+        let backup_version: i64 = backup_conn
+            .query_row(
+                "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(backup_version, 6);
+        let backup_route_tables: i64 = backup_conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'model_route_records'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(backup_route_tables, 0);
+    }
+
+    #[test]
+    fn migration_failure_restores_preflight_backup() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("jarvis.sqlite");
+        let backup_dir = dir.path().join("migration-backups");
+
+        let repo = SqliteRepository::open(&db_path).unwrap();
+        repo.raw_connection()
+            .execute_batch(
+                "
+                DROP TRIGGER model_route_records_no_delete;
+                DROP TRIGGER model_route_records_no_update;
+                DROP TABLE model_route_records;
+                DELETE FROM schema_migrations WHERE version = 7;
+                ",
+            )
+            .unwrap();
+        assert_eq!(repo.schema_version().unwrap(), 6);
+        drop(repo);
+
+        let result = open_with_migration_backup_dir_and_hook(&db_path, Some(&backup_dir), |path| {
+            fs::write(path, b"not a sqlite database").map_err(storage_io_error)?;
+            Ok(())
+        });
+
+        assert!(result.is_err());
+        let restored =
+            SqliteRepository::open_with_migration_backup_dir(&db_path, Some(&backup_dir)).unwrap();
+        assert_eq!(restored.schema_version().unwrap(), CURRENT_SCHEMA_VERSION);
+
+        let backups = fs::read_dir(&backup_dir)
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(backups.len() >= 2);
+    }
+
+    #[test]
+    fn newer_schema_version_fails_with_explicit_upgrade_message() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("jarvis.sqlite");
+
+        let repo = SqliteRepository::open(&db_path).unwrap();
+        repo.raw_connection()
+            .execute(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+                params![CURRENT_SCHEMA_VERSION + 1, to_db_time(Utc::now())],
+            )
+            .unwrap();
+        drop(repo);
+
+        let error = SqliteRepository::open(db_path).unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("newer than this Jarvis build supports"));
     }
 
     #[test]

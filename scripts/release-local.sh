@@ -13,6 +13,7 @@ run cargo fmt --check
 run cargo clippy --workspace --all-targets -- -D warnings
 run cargo test --workspace
 run cargo test --workspace -- --ignored
+run ./scripts/storage-migration-backup-smoke.sh
 run cargo build --workspace
 run cargo run -p jarvis-cli -- smoke
 run cargo package --workspace --allow-dirty

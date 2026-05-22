@@ -53,6 +53,7 @@ stage or when a PR needs focused evidence for one ownership slice.
 - `cargo fmt --check`
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - `cargo test --workspace`
+- `./scripts/storage-migration-backup-smoke.sh`
 - `cargo test --workspace -- --ignored`
 - `cargo build --workspace`
 - `cargo run -p jarvis-cli -- smoke`
@@ -142,6 +143,10 @@ stage or when a PR needs focused evidence for one ownership slice.
   current Rust/CLI foundation; packaged Mac release smoke is now covered by
   `./scripts/packaged-app-release-smoke.sh` for the local assembled app
   boundary.
+- Confirm `./scripts/storage-migration-backup-smoke.sh` passes for storage
+  changes, proving legacy DB backup creation, restore after migration-open
+  failure, and newer-schema diagnostics. Treat broad installer upgrade and
+  full historical fixture matrices as separate release-candidate gates.
 - Confirm local plugin metadata install/list/get coverage remains in that E2E
   path, and installed plugin execution coverage applies only after an explicit
   `subprocess_stdio` grant.
@@ -240,6 +245,7 @@ Release notes must include:
 - Version number.
 - Summary of user-visible changes.
 - Migration notes.
+- Migration backup/recovery evidence and any backup privacy implications.
 - Known limitations.
 - Local verification commands and dates.
 - Any manual checks that remain the user's responsibility.

@@ -115,6 +115,8 @@ These notes capture durable facts for future agents working on this repository.
   test --workspace -- --ignored`, `cargo build --workspace`, `cargo run -p
   jarvis-cli -- smoke`, `cargo package --workspace --allow-dirty`, `swift test
   --package-path apps/mac`, and `swift build --package-path apps/mac`.
+  It also runs `./scripts/storage-migration-backup-smoke.sh` so file-backed
+  migration backup/recovery stays part of the default local release evidence.
 - The current E2E expectation for Rust/CLI foundation changes is
   `cargo test -p jarvis-cli --test local_ipc_e2e`; the ignored variant is
   release-proof coverage and is included by `./scripts/release-local.sh`.
@@ -208,6 +210,12 @@ These notes capture durable facts for future agents working on this repository.
   or confirm end-to-end testing for the discussed scope.
 - `jarvis-cli serve --db-path <path>` starts IPC with SQLite-backed task,
   audit, memory, and emergency-pause state for manual persistence checks.
+- File-backed `SqliteRepository::open` creates a preflight migration backup
+  for existing DBs below the current schema version and restores the original
+  DB/WAL/SHM files if opening/configuring/migrating fails. Backups are
+  app-owned local files, may include personal memory/audit/plugin metadata, and
+  are not redacted diagnostics exports. Keychain secrets are not stored in
+  SQLite backups.
 - `cargo run -p jarvis-cli -- smoke` now covers baseline command/pause smoke,
   plugin manifest listing, and repository-backed task, model-route, and memory
   inspection paths, diagnostics redaction, and repository-backed scheduler/job
