@@ -143,6 +143,13 @@ These notes capture durable facts for future agents working on this repository.
   signing, notarization, installer validation, entitlement validation,
   Finder/LaunchServices validation, App Store distribution, or real
   microphone/Speech/TTS coverage.
+- `./scripts/package-distribution.sh` is the repo-owned distribution packaging
+  lane. Its `--check` mode is credential-free and validates local tools plus
+  entitlements. Full mode requires the owner's Developer ID and notarytool
+  credentials, signs with hardened runtime and microphone entitlements,
+  notarizes, and staples the app. It still does not replace clean-profile
+  Finder launch, live microphone/Speech validation, installer validation, App
+  Store review, or TTS validation.
 - It is fair to describe the current repo as a Rust foundation with tested
   scaffolding for IPC, storage, policy, routing, runtime, scheduler, plugin
   contracts, deterministic first-party plugin command execution, bounded
