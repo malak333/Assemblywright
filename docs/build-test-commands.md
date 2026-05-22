@@ -284,6 +284,7 @@ cargo test -p jarvis-cli --test local_ipc_e2e -- --ignored
 ./scripts/packaged-app-release-smoke.sh
 ./scripts/package-distribution.sh --check
 ./scripts/package-distribution.sh --unsigned-structure-check
+./scripts/package-distribution.sh --unsigned-launch-check
 swift test --package-path apps/mac --filter JarvisMacCoreTests
 ```
 
@@ -323,13 +324,17 @@ and denied-permission fail-closed behavior through a fake adapter.
 lane. Its `--check` mode validates local tool availability and the entitlements
 template without Apple credentials. Its `--unsigned-structure-check` mode
 builds and inspects the release app/pkg structure without Developer ID
-credentials. Full mode requires `JARVIS_DEVELOPER_ID_APPLICATION`,
+credentials. Its `--unsigned-launch-check` mode also launches the release-built
+app executable with an isolated temporary HOME, verifies the bundled core over
+loopback IPC, and checks command, audit, diagnostics, pause/block/resume, and
+SQLite state through the release app layout. Full mode requires
+`JARVIS_DEVELOPER_ID_APPLICATION`,
 `JARVIS_DEVELOPER_ID_INSTALLER`, and notarytool credentials. It signs the
 release bundle with hardened runtime and microphone entitlements, submits the
 app zip for notarization, staples the app, then creates a signed
 `/Applications` installer package at `target/distribution/Jarvis-0.1.4.pkg`,
 checks its installer signature, submits it for notarization, and staples the
-package. Passing the unsigned structure check still does not prove
+package. Passing the unsigned structure or launch checks still does not prove
 signing/notarization, and passing full mode still does not replace
 clean-profile install, Finder launch, live microphone/Speech validation, App
 Store review, or live audio-output validation.

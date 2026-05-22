@@ -348,12 +348,16 @@ These notes capture durable facts for future agents working on this repository.
   artifacts, assembles `target/distribution/Jarvis.app`, optionally ad-hoc signs
   when `codesign` is available, creates an unsigned `/Applications` installer
   package, and inspects the package payload for the app executable, bundled
-  core, and `Info.plist`. Full mode requires the owner's Developer ID
+  core, and `Info.plist`. Its `--unsigned-launch-check` mode also launches the
+  release-built app executable with an isolated temporary HOME, verifies the
+  bundled core over loopback IPC, and checks command, audit, diagnostics,
+  pause/block/resume, and SQLite state through the release app layout. Full mode
+  requires the owner's Developer ID
   Application, Developer ID Installer, and notarytool credentials; signs with
   hardened runtime and microphone entitlements; notarizes and staples the app
   zip; then creates, signs, notarizes, and staples a `/Applications` installer
-  package. The unsigned structure check still does not prove Developer ID
-  signing, notarization, stapling, installation, Finder launch, live
+  package. The unsigned structure and launch checks still do not prove Developer
+  ID signing, notarization, stapling, installation, Finder launch, live
   microphone/Speech validation, App Store review, live audio-output validation,
   or manual QA.
 - It is fair to describe the current repo as a Rust foundation with tested

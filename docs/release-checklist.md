@@ -260,6 +260,14 @@ stage or when a PR needs focused evidence for one ownership slice.
   evidence only; it is not Developer ID signing, notarization, installer
   validation, live microphone/Speech/audio-output validation, or App Store
   release evidence.
+  `./scripts/package-distribution.sh --unsigned-launch-check` is the release
+  distribution counterpart: it builds release Rust/Swift artifacts, assembles
+  `target/distribution/Jarvis.app`, creates an unsigned installer payload,
+  launches the app executable from that release layout with an isolated HOME,
+  and verifies bundled-core health, command, audit, diagnostics, emergency
+  pause, blocked command, resume, and SQLite state. It is still not Developer
+  ID signing, notarization, stapling, /Applications installation,
+  Finder/LaunchServices validation, live device validation, or manual QA.
 
 ## Documentation Gate
 
@@ -338,6 +346,11 @@ Distribution packaging gate:
   package, and inspect the payload without requiring Apple credentials. Treat it
   as structure evidence only, not signing, notarization, installation,
   Finder/LaunchServices, live device, or manual QA proof.
+- Run `./scripts/package-distribution.sh --unsigned-launch-check` when a
+  packaging change should prove the release-built `Jarvis.app` executable can
+  supervise its bundled core from an isolated HOME. Treat it as local launch and
+  IPC evidence only; it still does not prove signing, notarization, stapling,
+  installation, Finder/LaunchServices, live device, or manual QA.
 - For a release candidate, set `JARVIS_DEVELOPER_ID_APPLICATION`,
   `JARVIS_DEVELOPER_ID_INSTALLER`, and either `JARVIS_NOTARYTOOL_PROFILE` or
   the Apple ID/team/password notarytool variables, then run
