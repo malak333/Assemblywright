@@ -7,12 +7,14 @@ use serde_json::{json, Map, Value};
 use std::{
     collections::{HashMap, HashSet},
     fs,
+    io::Write,
     path::{Path, PathBuf},
+    process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc, Arc,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 const DEFAULT_TIMEOUT_MS: u64 = 5_000;
@@ -38,6 +40,7 @@ pub enum PluginSource {
     FirstParty,
     ThirdParty,
     LocalDevelopment,
+    LocalSubprocess,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -319,7 +322,24 @@ pub struct PluginManifest {
     pub author: String,
     #[serde(default)]
     pub source_path: Option<String>,
+    #[serde(default)]
+    pub subprocess: Option<PluginSubprocessManifest>,
     pub actions: Vec<PluginActionManifest>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginSubprocessManifest {
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    pub stdin: PluginSubprocessStream,
+    pub stdout: PluginSubprocessStream,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginSubprocessStream {
+    Json,
 }
 
 impl PluginManifest {
@@ -363,6 +383,18 @@ impl PluginManifest {
         if self.source == PluginSource::FirstParty {
             return Err(JarvisError::Validation(format!(
                 "{} local installs cannot claim first_party source",
+                self.id
+            )));
+        }
+        if self.source == PluginSource::LocalSubprocess && self.subprocess.is_none() {
+            return Err(JarvisError::Validation(format!(
+                "{} local_subprocess manifests must declare subprocess",
+                self.id
+            )));
+        }
+        if self.source != PluginSource::LocalSubprocess && self.subprocess.is_some() {
+            return Err(JarvisError::Validation(format!(
+                "{} subprocess config requires local_subprocess source",
                 self.id
             )));
         }
@@ -412,12 +444,65 @@ impl PluginManifest {
                 self.id
             )));
         }
+        if let Some(subprocess) = &self.subprocess {
+            subprocess.validate(&self.id, &canonical_source)?;
+        }
 
         Ok(canonical_source)
     }
 
     pub fn action(&self, name: &str) -> Option<&PluginActionManifest> {
         self.actions.iter().find(|action| action.name == name)
+    }
+}
+
+impl PluginSubprocessManifest {
+    pub fn validate(&self, plugin_id: &str, source_path: &Path) -> JarvisResult<PathBuf> {
+        validate_non_empty(&self.command, "subprocess command")?;
+        if self.command.contains('\0') {
+            return Err(JarvisError::Validation(format!(
+                "{plugin_id} subprocess command cannot contain NUL"
+            )));
+        }
+        for arg in &self.args {
+            if arg.contains('\0') {
+                return Err(JarvisError::Validation(format!(
+                    "{plugin_id} subprocess args cannot contain NUL"
+                )));
+            }
+        }
+
+        let command_path = Path::new(&self.command);
+        if command_path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+        {
+            return Err(JarvisError::Validation(format!(
+                "{plugin_id} subprocess command cannot contain parent directory components"
+            )));
+        }
+        let declared_command = if command_path.is_absolute() {
+            command_path.to_path_buf()
+        } else {
+            source_path.join(command_path)
+        };
+        let canonical_command = fs::canonicalize(&declared_command).map_err(|err| {
+            JarvisError::Validation(format!(
+                "{plugin_id} subprocess command is not readable: {err}"
+            ))
+        })?;
+        if !canonical_command.starts_with(source_path) {
+            return Err(JarvisError::Validation(format!(
+                "{plugin_id} subprocess command must live under source_path"
+            )));
+        }
+        if !canonical_command.is_file() {
+            return Err(JarvisError::Validation(format!(
+                "{plugin_id} subprocess command must be a file"
+            )));
+        }
+
+        Ok(canonical_command)
     }
 }
 
@@ -439,22 +524,128 @@ pub struct InstalledPlugin {
 pub enum InstalledPluginExecutionGrant {
     #[default]
     MetadataOnly,
+    SubprocessStdio,
 }
 
 impl InstalledPluginExecutionGrant {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::MetadataOnly => "metadata_only",
+            Self::SubprocessStdio => "subprocess_stdio",
         }
     }
 
     pub fn parse(value: &str) -> JarvisResult<Self> {
         match value {
             "metadata_only" => Ok(Self::MetadataOnly),
+            "subprocess_stdio" => Ok(Self::SubprocessStdio),
             _ => Err(JarvisError::Validation(format!(
                 "unknown installed plugin execution grant: {value}"
             ))),
         }
+    }
+}
+
+impl std::str::FromStr for InstalledPluginExecutionGrant {
+    type Err = JarvisError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::parse(value)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubprocessPluginExecution {
+    pub output: Value,
+    pub stdout_bytes: usize,
+    pub stderr_bytes: usize,
+    pub exit_code: Option<i32>,
+}
+
+pub fn execute_installed_subprocess_plugin(
+    manifest: &PluginManifest,
+    action: &PluginActionManifest,
+    source_path: &Path,
+    input: &Value,
+) -> JarvisResult<SubprocessPluginExecution> {
+    if manifest.source != PluginSource::LocalSubprocess {
+        return Err(JarvisError::Validation(format!(
+            "{} installed execution requires local_subprocess source",
+            manifest.id
+        )));
+    }
+    let subprocess = manifest.subprocess.as_ref().ok_or_else(|| {
+        JarvisError::Validation(format!("{} missing subprocess config", manifest.id))
+    })?;
+    if subprocess.stdin != PluginSubprocessStream::Json
+        || subprocess.stdout != PluginSubprocessStream::Json
+    {
+        return Err(JarvisError::Validation(format!(
+            "{} subprocess must use JSON stdin/stdout",
+            manifest.id
+        )));
+    }
+    let executable = subprocess.validate(&manifest.id, source_path)?;
+    let request = json!({
+        "plugin_id": manifest.id,
+        "action": action.name,
+        "input": input,
+    });
+    let request_bytes = serde_json::to_vec(&request)
+        .map_err(|err| JarvisError::Plugin(format!("serialize subprocess input: {err}")))?;
+
+    let mut child = Command::new(executable)
+        .args(&subprocess.args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| JarvisError::Plugin(format!("spawn subprocess plugin: {err}")))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(&request_bytes)
+            .map_err(|err| JarvisError::Plugin(format!("write subprocess stdin: {err}")))?;
+    }
+
+    let deadline = Instant::now() + action.timeout.duration();
+    loop {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|err| JarvisError::Plugin(format!("wait subprocess plugin: {err}")))?
+        {
+            let output = child
+                .wait_with_output()
+                .map_err(|err| JarvisError::Plugin(format!("read subprocess output: {err}")))?;
+            if !status.success() {
+                return Err(JarvisError::Plugin(format!(
+                    "subprocess plugin exited with status {status}"
+                )));
+            }
+            let stdout_bytes = output.stdout.len();
+            let stderr_bytes = output.stderr.len();
+            let value: Value = serde_json::from_slice(&output.stdout).map_err(|err| {
+                JarvisError::Plugin(format!("parse subprocess stdout JSON: {err}"))
+            })?;
+            action
+                .output_schema
+                .validate_value(&format!("{}.{} output", manifest.id, action.name), &value)?;
+            return Ok(SubprocessPluginExecution {
+                output: value,
+                stdout_bytes,
+                stderr_bytes,
+                exit_code: status.code(),
+            });
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(JarvisError::Plugin(format!(
+                "subprocess plugin timed out after {}ms",
+                action.timeout.timeout_ms
+            )));
+        }
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -853,6 +1044,7 @@ impl InProcessPlugin for EchoPlugin {
             source: PluginSource::FirstParty,
             author: "Jarvis".to_string(),
             source_path: None,
+            subprocess: None,
             actions: vec![
                 PluginActionManifest {
                     name: "echo".to_string(),
@@ -931,6 +1123,7 @@ impl InProcessPlugin for StatusPlugin {
             source: PluginSource::FirstParty,
             author: "Jarvis".to_string(),
             source_path: None,
+            subprocess: None,
             actions: vec![PluginActionManifest {
                 name: "status".to_string(),
                 description: "Report deterministic first-party host status for contract testing."
@@ -1365,6 +1558,7 @@ mod tests {
                 source: PluginSource::FirstParty,
                 author: "Jarvis".to_string(),
                 source_path: None,
+                subprocess: None,
                 actions: vec![PluginActionManifest {
                     name: "needs_approval".to_string(),
                     description: "Requires approval before execution.".to_string(),
@@ -1407,6 +1601,7 @@ mod tests {
                 source: PluginSource::FirstParty,
                 author: "Jarvis".to_string(),
                 source_path: None,
+                subprocess: None,
                 actions: vec![PluginActionManifest {
                     name: "sleep".to_string(),
                     description: "Sleeps longer than its timeout.".to_string(),

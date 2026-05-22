@@ -113,6 +113,7 @@ Run these while `cargo run -p jarvis-cli -- serve` is active:
 cargo run -p jarvis-cli -- command --dry-run "status check"
 cargo run -p jarvis-cli -- plugins list
 cargo run -p jarvis-cli -- diagnostics export
+cargo run -p jarvis-cli -- permissions grants
 cargo run -p jarvis-cli -- scheduler list
 cargo run -p jarvis-cli -- scheduler schedule "manual check" "status check"
 cargo run -p jarvis-cli -- scheduler schedule "approval fail closed" "plugin approval echo scheduler pause"
@@ -130,13 +131,17 @@ records local-first `ModelRouter` audit evidence, sends ChatGPT only minimized
 redacted route context after policy selection, can execute deterministic
 first-party plugin commands such as `plugin echo ...` through the policy
 engine, honors `--dry-run` for plugin execution, and can persist task/audit
-state when configured with a repository-backed IPC state. It also has
-deterministic coverage for bounded model-planned first-party tool calls.
+state plus redacted model-route records when configured with a
+repository-backed IPC state. It also has deterministic coverage for bounded
+model-planned first-party tool calls.
 Approval-required command scaffolds such as `plugin approval echo ...` fail
 closed by returning `waiting_for_approval`, persisting an inspectable pending
 approval when repository backing is enabled, and requiring a separate CLI/IPC
 grant or denial. Granting an approval records the decision but does not execute
-the side effect. It does not yet implement installed plugin sandboxing,
+the side effect. `jarvis permissions grants` reads the combined local grant
+surface: approval counts/history, high-risk pending count, installed-plugin
+`metadata_only` grant records, and the invariant that side effects still
+require approval. It does not yet implement installed plugin sandboxing,
 installed plugin execution, real voice capture, or signed packaged-app smoke.
 Swift approval decision controls are covered by the Swift contract/model tests.
 Local plugin install is metadata-only:
@@ -152,6 +157,9 @@ available:
 ```sh
 cargo run -p jarvis-cli -- tasks list
 cargo run -p jarvis-cli -- tasks audit
+cargo run -p jarvis-cli -- routes list
+cargo run -p jarvis-cli -- routes list --task-id <task-id>
+cargo run -p jarvis-cli -- routes get <route-id>
 cargo run -p jarvis-cli -- approvals list --status pending
 cargo run -p jarvis-cli -- approvals approve <approval-id> --decided-by cli --reason "reviewed"
 cargo run -p jarvis-cli -- approvals deny <approval-id> --decided-by cli --reason "not safe"

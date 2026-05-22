@@ -9,13 +9,14 @@ pub mod storage;
 pub mod types;
 
 pub use ipc::{
-    router, serve, serve_listener, ApprovalDecisionRequest, CommandRequest, CommandResponse,
-    CreateMemoryItemRequest, CreateSchedulerJobRequest, EmergencyPauseRequest,
+    router, serve, serve_listener, ApprovalDecisionRequest, ApprovalStatusCount, CommandRequest,
+    CommandResponse, CreateMemoryItemRequest, CreateSchedulerJobRequest, EmergencyPauseRequest,
     EmergencyPauseResponse, ErrorResponse, HealthResponse, InstallPluginRequest,
-    InstalledPluginRunRequest, InstalledPluginRunResponse, IpcState, SchedulerBackgroundConfig,
-    SchedulerJobExecution, SchedulerRunResponse, UpdateMemoryItemRequest,
-    DEFAULT_SCHEDULER_BACKGROUND_INTERVAL_MS, DEFAULT_SCHEDULER_BACKGROUND_LIMIT,
-    MAX_SCHEDULER_BACKGROUND_LIMIT,
+    InstalledPluginExecutionRequest, InstalledPluginRunRequest, InstalledPluginRunResponse,
+    InstalledPluginGrantSurface, IpcState, PermissionGrantSummary, SchedulerBackgroundConfig,
+    SchedulerJobExecution, SchedulerRunResponse,
+    UpdateMemoryItemRequest, DEFAULT_SCHEDULER_BACKGROUND_INTERVAL_MS,
+    DEFAULT_SCHEDULER_BACKGROUND_LIMIT, MAX_SCHEDULER_BACKGROUND_LIMIT,
 };
 pub use model::{
     redact_url_credentials, ChatGptHttpModel, ChatGptProviderConfig, FakeLocalModel,
@@ -24,11 +25,13 @@ pub use model::{
     ProviderConfig, ProviderStatus, RoutedModelExecutor,
 };
 pub use plugin::{
-    plugin_permission_scopes, CancellationBehavior, CancellationSignal, EchoPlugin,
-    InProcessPlugin, InstalledPlugin, InstalledPluginExecutionGrant, JsonSchema, PluginAccess,
-    PluginActionManifest, PluginCallMetadata, PluginCallRequest, PluginCallResult,
-    PluginCallStatus, PluginHost, PluginManifest, PluginPermission, PluginSource, PluginTimeout,
-    PluginTimeoutAction, StatusPlugin,
+    execute_installed_subprocess_plugin, plugin_permission_scopes, CancellationBehavior,
+    CancellationSignal, EchoPlugin, InProcessPlugin, InstalledPlugin,
+    InstalledPluginExecutionGrant, JsonSchema, PluginAccess, PluginActionManifest,
+    PluginCallMetadata, PluginCallRequest, PluginCallResult, PluginCallStatus, PluginHost,
+    PluginManifest, PluginPermission, PluginSource, PluginSubprocessManifest,
+    PluginSubprocessStream, PluginTimeout, PluginTimeoutAction, StatusPlugin,
+    SubprocessPluginExecution,
 };
 pub use policy::{
     ApprovalDecision, ApprovalGrant, CapabilityScope, PermissionEngine, PolicyDecision,

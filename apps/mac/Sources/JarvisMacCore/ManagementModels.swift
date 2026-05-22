@@ -223,6 +223,7 @@ public final class RunManagementModel: ObservableObject {
 public final class ApprovalManagementModel: ObservableObject {
     @Published public private(set) var contract: JarvisContractResponse?
     @Published public private(set) var pendingItems: [JarvisApprovalQueueItem]
+    @Published public private(set) var grantSummary: JarvisPermissionGrantSummary?
     @Published public private(set) var permissionSurface: JarvisPermissionSurfaceState
     @Published public private(set) var lastDecision: JarvisPendingApproval?
     @Published public private(set) var isLoading: Bool
@@ -245,6 +246,7 @@ public final class ApprovalManagementModel: ObservableObject {
         self.client = client
         self.contract = nil
         self.pendingItems = []
+        self.grantSummary = nil
         self.permissionSurface = .empty
         self.lastDecision = nil
         self.isLoading = false
@@ -257,6 +259,9 @@ public final class ApprovalManagementModel: ObservableObject {
             let loadedContract = try await self.client.contract()
             self.contract = loadedContract
             self.pluginManifests = try await self.client.listPluginManifests()
+            self.grantSummary = loadedContract.exposesPermissionGrantSummary
+                ? try await self.client.permissionGrantSummary()
+                : nil
 
             if loadedContract.exposesApprovalList {
                 let approvals = try await self.client.listApprovals(status: "pending")
@@ -279,7 +284,8 @@ public final class ApprovalManagementModel: ObservableObject {
             self.permissionSurface = JarvisPermissionSurfaceState.current(
                 pendingItems: self.pendingItems,
                 pluginManifests: self.pluginManifests,
-                contract: loadedContract
+                contract: loadedContract,
+                grantSummary: self.grantSummary
             )
         }
     }
@@ -315,10 +321,14 @@ public final class ApprovalManagementModel: ObservableObject {
             let decision = try await operation()
             self.lastDecision = decision
             self.pendingItems.removeAll { $0.id == id }
+            if self.contract?.exposesPermissionGrantSummary == true {
+                self.grantSummary = try await self.client.permissionGrantSummary()
+            }
             self.permissionSurface = JarvisPermissionSurfaceState.current(
                 pendingItems: self.pendingItems,
                 pluginManifests: self.pluginManifests,
-                contract: self.contract
+                contract: self.contract,
+                grantSummary: self.grantSummary
             )
         }
     }

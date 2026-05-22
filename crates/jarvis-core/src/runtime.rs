@@ -169,6 +169,7 @@ pub trait RuntimeCommandStore {
     fn create_task(&self, session_id: Uuid, user_input: String) -> JarvisResult<TaskRecord>;
     fn update_task_status(&self, task: &mut TaskRecord, status: TaskStatus) -> JarvisResult<()>;
     fn append_audit_entry(&self, entry: &AuditEntry) -> JarvisResult<()>;
+    fn append_model_route_record(&self, record: &ModelRouteRecord) -> JarvisResult<()>;
 }
 
 #[derive(Debug, Default)]
@@ -196,6 +197,10 @@ impl RuntimeCommandStore for NoopRuntimeCommandStore {
     fn append_audit_entry(&self, _entry: &AuditEntry) -> JarvisResult<()> {
         Ok(())
     }
+
+    fn append_model_route_record(&self, _record: &ModelRouteRecord) -> JarvisResult<()> {
+        Ok(())
+    }
 }
 
 impl<T> RuntimeCommandStore for &T
@@ -213,6 +218,10 @@ where
     fn append_audit_entry(&self, entry: &AuditEntry) -> JarvisResult<()> {
         (*self).append_audit_entry(entry)
     }
+
+    fn append_model_route_record(&self, record: &ModelRouteRecord) -> JarvisResult<()> {
+        (*self).append_model_route_record(record)
+    }
 }
 
 impl RuntimeCommandStore for SqliteRepository {
@@ -227,6 +236,10 @@ impl RuntimeCommandStore for SqliteRepository {
 
     fn append_audit_entry(&self, entry: &AuditEntry) -> JarvisResult<()> {
         SqliteRepository::append_audit_entry(self, entry)
+    }
+
+    fn append_model_route_record(&self, record: &ModelRouteRecord) -> JarvisResult<()> {
+        SqliteRepository::append_model_route_record(self, record)
     }
 }
 
@@ -369,6 +382,8 @@ where
             approval: None,
             context_preview: task.user_input.clone(),
         });
+        self.command_store
+            .append_model_route_record(&route_record)?;
         self.record_audit(
             &mut audit_entries,
             route_audit_entry(task.id, &route_record),
