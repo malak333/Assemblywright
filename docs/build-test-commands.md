@@ -144,9 +144,11 @@ surface: approval counts/history, high-risk pending count, installed-plugin
 require approval. Installed `local_subprocess` plugins remain disabled by
 default and execute only after an explicit `subprocess_stdio` grant through the
 constrained JSON stdin/stdout runner. The Swift app now exposes the
-Speech/AVFoundation adapter controls, but release claims for real voice still
-require entitlement packaging and manual device validation. Swift approval and
-voice controls are covered by the Swift contract/model tests.
+Speech/AVFoundation input adapter controls and AVFoundation speech-output
+preview controls, but release claims for real voice still require entitlement
+packaging, live microphone checks, live audio-output checks, and manual device
+validation. Swift approval and voice controls are covered by the Swift
+contract/model tests.
 Local plugin install is metadata-only:
 `jarvis plugins install /absolute/path/to/jarvis-plugin.json` validates and
 stores a disabled registry record when repository backing is enabled.
@@ -204,7 +206,7 @@ command, audit, diagnostics, emergency pause, blocked command, pause status,
 resume, and temp-profile SQLite state. It is still local evidence only, not
 Developer ID signing, notarization, installer validation, entitlement
 validation, App Store distribution, Finder/LaunchServices validation, or real
-microphone/Speech/TTS coverage.
+microphone/Speech/live audio-output coverage.
 `./scripts/package-distribution.sh` is the stricter distribution packaging
 lane. Its `--check` mode validates local tool availability and the entitlements
 template without Apple credentials. Full mode requires
@@ -212,7 +214,7 @@ template without Apple credentials. Full mode requires
 bundle with hardened runtime and microphone entitlements, submits it for
 notarization, and staples the ticket. Passing that script still does not
 replace clean-profile Finder launch, live microphone/Speech validation,
-installer validation, App Store review, or TTS validation.
+installer validation, App Store review, or live audio-output validation.
 Docs-only branches should at least run a render/lint-oriented documentation
 check when available, plus `cargo fmt --check` if the branch also touches Rust
 examples or scripts. Record any skipped full-gate stage as a blocker, not as
@@ -251,13 +253,14 @@ orchestration, including policy checks, approval stops, validation failures, and
 tool-result feedback into later model steps. Focused provider tests prove typed
 Ollama-compatible request/error behavior without requiring a live model during
 the default release gate. They do not prove live ChatGPT service execution,
-memory UX beyond the scaffold, live microphone capture, or TTS until those
-surfaces are manually validated. The current Swift gate proves the Mac shell
-scaffold builds, decodes IPC contracts, exposes management models for approval
-evidence, runs/audit, scheduler, diagnostics, text-transcript voice handoff
-state, adapter-backed voice controls, and Keychain-backed supervised-core
-credential injection without requiring live microphone access or real
-credentials in tests. It can supervise a configured local core process
+memory UX beyond the scaffold, live microphone capture, or live audio output
+until those surfaces are manually validated. The current Swift gate proves the
+Mac shell scaffold builds, decodes IPC contracts, exposes management models for
+approval evidence, runs/audit, scheduler, diagnostics, text-transcript voice
+handoff state, adapter-backed voice input controls, adapter-backed speech-output
+preview controls, and Keychain-backed supervised-core credential injection
+without requiring live microphone access, live audio output, or real credentials
+in tests. It can supervise a configured local core process
 abstraction. It also covers Swift approval decision calls against the Rust IPC
 approval endpoints. The packaged supervision proof additionally checks the
 expected `Resources/bin/jarvis-cli` bundle layout with a locally built core
@@ -267,9 +270,9 @@ assembles and ad-hoc signs a local `Jarvis.app`, launches it with isolated
 profile state, and verifies app-supervised core IPC through the bundled
 `jarvis-cli`. These gates still do not prove Developer ID signing,
 notarization, installer behavior, entitlement validation, Finder/LaunchServices
-launch, microphone permissions, live speech-to-text, or text-to-speech unless
-the stricter distribution lane and manual checks named in the release checklist
-are also completed.
+launch, microphone permissions, live speech-to-text, or live audio-output
+behavior unless the stricter distribution lane and manual checks named in the
+release checklist are also completed.
 
 The public-repo production workflow expects isolated worktrees, topic branches,
 reviewable PRs, and clear ownership. A six-agent autonomous sweep can reduce

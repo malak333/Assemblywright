@@ -13,6 +13,7 @@ struct JarvisMacApp: App {
     @StateObject private var diagnostics: DiagnosticsModel
     @StateObject private var voice: VoiceStateModel
     @StateObject private var voiceAdapter: VoiceAdapterStateModel
+    @StateObject private var speechOutput: SpeechOutputStateModel
 
     init() {
         let configuration = JarvisCoreSupervisorConfiguration()
@@ -28,6 +29,7 @@ struct JarvisMacApp: App {
         _diagnostics = StateObject(wrappedValue: DiagnosticsModel(client: client))
         _voice = StateObject(wrappedValue: voice)
         _voiceAdapter = StateObject(wrappedValue: VoiceAdapterStateModel(adapter: MacSpeechVoiceAdapter(), voiceState: voice))
+        _speechOutput = StateObject(wrappedValue: SpeechOutputStateModel(adapter: MacSpeechOutputAdapter()))
     }
 
     var body: some Scene {
@@ -42,7 +44,8 @@ struct JarvisMacApp: App {
                 scheduler: scheduler,
                 diagnostics: diagnostics,
                 voice: voice,
-                voiceAdapter: voiceAdapter
+                voiceAdapter: voiceAdapter,
+                speechOutput: speechOutput
             )
                 .task {
                     await supervisor.start()
@@ -78,6 +81,7 @@ struct JarvisShellView: View {
     @ObservedObject var diagnostics: DiagnosticsModel
     @ObservedObject var voice: VoiceStateModel
     @ObservedObject var voiceAdapter: VoiceAdapterStateModel
+    @ObservedObject var speechOutput: SpeechOutputStateModel
 
     var body: some View {
         VStack(spacing: 0) {
@@ -98,7 +102,7 @@ struct JarvisShellView: View {
                     .tabItem { Text("Scheduler") }
                 DiagnosticsExportView(model: diagnostics)
                     .tabItem { Text("Diagnostics") }
-                VoiceStateView(model: voice, adapter: voiceAdapter, console: console)
+                VoiceStateView(model: voice, adapter: voiceAdapter, speechOutput: speechOutput, console: console)
                     .tabItem { Text("Voice") }
             }
         }
@@ -734,7 +738,9 @@ struct DiagnosticsExportView: View {
 struct VoiceStateView: View {
     @ObservedObject var model: VoiceStateModel
     @ObservedObject var adapter: VoiceAdapterStateModel
+    @ObservedObject var speechOutput: SpeechOutputStateModel
     @ObservedObject var console: CommandConsoleModel
+    @State private var speechPreview = "Jarvis voice output is ready."
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -746,10 +752,13 @@ struct VoiceStateView: View {
             Text(adapter.statusText)
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
+            Text(speechOutput.statusText)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
 
             Toggle("Push to talk", isOn: .constant(model.isPushToTalkEnabled))
                 .disabled(true)
-            Text("Live capture uses the macOS Speech/AVFoundation adapter and the same transcript handoff path as typed commands. Release claims still require entitlements and manual device validation.")
+            Text("Live capture uses the macOS Speech/AVFoundation adapter and the same transcript handoff path as typed commands. Speech output uses an AVFoundation adapter. Release claims still require entitlements and manual device validation.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -779,6 +788,25 @@ struct VoiceStateView: View {
                     Task { await adapter.interrupt(reason: "User interrupted voice capture.") }
                 }
                 .disabled(!adapter.isCaptureActive)
+            }
+
+            TextField("Speech output preview", text: $speechPreview)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit(speakPreview)
+
+            HStack {
+                Button(speechOutput.isSpeaking ? "Speaking" : "Speak Preview") {
+                    speakPreview()
+                }
+                .disabled(!speechOutput.canSpeak || speechPreview.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button("Stop Speech") {
+                    Task { await speechOutput.stop() }
+                }
+                .disabled(!speechOutput.isSpeaking)
+                Button("Interrupt Speech") {
+                    Task { await speechOutput.interrupt(reason: "User interrupted speech output.") }
+                }
+                .disabled(!speechOutput.isSpeaking)
             }
 
             HStack {
@@ -831,6 +859,12 @@ struct VoiceStateView: View {
         guard let handoff = model.apply(.submitTranscript) else { return }
         Task {
             await console.submit(input: handoff.text)
+        }
+    }
+
+    private func speakPreview() {
+        Task {
+            await speechOutput.speak(speechPreview)
         }
     }
 }

@@ -92,11 +92,12 @@ These notes capture durable facts for future agents working on this repository.
   interruption, resume/cancel, unavailable, and degraded typed-fallback states,
   owns a protocol-backed macOS Speech/AVFoundation adapter model from the
   SwiftUI Voice tab, and exposes permission request, start/stop capture, and
-  interrupt controls. Swift tests cover the adapter boundary with fakes and do
-  not require live microphone access. The app still must not claim real voice
-  parity until entitlements, clean-profile permission prompts, live microphone
-  capture, and manual device validation are complete; text-to-speech remains
-  pending.
+  interrupt controls. The Voice tab also owns a protocol-backed AVFoundation
+  speech-output adapter with preview, stop, and interrupt controls. Swift tests
+  cover both adapter boundaries with fakes and do not require live microphone
+  access or live audio output. The app still must not claim real voice parity
+  until entitlements, clean-profile permission prompts, live microphone capture,
+  live audio output, and manual device validation are complete.
 - The scheduler is inspectable, cancellable, explicitly runnable through
   `scheduler run-due`, and opt-in runnable as a bounded background loop with
   `jarvis serve --scheduler-background`. Scheduler jobs are in-memory without
@@ -148,14 +149,14 @@ These notes capture durable facts for future agents working on this repository.
   command, pause status, resume, and SQLite state. It is not Developer ID
   signing, notarization, installer validation, entitlement validation,
   Finder/LaunchServices validation, App Store distribution, or real
-  microphone/Speech/TTS coverage.
+  microphone/Speech/live audio-output coverage.
 - `./scripts/package-distribution.sh` is the repo-owned distribution packaging
   lane. Its `--check` mode is credential-free and validates local tools plus
   entitlements. Full mode requires the owner's Developer ID and notarytool
   credentials, signs with hardened runtime and microphone entitlements,
   notarizes, and staples the app. It still does not replace clean-profile
   Finder launch, live microphone/Speech validation, installer validation, App
-  Store review, or TTS validation.
+  Store review, or live audio-output validation.
 - It is fair to describe the current repo as a Rust foundation with tested
   scaffolding for IPC, storage, policy, routing, runtime, scheduler, plugin
   contracts, deterministic first-party plugin command execution, bounded
