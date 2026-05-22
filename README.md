@@ -107,6 +107,10 @@ plugin provenance/grant/network concerns plus unreviewed memory items into
 explicit review items without exposing memory values, but it still does not
 grant broader marketplace trust, malware safety, autonomous memory rewriting,
 or OS-level network sandboxing.
+Approval grant/deny decisions remain side-effect-free. Approved first-party
+approval records require a separate one-shot `/approvals/:id/execute` or
+`jarvis approvals execute <approval-id>` replay, which verifies the original
+action and scopes before recording `approval_executed` audit evidence.
 
 ## Build
 

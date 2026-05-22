@@ -146,6 +146,12 @@ public struct JarvisContractResponse: Decodable, Equatable, Sendable {
         exposesApprovalApproveAction || exposesApprovalDenyAction
     }
 
+    public var exposesApprovalExecuteAction: Bool {
+        endpoints.contains { endpoint in
+            endpoint.method.uppercased() == "POST" && endpoint.path == "/approvals/:id/execute"
+        }
+    }
+
     public var exposesApprovalList: Bool {
         endpoints.contains { endpoint in
             endpoint.method.uppercased() == "GET" && endpoint.path == "/approvals"
@@ -700,6 +706,26 @@ public struct JarvisCommandResponse: Decodable, Equatable, Sendable {
     }
 }
 
+public struct JarvisApprovalExecutionResponse: Decodable, Equatable, Sendable {
+    public var accepted: Bool
+    public var approval: JarvisPendingApproval
+    public var task: JarvisTask
+    public var auditEntry: JarvisAuditEntry
+    public var auditEntries: [JarvisAuditEntry]
+    public var pluginResults: [JarvisPluginCallResult]
+    public var message: String
+
+    enum CodingKeys: String, CodingKey {
+        case accepted
+        case approval
+        case task
+        case auditEntry = "audit_entry"
+        case auditEntries = "audit_entries"
+        case pluginResults = "plugin_results"
+        case message
+    }
+}
+
 public struct JarvisApprovalQueueItem: Equatable, Identifiable, Sendable {
     public var id: UUID
     public var taskId: UUID?
@@ -1189,6 +1215,7 @@ public protocol JarvisCoreClient: Sendable {
     func approval(id: UUID) async throws -> JarvisPendingApproval
     func approveApproval(id: UUID, request: JarvisApprovalDecisionRequest) async throws -> JarvisPendingApproval
     func denyApproval(id: UUID, request: JarvisApprovalDecisionRequest) async throws -> JarvisPendingApproval
+    func executeApproval(id: UUID) async throws -> JarvisApprovalExecutionResponse
 }
 
 public final class JarvisIPCClient: JarvisCoreClient {
@@ -1340,6 +1367,10 @@ public final class JarvisIPCClient: JarvisCoreClient {
         request: JarvisApprovalDecisionRequest
     ) async throws -> JarvisPendingApproval {
         try await send(path: "/approvals/\(id.uuidString)/deny", method: "POST", body: encoder.encode(request))
+    }
+
+    public func executeApproval(id: UUID) async throws -> JarvisApprovalExecutionResponse {
+        try await send(path: "/approvals/\(id.uuidString)/execute", method: "POST", body: Optional<Data>.none)
     }
 
     private func send<Response: Decodable>(

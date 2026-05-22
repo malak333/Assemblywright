@@ -9,11 +9,11 @@ pub mod storage;
 pub mod types;
 
 pub use ipc::{
-    router, serve, serve_listener, ApprovalDecisionRequest, ApprovalStatusCount, CommandRequest,
-    CommandResponse, CreateMemoryItemRequest, CreateSchedulerJobRequest, EmergencyPauseRequest,
-    EmergencyPauseResponse, ErrorResponse, HealthResponse, InstallPluginRequest,
-    InstalledPluginExecutionRequest, InstalledPluginGrantSurface,
-    InstalledPluginPublisherSignatureVerificationRequest,
+    router, serve, serve_listener, ApprovalDecisionRequest, ApprovalExecutionResponse,
+    ApprovalStatusCount, CommandRequest, CommandResponse, CreateMemoryItemRequest,
+    CreateSchedulerJobRequest, EmergencyPauseRequest, EmergencyPauseResponse, ErrorResponse,
+    HealthResponse, InstallPluginRequest, InstalledPluginExecutionRequest,
+    InstalledPluginGrantSurface, InstalledPluginPublisherSignatureVerificationRequest,
     InstalledPluginPublisherVerificationRequest, InstalledPluginRunRequest,
     InstalledPluginRunResponse, IpcState, PermissionGrantSummary, PermissionPolicyReview,
     PermissionPolicyReviewItem, SchedulerAttentionItem, SchedulerAttentionSummary,

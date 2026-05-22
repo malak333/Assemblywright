@@ -1158,6 +1158,8 @@ struct JarvisMacCoreTests {
                 return (response, pendingApprovalJSON(id: approvalId, taskId: taskId, status: "approved", decidedBy: "mac-ui", decisionReason: "reviewed"))
             case "/approvals/\(approvalId.uuidString)/deny":
                 return (response, pendingApprovalJSON(id: approvalId, taskId: taskId, status: "denied", decidedBy: "mac-ui", decisionReason: "too risky"))
+            case "/approvals/\(approvalId.uuidString)/execute":
+                return (response, approvalExecutionJSON(approvalId: approvalId, taskId: taskId))
             default:
                 return (response, Data("{}".utf8))
             }
@@ -1176,20 +1178,24 @@ struct JarvisMacCoreTests {
             id: approvalId,
             request: JarvisApprovalDecisionRequest(decidedBy: "mac-ui", reason: "too risky")
         )
+        let executed = try await client.executeApproval(id: approvalId)
 
         #expect(pending.first?.id == approvalId)
         #expect(grants.highRiskPendingCount == 1)
         #expect(review.reviewItemCount == 3)
         #expect(approved.status == "approved")
         #expect(denied.status == "denied")
-        #expect(requests.map(\.method) == ["GET", "GET", "GET", "GET", "POST", "POST"])
+        #expect(executed.accepted)
+        #expect(executed.auditEntry.eventType == "approval_executed")
+        #expect(requests.map(\.method) == ["GET", "GET", "GET", "GET", "POST", "POST", "POST"])
         #expect(requests.map(\.path) == [
             "/approvals",
             "/permissions/grants",
             "/permissions/policy-review",
             "/approvals/\(approvalId.uuidString)",
             "/approvals/\(approvalId.uuidString)/approve",
-            "/approvals/\(approvalId.uuidString)/deny"
+            "/approvals/\(approvalId.uuidString)/deny",
+            "/approvals/\(approvalId.uuidString)/execute"
         ])
         #expect(requests[0].query == "status=pending")
         #expect(requests[4].body?["decided_by"] as? String == "mac-ui")
@@ -2098,7 +2104,8 @@ private func fullApprovalContract() -> JarvisContractResponse {
                 { "method": "GET", "path": "/approvals", "repository_required": true, "redacted": false },
                 { "method": "GET", "path": "/approvals/:id", "repository_required": true, "redacted": false },
                 { "method": "POST", "path": "/approvals/:id/approve", "repository_required": true, "redacted": false },
-                { "method": "POST", "path": "/approvals/:id/deny", "repository_required": true, "redacted": false }
+                { "method": "POST", "path": "/approvals/:id/deny", "repository_required": true, "redacted": false },
+                { "method": "POST", "path": "/approvals/:id/execute", "repository_required": true, "redacted": false }
               ],
               "safe_inspection_paths": ["/health", "/permissions/grants", "/permissions/policy-review", "/approvals"]
             }
@@ -2152,6 +2159,57 @@ private func pendingApprovalJSON(
           "decided_at": \(decidedAt),
           "decided_by": \(encodedDecidedBy),
           "decision_reason": \(encodedDecisionReason)
+        }
+        """.utf8
+    )
+}
+
+private func approvalExecutionJSON(approvalId: UUID, taskId: UUID) -> Data {
+    let sessionId = UUID()
+    let auditId = UUID()
+    return Data(
+        """
+        {
+          "accepted": true,
+          "approval": \(String(decoding: pendingApprovalJSON(id: approvalId, taskId: taskId, status: "approved", decidedBy: "mac-ui", decisionReason: "reviewed"), as: UTF8.self)),
+          "task": {
+            "id": "\(taskId.uuidString)",
+            "session_id": "\(sessionId.uuidString)",
+            "user_input": "plugin approval echo needs user approval",
+            "status": "completed",
+            "created_at": "2026-05-20T12:00:00Z",
+            "updated_at": "2026-05-20T12:02:00Z"
+          },
+          "audit_entry": {
+            "id": "\(auditId.uuidString)",
+            "task_id": "\(taskId.uuidString)",
+            "event_type": "approval_executed",
+            "summary": "approved first-party plugin action execution completed",
+            "payload": { "approval_id": "\(approvalId.uuidString)", "side_effect_executed": true },
+            "created_at": "2026-05-20T12:02:00Z"
+          },
+          "audit_entries": [],
+          "plugin_results": [
+            {
+              "status": "completed",
+              "output": { "message": "needs user approval" },
+              "metadata": {
+                "plugin_id": "fake_echo",
+                "action": "approval_echo",
+                "permissions": ["file_write"],
+                "risk_tier": "confirm",
+                "approval_required": true,
+                "approval_status": "approved",
+                "proactive": false,
+                "memory_access": "none",
+                "model_access": "none",
+                "timeout_ms": 5000,
+                "cancellation": "cooperative",
+                "audit_fields": ["message"]
+              }
+            }
+          ],
+          "message": "approved first-party plugin action executed"
         }
         """.utf8
     )
@@ -2732,6 +2790,16 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         request: JarvisApprovalDecisionRequest
     ) async throws -> JarvisPendingApproval {
         try decideApproval(id: id, approved: false, request: request)
+    }
+
+    func executeApproval(id: UUID) async throws -> JarvisApprovalExecutionResponse {
+        guard let approval = approvals.first(where: { $0.id == id }) else {
+            throw URLError(.badServerResponse)
+        }
+        return try JSONDecoder().decode(
+            JarvisApprovalExecutionResponse.self,
+            from: approvalExecutionJSON(approvalId: approval.id, taskId: approval.taskId)
+        )
     }
 
     private func decideApproval(

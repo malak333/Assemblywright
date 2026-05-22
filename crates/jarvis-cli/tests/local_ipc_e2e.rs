@@ -972,6 +972,48 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         "{approval_audit_encoded}"
     );
 
+    let executed_approval = run_cli_json([
+        "approvals",
+        "execute",
+        approval_id.as_str(),
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(executed_approval["accepted"], true);
+    assert_eq!(executed_approval["task"]["status"], "completed");
+    assert_eq!(
+        executed_approval["audit_entry"]["event_type"],
+        "approval_executed"
+    );
+    assert_eq!(
+        executed_approval["plugin_results"][0]["status"],
+        "completed"
+    );
+    assert_eq!(
+        executed_approval["plugin_results"][0]["output"]["message"],
+        "needs user approval"
+    );
+    assert_array_contains(
+        &executed_approval["audit_entries"],
+        "event_type",
+        "plugin_completed_after_approval",
+    );
+    let executed_approval_audit = run_cli_json([
+        "tasks",
+        "audit",
+        "--task-id",
+        approval_task_id.as_str(),
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_array_contains(&executed_approval_audit, "event_type", "approval_executed");
+    let executed_audit_encoded =
+        serde_json::to_string(&executed_approval_audit).expect("executed approval audit JSON");
+    assert!(
+        executed_audit_encoded.contains("\"side_effect_executed\":true"),
+        "{executed_audit_encoded}"
+    );
+
     let deny_command = run_cli_json([
         "command",
         "plugin approval echo deny this approval",

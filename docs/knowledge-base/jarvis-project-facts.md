@@ -140,6 +140,14 @@ These notes capture durable facts for future agents working on this repository.
   Approval Center renders this summary alongside grant history. It is
   inspection-only and does not execute, enable plugin side effects, or
   autonomously rewrite/delete memory.
+- Approved first-party approval records can be explicitly executed once through
+  `/approvals/:id/execute` or `jarvis approvals execute <approval-id>`.
+  Approve/deny remains side-effect-free; execution replays only the original
+  first-party plugin command, verifies the current action and scope contract
+  against the approval record, applies an approval grant for that replay, moves
+  the task out of `waiting_for_approval` on completion, and records
+  `approval_executed` plus plugin completion audit evidence with
+  `side_effect_executed: true`.
 - The CLI has matching `tasks`, `memory`, `scheduler`, `diagnostics`, and
   `plugins` subcommands, including `plugins install`, `plugins installed`,
   `plugins installed-get`, `plugins enable-installed`, `plugins
