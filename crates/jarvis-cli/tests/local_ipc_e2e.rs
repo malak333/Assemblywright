@@ -272,6 +272,109 @@ fn release_readiness_rejects_semantically_invalid_live_voice_evidence() {
 }
 
 #[test]
+fn release_evidence_status_rejects_semantically_invalid_plugin_and_bundle_evidence() {
+    let endpoint = format!("http://{}", unused_loopback_addr());
+
+    let temp_dir = tempfile::tempdir().expect("temp release evidence reports");
+    let plugin_report_path = temp_dir.path().join("release-plugin-trust-qa-report.json");
+    let bundle_path = temp_dir.path().join("release-evidence-bundle.json");
+
+    let mut plugin_report = valid_plugin_trust_qa_report();
+    plugin_report["owner_recorded_plugin_trust_evidence"]["review_started_at"] =
+        json!("2026-05-22T16:20:00Z");
+    plugin_report["owner_recorded_plugin_trust_evidence"]["review_completed_at"] =
+        json!("2026-05-22T16:10:00Z");
+    write_json_report(&plugin_report_path, plugin_report);
+
+    let mut bundle_report = valid_release_evidence_bundle();
+    bundle_report["validation_flags"]["local_signature_validation"] = json!(false);
+    write_json_report(&bundle_path, bundle_report);
+
+    let plugin_path = plugin_report_path.to_str().expect("plugin report utf8");
+    let bundle_path = bundle_path.to_str().expect("bundle report utf8");
+    let evidence_status = run_cli_json_with_env(
+        [
+            "release",
+            "evidence-status",
+            "--endpoint",
+            endpoint.as_str(),
+        ],
+        &[
+            ("JARVIS_EVIDENCE_PLUGIN_QA_REPORT", plugin_path),
+            ("JARVIS_EVIDENCE_OUTPUT_PATH", bundle_path),
+        ],
+    );
+    let items = evidence_status["items"].as_array().expect("evidence items");
+    let plugin_item = items
+        .iter()
+        .find(|item| item["key"] == "plugin_trust_qa_report")
+        .expect("plugin trust item");
+    assert_eq!(plugin_item["status"], "invalid", "{plugin_item}");
+    assert!(
+        plugin_item["detail"]
+            .as_str()
+            .expect("plugin detail")
+            .contains("review_completed_at"),
+        "{plugin_item}"
+    );
+    let bundle_item = items
+        .iter()
+        .find(|item| item["key"] == "release_evidence_bundle")
+        .expect("release evidence bundle item");
+    assert_eq!(bundle_item["status"], "invalid", "{bundle_item}");
+    assert!(
+        bundle_item["detail"]
+            .as_str()
+            .expect("bundle detail")
+            .contains("local_signature_validation"),
+        "{bundle_item}"
+    );
+}
+
+#[test]
+fn release_evidence_status_accepts_semantically_valid_plugin_and_bundle_evidence() {
+    let endpoint = format!("http://{}", unused_loopback_addr());
+
+    let temp_dir = tempfile::tempdir().expect("temp release evidence reports");
+    let plugin_report_path = temp_dir.path().join("release-plugin-trust-qa-report.json");
+    let bundle_path = temp_dir.path().join("release-evidence-bundle.json");
+    write_json_report(&plugin_report_path, valid_plugin_trust_qa_report());
+    write_json_report(&bundle_path, valid_release_evidence_bundle());
+
+    let plugin_path = plugin_report_path.to_str().expect("plugin report utf8");
+    let bundle_path = bundle_path.to_str().expect("bundle report utf8");
+    let evidence_status = run_cli_json_with_env(
+        [
+            "release",
+            "evidence-status",
+            "--endpoint",
+            endpoint.as_str(),
+        ],
+        &[
+            ("JARVIS_EVIDENCE_PLUGIN_QA_REPORT", plugin_path),
+            ("JARVIS_EVIDENCE_OUTPUT_PATH", bundle_path),
+        ],
+    );
+    let items = evidence_status["items"].as_array().expect("evidence items");
+    assert!(items
+        .iter()
+        .any(|item| item["key"] == "plugin_trust_qa_report"
+            && item["status"] == "present"
+            && item["detail"]
+                .as_str()
+                .expect("plugin detail")
+                .contains("review timestamps")));
+    assert!(items
+        .iter()
+        .any(|item| item["key"] == "release_evidence_bundle"
+            && item["status"] == "present"
+            && item["detail"]
+                .as_str()
+                .expect("bundle detail")
+                .contains("SHA-256")));
+}
+
+#[test]
 fn release_evidence_status_cli_falls_back_without_running_server() {
     let endpoint = format!("http://{}", unused_loopback_addr());
 
@@ -3635,16 +3738,78 @@ fn valid_live_device_qa_report() -> Value {
     })
 }
 
+fn valid_plugin_trust_qa_report() -> Value {
+    json!({
+        "generated_at": "2026-05-22T16:21:00Z",
+        "review_source": "owner-asserted-manual-review",
+        "validation_flags": {
+            "marketplace_review": true,
+            "malware_scan": true,
+            "os_sandbox": true,
+            "egress_enforcement": true,
+            "signed_publisher_policy": true,
+            "manual_trust_review": true
+        },
+        "owner_recorded_plugin_trust_evidence": {
+            "owner_name": "Release Operator",
+            "review_started_at": "2026-05-22T16:10:00Z",
+            "review_completed_at": "2026-05-22T16:20:00Z",
+            "marketplace_evidence_note": "Marketplace review evidence archived.",
+            "malware_scan_evidence_note": "Malware scan evidence archived.",
+            "os_sandbox_evidence_note": "OS sandbox validation evidence archived.",
+            "egress_evidence_note": "Host-level egress validation evidence archived.",
+            "signed_publisher_evidence_note": "Signed publisher policy evidence archived.",
+            "manual_review_evidence_note": "Manual plugin trust review evidence archived."
+        },
+        "proof_boundary": "Owner-recorded plugin trust fixture for CLI E2E."
+    })
+}
+
+fn valid_release_evidence_bundle() -> Value {
+    let digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    json!({
+        "generated_at": "2026-05-22T17:00:00Z",
+        "version": "0.1.4",
+        "artifacts": {
+            "app_path": "target/distribution/Jarvis.app",
+            "zip_path": "target/distribution/Jarvis-0.1.4.zip",
+            "pkg_path": "target/distribution/Jarvis-0.1.4.pkg",
+            "zip_sha256": digest,
+            "pkg_sha256": digest
+        },
+        "reports": {
+            "live_device_qa_report": "target/release-live-device-qa-report.json",
+            "plugin_trust_qa_report": "target/release-plugin-trust-qa-report.json",
+            "live_device_qa_sha256": digest,
+            "plugin_trust_qa_sha256": digest
+        },
+        "validation_flags": {
+            "signed_distribution": true,
+            "notarization": true,
+            "clean_profile": true,
+            "live_device_qa": true,
+            "plugin_trust_qa": true,
+            "reports_archived": true,
+            "local_signature_validation": true
+        },
+        "proof_boundary": "Release evidence bundle fixture for CLI E2E."
+    })
+}
+
 fn write_valid_live_device_qa_report(path: &Path) {
     write_live_device_qa_report(path, valid_live_device_qa_report());
 }
 
 fn write_live_device_qa_report(path: &Path, report: Value) {
+    write_json_report(path, report);
+}
+
+fn write_json_report(path: &Path, report: Value) {
     fs::write(
         path,
-        serde_json::to_string_pretty(&report).expect("serialize live QA report"),
+        serde_json::to_string_pretty(&report).expect("serialize JSON report"),
     )
-    .expect("write live QA report");
+    .expect("write JSON report");
 }
 
 #[cfg(unix)]

@@ -91,6 +91,11 @@ These notes capture durable facts for future agents working on this repository.
   voice-check timestamps ending in `Z`, and requires completion to be at or
   after start. Invalid or stale hand-written reports stay `invalid` and cannot
   clear `live_voice_loop` in evidence-aware readiness mode.
+- Plugin-trust and final bundle evidence items are also stricter than generic
+  JSON presence: `/release/evidence-status` validates plugin-trust UTC review
+  timestamp ordering, rejects self-test review sources, validates final bundle
+  version, requires SHA-256-shaped artifact/report digests, and requires
+  `validation_flags.local_signature_validation=true`.
 - The Swift shell also decodes `/release/readiness` through
   `ReleaseReadinessModel` and renders a Release tab with blocking manual gates,
   recommended commands, implemented proofs, pending features, the proof
@@ -240,8 +245,9 @@ These notes capture durable facts for future agents working on this repository.
 - The structured release evidence status endpoint mirrors the doctor inventory
   for app/installer artifacts and JSON reports, including required owner-recorded
   live-device and plugin-trust evidence fields plus live-device bundle/version
-  and timestamp semantic checks, so the CLI and Swift Release tab can show
-  missing or invalid release evidence without parsing script text.
+  and timestamp semantic checks, plugin-trust review timestamp checks, and final
+  bundle version/SHA/local-signature checks, so the CLI and Swift Release tab can
+  show missing or invalid release evidence without parsing script text.
 - Enabled `local_subprocess` plugins run with an environment boundary: Jarvis
   clears the inherited app/core process environment before spawn and provides
   only a deterministic `PATH` plus `JARVIS_PLUGIN_ID`,

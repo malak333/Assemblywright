@@ -62,11 +62,14 @@ after preserving the relevant QA reports:
 cargo run -p jarvis-cli -- release readiness
 ```
 
-Evidence-aware readiness only accepts a live-device QA report that passes
-`release evidence-status` semantic checks: schema/type, `self_test_fixture=false`,
-expected bundle ID, matching short/build version, and ordered UTC voice-check
-timestamps. Wrong bundle/version metadata, malformed timestamps, reversed
-timestamps, or a self-test fixture leave `live_voice_loop` pending.
+Evidence-aware readiness only accepts release reports that pass
+`release evidence-status` semantic checks. Live-device QA checks schema/type,
+`self_test_fixture=false`, expected bundle ID, matching short/build version, and
+ordered UTC voice-check timestamps. Plugin-trust checks ordered UTC review
+timestamps. The final evidence bundle checks the expected release version,
+SHA-256 digest shape, and `local_signature_validation=true`. Wrong
+bundle/version metadata, malformed timestamps, reversed timestamps, disabled
+local signature validation, or a self-test fixture leave evidence invalid.
 
 Focused regression checks for that release evidence boundary:
 

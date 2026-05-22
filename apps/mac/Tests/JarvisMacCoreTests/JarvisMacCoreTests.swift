@@ -2804,7 +2804,7 @@ private func releaseEvidenceStatusJSON() -> Data {
               "detail": "expected JSON report is missing"
             }
           ],
-          "proof_boundary": "File/report inventory only; complete means expected paths are present and JSON reports pass required field checks plus live-device QA release-metadata and timestamp semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
+          "proof_boundary": "File/report inventory only; complete means expected paths are present and JSON reports pass required field checks plus live-device QA release-metadata/timestamp semantics, plugin-trust timestamp semantics, and final evidence-bundle version/SHA/signature-validation semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
         }
         """.utf8
     )
@@ -2841,7 +2841,7 @@ private func invalidLiveDeviceEvidenceStatusJSON() -> Data {
               "detail": "JSON report app_bundle.bundle_identifier mismatch: expected com.nobiletechnology.jarvis, got com.example.StaleJarvis"
             }
           ],
-          "proof_boundary": "File/report inventory only; complete means expected paths are present and JSON reports pass required field checks plus live-device QA release-metadata and timestamp semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
+          "proof_boundary": "File/report inventory only; complete means expected paths are present and JSON reports pass required field checks plus live-device QA release-metadata/timestamp semantics, plugin-trust timestamp semantics, and final evidence-bundle version/SHA/signature-validation semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
         }
         """.utf8
     )
