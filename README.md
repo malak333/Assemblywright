@@ -229,6 +229,11 @@ For those live checks, `./scripts/release-live-device-qa.sh --check` prints the
 required manual runbook and is part of the default local release gate. After the
 owner validates a signed installed app on a real Mac profile, rerun the script
 with `--assert-complete` and all required `JARVIS_QA_*` flags set to `true`.
+That assertion writes a JSON report, defaulting to
+`target/release-live-device-qa-report.json`, for release evidence. The local
+release gate also runs `./scripts/release-live-device-qa.sh --self-test` against
+a fake app fixture to prove the assertion/report mechanics without claiming
+real device validation.
 
 With a repository-backed server running, `jarvis release readiness`,
 `jarvis tasks`, `jarvis memory`, `jarvis activity summary`,

@@ -297,8 +297,9 @@ These notes capture durable facts for future agents working on this repository.
   jarvis-cli -- smoke`, `./scripts/release-operator-qa-smoke.sh`, `cargo
   package --workspace --allow-dirty`,
   `./scripts/package-distribution.sh --unsigned-launch-check`,
-  `./scripts/release-live-device-qa.sh --check`, `swift test --package-path
-  apps/mac`, and `swift build --package-path apps/mac`.
+  `./scripts/release-live-device-qa.sh --check`,
+  `./scripts/release-live-device-qa.sh --self-test`, `swift test
+  --package-path apps/mac`, and `swift build --package-path apps/mac`.
   It also runs `./scripts/storage-migration-backup-smoke.sh` so file-backed
   migration backup/recovery stays part of the default local release evidence.
 - The current E2E expectation for Rust/CLI foundation changes is
@@ -400,8 +401,12 @@ These notes capture durable facts for future agents working on this repository.
   and prints the manual clean-profile install, Finder/LaunchServices,
   microphone/Speech, live audio-output, notification, restart, and release-QA
   runbook. Its `--assert-complete` mode requires an installed app plus explicit
-  `JARVIS_QA_*` owner flags. This standardizes manual evidence only; `--check`
-  does not prove live device behavior.
+  `JARVIS_QA_*` owner flags, then writes a JSON evidence report to
+  `JARVIS_QA_REPORT_PATH` or `target/release-live-device-qa-report.json`. This
+  standardizes manual evidence only; `--check` does not prove live device
+  behavior, and the report remains an owner assertion. `--self-test` uses a fake
+  app fixture to validate assertion/report mechanics in the local release gate
+  without claiming live device validation.
 - It is fair to describe the current repo as a Rust foundation with tested
   scaffolding for IPC, storage, policy, routing, runtime, scheduler, plugin
   contracts, deterministic first-party plugin command execution, bounded

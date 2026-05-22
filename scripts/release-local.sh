@@ -20,6 +20,7 @@ run ./scripts/release-operator-qa-smoke.sh
 run cargo package --workspace --allow-dirty
 run ./scripts/package-distribution.sh --unsigned-launch-check
 run ./scripts/release-live-device-qa.sh --check
+run ./scripts/release-live-device-qa.sh --self-test
 
 if ! command -v swift >/dev/null 2>&1; then
   printf '\nerror: swift is required for the local release gate because apps/mac exists\n' >&2

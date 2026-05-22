@@ -27,6 +27,7 @@ cargo run -p jarvis-cli -- smoke
 cargo package --workspace --allow-dirty
 ./scripts/package-distribution.sh --unsigned-launch-check
 ./scripts/release-live-device-qa.sh --check
+./scripts/release-live-device-qa.sh --self-test
 swift test --package-path apps/mac
 swift build --package-path apps/mac
 ```
@@ -375,6 +376,11 @@ microphone/Speech, live audio-output, notification, restart, and manual QA
 steps. `--assert-complete` is for the release machine after those checks are
 actually performed and all required `JARVIS_QA_*` flags are explicitly set to
 `true`.
+On success, `--assert-complete` writes a JSON evidence report to
+`JARVIS_QA_REPORT_PATH` or `target/release-live-device-qa-report.json` by
+default. Preserve that report with release notes when making a production-ready
+claim. `--self-test` uses a fake app fixture to exercise only the
+assertion/report mechanics and is included in `./scripts/release-local.sh`.
 Docs-only branches should at least run a render/lint-oriented documentation
 check when available, plus `cargo fmt --check` if the branch also touches Rust
 examples or scripts. Record any skipped full-gate stage as a blocker, not as
