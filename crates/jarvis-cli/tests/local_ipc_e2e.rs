@@ -5,6 +5,8 @@ use std::path::Path;
 use std::process::{Child, Command, Output, Stdio};
 use std::time::Duration;
 
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use ed25519_dalek::{Signer, SigningKey};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 
@@ -43,6 +45,11 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         &contract["endpoints"],
         "path",
         "/plugins/installed/:id/publisher/verify",
+    );
+    assert_array_contains(
+        &contract["endpoints"],
+        "path",
+        "/plugins/installed/:id/publisher/signature/verify",
     );
     assert_array_contains(&contract["endpoints"], "path", "/plugins/installed/:id/run");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/model-routes");
@@ -159,8 +166,10 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     fs::create_dir(&plugin_dir).expect("create local plugin dir");
     let plugin_dir = plugin_dir.canonicalize().expect("canonical plugin dir");
     let plugin_manifest_path = plugin_dir.join("jarvis-plugin.json");
-    fs::write(
-        &plugin_manifest_path,
+    let local_signing_key = SigningKey::from_bytes(&[7_u8; 32]);
+    let local_trusted_public_key =
+        BASE64_STANDARD.encode(local_signing_key.verifying_key().as_bytes());
+    let local_manifest = signed_manifest(
         json!({
             "manifest_schema_version": 1,
             "id": "local_e2e_plugin",
@@ -190,8 +199,12 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
                 "timeout": { "timeout_ms": 5000, "on_timeout": "cancel" },
                 "cancellation": "cooperative"
             }]
-        })
-        .to_string(),
+        }),
+        &local_signing_key,
+    );
+    fs::write(
+        &plugin_manifest_path,
+        serde_json::to_string(&local_manifest).expect("serialize signed local manifest"),
     )
     .expect("write local plugin manifest");
 
@@ -293,6 +306,19 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     ]);
     assert!(premature_publisher_verification.contains("requires local provenance"));
 
+    let premature_signature_verification = run_cli_failure([
+        "plugins",
+        "verify-publisher-signature",
+        "local_e2e_plugin",
+        "--trusted-public-key",
+        local_trusted_public_key.as_str(),
+        "--decided-by",
+        "local_ipc_e2e",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert!(premature_signature_verification.contains("requires local provenance"));
+
     let blocked_installed_run = run_cli_json([
         "plugins",
         "run-installed",
@@ -351,6 +377,42 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_eq!(
         verified_local_plugin["provenance"]["origin_claim_verified"],
         false
+    );
+
+    let wrong_trusted_public_key = BASE64_STANDARD.encode(
+        SigningKey::from_bytes(&[8_u8; 32])
+            .verifying_key()
+            .as_bytes(),
+    );
+    let wrong_signature_verification = run_cli_failure([
+        "plugins",
+        "verify-publisher-signature",
+        "local_e2e_plugin",
+        "--trusted-public-key",
+        wrong_trusted_public_key.as_str(),
+        "--decided-by",
+        "local_ipc_e2e",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert!(wrong_signature_verification.contains("does not match trusted_public_key"));
+
+    let signature_verified = run_cli_json([
+        "plugins",
+        "verify-publisher-signature",
+        "local_e2e_plugin",
+        "--trusted-public-key",
+        local_trusted_public_key.as_str(),
+        "--decided-by",
+        "local_ipc_e2e",
+        "--reason",
+        "trusted test signing key",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(
+        signature_verified["provenance"]["origin_claim_verified"],
+        true
     );
 
     let wrong_publisher_verification = run_cli_failure([
@@ -614,6 +676,11 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         &all_audit,
         "event_type",
         "installed_plugin_publisher_verified",
+    );
+    assert_array_contains(
+        &all_audit,
+        "event_type",
+        "installed_plugin_publisher_signature_verified",
     );
 
     let approval_command = run_cli_json([
@@ -1474,6 +1541,19 @@ fn run_cli<const N: usize>(args: [&str; N]) -> Output {
         String::from_utf8_lossy(&output.stderr)
     );
     output
+}
+
+fn signed_manifest(mut manifest: Value, signing_key: &SigningKey) -> Value {
+    let typed_manifest: jarvis_core::PluginManifest =
+        serde_json::from_value(manifest.clone()).expect("decode unsigned plugin manifest");
+    let payload = serde_json::to_vec(&typed_manifest).expect("serialize unsigned plugin manifest");
+    let signature = signing_key.sign(&payload);
+    manifest["publisher_signature"] = json!({
+        "scheme": "ed25519-v1",
+        "public_key": BASE64_STANDARD.encode(signing_key.verifying_key().as_bytes()),
+        "signature": BASE64_STANDARD.encode(signature.to_bytes()),
+    });
+    manifest
 }
 
 #[cfg(unix)]

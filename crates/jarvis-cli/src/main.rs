@@ -8,8 +8,8 @@ use clap::{Parser, Subcommand};
 use jarvis_core::{
     ApprovalDecisionRequest, CommandRequest, CreateMemoryItemRequest, CreateSchedulerJobRequest,
     EmergencyPauseRequest, InstallPluginRequest, InstalledPluginExecutionGrant,
-    InstalledPluginExecutionRequest, InstalledPluginPublisherVerificationRequest, Sensitivity,
-    TriggerKind, UpdateMemoryItemRequest,
+    InstalledPluginExecutionRequest, InstalledPluginPublisherSignatureVerificationRequest,
+    InstalledPluginPublisherVerificationRequest, Sensitivity, TriggerKind, UpdateMemoryItemRequest,
 };
 use tokio::net::TcpListener;
 
@@ -352,6 +352,18 @@ enum PluginsCommand {
         id: String,
         #[arg(long)]
         trusted_origin: String,
+        #[arg(long, default_value = "cli")]
+        decided_by: String,
+        #[arg(long)]
+        reason: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    /// Verify an installed plugin publisher signature with an explicit trusted public key.
+    VerifyPublisherSignature {
+        id: String,
+        #[arg(long)]
+        trusted_public_key: String,
         #[arg(long, default_value = "cli")]
         decided_by: String,
         #[arg(long)]
@@ -791,6 +803,29 @@ async fn main() -> anyhow::Result<()> {
                         &endpoint,
                         "POST",
                         &format!("/plugins/installed/{id}/publisher/verify"),
+                        Some(&body)
+                    )?
+                );
+            }
+            PluginsCommand::VerifyPublisherSignature {
+                id,
+                trusted_public_key,
+                decided_by,
+                reason,
+                endpoint,
+            } => {
+                let body =
+                    serde_json::to_string(&InstalledPluginPublisherSignatureVerificationRequest {
+                        trusted_public_key,
+                        decided_by,
+                        reason,
+                    })?;
+                println!(
+                    "{}",
+                    request(
+                        &endpoint,
+                        "POST",
+                        &format!("/plugins/installed/{id}/publisher/signature/verify"),
                         Some(&body)
                     )?
                 );

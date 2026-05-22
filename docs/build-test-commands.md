@@ -160,7 +160,11 @@ local subprocess execution; enablement fails closed unless the manifest and
 subprocess command still match the install snapshot. Use
 `jarvis plugins verify-publisher <id> --trusted-origin "<manifest author>"`
 only after provenance matches to mark the manifest author claim as
-operator-reviewed; this does not prove a cryptographic publisher signature.
+operator-reviewed. For signed manifests, use
+`jarvis plugins verify-publisher-signature <id> --trusted-public-key "<base64 ed25519 public key>"`
+after provenance matches; this verifies the manifest signature against the
+explicit trusted key, but still does not prove marketplace approval or malware
+safety.
 Background scheduler execution is opt-in on `jarvis serve`; it does not start
 for default smoke or manual inspection sessions unless `--scheduler-background`
 is passed.
@@ -181,6 +185,7 @@ cargo run -p jarvis-cli -- permissions review
 cargo run -p jarvis-cli -- activity summary
 cargo run -p jarvis-cli -- activity watch --max-events 2 --interval-ms 500
 cargo run -p jarvis-cli -- plugins verify-publisher <plugin-id> --trusted-origin "<manifest author>" --decided-by cli
+cargo run -p jarvis-cli -- plugins verify-publisher-signature <plugin-id> --trusted-public-key "<base64 ed25519 public key>" --decided-by cli
 cargo run -p jarvis-cli -- memory list
 cargo run -p jarvis-cli -- memory classification --include-deleted
 cargo run -p jarvis-cli -- memory create workflow release-gate "run local gate before PR" --provenance "manual note" --sensitivity workspace
@@ -279,6 +284,7 @@ diagnostics export, memory classification summary fields,
 memory create/update/review/delete/restore and persistence, plugin
 manifests, installed-plugin provenance verification, permission-grant
 provenance summary fields, operator-pinned publisher-origin verification,
+trusted-key publisher-signature verification,
 permission policy review items, fail-closed
 subprocess enablement, repository-backed activity summary status/recent-audit
 evidence, bounded activity event streaming over server-sent events, redacted

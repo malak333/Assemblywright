@@ -4,8 +4,9 @@ Jarvis plugins are executable capabilities behind an explicit manifest and the
 same policy engine used for built-in tools. The implemented local plugin
 boundary supports first-party Rust modules and local subprocess plugins over
 JSON stdin/stdout. The stable commitment is the manifest, local provenance
-snapshot, and audit contract; marketplace, WASM, network, and signed-publisher
-trust remain target architecture.
+snapshot, optional trusted-key publisher signature verification, and audit
+contract; marketplace, WASM, network, and malware-analysis trust remain target
+architecture.
 
 ## Manifest Fields
 
@@ -21,7 +22,14 @@ Each plugin manifest must declare:
 - Local installs capture an install-time provenance snapshot with canonical
   manifest path, manifest SHA-256, canonical source path, optional subprocess
   command path, optional subprocess command SHA-256, capture time, verification
-  time, and integrity status. Origin claims remain unverified local labels.
+  time, and integrity status. Origin claims remain unverified local labels until
+  an operator pins the author claim or verifies a manifest signature against an
+  explicit trusted public key.
+- Optional `publisher_signature` with `scheme: ed25519-v1`, a base64 Ed25519
+  public key, and a base64 signature over the manifest payload with
+  `publisher_signature` omitted. Signature verification requires local
+  provenance to match first and a trusted public key supplied by the operator;
+  an embedded public key cannot self-authorize.
 - `local_subprocess` manifests must declare a `subprocess` block with a command
   under `source_path`, optional argument array, and `stdin: json` /
   `stdout: json`. Jarvis starts the command directly and never interpolates it
@@ -94,6 +102,14 @@ to explain what happened:
   malformed stdout JSON, and output-schema mismatches all fail closed with audit
   evidence. Jarvis sends a JSON object containing `plugin_id`, `action`, and
   `input` to stdin and accepts only JSON stdout that matches the action output
+- Publisher signature verification uses
+  `/plugins/installed/:id/publisher/signature/verify` or
+  `jarvis plugins verify-publisher-signature`. It fails closed until local
+  provenance matches, requires the trusted key to match the manifest key,
+  verifies the Ed25519 signature, stores `origin_claim_verified: true`, and
+  appends `installed_plugin_publisher_signature_verified` audit evidence.
+  This proves the manifest was signed by the trusted key; it does not prove
+  marketplace approval, malware safety, or sandbox completeness.
   schema.
 - Installed plugin dry runs are contract-only. `dry_run: true` validates the
   stored manifest, action name, and input schema, then returns `dry_run` with
@@ -128,4 +144,5 @@ contract testing. Release verification should keep covering:
   validation, disabled `metadata_only` execution-grant semantics, explicit
   enablement semantics, local provenance verification, subprocess safe-path
   validation, contract-only dry-run evidence, constrained subprocess execution
-  evidence, and durable audit evidence.
+  evidence, publisher-origin/signature verification evidence, and durable audit
+  evidence.
