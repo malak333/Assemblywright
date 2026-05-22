@@ -27,31 +27,49 @@ These notes capture durable facts for future agents working on this repository.
   entry, and can execute deterministic first-party plugin commands such as
   `plugin echo ...` and `status` through policy. `dry_run` skips plugin
   execution and records audit evidence.
+- Repository-backed `/commands` also persists append-only SQLite model-route
+  records. The stored and inspectable route copy keeps provider/outcome/policy
+  evidence but omits `context_for_model`, so restart recovery can prove route
+  selection without retaining raw command bodies or route context.
 - `ConversationRuntime` supports bounded fake-model planned first-party tool
   calls with schema validation, policy checks, approval stops, tool-result audit
   entries, and feedback of tool results into later model steps. The local HTTP
   provider does not yet make real model-planned tool calls; installed-plugin
   orchestration remains target architecture.
-- Repository-backed IPC state exposes task, audit, and memory inspection routes,
-  persists scheduler jobs, restores them at startup, and all IPC states expose
-  `/plugins/manifests` for deterministic first-party plugin manifests.
+- Repository-backed IPC state exposes task, audit, model-route, and memory
+  inspection routes, persists scheduler jobs, restores them at startup, and all
+  IPC states expose `/plugins/manifests` for deterministic first-party plugin
+  manifests.
   Repository-backed IPC also exposes `/plugins/installed` for metadata-only
   local plugin installation. Installed records are persisted with
-  `execution_enabled: false` and `execution_grant: metadata_only`; they are not
-  executable. Installed plugin run requests can perform contract-only dry runs
-  that validate manifest/action/input schema and audit
-  `side_effect_executed: false` without loading or executing plugin code.
+  `execution_enabled: false` and `execution_grant: metadata_only` by default.
+  Installed plugin run requests can perform contract-only dry runs that
+  validate manifest/action/input schema and audit `side_effect_executed: false`
+  without loading or executing plugin code. `local_subprocess` manifests can be
+  explicitly enabled through `/plugins/installed/:id/execution` or
+  `plugins enable-installed` with `execution_grant: subprocess_stdio`; only then
+  can they run through the constrained subprocess-stdio JSON boundary.
+- Repository-backed IPC exposes `/permissions/grants`, and the CLI exposes
+  `jarvis permissions grants`, as a read-only permission-center summary. It
+  combines approval status counts/history, high-risk pending approval count,
+  installed-plugin grant state, executable installed-plugin count, and the
+  `side_effects_require_approval` invariant without enabling installed plugin
+  execution.
 - The CLI has matching `tasks`, `memory`, `scheduler`, `diagnostics`, and
-  `plugins` subcommands, including `plugins install`, `plugins installed`, and
-  `plugins installed-get` for disabled local manifest metadata.
-- A local packaged app release smoke exists, but Developer ID signing,
-  notarization, installer validation, App Store distribution, installed plugin
-  execution, real voice loop, and broader production operations are not yet
-  implemented in this worktree.
+  `plugins` subcommands, including `plugins install`, `plugins installed`,
+  `plugins installed-get`, `plugins enable-installed`, `plugins
+  disable-installed`, and `plugins run-installed` for disabled-by-default local
+  manifests and explicit subprocess execution.
+- A local packaged app release smoke exists, and installed plugin execution now
+  has a constrained local subprocess proof. Developer ID signing,
+  notarization, installer validation, App Store distribution, real voice loop,
+  broader plugin marketplace/WASM/network sandboxing, third-party trust, and
+  broader production operations are not yet implemented in this worktree.
   The SwiftUI shell scaffold and IPC client live under `apps/mac`, including a
   command transcript, activity/audit panel, approval decision controls,
-  management tabs, degraded-mode handling, text-only voice command handoff, and
-  a core supervisor abstraction for configured or bundled local core binaries.
+  management tabs, permission grant-history summary, degraded-mode handling,
+  text-only voice command handoff, and a core supervisor abstraction for
+  configured or bundled local core binaries.
 - The architecture docs must preserve two diagrams: the current implemented
   Rust/Swift scaffold and the end-goal production architecture. Keep the
   current-vs-target phase table aligned with code before answering readiness
@@ -67,8 +85,12 @@ These notes capture durable facts for future agents working on this repository.
   and voice state. Voice supports typed transcript staging and hands the
   transcript to the same text command path. The scaffold now models
   interruption, resume/cancel, unavailable, and degraded typed-fallback states,
-  but remains a text-only scaffold rather than real microphone capture, speech
-  recognition, AVFoundation playback, or text-to-speech.
+  and a protocol-backed macOS Speech/AVFoundation adapter boundary now exists
+  with explicit permission, capture, interruption, and recognition-error states.
+  Swift tests cover the adapter boundary with fakes and do not require live
+  microphone access. The app still must not claim real voice parity until
+  entitlements, clean-profile permission prompts, live microphone capture, and
+  manual device validation are complete; text-to-speech remains pending.
 - The scheduler is inspectable, cancellable, explicitly runnable through
   `scheduler run-due`, and opt-in runnable as a bounded background loop with
   `jarvis serve --scheduler-background`. Scheduler jobs are in-memory without
@@ -168,9 +190,9 @@ These notes capture durable facts for future agents working on this repository.
 - `jarvis-cli serve --db-path <path>` starts IPC with SQLite-backed task,
   audit, memory, and emergency-pause state for manual persistence checks.
 - `cargo run -p jarvis-cli -- smoke` now covers baseline command/pause smoke,
-  plugin manifest listing, and repository-backed task plus memory inspection
-  paths, diagnostics redaction, and repository-backed scheduler/job state
-  surfaces.
+  plugin manifest listing, and repository-backed task, model-route, and memory
+  inspection paths, diagnostics redaction, and repository-backed scheduler/job
+  state surfaces.
 
 ## Safety Guardrails
 
@@ -186,7 +208,11 @@ These notes capture durable facts for future agents working on this repository.
   behavior, memory access, model access, audit fields, timeout behavior, and
   cancellation behavior before execution.
 - Installed plugin execution remains disabled by default and must not be
-  expanded into arbitrary local code execution. The current safe boundary is
-  metadata persistence plus contract-only dry runs; any future executable path
-  needs a sandboxed runner, explicit grant state beyond `metadata_only`, policy
-  checks, timeout/cancellation behavior, and E2E audit coverage.
+  expanded into arbitrary local code execution. The current executable boundary
+  is limited to `local_subprocess` manifests that declare JSON stdin/stdout,
+  use a command canonicalized under `source_path`, are explicitly enabled with
+  `execution_grant: subprocess_stdio`, validate input and output schemas, run
+  with the declared timeout, and emit audit evidence including whether the
+  subprocess started. Any broader executable path needs a stronger sandbox,
+  explicit grant state beyond `metadata_only`, policy checks,
+  timeout/cancellation behavior, and E2E audit coverage.

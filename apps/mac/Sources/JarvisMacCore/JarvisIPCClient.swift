@@ -103,6 +103,12 @@ public struct JarvisContractResponse: Decodable, Equatable, Sendable {
         }
     }
 
+    public var exposesPermissionGrantSummary: Bool {
+        endpoints.contains { endpoint in
+            endpoint.method.uppercased() == "GET" && endpoint.path == "/permissions/grants"
+        }
+    }
+
     public var exposesApprovalApproveAction: Bool {
         endpoints.contains { endpoint in
             endpoint.method.uppercased() == "POST" && endpoint.path == "/approvals/:id/approve"
@@ -655,6 +661,11 @@ public struct JarvisPermissionSurfaceState: Equatable, Sendable {
     public var pendingApprovalCount: Int
     public var actionableApprovalCount: Int
     public var inspectionOnlyApprovalCount: Int
+    public var approvedGrantCount: Int
+    public var deniedGrantCount: Int
+    public var installedPluginGrantCount: Int
+    public var executableInstalledPluginGrantCount: Int
+    public var sideEffectsRequireApproval: Bool
     public var declaredScopes: [String]
     public var riskTierCounts: [JarvisPermissionRiskCount]
     public var proactiveActionCount: Int
@@ -676,6 +687,11 @@ public struct JarvisPermissionSurfaceState: Equatable, Sendable {
         pendingApprovalCount: Int,
         actionableApprovalCount: Int,
         inspectionOnlyApprovalCount: Int,
+        approvedGrantCount: Int,
+        deniedGrantCount: Int,
+        installedPluginGrantCount: Int,
+        executableInstalledPluginGrantCount: Int,
+        sideEffectsRequireApproval: Bool,
         declaredScopes: [String],
         riskTierCounts: [JarvisPermissionRiskCount],
         proactiveActionCount: Int
@@ -685,6 +701,11 @@ public struct JarvisPermissionSurfaceState: Equatable, Sendable {
         self.pendingApprovalCount = pendingApprovalCount
         self.actionableApprovalCount = actionableApprovalCount
         self.inspectionOnlyApprovalCount = inspectionOnlyApprovalCount
+        self.approvedGrantCount = approvedGrantCount
+        self.deniedGrantCount = deniedGrantCount
+        self.installedPluginGrantCount = installedPluginGrantCount
+        self.executableInstalledPluginGrantCount = executableInstalledPluginGrantCount
+        self.sideEffectsRequireApproval = sideEffectsRequireApproval
         self.declaredScopes = declaredScopes
         self.riskTierCounts = riskTierCounts
         self.proactiveActionCount = proactiveActionCount
@@ -696,6 +717,11 @@ public struct JarvisPermissionSurfaceState: Equatable, Sendable {
         pendingApprovalCount: 0,
         actionableApprovalCount: 0,
         inspectionOnlyApprovalCount: 0,
+        approvedGrantCount: 0,
+        deniedGrantCount: 0,
+        installedPluginGrantCount: 0,
+        executableInstalledPluginGrantCount: 0,
+        sideEffectsRequireApproval: true,
         declaredScopes: [],
         riskTierCounts: [],
         proactiveActionCount: 0
@@ -704,12 +730,18 @@ public struct JarvisPermissionSurfaceState: Equatable, Sendable {
     public static func current(
         pendingItems: [JarvisApprovalQueueItem],
         pluginManifests: [JarvisPluginManifest],
-        contract: JarvisContractResponse?
+        contract: JarvisContractResponse?,
+        grantSummary: JarvisPermissionGrantSummary? = nil
     ) -> JarvisPermissionSurfaceState {
         let approvalActionsAvailable = contract?.exposesApprovalActions == true
         let pendingApprovalCount = pendingItems.filter { $0.approvalStatus == "pending" }.count
         let actionableApprovalCount = pendingItems.filter { $0.approvalStatus == "pending" && $0.actionAvailable }.count
         let inspectionOnlyApprovalCount = pendingApprovalCount - actionableApprovalCount
+        let approvedGrantCount = grantSummary?.count(for: "approved") ?? 0
+        let deniedGrantCount = grantSummary?.count(for: "denied") ?? 0
+        let installedPluginGrantCount = grantSummary?.installedPluginGrants.count ?? 0
+        let executableInstalledPluginGrantCount = grantSummary?.executableInstalledPluginCount ?? 0
+        let sideEffectsRequireApproval = grantSummary?.sideEffectsRequireApproval ?? true
         let actions = pluginManifests.flatMap(\.actions)
         let declaredScopes = Array(Set(actions.flatMap(\.permissions))).sorted()
         let riskTierCounts = Dictionary(grouping: actions, by: \.riskTier)
@@ -732,6 +764,11 @@ public struct JarvisPermissionSurfaceState: Equatable, Sendable {
             pendingApprovalCount: pendingApprovalCount,
             actionableApprovalCount: actionableApprovalCount,
             inspectionOnlyApprovalCount: inspectionOnlyApprovalCount,
+            approvedGrantCount: approvedGrantCount,
+            deniedGrantCount: deniedGrantCount,
+            installedPluginGrantCount: installedPluginGrantCount,
+            executableInstalledPluginGrantCount: executableInstalledPluginGrantCount,
+            sideEffectsRequireApproval: sideEffectsRequireApproval,
             declaredScopes: declaredScopes,
             riskTierCounts: riskTierCounts,
             proactiveActionCount: proactiveActionCount
@@ -781,6 +818,57 @@ public struct JarvisApprovalDecisionRequest: Encodable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case decidedBy = "decided_by"
         case reason
+    }
+}
+
+public struct JarvisPermissionGrantSummary: Decodable, Equatable, Sendable {
+    public var generatedAt: String
+    public var approvalCounts: [JarvisApprovalStatusCount]
+    public var latestApprovals: [JarvisPendingApproval]
+    public var installedPluginGrants: [JarvisInstalledPluginGrantSurface]
+    public var highRiskPendingCount: Int
+    public var executableInstalledPluginCount: Int
+    public var sideEffectsRequireApproval: Bool
+
+    public func count(for status: String) -> Int {
+        approvalCounts.first { $0.status == status }?.count ?? 0
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case generatedAt = "generated_at"
+        case approvalCounts = "approval_counts"
+        case latestApprovals = "latest_approvals"
+        case installedPluginGrants = "installed_plugin_grants"
+        case highRiskPendingCount = "high_risk_pending_count"
+        case executableInstalledPluginCount = "executable_installed_plugin_count"
+        case sideEffectsRequireApproval = "side_effects_require_approval"
+    }
+}
+
+public struct JarvisApprovalStatusCount: Decodable, Equatable, Sendable {
+    public var status: String
+    public var count: Int
+}
+
+public struct JarvisInstalledPluginGrantSurface: Decodable, Equatable, Identifiable, Sendable {
+    public var pluginId: String
+    public var name: String
+    public var executionEnabled: Bool
+    public var executionGrant: String
+    public var installedAt: String
+    public var actionCount: Int
+    public var highRiskActionCount: Int
+
+    public var id: String { pluginId }
+
+    enum CodingKeys: String, CodingKey {
+        case pluginId = "plugin_id"
+        case name
+        case executionEnabled = "execution_enabled"
+        case executionGrant = "execution_grant"
+        case installedAt = "installed_at"
+        case actionCount = "action_count"
+        case highRiskActionCount = "high_risk_action_count"
     }
 }
 
@@ -835,6 +923,7 @@ public protocol JarvisCoreClient: Sendable {
     func createSchedulerJob(_ request: JarvisCreateSchedulerJobRequest) async throws -> JarvisSchedulerJob
     func cancelSchedulerJob(id: UUID) async throws -> JarvisSchedulerJob
     func diagnosticsExport() async throws -> JarvisDiagnosticsExport
+    func permissionGrantSummary() async throws -> JarvisPermissionGrantSummary
     func listApprovals(status: String?) async throws -> [JarvisPendingApproval]
     func approval(id: UUID) async throws -> JarvisPendingApproval
     func approveApproval(id: UUID, request: JarvisApprovalDecisionRequest) async throws -> JarvisPendingApproval
@@ -942,6 +1031,10 @@ public final class JarvisIPCClient: JarvisCoreClient {
 
     public func diagnosticsExport() async throws -> JarvisDiagnosticsExport {
         try await send(path: "/diagnostics/export", method: "GET", body: Optional<Data>.none)
+    }
+
+    public func permissionGrantSummary() async throws -> JarvisPermissionGrantSummary {
+        try await send(path: "/permissions/grants", method: "GET", body: Optional<Data>.none)
     }
 
     public func listApprovals(status: String? = nil) async throws -> [JarvisPendingApproval] {

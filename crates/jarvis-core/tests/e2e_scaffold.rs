@@ -175,6 +175,7 @@ fn plugin_manifest_rejects_actions_outside_declared_scopes() {
         source: PluginSource::FirstParty,
         author: "Jarvis".to_string(),
         source_path: None,
+        subprocess: None,
         actions: vec![PluginActionManifest {
             name: "write_memory_without_scope".to_string(),
             description: "Invalid action that claims write memory access without permission."
@@ -267,6 +268,7 @@ impl InProcessPlugin for ConfirmWritePlugin {
             source: PluginSource::FirstParty,
             author: "Jarvis".to_string(),
             source_path: None,
+            subprocess: None,
             actions: vec![PluginActionManifest {
                 name: "write_note".to_string(),
                 description: "A fake side-effecting action that must require approval.".to_string(),

@@ -6,13 +6,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
 
+use crate::router::{
+    ModelProvider as RouteModelProvider, ModelRouteRecord, RouteEvidence, RouteOutcome,
+};
 use crate::{
     ApprovalStatus, AuditEntry, CapabilityScope, InstalledPlugin, InstalledPluginExecutionGrant,
     JarvisError, JarvisResult, PluginManifest, RiskTier, SchedulerJob, SchedulerJobStatus,
     Sensitivity, TaskRecord, TaskStatus, TriggerKind,
 };
 
-const CURRENT_SCHEMA_VERSION: i64 = 5;
+const CURRENT_SCHEMA_VERSION: i64 = 7;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EmergencyPauseState {
@@ -225,6 +228,84 @@ impl SqliteRepository {
             )
             .map_err(storage_error)?;
         Ok(())
+    }
+
+    pub fn append_model_route_record(&self, record: &ModelRouteRecord) -> JarvisResult<()> {
+        let evidence_json = serde_json::to_string(&record.evidence).map_err(|err| {
+            JarvisError::Storage(format!("serialize model route evidence: {err}"))
+        })?;
+        self.conn
+            .execute(
+                "INSERT INTO model_route_records
+                 (id, task_id, outcome, selected_provider, reason, sensitivity, approval_status,
+                  redaction_applied, context_for_model, local_available, local_sufficient,
+                  evidence_json, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11, ?12)",
+                params![
+                    record.id.to_string(),
+                    record.task_id.map(|id| id.to_string()),
+                    route_outcome_to_str(&record.outcome),
+                    record.selected_provider.map(route_model_provider_to_str),
+                    &record.reason,
+                    sensitivity_to_str(record.sensitivity),
+                    approval_status_to_str(record.approval_status),
+                    if record.redaction_applied { 1 } else { 0 },
+                    if record.local_available { 1 } else { 0 },
+                    if record.local_sufficient { 1 } else { 0 },
+                    evidence_json,
+                    to_db_time(record.created_at),
+                ],
+            )
+            .map_err(storage_error)?;
+        Ok(())
+    }
+
+    pub fn get_model_route_record(&self, id: Uuid) -> JarvisResult<Option<ModelRouteRecord>> {
+        self.conn
+            .query_row(
+                "SELECT id, task_id, outcome, selected_provider, reason, sensitivity,
+                        approval_status, redaction_applied, context_for_model,
+                        local_available, local_sufficient, evidence_json, created_at
+                 FROM model_route_records
+                 WHERE id = ?1",
+                params![id.to_string()],
+                model_route_record_from_row,
+            )
+            .optional()
+            .map_err(storage_error)
+    }
+
+    pub fn list_model_route_records(
+        &self,
+        task_id: Option<Uuid>,
+    ) -> JarvisResult<Vec<ModelRouteRecord>> {
+        let sql = match task_id {
+            Some(_) => {
+                "SELECT id, task_id, outcome, selected_provider, reason, sensitivity,
+                        approval_status, redaction_applied, context_for_model,
+                        local_available, local_sufficient, evidence_json, created_at
+                 FROM model_route_records
+                 WHERE task_id = ?1
+                 ORDER BY created_at ASC, id ASC"
+            }
+            None => {
+                "SELECT id, task_id, outcome, selected_provider, reason, sensitivity,
+                        approval_status, redaction_applied, context_for_model,
+                        local_available, local_sufficient, evidence_json, created_at
+                 FROM model_route_records
+                 ORDER BY created_at ASC, id ASC"
+            }
+        };
+        let mut stmt = self.conn.prepare(sql).map_err(storage_error)?;
+        let rows = match task_id {
+            Some(id) => stmt
+                .query_map(params![id.to_string()], model_route_record_from_row)
+                .map_err(storage_error)?,
+            None => stmt
+                .query_map([], model_route_record_from_row)
+                .map_err(storage_error)?,
+        };
+        collect_rows(rows)
     }
 
     pub fn get_audit_entry(&self, id: Uuid) -> JarvisResult<Option<AuditEntry>> {
@@ -651,6 +732,40 @@ impl SqliteRepository {
         collect_rows(rows)
     }
 
+    pub fn set_installed_plugin_execution(
+        &self,
+        id: &str,
+        execution_enabled: bool,
+        execution_grant: InstalledPluginExecutionGrant,
+    ) -> JarvisResult<InstalledPluginRecord> {
+        if execution_enabled && execution_grant == InstalledPluginExecutionGrant::MetadataOnly {
+            return Err(JarvisError::Validation(
+                "metadata_only grants cannot enable installed plugin execution".to_string(),
+            ));
+        }
+        let changed = self
+            .conn
+            .execute(
+                "UPDATE installed_plugins
+                 SET execution_enabled = ?2,
+                     execution_grant = ?3
+                 WHERE id = ?1",
+                params![
+                    id,
+                    if execution_enabled { 1 } else { 0 },
+                    execution_grant.as_str(),
+                ],
+            )
+            .map_err(storage_error)?;
+        if changed == 0 {
+            return Err(JarvisError::Storage(format!(
+                "installed plugin not found: {id}"
+            )));
+        }
+        self.get_installed_plugin(id)?
+            .ok_or_else(|| JarvisError::Storage(format!("installed plugin not found: {id}")))
+    }
+
     pub fn create_pending_approval(
         &self,
         approval: NewPendingApproval,
@@ -894,6 +1009,12 @@ impl SqliteRepository {
         }
         if version < 5 {
             self.apply_migration_5()?;
+        }
+        if version < 6 {
+            self.apply_migration_6()?;
+        }
+        if version < 7 {
+            self.apply_migration_7()?;
         }
 
         let migrated = self.schema_version()?;
@@ -1159,6 +1280,121 @@ impl SqliteRepository {
         tx.commit().map_err(storage_error)?;
         Ok(())
     }
+
+    fn apply_migration_6(&self) -> JarvisResult<()> {
+        let now = to_db_time(Utc::now());
+        let tx = self.conn.unchecked_transaction().map_err(storage_error)?;
+
+        tx.execute_batch(
+            "
+                ALTER TABLE installed_plugins RENAME TO installed_plugins_v5;
+
+                CREATE TABLE installed_plugins (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    manifest_json TEXT NOT NULL,
+                    source_path TEXT NOT NULL,
+                    execution_enabled INTEGER NOT NULL CHECK (execution_enabled IN (0, 1)),
+                    execution_grant TEXT NOT NULL CHECK (
+                        execution_grant IN ('metadata_only', 'subprocess_stdio')
+                    ),
+                    installed_at TEXT NOT NULL
+                );
+
+                INSERT INTO installed_plugins
+                    (id, manifest_json, source_path, execution_enabled, execution_grant, installed_at)
+                SELECT id, manifest_json, source_path, 0, 'metadata_only', installed_at
+                FROM installed_plugins_v5;
+
+                DROP TABLE installed_plugins_v5;
+
+                CREATE INDEX idx_installed_plugins_installed_at
+                    ON installed_plugins (installed_at);
+                ",
+        )
+        .map_err(storage_error)?;
+
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+            params![6, now],
+        )
+        .map_err(storage_error)?;
+
+        tx.commit().map_err(storage_error)?;
+        Ok(())
+    }
+
+    fn apply_migration_7(&self) -> JarvisResult<()> {
+        let now = to_db_time(Utc::now());
+        let tx = self.conn.unchecked_transaction().map_err(storage_error)?;
+
+        tx.execute_batch(
+            "
+                CREATE TABLE model_route_records (
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id TEXT NOT NULL UNIQUE,
+                    task_id TEXT NULL REFERENCES tasks(id) ON DELETE SET NULL,
+                    outcome TEXT NOT NULL CHECK (outcome IN (
+                        'selected',
+                        'needs_approval',
+                        'blocked'
+                    )),
+                    selected_provider TEXT NULL CHECK (
+                        selected_provider IS NULL OR selected_provider IN ('local', 'chat_gpt')
+                    ),
+                    reason TEXT NOT NULL,
+                    sensitivity TEXT NOT NULL CHECK (sensitivity IN (
+                        'public',
+                        'workspace',
+                        'personal',
+                        'private',
+                        'credential_adjacent',
+                        'restricted'
+                    )),
+                    approval_status TEXT NOT NULL CHECK (approval_status IN (
+                        'not_required',
+                        'pending',
+                        'approved',
+                        'denied'
+                    )),
+                    redaction_applied INTEGER NOT NULL CHECK (redaction_applied IN (0, 1)),
+                    context_for_model TEXT NULL CHECK (context_for_model IS NULL),
+                    local_available INTEGER NOT NULL CHECK (local_available IN (0, 1)),
+                    local_sufficient INTEGER NOT NULL CHECK (local_sufficient IN (0, 1)),
+                    evidence_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE INDEX idx_model_route_records_task_sequence
+                    ON model_route_records (task_id, sequence);
+                CREATE INDEX idx_model_route_records_created
+                    ON model_route_records (created_at);
+                CREATE INDEX idx_model_route_records_outcome
+                    ON model_route_records (outcome);
+
+                CREATE TRIGGER model_route_records_no_update
+                BEFORE UPDATE ON model_route_records
+                BEGIN
+                    SELECT RAISE(ABORT, 'model_route_records are append-only');
+                END;
+
+                CREATE TRIGGER model_route_records_no_delete
+                BEFORE DELETE ON model_route_records
+                BEGIN
+                    SELECT RAISE(ABORT, 'model_route_records are append-only');
+                END;
+                ",
+        )
+        .map_err(storage_error)?;
+
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+            params![7, now],
+        )
+        .map_err(storage_error)?;
+
+        tx.commit().map_err(storage_error)?;
+        Ok(())
+    }
 }
 
 fn task_from_row(row: &Row<'_>) -> rusqlite::Result<TaskRecord> {
@@ -1185,6 +1421,37 @@ fn audit_entry_from_row(row: &Row<'_>) -> rusqlite::Result<AuditEntry> {
         summary: row.get(3)?,
         payload: row.get(4)?,
         created_at: parse_db_time(&row.get::<_, String>(5)?)?,
+    })
+}
+
+fn model_route_record_from_row(row: &Row<'_>) -> rusqlite::Result<ModelRouteRecord> {
+    let task_id = row
+        .get::<_, Option<String>>(1)?
+        .map(|id| parse_uuid(&id))
+        .transpose()?;
+    let selected_provider = row
+        .get::<_, Option<String>>(3)?
+        .map(|provider| route_model_provider_from_str(&provider))
+        .transpose()?;
+    let evidence_json: String = row.get(11)?;
+    let evidence = serde_json::from_str::<RouteEvidence>(&evidence_json).map_err(|err| {
+        rusqlite::Error::FromSqlConversionFailure(11, rusqlite::types::Type::Text, Box::new(err))
+    })?;
+
+    Ok(ModelRouteRecord {
+        id: parse_uuid(&row.get::<_, String>(0)?)?,
+        task_id,
+        outcome: route_outcome_from_str(&row.get::<_, String>(2)?)?,
+        selected_provider,
+        reason: row.get(4)?,
+        sensitivity: sensitivity_from_str(&row.get::<_, String>(5)?)?,
+        approval_status: approval_status_from_str(&row.get::<_, String>(6)?)?,
+        redaction_applied: row.get::<_, i64>(7)? != 0,
+        context_for_model: row.get(8)?,
+        local_available: row.get::<_, i64>(9)? != 0,
+        local_sufficient: row.get::<_, i64>(10)? != 0,
+        evidence,
+        created_at: parse_db_time(&row.get::<_, String>(12)?)?,
     })
 }
 
@@ -1357,6 +1624,33 @@ fn approval_status_from_str(value: &str) -> rusqlite::Result<ApprovalStatus> {
     })
 }
 
+fn route_outcome_to_str(outcome: &RouteOutcome) -> &'static str {
+    match outcome {
+        RouteOutcome::Selected => "selected",
+        RouteOutcome::NeedsApproval => "needs_approval",
+        RouteOutcome::Blocked => "blocked",
+    }
+}
+
+fn route_outcome_from_str(value: &str) -> rusqlite::Result<RouteOutcome> {
+    serde_json::from_value(json!(value)).map_err(|err| {
+        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(err))
+    })
+}
+
+fn route_model_provider_to_str(provider: RouteModelProvider) -> &'static str {
+    match provider {
+        RouteModelProvider::Local => "local",
+        RouteModelProvider::ChatGpt => "chat_gpt",
+    }
+}
+
+fn route_model_provider_from_str(value: &str) -> rusqlite::Result<RouteModelProvider> {
+    serde_json::from_value(json!(value)).map_err(|err| {
+        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(err))
+    })
+}
+
 fn trigger_to_json(trigger: &TriggerKind) -> JarvisResult<String> {
     serde_json::to_string(trigger)
         .map_err(|err| JarvisError::Storage(format!("serialize scheduler trigger: {err}")))
@@ -1493,6 +1787,52 @@ mod tests {
             )
             .unwrap_err();
         assert!(delete_error.to_string().contains("append-only"));
+    }
+
+    #[test]
+    fn model_route_records_are_append_only_redacted_and_durable() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("jarvis.sqlite");
+        let repo = SqliteRepository::open(&db_path).unwrap();
+        let task = repo
+            .create_task(Uuid::new_v4(), "route with api_key=secret-value")
+            .unwrap();
+        let mut route = crate::ModelRouter::route(&crate::ModelRouteRequest::local(
+            "route with api_key=secret-value",
+            "route with api_key=secret-value",
+        ));
+        route.task_id = Some(task.id);
+
+        repo.append_model_route_record(&route).unwrap();
+        let fetched = repo.get_model_route_record(route.id).unwrap().unwrap();
+
+        assert_eq!(fetched.id, route.id);
+        assert_eq!(fetched.task_id, Some(task.id));
+        assert_eq!(fetched.outcome, RouteOutcome::Selected);
+        assert_eq!(fetched.selected_provider, Some(RouteModelProvider::Local));
+        assert_eq!(fetched.context_for_model, None);
+        assert_eq!(fetched.evidence.local_model, "fake-local-model");
+
+        let stored_json = serde_json::to_string(&fetched).unwrap();
+        assert!(!stored_json.contains("secret-value"));
+        assert!(!stored_json.contains("api_key"));
+
+        let update_error = repo
+            .raw_connection()
+            .execute(
+                "UPDATE model_route_records SET reason = 'tampered' WHERE id = ?1",
+                params![route.id.to_string()],
+            )
+            .unwrap_err();
+        assert!(update_error.to_string().contains("append-only"));
+
+        drop(repo);
+
+        let reopened = SqliteRepository::open(&db_path).unwrap();
+        let routes = reopened.list_model_route_records(Some(task.id)).unwrap();
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].id, route.id);
+        assert_eq!(routes[0].context_for_model, None);
     }
 
     #[test]
@@ -1709,6 +2049,7 @@ mod tests {
             source: crate::PluginSource::LocalDevelopment,
             author: "Jarvis Test".to_string(),
             source_path: Some(source_path.to_string()),
+            subprocess: None,
             actions: vec![crate::PluginActionManifest {
                 name: "inspect".to_string(),
                 description: "Validate registry persistence.".to_string(),

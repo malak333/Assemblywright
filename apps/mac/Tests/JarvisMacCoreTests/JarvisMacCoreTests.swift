@@ -32,6 +32,85 @@ private final class IPCURLProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
+@MainActor
+private final class FakeVoiceAdapter: JarvisVoiceAdapter {
+    var phase: JarvisVoiceAdapterPhase
+    var permissionResult: Result<Void, JarvisVoiceAdapterError>
+    var startResult: Result<Void, JarvisVoiceAdapterError>
+    var stopResult: Result<Void, JarvisVoiceAdapterError>
+    var interruptResult: Result<Void, JarvisVoiceAdapterError>
+    private(set) var callbacks: JarvisVoiceCaptureCallbacks?
+
+    init(
+        phase: JarvisVoiceAdapterPhase = .idle,
+        permissionResult: Result<Void, JarvisVoiceAdapterError> = .success(()),
+        startResult: Result<Void, JarvisVoiceAdapterError> = .success(()),
+        stopResult: Result<Void, JarvisVoiceAdapterError> = .success(()),
+        interruptResult: Result<Void, JarvisVoiceAdapterError> = .success(())
+    ) {
+        self.phase = phase
+        self.permissionResult = permissionResult
+        self.startResult = startResult
+        self.stopResult = stopResult
+        self.interruptResult = interruptResult
+    }
+
+    func requestPermissions() async -> Result<Void, JarvisVoiceAdapterError> {
+        switch permissionResult {
+        case .success:
+            phase = .idle
+        case let .failure(error):
+            phase = .unavailable(reason: error.description)
+        }
+        return permissionResult
+    }
+
+    func startCapture(callbacks: JarvisVoiceCaptureCallbacks) async -> Result<Void, JarvisVoiceAdapterError> {
+        switch startResult {
+        case .success:
+            self.callbacks = callbacks
+            phase = .listening
+        case let .failure(error):
+            phase = .unavailable(reason: error.description)
+        }
+        return startResult
+    }
+
+    func stopCapture() async -> Result<Void, JarvisVoiceAdapterError> {
+        switch stopResult {
+        case .success:
+            callbacks = nil
+            phase = .idle
+        case let .failure(error):
+            phase = .unavailable(reason: error.description)
+        }
+        return stopResult
+    }
+
+    func interrupt(reason: String) async -> Result<Void, JarvisVoiceAdapterError> {
+        switch interruptResult {
+        case .success:
+            callbacks = nil
+            phase = .interrupted(reason: reason)
+        case let .failure(error):
+            phase = .unavailable(reason: error.description)
+        }
+        return interruptResult
+    }
+
+    func emitPartial(_ transcript: String) {
+        callbacks?.onPartialTranscript(transcript)
+    }
+
+    func emitFinal(_ transcript: String) {
+        callbacks?.onFinalTranscript(transcript)
+    }
+
+    func emitError(_ error: JarvisVoiceAdapterError) {
+        callbacks?.onError(error)
+    }
+}
+
 @Suite("Jarvis Mac core contracts", .serialized)
 struct JarvisMacCoreTests {
     @Test("Endpoint appends paths to the configured core URL")
@@ -87,7 +166,8 @@ struct JarvisMacCoreTests {
               },
               "endpoints": [
                 { "method": "GET", "path": "/health", "repository_required": false, "redacted": true },
-                { "method": "GET", "path": "/scheduler/jobs/:id", "repository_required": false, "redacted": false }
+                { "method": "GET", "path": "/scheduler/jobs/:id", "repository_required": false, "redacted": false },
+                { "method": "GET", "path": "/permissions/grants", "repository_required": true, "redacted": false }
               ],
               "safe_inspection_paths": ["/health", "/diagnostics/export"]
             }
@@ -100,6 +180,7 @@ struct JarvisMacCoreTests {
         #expect(contract.endpoints.map(\.id).contains("GET /scheduler/jobs/:id"))
         #expect(contract.safeInspectionPaths.contains("/diagnostics/export"))
         #expect(!contract.exposesApprovalActions)
+        #expect(contract.exposesPermissionGrantSummary)
     }
 
     @Test("Command response decodes task, route, steps, and message")
@@ -684,6 +765,24 @@ struct JarvisMacCoreTests {
         #expect(item.detail == "Tool execution requires approval before continuing.")
     }
 
+    @Test("Permission grant summary decodes approval history and installed plugin grants")
+    func decodesPermissionGrantSummary() throws {
+        let approvalId = UUID()
+        let taskId = UUID()
+        let data = permissionGrantSummaryJSON(approvalId: approvalId, taskId: taskId)
+
+        let summary = try JSONDecoder().decode(JarvisPermissionGrantSummary.self, from: data)
+
+        #expect(summary.count(for: "pending") == 1)
+        #expect(summary.count(for: "approved") == 2)
+        #expect(summary.latestApprovals.first?.id == approvalId)
+        #expect(summary.highRiskPendingCount == 1)
+        #expect(summary.installedPluginGrants.first?.pluginId == "local_e2e_plugin")
+        #expect(summary.installedPluginGrants.first?.executionGrant == "metadata_only")
+        #expect(summary.installedPluginGrants.first?.executionEnabled == false)
+        #expect(summary.sideEffectsRequireApproval)
+    }
+
     @Test("Approval client methods send Rust IPC decision requests")
     func approvalClientMethodsSendDecisionRequests() async throws {
         let configuration = URLSessionConfiguration.ephemeral
@@ -714,6 +813,8 @@ struct JarvisMacCoreTests {
             switch request.url?.path(percentEncoded: false) {
             case "/approvals":
                 return (response, Data("[\(String(decoding: pendingApprovalJSON(id: approvalId, taskId: taskId), as: UTF8.self))]".utf8))
+            case "/permissions/grants":
+                return (response, permissionGrantSummaryJSON(approvalId: approvalId, taskId: taskId))
             case "/approvals/\(approvalId.uuidString)":
                 return (response, pendingApprovalJSON(id: approvalId, taskId: taskId))
             case "/approvals/\(approvalId.uuidString)/approve":
@@ -727,6 +828,7 @@ struct JarvisMacCoreTests {
         defer { IPCURLProtocol.handler = nil }
 
         let pending = try await client.listApprovals(status: "pending")
+        let grants = try await client.permissionGrantSummary()
         _ = try await client.approval(id: approvalId)
         let approved = try await client.approveApproval(
             id: approvalId,
@@ -738,19 +840,21 @@ struct JarvisMacCoreTests {
         )
 
         #expect(pending.first?.id == approvalId)
+        #expect(grants.highRiskPendingCount == 1)
         #expect(approved.status == "approved")
         #expect(denied.status == "denied")
-        #expect(requests.map(\.method) == ["GET", "GET", "POST", "POST"])
+        #expect(requests.map(\.method) == ["GET", "GET", "GET", "POST", "POST"])
         #expect(requests.map(\.path) == [
             "/approvals",
+            "/permissions/grants",
             "/approvals/\(approvalId.uuidString)",
             "/approvals/\(approvalId.uuidString)/approve",
             "/approvals/\(approvalId.uuidString)/deny"
         ])
         #expect(requests[0].query == "status=pending")
-        #expect(requests[2].body?["decided_by"] as? String == "mac-ui")
-        #expect(requests[2].body?["reason"] as? String == "reviewed")
-        #expect(requests[3].body?["reason"] as? String == "too risky")
+        #expect(requests[3].body?["decided_by"] as? String == "mac-ui")
+        #expect(requests[3].body?["reason"] as? String == "reviewed")
+        #expect(requests[4].body?["reason"] as? String == "too risky")
     }
 
     @MainActor
@@ -887,6 +991,104 @@ struct JarvisMacCoreTests {
     }
 
     @MainActor
+    @Test("Voice adapter model starts capture and stages deterministic transcripts")
+    func voiceAdapterModelStagesPartialAndFinalTranscripts() async {
+        let adapter = FakeVoiceAdapter()
+        let voice = VoiceStateModel()
+        let model = VoiceAdapterStateModel(adapter: adapter, voiceState: voice)
+
+        await model.requestPermissions()
+        #expect(model.phase == .idle)
+        #expect(model.lastError == nil)
+
+        await model.startCapture()
+        #expect(model.phase == .listening)
+        #expect(voice.statusText.contains("Voice transcript staging"))
+
+        adapter.emitPartial("open")
+        #expect(model.phase == .transcribing)
+        #expect(voice.transcriptDraft == "open")
+        adapter.emitFinal("open diagnostics")
+        #expect(model.phase == .idle)
+        #expect(voice.transcriptDraft == "open diagnostics")
+
+        let handoff = voice.apply(.submitTranscript)
+        #expect(handoff?.text == "open diagnostics")
+        #expect(handoff?.source == "voice-transcript-scaffold")
+    }
+
+    @MainActor
+    @Test("Voice adapter model fails closed on permission errors")
+    func voiceAdapterModelFailsClosedOnPermissionErrors() async {
+        let adapter = FakeVoiceAdapter(
+            permissionResult: .failure(.permissionDenied("Microphone permission was denied."))
+        )
+        let voice = VoiceStateModel()
+        let model = VoiceAdapterStateModel(adapter: adapter, voiceState: voice)
+
+        await model.requestPermissions()
+
+        #expect(model.phase == .unavailable(reason: "Voice permission denied: Microphone permission was denied."))
+        #expect(model.lastError == .permissionDenied("Microphone permission was denied."))
+        #expect(voice.statusText.contains("Voice unavailable"))
+        #expect(voice.statusText.contains("Microphone permission was denied"))
+        #expect(voice.apply(.submitTranscript) == nil)
+        #expect(voice.lastError == "Voice input is unavailable; transcript cannot be submitted.")
+    }
+
+    @MainActor
+    @Test("Voice adapter model exposes capture start failures without silent fallback")
+    func voiceAdapterModelExposesCaptureStartFailures() async {
+        let adapter = FakeVoiceAdapter(
+            startResult: .failure(.captureStartFailed("No input device selected."))
+        )
+        let voice = VoiceStateModel()
+        let model = VoiceAdapterStateModel(adapter: adapter, voiceState: voice)
+
+        await model.startCapture()
+
+        #expect(model.phase == .unavailable(reason: "Voice capture failed to start: No input device selected."))
+        #expect(model.lastError == .captureStartFailed("No input device selected."))
+        #expect(voice.transcriptDraft.isEmpty)
+        #expect(voice.statusText.contains("Voice unavailable"))
+    }
+
+    @MainActor
+    @Test("Voice adapter model preserves interruption as an explicit state")
+    func voiceAdapterModelInterruptsActiveCaptureExplicitly() async {
+        let adapter = FakeVoiceAdapter()
+        let voice = VoiceStateModel()
+        let model = VoiceAdapterStateModel(adapter: adapter, voiceState: voice)
+
+        await model.startCapture()
+        adapter.emitPartial("status check")
+        await model.interrupt(reason: "User stopped push-to-talk.")
+
+        #expect(model.phase == .interrupted(reason: "User stopped push-to-talk."))
+        #expect(model.lastError == nil)
+        #expect(voice.statusText.contains("interrupted"))
+        #expect(voice.transcriptDraft == "status check")
+        #expect(voice.apply(.submitTranscript) == nil)
+        #expect(voice.lastError == "Voice transcript is interrupted; resume or cancel before submitting.")
+    }
+
+    @MainActor
+    @Test("Voice adapter callback errors mark voice unavailable")
+    func voiceAdapterCallbackErrorsMarkVoiceUnavailable() async {
+        let adapter = FakeVoiceAdapter()
+        let voice = VoiceStateModel()
+        let model = VoiceAdapterStateModel(adapter: adapter, voiceState: voice)
+
+        await model.startCapture()
+        adapter.emitError(.recognitionFailed("Recognition task cancelled."))
+
+        #expect(model.phase == .unavailable(reason: "Speech recognition failed: Recognition task cancelled."))
+        #expect(model.lastError == .recognitionFailed("Recognition task cancelled."))
+        #expect(voice.statusText.contains("Voice unavailable"))
+        #expect(voice.statusText.contains("Recognition task cancelled"))
+    }
+
+    @MainActor
     @Test("Approval management model loads contract, tasks, and audit evidence")
     func approvalManagementModelLoadsQueue() async {
         let task = JarvisTask(
@@ -928,7 +1130,8 @@ struct JarvisMacCoreTests {
         let approval = samplePendingApproval()
         let client = FakeCoreClient(
             contractResponse: fullApprovalContract(),
-            approvals: [approval]
+            approvals: [approval],
+            permissionGrantSummary: samplePermissionGrantSummary(approval: approval)
         )
         let model = ApprovalManagementModel(client: client)
 
@@ -944,6 +1147,8 @@ struct JarvisMacCoreTests {
         ])
         #expect(model.permissionSurface.status == .clear)
         #expect(model.permissionSurface.pendingApprovalCount == 0)
+        #expect(model.permissionSurface.approvedGrantCount == 2)
+        #expect(model.permissionSurface.sideEffectsRequireApproval)
     }
 
     @MainActor
@@ -974,7 +1179,8 @@ struct JarvisMacCoreTests {
         let client = FakeCoreClient(
             contractResponse: fullApprovalContract(),
             approvals: [approval],
-            pluginManifests: [samplePluginManifest()]
+            pluginManifests: [samplePluginManifest()],
+            permissionGrantSummary: samplePermissionGrantSummary(approval: approval)
         )
         let model = ApprovalManagementModel(client: client)
 
@@ -990,6 +1196,9 @@ struct JarvisMacCoreTests {
             JarvisPermissionRiskCount(riskTier: "confirm", count: 1)
         ])
         #expect(model.permissionSurface.proactiveActionCount == 1)
+        #expect(model.permissionSurface.approvedGrantCount == 2)
+        #expect(model.permissionSurface.installedPluginGrantCount == 1)
+        #expect(model.permissionSurface.executableInstalledPluginGrantCount == 0)
         #expect(model.permissionSurface.summaryText.contains("need a decision"))
     }
 
@@ -1279,12 +1488,13 @@ private func fullApprovalContract() -> JarvisContractResponse {
               "contract": { "name": "jarvis.local-ipc", "version": 1, "core_version": "0.1.0" },
               "endpoints": [
                 { "method": "GET", "path": "/health", "repository_required": false, "redacted": true },
+                { "method": "GET", "path": "/permissions/grants", "repository_required": true, "redacted": false },
                 { "method": "GET", "path": "/approvals", "repository_required": true, "redacted": false },
                 { "method": "GET", "path": "/approvals/:id", "repository_required": true, "redacted": false },
                 { "method": "POST", "path": "/approvals/:id/approve", "repository_required": true, "redacted": false },
                 { "method": "POST", "path": "/approvals/:id/deny", "repository_required": true, "redacted": false }
               ],
-              "safe_inspection_paths": ["/health", "/approvals"]
+              "safe_inspection_paths": ["/health", "/permissions/grants", "/approvals"]
             }
             """.utf8
         )
@@ -1338,6 +1548,45 @@ private func pendingApprovalJSON(
           "decision_reason": \(encodedDecisionReason)
         }
         """.utf8
+    )
+}
+
+private func permissionGrantSummaryJSON(approvalId: UUID = UUID(), taskId: UUID = UUID()) -> Data {
+    Data(
+        """
+        {
+          "generated_at": "2026-05-20T12:02:00Z",
+          "approval_counts": [
+            { "status": "pending", "count": 1 },
+            { "status": "approved", "count": 2 },
+            { "status": "denied", "count": 1 }
+          ],
+          "latest_approvals": [
+            \(String(decoding: pendingApprovalJSON(id: approvalId, taskId: taskId), as: UTF8.self))
+          ],
+          "installed_plugin_grants": [
+            {
+              "plugin_id": "local_e2e_plugin",
+              "name": "Local E2E Plugin",
+              "execution_enabled": false,
+              "execution_grant": "metadata_only",
+              "installed_at": "2026-05-20T12:00:00Z",
+              "action_count": 1,
+              "high_risk_action_count": 0
+            }
+          ],
+          "high_risk_pending_count": 1,
+          "executable_installed_plugin_count": 0,
+          "side_effects_require_approval": true
+        }
+        """.utf8
+    )
+}
+
+private func samplePermissionGrantSummary(approval: JarvisPendingApproval) -> JarvisPermissionGrantSummary {
+    try! JSONDecoder().decode(
+        JarvisPermissionGrantSummary.self,
+        from: permissionGrantSummaryJSON(approvalId: approval.id, taskId: approval.taskId)
     )
 }
 
@@ -1488,6 +1737,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     private var contractResponse: JarvisContractResponse?
     private var approvals: [JarvisPendingApproval]
     private var pluginManifests: [JarvisPluginManifest]
+    private var permissionGrantSummaryResult: JarvisPermissionGrantSummary?
     private(set) var approvalDecisions: [ApprovalDecision]
 
     init(
@@ -1496,7 +1746,8 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         auditEntries: [JarvisAuditEntry] = [],
         contractResponse: JarvisContractResponse? = nil,
         approvals: [JarvisPendingApproval] = [],
-        pluginManifests: [JarvisPluginManifest] = []
+        pluginManifests: [JarvisPluginManifest] = [],
+        permissionGrantSummary: JarvisPermissionGrantSummary? = nil
     ) {
         self.healthResults = healthResults
         self.tasks = tasks
@@ -1505,6 +1756,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         self.contractResponse = contractResponse
         self.approvals = approvals
         self.pluginManifests = pluginManifests
+        self.permissionGrantSummaryResult = permissionGrantSummary
         self.approvalDecisions = []
     }
 
@@ -1615,6 +1867,17 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
 
     func diagnosticsExport() async throws -> JarvisDiagnosticsExport {
         try JSONDecoder().decode(JarvisDiagnosticsExport.self, from: diagnosticsJSON())
+    }
+
+    func permissionGrantSummary() async throws -> JarvisPermissionGrantSummary {
+        if let permissionGrantSummaryResult {
+            return permissionGrantSummaryResult
+        }
+
+        return try JSONDecoder().decode(
+            JarvisPermissionGrantSummary.self,
+            from: permissionGrantSummaryJSON()
+        )
     }
 
     func listApprovals(status: String?) async throws -> [JarvisPendingApproval] {
