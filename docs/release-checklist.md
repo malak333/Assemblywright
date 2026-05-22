@@ -152,6 +152,9 @@ stage or when a PR needs focused evidence for one ownership slice.
   enabling side effects, include network-capable plugin actions, and that
   operator-pinned publisher verification clears the unverified-origin review
   item for that plugin.
+- Confirm permission policy review includes active scheduler triggers without
+  exposing scheduler command bodies, and that recurring/due triggers remain
+  visible before due-job execution.
 - Confirm the Swift Approval Center renders permission policy review status
   alongside grant history when the IPC contract exposes the endpoint.
 - Confirm scheduler job create/list/cancel and due-run execution state is
@@ -171,8 +174,9 @@ stage or when a PR needs focused evidence for one ownership slice.
 - Confirm the cross-process CLI E2E still covers command, plugin, audit,
   redacted model-route inspection and restart recovery, memory
   classification summary, create/update/review/delete/restore, scheduler
-  schedule/get/list/cancel, redacted scheduler attention handoff, scheduler
-  run-due success/reschedule, scheduler fail-closed pause on non-accepted due
+  schedule/get/list/cancel, redacted scheduler trigger policy review,
+  redacted scheduler attention handoff, scheduler run-due success/reschedule,
+  scheduler fail-closed pause on non-accepted due
   jobs, diagnostics redaction, persistence restart, and emergency-pause
   blocking/resume behavior. Treat this as the minimum E2E expectation for the
   current Rust/CLI foundation; packaged Mac release smoke is now covered by

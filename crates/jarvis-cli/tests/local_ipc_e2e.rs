@@ -921,6 +921,19 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_eq!(scheduler_item["id"], scheduler_id);
     assert_eq!(scheduler_item["command"], "plugin status");
 
+    let scheduler_policy_review =
+        run_cli_json(["permissions", "review", "--endpoint", endpoint.as_str()]);
+    assert_eq!(scheduler_policy_review["status"], "review_required");
+    assert_array_contains(
+        &scheduler_policy_review["items"],
+        "item_type",
+        "scheduled_scheduler_trigger",
+    );
+    assert_array_contains(&scheduler_policy_review["items"], "action", &scheduler_id);
+    assert!(!serde_json::to_string(&scheduler_policy_review)
+        .expect("scheduler policy review JSON")
+        .contains("plugin status"));
+
     let due_once = run_cli_json([
         "scheduler",
         "schedule",
@@ -958,6 +971,21 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         .as_str()
         .expect("due interval id")
         .to_string();
+    let recurring_policy_review =
+        run_cli_json(["permissions", "review", "--endpoint", endpoint.as_str()]);
+    assert_array_contains(
+        &recurring_policy_review["items"],
+        "item_type",
+        "recurring_scheduler_trigger",
+    );
+    assert_array_contains(
+        &recurring_policy_review["items"],
+        "action",
+        &due_interval_id,
+    );
+    assert!(!serde_json::to_string(&recurring_policy_review)
+        .expect("recurring scheduler policy review JSON")
+        .contains("plugin status"));
     std::thread::sleep(Duration::from_millis(1100));
     let run_due = run_cli_json([
         "scheduler",

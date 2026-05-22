@@ -290,7 +290,7 @@ manifests, installed-plugin provenance verification, permission-grant
 provenance summary fields, operator-pinned publisher-origin verification,
 trusted-key publisher-signature verification,
 network-capable plugin policy review items,
-permission policy review items, fail-closed
+permission policy review items, redacted scheduler trigger review items, fail-closed
 subprocess enablement, repository-backed activity summary status/recent-audit
 evidence, bounded activity event streaming over server-sent events, redacted
 scheduler attention handoff, scheduler due-job

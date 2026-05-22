@@ -172,6 +172,10 @@ These notes capture durable facts for future agents working on this repository.
   behavior as manual execution. Repository-backed IPC exposes
   `/scheduler/attention`, and the CLI exposes `jarvis scheduler attention`, as
   a redacted app handoff summary for due, running, and failed scheduler jobs.
+  Repository-backed `/permissions/policy-review` also surfaces manual,
+  one-time, and recurring scheduler triggers as redacted review items, with
+  due and recurring jobs raised above future one-time/manual jobs and scheduler
+  command text omitted from the payload.
   The Swift Scheduler tab renders this summary above the job list and now owns
   a protocol-backed notification model plus macOS `UserNotifications` adapter
   controls for due/failed attention items. Swift tests use a fake adapter to

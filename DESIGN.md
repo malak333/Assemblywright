@@ -277,8 +277,9 @@ management surfaces, memory classification plus create/update/review/delete/rest
 controls over the existing Rust IPC contract, run activity summary,
 voice input/output adapter controls, text-transcript command handoff,
 permission policy review,
-redacted scheduler attention handoff, adapter-backed scheduler notification
-controls for due/failed attention items, and core supervision abstractions.
+redacted scheduler attention handoff, scheduler trigger policy-review items,
+adapter-backed scheduler notification controls for due/failed attention items,
+and core supervision abstractions.
 Installed plugin publisher-origin claims can be operator-pinned after local
 provenance matches the install snapshot and the supplied trusted origin exactly
 matches the manifest author claim. Signed manifests can also be verified with
@@ -303,7 +304,7 @@ reviewable PR slices, and docs-only synchronization work on
 `permission-grants-ux`, and `phase3-docs-architecture`. Follow-on slices
 include Swift memory classification/CRUD/restore and local plugin provenance
 verification plus scheduler attention handoff, scheduler notification controls,
-and permission policy review.
+permission policy review, and scheduler trigger review.
 That workflow improves reviewability but is not readiness evidence by itself.
 Readiness language must be tied to checked-in code, documented diagrams,
 knowledge-base updates, and the specific local/E2E checks that passed.

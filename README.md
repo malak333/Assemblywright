@@ -15,8 +15,9 @@ activity/audit panel with current progress summary, memory
 create/update/review/delete and restore management, memory classification
 summary, provenance-aware
 permission/grant inspection, permission policy review items, redacted scheduler
-attention summaries for app handoff, adapter-backed scheduler notification
-controls, degraded-mode handling, and a core supervisor abstraction.
+attention summaries for app handoff, scheduler trigger policy-review items,
+adapter-backed scheduler notification controls, degraded-mode handling, and a
+core supervisor abstraction.
 
 ## Current Scope
 
@@ -63,8 +64,8 @@ subprocess sandboxing, voice input controls, packaged app release smoke,
 permission grants UX, docs architecture alignment, distribution packaging, and
 Keychain launch credential injection. Follow-on slices have added Swift memory
 CRUD, local plugin provenance verification, scheduler attention handoff, and
-permission policy review plus scheduler notification controls. Later slices
-continue the same branch/PR discipline;
+permission policy review plus scheduler trigger review and notification
+controls. Later slices continue the same branch/PR discipline;
 release language should describe only the merged repo-owned surfaces with
 recorded focused E2E or integration proof.
 The permission center now surfaces installed-plugin provenance status from
@@ -138,8 +139,8 @@ With a repository-backed server running, `jarvis tasks`, `jarvis memory`,
 `jarvis activity watch`, `jarvis scheduler`, `jarvis diagnostics`, and
 `jarvis plugins` expose the current durable state, status counts, recent
 task/audit progress, bounded activity events, redacted scheduler attention
-handoff, redacted diagnostics, first-party plugin manifests, and disabled
-installed-plugin registry metadata over IPC.
+handoff, scheduler trigger policy review, redacted diagnostics, first-party
+plugin manifests, and disabled installed-plugin registry metadata over IPC.
 
 ## Docs
 
