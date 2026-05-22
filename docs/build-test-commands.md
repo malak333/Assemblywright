@@ -487,7 +487,8 @@ approval evidence, memory classification summary, memory policy review counts,
 memory create/update/review/delete/restore state, runs/audit,
 activity summary, permission policy review, scheduler attention summaries,
 diagnostics, release readiness, contract compatibility policy and feature proof/boundary metadata,
-text-transcript voice handoff state, adapter-backed voice input controls,
+text-transcript voice handoff state, opt-in final-transcript auto-submit through
+fake adapter final-result events, adapter-backed voice input controls,
 adapter-backed speech-output preview controls, adapter-backed scheduler
 notification controls, and
 Keychain-backed supervised-core credential injection

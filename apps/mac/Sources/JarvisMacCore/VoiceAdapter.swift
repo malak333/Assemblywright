@@ -79,15 +79,26 @@ public protocol JarvisVoiceAdapter: AnyObject {
 public final class VoiceAdapterStateModel: ObservableObject {
     @Published public private(set) var phase: JarvisVoiceAdapterPhase
     @Published public private(set) var lastError: JarvisVoiceAdapterError?
+    @Published public private(set) var isFinalTranscriptAutoSubmitEnabled: Bool
 
     private let adapter: any JarvisVoiceAdapter
     private let voiceState: VoiceStateModel
+    private let shouldAutoSubmitFinalTranscript: @MainActor () -> Bool
+    private let submitFinalTranscript: (@MainActor (JarvisVoiceCommandHandoff) async -> Void)?
 
-    public init(adapter: any JarvisVoiceAdapter, voiceState: VoiceStateModel) {
+    public init(
+        adapter: any JarvisVoiceAdapter,
+        voiceState: VoiceStateModel,
+        shouldAutoSubmitFinalTranscript: @escaping @MainActor () -> Bool = { true },
+        submitFinalTranscript: (@MainActor (JarvisVoiceCommandHandoff) async -> Void)? = nil
+    ) {
         self.adapter = adapter
         self.voiceState = voiceState
+        self.shouldAutoSubmitFinalTranscript = shouldAutoSubmitFinalTranscript
+        self.submitFinalTranscript = submitFinalTranscript
         self.phase = adapter.phase
         self.lastError = nil
+        self.isFinalTranscriptAutoSubmitEnabled = false
     }
 
     public var statusText: String {
@@ -144,9 +155,23 @@ public final class VoiceAdapterStateModel: ObservableObject {
                 self?.phase = .transcribing
                 voiceState?.apply(.updateTranscript(transcript))
             },
-            onFinalTranscript: { [weak self, weak voiceState] transcript in
-                self?.phase = .idle
-                voiceState?.apply(.updateTranscript(transcript))
+            onFinalTranscript: { [weak self] transcript in
+                guard let self else { return }
+                if case .interrupted = self.phase {
+                    return
+                }
+                self.phase = .idle
+                self.voiceState.apply(.updateTranscript(transcript))
+                guard self.isFinalTranscriptAutoSubmitEnabled,
+                      self.shouldAutoSubmitFinalTranscript(),
+                      let submitFinalTranscript = self.submitFinalTranscript,
+                      let handoff = self.voiceState.submitTranscript(source: "voice-final-transcript")
+                else {
+                    return
+                }
+                Task {
+                    await submitFinalTranscript(handoff)
+                }
             },
             onError: { [weak self] error in
                 self?.fail(error)
@@ -182,6 +207,10 @@ public final class VoiceAdapterStateModel: ObservableObject {
         case let .failure(error):
             fail(error)
         }
+    }
+
+    public func setFinalTranscriptAutoSubmitEnabled(_ enabled: Bool) {
+        isFinalTranscriptAutoSubmitEnabled = enabled
     }
 
     private func fail(_ error: JarvisVoiceAdapterError) {

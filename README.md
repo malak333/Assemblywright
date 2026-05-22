@@ -107,6 +107,8 @@ QA still listed as manual gates.
 The response keeps `production_ready: false` until Developer ID
 signing/notarization, clean-profile installer/Finder validation, live voice
 device checks, and manual QA are actually completed.
+Opt-in final-transcript auto-submit is text-path parity only; it does not clear
+live microphone/Speech/audio-output validation or manual release QA.
 
 Phase 3 landed through separate worktrees for model route persistence, plugin
 subprocess sandboxing, voice input controls, packaged app release smoke,

@@ -3770,7 +3770,7 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "live_voice_loop",
             "pending_manual_validation",
-            "Swift voice input and speech-output adapters have deterministic fake-adapter tests.",
+            "Swift voice input and speech-output adapters have deterministic fake-adapter tests, including final transcript staging and opt-in final-transcript auto-submit into the text command path.",
             "Live microphone, Speech permission, live audio output, and device validation are not proven by automated tests.",
         ),
     ]

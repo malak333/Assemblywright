@@ -20,9 +20,10 @@ struct JarvisMacApp: App {
     init() {
         let configuration = JarvisCoreSupervisorConfiguration()
         let client = JarvisIPCClient(endpoint: configuration.endpoint)
+        let console = CommandConsoleModel(client: client)
         let voice = VoiceStateModel()
         _supervisor = StateObject(wrappedValue: JarvisCoreSupervisor(configuration: configuration, client: client))
-        _console = StateObject(wrappedValue: CommandConsoleModel(client: client))
+        _console = StateObject(wrappedValue: console)
         _memory = StateObject(wrappedValue: MemoryManagerModel(client: client))
         _plugins = StateObject(wrappedValue: PluginManagerModel(client: client))
         _approvals = StateObject(wrappedValue: ApprovalManagementModel(client: client))
@@ -34,7 +35,16 @@ struct JarvisMacApp: App {
         _diagnostics = StateObject(wrappedValue: DiagnosticsModel(client: client))
         _releaseReadiness = StateObject(wrappedValue: ReleaseReadinessModel(client: client))
         _voice = StateObject(wrappedValue: voice)
-        _voiceAdapter = StateObject(wrappedValue: VoiceAdapterStateModel(adapter: MacSpeechVoiceAdapter(), voiceState: voice))
+        _voiceAdapter = StateObject(
+            wrappedValue: VoiceAdapterStateModel(
+                adapter: MacSpeechVoiceAdapter(),
+                voiceState: voice,
+                shouldAutoSubmitFinalTranscript: { !console.isWorking },
+                submitFinalTranscript: { handoff in
+                    await console.submit(input: handoff.text, dryRun: handoff.dryRun)
+                }
+            )
+        )
         _speechOutput = StateObject(wrappedValue: SpeechOutputStateModel(adapter: MacSpeechOutputAdapter()))
     }
 
@@ -1378,6 +1388,13 @@ struct VoiceStateView: View {
 
             Toggle("Push to talk", isOn: .constant(model.isPushToTalkEnabled))
                 .disabled(true)
+            Toggle(
+                "Auto-submit final transcript",
+                isOn: Binding(
+                    get: { adapter.isFinalTranscriptAutoSubmitEnabled },
+                    set: { adapter.setFinalTranscriptAutoSubmitEnabled($0) }
+                )
+            )
             Text("Live capture uses the macOS Speech/AVFoundation adapter and the same transcript handoff path as typed commands. Speech output uses an AVFoundation adapter. Release claims still require entitlements and manual device validation.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -1478,7 +1495,7 @@ struct VoiceStateView: View {
     private func sendTranscript() {
         guard let handoff = model.apply(.submitTranscript) else { return }
         Task {
-            await console.submit(input: handoff.text)
+            await console.submit(input: handoff.text, dryRun: handoff.dryRun)
         }
     }
 

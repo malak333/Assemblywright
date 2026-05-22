@@ -308,7 +308,7 @@ struct JarvisMacCoreTests {
                 {
                   "key": "live_voice_loop",
                   "status": "pending_manual_validation",
-                  "proof": "fake-adapter tests",
+                  "proof": "fake-adapter final transcript staging and opt-in auto-submit tests",
                   "boundary": "manual validation pending"
                 }
               ]
@@ -1346,16 +1346,35 @@ struct JarvisMacCoreTests {
         voice.apply(.beginTranscript)
         voice.apply(.updateTranscript("  plugin echo hello  "))
         let handoff = try #require(voice.apply(.submitTranscript))
-        await console.submit(input: handoff.text)
+        await console.submit(input: handoff.text, dryRun: handoff.dryRun)
 
         #expect(client.submittedCommands == [
             JarvisCommandRequest(input: "plugin echo hello", dryRun: true)
         ])
+        #expect(handoff.dryRun == true)
+        #expect(voice.lastHandoff == handoff)
         #expect(console.transcript.map(\.text) == [
             "plugin echo hello",
             "local response: plugin echo hello"
         ])
         #expect(console.activity.contains { $0.title == "Task completed" })
+    }
+
+    @MainActor
+    @Test("Command console can submit non-dry-run requests when explicitly requested")
+    func commandConsoleSubmitsExplicitNonDryRunRequests() async {
+        let client = FakeCoreClient()
+        let console = CommandConsoleModel(client: client)
+
+        await console.submit(input: "  status check  ", dryRun: false)
+
+        #expect(client.submittedCommands == [
+            JarvisCommandRequest(input: "status check", dryRun: false)
+        ])
+        #expect(console.transcript.map(\.text) == [
+            "status check",
+            "local response: status check"
+        ])
     }
 
     @MainActor
@@ -1477,10 +1496,64 @@ struct JarvisMacCoreTests {
         #expect(model.canStartCapture)
         #expect(!model.isCaptureActive)
         #expect(voice.transcriptDraft == "open diagnostics")
+        #expect(!model.isFinalTranscriptAutoSubmitEnabled)
 
         let handoff = voice.apply(.submitTranscript)
         #expect(handoff?.text == "open diagnostics")
         #expect(handoff?.source == "voice-transcript-scaffold")
+    }
+
+    @MainActor
+    @Test("Voice adapter auto-submits final transcript only when explicitly enabled")
+    func voiceAdapterModelAutoSubmitsFinalTranscriptWhenEnabled() async throws {
+        let adapter = FakeVoiceAdapter()
+        let voice = VoiceStateModel()
+        var submittedHandoffs: [JarvisVoiceCommandHandoff] = []
+        let model = VoiceAdapterStateModel(
+            adapter: adapter,
+            voiceState: voice,
+            submitFinalTranscript: { handoff in
+                submittedHandoffs.append(handoff)
+            }
+        )
+
+        model.setFinalTranscriptAutoSubmitEnabled(true)
+        await model.startCapture()
+        adapter.emitFinal("  open diagnostics  ")
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        #expect(model.phase == .idle)
+        #expect(submittedHandoffs.map(\.text) == ["open diagnostics"])
+        #expect(submittedHandoffs.map(\.source) == ["voice-final-transcript"])
+        #expect(submittedHandoffs.map(\.dryRun) == [true])
+        #expect(voice.transcriptDraft.isEmpty)
+        #expect(voice.lastHandoff == submittedHandoffs.first)
+    }
+
+    @MainActor
+    @Test("Voice adapter keeps final transcript staged when auto-submit is blocked")
+    func voiceAdapterModelKeepsFinalTranscriptStagedWhenAutoSubmitBlocked() async throws {
+        let adapter = FakeVoiceAdapter()
+        let voice = VoiceStateModel()
+        var submittedHandoffs: [JarvisVoiceCommandHandoff] = []
+        let model = VoiceAdapterStateModel(
+            adapter: adapter,
+            voiceState: voice,
+            shouldAutoSubmitFinalTranscript: { false },
+            submitFinalTranscript: { handoff in
+                submittedHandoffs.append(handoff)
+            }
+        )
+
+        model.setFinalTranscriptAutoSubmitEnabled(true)
+        await model.startCapture()
+        adapter.emitFinal("open diagnostics")
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        #expect(model.phase == .idle)
+        #expect(voice.transcriptDraft == "open diagnostics")
+        #expect(voice.lastHandoff == nil)
+        #expect(submittedHandoffs.isEmpty)
     }
 
     @MainActor
@@ -2516,7 +2589,7 @@ private func releaseReadinessJSON() -> Data {
             {
               "key": "live_voice_loop",
               "status": "pending_manual_validation",
-              "proof": "Swift voice input and speech-output adapters have deterministic fake-adapter tests.",
+              "proof": "Swift voice input and speech-output adapters have deterministic fake-adapter tests, including final transcript staging and opt-in final-transcript auto-submit into the text command path.",
               "boundary": "Live microphone, Speech permission, live audio output, and device validation are not proven by automated tests."
             }
           ],
