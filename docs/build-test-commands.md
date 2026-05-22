@@ -104,6 +104,21 @@ cargo run -p jarvis-cli -- serve \
   --scheduler-limit 16
 ```
 
+To recover stale persisted `Running` scheduler jobs before a repository-backed
+server starts accepting IPC traffic, opt in explicitly:
+
+```sh
+cargo run -p jarvis-cli -- serve \
+  --db-path /tmp/jarvis.sqlite \
+  --scheduler-recover-stale-on-startup \
+  --scheduler-stale-older-than-seconds 3600 \
+  --scheduler-stale-recovery-limit 16
+```
+
+Startup recovery uses the same redacted stale-recovery audit path as
+`scheduler recover-stale`, with `automatic_recovery: true`. It does not expose
+scheduler command text or run stale job side effects.
+
 Terminal 2:
 
 ```sh
@@ -235,6 +250,7 @@ cargo test -p jarvis-core run_due_scheduler_jobs_executes_and_persists_visible_t
 cargo test -p jarvis-core scheduler_proactive_policy_audit_matches_policy_review_classification -- --nocapture
 cargo test -p jarvis-core detects_stale_running_jobs_in_oldest_first_order -- --nocapture
 cargo test -p jarvis-core recover_stale_scheduler_jobs_marks_running_jobs_failed_and_audits_redacted -- --nocapture
+cargo test -p jarvis-core automatic_stale_scheduler_recovery_marks_audit_without_command_text -- --nocapture
 cargo test -p jarvis-core ollama_http_provider_parses_tool_request_envelope -- --nocapture
 cargo test -p jarvis-core chatgpt_http_provider_parses_tool_request_envelope -- --nocapture
 cargo test -p jarvis-core provider_tool_request_envelope_rejects_malformed_tool_requests_without_leaking_prompt -- --nocapture
@@ -246,6 +262,7 @@ cargo test -p jarvis-core contract_endpoint_documents_safe_inspection_paths -- -
 cargo test -p jarvis-core --test e2e_scaffold
 cargo test -p jarvis-cli
 cargo test -p jarvis-cli --test local_ipc_e2e
+cargo test -p jarvis-cli --test local_ipc_e2e serve_can_recover_stale_scheduler_jobs_on_startup -- --nocapture
 cargo test -p jarvis-cli --test local_ipc_e2e serve_executes_ollama_provider_tool_request_envelope -- --nocapture
 cargo test -p jarvis-cli --test local_ipc_e2e -- --ignored
 ./scripts/storage-migration-backup-smoke.sh
@@ -338,8 +355,9 @@ subprocess enablement, repository-backed activity summary status/recent-audit
 evidence, bounded activity event streaming over server-sent events, redacted
 scheduler attention handoff, scheduler due-job
 execution/reschedule audit evidence, redacted proactive scheduler policy
-audit evidence before due command submission, explicit stale-running scheduler
-recovery after persisted running jobs survive restart, scheduler fail-closed
+audit evidence before due command submission, explicit and opt-in startup
+stale-running scheduler recovery after persisted running jobs survive restart,
+scheduler fail-closed
 emergency pause on non-accepted due jobs, and emergency-pause blocking/resume
 surfaces.
 Runtime unit tests additionally prove bounded fake-model and provider-envelope

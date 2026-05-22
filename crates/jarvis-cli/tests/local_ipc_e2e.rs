@@ -1658,6 +1658,78 @@ fn serve_background_scheduler_runs_due_jobs_and_honors_pause() {
 }
 
 #[test]
+fn serve_can_recover_stale_scheduler_jobs_on_startup() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let db_path = temp_dir
+        .path()
+        .join("jarvis-scheduler-startup-recovery.sqlite");
+
+    let mut server = JarvisServer::start(&db_path);
+    let endpoint = server.endpoint();
+    let stale_running = run_cli_json([
+        "scheduler",
+        "schedule",
+        "stale startup recovery job",
+        "plugin status",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    let stale_running_id = stale_running["id"]
+        .as_str()
+        .expect("stale running id")
+        .to_string();
+    server.stop();
+
+    {
+        let repository = SqliteRepository::open(&db_path).expect("open repository");
+        let job = repository
+            .list_scheduler_jobs()
+            .expect("scheduler jobs")
+            .into_iter()
+            .find(|job| job.id.to_string() == stale_running_id)
+            .expect("stale running job");
+        repository
+            .mark_scheduler_job_running(job.id)
+            .expect("mark stale running");
+    }
+    thread::sleep(Duration::from_millis(1100));
+
+    let mut restarted = JarvisServer::start_with_startup_recovery(&db_path, 1, 4);
+    let restarted_endpoint = restarted.endpoint();
+    let health = run_cli_text(["health", "--endpoint", restarted_endpoint.as_str()]);
+    assert!(health.contains("jarvis-core: ok"), "{health}");
+
+    let jobs = run_cli_json([
+        "scheduler",
+        "list",
+        "--endpoint",
+        restarted_endpoint.as_str(),
+    ]);
+    let recovered_job = jobs
+        .as_array()
+        .expect("jobs array")
+        .iter()
+        .find(|job| job["id"] == stale_running_id)
+        .expect("recovered job");
+    assert_eq!(recovered_job["status"], "failed");
+
+    let audit = run_cli_json(["tasks", "audit", "--endpoint", restarted_endpoint.as_str()]);
+    let recovery_entry = audit
+        .as_array()
+        .expect("audit array")
+        .iter()
+        .find(|entry| entry["event_type"] == "scheduler_stale_running_recovered")
+        .expect("startup recovery audit");
+    assert_eq!(recovery_entry["payload"]["automatic_recovery"], true);
+    assert_eq!(recovery_entry["payload"]["command_redacted"], true);
+    assert!(!serde_json::to_string(&audit)
+        .expect("audit JSON")
+        .contains("plugin status"));
+
+    restarted.stop();
+}
+
+#[test]
 fn serve_executes_ollama_provider_tool_request_envelope() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let db_path = temp_dir.path().join("jarvis-provider-tool-e2e.sqlite");
@@ -1729,24 +1801,38 @@ struct JarvisServer {
 
 impl JarvisServer {
     fn start(db_path: &Path) -> Self {
-        Self::start_inner(db_path, None)
+        Self::start_inner(db_path, None, None)
     }
 
     fn start_with_background(db_path: &Path, interval_ms: u64, limit: usize) -> Self {
-        Self::start_inner(db_path, Some((interval_ms, limit)))
+        Self::start_inner(db_path, Some((interval_ms, limit)), None)
+    }
+
+    fn start_with_startup_recovery(db_path: &Path, older_than_seconds: u64, limit: usize) -> Self {
+        Self::start_inner(db_path, None, Some((older_than_seconds, limit)))
     }
 
     fn start_with_env(db_path: &Path, env: &[(&str, &str)]) -> Self {
-        Self::start_inner_with_env(db_path, None, env)
+        Self::start_inner_with_env(db_path, None, None, env)
     }
 
-    fn start_inner(db_path: &Path, scheduler_background: Option<(u64, usize)>) -> Self {
-        Self::start_inner_with_env(db_path, scheduler_background, &[])
+    fn start_inner(
+        db_path: &Path,
+        scheduler_background: Option<(u64, usize)>,
+        scheduler_startup_recovery: Option<(u64, usize)>,
+    ) -> Self {
+        Self::start_inner_with_env(
+            db_path,
+            scheduler_background,
+            scheduler_startup_recovery,
+            &[],
+        )
     }
 
     fn start_inner_with_env(
         db_path: &Path,
         scheduler_background: Option<(u64, usize)>,
+        scheduler_startup_recovery: Option<(u64, usize)>,
         env: &[(&str, &str)],
     ) -> Self {
         let bind = unused_loopback_addr();
@@ -1770,6 +1856,15 @@ impl JarvisServer {
                 "--scheduler-interval-ms".to_string(),
                 interval_ms.to_string(),
                 "--scheduler-limit".to_string(),
+                limit.to_string(),
+            ]);
+        }
+        if let Some((older_than_seconds, limit)) = scheduler_startup_recovery {
+            args.extend([
+                "--scheduler-recover-stale-on-startup".to_string(),
+                "--scheduler-stale-older-than-seconds".to_string(),
+                older_than_seconds.to_string(),
+                "--scheduler-stale-recovery-limit".to_string(),
                 limit.to_string(),
             ]);
         }

@@ -217,7 +217,10 @@ These notes capture durable facts for future agents working on this repository.
   or killed process. Recovery marks matching jobs failed, returns diagnostic
   scheduler job fields without commands, and records
   `scheduler_stale_running_recovered` with command redaction evidence. This is
-  explicit recovery, not automatic background lease recovery.
+  explicit recovery unless `jarvis serve --scheduler-recover-stale-on-startup`
+  is provided. Startup recovery runs the same stale recovery path before the
+  server accepts IPC traffic, marks the audit payload with `automatic_recovery:
+  true`, and remains bounded by age/limit flags.
   The Swift Scheduler tab renders this summary above the job list and now owns
   a protocol-backed notification model plus macOS `UserNotifications` adapter
   controls for due/failed attention items. Swift tests use a fake adapter to
@@ -244,6 +247,10 @@ These notes capture durable facts for future agents working on this repository.
   It also covers stale-running scheduler recovery by persisting a running job
   across restart, running `scheduler recover-stale`, and asserting redacted
   recovery output plus `scheduler_stale_running_recovered` audit evidence.
+  Startup stale recovery is covered by
+  `serve_can_recover_stale_scheduler_jobs_on_startup`, which starts `jarvis
+  serve` with the opt-in recovery flags and asserts the recovered job, redacted
+  audit entry, and `automatic_recovery: true` marker.
 - Focused provider-failure recovery coverage is
   `cargo test -p jarvis-core model_provider_failure_returns_failed_response_with_route_evidence -- --nocapture`
   plus
