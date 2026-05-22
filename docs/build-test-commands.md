@@ -282,6 +282,9 @@ preflight. Its `--self-test` validates bundle manifest generation with fake
 artifacts and fake QA reports only; real release evidence must come from
 `--bundle` after signed/notarized distribution artifacts, live-device QA, and
 plugin-trust QA evidence exist and every `JARVIS_EVIDENCE_*` flag is true.
+The real bundle path also locally validates the signed app, app stapling
+ticket, signed installer package, installer stapling ticket, and app zip
+payload before writing the manifest.
 
 ## Useful Focused Commands
 

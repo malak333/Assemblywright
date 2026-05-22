@@ -12,6 +12,7 @@ PKG_PATH="${JARVIS_EVIDENCE_PKG_PATH:-$DIST_DIR/Jarvis-$VERSION.pkg}"
 LIVE_QA_REPORT="${JARVIS_EVIDENCE_LIVE_QA_REPORT:-$ROOT_DIR/target/release-live-device-qa-report.json}"
 PLUGIN_QA_REPORT="${JARVIS_EVIDENCE_PLUGIN_QA_REPORT:-$ROOT_DIR/target/release-plugin-trust-qa-report.json}"
 OUTPUT_PATH="${JARVIS_EVIDENCE_OUTPUT_PATH:-$ROOT_DIR/target/release-evidence-bundle.json}"
+VALIDATE_LOCAL_SIGNATURES="${JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES:-true}"
 CHECK_ONLY=false
 BUNDLE=false
 SELF_TEST=false
@@ -50,6 +51,9 @@ Optional:
   JARVIS_EVIDENCE_LIVE_QA_REPORT      Defaults to target/release-live-device-qa-report.json
   JARVIS_EVIDENCE_PLUGIN_QA_REPORT    Defaults to target/release-plugin-trust-qa-report.json
   JARVIS_EVIDENCE_OUTPUT_PATH         Defaults to target/release-evidence-bundle.json
+  JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES
+                                      Defaults to true. Set to false only for
+                                      fake self-test fixtures.
 
 This script validates evidence capture only. It does not sign, notarize,
 install, launch Finder, run live microphone/audio checks, run malware scans, or
@@ -84,6 +88,16 @@ require_dir() {
   [[ -d "$path" ]] || fail "missing $label: $path"
 }
 
+require_artifact_validation_mode() {
+  case "$VALIDATE_LOCAL_SIGNATURES" in
+    true|false)
+      ;;
+    *)
+      fail "JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES must be true or false"
+      ;;
+  esac
+}
+
 require_json_contains() {
   local label="$1"
   local path="$2"
@@ -93,6 +107,48 @@ require_json_contains() {
   if ! grep -F "$expected" "$path" >/dev/null 2>&1; then
     fail "$label does not include required evidence text: $expected"
   fi
+}
+
+validate_zip_payload() {
+  python3 - "$ZIP_PATH" <<'PY'
+import sys
+import zipfile
+
+zip_path = sys.argv[1]
+required_suffixes = (
+    "Jarvis.app/Contents/MacOS/JarvisMacApp",
+    "Jarvis.app/Contents/Resources/bin/jarvis-cli",
+    "Jarvis.app/Contents/Info.plist",
+)
+
+with zipfile.ZipFile(zip_path) as archive:
+    names = archive.namelist()
+
+missing = [
+    suffix
+    for suffix in required_suffixes
+    if not any(name.endswith(suffix) for name in names)
+]
+if missing:
+    raise SystemExit(f"zip payload missing required app entries: {', '.join(missing)}")
+PY
+}
+
+validate_local_distribution_evidence() {
+  if [[ "$VALIDATE_LOCAL_SIGNATURES" != true ]]; then
+    printf 'warning: local signature/stapling validation skipped by JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false\n' >&2
+    return
+  fi
+
+  require_command codesign
+  require_command pkgutil
+  require_command xcrun
+  require_command python3
+  codesign --verify --deep --strict --verbose=2 "$APP_PATH" >/dev/null
+  xcrun stapler validate "$APP_PATH" >/dev/null
+  pkgutil --check-signature "$PKG_PATH" >/dev/null
+  xcrun stapler validate "$PKG_PATH" >/dev/null
+  validate_zip_payload
 }
 
 json_escape() {
@@ -107,6 +163,7 @@ write_bundle() {
   local escaped_live
   local escaped_plugin
   local escaped_boundary
+  local local_signature_validation
   require_command python3
   generated_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   escaped_app="$(json_escape "$APP_PATH")"
@@ -115,6 +172,7 @@ write_bundle() {
   escaped_live="$(json_escape "$LIVE_QA_REPORT")"
   escaped_plugin="$(json_escape "$PLUGIN_QA_REPORT")"
   escaped_boundary="$(json_escape "Evidence bundle manifest only; relies on owner-recorded external validation flags and referenced signed/notarized artifacts plus QA reports.")"
+  local_signature_validation="$VALIDATE_LOCAL_SIGNATURES"
 
   mkdir -p "$(dirname "$OUTPUT_PATH")"
   cat >"$OUTPUT_PATH" <<EOF
@@ -136,7 +194,8 @@ write_bundle() {
     "clean_profile": true,
     "live_device_qa": true,
     "plugin_trust_qa": true,
-    "reports_archived": true
+    "reports_archived": true,
+    "local_signature_validation": $local_signature_validation
   },
   "proof_boundary": "$escaped_boundary"
 }
@@ -180,6 +239,7 @@ fi
 
 require_command grep
 require_command python3
+require_artifact_validation_mode
 
 if [[ "$SELF_TEST" == true ]]; then
   tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/jarvis-release-evidence-self-test.XXXXXX")"
@@ -225,6 +285,7 @@ JSON
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
     JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
     JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
     JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
     JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
@@ -233,6 +294,7 @@ JSON
     JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"reports_archived": true'
+  require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"local_signature_validation": false'
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"plugin_trust_qa_report"'
   printf 'Jarvis release evidence bundle self-test: ok\n'
   printf 'Proof boundary: fake artifacts and reports validate bundle mechanics only; no production evidence was created.\n'
@@ -254,6 +316,8 @@ Required before --bundle:
 - Marketplace review, malware scan, signed publisher policy, OS sandbox, and
   host-level egress evidence report exists.
 - Owner sets every JARVIS_EVIDENCE_* validation flag to true.
+- The bundle command can locally verify app signing, app stapling, installer
+  signature, installer stapling, and the app zip payload.
 
 Proof boundary: preflight and runbook only; no production evidence was created.
 CHECKLIST
@@ -263,6 +327,7 @@ fi
 require_dir "signed app bundle" "$APP_PATH"
 require_file "signed app zip" "$ZIP_PATH"
 require_file "signed installer package" "$PKG_PATH"
+validate_local_distribution_evidence
 require_json_contains "live-device QA report" "$LIVE_QA_REPORT" '"manual_release_qa": true'
 require_json_contains "plugin trust QA report" "$PLUGIN_QA_REPORT" '"manual_trust_review": true'
 require_true JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED

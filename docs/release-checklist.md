@@ -258,7 +258,10 @@ stage or when a PR needs focused evidence for one ownership slice.
   `./scripts/release-evidence-bundle.sh --self-test` proves only final bundle
   manifest mechanics with fake artifacts/reports. Treat `--bundle` output as a
   manifest of referenced signed/notarized artifacts and owner-recorded QA
-  evidence, not as proof that those external validations happened locally.
+  evidence. The bundle path also verifies local artifact evidence by checking
+  the app signature, app stapling ticket, installer signature, installer
+  stapling ticket, and app zip payload before writing the manifest; it still
+  does not perform those external validations locally.
 - Confirm the Swift Release tab decodes the same `/release/readiness` contract
   and renders blocking gates, recommended commands, implemented proofs, pending
   features, and proof boundary without enabling release side effects.

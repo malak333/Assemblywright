@@ -20,8 +20,10 @@ flowchart TB
     LocalGate --> E2E["local_ipc_e2e ignored release proof"]
     LocalGate --> Smoke["jarvis-cli smoke"]
     LocalGate --> OperatorQASmoke["release-operator-qa-smoke.sh"]
+    LocalGate --> UnsignedLaunch["package-distribution.sh unsigned-launch-check"]
+    LocalGate --> LiveDeviceQA["release-live-device-qa.sh check/self-test"]
     LocalGate --> PluginTrustQA["release-plugin-trust-qa.sh check/self-test"]
-    LocalGate --> EvidenceBundle["release-evidence-bundle.sh check/self-test"]
+    LocalGate --> EvidenceBundle["release-evidence-bundle.sh check/self-test and signed-artifact validation path"]
     LocalGate --> SwiftGate["Swift package build/test"]
     LocalGate --> CargoGate["fmt, clippy, tests, build, package"]
     LocalGate --> MigrationSmoke["storage-migration-backup-smoke.sh"]
@@ -288,7 +290,9 @@ formatting, linting, tests, ignored release-proof tests, build/package, CLI
 smoke, repository-backed operator QA smoke, unsigned distribution launch proof,
 live-device QA preflight/self-test, plugin-trust QA preflight/self-test,
 release-evidence bundle preflight/self-test, and Swift package build/test.
-That evidence proves only the current implemented foundation surfaces.
+The current implementation diagram mirrors those `release-local.sh` lanes,
+including the unsigned distribution launch proof and live-device QA preflight
+nodes. That evidence proves only the current implemented foundation surfaces.
 `./scripts/release-operator-qa-smoke.sh` starts an isolated repository-backed
 core and verifies command, audit, routes, memory mutation/review/restore,
 scheduler attention/run-due, activity, permission review, diagnostics,
@@ -321,7 +325,9 @@ The `./scripts/release-evidence-bundle.sh --check` command ties the signed
 distribution artifacts, live-device QA report, plugin-trust QA report, and
 owner validation flags into a final bundle manifest path. `--self-test` uses
 fake artifacts/reports only; `--bundle` writes a manifest after the referenced
-evidence exists and the owner flags are true.
+evidence exists, the owner flags are true, and the local app signature,
+app stapling ticket, installer signature, installer stapling ticket, and app
+zip payload validate.
 
 The production-readiness sweep is coordinated through isolated worktrees and
 topic branches against the public repository
