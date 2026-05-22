@@ -334,6 +334,7 @@ struct JarvisMacCoreTests {
         #expect(readiness.pendingFeatures.first?.key == "live_voice_loop")
         #expect(readiness.blockingManualGates.contains("Developer ID Application and Installer signing credentials configured and used for a full signed package run"))
         #expect(readiness.recommendedVerificationCommands.contains("./scripts/release-local.sh"))
+        #expect(readiness.recommendedVerificationCommands.contains("./scripts/release-operator-qa-smoke.sh"))
         #expect(readiness.proofBoundary.contains("does not perform signing"))
     }
 
@@ -2484,6 +2485,7 @@ private func releaseReadinessJSON() -> Data {
           ],
           "recommended_verification_commands": [
             "./scripts/release-local.sh",
+            "./scripts/release-operator-qa-smoke.sh",
             "./scripts/package-distribution.sh --unsigned-launch-check"
           ],
           "proof_boundary": "Read-only summary derived from /contract feature metadata and release checklist blockers; it does not perform signing, notarization, installation, Finder/LaunchServices validation, live microphone/Speech validation, live audio-output validation, App Store review, marketplace plugin review, malware analysis, or OS sandbox enforcement."

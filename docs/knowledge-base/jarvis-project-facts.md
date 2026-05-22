@@ -291,8 +291,9 @@ These notes capture durable facts for future agents working on this repository.
   `cargo fmt --check`, `cargo clippy
   --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `cargo
   test --workspace -- --ignored`, `cargo build --workspace`, `cargo run -p
-  jarvis-cli -- smoke`, `cargo package --workspace --allow-dirty`, `swift test
-  --package-path apps/mac`, and `swift build --package-path apps/mac`.
+  jarvis-cli -- smoke`, `./scripts/release-operator-qa-smoke.sh`, `cargo
+  package --workspace --allow-dirty`, `swift test --package-path apps/mac`,
+  and `swift build --package-path apps/mac`.
   It also runs `./scripts/storage-migration-backup-smoke.sh` so file-backed
   migration backup/recovery stays part of the default local release evidence.
 - The current E2E expectation for Rust/CLI foundation changes is
@@ -345,6 +346,15 @@ These notes capture durable facts for future agents working on this repository.
   state, and verifies health, command, audit, diagnostics, emergency pause,
   blocked command, pause status, and resume over IPC. It is not signed,
   notarized, clean-profile packaged app release evidence.
+- `./scripts/release-operator-qa-smoke.sh` is local operator-facing QA
+  evidence: it starts a repository-backed loopback core with an isolated
+  SQLite database, verifies command, audit, model-route, memory
+  create/update/review/delete/restore, scheduler attention/run-due, activity,
+  permission review, diagnostics, emergency pause, release readiness, and
+  restart recovery paths, then removes the temporary state. It is not
+  clean-profile installed-app QA, Finder/LaunchServices validation, live
+  microphone/Speech validation, live audio-output validation, live OS
+  notification validation, or Developer ID signing/notarization evidence.
 - `./scripts/packaged-app-release-smoke.sh` is stronger local packaged app
   evidence: it builds `jarvis-cli` and the Swift app executable, assembles a
   deterministic `Jarvis.app`, writes release-smoke `Info.plist` metadata,

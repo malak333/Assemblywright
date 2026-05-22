@@ -150,6 +150,10 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         &release_readiness["recommended_verification_commands"],
         "./scripts/release-local.sh",
     );
+    assert_string_array_contains(
+        &release_readiness["recommended_verification_commands"],
+        "./scripts/release-operator-qa-smoke.sh",
+    );
     assert!(release_readiness["proof_boundary"]
         .as_str()
         .expect("release readiness proof boundary")

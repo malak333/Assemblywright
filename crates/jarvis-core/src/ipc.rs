@@ -3661,7 +3661,7 @@ fn release_blocking_manual_gates() -> Vec<String> {
         "Finder/LaunchServices launch validation for the installed app".to_string(),
         "live microphone and Speech permission prompt validation on a real Mac".to_string(),
         "live audio-output playback validation on a real Mac".to_string(),
-        "manual release QA pass covering command, audit, memory, scheduler, plugin, pause, diagnostics, and restart behavior".to_string(),
+        "manual clean-profile release QA pass covering installed-app command, audit, memory, scheduler, plugin, pause, diagnostics, restart behavior, and user-visible prompts".to_string(),
         "broader installed-plugin marketplace trust, malware analysis, and OS-level sandbox/egress enforcement before marketplace claims".to_string(),
     ]
 }
@@ -3669,6 +3669,7 @@ fn release_blocking_manual_gates() -> Vec<String> {
 fn release_verification_commands() -> Vec<String> {
     vec![
         "./scripts/release-local.sh".to_string(),
+        "./scripts/release-operator-qa-smoke.sh".to_string(),
         "./scripts/packaged-app-release-smoke.sh".to_string(),
         "./scripts/package-distribution.sh --unsigned-launch-check".to_string(),
         "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh".to_string(),

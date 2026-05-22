@@ -16,6 +16,7 @@ run cargo test --workspace -- --ignored
 run ./scripts/storage-migration-backup-smoke.sh
 run cargo build --workspace
 run cargo run -p jarvis-cli -- smoke
+run ./scripts/release-operator-qa-smoke.sh
 run cargo package --workspace --allow-dirty
 
 if ! command -v swift >/dev/null 2>&1; then
