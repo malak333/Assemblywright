@@ -170,6 +170,30 @@ if cursor != expected:
 PY
 }
 
+require_json_nonempty_string() {
+  local label="$1"
+  local path="$2"
+  local dotted_key="$3"
+  require_file "$label" "$path"
+  python3 - "$path" "$dotted_key" "$label" <<'PY'
+import json
+import sys
+
+path, dotted_key, label = sys.argv[1:4]
+with open(path, encoding="utf-8") as handle:
+    data = json.load(handle)
+
+cursor = data
+for segment in dotted_key.split("."):
+    if not isinstance(cursor, dict) or segment not in cursor:
+        raise SystemExit(f"{label} is missing required evidence field: {dotted_key}")
+    cursor = cursor[segment]
+
+if not isinstance(cursor, str) or not cursor.strip():
+    raise SystemExit(f"{label} required evidence field is blank: {dotted_key}")
+PY
+}
+
 file_sha256() {
   local path="$1"
   shasum -a 256 "$path" | awk '{print $1}'
@@ -348,6 +372,17 @@ if [[ "$SELF_TEST" == true ]]; then
     "same_command_path": true,
     "speech_output_playback": true
   },
+  "owner_recorded_live_voice_evidence": {
+    "owner_name": "Jarvis QA Self-Test",
+    "device_label": "self-test Mac fixture",
+    "profile_label": "self-test clean profile",
+    "voice_check_started_at": "2026-05-22T16:00:00Z",
+    "voice_check_completed_at": "2026-05-22T16:05:00Z",
+    "microphone_evidence_note": "Observed microphone permission prompt in the fake fixture.",
+    "speech_permission_evidence_note": "Observed Speech permission prompt in the fake fixture.",
+    "transcript_handoff_evidence_note": "Observed transcript handoff reach the command path in the fake fixture.",
+    "audio_output_evidence_note": "Observed speech output playback in the fake fixture."
+  },
   "app_bundle": {
     "bundle_identifier": "com.nobiletechnology.jarvis",
     "short_version": "0.1.4",
@@ -439,6 +474,36 @@ JSON
     fail "release evidence self-test expected incomplete live-device report to be rejected"
   fi
 
+  python3 - "$tmp_dir/live.json" "$tmp_dir/missing-observation-live.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+with open(source, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["owner_recorded_live_voice_evidence"]["audio_output_evidence_note"] = ""
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+PY
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="$tmp_dir/dist/Jarvis-0.1.4.zip" \
+    JARVIS_EVIDENCE_PKG_PATH="$tmp_dir/dist/Jarvis-0.1.4.pkg" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/missing-observation-live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/missing-observation-bundle.json" \
+    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
+    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+    "$0" --bundle >/dev/null 2>&1; then
+    fail "release evidence self-test expected blank live voice observation to be rejected"
+  fi
+
   cat >"$tmp_dir/incomplete-plugin.json" <<'JSON'
 {
   "validation_flags": {
@@ -504,6 +569,9 @@ for flag in clean_profile finder_launch microphone speech_permission transcript_
 done
 for flag in microphone_permission_prompt speech_permission_prompt spoken_transcript_handoff same_command_path speech_output_playback; do
   require_json_bool_true "live-device QA report" "$LIVE_QA_REPORT" "voice_loop.$flag"
+done
+for field in owner_name device_label profile_label voice_check_started_at voice_check_completed_at microphone_evidence_note speech_permission_evidence_note transcript_handoff_evidence_note audio_output_evidence_note; do
+  require_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.$field"
 done
 require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.bundle_identifier" "$EXPECTED_BUNDLE_ID"
 require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.short_version" "$EXPECTED_VERSION"

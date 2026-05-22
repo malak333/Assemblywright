@@ -38,6 +38,17 @@ explicitly recorded each live validation flag below as true:
   JARVIS_QA_RESTART_VALIDATED=true
   JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true
 
+The owner must also record non-empty live voice evidence notes:
+  JARVIS_QA_OWNER_NAME
+  JARVIS_QA_DEVICE_LABEL
+  JARVIS_QA_PROFILE_LABEL
+  JARVIS_QA_VOICE_CHECK_STARTED_AT
+  JARVIS_QA_VOICE_CHECK_COMPLETED_AT
+  JARVIS_QA_MICROPHONE_EVIDENCE_NOTE
+  JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE
+  JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE
+  JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE
+
 --self-test builds a fake app fixture in a temporary directory and exercises
 the assertion/report mechanics without claiming live-device validation.
 
@@ -76,6 +87,12 @@ require_true() {
   local name="$1"
   local value="${!name:-}"
   [[ "$value" == "true" ]] || fail "$name must be set to true after manual validation"
+}
+
+require_non_empty_env() {
+  local name="$1"
+  local value="${!name:-}"
+  [[ -n "$value" ]] || fail "$name must be set to a non-empty owner-recorded evidence value"
 }
 
 plist_value() {
@@ -125,6 +142,15 @@ write_report() {
   local escaped_build_version
   local escaped_microphone_usage
   local escaped_speech_usage
+  local escaped_owner_name
+  local escaped_device_label
+  local escaped_profile_label
+  local escaped_started_at
+  local escaped_completed_at
+  local escaped_microphone_note
+  local escaped_speech_note
+  local escaped_transcript_note
+  local escaped_audio_note
   local escaped_boundary
   require_command python3
   generated_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
@@ -134,6 +160,15 @@ write_report() {
   escaped_build_version="$(json_escape "$APP_BUILD_VERSION")"
   escaped_microphone_usage="$(json_escape "$APP_MICROPHONE_USAGE")"
   escaped_speech_usage="$(json_escape "$APP_SPEECH_USAGE")"
+  escaped_owner_name="$(json_escape "$JARVIS_QA_OWNER_NAME")"
+  escaped_device_label="$(json_escape "$JARVIS_QA_DEVICE_LABEL")"
+  escaped_profile_label="$(json_escape "$JARVIS_QA_PROFILE_LABEL")"
+  escaped_started_at="$(json_escape "$JARVIS_QA_VOICE_CHECK_STARTED_AT")"
+  escaped_completed_at="$(json_escape "$JARVIS_QA_VOICE_CHECK_COMPLETED_AT")"
+  escaped_microphone_note="$(json_escape "$JARVIS_QA_MICROPHONE_EVIDENCE_NOTE")"
+  escaped_speech_note="$(json_escape "$JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE")"
+  escaped_transcript_note="$(json_escape "$JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE")"
+  escaped_audio_note="$(json_escape "$JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE")"
   escaped_boundary="$(json_escape "Owner-recorded clean-profile install, Finder launch, microphone/Speech permission prompts, spoken transcript handoff into the command path, live audio output, notification, restart, and manual release QA flags only; no App Store review, marketplace trust, malware analysis, or OS-level sandbox/egress enforcement.")"
 
   mkdir -p "$(dirname "$REPORT_PATH")"
@@ -165,6 +200,17 @@ write_report() {
     "spoken_transcript_handoff": true,
     "same_command_path": true,
     "speech_output_playback": true
+  },
+  "owner_recorded_live_voice_evidence": {
+    "owner_name": "$escaped_owner_name",
+    "device_label": "$escaped_device_label",
+    "profile_label": "$escaped_profile_label",
+    "voice_check_started_at": "$escaped_started_at",
+    "voice_check_completed_at": "$escaped_completed_at",
+    "microphone_evidence_note": "$escaped_microphone_note",
+    "speech_permission_evidence_note": "$escaped_speech_note",
+    "transcript_handoff_evidence_note": "$escaped_transcript_note",
+    "audio_output_evidence_note": "$escaped_audio_note"
   },
   "proof_boundary": "$escaped_boundary"
 }
@@ -260,12 +306,24 @@ PLIST
     JARVIS_QA_NOTIFICATION_VALIDATED=true \
     JARVIS_QA_RESTART_VALIDATED=true \
     JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
+    JARVIS_QA_OWNER_NAME="Jarvis QA Self-Test" \
+    JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
+    JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
+    JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
+    JARVIS_QA_VOICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
+    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the fake fixture." \
+    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the fake fixture." \
+    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the fake fixture." \
+    JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the fake fixture." \
     "$0" --assert-complete >/dev/null
   require_file_contains "live QA self-test report" "$fixture_report" '"manual_release_qa": true'
   require_file_contains "live QA self-test report" "$fixture_report" '"bundle_identifier": "com.nobiletechnology.jarvis.selftest"'
   require_file_contains "live QA self-test report" "$fixture_report" '"microphone_usage_description"'
   require_file_contains "live QA self-test report" "$fixture_report" '"transcript_handoff": true'
   require_file_contains "live QA self-test report" "$fixture_report" '"same_command_path": true'
+  require_file_contains "live QA self-test report" "$fixture_report" '"owner_recorded_live_voice_evidence"'
+  require_file_contains "live QA self-test report" "$fixture_report" '"owner_name": "Jarvis QA Self-Test"'
+  require_file_contains "live QA self-test report" "$fixture_report" '"audio_output_evidence_note": "Observed speech output playback in the fake fixture."'
   require_file_contains "live QA self-test report" "$fixture_report" '"proof_boundary"'
 
   if JARVIS_QA_INSTALLED_APP_PATH="$fixture_app" \
@@ -280,8 +338,42 @@ PLIST
     JARVIS_QA_NOTIFICATION_VALIDATED=true \
     JARVIS_QA_RESTART_VALIDATED=true \
     JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
+    JARVIS_QA_OWNER_NAME="Jarvis QA Self-Test" \
+    JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
+    JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
+    JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
+    JARVIS_QA_VOICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
+    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the fake fixture." \
+    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the fake fixture." \
+    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the fake fixture." \
+    JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the fake fixture." \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "live QA self-test expected missing transcript handoff validation to fail"
+  fi
+
+  if JARVIS_QA_INSTALLED_APP_PATH="$fixture_app" \
+    JARVIS_QA_REPORT_PATH="$tmp_dir/missing-owner-note.json" \
+    JARVIS_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.jarvis.selftest" \
+    JARVIS_QA_EXPECTED_VERSION="0.1.4" \
+    JARVIS_QA_CLEAN_PROFILE_VALIDATED=true \
+    JARVIS_QA_FINDER_LAUNCH_VALIDATED=true \
+    JARVIS_QA_MICROPHONE_VALIDATED=true \
+    JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true \
+    JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true \
+    JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true \
+    JARVIS_QA_NOTIFICATION_VALIDATED=true \
+    JARVIS_QA_RESTART_VALIDATED=true \
+    JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
+    JARVIS_QA_OWNER_NAME="Jarvis QA Self-Test" \
+    JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
+    JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
+    JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
+    JARVIS_QA_VOICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
+    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the fake fixture." \
+    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the fake fixture." \
+    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the fake fixture." \
+    "$0" --assert-complete >/dev/null 2>&1; then
+    fail "live QA self-test expected missing owner-recorded audio evidence note to fail"
   fi
 
   printf 'Jarvis live-device QA self-test: ok\n'
@@ -302,8 +394,9 @@ Manual release checks still required before production-ready language:
 - Speak a command and verify transcript handoff reaches the same command path.
 - Play speech output and verify live audio output on the device.
 - Verify scheduler notification permission and at least one visible notification.
-- Record all JARVIS_QA_* flags as true, then rerun this script with
-  --assert-complete on the validated release machine.
+- Record all JARVIS_QA_* flags as true, add owner/device/profile/timestamp and
+  voice evidence notes, then rerun this script with --assert-complete on the
+  validated release machine.
 - Preserve the generated JSON report from --assert-complete as release evidence.
 
 Proof boundary: preflight and runbook only; no live device validation was
@@ -326,6 +419,15 @@ require_true JARVIS_QA_AUDIO_OUTPUT_VALIDATED
 require_true JARVIS_QA_NOTIFICATION_VALIDATED
 require_true JARVIS_QA_RESTART_VALIDATED
 require_true JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED
+require_non_empty_env JARVIS_QA_OWNER_NAME
+require_non_empty_env JARVIS_QA_DEVICE_LABEL
+require_non_empty_env JARVIS_QA_PROFILE_LABEL
+require_non_empty_env JARVIS_QA_VOICE_CHECK_STARTED_AT
+require_non_empty_env JARVIS_QA_VOICE_CHECK_COMPLETED_AT
+require_non_empty_env JARVIS_QA_MICROPHONE_EVIDENCE_NOTE
+require_non_empty_env JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE
+require_non_empty_env JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE
+require_non_empty_env JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE
 write_report
 
 cat <<EOF

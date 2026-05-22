@@ -406,9 +406,12 @@ Still future gates for production distribution:
   command path, live audio-output, notification, restart, and manual QA are
   actually validated on the release machine, rerun it with `--assert-complete`
   and all required `JARVIS_QA_*` flags set to `true`, including
-  `JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true`. Preserve the generated
-  `target/release-live-device-qa-report.json` artifact, or the
-  `JARVIS_QA_REPORT_PATH` override, with the release notes.
+  `JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true`, plus the required
+  owner/device/profile/timestamp and voice evidence-note fields. Confirm the
+  generated report includes installed-app metadata, `voice_loop`,
+  `owner_recorded_live_voice_evidence`, validation flags, and proof boundary,
+  then preserve the `target/release-live-device-qa-report.json` artifact, or
+  the `JARVIS_QA_REPORT_PATH` override, with the release notes.
 - Activity view shows current task state, active/status counts, and recent
   audit progress through `/activity/summary`.
 - CLI activity watch receives bounded `/activity/events` progress events.
@@ -467,8 +470,8 @@ Distribution packaging gate:
   `./scripts/release-live-device-qa.sh --assert-complete` is the repo-owned way
   to record that those checks were completed; it remains an owner assertion,
   not automated live-device proof. The resulting JSON report records
-  owner-asserted validation flags, voice-loop evidence fields, installed-app
-  metadata, and proof boundary.
+  owner-asserted validation flags, voice-loop evidence fields, owner-recorded
+  live voice evidence notes, installed-app metadata, and proof boundary.
 
 ## Release Notes
 

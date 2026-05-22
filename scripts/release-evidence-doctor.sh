@@ -121,6 +121,30 @@ raise SystemExit(0 if cursor == expected else 1)
 PY
 }
 
+json_nonempty_string() {
+  local path="$1"
+  local dotted_key="$2"
+  python3 - "$path" "$dotted_key" <<'PY'
+import json
+import sys
+
+path, dotted_key = sys.argv[1:3]
+try:
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+except Exception:
+    raise SystemExit(1)
+
+cursor = data
+for segment in dotted_key.split("."):
+    if not isinstance(cursor, dict) or segment not in cursor:
+        raise SystemExit(1)
+    cursor = cursor[segment]
+
+raise SystemExit(0 if isinstance(cursor, str) and bool(cursor.strip()) else 1)
+PY
+}
+
 valid_json_file() {
   local path="$1"
   [[ -f "$path" ]] && python3 -m json.tool "$path" >/dev/null 2>&1
@@ -172,6 +196,18 @@ check_json_string() {
   fi
 }
 
+check_json_nonempty_string() {
+  local label="$1"
+  local path="$2"
+  local dotted_key="$3"
+
+  if json_nonempty_string "$path" "$dotted_key"; then
+    record_satisfied "$label: $dotted_key present"
+  else
+    record_missing "$label missing non-empty field: $dotted_key in $path"
+  fi
+}
+
 check_release_evidence() {
   check_path "signed app bundle" "$APP_PATH" dir
   check_path "app executable" "$APP_PATH/Contents/MacOS/JarvisMacApp" executable
@@ -187,6 +223,9 @@ check_release_evidence() {
     check_json_flag "live-device QA report" "$LIVE_QA_REPORT" "validation_flags.transcript_handoff"
     for flag in microphone_permission_prompt speech_permission_prompt spoken_transcript_handoff same_command_path speech_output_playback; do
       check_json_flag "live-device QA report" "$LIVE_QA_REPORT" "voice_loop.$flag"
+    done
+    for field in owner_name device_label profile_label voice_check_started_at voice_check_completed_at microphone_evidence_note speech_permission_evidence_note transcript_handoff_evidence_note audio_output_evidence_note; do
+      check_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.$field"
     done
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.bundle_identifier" "$EXPECTED_BUNDLE_ID"
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.short_version" "$EXPECTED_VERSION"
@@ -268,6 +307,17 @@ write_fixture_reports() {
     "spoken_transcript_handoff": true,
     "same_command_path": true,
     "speech_output_playback": true
+  },
+  "owner_recorded_live_voice_evidence": {
+    "owner_name": "Jarvis QA Self-Test",
+    "device_label": "self-test Mac fixture",
+    "profile_label": "self-test clean profile",
+    "voice_check_started_at": "2026-05-22T16:00:00Z",
+    "voice_check_completed_at": "2026-05-22T16:05:00Z",
+    "microphone_evidence_note": "Observed microphone permission prompt in the fake fixture.",
+    "speech_permission_evidence_note": "Observed Speech permission prompt in the fake fixture.",
+    "transcript_handoff_evidence_note": "Observed transcript handoff reach the command path in the fake fixture.",
+    "audio_output_evidence_note": "Observed speech output playback in the fake fixture."
   },
   "app_bundle": {
     "bundle_identifier": "com.nobiletechnology.jarvis",
@@ -359,6 +409,28 @@ if [[ "$SELF_TEST" == true ]]; then
     JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null
+
+  python3 - "$tmp_dir/live.json" "$tmp_dir/missing-observation-live.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+with open(source, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["owner_recorded_live_voice_evidence"]["audio_output_evidence_note"] = ""
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+PY
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="$tmp_dir/dist/Jarvis-0.1.4.zip" \
+    JARVIS_EVIDENCE_PKG_PATH="$tmp_dir/dist/Jarvis-0.1.4.pkg" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/missing-observation-live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+    "$0" --assert-complete >/dev/null 2>&1; then
+    fail "release evidence doctor self-test expected blank live voice observation to fail"
+  fi
 
   rm "$tmp_dir/plugin.json"
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \

@@ -22,8 +22,10 @@ flowchart TB
     LocalGate --> OperatorQASmoke["release-operator-qa-smoke.sh"]
     LocalGate --> UnsignedLaunch["package-distribution.sh unsigned-launch-check"]
     LocalGate --> LiveDeviceQA["release-live-device-qa.sh check/self-test"]
+    LiveDeviceQA --> LiveDeviceQAReport["target/release-live-device-qa-report.json owner-recorded voice evidence"]
     LocalGate --> PluginTrustQA["release-plugin-trust-qa.sh check/self-test"]
     LocalGate --> EvidenceBundle["release-evidence-bundle.sh check/self-test and signed-artifact validation path"]
+    LiveDeviceQAReport --> EvidenceBundle
     LocalGate --> EvidenceDoctor["release-evidence-doctor.sh check/self-test evidence inventory"]
     LocalGate --> SwiftGate["Swift package build/test"]
     LocalGate --> CargoGate["fmt, clippy, tests, build, package"]
@@ -328,7 +330,8 @@ App Store distribution, or real voice permissions. The
 live-device QA runbook executable in the default gate;
 `--assert-complete` is an owner-recorded assertion after real-device checks and
 writes a JSON evidence report with installed-app metadata, voice-loop evidence
-fields, validation flags, and proof boundary, not an automated proof. The
+fields, owner/device/profile/timestamp/evidence notes, validation flags, and
+proof boundary, not an automated proof. The
 `--self-test` mode uses a fake app fixture to cover the assertion/report
 mechanics in the local gate.
 The `./scripts/release-plugin-trust-qa.sh --check` command similarly keeps
@@ -573,7 +576,7 @@ flowchart TB
     AppFiles["app-owned files and plugin bundles"] --> RuntimeProd
     DiagnosticsProd --> Diagnostics["local diagnostics export"]
     Diagnostics --> MacApp
-    ReleaseOps["release operator"] --> ReleaseGate["signed package, clean-profile Mac smoke, E2E, migration, recovery, diagnostics checks"]
+    ReleaseOps["release operator"] --> ReleaseGate["signed package, clean-profile Mac smoke, live voice QA evidence report, E2E, migration, recovery, diagnostics, final evidence bundle checks"]
     ReleaseGate --> MacApp
     ReleaseGate --> IPCServer
 ```

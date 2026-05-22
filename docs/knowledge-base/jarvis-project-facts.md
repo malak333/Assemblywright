@@ -491,8 +491,9 @@ These notes capture durable facts for future agents working on this repository.
   `JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true`, then writes a JSON evidence
   report to `JARVIS_QA_REPORT_PATH` or
   `target/release-live-device-qa-report.json`. The report records installed-app
-  metadata, voice-loop evidence fields, validation flags, and proof boundary.
-  This standardizes manual evidence only; `--check` does not prove live device
+  metadata, voice-loop evidence fields, owner-recorded live voice evidence
+  fields for owner/device/profile/timestamps/notes, validation flags, and proof
+  boundary. This standardizes manual evidence only; `--check` does not prove live device
   behavior, and the report remains an owner assertion. `--self-test` uses a fake
   app fixture to validate assertion/report mechanics in the local release gate
   without claiming live device validation.
