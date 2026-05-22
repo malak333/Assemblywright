@@ -7,7 +7,8 @@ use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 use jarvis_core::{
     ApprovalDecisionRequest, CommandRequest, CreateMemoryItemRequest, CreateSchedulerJobRequest,
-    EmergencyPauseRequest, InstallPluginRequest, Sensitivity, TriggerKind, UpdateMemoryItemRequest,
+    EmergencyPauseRequest, InstallPluginRequest, InstalledPluginExecutionGrant,
+    InstalledPluginExecutionRequest, Sensitivity, TriggerKind, UpdateMemoryItemRequest,
 };
 use tokio::net::TcpListener;
 
@@ -275,6 +276,20 @@ enum PluginsCommand {
     },
     /// Fetch one locally installed plugin metadata record by id.
     InstalledGet {
+        id: String,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    /// Enable an installed local subprocess plugin with an explicit execution grant.
+    EnableInstalled {
+        id: String,
+        #[arg(long, default_value = "subprocess_stdio")]
+        grant: InstalledPluginExecutionGrant,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    /// Disable an installed plugin and reset it to metadata-only.
+    DisableInstalled {
         id: String,
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
@@ -587,6 +602,40 @@ async fn main() -> anyhow::Result<()> {
                 println!(
                     "{}",
                     request(&endpoint, "GET", &format!("/plugins/installed/{id}"), None)?
+                );
+            }
+            PluginsCommand::EnableInstalled {
+                id,
+                grant,
+                endpoint,
+            } => {
+                let body = serde_json::to_string(&InstalledPluginExecutionRequest {
+                    execution_enabled: true,
+                    execution_grant: grant,
+                })?;
+                println!(
+                    "{}",
+                    request(
+                        &endpoint,
+                        "POST",
+                        &format!("/plugins/installed/{id}/execution"),
+                        Some(&body)
+                    )?
+                );
+            }
+            PluginsCommand::DisableInstalled { id, endpoint } => {
+                let body = serde_json::to_string(&InstalledPluginExecutionRequest {
+                    execution_enabled: false,
+                    execution_grant: InstalledPluginExecutionGrant::MetadataOnly,
+                })?;
+                println!(
+                    "{}",
+                    request(
+                        &endpoint,
+                        "POST",
+                        &format!("/plugins/installed/{id}/execution"),
+                        Some(&body)
+                    )?
                 );
             }
             PluginsCommand::RunInstalled {

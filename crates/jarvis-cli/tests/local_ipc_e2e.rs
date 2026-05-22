@@ -30,6 +30,11 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_array_contains(&contract["endpoints"], "path", "/diagnostics/export");
     assert_array_contains(&contract["endpoints"], "path", "/model-routes");
     assert_array_contains(&contract["endpoints"], "path", "/approvals/:id/approve");
+    assert_array_contains(
+        &contract["endpoints"],
+        "path",
+        "/plugins/installed/:id/execution",
+    );
     assert_array_contains(&contract["endpoints"], "path", "/plugins/installed/:id/run");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/model-routes");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/model-routes/:id");
@@ -206,6 +211,151 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         contract_dry_run["audit_entry"]["event_type"],
         "installed_plugin_contract_dry_run"
     );
+
+    let subprocess_plugin_dir = temp_dir.path().join("local-subprocess-plugin");
+    fs::create_dir(&subprocess_plugin_dir).expect("create subprocess plugin dir");
+    let subprocess_plugin_dir = subprocess_plugin_dir
+        .canonicalize()
+        .expect("canonical subprocess plugin dir");
+    write_executable_plugin_script(&subprocess_plugin_dir);
+    let subprocess_manifest_path = subprocess_plugin_dir.join("jarvis-plugin.json");
+    fs::write(
+        &subprocess_manifest_path,
+        json!({
+            "manifest_schema_version": 1,
+            "id": "local_subprocess_e2e",
+            "name": "Local Subprocess E2E Plugin",
+            "version": "0.1.0",
+            "source": "local_subprocess",
+            "author": "Jarvis E2E",
+            "source_path": subprocess_plugin_dir.display().to_string(),
+            "subprocess": {
+                "command": "plugin-runner.py",
+                "args": [],
+                "stdin": "json",
+                "stdout": "json"
+            },
+            "actions": [{
+                "name": "inspect",
+                "description": "Validate local subprocess execution.",
+                "permissions": ["read_workspace"],
+                "risk_tier": "low",
+                "input_schema": {
+                    "schema": {
+                        "type": "object",
+                        "properties": { "path": { "type": "string" } },
+                        "required": ["path"],
+                        "additionalProperties": false
+                    }
+                },
+                "output_schema": {
+                    "schema": {
+                        "type": "object",
+                        "properties": { "path": { "type": "string" } },
+                        "required": ["path"],
+                        "additionalProperties": false
+                    }
+                },
+                "proactive": false,
+                "memory_access": "none",
+                "model_access": "none",
+                "audit_fields": ["path"],
+                "timeout": { "timeout_ms": 5000, "on_timeout": "cancel" },
+                "cancellation": "cooperative"
+            }]
+        })
+        .to_string(),
+    )
+    .expect("write subprocess plugin manifest");
+
+    let subprocess_installed = run_cli_json([
+        "plugins",
+        "install",
+        subprocess_manifest_path.to_str().expect("manifest path"),
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(subprocess_installed["id"], "local_subprocess_e2e");
+    assert_eq!(subprocess_installed["execution_enabled"], false);
+    assert_eq!(subprocess_installed["execution_grant"], "metadata_only");
+
+    let subprocess_enabled = run_cli_json([
+        "plugins",
+        "enable-installed",
+        "local_subprocess_e2e",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(subprocess_enabled["execution_enabled"], true);
+    assert_eq!(subprocess_enabled["execution_grant"], "subprocess_stdio");
+
+    let subprocess_run = run_cli_json([
+        "plugins",
+        "run-installed",
+        "local_subprocess_e2e",
+        "inspect",
+        "--input",
+        r#"{"path":"README.md"}"#,
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(subprocess_run["status"], "completed");
+    assert_eq!(subprocess_run["execution_enabled"], true);
+    assert_eq!(subprocess_run["execution_grant"], "subprocess_stdio");
+    assert_eq!(subprocess_run["output"]["path"], "README.md");
+    assert_eq!(subprocess_run["side_effect_executed"], true);
+    assert_eq!(
+        subprocess_run["audit_entry"]["event_type"],
+        "installed_plugin_subprocess_completed"
+    );
+    assert_eq!(
+        subprocess_run["audit_entry"]["payload"]["sandbox_process_started"],
+        true
+    );
+
+    let unsafe_manifest_path = subprocess_plugin_dir.join("unsafe-plugin.json");
+    fs::write(
+        &unsafe_manifest_path,
+        json!({
+            "manifest_schema_version": 1,
+            "id": "unsafe_subprocess_e2e",
+            "name": "Unsafe Subprocess E2E Plugin",
+            "version": "0.1.0",
+            "source": "local_subprocess",
+            "author": "Jarvis E2E",
+            "source_path": subprocess_plugin_dir.display().to_string(),
+            "subprocess": {
+                "command": "/bin/echo",
+                "args": [],
+                "stdin": "json",
+                "stdout": "json"
+            },
+            "actions": [{
+                "name": "inspect",
+                "description": "Should be blocked because command escapes source_path.",
+                "permissions": ["read_workspace"],
+                "risk_tier": "low",
+                "input_schema": { "schema": { "type": "object" } },
+                "output_schema": { "schema": { "type": "object" } },
+                "proactive": false,
+                "memory_access": "none",
+                "model_access": "none",
+                "audit_fields": [],
+                "timeout": { "timeout_ms": 5000, "on_timeout": "cancel" },
+                "cancellation": "cooperative"
+            }]
+        })
+        .to_string(),
+    )
+    .expect("write unsafe subprocess manifest");
+    let unsafe_install = run_cli_failure([
+        "plugins",
+        "install",
+        unsafe_manifest_path.to_str().expect("manifest path"),
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert!(unsafe_install.contains("subprocess command must live under source_path"));
 
     let tasks = run_cli_json(["tasks", "list", "--endpoint", endpoint.as_str()]);
     assert_array_contains(&tasks, "id", &task_id);
@@ -489,7 +639,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
 
     let diagnostics = run_cli_json(["diagnostics", "export", "--endpoint", endpoint.as_str()]);
     assert_eq!(diagnostics["repository_backed"], true);
-    assert_eq!(diagnostics["schema_version"], 6);
+    assert_eq!(diagnostics["schema_version"], 7);
     assert_eq!(
         diagnostics["health"]["contract"]["name"],
         "jarvis.local-ipc"
@@ -968,6 +1118,27 @@ fn run_cli_json<const N: usize>(args: [&str; N]) -> Value {
     })
 }
 
+fn run_cli_failure<const N: usize>(args: [&str; N]) -> String {
+    let output = Command::new(BIN)
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .expect("run jarvis cli");
+
+    assert!(
+        !output.status.success(),
+        "jarvis cli unexpectedly succeeded: {:?}\nstdout:\n{}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
 fn run_cli_text<const N: usize>(args: [&str; N]) -> String {
     let output = run_cli(args);
     String::from_utf8(output.stdout).expect("stdout is UTF-8")
@@ -988,6 +1159,29 @@ fn run_cli<const N: usize>(args: [&str; N]) -> Output {
         String::from_utf8_lossy(&output.stderr)
     );
     output
+}
+
+#[cfg(unix)]
+fn write_executable_plugin_script(dir: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let script = dir.join("plugin-runner.py");
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env python3
+import json
+import sys
+
+request = json.load(sys.stdin)
+json.dump({"path": request["input"]["path"]}, sys.stdout)
+"#,
+    )
+    .expect("write plugin runner");
+    let mut permissions = fs::metadata(&script)
+        .expect("script metadata")
+        .permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script, permissions).expect("chmod plugin runner");
 }
 
 fn assert_array_contains(value: &Value, field: &str, expected: &str) {
