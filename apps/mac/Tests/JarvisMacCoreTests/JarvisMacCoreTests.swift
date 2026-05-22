@@ -997,19 +997,30 @@ struct JarvisMacCoreTests {
         let voice = VoiceStateModel()
         let model = VoiceAdapterStateModel(adapter: adapter, voiceState: voice)
 
+        #expect(model.statusText == "Voice adapter idle.")
+        #expect(model.canStartCapture)
+        #expect(!model.isCaptureActive)
+
         await model.requestPermissions()
         #expect(model.phase == .idle)
         #expect(model.lastError == nil)
 
         await model.startCapture()
         #expect(model.phase == .listening)
+        #expect(model.statusText == "Voice adapter listening.")
+        #expect(!model.canStartCapture)
+        #expect(model.isCaptureActive)
         #expect(voice.statusText.contains("Voice transcript staging"))
 
         adapter.emitPartial("open")
         #expect(model.phase == .transcribing)
+        #expect(model.statusText == "Voice adapter transcribing.")
+        #expect(model.isCaptureActive)
         #expect(voice.transcriptDraft == "open")
         adapter.emitFinal("open diagnostics")
         #expect(model.phase == .idle)
+        #expect(model.canStartCapture)
+        #expect(!model.isCaptureActive)
         #expect(voice.transcriptDraft == "open diagnostics")
 
         let handoff = voice.apply(.submitTranscript)
