@@ -311,6 +311,11 @@ Distribution packaging gate:
 - Run `./scripts/package-distribution.sh --check` on packaging-related PRs to
   validate local app signing, installer packaging, notarization tool
   availability, and entitlements templates.
+- Run `./scripts/package-distribution.sh --unsigned-structure-check` on
+  distribution-layout PRs to build the release app, create an unsigned installer
+  package, and inspect the payload without requiring Apple credentials. Treat it
+  as structure evidence only, not signing, notarization, installation,
+  Finder/LaunchServices, live device, or manual QA proof.
 - For a release candidate, set `JARVIS_DEVELOPER_ID_APPLICATION`,
   `JARVIS_DEVELOPER_ID_INSTALLER`, and either `JARVIS_NOTARYTOOL_PROFILE` or
   the Apple ID/team/password notarytool variables, then run

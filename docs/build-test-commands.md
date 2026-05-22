@@ -269,6 +269,7 @@ cargo test -p jarvis-cli --test local_ipc_e2e -- --ignored
 ./scripts/packaged-supervision-proof.sh
 ./scripts/packaged-app-release-smoke.sh
 ./scripts/package-distribution.sh --check
+./scripts/package-distribution.sh --unsigned-structure-check
 swift test --package-path apps/mac --filter JarvisMacCoreTests
 ```
 
@@ -306,15 +307,18 @@ notification authorization, due/failed request creation, duplicate suppression,
 and denied-permission fail-closed behavior through a fake adapter.
 `./scripts/package-distribution.sh` is the stricter distribution packaging
 lane. Its `--check` mode validates local tool availability and the entitlements
-template without Apple credentials. Full mode requires
-`JARVIS_DEVELOPER_ID_APPLICATION`, `JARVIS_DEVELOPER_ID_INSTALLER`, and
-notarytool credentials. It signs the release bundle with hardened runtime and
-microphone entitlements, submits the app zip for notarization, staples the app,
-then creates a signed `/Applications` installer package at
-`target/distribution/Jarvis-0.1.4.pkg`, checks its installer signature,
-submits it for notarization, and staples the package. Passing that script still
-does not replace clean-profile install, Finder launch, live microphone/Speech
-validation, App Store review, or live audio-output validation.
+template without Apple credentials. Its `--unsigned-structure-check` mode
+builds and inspects the release app/pkg structure without Developer ID
+credentials. Full mode requires `JARVIS_DEVELOPER_ID_APPLICATION`,
+`JARVIS_DEVELOPER_ID_INSTALLER`, and notarytool credentials. It signs the
+release bundle with hardened runtime and microphone entitlements, submits the
+app zip for notarization, staples the app, then creates a signed
+`/Applications` installer package at `target/distribution/Jarvis-0.1.4.pkg`,
+checks its installer signature, submits it for notarization, and staples the
+package. Passing the unsigned structure check still does not prove
+signing/notarization, and passing full mode still does not replace
+clean-profile install, Finder launch, live microphone/Speech validation, App
+Store review, or live audio-output validation.
 Docs-only branches should at least run a render/lint-oriented documentation
 check when available, plus `cargo fmt --check` if the branch also touches Rust
 examples or scripts. Record any skipped full-gate stage as a blocker, not as
