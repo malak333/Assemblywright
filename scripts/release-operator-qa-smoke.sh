@@ -156,7 +156,7 @@ MEMORY_RESTORE_OUTPUT="$("$JARVIS" memory restore "$MEMORY_ID" --endpoint "$ENDP
 require_output_contains "operator QA memory restore" "$MEMORY_RESTORE_OUTPUT" '"deleted_at":null'
 
 SCHEDULER_RUN_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-SCHEDULER_CREATE_OUTPUT="$("$JARVIS" scheduler schedule "release operator QA due job" "plugin echo scheduled release operator qa smoke" --once-at "$SCHEDULER_RUN_AT" --endpoint "$ENDPOINT")"
+SCHEDULER_CREATE_OUTPUT="$("$JARVIS" scheduler schedule "release operator QA due job" "plugin status" --once-at "$SCHEDULER_RUN_AT" --endpoint "$ENDPOINT")"
 require_output_contains "operator QA scheduler create" "$SCHEDULER_CREATE_OUTPUT" '"name":"release operator QA due job"'
 
 SCHEDULER_ATTENTION_OUTPUT="$("$JARVIS" scheduler attention --endpoint "$ENDPOINT")"

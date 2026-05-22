@@ -357,6 +357,11 @@ These notes capture durable facts for future agents working on this repository.
   audit entry before command submission. The audit uses the same trigger
   classification as `/permissions/policy-review`, marks `command_redacted:
   true`, and keeps scheduler command text out of the policy audit payload.
+  Scheduler-originated first-party plugin calls are submitted as proactive
+  calls, so actions must opt in with manifest `proactive` plus
+  `proactive_run` permission. Non-opted-in scheduled plugin actions fail closed,
+  record redacted `plugin_execution_blocked` evidence, and do not execute side
+  effects.
   `jarvis scheduler recover-stale` and `/scheduler/recover-stale` provide
   explicit operator recovery for persisted stale `Running` jobs after a crash
   or killed process. Recovery marks matching jobs failed, returns diagnostic

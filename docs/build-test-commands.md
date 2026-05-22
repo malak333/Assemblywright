@@ -332,6 +332,7 @@ cargo test -p jarvis-core permission_policy_review_summarizes_unreviewed_memory_
 cargo test -p jarvis-core diagnostics_export_is_redacted_and_counts_repository_state -- --nocapture
 cargo test -p jarvis-core scheduler_attention -- --nocapture
 cargo test -p jarvis-core run_due_scheduler_jobs_executes_and_persists_visible_tasks -- --nocapture
+cargo test -p jarvis-core run_due_scheduler_jobs_blocks_non_proactive_plugin_actions -- --nocapture
 cargo test -p jarvis-core scheduler_proactive_policy_audit_matches_policy_review_classification -- --nocapture
 cargo test -p jarvis-core detects_stale_running_jobs_in_oldest_first_order -- --nocapture
 cargo test -p jarvis-core recover_stale_scheduler_jobs_marks_running_jobs_failed_and_audits_redacted -- --nocapture

@@ -1733,6 +1733,13 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert!(!serde_json::to_string(&run_due_audit_entries)
         .expect("run due audit JSON")
         .contains("\"plugin status\""));
+    let proactive_task_audit = run_cli_json(["tasks", "audit", "--endpoint", endpoint.as_str()]);
+    assert!(proactive_task_audit
+        .as_array()
+        .expect("task audit entries")
+        .iter()
+        .any(|entry| entry["event_type"] == "plugin_completed"
+            && entry["payload"]["proactive"] == true));
 
     let diagnostics = run_cli_json(["diagnostics", "export", "--endpoint", endpoint.as_str()]);
     assert_eq!(diagnostics["repository_backed"], true);
@@ -1757,8 +1764,8 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     let fail_closed_job = run_cli_json([
         "scheduler",
         "schedule",
-        "fail closed approval e2e job",
-        "plugin approval echo scheduler should pause",
+        "fail closed non proactive e2e job",
+        "plugin echo scheduler should not run",
         "--endpoint",
         endpoint.as_str(),
     ]);
@@ -1800,6 +1807,25 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         "event_type",
         "scheduler_fail_closed_emergency_pause",
     );
+    assert!(fail_closed_run["executions"][0]["message"]
+        .as_str()
+        .expect("fail closed message")
+        .contains("fake_echo.echo cannot run proactively"));
+    let fail_closed_audit = run_cli_json(["tasks", "audit", "--endpoint", endpoint.as_str()]);
+    assert!(fail_closed_audit
+        .as_array()
+        .expect("fail closed audit entries")
+        .iter()
+        .any(|entry| entry["event_type"] == "plugin_execution_blocked"
+            && entry["payload"]["proactive"] == true
+            && entry["payload"]["side_effect_executed"] == false
+            && entry["payload"]["error"]
+                .as_str()
+                .expect("blocked error")
+                .contains("fake_echo.echo cannot run proactively")));
+    assert!(!serde_json::to_string(&fail_closed_audit)
+        .expect("fail closed audit JSON")
+        .contains("scheduler should not run"));
     let fail_closed_pause_status = run_cli_json(["pause-status", "--endpoint", endpoint.as_str()]);
     assert_eq!(fail_closed_pause_status["paused"], true);
     let cancelled_by_fail_closed = run_cli_json([

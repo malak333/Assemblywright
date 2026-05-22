@@ -552,6 +552,7 @@ async fn main() -> anyhow::Result<()> {
                 session_id: None,
                 context: serde_json::Value::Null,
                 dry_run,
+                proactive: false,
                 sensitivity: sensitivity.as_deref().map(parse_sensitivity).transpose()?,
             })?;
             println!("{}", request(&endpoint, "POST", "/commands", Some(&body))?);
@@ -1137,6 +1138,7 @@ async fn run_smoke() -> anyhow::Result<()> {
         session_id: None,
         context: serde_json::json!({ "surface": "cli-smoke" }),
         dry_run: true,
+        proactive: false,
         sensitivity: None,
     })?;
     let command = request(&endpoint, "POST", "/commands", Some(&command_body))?;

@@ -254,6 +254,8 @@ pub struct CommandRequest {
     #[serde(default)]
     pub dry_run: bool,
     #[serde(default)]
+    pub proactive: bool,
+    #[serde(default)]
     pub sensitivity: Option<Sensitivity>,
 }
 
@@ -1473,20 +1475,23 @@ impl IpcState {
             .await?;
 
         let mut audit_entries = runtime_response.audit_entries;
-        let plugin_dispatch = if runtime_response.task.status == TaskStatus::Completed {
+        let mut task = runtime_response.task;
+        let plugin_dispatch = if task.status == TaskStatus::Completed {
             self.maybe_execute_first_party_plugin(
-                runtime_response.task.id,
-                &request.input,
-                sensitivity,
-                request.dry_run,
-                &mut audit_entries,
-                &command_store,
+                &mut task,
+                FirstPartyPluginDispatchContext {
+                    input: &request.input,
+                    sensitivity,
+                    dry_run: request.dry_run,
+                    proactive: request.proactive,
+                    audit_entries: &mut audit_entries,
+                    command_store: &command_store,
+                },
             )?
         } else {
             PluginDispatch::default()
         };
 
-        let mut task = runtime_response.task;
         if plugin_dispatch.waiting_for_approval {
             command_store.update_task_status(&mut task, TaskStatus::WaitingForApproval)?;
         }
@@ -1513,7 +1518,7 @@ impl IpcState {
             route_evidence: runtime_response.route_evidence,
             steps: runtime_response.steps,
             plugin_results: plugin_dispatch.results,
-            message: runtime_response.message,
+            message: plugin_dispatch.message.unwrap_or(runtime_response.message),
         })
     }
 
@@ -1525,14 +1530,10 @@ impl IpcState {
 
     fn maybe_execute_first_party_plugin(
         &self,
-        task_id: Uuid,
-        input: &str,
-        sensitivity: Sensitivity,
-        dry_run: bool,
-        audit_entries: &mut Vec<AuditEntry>,
-        command_store: &SharedCommandStore,
+        task: &mut TaskRecord,
+        context: FirstPartyPluginDispatchContext<'_>,
     ) -> JarvisResult<PluginDispatch> {
-        let Some(mut plugin_request) = first_party_plugin_request(input) else {
+        let Some(mut plugin_request) = first_party_plugin_request(context.input) else {
             return Ok(PluginDispatch::default());
         };
         let host = PluginHost::with_first_party_plugins()?;
@@ -1547,20 +1548,21 @@ impl IpcState {
         let mut granted_scopes = requested_scopes.clone();
         granted_scopes.push(CapabilityScope::Conversation);
         plugin_request.granted_scopes = granted_scopes.clone();
-        plugin_request.sensitivity = sensitivity;
+        plugin_request.sensitivity = context.sensitivity;
+        plugin_request.proactive = context.proactive;
         let policy_request = PolicyRequest {
-            task_id: Some(task_id),
+            task_id: Some(task.id),
             action: format!("{}.{}", plugin_request.plugin_id, plugin_request.action),
             requested_scopes,
             granted_scopes,
             risk_tier: action.risk_tier,
-            sensitivity,
+            sensitivity: context.sensitivity,
             emergency_paused: self.runtime_control.is_emergency_paused(),
             approval: None,
         };
         let policy = PermissionEngine::evaluate(&policy_request);
         let policy_audit = AuditEntry::new(
-            Some(task_id),
+            Some(task.id),
             "plugin_policy_evaluated",
             "policy evaluated first-party plugin action",
             json!({
@@ -1571,11 +1573,12 @@ impl IpcState {
                 "risk_tier": policy.risk_tier,
                 "approval_status": policy.approval_status,
                 "missing_scopes": policy.missing_scopes,
-                "dry_run": dry_run,
+                "dry_run": context.dry_run,
+                "proactive": context.proactive,
             }),
         );
-        command_store.append_audit_entry(&policy_audit)?;
-        audit_entries.push(policy_audit);
+        context.command_store.append_audit_entry(&policy_audit)?;
+        context.audit_entries.push(policy_audit);
 
         if policy.decision == ApprovalDecision::Blocked {
             return Err(JarvisError::PolicyBlocked(policy.reason));
@@ -1584,15 +1587,15 @@ impl IpcState {
         if policy.decision == ApprovalDecision::RequireConfirmation {
             plugin_request.approval_status = ApprovalStatus::Pending;
             let approval = self.persist_pending_approval(NewPendingApproval {
-                task_id,
+                task_id: task.id,
                 action: format!("{}.{}", plugin_request.plugin_id, plugin_request.action),
                 requested_scopes: policy_request.requested_scopes,
                 risk_tier: action.risk_tier,
-                sensitivity,
+                sensitivity: context.sensitivity,
                 reason: policy.reason.clone(),
             })?;
             let approval_audit = AuditEntry::new(
-                Some(task_id),
+                Some(task.id),
                 "approval_pending",
                 "first-party plugin action is pending explicit approval and did not execute",
                 json!({
@@ -1606,27 +1609,57 @@ impl IpcState {
                     "side_effect_executed": false,
                 }),
             );
-            command_store.append_audit_entry(&approval_audit)?;
-            audit_entries.push(approval_audit);
+            context.command_store.append_audit_entry(&approval_audit)?;
+            context.audit_entries.push(approval_audit);
         }
 
-        if dry_run {
+        if context.dry_run {
             let dry_run_audit = AuditEntry::new(
-                Some(task_id),
+                Some(task.id),
                 "plugin_dry_run",
                 "dry run skipped first-party plugin execution",
                 json!({
                     "plugin_id": plugin_request.plugin_id,
                     "action": plugin_request.action,
                     "approval_status": plugin_request.approval_status,
+                    "proactive": context.proactive,
                 }),
             );
-            command_store.append_audit_entry(&dry_run_audit)?;
-            audit_entries.push(dry_run_audit);
+            context.command_store.append_audit_entry(&dry_run_audit)?;
+            context.audit_entries.push(dry_run_audit);
             return Ok(PluginDispatch::default());
         }
 
-        let result = host.execute(plugin_request)?;
+        let result = match host.execute(plugin_request) {
+            Ok(result) => result,
+            Err(error) => {
+                let status = if matches!(error, JarvisError::PolicyBlocked(_)) {
+                    TaskStatus::Blocked
+                } else {
+                    TaskStatus::Failed
+                };
+                context.command_store.update_task_status(task, status)?;
+                let blocked_audit = AuditEntry::new(
+                    Some(task.id),
+                    "plugin_execution_blocked",
+                    "first-party plugin action was blocked before execution",
+                    json!({
+                        "plugin_id": manifest.id,
+                        "action": action.name,
+                        "error": error.to_string(),
+                        "proactive": context.proactive,
+                        "side_effect_executed": false,
+                    }),
+                );
+                context.command_store.append_audit_entry(&blocked_audit)?;
+                context.audit_entries.push(blocked_audit);
+                return Ok(PluginDispatch {
+                    waiting_for_approval: false,
+                    results: Vec::new(),
+                    message: Some(format!("First-party plugin execution blocked: {error}")),
+                });
+            }
+        };
         let event_type = match result.status {
             PluginCallStatus::Completed => "plugin_completed",
             PluginCallStatus::ApprovalRequired => "plugin_approval_required",
@@ -1635,7 +1668,7 @@ impl IpcState {
             PluginCallStatus::Failed => "plugin_failed",
         };
         let plugin_audit = AuditEntry::new(
-            Some(task_id),
+            Some(task.id),
             event_type,
             "first-party plugin action finished",
             json!({
@@ -1648,11 +1681,12 @@ impl IpcState {
                 "timeout_ms": result.metadata.timeout_ms,
             }),
         );
-        command_store.append_audit_entry(&plugin_audit)?;
-        audit_entries.push(plugin_audit);
+        context.command_store.append_audit_entry(&plugin_audit)?;
+        context.audit_entries.push(plugin_audit);
         Ok(PluginDispatch {
             waiting_for_approval: result.status == PluginCallStatus::ApprovalRequired,
             results: vec![result],
+            message: None,
         })
     }
 
@@ -2257,6 +2291,7 @@ impl IpcState {
                         "sensitivity": "workspace",
                     }),
                     dry_run: false,
+                    proactive: true,
                     sensitivity: Some(Sensitivity::Workspace),
                 })
                 .await?;
@@ -2636,6 +2671,16 @@ struct SharedCommandStore {
 struct PluginDispatch {
     waiting_for_approval: bool,
     results: Vec<PluginCallResult>,
+    message: Option<String>,
+}
+
+struct FirstPartyPluginDispatchContext<'a> {
+    input: &'a str,
+    sensitivity: Sensitivity,
+    dry_run: bool,
+    proactive: bool,
+    audit_entries: &'a mut Vec<AuditEntry>,
+    command_store: &'a SharedCommandStore,
 }
 
 impl RuntimeCommandStore for SharedCommandStore {
@@ -4070,14 +4115,14 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "scheduler_attention",
             "implemented",
-            "Repository-backed scheduler jobs expose redacted `/scheduler/attention`, explicit run-due execution, background loop tests, and CLI IPC E2E.",
-            "Adapter and fake-test evidence only for notifications; live OS notification delivery remains a manual release gate.",
+            "Repository-backed scheduler jobs expose redacted `/scheduler/attention` due/running/failed handoff, explicit run-due execution, background loop tests, and CLI IPC E2E.",
+            "Visibility and app-notification handoff only; scheduler attention does not grant proactive plugin execution, and live OS notification delivery remains a manual release gate.",
         ),
         feature(
             "scheduler_trigger_policy_review",
             "implemented",
-            "Active scheduler triggers appear in `/permissions/policy-review` without scheduler command text and are covered by Rust unit and CLI IPC E2E tests.",
-            "Review visibility only; richer proactive trigger policy and manual notification validation remain pending.",
+            "Active scheduler triggers appear in `/permissions/policy-review` without scheduler command text; due execution emits `scheduler_proactive_policy_checked` using the same trigger classification, and proactive plugin call requests require manifest opt-in plus `proactive_run` permission.",
+            "Review visibility only for scheduler policy review; due-run audit and plugin opt-in enforcement are local-only, scheduler command bodies remain redacted, proactive plugin requests that are not opted in fail closed, and live OS notification delivery remains a manual release gate.",
         ),
         feature(
             "scheduler_stale_running_recovery",
@@ -5162,6 +5207,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 session_id: None,
                 context: json!({"surface": "test"}),
                 dry_run: true,
+                proactive: false,
                 sensitivity: None,
             })
             .await
@@ -5226,6 +5272,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 session_id: None,
                 context: json!({"surface": "test"}),
                 dry_run: false,
+                proactive: false,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -5340,6 +5387,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 session_id: None,
                 context: json!({"surface": "test"}),
                 dry_run: false,
+                proactive: false,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -5369,6 +5417,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 session_id: None,
                 context: json!({"surface": "test"}),
                 dry_run: false,
+                proactive: false,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -5428,6 +5477,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 session_id: None,
                 context: json!({"surface": "test"}),
                 dry_run: false,
+                proactive: false,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -5585,6 +5635,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 session_id: None,
                 context: json!({"surface": "test", "sensitivity": "workspace"}),
                 dry_run: false,
+                proactive: false,
                 sensitivity: None,
             })
             .await
@@ -5616,6 +5667,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 session_id: None,
                 context: json!({"surface": "test"}),
                 dry_run: true,
+                proactive: false,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -5643,6 +5695,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 session_id: None,
                 context: json!({"surface": "test"}),
                 dry_run: false,
+                proactive: false,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -5681,6 +5734,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 session_id: None,
                 context: json!({"surface": "test"}),
                 dry_run: false,
+                proactive: false,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -6074,6 +6128,16 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert!(audit
             .iter()
             .any(|entry| entry.event_type == "plugin_completed"));
+        let plugin_completed_audits = audit
+            .iter()
+            .filter(|entry| entry.event_type == "plugin_completed")
+            .collect::<Vec<_>>();
+        assert_eq!(plugin_completed_audits.len(), 3);
+        assert!(plugin_completed_audits.iter().all(|entry| entry
+            .payload
+            .get("proactive")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)));
     }
 
     #[tokio::test]
@@ -6128,6 +6192,71 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         );
         let encoded = serde_json::to_string(policy_audit).expect("policy audit JSON");
         assert!(!encoded.contains("plugin status"));
+    }
+
+    #[tokio::test]
+    async fn run_due_scheduler_jobs_blocks_non_proactive_plugin_actions() {
+        let repository = SqliteRepository::in_memory().unwrap();
+        let state = IpcState::with_repository(repository).expect("state");
+        let job = state
+            .schedule_scheduler_job(SchedulerJobSpec {
+                name: "non proactive echo".to_string(),
+                command: "plugin echo scheduler should not run".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .expect("schedule");
+
+        let response = state.run_due_scheduler_jobs(1).await.expect("run due");
+
+        assert!(response.emergency_paused);
+        assert_eq!(response.executions.len(), 1);
+        let execution = &response.executions[0];
+        assert!(!execution.accepted);
+        assert_eq!(execution.job.id, job.id);
+        assert_eq!(execution.job.status, SchedulerJobStatus::Failed);
+        assert_eq!(execution.task.status, TaskStatus::Blocked);
+        assert!(execution
+            .message
+            .contains("fake_echo.echo cannot run proactively"));
+        assert!(execution
+            .audit_entries
+            .iter()
+            .any(|entry| entry.event_type == "scheduler_fail_closed_emergency_pause"));
+
+        let audit = state
+            .using_repository(|repository| repository.list_audit_entries(None))
+            .expect("audit");
+        assert!(audit.iter().any(|entry| {
+            entry.event_type == "plugin_policy_evaluated"
+                && entry
+                    .payload
+                    .get("proactive")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(true)
+        }));
+        assert!(audit.iter().any(|entry| {
+            entry.event_type == "plugin_execution_blocked"
+                && entry
+                    .payload
+                    .get("proactive")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(true)
+                && entry
+                    .payload
+                    .get("side_effect_executed")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(false)
+                && entry
+                    .payload
+                    .get("error")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|error| error.contains("fake_echo.echo cannot run proactively"))
+        }));
+        assert!(!audit
+            .iter()
+            .any(|entry| entry.event_type == "plugin_completed"));
+        let encoded = serde_json::to_string(&audit).expect("audit JSON");
+        assert!(!encoded.contains("scheduler should not run"));
     }
 
     #[tokio::test]
@@ -6443,6 +6572,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 session_id: None,
                 context: json!({"surface": "test"}),
                 dry_run: true,
+                proactive: false,
                 sensitivity: Some(Sensitivity::Private),
             })
             .await
@@ -6481,6 +6611,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 session_id: None,
                 context: json!({ "surface": "test" }),
                 dry_run: true,
+                proactive: false,
                 sensitivity: Some(Sensitivity::Private),
             })
             .await
@@ -6565,6 +6696,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 session_id: None,
                 context: serde_json::Value::Null,
                 dry_run: false,
+                proactive: false,
                 sensitivity: None,
             })
             .await
@@ -6617,6 +6749,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 session_id: None,
                 context: serde_json::Value::Null,
                 dry_run: false,
+                proactive: false,
                 sensitivity: None,
             })
             .await
