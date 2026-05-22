@@ -89,6 +89,12 @@ These notes capture durable facts for future agents working on this repository.
   OpenAI `tool_calls` for advertised first-party tool definitions. Plain text
   remains backward-compatible. This is not installed-plugin orchestration or
   broad third-party tool execution.
+- Live local testing with Ollama `llama3.2` has proven the opt-in
+  Ollama-compatible HTTP route can complete real model commands. The runtime
+  now advertises the exact registered first-party tool inventory in the
+  Ollama prompt and rejects hallucinated provider plugin IDs/actions with
+  `tool_request_rejected` audit evidence plus registered-tool guidance before
+  policy checks or tool execution.
 - Provider-envelope coverage includes
   `ollama_http_provider_parses_tool_request_envelope`,
   `chatgpt_http_provider_parses_tool_request_envelope`,
@@ -98,7 +104,12 @@ These notes capture durable facts for future agents working on this repository.
   E2E with an Ollama-compatible stub.
 - Native ChatGPT/OpenAI-compatible tool-call coverage includes
   `chatgpt_http_provider_parses_native_tool_calls` and the cross-process
-  `serve_executes_chatgpt_native_tool_call` E2E with an OpenAI-compatible stub.
+  `serve_executes_chatgpt_native_tool_call` E2E.
+- Invalid provider-planned tool coverage includes
+  `rejects_hallucinated_model_planned_plugin_with_registered_tool_guidance`,
+  `rejects_hallucinated_model_planned_action_with_registered_tool_guidance`,
+  and the cross-process
+  `serve_rejects_ollama_hallucinated_tool_with_registered_tool_guidance` E2E.
 - Repository-backed IPC state exposes task, audit, model-route, and memory
   inspection routes, persists scheduler jobs, restores them at startup, and all
   IPC states expose `/plugins/manifests` for deterministic first-party plugin
@@ -339,6 +350,11 @@ These notes capture durable facts for future agents working on this repository.
   --package-path apps/mac`, and `swift build --package-path apps/mac`.
   It also runs `./scripts/storage-migration-backup-smoke.sh` so file-backed
   migration backup/recovery stays part of the default local release evidence.
+- Local-model proof now includes stubbed provider-envelope E2E plus live
+  Ollama route viability observed during manual testing. The proof is still a
+  local runtime boundary claim, not a finished conversational assistant claim:
+  model-specific tool discipline can vary, and Jarvis relies on the runtime
+  advertised inventory plus fail-closed validation for safety.
 - The current E2E expectation for Rust/CLI foundation changes is
   `cargo test -p jarvis-cli --test local_ipc_e2e`; the ignored variant is
   release-proof coverage and is included by `./scripts/release-local.sh`.

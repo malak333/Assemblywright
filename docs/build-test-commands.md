@@ -78,6 +78,11 @@ JARVIS_LOCAL_MODEL_TIMEOUT_MS=15000 \
 cargo run -p jarvis-cli -- serve
 ```
 
+Live local testing with `llama3.2` has proven this Ollama route can complete
+real model commands. Local model behavior is still model-dependent, so the
+runtime advertises the exact first-party tool inventory in the prompt and
+keeps validating every model-planned tool request before execution.
+
 To exercise the opt-in ChatGPT/OpenAI-compatible provider boundary, disable
 the local provider and provide an API key. The key is never serialized in
 provider config, provider status, route evidence, diagnostics, or structured
@@ -100,7 +105,10 @@ Ollama-compatible and ChatGPT/OpenAI-compatible text responses may also return
 a strict JSON envelope with `message`, `complete`, and `tool_requests`.
 Accepted `tool_requests` are fed into the same bounded first-party schema,
 policy, approval, and audit path as fake-model tool plans; malformed envelopes
-fail with redacted diagnostics. ChatGPT/OpenAI-compatible responses may also
+fail with redacted diagnostics. Unknown plugin IDs, undeclared actions,
+malformed inputs, and oversized tool plans fail closed with
+`tool_request_rejected` audit evidence and registered-tool guidance before any
+policy check or tool execution. ChatGPT/OpenAI-compatible responses may also
 return native OpenAI `tool_calls` for the advertised first-party tools; these
 are translated into the same bounded first-party path. This is provider tool
 compatibility, not installed-plugin orchestration.

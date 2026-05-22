@@ -2257,6 +2257,75 @@ fn serve_executes_ollama_provider_tool_request_envelope() {
 }
 
 #[test]
+fn serve_rejects_ollama_hallucinated_tool_with_registered_tool_guidance() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let db_path = temp_dir
+        .path()
+        .join("jarvis-provider-invalid-tool-e2e.sqlite");
+    let (ollama_base_url, server_thread) = start_ollama_invalid_tool_server();
+    let mut server = JarvisServer::start_with_env(
+        &db_path,
+        &[
+            ("JARVIS_LOCAL_MODEL_PROVIDER", "ollama"),
+            ("JARVIS_LOCAL_MODEL", "provider-invalid-tool-test"),
+            ("JARVIS_OLLAMA_BASE_URL", ollama_base_url.as_str()),
+        ],
+    );
+    let endpoint = server.endpoint();
+
+    let command = run_cli_json([
+        "command",
+        "ask provider to inspect status with a bad tool",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+
+    assert_eq!(command["accepted"], false, "{command}");
+    assert_eq!(command["task"]["status"], "failed", "{command}");
+    assert!(command["plugin_results"]
+        .as_array()
+        .expect("plugin results")
+        .is_empty());
+    let message = command["message"].as_str().expect("message");
+    assert!(message.contains("Tool request rejected"), "{message}");
+    assert!(
+        message.contains("plugin status is not registered"),
+        "{message}"
+    );
+    assert!(
+        message.contains(
+            "Registered first-party model tools are: fake_echo.approval_echo, fake_echo.echo, fake_status.status"
+        ),
+        "{message}"
+    );
+    assert_array_contains(
+        &command["audit_entries"],
+        "event_type",
+        "tool_request_rejected",
+    );
+    let rejection = command["audit_entries"]
+        .as_array()
+        .expect("audit entries")
+        .iter()
+        .find(|entry| entry["event_type"] == "tool_request_rejected")
+        .expect("rejection audit");
+    assert_eq!(rejection["payload"]["plugin_id"], "status");
+    assert!(rejection["payload"]["registered_tools"]
+        .as_array()
+        .expect("registered tools")
+        .iter()
+        .any(|tool| tool == "fake_status.status"));
+    let encoded = serde_json::to_string(&command).expect("command JSON");
+    assert!(!encoded.contains("JARVIS_OLLAMA_BASE_URL"));
+
+    server.stop();
+    server_thread
+        .join()
+        .expect("ollama invalid-tool stub thread");
+    drop(temp_dir);
+}
+
+#[test]
 fn serve_executes_chatgpt_native_tool_call() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let db_path = temp_dir
@@ -2514,6 +2583,45 @@ fn start_ollama_envelope_server() -> (String, thread::JoinHandle<()>) {
             );
             stream.write_all(http.as_bytes()).expect("write response");
         }
+    });
+
+    (format!("http://{address}"), handle)
+}
+
+fn start_ollama_invalid_tool_server() -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind ollama invalid-tool stub");
+    let address = listener
+        .local_addr()
+        .expect("ollama invalid-tool stub address");
+    let handle = thread::spawn(move || {
+        let envelope = json!({
+            "message": "provider guessed a status tool",
+            "complete": false,
+            "tool_requests": [
+                {
+                    "plugin_id": "status",
+                    "action": "status",
+                    "input": {}
+                }
+            ]
+        })
+        .to_string();
+        let response = json!({ "response": envelope, "done": false }).to_string();
+
+        let (mut stream, _) = listener.accept().expect("ollama request");
+        let mut buffer = [0_u8; 4096];
+        let read = stream.read(&mut buffer).expect("read request");
+        let request = String::from_utf8_lossy(&buffer[..read]);
+        assert!(request.contains("POST /api/generate"), "{request}");
+        assert!(request.contains("Registered first-party tools are exactly"));
+        assert!(request.contains("fake_status.status"));
+        assert!(request.contains("Never invent plugin_id or action values"));
+        let http = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            response.len(),
+            response
+        );
+        stream.write_all(http.as_bytes()).expect("write response");
     });
 
     (format!("http://{address}"), handle)

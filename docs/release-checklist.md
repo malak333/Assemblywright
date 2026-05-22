@@ -25,6 +25,11 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   commands, and supports bounded fake-model, strict provider-envelope, and
   native ChatGPT/OpenAI-compatible first-party tool execution
   before any broader assistant claim.
+- Confirm local-model tool discipline/recovery remains represented in the
+  architecture map: advertised first-party tool inventory, strict provider
+  envelopes, bounded tool requests, invalid-tool rejection, redacted provider
+  failure responses, and no installed-plugin or external tool execution through
+  model-planned calls.
 - Confirm the current-vs-target implementation phase table is up to date before
   using any production-readiness language. Release notes may claim foundation
   readiness only for verified Rust/Swift surfaces, not full assistant readiness.
@@ -170,7 +175,10 @@ stage or when a PR needs focused evidence for one ownership slice.
   redacted `model_step_failed` audit and route evidence. Malformed provider
   tool envelopes must fail with redacted diagnostics, and provider-originated
   tool calls must still pass runtime schema, policy, approval, and audit paths;
-  Swift approval decision controls are covered by contract/model tests.
+  hallucinated provider plugin IDs/actions must fail closed with
+  `tool_request_rejected` audit evidence and registered-tool guidance before
+  policy checks or tool execution; Swift approval decision controls are covered
+  by contract/model tests.
 - Confirm task, audit, model-route, memory, and plugin manifest inspection
   endpoints still require or use the correct repository/plugin backing and are
   covered by local smoke or focused IPC tests.

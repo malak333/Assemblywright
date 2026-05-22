@@ -31,6 +31,10 @@ release requirements, not optional UX guidance.
   proactive triggers.
 - Degraded modes must be visible when local models, microphone access, TTS,
   ChatGPT, plugins, persistence, or IPC are unavailable.
+- Model-originated tool calls must be constrained to advertised first-party
+  inventory and fail closed on unknown plugin IDs, undeclared actions,
+  non-object inputs, schema failures, non-first-party requests, or oversized
+  tool plans before execution.
 - Audit logs must explain model route, permission checks, tool calls,
   approvals, denials, files touched, external actions attempted, failures, and
   final state.
