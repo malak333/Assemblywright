@@ -326,7 +326,7 @@ write_bundle() {
   pkg_sha="$(file_sha256 "$PKG_PATH")"
   live_sha="$(file_sha256 "$LIVE_QA_REPORT")"
   plugin_sha="$(file_sha256 "$PLUGIN_QA_REPORT")"
-  escaped_boundary="$(json_escape "Evidence bundle manifest only; relies on owner-recorded external validation flags and referenced signed/notarized artifacts plus QA reports.")"
+  escaped_boundary="$(json_escape "Evidence bundle manifest only; records artifact paths, local signature/stapling validation status, owner-recorded signing/notarization validation flags, and QA reports.")"
   local_signature_validation="$VALIDATE_LOCAL_SIGNATURES"
 
   mkdir -p "$(dirname "$OUTPUT_PATH")"
@@ -651,8 +651,8 @@ if [[ "$CHECK_ONLY" == true ]]; then
   printf 'Jarvis release evidence bundle preflight: ok\n\n'
   cat <<'CHECKLIST'
 Required before --bundle:
-- Full Developer ID signed and notarized app zip exists.
-- Full Developer ID signed and notarized /Applications installer package exists.
+- App zip artifact path exists, with Developer ID signing/notarization validated separately.
+- /Applications installer package path exists, with Developer ID signing/notarization validated separately.
 - Clean-profile install, Finder launch, live microphone/Speech, audio output,
   notification, restart, and manual release QA report exists.
 - Marketplace review, malware scan, signed publisher policy, OS sandbox, and
@@ -666,9 +666,9 @@ CHECKLIST
   exit 0
 fi
 
-require_dir "signed app bundle" "$APP_PATH"
-require_file "signed app zip" "$ZIP_PATH"
-require_file "signed installer package" "$PKG_PATH"
+require_dir "app bundle path" "$APP_PATH"
+require_file "app zip path" "$ZIP_PATH"
+require_file "installer package path" "$PKG_PATH"
 require_production_signature_validation
 validate_local_distribution_evidence
 for flag in clean_profile finder_launch microphone speech_permission transcript_handoff audio_output notification restart manual_release_qa; do

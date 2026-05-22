@@ -309,23 +309,25 @@ preflight. Its `--self-test` validates bundle manifest generation with fake
 artifacts and fake QA reports only; real release evidence must come from
 `--bundle` after signed/notarized distribution artifacts, live-device QA, and
 plugin-trust QA evidence exist and every `JARVIS_EVIDENCE_*` flag is true.
-The real bundle path also locally validates the signed app, app stapling
-ticket, signed installer package, installer stapling ticket, and app zip
-payload before writing the manifest. It rejects disabled local signature
-validation outside the fake self-test lane, parses every required
+The doctor/status paths only inventory expected paths, JSON flags, and release
+metadata; they do not validate Developer ID signing, notarization, stapling, or
+installation. The real `--bundle` path also locally validates the app code
+signature, app stapling ticket, installer package signature, installer stapling
+ticket, and app zip payload before writing the manifest. It rejects disabled
+local signature validation outside the fake self-test lane, parses every required
 live-device/plugin-trust report flag, requires owner-recorded evidence fields in
 both QA reports, requires live-device QA app bundle metadata to match the
 expected bundle id/version, and writes SHA-256 digests for distribution
 artifacts and QA reports before writing production evidence.
 `./scripts/release-evidence-doctor.sh --check` inventories the expected signed
 artifact paths, live-device QA report, plugin-trust QA report, and final
-evidence bundle manifest, then reports present and missing evidence without
-failing the local gate. Its `--self-test` uses fake artifacts/reports to prove
-the inventory logic only; `--assert-complete` is reserved for release triage
-after real external evidence exists.
+evidence bundle manifest, then reports present, missing, or invalid evidence
+without failing the local gate. Its `--self-test` uses fake artifacts/reports to
+prove the inventory logic only; it is not a signing, notarization, stapling, or
+installation validator.
 `jarvis release evidence-status` exposes the same standard artifact/report
 inventory as structured JSON through `/release/evidence-status`; it is
-file/report inspection only and does not prove signing, notarization, installed
+file/report inventory only and does not prove signing, notarization, installed
 app launch, live-device QA, marketplace review, malware scanning, or OS
 sandboxing. Non-default live-device and plugin-trust report paths can be
 provided through either the QA script variables (`JARVIS_QA_REPORT_PATH`,

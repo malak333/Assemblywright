@@ -31,8 +31,9 @@ evidence gates are present or missing.
 --check prints a non-failing status summary. Missing external/manual evidence is
 expected before a production release candidate is fully validated.
 
---assert-complete fails unless all signed artifacts, QA reports, and final
-evidence bundle flags are present and valid.
+--assert-complete fails unless all expected artifact paths, QA reports, and
+final evidence bundle flags are present and valid. Path presence does not prove
+Developer ID signing, notarization, or stapling by itself.
 
 --self-test creates fake artifacts and reports in a temporary directory and
 exercises the status logic without claiming production readiness.
@@ -283,11 +284,11 @@ check_json_nonempty_string() {
 }
 
 check_release_evidence() {
-  check_path "signed app bundle" "$APP_PATH" dir
+  check_path "app bundle path" "$APP_PATH" dir
   check_path "app executable" "$APP_PATH/Contents/MacOS/JarvisMacApp" executable
   check_path "bundled core executable" "$APP_PATH/Contents/Resources/bin/jarvis-cli" executable
-  check_path "signed app zip" "$ZIP_PATH" file
-  check_path "signed installer package" "$PKG_PATH" file
+  check_path "app zip path" "$ZIP_PATH" file
+  check_path "installer package path" "$PKG_PATH" file
 
   if valid_json_file "$LIVE_QA_REPORT"; then
     record_satisfied "live-device QA report JSON: $LIVE_QA_REPORT"
@@ -345,7 +346,7 @@ print_status() {
     status="complete"
   fi
 
-  printf 'Jarvis release evidence doctor: %s\n' "$status"
+  printf 'Jarvis release evidence inventory: %s\n' "$status"
   printf 'Satisfied evidence items: %s\n' "${#SATISFIED_ITEMS[@]}"
   if [[ "${#SATISFIED_ITEMS[@]}" -gt 0 ]]; then
     for item in "${SATISFIED_ITEMS[@]}"; do
@@ -358,7 +359,7 @@ print_status() {
       printf '  missing: %s\n' "$item"
     done
   fi
-  printf 'Proof boundary: file/report inspection only; no signing, notarization, installation, Finder launch, live device QA, marketplace review, malware scan, or OS sandbox enforcement was performed.\n'
+  printf 'Proof boundary: file/report path inventory only; present artifact paths do not prove Developer ID signing, notarization, stapling, installation, Finder launch, live device QA, marketplace review, malware scan, or OS sandbox enforcement.\n'
 }
 
 write_fixture_app() {

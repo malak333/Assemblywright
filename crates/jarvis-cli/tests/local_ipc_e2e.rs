@@ -197,6 +197,98 @@ fn release_evidence_status_accepts_bundle_evidence_report_aliases() {
 }
 
 #[test]
+#[cfg(unix)]
+fn release_evidence_status_marks_present_artifacts_as_presence_only() {
+    let temp_dir = tempfile::tempdir().expect("temp evidence artifacts");
+    let dist_dir = write_placeholder_distribution(temp_dir.path());
+    let endpoint = format!("http://{}", unused_loopback_addr());
+    let dist_dir = dist_dir.to_str().expect("dist dir utf8");
+
+    let evidence_status = run_cli_json_with_env(
+        [
+            "release",
+            "evidence-status",
+            "--endpoint",
+            endpoint.as_str(),
+        ],
+        &[("JARVIS_EVIDENCE_DIST_DIR", dist_dir)],
+    );
+    let items = evidence_status["items"].as_array().expect("evidence items");
+
+    for key in [
+        "signed_app_bundle",
+        "app_executable",
+        "bundled_core_executable",
+        "signed_app_zip",
+        "signed_installer_package",
+    ] {
+        let item = items
+            .iter()
+            .find(|item| item["key"] == key)
+            .unwrap_or_else(|| panic!("missing evidence item {key}"));
+        assert_eq!(item["status"], "present", "{item}");
+        let detail = item["detail"].as_str().expect("detail string");
+        assert!(detail.contains("presence only"), "{detail}");
+        assert!(
+            detail.contains("not validated by evidence-status"),
+            "{detail}"
+        );
+    }
+
+    assert!(evidence_status["proof_boundary"]
+        .as_str()
+        .expect("proof boundary")
+        .contains("does not sign"));
+}
+
+#[test]
+#[cfg(unix)]
+fn release_evidence_status_server_marks_present_artifacts_as_presence_only() {
+    let temp_dir = tempfile::tempdir().expect("temp evidence artifacts");
+    let dist_dir = write_placeholder_distribution(temp_dir.path());
+    let db_path = temp_dir.path().join("jarvis-evidence-status.sqlite");
+    let dist_dir_value = dist_dir.to_str().expect("dist dir utf8").to_string();
+    let mut server = JarvisServer::start_with_env(
+        &db_path,
+        &[("JARVIS_EVIDENCE_DIST_DIR", dist_dir_value.as_str())],
+    );
+
+    let evidence_status = run_cli_json([
+        "release",
+        "evidence-status",
+        "--endpoint",
+        server.endpoint().as_str(),
+    ]);
+    let items = evidence_status["items"].as_array().expect("evidence items");
+
+    for key in [
+        "signed_app_bundle",
+        "app_executable",
+        "bundled_core_executable",
+        "signed_app_zip",
+        "signed_installer_package",
+    ] {
+        let item = items
+            .iter()
+            .find(|item| item["key"] == key)
+            .unwrap_or_else(|| panic!("missing evidence item {key}"));
+        assert_eq!(item["status"], "present", "{item}");
+        let detail = item["detail"].as_str().expect("detail string");
+        assert!(detail.contains("presence only"), "{detail}");
+        assert!(
+            detail.contains("not validated by evidence-status"),
+            "{detail}"
+        );
+    }
+
+    assert!(evidence_status["proof_boundary"]
+        .as_str()
+        .expect("proof boundary")
+        .contains("does not sign"));
+    server.stop();
+}
+
+#[test]
 fn release_help_documents_operator_boundaries() {
     let release_help = run_cli_text(["release", "--help"]);
     assert!(release_help.contains("Read-only"));
@@ -210,7 +302,7 @@ fn release_help_documents_operator_boundaries() {
     assert!(readiness_help.contains("Falls back to local read-only readiness metadata"));
 
     let evidence_help = run_cli_text(["release", "evidence-status", "--help"]);
-    assert!(evidence_help.contains("file/report inspection only"));
+    assert!(evidence_help.contains("file/report inventory only"));
     assert!(evidence_help.contains("does not prove Developer ID signing"));
     assert!(evidence_help.contains("live-device QA"));
     assert!(evidence_help.contains("marketplace review"));
@@ -3241,6 +3333,34 @@ fn write_valid_live_device_qa_report(path: &Path) {
         serde_json::to_string_pretty(&report).expect("serialize live QA report"),
     )
     .expect("write live QA report");
+}
+
+#[cfg(unix)]
+fn make_executable(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut permissions = fs::metadata(path).expect("file metadata").permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(path, permissions).expect("chmod executable");
+}
+
+#[cfg(unix)]
+fn write_placeholder_distribution(root: &Path) -> std::path::PathBuf {
+    let dist_dir = root.join("dist");
+    let app_path = dist_dir.join("Jarvis.app");
+    let macos_dir = app_path.join("Contents/MacOS");
+    let resources_dir = app_path.join("Contents/Resources/bin");
+    fs::create_dir_all(&macos_dir).expect("create app executable dir");
+    fs::create_dir_all(&resources_dir).expect("create bundled core dir");
+    let app_executable = macos_dir.join("JarvisMacApp");
+    let bundled_core = resources_dir.join("jarvis-cli");
+    fs::write(&app_executable, "#!/bin/sh\n").expect("write app executable");
+    fs::write(&bundled_core, "#!/bin/sh\n").expect("write bundled core");
+    make_executable(&app_executable);
+    make_executable(&bundled_core);
+    fs::write(dist_dir.join("Jarvis-0.1.4.zip"), "zip placeholder").expect("write zip placeholder");
+    fs::write(dist_dir.join("Jarvis-0.1.4.pkg"), "pkg placeholder").expect("write pkg placeholder");
+    dist_dir
 }
 
 fn signed_manifest(mut manifest: Value, signing_key: &SigningKey) -> Value {

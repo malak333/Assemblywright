@@ -154,7 +154,7 @@ enum ReleaseCommand {
     },
     /// Print structured release evidence file/report status as JSON.
     #[command(
-        long_about = "Print structured release evidence file/report status as JSON.\n\nThis is file/report inspection only. It can report whether expected artifact paths and JSON reports are present, missing, or invalid, but it does not prove Developer ID signing, notarization, stapling, Finder launch, live-device QA, marketplace review, malware scanning, OS sandboxing, or host-level egress enforcement."
+        long_about = "Print structured release evidence file/report status as JSON.\n\nThis is file/report inventory only. It can report whether expected artifact paths and JSON reports are present, missing, or invalid, but it does not prove Developer ID signing, notarization, stapling, Finder launch, live-device QA, marketplace review, malware scanning, OS sandboxing, or host-level egress enforcement."
     )]
     EvidenceStatus {
         /// HTTP IPC endpoint. Falls back to local read-only evidence inspection when unavailable.

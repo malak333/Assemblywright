@@ -274,21 +274,24 @@ The owner-recorded `--assert-complete` path writes
 populated, but that report remains manual external evidence rather than
 repo-local proof of marketplace or host sandbox systems.
 `./scripts/release-evidence-bundle.sh --check` ties those external proof paths
-together by listing the signed distribution artifacts, live-device QA report,
-plugin-trust QA report, and owner validation flags required before a final
-release evidence manifest can be written. Its `--self-test` mode uses fake
-artifacts/reports to prove bundle mechanics only; `--bundle` writes
-`target/release-evidence-bundle.json` after all referenced evidence exists and
-all required `JARVIS_EVIDENCE_*` flags are true. Non-default live-device and
-plugin-trust report paths can be supplied with either the QA script variables
-(`JARVIS_QA_REPORT_PATH`, `JARVIS_PLUGIN_QA_REPORT_PATH`) or the bundle/doctor
-aliases (`JARVIS_EVIDENCE_LIVE_QA_REPORT`,
-`JARVIS_EVIDENCE_PLUGIN_QA_REPORT`). The live-device QA report must bind the
-validated bundle identifier, app version, build version, and voice permission
-usage strings to the installed app. The real bundle path also
-validates the local app signature, app stapling ticket, installer signature,
-installer stapling ticket, and app zip payload, then records SHA-256 digests
-for distribution artifacts and QA reports before writing the manifest.
+together by listing the expected signed distribution artifact paths,
+live-device QA report, plugin-trust QA report, and owner validation flags
+required before a final release evidence manifest can be written. The `--check`
+and doctor/status paths are presence and JSON-field inventory only; they do not
+validate Developer ID signatures, notarization, stapling, installation, or
+manual QA. Its `--self-test` mode uses fake artifacts/reports to prove bundle
+mechanics only; `--bundle` writes `target/release-evidence-bundle.json` after
+the referenced evidence files exist and all required `JARVIS_EVIDENCE_*` flags
+are true. Non-default live-device and plugin-trust report paths can be supplied
+with either the QA script variables (`JARVIS_QA_REPORT_PATH`,
+`JARVIS_PLUGIN_QA_REPORT_PATH`) or the bundle/doctor aliases
+(`JARVIS_EVIDENCE_LIVE_QA_REPORT`, `JARVIS_EVIDENCE_PLUGIN_QA_REPORT`). The
+live-device QA report must bind the validated bundle identifier, app version,
+build version, and voice permission usage strings to the installed app. Unlike
+doctor/status inventory, the real `--bundle` path also validates the local app
+signature, app stapling ticket, installer signature, installer stapling ticket,
+and app zip payload, then records SHA-256 digests for distribution artifacts and
+QA reports before writing the manifest.
 
 With a repository-backed server running, `jarvis release readiness`,
 `jarvis release evidence-status`,
@@ -298,7 +301,10 @@ With a repository-backed server running, `jarvis release readiness`,
 counts, recent task/audit progress, bounded activity events, redacted scheduler
 attention handoff, scheduler trigger policy review, redacted diagnostics,
 first-party plugin manifests, disabled installed-plugin registry metadata, and
-structured release evidence file/report inventory over IPC.
+structured release evidence file/report presence over IPC. Evidence-status
+items report present/missing/invalid inventory and JSON required-field status;
+they do not validate signing, notarization, stapling, installation, or manual
+QA.
 
 ## Docs
 
