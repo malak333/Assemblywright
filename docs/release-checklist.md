@@ -228,6 +228,10 @@ stage or when a PR needs focused evidence for one ownership slice.
   `scheduler_proactive_policy_checked` before command submission, reuses the
   policy-review trigger classification, marks command redaction explicitly, and
   does not expose scheduler command bodies in that policy audit.
+- Confirm scheduler due-job execution marks scheduler-originated plugin calls
+  as proactive, allows only manifest-opted-in `proactive_run` actions, rejects
+  non-proactive plugin actions before side effects, and records redacted
+  `plugin_execution_blocked` evidence.
 - Confirm scheduler stale-running recovery is bounded and redacted:
   `/scheduler/recover-stale` or `jarvis scheduler recover-stale` marks stale
   `Running` jobs failed with `automatic_recovery: false`; opt-in

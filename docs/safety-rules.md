@@ -49,7 +49,10 @@ release requirements, not optional UX guidance.
   and review/delete controls.
 - Scheduler jobs must remain inspectable and cancellable. Persisted scheduler
   metadata is not permission to execute proactive side effects; trigger
-  execution still has to pass policy and visibility rules.
+  execution still has to pass policy and visibility rules. Scheduled plugin
+  actions must also be manifest-opted-in for proactive execution with
+  `proactive_run`; non-opted-in scheduled plugin actions fail closed before side
+  effects execute.
 - Diagnostics exports must redact credentials, command bodies, scheduler
   commands, audit payloads, memory values, raw cancellation reasons, and other
   sensitive payloads.

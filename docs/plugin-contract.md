@@ -169,7 +169,9 @@ to explain what happened:
   source paths, unreadable source directories, and manifests outside the
   declared source directory.
 - Side-effecting actions require policy evaluation even for first-party plugins.
-- Proactive actions must be opt-in and visible in scheduler state.
+- Proactive actions must be opt-in and visible in scheduler state. Scheduler
+  execution enforces that declaration at run time and fails closed with redacted
+  audit evidence when a scheduled plugin action is not proactive-enabled.
 - Memory access must be scoped by category and sensitivity label.
 - Model calls from plugins must go through the model router; plugins cannot
   bypass local-first routing or ChatGPT approval policy.
