@@ -7,9 +7,9 @@ first-party tool orchestration, local-first model routing evidence, opt-in
 Ollama-compatible local HTTP and ChatGPT/OpenAI-compatible provider boundaries,
 plugin contracts, metadata-only local plugin installation, local plugin
 provenance snapshots, scheduler state, redacted diagnostics export, a loopback
-IPC surface with feature proof/boundary metadata, repository-backed activity
-summary and activity event stream, and CLI smoke paths for the Swift shell
-scaffold and future packaged app.
+IPC surface with compatibility policy plus feature proof/boundary metadata,
+repository-backed activity summary and activity event stream, and CLI smoke
+paths for the Swift shell scaffold and future packaged app.
 It also includes the first buildable Swift/SwiftUI Mac shell scaffold under
 `apps/mac`, with a tested IPC client, command-console state model,
 activity/audit panel with current progress summary, memory

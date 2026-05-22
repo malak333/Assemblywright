@@ -29,6 +29,20 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     let contract = run_cli_json(["contract", "--endpoint", endpoint.as_str()]);
     assert_eq!(contract["contract"]["name"], "jarvis.local-ipc");
     assert_eq!(contract["contract"]["version"], 1);
+    assert_eq!(contract["compatibility"]["minimum_supported_version"], 1);
+    assert_eq!(contract["compatibility"]["current_version"], 1);
+    assert_eq!(contract["compatibility"]["additive_changes_allowed"], true);
+    assert_string_array_contains(
+        &contract["compatibility"]["client_requirements"],
+        "Clients must ignore unknown JSON fields.",
+    );
+    assert_eq!(
+        contract["compatibility"]["deprecated_endpoints"]
+            .as_array()
+            .expect("deprecated endpoints array")
+            .len(),
+        0
+    );
     assert_array_contains(
         &contract["features"],
         "key",

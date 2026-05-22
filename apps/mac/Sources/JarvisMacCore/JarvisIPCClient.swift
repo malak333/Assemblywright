@@ -97,8 +97,35 @@ public struct JarvisContractFeature: Decodable, Equatable, Identifiable, Sendabl
     public var id: String { key }
 }
 
+public struct JarvisContractCompatibility: Decodable, Equatable, Sendable {
+    public var minimumSupportedVersion: Int
+    public var currentVersion: Int
+    public var additiveChangesAllowed: Bool
+    public var breakingChangePolicy: String
+    public var deprecationPolicy: String
+    public var clientRequirements: [String]
+    public var removedEndpoints: [String]
+    public var deprecatedEndpoints: [String]
+
+    public var supportsCurrentClient: Bool {
+        minimumSupportedVersion <= currentVersion
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case minimumSupportedVersion = "minimum_supported_version"
+        case currentVersion = "current_version"
+        case additiveChangesAllowed = "additive_changes_allowed"
+        case breakingChangePolicy = "breaking_change_policy"
+        case deprecationPolicy = "deprecation_policy"
+        case clientRequirements = "client_requirements"
+        case removedEndpoints = "removed_endpoints"
+        case deprecatedEndpoints = "deprecated_endpoints"
+    }
+}
+
 public struct JarvisContractResponse: Decodable, Equatable, Sendable {
     public var contract: JarvisContractMetadata
+    public var compatibility: JarvisContractCompatibility?
     public var endpoints: [JarvisContractEndpoint]
     public var safeInspectionPaths: [String]
     public var features: [JarvisContractFeature]
@@ -106,6 +133,10 @@ public struct JarvisContractResponse: Decodable, Equatable, Sendable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         contract = try container.decode(JarvisContractMetadata.self, forKey: .contract)
+        compatibility = try container.decodeIfPresent(
+            JarvisContractCompatibility.self,
+            forKey: .compatibility
+        )
         endpoints = try container.decode([JarvisContractEndpoint].self, forKey: .endpoints)
         safeInspectionPaths = try container.decode([String].self, forKey: .safeInspectionPaths)
         features = try container.decodeIfPresent([JarvisContractFeature].self, forKey: .features) ?? []
@@ -147,6 +178,7 @@ public struct JarvisContractResponse: Decodable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case contract
+        case compatibility
         case endpoints
         case safeInspectionPaths = "safe_inspection_paths"
         case features

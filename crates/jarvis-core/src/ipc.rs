@@ -67,8 +67,21 @@ pub struct ContractFeature {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContractCompatibility {
+    pub minimum_supported_version: u16,
+    pub current_version: u16,
+    pub additive_changes_allowed: bool,
+    pub breaking_change_policy: String,
+    pub deprecation_policy: String,
+    pub client_requirements: Vec<String>,
+    pub removed_endpoints: Vec<String>,
+    pub deprecated_endpoints: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContractResponse {
     pub contract: ContractMetadata,
+    pub compatibility: ContractCompatibility,
     pub endpoints: Vec<ContractEndpoint>,
     pub safe_inspection_paths: Vec<String>,
     pub features: Vec<ContractFeature>,
@@ -534,6 +547,7 @@ impl IpcState {
     pub fn contract(&self) -> ContractResponse {
         ContractResponse {
             contract: self.contract_metadata(),
+            compatibility: contract_compatibility(),
             endpoints: contract_endpoints(),
             safe_inspection_paths: vec![
                 "/health".to_string(),
@@ -3060,6 +3074,28 @@ fn contract_features() -> Vec<ContractFeature> {
     ]
 }
 
+fn contract_compatibility() -> ContractCompatibility {
+    ContractCompatibility {
+        minimum_supported_version: 1,
+        current_version: IPC_CONTRACT_VERSION,
+        additive_changes_allowed: true,
+        breaking_change_policy:
+            "Breaking IPC response-shape changes require a contract version bump and a release-note migration entry."
+                .to_string(),
+        deprecation_policy:
+            "Deprecated endpoints remain listed in /contract for at least one minor release and must include a replacement before removal."
+                .to_string(),
+        client_requirements: vec![
+            "Clients must ignore unknown JSON fields.".to_string(),
+            "Clients must prefer /contract endpoint and feature metadata over hard-coded readiness assumptions.".to_string(),
+            "Clients must treat missing required endpoints or unsupported contract versions as degraded mode.".to_string(),
+            "Clients must not infer production readiness from feature presence without reading each feature boundary.".to_string(),
+        ],
+        removed_endpoints: Vec::new(),
+        deprecated_endpoints: Vec::new(),
+    }
+}
+
 fn feature(
     key: impl Into<String>,
     status: impl Into<String>,
@@ -3172,6 +3208,16 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
 
         assert_eq!(contract.contract.name, IPC_CONTRACT_NAME);
         assert_eq!(contract.contract.version, IPC_CONTRACT_VERSION);
+        assert_eq!(contract.compatibility.minimum_supported_version, 1);
+        assert_eq!(contract.compatibility.current_version, IPC_CONTRACT_VERSION);
+        assert!(contract.compatibility.additive_changes_allowed);
+        assert!(contract
+            .compatibility
+            .client_requirements
+            .iter()
+            .any(|requirement| requirement.contains("ignore unknown JSON fields")));
+        assert!(contract.compatibility.deprecated_endpoints.is_empty());
+        assert!(contract.compatibility.removed_endpoints.is_empty());
         assert!(contract.features.iter().any(|feature| {
             feature.key == "scheduler_trigger_policy_review"
                 && feature.status == "implemented"

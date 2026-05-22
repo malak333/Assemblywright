@@ -171,9 +171,9 @@ stage or when a PR needs focused evidence for one ownership slice.
 - Confirm the Swift Scheduler tab still consumes `/scheduler/attention` and
   renders redacted due/running/failed attention state without exposing
   scheduler command bodies.
-- Confirm `/contract` exposes feature proof/boundary metadata and Swift decodes
-  it, so release notes can cite implemented surfaces without overclaiming
-  pending manual gates.
+- Confirm `/contract` exposes compatibility policy plus feature proof/boundary
+  metadata and Swift decodes it, so release notes can cite implemented surfaces
+  without overclaiming pending manual gates.
 - Confirm the cross-process CLI E2E still covers command, plugin, audit,
   redacted model-route inspection and restart recovery, memory
   classification summary, create/update/review/delete/restore, scheduler
