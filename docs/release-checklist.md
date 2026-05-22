@@ -165,6 +165,11 @@ stage or when a PR needs focused evidence for one ownership slice.
   provenance integrity status, unverified plugin counts, and the
   `side_effects_require_approval` invariant. This inspection surface must not
   enable installed plugin code execution.
+- Confirm the Swift Plugin tab renders installed-plugin registry records
+  read-only, including source path, execution grant, provenance integrity,
+  origin-review state, and executable status, and that first-party manifests
+  remain visible with a warning when the repository-backed installed registry
+  endpoint is unavailable.
 - Confirm `/permissions/policy-review` and `jarvis permissions review` expose
   read-only severity-ranked review items for pending approvals, high-risk
   plugin actions, unverified provenance, and unverified origin claims without

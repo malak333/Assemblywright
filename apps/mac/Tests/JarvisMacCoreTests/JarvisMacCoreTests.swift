@@ -782,6 +782,24 @@ struct JarvisMacCoreTests {
         ]))
     }
 
+    @Test("Management payloads decode installed plugin registry records")
+    func decodesInstalledPluginRecords() throws {
+        let records = try JSONDecoder().decode(
+            [JarvisInstalledPluginRecord].self,
+            from: installedPluginsJSON()
+        )
+        let record = try #require(records.first)
+
+        #expect(record.id == "local_runner_test")
+        #expect(record.manifest.source == "local_subprocess")
+        #expect(record.sourcePath == "/tmp/jarvis-plugin")
+        #expect(!record.executionEnabled)
+        #expect(record.executionGrant == "metadata_only")
+        #expect(record.provenance.integrityStatus == "not_verified")
+        #expect(record.provenance.needsReview)
+        #expect(!record.isExecutable)
+    }
+
     @Test("Management payloads decode scheduler jobs and encode scheduler requests")
     func decodesSchedulerJobsAndEncodesRequests() throws {
         let id = UUID()
@@ -1719,6 +1737,44 @@ struct JarvisMacCoreTests {
     }
 
     @MainActor
+    @Test("Plugin manager model loads first-party manifests and installed registry")
+    func pluginManagerModelLoadsInstalledRegistry() async {
+        let installed = try! JSONDecoder().decode(
+            [JarvisInstalledPluginRecord].self,
+            from: installedPluginsJSON()
+        )
+        let client = FakeCoreClient(
+            pluginManifests: [samplePluginManifest()],
+            installedPlugins: installed
+        )
+        let model = PluginManagerModel(client: client)
+
+        await model.refresh()
+
+        #expect(model.manifests.map(\.id) == ["calendar"])
+        #expect(model.installedPlugins.map(\.id) == ["local_runner_test"])
+        #expect(model.installedPlugins.first?.provenance.needsReview == true)
+        #expect(model.installedPlugins.first?.isExecutable == false)
+    }
+
+    @MainActor
+    @Test("Plugin manager keeps first-party manifests when installed registry is unavailable")
+    func pluginManagerModelKeepsManifestsWhenInstalledRegistryFails() async {
+        let client = FakeCoreClient(
+            pluginManifests: [samplePluginManifest()],
+            installedPluginsUnavailable: true
+        )
+        let model = PluginManagerModel(client: client)
+
+        await model.refresh()
+
+        #expect(model.manifests.map(\.id) == ["calendar"])
+        #expect(model.installedPlugins.isEmpty)
+        #expect(model.installedRegistryWarning?.contains("Installed plugin registry unavailable") == true)
+        #expect(model.lastError == nil)
+    }
+
+    @MainActor
     @Test("Run management model loads tasks and audit entries")
     func runManagementModelLoadsRuns() async {
         let task = JarvisTask(
@@ -2401,6 +2457,68 @@ private func samplePluginManifest() -> JarvisPluginManifest {
     )
 }
 
+private func installedPluginsJSON() -> Data {
+    Data(
+        """
+        [
+          {
+            "id": "local_runner_test",
+            "manifest": {
+              "id": "local_runner_test",
+              "name": "Local Runner Test",
+              "version": "0.1.0",
+              "source": "local_subprocess",
+              "author": "Jarvis Test",
+              "source_path": "/tmp/jarvis-plugin",
+              "actions": [
+                {
+                  "name": "inspect",
+                  "description": "Inspect a workspace path.",
+                  "permissions": ["read_workspace"],
+                  "risk_tier": "low",
+                  "input_schema": { "type": "object", "properties": { "path": { "type": "string" } } },
+                  "output_schema": { "type": "object" },
+                  "proactive": false,
+                  "memory_access": "none",
+                  "model_access": "none",
+                  "network_access": { "mode": "none" },
+                  "audit_fields": ["path"],
+                  "timeout": { "timeout_ms": 5000, "on_timeout": "cancel" },
+                  "cancellation": "cooperative"
+                }
+              ],
+              "subprocess": {
+                "command": "plugin-runner.py",
+                "args": [],
+                "stdin": "json",
+                "stdout": "json"
+              }
+            },
+            "source_path": "/tmp/jarvis-plugin",
+            "provenance": {
+              "provenance_schema_version": 1,
+              "capture_method": "local_manifest_snapshot",
+              "manifest_path": "/tmp/jarvis-plugin/jarvis-plugin.json",
+              "manifest_sha256": "abc123",
+              "source_path": "/tmp/jarvis-plugin",
+              "source_path_canonicalized": true,
+              "subprocess_command_path": "/tmp/jarvis-plugin/plugin-runner.py",
+              "subprocess_command_sha256": "def456",
+              "captured_at": "2026-05-20T12:00:00Z",
+              "last_verified_at": null,
+              "integrity_status": "not_verified",
+              "origin_claim": "Jarvis Test",
+              "origin_claim_verified": false
+            },
+            "execution_enabled": false,
+            "execution_grant": "metadata_only",
+            "installed_at": "2026-05-20T12:00:00Z"
+          }
+        ]
+        """.utf8
+    )
+}
+
 private func commandResponseJSON(input: String) -> Data {
     let taskId = UUID()
     let sessionId = UUID()
@@ -2506,6 +2624,8 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     private var contractResponse: JarvisContractResponse?
     private var approvals: [JarvisPendingApproval]
     private var pluginManifests: [JarvisPluginManifest]
+    private var installedPlugins: [JarvisInstalledPluginRecord]
+    private var installedPluginsUnavailable: Bool
     private var memoryItems: [JarvisMemoryItem]
     private var permissionGrantSummaryResult: JarvisPermissionGrantSummary?
     private(set) var approvalDecisions: [ApprovalDecision]
@@ -2521,6 +2641,8 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         contractResponse: JarvisContractResponse? = nil,
         approvals: [JarvisPendingApproval] = [],
         pluginManifests: [JarvisPluginManifest] = [],
+        installedPlugins: [JarvisInstalledPluginRecord] = [],
+        installedPluginsUnavailable: Bool = false,
         memoryItems: [JarvisMemoryItem] = [],
         permissionGrantSummary: JarvisPermissionGrantSummary? = nil
     ) {
@@ -2531,6 +2653,8 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         self.contractResponse = contractResponse
         self.approvals = approvals
         self.pluginManifests = pluginManifests
+        self.installedPlugins = installedPlugins
+        self.installedPluginsUnavailable = installedPluginsUnavailable
         self.memoryItems = memoryItems
         self.permissionGrantSummaryResult = permissionGrantSummary
         self.approvalDecisions = []
@@ -2736,6 +2860,13 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
 
     func listPluginManifests() async throws -> [JarvisPluginManifest] {
         pluginManifests
+    }
+
+    func listInstalledPlugins() async throws -> [JarvisInstalledPluginRecord] {
+        if installedPluginsUnavailable {
+            throw URLError(.cannotConnectToHost)
+        }
+        return installedPlugins
     }
 
     func listSchedulerJobs() async throws -> [JarvisSchedulerJob] {

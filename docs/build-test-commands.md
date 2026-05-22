@@ -179,12 +179,15 @@ surface: approval counts/history, high-risk pending count, installed-plugin
 `metadata_only` grant records, and the invariant that side effects still
 require approval. Installed `local_subprocess` plugins remain disabled by
 default and execute only after an explicit `subprocess_stdio` grant through the
-constrained JSON stdin/stdout runner. The Swift app now exposes the
+constrained JSON stdin/stdout runner. The Swift Plugin tab reads the same
+installed registry records for read-only provenance/grant review, and its model
+keeps first-party manifests visible if the repository-backed registry endpoint
+is unavailable. The Swift app now exposes the
 Speech/AVFoundation input adapter controls and AVFoundation speech-output
 preview controls, but release claims for real voice still require entitlement
 packaging, live microphone checks, live audio-output checks, and manual device
-validation. Swift approval decision, approved-run, and voice controls are
-covered by the Swift contract/model tests.
+validation. Swift approval decision, approved-run, plugin registry, and voice
+controls are covered by the Swift contract/model tests.
 Local plugin install is metadata-only:
 `jarvis plugins install /absolute/path/to/jarvis-plugin.json` validates and
 stores a disabled registry record with local provenance hashes when repository

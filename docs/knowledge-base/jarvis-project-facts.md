@@ -153,6 +153,12 @@ These notes capture durable facts for future agents working on this repository.
   exposes `/approvals/:id/execute`. It checks the approval task audit for
   `approval_executed` and hides records that already have execution evidence,
   so a refresh does not invite duplicate approved replay.
+- The Swift Plugin tab decodes `/plugins/installed` registry records and shows
+  installed plugin source path, execution grant, provenance integrity status,
+  origin-review state, and executable/not-executable status alongside
+  first-party manifests. This surface is read-only and degrades to a warning
+  while keeping first-party manifests visible when the repository-backed
+  installed registry endpoint is unavailable.
 - The CLI has matching `tasks`, `memory`, `scheduler`, `diagnostics`, and
   `plugins` subcommands, including `plugins install`, `plugins installed`,
   `plugins installed-get`, `plugins enable-installed`, `plugins

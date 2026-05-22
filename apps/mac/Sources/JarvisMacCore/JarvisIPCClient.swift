@@ -556,6 +556,66 @@ public struct JarvisPluginTimeout: Decodable, Equatable, Sendable {
     }
 }
 
+public struct JarvisInstalledPluginProvenance: Decodable, Equatable, Sendable {
+    public var provenanceSchemaVersion: Int
+    public var captureMethod: String
+    public var manifestPath: String
+    public var manifestSha256: String
+    public var sourcePath: String
+    public var sourcePathCanonicalized: Bool
+    public var subprocessCommandPath: String?
+    public var subprocessCommandSha256: String?
+    public var capturedAt: String
+    public var lastVerifiedAt: String?
+    public var integrityStatus: String
+    public var originClaim: String?
+    public var originClaimVerified: Bool
+
+    public var needsReview: Bool {
+        integrityStatus != "matches_install_snapshot" || !originClaimVerified
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case provenanceSchemaVersion = "provenance_schema_version"
+        case captureMethod = "capture_method"
+        case manifestPath = "manifest_path"
+        case manifestSha256 = "manifest_sha256"
+        case sourcePath = "source_path"
+        case sourcePathCanonicalized = "source_path_canonicalized"
+        case subprocessCommandPath = "subprocess_command_path"
+        case subprocessCommandSha256 = "subprocess_command_sha256"
+        case capturedAt = "captured_at"
+        case lastVerifiedAt = "last_verified_at"
+        case integrityStatus = "integrity_status"
+        case originClaim = "origin_claim"
+        case originClaimVerified = "origin_claim_verified"
+    }
+}
+
+public struct JarvisInstalledPluginRecord: Decodable, Equatable, Identifiable, Sendable {
+    public var id: String
+    public var manifest: JarvisPluginManifest
+    public var sourcePath: String
+    public var provenance: JarvisInstalledPluginProvenance
+    public var executionEnabled: Bool
+    public var executionGrant: String
+    public var installedAt: String
+
+    public var isExecutable: Bool {
+        executionEnabled && executionGrant != "metadata_only" && provenance.integrityStatus == "matches_install_snapshot"
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case manifest
+        case sourcePath = "source_path"
+        case provenance
+        case executionEnabled = "execution_enabled"
+        case executionGrant = "execution_grant"
+        case installedAt = "installed_at"
+    }
+}
+
 public enum JarvisSchedulerTrigger: Codable, Equatable, Sendable {
     case manual
     case onceAt(runAt: String)
@@ -1216,6 +1276,7 @@ public protocol JarvisCoreClient: Sendable {
     func deleteMemoryItem(id: UUID) async throws -> JarvisMemoryItem
     func restoreMemoryItem(id: UUID) async throws -> JarvisMemoryItem
     func listPluginManifests() async throws -> [JarvisPluginManifest]
+    func listInstalledPlugins() async throws -> [JarvisInstalledPluginRecord]
     func listSchedulerJobs() async throws -> [JarvisSchedulerJob]
     func schedulerAttention() async throws -> JarvisSchedulerAttentionSummary
     func schedulerJob(id: UUID) async throws -> JarvisSchedulerJob
@@ -1325,6 +1386,10 @@ public final class JarvisIPCClient: JarvisCoreClient {
 
     public func listPluginManifests() async throws -> [JarvisPluginManifest] {
         try await send(path: "/plugins/manifests", method: "GET", body: Optional<Data>.none)
+    }
+
+    public func listInstalledPlugins() async throws -> [JarvisInstalledPluginRecord] {
+        try await send(path: "/plugins/installed", method: "GET", body: Optional<Data>.none)
     }
 
     public func listSchedulerJobs() async throws -> [JarvisSchedulerJob] {
