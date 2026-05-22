@@ -294,6 +294,10 @@ manual production blockers. Evidence-aware mode can clear the live voice/audio
 blocker only from a valid live-device QA report, but `production_ready` remains
 false until the signed distribution, notarization, plugin-trust report, and
 final evidence bundle validate.
+The release command `--help` output is part of the operator contract: it should
+preserve the read-only scope, IPC-first/local-fallback behavior, explicit
+`JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external` opt-in, and file/report
+inspection boundary for evidence status.
 `./scripts/release-plugin-trust-qa.sh --check` is the local plugin-trust
 preflight for marketplace review, malware scanning, signed publisher policy,
 OS sandbox, and host-level egress validation. Its `--self-test` mode uses fake
@@ -323,7 +327,10 @@ after real external evidence exists.
 inventory as structured JSON through `/release/evidence-status`; it is
 file/report inspection only and does not prove signing, notarization, installed
 app launch, live-device QA, marketplace review, malware scanning, or OS
-sandboxing.
+sandboxing. Non-default live-device and plugin-trust report paths can be
+provided through either the QA script variables (`JARVIS_QA_REPORT_PATH`,
+`JARVIS_PLUGIN_QA_REPORT_PATH`) or the bundle/doctor aliases
+(`JARVIS_EVIDENCE_LIVE_QA_REPORT`, `JARVIS_EVIDENCE_PLUGIN_QA_REPORT`).
 
 ## Useful Focused Commands
 

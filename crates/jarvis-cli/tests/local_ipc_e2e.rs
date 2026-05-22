@@ -141,6 +141,22 @@ fn release_evidence_status_cli_falls_back_without_running_server() {
         .as_array()
         .expect("evidence items")
         .iter()
+        .any(|item| item["key"] == "signed_app_bundle" && item["label"] == "App bundle path"));
+    assert!(evidence_status["items"]
+        .as_array()
+        .expect("evidence items")
+        .iter()
+        .any(|item| item["key"] == "signed_app_zip" && item["label"] == "App zip path"));
+    assert!(evidence_status["items"]
+        .as_array()
+        .expect("evidence items")
+        .iter()
+        .any(|item| item["key"] == "signed_installer_package"
+            && item["label"] == "Installer package path"));
+    assert!(evidence_status["items"]
+        .as_array()
+        .expect("evidence items")
+        .iter()
         .any(|item| item["key"] == "release_evidence_bundle"
             && item["kind"] == "json_report"
             && item["manual_gate"] == true));
@@ -148,6 +164,57 @@ fn release_evidence_status_cli_falls_back_without_running_server() {
         .as_str()
         .expect("evidence proof boundary")
         .contains("does not sign"));
+}
+
+#[test]
+fn release_evidence_status_accepts_bundle_evidence_report_aliases() {
+    let temp_dir = tempfile::tempdir().expect("temp evidence report");
+    let live_report_path = temp_dir.path().join("custom-live-report.json");
+    write_valid_live_device_qa_report(&live_report_path);
+    let endpoint = format!("http://{}", unused_loopback_addr());
+    let report_path = live_report_path
+        .to_str()
+        .expect("live report path is UTF-8")
+        .to_string();
+
+    let evidence_status = run_cli_json_with_env(
+        [
+            "release",
+            "evidence-status",
+            "--endpoint",
+            endpoint.as_str(),
+        ],
+        &[("JARVIS_EVIDENCE_LIVE_QA_REPORT", report_path.as_str())],
+    );
+
+    assert!(evidence_status["items"]
+        .as_array()
+        .expect("evidence items")
+        .iter()
+        .any(|item| item["key"] == "live_device_qa_report"
+            && item["path"] == report_path
+            && item["status"] == "present"));
+}
+
+#[test]
+fn release_help_documents_operator_boundaries() {
+    let release_help = run_cli_text(["release", "--help"]);
+    assert!(release_help.contains("Read-only"));
+    assert!(release_help.contains("IPC"));
+    assert!(release_help.contains("conservative local"));
+
+    let readiness_help = run_cli_text(["release", "readiness", "--help"]);
+    assert!(readiness_help.contains("JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external"));
+    assert!(readiness_help.contains("production_ready"));
+    assert!(readiness_help.contains("notarization"));
+    assert!(readiness_help.contains("Falls back to local read-only readiness metadata"));
+
+    let evidence_help = run_cli_text(["release", "evidence-status", "--help"]);
+    assert!(evidence_help.contains("file/report inspection only"));
+    assert!(evidence_help.contains("does not prove Developer ID signing"));
+    assert!(evidence_help.contains("live-device QA"));
+    assert!(evidence_help.contains("marketplace review"));
+    assert!(evidence_help.contains("Falls back to local read-only evidence inspection"));
 }
 
 #[test]

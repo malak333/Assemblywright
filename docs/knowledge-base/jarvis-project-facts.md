@@ -450,13 +450,16 @@ These notes capture durable facts for future agents working on this repository.
   build/test commands, and KB proof-boundary notes.
 - Do not describe Jarvis as a finished desktop assistant based on the local
   packaged app smoke alone. Broader readiness still needs Developer ID
-  signing/notarization evidence, richer permission UX, real voice where
-  claimed, installed-plugin sandboxing/execution where claimed, and manual
+  signing/notarization/stapling evidence, clean-profile install and Finder
+  validation, owner-recorded live voice/audio validation, marketplace/plugin
+  trust QA, malware analysis, OS-level sandbox/egress evidence where
+  marketplace claims are made, final evidence-bundle archival, and manual
   clean-profile release QA.
 - Do not describe Jarvis as production assistant ready based only on the Rust
-  and Swift local gates. The stronger claim requires packaged-app evidence,
-  richer permission UX, real voice where claimed, diagnostics/recovery checks,
-  and release smoke proof.
+  and Swift local gates. The stronger claim requires signed/notarized
+  distribution evidence, clean-profile install and Finder validation,
+  owner-recorded live voice/audio QA, plugin-trust QA, and a final archived
+  evidence bundle.
 - `./scripts/packaged-supervision-proof.sh` is local packaged-layout evidence:
   it builds the Rust CLI, copies it into
   `Jarvis.app/Contents/Resources/bin/jarvis-cli`, runs Swift supervisor tests
@@ -528,18 +531,23 @@ These notes capture durable facts for future agents working on this repository.
   release operator explicitly enables evidence-aware readiness, this report can
   support the narrow claim that the live voice loop was validated for that
   release candidate, not a generalized claim that voice is validated for every
-  device or future release. `--self-test` uses a fake app fixture to validate
-  assertion/report mechanics in the local release gate without claiming live
-  device validation.
+  device or future release. Use
+  `./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env`
+  to generate a sourceable checklist for all required `JARVIS_QA_*` fields.
+  `--self-test` uses a fake app fixture to validate assertion/report mechanics
+  in the local release gate without claiming live device validation.
 - It is fair to describe the current repo as a Rust foundation with tested
   scaffolding for IPC, storage, policy, routing, runtime, scheduler, plugin
   contracts, deterministic first-party plugin command execution, bounded
   fake-model and strict provider-envelope planned first-party tool orchestration,
   opt-in Ollama-compatible local HTTP provider behavior, opt-in
   ChatGPT/OpenAI-compatible provider behavior, CLI behavior, and a Swift
-  command/management shell with supervisor
-  abstraction, approval decisions, and text-only voice handoff when the local
-  gate passes.
+  command/management shell with supervisor abstraction, approval decisions,
+  adapter-backed voice input/output controls, typed transcript handoff, and
+  opt-in final-transcript auto-submit proof when the local gate passes. Live
+  microphone/Speech capture, spoken transcript handoff, and live audio-output
+  remain pending until owner-recorded live-device QA evidence is explicitly
+  enabled.
 - Do not claim autonomous external communication, smart-home control, or
   third-party plugin marketplace readiness for v1.
 - Keep public-facing claims scoped to tested local behavior.
@@ -547,14 +555,14 @@ These notes capture durable facts for future agents working on this repository.
 ## Workflow
 
 - Work in isolated worktrees and branches for reviewable slices.
-- Use topic branches and PRs for production work. The docs production slice is
-  currently `codex/phase3-docs-architecture` in
-  `/Users/michaelnobile/Antigravity/jarvis-worktrees-phase3/phase3-docs-architecture`.
-- Phase-3 work is split across separate worktrees and `codex/` branches:
-  `model-route-persistence`, `plugin-subprocess-sandbox`,
-  `voice-adapter-production`, `packaged-app-release-smoke`,
-  `permission-grants-ux`, and `phase3-docs-architecture`. Treat those names as
-  coordination context until each slice is merged and verified on main.
+- Use topic branches and PRs for production work. Treat older phase/worktree
+  names as historical coordination context unless the branch is verified active
+  in the current checkout.
+- Historical phase-3 slices included model-route persistence, plugin-subprocess
+  execution, voice adapter controls, packaged app smoke, permission grants UX,
+  and docs architecture alignment. Verify current status from
+  `/release/readiness` and the checkout before treating any old worktree name
+  as active.
 - Follow-on Swift scheduler notification work uses
   `codex/scheduler-notifications` in
   `/Users/michaelnobile/Antigravity/jarvis-worktrees-continuation/scheduler-notifications`.
@@ -578,8 +586,10 @@ These notes capture durable facts for future agents working on this repository.
   worktrees and `codex/` topic branches, PRs should be reviewable and
   evidence-backed, docs-only workers must not edit Rust or Swift code, and
   readiness language must stay scoped to verified local foundation surfaces
-  until distribution-grade packaged app signing/notarization, real voice,
-  executable plugin sandbox, recovery, and manual release QA gates exist.
+  until distribution-grade app/installer signing, notarization/stapling,
+  clean-profile install/Finder validation, owner-recorded live voice/audio QA,
+  marketplace/plugin-trust plus OS-level sandbox/egress evidence, final
+  evidence bundle archival, and manual release QA gates exist.
 - Durable fact from phase 3 packaged app work: SwiftPM does not create a full
   release `.app` bundle by itself here, so the local smoke assembles the bundle
   deterministically in a temp directory and uses environment-configurable

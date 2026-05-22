@@ -9,8 +9,8 @@ DIST_DIR="${JARVIS_EVIDENCE_DIST_DIR:-$ROOT_DIR/target/distribution}"
 APP_PATH="${JARVIS_EVIDENCE_APP_PATH:-$DIST_DIR/Jarvis.app}"
 ZIP_PATH="${JARVIS_EVIDENCE_ZIP_PATH:-$DIST_DIR/Jarvis-$VERSION.zip}"
 PKG_PATH="${JARVIS_EVIDENCE_PKG_PATH:-$DIST_DIR/Jarvis-$VERSION.pkg}"
-LIVE_QA_REPORT="${JARVIS_EVIDENCE_LIVE_QA_REPORT:-$ROOT_DIR/target/release-live-device-qa-report.json}"
-PLUGIN_QA_REPORT="${JARVIS_EVIDENCE_PLUGIN_QA_REPORT:-$ROOT_DIR/target/release-plugin-trust-qa-report.json}"
+LIVE_QA_REPORT="${JARVIS_EVIDENCE_LIVE_QA_REPORT:-${JARVIS_QA_REPORT_PATH:-$ROOT_DIR/target/release-live-device-qa-report.json}}"
+PLUGIN_QA_REPORT="${JARVIS_EVIDENCE_PLUGIN_QA_REPORT:-${JARVIS_PLUGIN_QA_REPORT_PATH:-$ROOT_DIR/target/release-plugin-trust-qa-report.json}}"
 OUTPUT_PATH="${JARVIS_EVIDENCE_OUTPUT_PATH:-$ROOT_DIR/target/release-evidence-bundle.json}"
 VALIDATE_LOCAL_SIGNATURES="${JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES:-true}"
 EXPECTED_BUNDLE_ID="${JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID:-com.nobiletechnology.jarvis}"
@@ -50,8 +50,8 @@ Optional:
   JARVIS_EVIDENCE_APP_PATH            Defaults to target/distribution/Jarvis.app
   JARVIS_EVIDENCE_ZIP_PATH            Defaults to target/distribution/Jarvis-<version>.zip
   JARVIS_EVIDENCE_PKG_PATH            Defaults to target/distribution/Jarvis-<version>.pkg
-  JARVIS_EVIDENCE_LIVE_QA_REPORT      Defaults to target/release-live-device-qa-report.json
-  JARVIS_EVIDENCE_PLUGIN_QA_REPORT    Defaults to target/release-plugin-trust-qa-report.json
+  JARVIS_EVIDENCE_LIVE_QA_REPORT      Defaults to JARVIS_QA_REPORT_PATH or target/release-live-device-qa-report.json
+  JARVIS_EVIDENCE_PLUGIN_QA_REPORT    Defaults to JARVIS_PLUGIN_QA_REPORT_PATH or target/release-plugin-trust-qa-report.json
   JARVIS_EVIDENCE_OUTPUT_PATH         Defaults to target/release-evidence-bundle.json
   JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES
                                       Defaults to true. Set to false only for
@@ -689,6 +689,8 @@ done
 require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.bundle_identifier" "$EXPECTED_BUNDLE_ID"
 require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.short_version" "$EXPECTED_VERSION"
 require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.build_version" "$EXPECTED_VERSION"
+require_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.microphone_usage_description"
+require_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.speech_recognition_usage_description"
 for flag in marketplace_review malware_scan os_sandbox egress_enforcement signed_publisher_policy manual_trust_review; do
   require_json_bool_true "plugin trust QA report" "$PLUGIN_QA_REPORT" "validation_flags.$flag"
 done
