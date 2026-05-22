@@ -18,10 +18,12 @@ EXPECTED_VERSION="${JARVIS_EVIDENCE_EXPECTED_VERSION:-$VERSION}"
 CHECK_ONLY=false
 BUNDLE=false
 SELF_TEST=false
+WRITE_TEMPLATE=false
+WRITE_TEMPLATE_PATH=""
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/release-evidence-bundle.sh [--check|--bundle|--self-test]
+Usage: scripts/release-evidence-bundle.sh [--check|--bundle|--self-test|--write-template PATH]
 
 Collect and validate the release evidence bundle required before any
 production-ready claim for Jarvis.
@@ -35,6 +37,10 @@ a JSON bundle manifest.
 
 --self-test creates fake artifacts/reports in a temporary directory and
 exercises the bundle manifest mechanics without claiming production readiness.
+
+--write-template PATH writes a sourceable shell env template containing every
+JARVIS_EVIDENCE_* input required by --bundle. Edit the template only after the
+external release checks are complete, then source it and rerun --bundle.
 
 Required before --bundle:
   JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true
@@ -84,6 +90,16 @@ require_file() {
   local label="$1"
   local path="$2"
   [[ -f "$path" ]] || fail "missing $label: $path"
+}
+
+require_file_contains() {
+  local label="$1"
+  local path="$2"
+  local expected="$3"
+  require_file "$label" "$path"
+  if ! grep -F "$expected" "$path" >/dev/null 2>&1; then
+    fail "$label does not include required text: $expected"
+  fi
 }
 
 require_dir() {
@@ -362,6 +378,43 @@ EOF
   python3 -m json.tool "$OUTPUT_PATH" >/dev/null
 }
 
+write_env_template() {
+  local template_path="$1"
+  mkdir -p "$(dirname "$template_path")"
+  cat >"$template_path" <<EOF
+# Jarvis final release evidence bundle template.
+# Edit this file only after the signed/notarized distribution artifacts,
+# live-device QA report, plugin-trust QA report, and archive locations have
+# been validated for the release candidate. Keep every validation flag false
+# until the matching external check has actually completed.
+#
+# Usage:
+#   set -a
+#   source "$template_path"
+#   set +a
+#   ./scripts/release-evidence-bundle.sh --bundle
+
+JARVIS_EVIDENCE_VERSION="$VERSION"
+JARVIS_EVIDENCE_DIST_DIR="$DIST_DIR"
+JARVIS_EVIDENCE_APP_PATH="$APP_PATH"
+JARVIS_EVIDENCE_ZIP_PATH="$ZIP_PATH"
+JARVIS_EVIDENCE_PKG_PATH="$PKG_PATH"
+JARVIS_EVIDENCE_LIVE_QA_REPORT="$LIVE_QA_REPORT"
+JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$PLUGIN_QA_REPORT"
+JARVIS_EVIDENCE_OUTPUT_PATH="$OUTPUT_PATH"
+JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=true
+JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID="$EXPECTED_BUNDLE_ID"
+JARVIS_EVIDENCE_EXPECTED_VERSION="$EXPECTED_VERSION"
+
+JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=false
+JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=false
+JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=false
+JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=false
+JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=false
+JARVIS_EVIDENCE_REPORTS_ARCHIVED=false
+EOF
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --check)
@@ -376,6 +429,12 @@ while [[ $# -gt 0 ]]; do
       SELF_TEST=true
       shift
       ;;
+    --write-template)
+      WRITE_TEMPLATE=true
+      [[ $# -ge 2 ]] || fail "--write-template requires a path"
+      WRITE_TEMPLATE_PATH="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -386,12 +445,13 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if { [[ "$CHECK_ONLY" == true ]] && { [[ "$BUNDLE" == true ]] || [[ "$SELF_TEST" == true ]]; }; } ||
-  { [[ "$BUNDLE" == true ]] && [[ "$SELF_TEST" == true ]]; }; then
-  fail "--check, --bundle, and --self-test are mutually exclusive"
+if { [[ "$CHECK_ONLY" == true ]] && { [[ "$BUNDLE" == true ]] || [[ "$SELF_TEST" == true ]] || [[ "$WRITE_TEMPLATE" == true ]]; }; } ||
+  { [[ "$BUNDLE" == true ]] && { [[ "$SELF_TEST" == true ]] || [[ "$WRITE_TEMPLATE" == true ]]; }; } ||
+  { [[ "$SELF_TEST" == true ]] && [[ "$WRITE_TEMPLATE" == true ]]; }; then
+  fail "--check, --bundle, --self-test, and --write-template are mutually exclusive"
 fi
 
-if [[ "$CHECK_ONLY" != true && "$BUNDLE" != true && "$SELF_TEST" != true ]]; then
+if [[ "$CHECK_ONLY" != true && "$BUNDLE" != true && "$SELF_TEST" != true && "$WRITE_TEMPLATE" != true ]]; then
   usage
   exit 0
 fi
@@ -399,6 +459,13 @@ fi
 require_command grep
 require_command python3
 require_artifact_validation_mode
+
+if [[ "$WRITE_TEMPLATE" == true ]]; then
+  write_env_template "$WRITE_TEMPLATE_PATH"
+  printf 'Jarvis release evidence bundle env template written: %s\n' "$WRITE_TEMPLATE_PATH"
+  printf 'Proof boundary: template generation only; no release evidence was validated or created.\n'
+  exit 0
+fi
 
 if [[ "$SELF_TEST" == true ]]; then
   tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/jarvis-release-evidence-self-test.XXXXXX")"
@@ -483,6 +550,34 @@ JSON
   "proof_boundary": "self-test fixture"
 }
 JSON
+
+  "$0" --write-template "$tmp_dir/release-evidence-bundle.env" >/dev/null
+  require_file "release evidence template" "$tmp_dir/release-evidence-bundle.env"
+  for field in \
+    JARVIS_EVIDENCE_VERSION \
+    JARVIS_EVIDENCE_APP_PATH \
+    JARVIS_EVIDENCE_ZIP_PATH \
+    JARVIS_EVIDENCE_PKG_PATH \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT \
+    JARVIS_EVIDENCE_OUTPUT_PATH \
+    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES \
+    JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID \
+    JARVIS_EVIDENCE_EXPECTED_VERSION; do
+    require_file_contains "release evidence template" "$tmp_dir/release-evidence-bundle.env" "$field="
+  done
+  for flag in \
+    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED \
+    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED \
+    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED \
+    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED \
+    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED \
+    JARVIS_EVIDENCE_REPORTS_ARCHIVED; do
+    require_file_contains "release evidence template" "$tmp_dir/release-evidence-bundle.env" "$flag=false"
+    if grep -F "$flag=true" "$tmp_dir/release-evidence-bundle.env" >/dev/null 2>&1; then
+      fail "release evidence template must not default $flag to true"
+    fi
+  done
 
   JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
     JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \

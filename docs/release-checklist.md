@@ -295,7 +295,12 @@ stage or when a PR needs focused evidence for one ownership slice.
 - Confirm `./scripts/release-evidence-bundle.sh --check` is included in
   release readiness recommendations and the local release gate, and that
   `./scripts/release-evidence-bundle.sh --self-test` proves only final bundle
-  manifest mechanics with fake artifacts/reports. Treat `--check`,
+  manifest mechanics with fake artifacts/reports. Confirm
+  `./scripts/release-evidence-bundle.sh --write-template
+  target/release-evidence-bundle.env` generates a sourceable final-bundle
+  template with every `JARVIS_EVIDENCE_*` validation flag defaulted to `false`;
+  those flags may be changed only after the corresponding external release
+  check has actually completed. Treat `--check`,
   `release-evidence-doctor.sh`, `/release/evidence-status`, and
   `jarvis release evidence-status` as present/missing/invalid inventory for
   expected paths, JSON flags, and release metadata only; those paths do not

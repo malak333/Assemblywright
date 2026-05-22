@@ -328,6 +328,10 @@ preflight. Its `--self-test` validates bundle manifest generation with fake
 artifacts and fake QA reports only; real release evidence must come from
 `--bundle` after signed/notarized distribution artifacts, live-device QA, and
 plugin-trust QA evidence exist and every `JARVIS_EVIDENCE_*` flag is true.
+Use `./scripts/release-evidence-bundle.sh --write-template
+target/release-evidence-bundle.env` to generate a sourceable final-bundle
+template. The template defaults every validation flag to `false`; operators
+must flip each one only after the matching external release check is complete.
 The doctor/status paths only inventory expected paths, JSON flags, and release
 metadata; they do not validate Developer ID signing, notarization, stapling, or
 installation. The real `--bundle` path also locally validates the app code
