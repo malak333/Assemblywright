@@ -19,9 +19,9 @@ This repository is intentionally v1 foundation work, not a Marvel/JARVIS clone
 and not an autonomous external-communication system. Risky side effects must be
 blocked or require approval, and every meaningful decision should be auditable.
 The current implementation should not be described as a finished production
-assistant: signed packaging, real voice support, installed plugin execution,
-richer permission-center UX, and packaged Mac smoke evidence are still target
-architecture. The
+assistant: distribution signing/notarization, live microphone validation,
+third-party plugin trust, richer permission-center UX, and manual release QA
+are still target architecture. The
 default command path still uses `FakeLocalModel`; set
 `JARVIS_LOCAL_MODEL_PROVIDER=ollama`, `JARVIS_LOCAL_MODEL`, and optionally
 `JARVIS_OLLAMA_BASE_URL`/`JARVIS_LOCAL_MODEL_TIMEOUT_MS` to exercise the local
@@ -30,8 +30,9 @@ typed env opt-in with `JARVIS_CHATGPT_ENABLED=true`,
 `JARVIS_OPENAI_API_KEY`, and optional `JARVIS_CHATGPT_MODEL`,
 `JARVIS_OPENAI_BASE_URL`, and `JARVIS_CHATGPT_TIMEOUT_MS`; route policy still
 blocks restricted data and sends only redacted route context. Local plugin
-installation currently stores validated manifest metadata only and does not
-create an execution path.
+installation stores validated manifest metadata disabled by default; executable
+local subprocess plugins require an explicit `subprocess_stdio` grant and still
+run only through the constrained JSON stdin/stdout boundary.
 
 ## Production Work Protocol
 
@@ -83,6 +84,18 @@ That script builds `jarvis-cli`, places it in a temporary
 the configured packaged-style executable, and runs `jarvis smoke`.
 It is branch evidence for app-supervised core discovery, not a signed packaged
 app release smoke.
+
+For distribution packaging work, run:
+
+```sh
+./scripts/package-distribution.sh --check
+```
+
+The full `package-distribution.sh` lane owns Developer ID signing,
+notarization, stapling, and microphone entitlement packaging when Apple
+credentials are provided. It still does not replace clean-profile Finder
+launch, installer/App Store validation, or live microphone/Speech/TTS
+validation.
 
 With a repository-backed server running, `jarvis tasks`, `jarvis memory`,
 `jarvis scheduler`, `jarvis diagnostics`, and `jarvis plugins` expose the

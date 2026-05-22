@@ -60,6 +60,9 @@ stage or when a PR needs focused evidence for one ownership slice.
 - Focused packaged app release smoke for branches that touch packaging,
   app-supervised core launch, or Mac release evidence:
   `./scripts/packaged-app-release-smoke.sh`
+- Distribution packaging preflight for branches that touch release packaging,
+  signing, entitlements, or notarization:
+  `./scripts/package-distribution.sh --check`
 - `swift test --package-path apps/mac`
 - `swift build --package-path apps/mac`
 - Optional manual CLI/IPC smoke against a running local server:
@@ -209,6 +212,17 @@ It does not prove Finder launch, LaunchServices registration, Developer ID
 signing, notarization, entitlement validation, installer behavior, App Store
 distribution, microphone permissions, real speech capture, or a separate
 clean-user manual QA pass.
+
+Distribution packaging gate:
+
+- Run `./scripts/package-distribution.sh --check` on packaging-related PRs to
+  validate local tool availability and entitlements templates.
+- For a release candidate, set `JARVIS_DEVELOPER_ID_APPLICATION` and either
+  `JARVIS_NOTARYTOOL_PROFILE` or the Apple ID/team/password notarytool
+  variables, then run `./scripts/package-distribution.sh`.
+- Confirm the resulting app is Developer ID signed, notarized, stapled, and
+  still passes clean-profile Finder launch/manual QA before any broader
+  production distribution claim.
 
 ## Release Notes
 

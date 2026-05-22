@@ -178,6 +178,7 @@ cargo test -p jarvis-cli --test local_ipc_e2e
 cargo test -p jarvis-cli --test local_ipc_e2e -- --ignored
 ./scripts/packaged-supervision-proof.sh
 ./scripts/packaged-app-release-smoke.sh
+./scripts/package-distribution.sh --check
 ```
 
 The non-ignored `local_ipc_e2e` test is the current cross-process E2E
@@ -201,6 +202,14 @@ resume, and temp-profile SQLite state. It is still local evidence only, not
 Developer ID signing, notarization, installer validation, entitlement
 validation, App Store distribution, Finder/LaunchServices validation, or real
 microphone/Speech/TTS coverage.
+`./scripts/package-distribution.sh` is the stricter distribution packaging
+lane. Its `--check` mode validates local tool availability and the entitlements
+template without Apple credentials. Full mode requires
+`JARVIS_DEVELOPER_ID_APPLICATION` plus notarytool credentials, signs the release
+bundle with hardened runtime and microphone entitlements, submits it for
+notarization, and staples the ticket. Passing that script still does not
+replace clean-profile Finder launch, live microphone/Speech validation,
+installer validation, App Store review, or TTS validation.
 Docs-only branches should at least run a render/lint-oriented documentation
 check when available, plus `cargo fmt --check` if the branch also touches Rust
 examples or scripts. Record any skipped full-gate stage as a blocker, not as
@@ -254,7 +263,9 @@ assembles and ad-hoc signs a local `Jarvis.app`, launches it with isolated
 profile state, and verifies app-supervised core IPC through the bundled
 `jarvis-cli`. These gates still do not prove Developer ID signing,
 notarization, installer behavior, entitlement validation, Finder/LaunchServices
-launch, microphone permissions, live speech-to-text, or text-to-speech.
+launch, microphone permissions, live speech-to-text, or text-to-speech unless
+the stricter distribution lane and manual checks named in the release checklist
+are also completed.
 
 The public-repo production workflow expects isolated worktrees, topic branches,
 reviewable PRs, and clear ownership. A six-agent autonomous sweep can reduce
