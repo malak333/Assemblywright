@@ -443,8 +443,9 @@ These notes capture durable facts for future agents working on this repository.
   permission review, diagnostics, emergency pause, release readiness, and
   restart recovery paths, then removes the temporary state. It is not
   clean-profile installed-app QA, Finder/LaunchServices validation, live
-  microphone/Speech validation, live audio-output validation, live OS
-  notification validation, or Developer ID signing/notarization evidence.
+  microphone/Speech validation, spoken transcript handoff, live audio-output
+  validation, live OS notification validation, or Developer ID
+  signing/notarization evidence.
 - `./scripts/packaged-app-release-smoke.sh` is stronger local packaged app
   evidence: it builds `jarvis-cli` and the Swift app executable, assembles a
   deterministic `Jarvis.app`, writes release-smoke `Info.plist` metadata,
@@ -478,16 +479,20 @@ These notes capture durable facts for future agents working on this repository.
   zip; then creates, signs, notarizes, and staples a `/Applications` installer
   package. The unsigned structure and launch checks still do not prove Developer
   ID signing, notarization, stapling, installation, Finder launch, live
-  microphone/Speech validation, App Store review, live audio-output validation,
-  or manual QA.
+  microphone/Speech validation, spoken transcript handoff, App Store review,
+  live audio-output validation, or manual QA.
 - `./scripts/release-live-device-qa.sh --check` is part of
   `./scripts/release-local.sh`. It validates repo-owned live QA preconditions
   and prints the manual clean-profile install, Finder/LaunchServices,
-  microphone/Speech, live audio-output, notification, restart, and release-QA
-  runbook. Its `--assert-complete` mode requires an installed app plus explicit
-  `JARVIS_QA_*` owner flags, then writes a JSON evidence report to
-  `JARVIS_QA_REPORT_PATH` or `target/release-live-device-qa-report.json`. This
-  standardizes manual evidence only; `--check` does not prove live device
+  microphone/Speech permission prompts, spoken transcript handoff into the
+  command path, live audio-output, notification, restart, and release-QA runbook.
+  Its `--assert-complete` mode requires an installed app plus explicit
+  `JARVIS_QA_*` owner flags, including
+  `JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true`, then writes a JSON evidence
+  report to `JARVIS_QA_REPORT_PATH` or
+  `target/release-live-device-qa-report.json`. The report records installed-app
+  metadata, voice-loop evidence fields, validation flags, and proof boundary.
+  This standardizes manual evidence only; `--check` does not prove live device
   behavior, and the report remains an owner assertion. `--self-test` uses a fake
   app fixture to validate assertion/report mechanics in the local release gate
   without claiming live device validation.

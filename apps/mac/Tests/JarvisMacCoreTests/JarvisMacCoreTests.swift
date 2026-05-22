@@ -354,6 +354,10 @@ struct JarvisMacCoreTests {
         #expect(readiness.recommendedVerificationCommands.contains("./scripts/release-local.sh"))
         #expect(readiness.recommendedVerificationCommands.contains("./scripts/release-operator-qa-smoke.sh"))
         #expect(readiness.recommendedVerificationCommands.contains("./scripts/release-live-device-qa.sh --check"))
+        #expect(readiness.recommendedVerificationCommands.contains { command in
+            command.contains("JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true") &&
+                command.contains("./scripts/release-live-device-qa.sh --assert-complete")
+        })
         #expect(readiness.recommendedVerificationCommands.contains("./scripts/release-plugin-trust-qa.sh --check"))
         #expect(readiness.recommendedVerificationCommands.contains("./scripts/release-evidence-bundle.sh --check"))
         #expect(readiness.recommendedVerificationCommands.contains("./scripts/release-evidence-doctor.sh --check"))
@@ -2591,12 +2595,12 @@ private func releaseReadinessJSON() -> Data {
               "key": "live_voice_loop",
               "status": "pending_manual_validation",
               "proof": "Swift voice input and speech-output adapters have deterministic fake-adapter tests, including final transcript staging and opt-in final-transcript auto-submit into the text command path.",
-              "boundary": "Live microphone, Speech permission, live audio output, and device validation are not proven by automated tests."
+              "boundary": "Live microphone, Speech permission, spoken transcript handoff, live audio output, and device validation are not proven by automated tests."
             }
           ],
           "blocking_manual_gates": [
             "Developer ID Application and Installer signing credentials configured and used for a full signed package run",
-            "live microphone and Speech permission prompt validation on a real Mac",
+            "live microphone and Speech permission prompt validation plus spoken transcript handoff on a real Mac",
             "final release evidence bundle generated and archived after signed distribution, live-device QA, and plugin-trust QA reports exist"
           ],
           "recommended_verification_commands": [
@@ -2604,14 +2608,14 @@ private func releaseReadinessJSON() -> Data {
             "./scripts/release-operator-qa-smoke.sh",
             "./scripts/package-distribution.sh --unsigned-launch-check",
             "./scripts/release-live-device-qa.sh --check",
-            "JARVIS_QA_CLEAN_PROFILE_VALIDATED=true JARVIS_QA_FINDER_LAUNCH_VALIDATED=true JARVIS_QA_MICROPHONE_VALIDATED=true JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true JARVIS_QA_NOTIFICATION_VALIDATED=true JARVIS_QA_RESTART_VALIDATED=true JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true ./scripts/release-live-device-qa.sh --assert-complete",
+            "JARVIS_QA_CLEAN_PROFILE_VALIDATED=true JARVIS_QA_FINDER_LAUNCH_VALIDATED=true JARVIS_QA_MICROPHONE_VALIDATED=true JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true JARVIS_QA_NOTIFICATION_VALIDATED=true JARVIS_QA_RESTART_VALIDATED=true JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true ./scripts/release-live-device-qa.sh --assert-complete",
             "./scripts/release-plugin-trust-qa.sh --check",
             "JARVIS_PLUGIN_QA_MARKETPLACE_REVIEW_VALIDATED=true JARVIS_PLUGIN_QA_MALWARE_SCAN_VALIDATED=true JARVIS_PLUGIN_QA_OS_SANDBOX_VALIDATED=true JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED=true JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_POLICY_VALIDATED=true JARVIS_PLUGIN_QA_MANUAL_TRUST_REVIEW_VALIDATED=true ./scripts/release-plugin-trust-qa.sh --assert-complete",
             "./scripts/release-evidence-bundle.sh --check",
             "./scripts/release-evidence-doctor.sh --check",
             "JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true JARVIS_EVIDENCE_REPORTS_ARCHIVED=true ./scripts/release-evidence-bundle.sh --bundle"
           ],
-          "proof_boundary": "Read-only summary derived from /contract feature metadata and release checklist blockers; it does not perform signing, notarization, installation, Finder/LaunchServices validation, live microphone/Speech validation, live audio-output validation, App Store review, marketplace plugin review, malware analysis, or OS sandbox enforcement."
+          "proof_boundary": "Read-only summary derived from /contract feature metadata and release checklist blockers; it does not perform signing, notarization, installation, Finder/LaunchServices validation, live microphone/Speech validation, spoken transcript handoff, live audio-output validation, App Store review, marketplace plugin review, malware analysis, or OS sandbox enforcement."
         }
         """.utf8
     )

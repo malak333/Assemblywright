@@ -702,7 +702,7 @@ impl IpcState {
             blocking_manual_gates: release_blocking_manual_gates(),
             recommended_verification_commands: release_verification_commands(),
             proof_boundary:
-                "Read-only summary derived from /contract feature metadata and release checklist blockers; it does not perform signing, notarization, installation, Finder/LaunchServices validation, live microphone/Speech validation, live audio-output validation, App Store review, marketplace plugin review, malware analysis, or OS sandbox enforcement."
+                "Read-only summary derived from /contract feature metadata and release checklist blockers; it does not perform signing, notarization, installation, Finder/LaunchServices validation, live microphone/Speech validation, spoken transcript handoff, live audio-output validation, App Store review, marketplace plugin review, malware analysis, or OS sandbox enforcement."
                     .to_string(),
         }
     }
@@ -3657,7 +3657,7 @@ fn release_blocking_manual_gates() -> Vec<String> {
         "notarization and stapling completed for both app and installer package".to_string(),
         "clean-profile installer run into /Applications".to_string(),
         "Finder/LaunchServices launch validation for the installed app".to_string(),
-        "live microphone and Speech permission prompt validation on a real Mac".to_string(),
+        "live microphone and Speech permission prompt validation plus spoken transcript handoff on a real Mac".to_string(),
         "live audio-output playback validation on a real Mac".to_string(),
         "manual clean-profile release QA pass covering installed-app command, audit, memory, scheduler, plugin, pause, diagnostics, restart behavior, and user-visible prompts".to_string(),
         "broader installed-plugin marketplace trust, malware analysis, and OS-level sandbox/egress enforcement before marketplace claims".to_string(),
@@ -3672,7 +3672,7 @@ fn release_verification_commands() -> Vec<String> {
         "./scripts/packaged-app-release-smoke.sh".to_string(),
         "./scripts/package-distribution.sh --unsigned-launch-check".to_string(),
         "./scripts/release-live-device-qa.sh --check".to_string(),
-        "JARVIS_QA_CLEAN_PROFILE_VALIDATED=true JARVIS_QA_FINDER_LAUNCH_VALIDATED=true JARVIS_QA_MICROPHONE_VALIDATED=true JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true JARVIS_QA_NOTIFICATION_VALIDATED=true JARVIS_QA_RESTART_VALIDATED=true JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true ./scripts/release-live-device-qa.sh --assert-complete".to_string(),
+        "JARVIS_QA_CLEAN_PROFILE_VALIDATED=true JARVIS_QA_FINDER_LAUNCH_VALIDATED=true JARVIS_QA_MICROPHONE_VALIDATED=true JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true JARVIS_QA_NOTIFICATION_VALIDATED=true JARVIS_QA_RESTART_VALIDATED=true JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true ./scripts/release-live-device-qa.sh --assert-complete".to_string(),
         "./scripts/release-plugin-trust-qa.sh --check".to_string(),
         "JARVIS_PLUGIN_QA_MARKETPLACE_REVIEW_VALIDATED=true JARVIS_PLUGIN_QA_MALWARE_SCAN_VALIDATED=true JARVIS_PLUGIN_QA_OS_SANDBOX_VALIDATED=true JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED=true JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_POLICY_VALIDATED=true JARVIS_PLUGIN_QA_MANUAL_TRUST_REVIEW_VALIDATED=true ./scripts/release-plugin-trust-qa.sh --assert-complete".to_string(),
         "./scripts/release-evidence-bundle.sh --check".to_string(),
@@ -3772,7 +3772,7 @@ fn contract_features() -> Vec<ContractFeature> {
             "live_voice_loop",
             "pending_manual_validation",
             "Swift voice input and speech-output adapters have deterministic fake-adapter tests, including final transcript staging and opt-in final-transcript auto-submit into the text command path.",
-            "Live microphone, Speech permission, live audio output, and device validation are not proven by automated tests.",
+            "Live microphone, Speech permission, spoken transcript handoff, live audio output, and device validation are not proven by automated tests.",
         ),
     ]
 }
@@ -4127,6 +4127,13 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .recommended_verification_commands
             .iter()
             .any(|command| command == "./scripts/release-live-device-qa.sh --check"));
+        assert!(readiness
+            .recommended_verification_commands
+            .iter()
+            .any(
+                |command| command.contains("JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true")
+                    && command.contains("./scripts/release-live-device-qa.sh --assert-complete")
+            ));
         assert!(readiness
             .recommended_verification_commands
             .iter()

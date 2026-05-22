@@ -414,19 +414,22 @@ checks its installer signature, submits it for notarization, and staples the
 package. Passing the unsigned structure or launch checks still does not prove
 signing/notarization, and passing full mode still does not replace
 clean-profile install, Finder launch, live microphone/Speech validation, App
-Store review, or live audio-output validation.
+Store review, spoken transcript handoff, or live audio-output validation.
 `./scripts/release-live-device-qa.sh --check` keeps the live-device QA runbook
 in the default release gate. It validates the repo-owned entitlement/checklist
 preconditions and prints the required clean-profile install, Finder launch,
-microphone/Speech, live audio-output, notification, restart, and manual QA
-steps. `--assert-complete` is for the release machine after those checks are
-actually performed and all required `JARVIS_QA_*` flags are explicitly set to
-`true`.
+microphone/Speech, spoken transcript handoff, live audio-output, notification,
+restart, and manual QA steps. `--assert-complete` is for the release machine
+after those checks are actually performed and all required `JARVIS_QA_*` flags
+are explicitly set to `true`, including
+`JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true` for the spoken
+transcript handoff into the same command path.
 On success, `--assert-complete` writes a JSON evidence report to
 `JARVIS_QA_REPORT_PATH` or `target/release-live-device-qa-report.json` by
-default. Preserve that report with release notes when making a production-ready
-claim. `--self-test` uses a fake app fixture to exercise only the
-assertion/report mechanics and is included in `./scripts/release-local.sh`.
+default. The report includes installed-app metadata, voice-loop evidence fields,
+and the proof boundary. Preserve that report with release notes when making a
+production-ready claim. `--self-test` uses a fake app fixture to exercise only
+the assertion/report mechanics and is included in `./scripts/release-local.sh`.
 Docs-only branches should at least run a render/lint-oriented documentation
 check when available, plus `cargo fmt --check` if the branch also touches Rust
 examples or scripts. Record any skipped full-gate stage as a blocker, not as

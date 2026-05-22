@@ -269,7 +269,7 @@ run_unsigned_structure_check() {
   printf 'App: %s\n' "$APP_PATH"
   printf 'Pkg: %s\n' "$PKG_PATH"
   printf 'Signing: %s\n' "$SIGNING_STATUS"
-  printf 'Proof boundary: release app and unsigned installer payload structure only; no Developer ID signing, notarization, stapling, /Applications install, Finder launch, live microphone/Speech validation, live audio-output validation, App Store validation, or manual QA.\n'
+  printf 'Proof boundary: release app and unsigned installer payload structure only; no Developer ID signing, notarization, stapling, /Applications install, Finder launch, live microphone/Speech validation, spoken transcript handoff, live audio-output validation, App Store validation, or manual QA.\n'
 }
 
 run_unsigned_launch_check() {
@@ -391,7 +391,7 @@ run_unsigned_launch_check() {
   printf 'Pkg: %s\n' "$PKG_PATH"
   printf 'Signing: %s\n' "$SIGNING_STATUS"
   printf 'Clean HOME database: %s\n' "$APP_DB"
-  printf 'Proof boundary: release-built app executable, bundled core, unsigned installer payload structure, isolated HOME launch, command/audit/diagnostics/pause smoke, and optional ad-hoc signing only; no Developer ID signing, notarization, stapling, /Applications install, Finder/LaunchServices validation, live microphone/Speech validation, live audio-output validation, App Store validation, or manual QA.\n'
+  printf 'Proof boundary: release-built app executable, bundled core, unsigned installer payload structure, isolated HOME launch, command/audit/diagnostics/pause smoke, and optional ad-hoc signing only; no Developer ID signing, notarization, stapling, /Applications install, Finder/LaunchServices validation, live microphone/Speech validation, spoken transcript handoff, live audio-output validation, App Store validation, or manual QA.\n'
 }
 
 if [[ "$UNSIGNED_STRUCTURE_CHECK" == true ]]; then
@@ -451,4 +451,4 @@ printf '\nJarvis distribution package: ok\n'
 printf 'App: %s\n' "$APP_PATH"
 printf 'Zip: %s\n' "$ZIP_PATH"
 printf 'Pkg: %s\n' "$PKG_PATH"
-printf 'Proof boundary: signed, notarized app zip and signed, notarized installer package only; clean-profile install, Finder launch, live microphone/Speech validation, live audio-output validation, and App Store validation remain manual release checks.\n'
+printf 'Proof boundary: signed, notarized app zip and signed, notarized installer package only; clean-profile install, Finder launch, live microphone/Speech validation, spoken transcript handoff, live audio-output validation, and App Store validation remain manual release checks.\n'
