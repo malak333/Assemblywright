@@ -29,6 +29,14 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     let contract = run_cli_json(["contract", "--endpoint", endpoint.as_str()]);
     assert_eq!(contract["contract"]["name"], "jarvis.local-ipc");
     assert_eq!(contract["contract"]["version"], 1);
+    assert_array_contains(
+        &contract["features"],
+        "key",
+        "scheduler_trigger_policy_review",
+    );
+    assert_array_contains(&contract["features"], "key", "installed_plugin_execution");
+    assert_array_contains(&contract["features"], "key", "live_voice_loop");
+    assert_array_contains(&contract["features"], "status", "pending_manual_validation");
     assert_array_contains(&contract["endpoints"], "path", "/diagnostics/export");
     assert_array_contains(&contract["endpoints"], "path", "/permissions/grants");
     assert_array_contains(&contract["endpoints"], "path", "/permissions/policy-review");

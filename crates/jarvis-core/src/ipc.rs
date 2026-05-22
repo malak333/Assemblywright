@@ -59,10 +59,19 @@ pub struct ContractEndpoint {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContractFeature {
+    pub key: String,
+    pub status: String,
+    pub proof: String,
+    pub boundary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContractResponse {
     pub contract: ContractMetadata,
     pub endpoints: Vec<ContractEndpoint>,
     pub safe_inspection_paths: Vec<String>,
+    pub features: Vec<ContractFeature>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -549,6 +558,7 @@ impl IpcState {
                 "/approvals".to_string(),
                 "/approvals/:id".to_string(),
             ],
+            features: contract_features(),
         }
     }
 
@@ -2991,6 +3001,79 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
     ]
 }
 
+fn contract_features() -> Vec<ContractFeature> {
+    vec![
+        feature(
+            "repository_state",
+            "implemented",
+            "SQLite-backed task, audit, model-route, memory, scheduler, approval, and installed-plugin state is covered by Rust unit tests and local IPC E2E.",
+            "Local repository evidence only; no hosted sync or multi-device state claim.",
+        ),
+        feature(
+            "activity_events",
+            "implemented",
+            "Repository-backed `/activity/events` exposes bounded task/audit event batches and is covered by CLI IPC E2E.",
+            "This is bounded state polling over SSE, not per-token model streaming or plugin-internal progress streaming.",
+        ),
+        feature(
+            "scheduler_attention",
+            "implemented",
+            "Repository-backed scheduler jobs expose redacted `/scheduler/attention`, explicit run-due execution, background loop tests, and CLI IPC E2E.",
+            "Adapter and fake-test evidence only for notifications; live OS notification delivery remains a manual release gate.",
+        ),
+        feature(
+            "scheduler_trigger_policy_review",
+            "implemented",
+            "Active scheduler triggers appear in `/permissions/policy-review` without scheduler command text and are covered by Rust unit and CLI IPC E2E tests.",
+            "Review visibility only; richer proactive trigger policy and manual notification validation remain pending.",
+        ),
+        feature(
+            "installed_plugin_execution",
+            "implemented",
+            "Local subprocess plugins require provenance verification plus explicit subprocess_stdio grant and are covered by Rust unit and CLI IPC E2E tests.",
+            "Constrained local subprocess execution only; not a WASM, OS-level, or marketplace sandbox.",
+        ),
+        feature(
+            "plugin_publisher_signature",
+            "implemented",
+            "Installed plugin manifests can verify an Ed25519 publisher signature against an explicit trusted public key with audit evidence.",
+            "Trusted-key verification only; not marketplace approval, malware analysis, or reputation service trust.",
+        ),
+        feature(
+            "plugin_network_governance",
+            "implemented",
+            "Network-capable plugin actions must declare exact allowed hosts and appear in permission policy review.",
+            "Manifest governance only; not OS-level network sandbox enforcement.",
+        ),
+        feature(
+            "packaged_app_smoke",
+            "implemented",
+            "Local packaged-app smoke assembles and ad-hoc signs Jarvis.app, launches it with a temp profile, and verifies supervised core health and recovery paths.",
+            "Local ad-hoc proof only; Developer ID signing, notarization, installer, Finder, App Store, and entitlement validation remain manual/distribution gates.",
+        ),
+        feature(
+            "live_voice_loop",
+            "pending_manual_validation",
+            "Swift voice input and speech-output adapters have deterministic fake-adapter tests.",
+            "Live microphone, Speech permission, live audio output, and device validation are not proven by automated tests.",
+        ),
+    ]
+}
+
+fn feature(
+    key: impl Into<String>,
+    status: impl Into<String>,
+    proof: impl Into<String>,
+    boundary: impl Into<String>,
+) -> ContractFeature {
+    ContractFeature {
+        key: key.into(),
+        status: status.into(),
+        proof: proof.into(),
+        boundary: boundary.into(),
+    }
+}
+
 fn sha256_text(value: &str) -> String {
     let digest = Sha256::digest(value.as_bytes());
     format!("{digest:x}")
@@ -3089,6 +3172,14 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
 
         assert_eq!(contract.contract.name, IPC_CONTRACT_NAME);
         assert_eq!(contract.contract.version, IPC_CONTRACT_VERSION);
+        assert!(contract.features.iter().any(|feature| {
+            feature.key == "scheduler_trigger_policy_review"
+                && feature.status == "implemented"
+                && feature.boundary.contains("Review visibility only")
+        }));
+        assert!(contract.features.iter().any(|feature| {
+            feature.key == "live_voice_loop" && feature.status == "pending_manual_validation"
+        }));
         assert!(contract
             .safe_inspection_paths
             .contains(&"/diagnostics/export".to_string()));

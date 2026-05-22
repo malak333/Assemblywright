@@ -40,6 +40,10 @@ These notes capture durable facts for future agents working on this repository.
   summary snapshots. This is local progress-streaming evidence for current
   task/audit state, not per-token model streaming or plugin-internal progress
   events.
+- `/contract` includes a `features` list with stable keys, status, proof, and
+  boundary fields so Swift and release docs can distinguish implemented
+  repo-owned surfaces from manual or target production claims without scraping
+  prose.
 - `ConversationRuntime` supports bounded fake-model planned first-party tool
   calls with schema validation, policy checks, approval stops, tool-result audit
   entries, and feedback of tool results into later model steps. The local HTTP
