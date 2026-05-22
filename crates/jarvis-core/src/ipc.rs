@@ -1876,6 +1876,8 @@ impl IpcState {
                     "job_status": running.status,
                 }),
             )?;
+            let policy_audit =
+                self.append_scheduler_proactive_policy_audit(&running, true, checked_at)?;
             let command_response = self
                 .submit_command(CommandRequest {
                     input: running.command.clone(),
@@ -1893,6 +1895,7 @@ impl IpcState {
                 .await?;
 
             let mut audit_entries = Vec::new();
+            audit_entries.push(policy_audit);
             self.append_scheduler_execution_audit(
                 "scheduler_job_started",
                 "scheduler started due job command",
@@ -2090,6 +2093,34 @@ impl IpcState {
         Ok(())
     }
 
+    fn append_scheduler_proactive_policy_audit(
+        &self,
+        job: &SchedulerJob,
+        due: bool,
+        checked_at: DateTime<Utc>,
+    ) -> JarvisResult<AuditEntry> {
+        let classification = scheduler_policy_classification(job, due);
+        self.append_scheduler_audit_entry(
+            None,
+            "scheduler_proactive_policy_checked",
+            "scheduler checked proactive policy before submitting due job command",
+            json!({
+                "checked_at": checked_at,
+                "scheduler_job_id": job.id,
+                "scheduler_job_name": job.name,
+                "trigger": job.trigger,
+                "job_status": job.status,
+                "due": due,
+                "proactive_trigger": true,
+                "command_redacted": true,
+                "policy_review_item_type": classification.item_type,
+                "severity": classification.severity,
+                "trigger_label": classification.trigger_label,
+                "side_effects_require_approval": true,
+            }),
+        )
+    }
+
     fn append_scheduler_audit_entry(
         &self,
         task_id: Option<Uuid>,
@@ -2213,26 +2244,7 @@ fn scheduler_policy_review_item(
     let due_at = scheduler_job_due_at(&job);
     let due = matches!(job.status, SchedulerJobStatus::Scheduled)
         && due_at.is_some_and(|candidate| candidate <= now);
-    let (item_type, severity, trigger_label) = match job.trigger {
-        TriggerKind::Manual => (
-            "manual_scheduler_trigger",
-            "low",
-            "manual trigger".to_string(),
-        ),
-        TriggerKind::OnceAt { run_at } => {
-            let severity = if due { "medium" } else { "low" };
-            (
-                "scheduled_scheduler_trigger",
-                severity,
-                format!("one-time trigger at {run_at}"),
-            )
-        }
-        TriggerKind::Interval { every_seconds } => (
-            "recurring_scheduler_trigger",
-            "medium",
-            format!("recurring trigger every {every_seconds} seconds"),
-        ),
-    };
+    let classification = scheduler_policy_classification(&job, due);
     let due_detail = if due {
         " The job is currently due."
     } else {
@@ -2240,17 +2252,43 @@ fn scheduler_policy_review_item(
     };
 
     PermissionPolicyReviewItem {
-        item_type: item_type.to_string(),
-        severity: severity.to_string(),
+        item_type: classification.item_type.to_string(),
+        severity: classification.severity.to_string(),
         title: "Scheduler trigger is active".to_string(),
         detail: format!(
-            "{} is {:?} with a {trigger_label}; scheduler command text is redacted and due execution remains policy-gated.{due_detail}",
-            job.name, job.status
+            "{} is {:?} with a {}; scheduler command text is redacted and due execution remains policy-gated.{due_detail}",
+            job.name, job.status, classification.trigger_label
         ),
         approval_id: None,
         plugin_id: None,
         memory_id: None,
         action: Some(job.id.to_string()),
+    }
+}
+
+struct SchedulerPolicyClassification {
+    item_type: &'static str,
+    severity: &'static str,
+    trigger_label: String,
+}
+
+fn scheduler_policy_classification(job: &SchedulerJob, due: bool) -> SchedulerPolicyClassification {
+    match job.trigger {
+        TriggerKind::Manual => SchedulerPolicyClassification {
+            item_type: "manual_scheduler_trigger",
+            severity: "low",
+            trigger_label: "manual trigger".to_string(),
+        },
+        TriggerKind::OnceAt { run_at } => SchedulerPolicyClassification {
+            item_type: "scheduled_scheduler_trigger",
+            severity: if due { "medium" } else { "low" },
+            trigger_label: format!("one-time trigger at {run_at}"),
+        },
+        TriggerKind::Interval { every_seconds } => SchedulerPolicyClassification {
+            item_type: "recurring_scheduler_trigger",
+            severity: "medium",
+            trigger_label: format!("recurring trigger every {every_seconds} seconds"),
+        },
     }
 }
 
@@ -4595,12 +4633,94 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let audit = state
             .using_repository(|repository| repository.list_audit_entries(None))
             .expect("audit");
+        let proactive_policy_audits = audit
+            .iter()
+            .filter(|entry| entry.event_type == "scheduler_proactive_policy_checked")
+            .collect::<Vec<_>>();
+        assert_eq!(proactive_policy_audits.len(), 3);
+        assert!(proactive_policy_audits.iter().all(|entry| entry
+            .payload
+            .get("command_redacted")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)));
+        assert!(proactive_policy_audits.iter().any(|entry| entry
+            .payload
+            .get("policy_review_item_type")
+            .and_then(serde_json::Value::as_str)
+            == Some("manual_scheduler_trigger")));
+        assert!(proactive_policy_audits.iter().any(|entry| entry
+            .payload
+            .get("policy_review_item_type")
+            .and_then(serde_json::Value::as_str)
+            == Some("scheduled_scheduler_trigger")));
+        assert!(proactive_policy_audits.iter().any(|entry| entry
+            .payload
+            .get("policy_review_item_type")
+            .and_then(serde_json::Value::as_str)
+            == Some("recurring_scheduler_trigger")));
+        let encoded_policy_audits =
+            serde_json::to_string(&proactive_policy_audits).expect("policy audit JSON");
+        assert!(!encoded_policy_audits.contains("plugin status"));
         assert!(audit
             .iter()
             .any(|entry| entry.event_type == "scheduler_job_rescheduled"));
         assert!(audit
             .iter()
             .any(|entry| entry.event_type == "plugin_completed"));
+    }
+
+    #[tokio::test]
+    async fn scheduler_proactive_policy_audit_matches_policy_review_classification() {
+        let repository = SqliteRepository::in_memory().unwrap();
+        let state = IpcState::with_repository(repository).expect("state");
+        let job = state
+            .schedule_scheduler_job(SchedulerJobSpec {
+                name: "classified scheduled job".to_string(),
+                command: "plugin status".to_string(),
+                trigger: TriggerKind::OnceAt {
+                    run_at: Utc::now() - chrono::Duration::seconds(1),
+                },
+            })
+            .expect("schedule");
+        let job_id = job.id.to_string();
+        let review = state.permission_policy_review().expect("policy review");
+        let review_item = review
+            .items
+            .iter()
+            .find(|item| item.action.as_deref() == Some(job_id.as_str()))
+            .expect("scheduler review item")
+            .clone();
+
+        let response = state.run_due_scheduler_jobs(1).await.expect("run due");
+
+        let policy_audit = response.executions[0]
+            .audit_entries
+            .iter()
+            .find(|entry| entry.event_type == "scheduler_proactive_policy_checked")
+            .expect("policy audit");
+        assert_eq!(
+            policy_audit
+                .payload
+                .get("policy_review_item_type")
+                .and_then(serde_json::Value::as_str),
+            Some(review_item.item_type.as_str())
+        );
+        assert_eq!(
+            policy_audit
+                .payload
+                .get("severity")
+                .and_then(serde_json::Value::as_str),
+            Some(review_item.severity.as_str())
+        );
+        assert_eq!(
+            policy_audit
+                .payload
+                .get("side_effects_require_approval")
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+        let encoded = serde_json::to_string(policy_audit).expect("policy audit JSON");
+        assert!(!encoded.contains("plugin status"));
     }
 
     #[tokio::test]

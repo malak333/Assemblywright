@@ -1164,6 +1164,46 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_array_contains_nested(&run_due["executions"], &["job", "id"], &due_interval_id);
     assert_array_contains_nested(&run_due["executions"], &["job", "status"], "completed");
     assert_array_contains_nested(&run_due["executions"], &["job", "status"], "scheduled");
+    assert!(run_due["executions"]
+        .as_array()
+        .expect("executions array")
+        .iter()
+        .any(|execution| execution["audit_entries"]
+            .as_array()
+            .expect("audit entries")
+            .iter()
+            .any(
+                |entry| entry["event_type"] == "scheduler_proactive_policy_checked"
+                    && entry["payload"]["command_redacted"] == true
+                    && entry["payload"]["policy_review_item_type"] == "scheduled_scheduler_trigger"
+            )));
+    assert!(run_due["executions"]
+        .as_array()
+        .expect("executions array")
+        .iter()
+        .any(|execution| execution["audit_entries"]
+            .as_array()
+            .expect("audit entries")
+            .iter()
+            .any(
+                |entry| entry["event_type"] == "scheduler_proactive_policy_checked"
+                    && entry["payload"]["command_redacted"] == true
+                    && entry["payload"]["policy_review_item_type"] == "recurring_scheduler_trigger"
+            )));
+    let run_due_audit_entries = run_due["executions"]
+        .as_array()
+        .expect("executions array")
+        .iter()
+        .flat_map(|execution| {
+            execution["audit_entries"]
+                .as_array()
+                .expect("audit entries")
+                .iter()
+        })
+        .collect::<Vec<_>>();
+    assert!(!serde_json::to_string(&run_due_audit_entries)
+        .expect("run due audit JSON")
+        .contains("\"plugin status\""));
 
     let diagnostics = run_cli_json(["diagnostics", "export", "--endpoint", endpoint.as_str()]);
     assert_eq!(diagnostics["repository_backed"], true);

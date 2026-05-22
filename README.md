@@ -20,6 +20,10 @@ permission/grant inspection, permission policy review items, redacted scheduler
 attention summaries for app handoff, scheduler trigger policy-review items,
 adapter-backed scheduler notification controls, degraded-mode handling, and a
 core supervisor abstraction.
+Scheduler due execution records a redacted proactive policy audit before
+submitting commands, using the same trigger classification as
+`/permissions/policy-review`, so proactive routines stay inspectable without
+exposing scheduler command text.
 
 ## Current Scope
 
@@ -72,7 +76,8 @@ permission grants UX, docs architecture alignment, distribution packaging, and
 Keychain launch credential injection. Follow-on slices have added Swift memory
 CRUD, local plugin provenance verification, scheduler attention handoff, and
 permission policy review plus scheduler trigger review and notification
-controls. Later slices continue the same branch/PR discipline;
+controls, including redacted proactive scheduler policy audit before due
+command execution. Later slices continue the same branch/PR discipline;
 release language should describe only the merged repo-owned surfaces with
 recorded focused E2E or integration proof.
 The permission center now surfaces installed-plugin provenance status from

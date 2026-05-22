@@ -160,6 +160,10 @@ stage or when a PR needs focused evidence for one ownership slice.
 - Confirm permission policy review includes active scheduler triggers without
   exposing scheduler command bodies, and that recurring/due triggers remain
   visible before due-job execution.
+- Confirm scheduler due-job execution records
+  `scheduler_proactive_policy_checked` before command submission, reuses the
+  policy-review trigger classification, marks command redaction explicitly, and
+  does not expose scheduler command bodies in that policy audit.
 - Confirm permission policy review includes unreviewed memory items without
   exposing memory values, and diagnostics export exposes only aggregate active,
   unreviewed, and sensitive memory counts.
@@ -188,6 +192,7 @@ stage or when a PR needs focused evidence for one ownership slice.
   classification summary, create/update/review/delete/restore, scheduler
   schedule/get/list/cancel, redacted scheduler trigger policy review,
   redacted scheduler attention handoff, scheduler run-due success/reschedule,
+  redacted proactive scheduler policy audit before due command submission,
   scheduler fail-closed pause on non-accepted due
   jobs, diagnostics redaction, persistence restart, and emergency-pause
   blocking/resume behavior. Treat this as the minimum E2E expectation for the
