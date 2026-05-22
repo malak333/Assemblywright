@@ -76,6 +76,12 @@ stage or when a PR needs focused evidence for one ownership slice.
 - `./scripts/package-distribution.sh --unsigned-launch-check`
 - `./scripts/release-live-device-qa.sh --check`
 - `./scripts/release-live-device-qa.sh --self-test`
+- `./scripts/release-plugin-trust-qa.sh --check`
+- `./scripts/release-plugin-trust-qa.sh --self-test`
+- `./scripts/release-evidence-bundle.sh --check`
+- `./scripts/release-evidence-bundle.sh --self-test`
+- `./scripts/release-evidence-doctor.sh --check`
+- `./scripts/release-evidence-doctor.sh --self-test`
 - Focused supervision proof for branches that touch Swift core launch or bundle
   discovery: `./scripts/packaged-supervision-proof.sh`
 - Focused packaged app release smoke for branches that touch packaging,
@@ -276,6 +282,13 @@ stage or when a PR needs focused evidence for one ownership slice.
   matches the expected bundle id/version/build, and write SHA-256 digests for
   the signed distribution artifacts plus QA reports before writing evidence;
   the disabled-signature path is reserved for the fake self-test fixture.
+- Confirm `./scripts/release-evidence-doctor.sh --check` is included in
+  release readiness recommendations and the local release gate, and that
+  `./scripts/release-evidence-doctor.sh --self-test` proves only evidence
+  inventory mechanics with fake artifacts/reports. Treat a complete doctor run
+  as a present/missing inventory of expected files, JSON flags, and release
+  metadata only; it does not perform signing, notarization, live-device QA,
+  plugin-trust QA, owner assertions, or final bundle creation.
 - Confirm the Swift Release tab decodes the same `/release/readiness` contract
   and renders blocking gates, recommended commands, implemented proofs, pending
   features, and proof boundary without enabling release side effects.

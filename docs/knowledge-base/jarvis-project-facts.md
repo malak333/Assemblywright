@@ -180,6 +180,12 @@ These notes capture durable facts for future agents working on this repository.
   match the expected release, and records SHA-256 digests for the distribution
   zip, installer package, live-device QA report, and plugin-trust QA report
   before writing the bundle manifest.
+- `./scripts/release-evidence-doctor.sh` inventories release evidence readiness
+  before final bundling. `--check` reports present and missing signed-artifact,
+  live-device QA, plugin-trust QA, and final bundle evidence without failing
+  the default local gate; `--self-test` uses fake artifacts/reports to prove the
+  inventory mechanics only. A complete doctor run is diagnostic status, not
+  proof that external validation happened.
 - Enabled `local_subprocess` plugins run with an environment boundary: Jarvis
   clears the inherited app/core process environment before spawn and provides
   only a deterministic `PATH` plus `JARVIS_PLUGIN_ID`,
@@ -347,7 +353,13 @@ These notes capture durable facts for future agents working on this repository.
   package --workspace --allow-dirty`,
   `./scripts/package-distribution.sh --unsigned-launch-check`,
   `./scripts/release-live-device-qa.sh --check`,
-  `./scripts/release-live-device-qa.sh --self-test`, `swift test
+  `./scripts/release-live-device-qa.sh --self-test`,
+  `./scripts/release-plugin-trust-qa.sh --check`,
+  `./scripts/release-plugin-trust-qa.sh --self-test`,
+  `./scripts/release-evidence-bundle.sh --check`,
+  `./scripts/release-evidence-bundle.sh --self-test`,
+  `./scripts/release-evidence-doctor.sh --check`,
+  `./scripts/release-evidence-doctor.sh --self-test`, `swift test
   --package-path apps/mac`, and `swift build --package-path apps/mac`.
   It also runs `./scripts/storage-migration-backup-smoke.sh` so file-backed
   migration backup/recovery stays part of the default local release evidence.
