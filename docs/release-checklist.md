@@ -117,7 +117,8 @@ stage or when a PR needs focused evidence for one ownership slice.
 - Confirm local plugin installation accepts only validated manifest metadata
   with safe absolute source paths and stores installed records with
   `execution_enabled: false`, `execution_grant: metadata_only`, and local
-  provenance snapshot metadata.
+  provenance snapshot metadata, including deterministic source-tree hashes that
+  detect helper/resource drift under `source_path`.
 - Confirm installed plugin metadata remains disabled by default and becomes
   executable only after local provenance verification reports
   `matches_install_snapshot` and an explicit `subprocess_stdio` execution

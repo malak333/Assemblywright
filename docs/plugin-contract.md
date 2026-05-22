@@ -21,11 +21,14 @@ Each plugin manifest must declare:
 - Absolute `source_path` for local installation metadata. The manifest file
   must be a readable file under that canonical directory.
 - Local installs capture an install-time provenance snapshot with canonical
-  manifest path, manifest SHA-256, canonical source path, optional subprocess
-  command path, optional subprocess command SHA-256, capture time, verification
-  time, and integrity status. Origin claims remain unverified local labels until
-  an operator pins the author claim or verifies a manifest signature against an
-  explicit trusted public key.
+  manifest path, manifest SHA-256, canonical source path, deterministic
+  source-tree SHA-256 and file count, optional subprocess command path, optional
+  subprocess command SHA-256, capture time, verification time, and integrity
+  status. Source-tree hashing rejects symlinks, ignores Jarvis-owned generated
+  artifact/cache paths, and fails closed if the manifest or subprocess
+  entrypoint would be excluded. Origin claims remain unverified local labels
+  until an operator pins the author claim or verifies a manifest signature
+  against an explicit trusted public key.
 - Optional `publisher_signature` with `scheme: ed25519-v1`, a base64 Ed25519
   public key, and a base64 signature over the manifest payload with
   `publisher_signature` omitted. Signature verification requires local
@@ -100,7 +103,7 @@ to explain what happened:
 - Installed plugin run requests go through an explicit fail-closed runner
   boundary. The boundary revalidates the stored manifest/version metadata,
   checks the requested action is declared, validates input schema, verifies the
-  local manifest/subprocess snapshot, honors `execution_enabled` and
+  local source-tree provenance snapshot, honors `execution_enabled` and
   `execution_grant`, checks that the stored source path is canonical, and
   appends audit evidence.
 - Enabled installed plugin execution is limited to `local_subprocess` manifests

@@ -693,6 +693,10 @@ pub struct InstalledPluginProvenance {
     pub manifest_sha256: String,
     pub source_path: String,
     pub source_path_canonicalized: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_tree_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_tree_file_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subprocess_command_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -737,6 +741,8 @@ impl InstalledPluginProvenance {
             manifest_sha256: String::new(),
             source_path: source_path.into(),
             source_path_canonicalized: false,
+            source_tree_sha256: None,
+            source_tree_file_count: None,
             subprocess_command_path: None,
             subprocess_command_sha256: None,
             captured_at,
@@ -759,6 +765,8 @@ impl InstalledPluginProvenance {
         let source_path = fs::canonicalize(source_path).map_err(|err| {
             JarvisError::Validation(format!("source_path is not readable: {err}"))
         })?;
+        validate_source_tree_required_path("manifest", &source_path, &manifest_path)?;
+        let source_tree_snapshot = source_tree_snapshot(&source_path)?;
         let mut provenance = Self {
             provenance_schema_version: 1,
             capture_method: "local_manifest_snapshot".to_string(),
@@ -766,6 +774,8 @@ impl InstalledPluginProvenance {
             manifest_sha256: sha256_file(&manifest_path)?,
             source_path: source_path.display().to_string(),
             source_path_canonicalized: true,
+            source_tree_sha256: Some(source_tree_snapshot.sha256),
+            source_tree_file_count: Some(source_tree_snapshot.file_count),
             subprocess_command_path: None,
             subprocess_command_sha256: None,
             captured_at,
@@ -783,6 +793,7 @@ impl InstalledPluginProvenance {
                 ))
             })?;
             let command_path = subprocess.validate(&manifest.id, &source_path)?;
+            validate_source_tree_required_path("subprocess command", &source_path, &command_path)?;
             provenance.subprocess_command_sha256 = Some(sha256_file(&command_path)?);
             provenance.subprocess_command_path = Some(command_path.display().to_string());
         }
@@ -827,6 +838,18 @@ impl InstalledPluginProvenance {
         if !source_path.exists() {
             return Err(PluginProvenanceVerificationError::MissingFile);
         }
+        if let Some(expected_tree_sha) = self.source_tree_sha256.as_deref() {
+            let source_tree_snapshot = source_tree_snapshot(source_path).map_err(|err| {
+                if err.to_string().contains("symlink") {
+                    PluginProvenanceVerificationError::InvalidManifest
+                } else {
+                    PluginProvenanceVerificationError::MissingFile
+                }
+            })?;
+            if source_tree_snapshot.sha256 != expected_tree_sha {
+                return Err(PluginProvenanceVerificationError::Changed);
+            }
+        }
         if let Some(expected_sha) = self.subprocess_command_sha256.as_deref() {
             let subprocess = manifest
                 .subprocess
@@ -844,6 +867,197 @@ impl InstalledPluginProvenance {
 
         Ok(())
     }
+}
+
+#[derive(Debug)]
+struct SourceTreeSnapshot {
+    sha256: String,
+    file_count: usize,
+}
+
+fn source_tree_snapshot(root: &Path) -> JarvisResult<SourceTreeSnapshot> {
+    let canonical_root = fs::canonicalize(root).map_err(|err| {
+        JarvisError::Validation(format!("plugin source_path is not readable: {err}"))
+    })?;
+    let mut files = Vec::new();
+    let mut normalized_paths = HashSet::new();
+    collect_source_tree_files(&canonical_root, &canonical_root, &mut files)?;
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let mut digest = Sha256::new();
+    digest.update(b"jarvis-plugin-source-tree-sha256-v1\0");
+    digest.update(b"ignore-policy-v1\0");
+    for (relative_path, file_path) in &files {
+        let collision_key = relative_path.to_lowercase();
+        if !normalized_paths.insert(collision_key) {
+            return Err(JarvisError::Validation(format!(
+                "plugin source tree has case-insensitive duplicate path: {relative_path}"
+            )));
+        }
+        let file_bytes = fs::read(file_path).map_err(|err| {
+            JarvisError::Validation(format!("read plugin source tree file: {err}"))
+        })?;
+        digest.update(b"file\0");
+        update_digest_with_len_prefixed_bytes(&mut digest, relative_path.as_bytes());
+        update_digest_with_len_prefixed_bytes(&mut digest, &file_bytes);
+    }
+
+    Ok(SourceTreeSnapshot {
+        sha256: format!("{:x}", digest.finalize()),
+        file_count: files.len(),
+    })
+}
+
+fn collect_source_tree_files(
+    root: &Path,
+    current: &Path,
+    files: &mut Vec<(String, PathBuf)>,
+) -> JarvisResult<()> {
+    let mut entries = fs::read_dir(current)
+        .map_err(|err| JarvisError::Validation(format!("read plugin source tree: {err}")))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| JarvisError::Validation(format!("read plugin source tree: {err}")))?;
+    entries.sort_by_key(|entry| entry.path());
+
+    for entry in entries {
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path).map_err(|err| {
+            JarvisError::Validation(format!("read plugin source tree metadata: {err}"))
+        })?;
+        let file_type = metadata.file_type();
+        if file_type.is_symlink() {
+            return Err(JarvisError::Validation(format!(
+                "plugin source tree cannot include symlink: {}",
+                path.display()
+            )));
+        }
+        let relative_path = normalized_source_tree_relative_path(root, &path)?;
+        if source_tree_ignore_match(&relative_path, file_type.is_dir()) {
+            continue;
+        }
+        if file_type.is_dir() {
+            collect_source_tree_files(root, &path, files)?;
+            continue;
+        }
+        if file_type.is_file() {
+            let canonical_path = fs::canonicalize(&path).map_err(|err| {
+                JarvisError::Validation(format!("plugin source tree file is not readable: {err}"))
+            })?;
+            if !canonical_path.starts_with(root) {
+                return Err(JarvisError::Validation(format!(
+                    "plugin source tree file escapes source_path: {}",
+                    path.display()
+                )));
+            }
+            files.push((relative_path, canonical_path));
+            continue;
+        }
+        return Err(JarvisError::Validation(format!(
+            "plugin source tree contains unsupported file type: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn update_digest_with_len_prefixed_bytes(digest: &mut Sha256, bytes: &[u8]) {
+    digest.update((bytes.len() as u64).to_be_bytes());
+    digest.update(bytes);
+}
+
+fn validate_source_tree_required_path(label: &str, root: &Path, path: &Path) -> JarvisResult<()> {
+    let relative_path = normalized_source_tree_relative_path(root, path)?;
+    if source_tree_ignore_match(&relative_path, path.is_dir()) {
+        return Err(JarvisError::Validation(format!(
+            "plugin {label} cannot be excluded from source tree provenance: {relative_path}"
+        )));
+    }
+    Ok(())
+}
+
+fn normalized_source_tree_relative_path(root: &Path, path: &Path) -> JarvisResult<String> {
+    let canonical_path = fs::canonicalize(path).map_err(|err| {
+        JarvisError::Validation(format!("plugin source tree path is not readable: {err}"))
+    })?;
+    if !canonical_path.starts_with(root) {
+        return Err(JarvisError::Validation(format!(
+            "plugin source tree path escapes source_path: {}",
+            path.display()
+        )));
+    }
+    let relative_path = canonical_path.strip_prefix(root).map_err(|err| {
+        JarvisError::Validation(format!("plugin source tree relative path: {err}"))
+    })?;
+    let mut components = Vec::new();
+    for component in relative_path.components() {
+        let Some(component) = component.as_os_str().to_str() else {
+            return Err(JarvisError::Validation(format!(
+                "plugin source tree path must be valid UTF-8: {}",
+                path.display()
+            )));
+        };
+        components.push(component);
+    }
+    Ok(components.join("/"))
+}
+
+fn source_tree_ignore_match(relative_path: &str, is_dir: bool) -> bool {
+    let components: Vec<&str> = relative_path.split('/').collect();
+    components.iter().any(|component| {
+        matches!(
+            *component,
+            ".git"
+                | ".hg"
+                | ".svn"
+                | ".AppleDouble"
+                | "__MACOSX"
+                | ".Spotlight-V100"
+                | ".Trashes"
+                | ".fseventsd"
+                | "target"
+                | "node_modules"
+                | "dist"
+                | "build"
+                | ".cache"
+                | ".pytest_cache"
+                | ".mypy_cache"
+                | ".ruff_cache"
+                | "__pycache__"
+                | ".venv"
+                | "venv"
+        )
+    }) || components.last().is_some_and(|name| {
+        *name == ".DS_Store"
+            || name.starts_with("._")
+            || *name == ".env"
+            || name.starts_with(".env.")
+            || name.ends_with(".pyc")
+            || name.ends_with(".pyo")
+            || name.ends_with(".log")
+            || (is_dir
+                && matches!(
+                    *name,
+                    ".git"
+                        | ".hg"
+                        | ".svn"
+                        | ".AppleDouble"
+                        | "__MACOSX"
+                        | ".Spotlight-V100"
+                        | ".Trashes"
+                        | ".fseventsd"
+                        | "target"
+                        | "node_modules"
+                        | "dist"
+                        | "build"
+                        | ".cache"
+                        | ".pytest_cache"
+                        | ".mypy_cache"
+                        | ".ruff_cache"
+                        | "__pycache__"
+                        | ".venv"
+                        | "venv"
+                ))
+    })
 }
 
 enum PluginProvenanceVerificationError {
@@ -2000,6 +2214,137 @@ mod tests {
         assert_eq!(installed.manifest.source, PluginSource::LocalDevelopment);
         assert!(!installed.execution_enabled);
         assert_eq!(installed.source_path, source_path.display().to_string());
+        assert!(installed.provenance.source_tree_sha256.is_some());
+        assert_eq!(installed.provenance.source_tree_file_count, Some(1));
+    }
+
+    #[test]
+    fn local_install_source_tree_provenance_detects_helper_changes() {
+        let dir = tempfile::tempdir().expect("temp plugin dir");
+        let manifest_path = dir.path().join("jarvis-plugin.json");
+        let helper_path = dir.path().join("helper.txt");
+        fs::write(&helper_path, "original helper").expect("write helper");
+        let source_path = dir.path().canonicalize().expect("canonical source");
+        fs::write(
+            &manifest_path,
+            json!({
+                "manifest_schema_version": 1,
+                "id": "local_tree",
+                "name": "Local Tree",
+                "version": "0.1.0",
+                "source": "local_development",
+                "author": "Local Tester",
+                "source_path": source_path.display().to_string(),
+                "actions": [{
+                    "name": "summarize",
+                    "description": "Summarize local tree metadata for validation.",
+                    "permissions": ["read_workspace"],
+                    "risk_tier": "low",
+                    "input_schema": {
+                        "schema": {
+                            "type": "object",
+                            "properties": { "path": { "type": "string" } },
+                            "required": ["path"],
+                            "additionalProperties": false
+                        }
+                    },
+                    "output_schema": {
+                        "schema": {
+                            "type": "object",
+                            "properties": { "summary": { "type": "string" } },
+                            "required": ["summary"],
+                            "additionalProperties": false
+                        }
+                    },
+                    "proactive": false,
+                    "memory_access": "none",
+                    "model_access": "none",
+                    "audit_fields": ["path"],
+                    "timeout": { "timeout_ms": 5000, "on_timeout": "cancel" },
+                    "cancellation": "cooperative"
+                }]
+            })
+            .to_string(),
+        )
+        .expect("write manifest");
+
+        let installed = InstalledPlugin::from_local_manifest_path(&manifest_path)
+            .expect("valid local metadata should install");
+        assert_eq!(installed.provenance.source_tree_file_count, Some(2));
+        assert_eq!(
+            installed
+                .provenance
+                .verify_snapshot(&installed.manifest, Utc::now())
+                .integrity_status,
+            InstalledPluginIntegrityStatus::MatchesInstallSnapshot
+        );
+
+        fs::write(&helper_path, "changed helper").expect("mutate helper");
+        assert_eq!(
+            installed
+                .provenance
+                .verify_snapshot(&installed.manifest, Utc::now())
+                .integrity_status,
+            InstalledPluginIntegrityStatus::ChangedSinceInstall
+        );
+    }
+
+    #[test]
+    fn source_tree_snapshot_is_stable_and_ignores_generated_artifacts() {
+        let left = tempfile::tempdir().expect("left temp plugin dir");
+        let right = tempfile::tempdir().expect("right temp plugin dir");
+        fs::create_dir_all(left.path().join("nested")).expect("left nested");
+        fs::create_dir_all(right.path().join("nested")).expect("right nested");
+        fs::write(left.path().join("nested/tool.txt"), "runtime").expect("left tool");
+        fs::write(left.path().join("jarvis-plugin.json"), "{}").expect("left manifest");
+        fs::write(right.path().join("jarvis-plugin.json"), "{}").expect("right manifest");
+        fs::write(right.path().join("nested/tool.txt"), "runtime").expect("right tool");
+
+        let left_snapshot = source_tree_snapshot(left.path()).expect("left snapshot");
+        fs::create_dir_all(left.path().join(".git")).expect("left git dir");
+        fs::write(left.path().join(".git/config"), "ignored").expect("left git config");
+        fs::write(left.path().join(".DS_Store"), "ignored").expect("left ds store");
+        fs::create_dir_all(left.path().join("__pycache__")).expect("left pycache");
+        fs::write(left.path().join("__pycache__/tool.pyc"), "ignored").expect("left pyc");
+        fs::create_dir_all(left.path().join("target/debug")).expect("left target");
+        fs::write(left.path().join("target/debug/build.log"), "ignored").expect("left build log");
+        let left_with_ignored = source_tree_snapshot(left.path()).expect("left ignored snapshot");
+        let right_snapshot = source_tree_snapshot(right.path()).expect("right snapshot");
+
+        assert_eq!(left_snapshot.sha256, left_with_ignored.sha256);
+        assert_eq!(left_snapshot.sha256, right_snapshot.sha256);
+        assert_eq!(left_snapshot.file_count, 2);
+
+        fs::write(right.path().join("nested/tool.txt"), "changed").expect("right tool changed");
+        let changed = source_tree_snapshot(right.path()).expect("changed snapshot");
+        assert_ne!(right_snapshot.sha256, changed.sha256);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn source_tree_snapshot_rejects_symlinks_and_case_collisions() {
+        use std::os::unix::fs::symlink;
+
+        let symlink_dir = tempfile::tempdir().expect("symlink temp plugin dir");
+        fs::write(symlink_dir.path().join("jarvis-plugin.json"), "{}").expect("manifest");
+        symlink("/bin/echo", symlink_dir.path().join("echo-link")).expect("symlink");
+        let symlink_error = source_tree_snapshot(symlink_dir.path()).expect_err("reject symlink");
+        assert!(symlink_error.to_string().contains("cannot include symlink"));
+
+        let collision_dir = tempfile::tempdir().expect("collision temp plugin dir");
+        let upper = collision_dir.path().join("README.md");
+        let lower = collision_dir.path().join("readme.md");
+        fs::write(&upper, "upper").expect("upper");
+        fs::write(&lower, "lower").expect("lower");
+        let upper_path = fs::canonicalize(&upper).expect("canonical upper");
+        let lower_path = fs::canonicalize(&lower).expect("canonical lower");
+        if upper_path != lower_path {
+            let collision_error =
+                source_tree_snapshot(collision_dir.path()).expect_err("reject path collision");
+            assert!(collision_error
+                .to_string()
+                .contains("case-insensitive duplicate path"));
+        }
     }
 
     #[test]

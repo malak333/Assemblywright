@@ -2479,7 +2479,7 @@ private func releaseReadinessJSON() -> Data {
             {
               "key": "installed_plugin_execution",
               "status": "implemented",
-              "proof": "Local subprocess plugins require provenance verification plus explicit grants.",
+              "proof": "Local subprocess plugins require full source-tree provenance verification plus explicit grants.",
               "boundary": "Constrained local subprocess execution only; not a WASM, OS-level, or marketplace sandbox."
             },
             {

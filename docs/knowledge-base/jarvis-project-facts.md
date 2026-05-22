@@ -106,10 +106,13 @@ These notes capture durable facts for future agents working on this repository.
   Repository-backed IPC also exposes `/plugins/installed` for metadata-only
   local plugin installation. Installed records are persisted with
   `execution_enabled: false` and `execution_grant: metadata_only` by default.
-  Installed records also carry a local provenance snapshot with manifest and,
-  for `local_subprocess`, command SHA-256 hashes. This proves only local file
-  integrity against the install snapshot, not malware safety or cryptographic
-  publisher identity.
+  Installed records also carry a local provenance snapshot with deterministic
+  source-tree SHA-256/file count, manifest SHA-256, and, for
+  `local_subprocess`, command SHA-256 hashes. Verification detects helper or
+  resource drift under `source_path`, rejects symlinks and ambiguous path
+  collisions, and keeps generated caches/artifacts out of the digest. This
+  proves only local file integrity against the install snapshot, not malware
+  safety or cryptographic publisher identity.
   Installed plugin run requests can perform contract-only dry runs that
   validate manifest/action/input schema and audit `side_effect_executed: false`
   without loading or executing plugin code. `local_subprocess` manifests can be

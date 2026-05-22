@@ -3,6 +3,7 @@ use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::process::{Child, Command, Output, Stdio};
+use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
@@ -613,6 +614,8 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         .canonicalize()
         .expect("canonical subprocess plugin dir");
     write_executable_plugin_script(&subprocess_plugin_dir);
+    fs::write(subprocess_plugin_dir.join("fixture-resource.txt"), "v1")
+        .expect("write subprocess fixture resource");
     let subprocess_manifest_path = subprocess_plugin_dir.join("jarvis-plugin.json");
     fs::write(
         &subprocess_manifest_path,
@@ -689,6 +692,17 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
             .len()
             == 64
     );
+    assert!(
+        subprocess_installed["provenance"]["source_tree_sha256"]
+            .as_str()
+            .expect("source tree hash")
+            .len()
+            == 64
+    );
+    assert_eq!(
+        subprocess_installed["provenance"]["source_tree_file_count"],
+        3
+    );
 
     let subprocess_enable_unverified = run_cli_failure([
         "plugins",
@@ -754,6 +768,10 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         subprocess_run["provenance"]["integrity_status"],
         "matches_install_snapshot"
     );
+    assert_eq!(
+        subprocess_run["provenance"]["source_tree_sha256"],
+        subprocess_installed["provenance"]["source_tree_sha256"]
+    );
     assert_eq!(subprocess_run["output"]["path"], "README.md");
     assert_eq!(subprocess_run["output"]["secret_seen"], false);
     assert_eq!(
@@ -786,6 +804,25 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         serde_json::to_string(&subprocess_run).expect("subprocess run JSON");
     assert!(!subprocess_run_encoded.contains("raw stderr secret"));
     assert!(!subprocess_run_encoded.contains("ignored"));
+
+    fs::write(subprocess_plugin_dir.join("fixture-resource.txt"), "v2")
+        .expect("mutate subprocess fixture resource");
+    let changed_subprocess_run = run_cli_json([
+        "plugins",
+        "run-installed",
+        "local_subprocess_e2e",
+        "inspect",
+        "--input",
+        r#"{"path":"README.md"}"#,
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(changed_subprocess_run["status"], "blocked");
+    assert_eq!(
+        changed_subprocess_run["provenance"]["integrity_status"],
+        "changed_since_install"
+    );
+    assert_eq!(changed_subprocess_run["side_effect_executed"], false);
 
     let noisy_stdout_plugin_dir = temp_dir.path().join("noisy-stdout-subprocess-plugin");
     fs::create_dir(&noisy_stdout_plugin_dir).expect("create noisy stdout plugin dir");
@@ -1888,8 +1925,13 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         "integrity_status",
         "matches_install_snapshot",
     );
+    assert_array_contains(
+        &persisted_grants["installed_plugin_grants"],
+        "integrity_status",
+        "changed_since_install",
+    );
     assert_eq!(persisted_grants["executable_installed_plugin_count"], 4);
-    assert_eq!(persisted_grants["unverified_installed_plugin_count"], 0);
+    assert_eq!(persisted_grants["unverified_installed_plugin_count"], 1);
     assert_eq!(persisted_grants["side_effects_require_approval"], true);
 
     let persisted_policy_review = run_cli_json([
@@ -1904,7 +1946,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     );
     assert_eq!(
         persisted_policy_review["unverified_installed_plugin_count"],
-        0
+        1
     );
     assert_eq!(
         persisted_policy_review["side_effects_require_approval"],
@@ -2307,6 +2349,9 @@ impl JarvisServer {
         scheduler_startup_recovery: Option<(u64, usize)>,
         env: &[(&str, &str)],
     ) -> Self {
+        let _startup_guard = jarvis_server_startup_lock()
+            .lock()
+            .expect("lock jarvis server startup");
         let bind = unused_loopback_addr();
         let endpoint = format!("http://{bind}");
         let temp_dir = tempfile::tempdir().expect("server temp dir");
@@ -2405,6 +2450,11 @@ impl JarvisServer {
             last_error.unwrap_or_else(|| "no request attempted".to_string())
         );
     }
+}
+
+fn jarvis_server_startup_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
 }
 
 impl Drop for JarvisServer {
