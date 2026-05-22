@@ -721,7 +721,9 @@ impl IpcState {
     }
 
     pub fn release_readiness(&self) -> ReleaseReadinessResponse {
-        let features = contract_features();
+        let evidence_status = release_evidence_status_from_env();
+        let evidence_mode_enabled = release_readiness_evidence_mode_enabled();
+        let features = release_readiness_features(&evidence_status, evidence_mode_enabled);
         let implemented_features = features
             .iter()
             .filter(|feature| feature.status == "implemented")
@@ -744,10 +746,10 @@ impl IpcState {
             pending_feature_count: pending_features.len(),
             implemented_features,
             pending_features,
-            blocking_manual_gates: release_blocking_manual_gates(),
+            blocking_manual_gates: release_blocking_manual_gates(&evidence_status, evidence_mode_enabled),
             recommended_verification_commands: release_verification_commands(),
             proof_boundary:
-                "Read-only summary derived from /contract feature metadata and release checklist blockers; it does not perform signing, notarization, installation, Finder/LaunchServices validation, live microphone/Speech validation, spoken transcript handoff, live audio-output validation, App Store review, marketplace plugin review, malware analysis, or OS sandbox enforcement."
+                "Read-only summary derived from /contract feature metadata, release checklist blockers, and explicitly enabled release evidence status; it does not perform signing, notarization, installation, Finder/LaunchServices validation, live microphone/Speech validation, spoken transcript handoff, live audio-output validation, App Store review, marketplace plugin review, malware analysis, or OS sandbox enforcement."
                     .to_string(),
         }
     }
@@ -3751,6 +3753,39 @@ impl From<ContractFeature> for ReleaseReadinessFeature {
     }
 }
 
+fn release_readiness_features(
+    evidence_status: &ReleaseEvidenceStatusResponse,
+    evidence_mode_enabled: bool,
+) -> Vec<ContractFeature> {
+    let live_device_qa_valid =
+        release_evidence_item_present(evidence_status, "live_device_qa_report")
+            && evidence_mode_enabled;
+    contract_features()
+        .into_iter()
+        .map(|mut feature| {
+            if feature.key == "live_voice_loop" && live_device_qa_valid {
+                feature.status = "implemented".to_string();
+                feature.proof = "A valid owner-recorded live-device QA report is present through explicitly enabled release evidence status, including microphone/Speech permission prompts, spoken transcript handoff into the command path, and speech-output playback evidence.".to_string();
+                feature.boundary = "Owner-recorded live-device QA evidence for the referenced release candidate only; readiness still does not perform signing, notarization, installation, Finder/LaunchServices validation, live audio capture, App Store review, marketplace review, malware analysis, or OS sandbox/egress enforcement.".to_string();
+            }
+            feature
+        })
+        .collect()
+}
+
+fn release_readiness_evidence_mode_enabled() -> bool {
+    std::env::var("JARVIS_RELEASE_READINESS_EVIDENCE_MODE")
+        .map(|value| value == "external")
+        .unwrap_or(false)
+}
+
+fn release_evidence_item_present(status: &ReleaseEvidenceStatusResponse, key: &str) -> bool {
+    status
+        .items
+        .iter()
+        .any(|item| item.key == key && item.status == ReleaseEvidenceItemStatus::Present)
+}
+
 fn release_evidence_status_from_env() -> ReleaseEvidenceStatusResponse {
     let version = std::env::var("JARVIS_EVIDENCE_VERSION")
         .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string());
@@ -3827,6 +3862,11 @@ fn release_evidence_status_from_env() -> ReleaseEvidenceStatusResponse {
                 "voice_loop.spoken_transcript_handoff",
                 "voice_loop.same_command_path",
                 "voice_loop.speech_output_playback",
+                "app_bundle.bundle_identifier",
+                "app_bundle.short_version",
+                "app_bundle.build_version",
+                "app_bundle.microphone_usage_description",
+                "app_bundle.speech_recognition_usage_description",
                 "owner_recorded_live_voice_evidence.owner_name",
                 "owner_recorded_live_voice_evidence.device_label",
                 "owner_recorded_live_voice_evidence.profile_label",
@@ -4067,8 +4107,14 @@ fn is_executable(metadata: &fs::Metadata) -> bool {
     metadata.is_file()
 }
 
-fn release_blocking_manual_gates() -> Vec<String> {
-    vec![
+fn release_blocking_manual_gates(
+    evidence_status: &ReleaseEvidenceStatusResponse,
+    evidence_mode_enabled: bool,
+) -> Vec<String> {
+    let live_device_qa_valid =
+        release_evidence_item_present(evidence_status, "live_device_qa_report")
+            && evidence_mode_enabled;
+    let mut gates = vec![
         "Developer ID Application and Installer signing credentials configured and used for a full signed package run".to_string(),
         "notarization and stapling completed for both app and installer package".to_string(),
         "clean-profile installer run into /Applications".to_string(),
@@ -4078,7 +4124,17 @@ fn release_blocking_manual_gates() -> Vec<String> {
         "manual clean-profile release QA pass covering installed-app command, audit, memory, scheduler, plugin, pause, diagnostics, restart behavior, and user-visible prompts".to_string(),
         "broader installed-plugin marketplace trust, malware analysis, and OS-level sandbox/egress enforcement before marketplace claims".to_string(),
         "final release evidence bundle generated and archived after signed distribution, live-device QA, and plugin-trust QA reports exist".to_string(),
-    ]
+    ];
+    if live_device_qa_valid {
+        gates.retain(|gate| {
+            !gate.contains("clean-profile installer run")
+                && !gate.contains("Finder/LaunchServices launch")
+                && !gate.contains("live microphone")
+                && !gate.contains("live audio-output")
+                && !gate.contains("manual clean-profile release QA pass")
+        });
+    }
+    gates
 }
 
 fn release_verification_commands() -> Vec<String> {
@@ -4089,6 +4145,7 @@ fn release_verification_commands() -> Vec<String> {
         "./scripts/package-distribution.sh --unsigned-launch-check".to_string(),
         "./scripts/release-live-device-qa.sh --check".to_string(),
         "JARVIS_QA_CLEAN_PROFILE_VALIDATED=true JARVIS_QA_FINDER_LAUNCH_VALIDATED=true JARVIS_QA_MICROPHONE_VALIDATED=true JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true JARVIS_QA_NOTIFICATION_VALIDATED=true JARVIS_QA_RESTART_VALIDATED=true JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true JARVIS_QA_OWNER_NAME='Release Operator' JARVIS_QA_DEVICE_LABEL='Clean-profile release Mac' JARVIS_QA_PROFILE_LABEL='Clean macOS QA profile' JARVIS_QA_VOICE_CHECK_STARTED_AT='2026-05-22T16:00:00Z' JARVIS_QA_VOICE_CHECK_COMPLETED_AT='2026-05-22T16:05:00Z' JARVIS_QA_MICROPHONE_EVIDENCE_NOTE='Microphone prompt and capture observed' JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE='Speech prompt and recognition observed' JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE='Spoken transcript reached the command path' JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE='Speech output playback observed' ./scripts/release-live-device-qa.sh --assert-complete".to_string(),
+        "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness".to_string(),
         "./scripts/release-plugin-trust-qa.sh --check".to_string(),
         "JARVIS_PLUGIN_QA_MARKETPLACE_REVIEW_VALIDATED=true JARVIS_PLUGIN_QA_MALWARE_SCAN_VALIDATED=true JARVIS_PLUGIN_QA_OS_SANDBOX_VALIDATED=true JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED=true JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_POLICY_VALIDATED=true JARVIS_PLUGIN_QA_MANUAL_TRUST_REVIEW_VALIDATED=true JARVIS_PLUGIN_QA_OWNER_NAME='Release Operator' JARVIS_PLUGIN_QA_REVIEW_STARTED_AT='2026-05-22T16:10:00Z' JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT='2026-05-22T16:20:00Z' JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE='Marketplace review evidence archived' JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE='Malware scan evidence archived' JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE='OS sandbox validation evidence archived' JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE='Host-level egress validation evidence archived' JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE='Signed publisher policy evidence archived' JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE='Manual plugin trust review evidence archived' ./scripts/release-plugin-trust-qa.sh --assert-complete".to_string(),
         "./scripts/release-evidence-bundle.sh --check".to_string(),
@@ -4598,6 +4655,72 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
     }
 
     #[test]
+    fn release_readiness_requires_explicit_evidence_mode_for_live_voice_completion() {
+        let evidence_status = release_evidence_status_fixture(ReleaseEvidenceItemStatus::Present);
+
+        let default_features = release_readiness_features(&evidence_status, false);
+        assert!(default_features.iter().any(|feature| {
+            feature.key == "live_voice_loop" && feature.status == "pending_manual_validation"
+        }));
+        let default_gates = release_blocking_manual_gates(&evidence_status, false);
+        assert!(default_gates
+            .iter()
+            .any(|gate| gate.contains("live microphone")));
+
+        let evidence_features = release_readiness_features(&evidence_status, true);
+        assert!(evidence_features.iter().any(|feature| {
+            feature.key == "live_voice_loop"
+                && feature.status == "implemented"
+                && feature
+                    .proof
+                    .contains("valid owner-recorded live-device QA report")
+                && feature
+                    .boundary
+                    .contains("Owner-recorded live-device QA evidence")
+        }));
+        assert!(!evidence_features
+            .iter()
+            .any(|feature| feature.key == "live_voice_loop"
+                && feature.status == "pending_manual_validation"));
+        let evidence_gates = release_blocking_manual_gates(&evidence_status, true);
+        assert!(!evidence_gates
+            .iter()
+            .any(|gate| gate.contains("live microphone")));
+        assert!(!evidence_gates
+            .iter()
+            .any(|gate| gate.contains("live audio-output")));
+        assert!(evidence_gates
+            .iter()
+            .any(|gate| gate.contains("Developer ID")));
+        assert!(evidence_gates
+            .iter()
+            .any(|gate| gate.contains("final release evidence bundle")));
+    }
+
+    #[test]
+    fn release_readiness_keeps_live_voice_pending_when_evidence_is_missing_or_invalid() {
+        for status in [
+            ReleaseEvidenceItemStatus::Missing,
+            ReleaseEvidenceItemStatus::Invalid,
+        ] {
+            let evidence_status = release_evidence_status_fixture(status);
+            let features = release_readiness_features(&evidence_status, true);
+            assert!(
+                features.iter().any(|feature| {
+                    feature.key == "live_voice_loop"
+                        && feature.status == "pending_manual_validation"
+                }),
+                "live voice should stay pending for {status:?}"
+            );
+            let gates = release_blocking_manual_gates(&evidence_status, true);
+            assert!(
+                gates.iter().any(|gate| gate.contains("live microphone")),
+                "live microphone gate should remain for {status:?}"
+            );
+        }
+    }
+
+    #[test]
     fn release_evidence_status_reports_missing_and_invalid_evidence_without_manual_claims() {
         let missing_path = PathBuf::from("target/jarvis-test-missing-release-report.json");
         let invalid_path = tempfile::NamedTempFile::new().expect("temp invalid report");
@@ -4623,6 +4746,53 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 && item.required_for_production
                 && item.manual_gate
         }));
+    }
+
+    fn release_evidence_status_fixture(
+        live_device_status: ReleaseEvidenceItemStatus,
+    ) -> ReleaseEvidenceStatusResponse {
+        let live_device_item = ReleaseEvidenceStatusItem {
+            key: "live_device_qa_report".to_string(),
+            label: "Live-device QA report".to_string(),
+            path: "target/release-live-device-qa-report.json".to_string(),
+            kind: ReleaseEvidenceKind::JsonReport,
+            status: live_device_status,
+            required_for_production: true,
+            manual_gate: true,
+            detail: "test fixture".to_string(),
+        };
+        let missing_bundle = ReleaseEvidenceStatusItem {
+            key: "release_evidence_bundle".to_string(),
+            label: "Release evidence bundle".to_string(),
+            path: "target/release-evidence-bundle.json".to_string(),
+            kind: ReleaseEvidenceKind::JsonReport,
+            status: ReleaseEvidenceItemStatus::Missing,
+            required_for_production: true,
+            manual_gate: true,
+            detail: "test fixture".to_string(),
+        };
+        let items = vec![live_device_item, missing_bundle];
+        let satisfied_count = items
+            .iter()
+            .filter(|item| item.status == ReleaseEvidenceItemStatus::Present)
+            .count();
+        let missing_count = items
+            .iter()
+            .filter(|item| item.status == ReleaseEvidenceItemStatus::Missing)
+            .count();
+        let invalid_count = items
+            .iter()
+            .filter(|item| item.status == ReleaseEvidenceItemStatus::Invalid)
+            .count();
+        ReleaseEvidenceStatusResponse {
+            generated_at: Utc::now(),
+            complete: missing_count == 0 && invalid_count == 0,
+            satisfied_count,
+            missing_count,
+            invalid_count,
+            items,
+            proof_boundary: "test fixture".to_string(),
+        }
     }
 
     #[test]

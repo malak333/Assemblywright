@@ -63,14 +63,16 @@ These notes capture durable facts for future agents working on this repository.
   repo-owned surfaces from manual or target production claims without scraping
   prose.
 - `/release/readiness` and `jarvis release readiness` derive a conservative
-  read-only release summary from contract feature metadata and release-checklist
-  blockers. It reports implemented features, pending features, recommended
-  verification commands, and manual gates while keeping
-  `production_ready: false` until external signing/notarization, clean-profile
-  installer/Finder checks, live voice/audio validation, and manual QA are
-  complete. The CLI command prefers the IPC endpoint when it is running and
-  falls back to the same local `IpcState` readiness summary when the server is
-  unavailable, so operator triage does not require a prestarted core.
+  read-only release summary from contract feature metadata, release-checklist
+  blockers, and explicitly enabled release evidence status. Default readiness
+  treats standard `target/` evidence files as inventory only; with
+  `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external`, a valid
+  live-device QA report can move `live_voice_loop` to implemented and clear
+  related live voice/audio blockers while keeping `production_ready: false`
+  until the remaining signed-artifact, plugin-trust, and final evidence-bundle
+  gates validate. The CLI command prefers the IPC endpoint when it is running
+  and falls back to the same local `IpcState` readiness summary when the server
+  is unavailable, so operator triage does not require a prestarted core.
   `operator_release_qa_smoke` is an implemented readiness feature for the local
   repository-backed operator QA lane; it does not clear clean-profile
   installed-app or live-device manual gates.
@@ -514,10 +516,14 @@ These notes capture durable facts for future agents working on this repository.
   `target/release-live-device-qa-report.json`. The report records installed-app
   metadata, voice-loop evidence fields, owner-recorded live voice evidence
   fields for owner/device/profile/timestamps/notes, validation flags, and proof
-  boundary. This standardizes manual evidence only; `--check` does not prove live device
-  behavior, and the report remains an owner assertion. `--self-test` uses a fake
-  app fixture to validate assertion/report mechanics in the local release gate
-  without claiming live device validation.
+  boundary. This standardizes manual evidence only; `--check` does not prove
+  live device behavior, and the report remains an owner assertion. When the
+  release operator explicitly enables evidence-aware readiness, this report can
+  support the narrow claim that the live voice loop was validated for that
+  release candidate, not a generalized claim that voice is validated for every
+  device or future release. `--self-test` uses a fake app fixture to validate
+  assertion/report mechanics in the local release gate without claiming live
+  device validation.
 - It is fair to describe the current repo as a Rust foundation with tested
   scaffolding for IPC, storage, policy, routing, runtime, scheduler, plugin
   contracts, deterministic first-party plugin command execution, bounded

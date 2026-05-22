@@ -62,6 +62,55 @@ fn release_readiness_cli_falls_back_without_running_server() {
 }
 
 #[test]
+fn release_readiness_cli_uses_explicit_live_voice_evidence() {
+    let temp_dir = tempfile::tempdir().expect("temp live QA report");
+    let live_report_path = temp_dir.path().join("release-live-device-qa-report.json");
+    write_valid_live_device_qa_report(&live_report_path);
+    let endpoint = format!("http://{}", unused_loopback_addr());
+    let report_path = live_report_path
+        .to_str()
+        .expect("live report path is UTF-8")
+        .to_string();
+
+    let conservative_readiness = run_cli_json_with_env(
+        ["release", "readiness", "--endpoint", endpoint.as_str()],
+        &[("JARVIS_QA_REPORT_PATH", report_path.as_str())],
+    );
+    assert_array_contains(
+        &conservative_readiness["pending_features"],
+        "key",
+        "live_voice_loop",
+    );
+
+    let evidence_readiness = run_cli_json_with_env(
+        ["release", "readiness", "--endpoint", endpoint.as_str()],
+        &[
+            ("JARVIS_QA_REPORT_PATH", report_path.as_str()),
+            ("JARVIS_RELEASE_READINESS_EVIDENCE_MODE", "external"),
+        ],
+    );
+    assert_eq!(evidence_readiness["production_ready"], false);
+    assert_array_contains(
+        &evidence_readiness["implemented_features"],
+        "key",
+        "live_voice_loop",
+    );
+    assert!(!evidence_readiness["pending_features"]
+        .as_array()
+        .expect("pending features")
+        .iter()
+        .any(|feature| feature["key"] == "live_voice_loop"));
+    assert!(!evidence_readiness["blocking_manual_gates"]
+        .as_array()
+        .expect("blocking gates")
+        .iter()
+        .any(|gate| gate
+            .as_str()
+            .expect("gate string")
+            .contains("live microphone")));
+}
+
+#[test]
 fn release_evidence_status_cli_falls_back_without_running_server() {
     let endpoint = format!("http://{}", unused_loopback_addr());
 
@@ -2948,6 +2997,17 @@ fn run_cli_json<const N: usize>(args: [&str; N]) -> Value {
     })
 }
 
+fn run_cli_json_with_env<const N: usize>(args: [&str; N], env: &[(&str, &str)]) -> Value {
+    let output = run_cli_with_env(args, env);
+    serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "stdout was not JSON: {error}\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    })
+}
+
 fn run_cli_failure<const N: usize>(args: [&str; N]) -> String {
     let output = Command::new(BIN)
         .args(args)
@@ -2975,11 +3035,16 @@ fn run_cli_text<const N: usize>(args: [&str; N]) -> String {
 }
 
 fn run_cli<const N: usize>(args: [&str; N]) -> Output {
-    let output = Command::new(BIN)
-        .args(args)
-        .stdin(Stdio::null())
-        .output()
-        .expect("run jarvis cli");
+    run_cli_with_env(args, &[])
+}
+
+fn run_cli_with_env<const N: usize>(args: [&str; N], env: &[(&str, &str)]) -> Output {
+    let mut command = Command::new(BIN);
+    command.args(args).stdin(Stdio::null());
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    let output = command.output().expect("run jarvis cli");
 
     assert!(
         output.status.success(),
@@ -2989,6 +3054,55 @@ fn run_cli<const N: usize>(args: [&str; N]) -> Output {
         String::from_utf8_lossy(&output.stderr)
     );
     output
+}
+
+fn write_valid_live_device_qa_report(path: &Path) {
+    let report = json!({
+        "generated_at": "2026-05-22T16:06:00Z",
+        "installed_app_path": "/Applications/Jarvis.app",
+        "app_bundle": {
+            "bundle_identifier": "com.nobiletechnology.jarvis",
+            "short_version": "0.1.4",
+            "build_version": "0.1.4",
+            "microphone_usage_description": "Jarvis uses microphone input only when you explicitly start local voice capture.",
+            "speech_recognition_usage_description": "Jarvis uses speech recognition only to turn your spoken command into a local assistant request."
+        },
+        "validation_flags": {
+            "clean_profile": true,
+            "finder_launch": true,
+            "microphone": true,
+            "speech_permission": true,
+            "transcript_handoff": true,
+            "audio_output": true,
+            "notification": true,
+            "restart": true,
+            "manual_release_qa": true
+        },
+        "voice_loop": {
+            "microphone_permission_prompt": true,
+            "speech_permission_prompt": true,
+            "spoken_transcript_handoff": true,
+            "same_command_path": true,
+            "speech_output_playback": true
+        },
+        "owner_recorded_live_voice_evidence": {
+            "owner_name": "Release Operator",
+            "device_label": "Clean-profile release Mac",
+            "profile_label": "Clean macOS QA profile",
+            "voice_check_started_at": "2026-05-22T16:00:00Z",
+            "voice_check_completed_at": "2026-05-22T16:05:00Z",
+            "microphone_evidence_note": "Microphone prompt and capture observed.",
+            "speech_permission_evidence_note": "Speech prompt and recognition observed.",
+            "transcript_handoff_evidence_note": "Spoken transcript reached the command path.",
+            "audio_output_evidence_note": "Speech output playback observed."
+        },
+        "proof_boundary": "Owner-recorded live device QA fixture for CLI E2E."
+    });
+    fs::write(
+        path,
+        serde_json::to_string_pretty(&report).expect("serialize live QA report"),
+    )
+    .expect("write live QA report");
 }
 
 fn signed_manifest(mut manifest: Value, signing_key: &SigningKey) -> Value {
