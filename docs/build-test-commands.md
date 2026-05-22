@@ -126,6 +126,7 @@ cargo run -p jarvis-cli -- scheduler list
 cargo run -p jarvis-cli -- scheduler schedule "manual check" "status check"
 cargo run -p jarvis-cli -- scheduler schedule "approval fail closed" "plugin approval echo scheduler pause"
 cargo run -p jarvis-cli -- scheduler run-due --limit 1
+cargo run -p jarvis-cli -- scheduler recover-stale --older-than-seconds 3600 --limit 16
 cargo run -p jarvis-cli -- plugins installed
 cargo run -p jarvis-cli -- pause --reason "manual smoke"
 cargo run -p jarvis-cli -- pause-status
@@ -225,6 +226,8 @@ cargo test -p jarvis-core diagnostics_export_is_redacted_and_counts_repository_s
 cargo test -p jarvis-core scheduler_attention -- --nocapture
 cargo test -p jarvis-core run_due_scheduler_jobs_executes_and_persists_visible_tasks -- --nocapture
 cargo test -p jarvis-core scheduler_proactive_policy_audit_matches_policy_review_classification -- --nocapture
+cargo test -p jarvis-core detects_stale_running_jobs_in_oldest_first_order -- --nocapture
+cargo test -p jarvis-core recover_stale_scheduler_jobs_marks_running_jobs_failed_and_audits_redacted -- --nocapture
 cargo test -p jarvis-core model_provider_failure_returns_failed_response_with_route_evidence -- --nocapture
 cargo test -p jarvis-core command_schema_returns_failed_runtime_response_for_model_provider_error -- --nocapture
 cargo test -p jarvis-core repository_backed_state_endpoints_expose_tasks_and_audit -- --nocapture
@@ -323,8 +326,10 @@ subprocess enablement, repository-backed activity summary status/recent-audit
 evidence, bounded activity event streaming over server-sent events, redacted
 scheduler attention handoff, scheduler due-job
 execution/reschedule audit evidence, redacted proactive scheduler policy
-audit evidence before due command submission, scheduler fail-closed emergency
-pause on non-accepted due jobs, and emergency-pause blocking/resume surfaces.
+audit evidence before due command submission, explicit stale-running scheduler
+recovery after persisted running jobs survive restart, scheduler fail-closed
+emergency pause on non-accepted due jobs, and emergency-pause blocking/resume
+surfaces.
 Runtime unit tests additionally prove bounded fake-model first-party tool-call
 orchestration, including policy checks, approval stops, validation failures, and
 tool-result feedback into later model steps. Focused provider tests prove typed

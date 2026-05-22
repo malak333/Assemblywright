@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use ed25519_dalek::{Signer, SigningKey};
+use jarvis_core::SqliteRepository;
 use serde_json::{json, Value};
 use tempfile::TempDir;
 
@@ -48,12 +49,18 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         "key",
         "scheduler_trigger_policy_review",
     );
+    assert_array_contains(
+        &contract["features"],
+        "key",
+        "scheduler_stale_running_recovery",
+    );
     assert_array_contains(&contract["features"], "key", "installed_plugin_execution");
     assert_array_contains(&contract["features"], "key", "live_voice_loop");
     assert_array_contains(&contract["features"], "status", "pending_manual_validation");
     assert_array_contains(&contract["endpoints"], "path", "/diagnostics/export");
     assert_array_contains(&contract["endpoints"], "path", "/permissions/grants");
     assert_array_contains(&contract["endpoints"], "path", "/permissions/policy-review");
+    assert_array_contains(&contract["endpoints"], "path", "/scheduler/recover-stale");
     assert_array_contains(&contract["endpoints"], "path", "/model-routes");
     assert_array_contains(&contract["endpoints"], "path", "/activity/summary");
     assert_array_contains(&contract["endpoints"], "path", "/activity/events");
@@ -1327,10 +1334,36 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     ]);
     assert_eq!(cancelled["status"], "cancelled");
 
+    let stale_running = run_cli_json([
+        "scheduler",
+        "schedule",
+        "stale running e2e job",
+        "plugin status",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    let stale_running_id = stale_running["id"]
+        .as_str()
+        .expect("stale running id")
+        .to_string();
+
     let pause_status = run_cli_json(["pause-status", "--endpoint", endpoint.as_str()]);
     assert_eq!(pause_status["paused"], false);
 
     server.stop();
+    {
+        let repository = SqliteRepository::open(&db_path).expect("open repository");
+        let job = repository
+            .list_scheduler_jobs()
+            .expect("scheduler jobs")
+            .into_iter()
+            .find(|job| job.id.to_string() == stale_running_id)
+            .expect("stale running job");
+        repository
+            .mark_scheduler_job_running(job.id)
+            .expect("mark stale running");
+    }
+    std::thread::sleep(Duration::from_millis(1100));
 
     let mut restarted = JarvisServer::start(&db_path);
     let restarted_endpoint = restarted.endpoint();
@@ -1344,6 +1377,33 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         restarted_health.contains("paused: false"),
         "{restarted_health}"
     );
+
+    let recovered_stale = run_cli_json([
+        "scheduler",
+        "recover-stale",
+        "--older-than-seconds",
+        "1",
+        "--limit",
+        "4",
+        "--endpoint",
+        restarted_endpoint.as_str(),
+    ]);
+    assert_eq!(
+        recovered_stale["recovered"][0]["job"]["id"],
+        stale_running_id
+    );
+    assert_eq!(recovered_stale["recovered"][0]["job"]["status"], "failed");
+    assert_eq!(
+        recovered_stale["recovered"][0]["audit_entry"]["event_type"],
+        "scheduler_stale_running_recovered"
+    );
+    assert_eq!(
+        recovered_stale["recovered"][0]["audit_entry"]["payload"]["command_redacted"],
+        true
+    );
+    assert!(!serde_json::to_string(&recovered_stale)
+        .expect("stale recovery JSON")
+        .contains("\"plugin status\""));
 
     let persisted_tasks =
         run_cli_json(["tasks", "list", "--endpoint", restarted_endpoint.as_str()]);
@@ -1363,6 +1423,11 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         run_cli_json(["tasks", "audit", "--endpoint", restarted_endpoint.as_str()]);
     assert_array_contains(&persisted_audit, "event_type", "plugin_completed");
     assert_array_contains(&persisted_audit, "event_type", "approval_granted");
+    assert_array_contains(
+        &persisted_audit,
+        "event_type",
+        "scheduler_stale_running_recovered",
+    );
 
     let persisted_routes =
         run_cli_json(["routes", "list", "--endpoint", restarted_endpoint.as_str()]);
