@@ -126,6 +126,12 @@ model-visible pairs are `fake_echo.approval_echo`, `fake_echo.echo`, and
 through `jarvis plugins ...` commands, but they are not exposed to
 model-originated tool planning.
 
+The interactive CLI defaults to operator-readable text for `jarvis command`
+and its `jarvis ask` alias, plus `jarvis tools list`. Use `--json` on those
+commands when a script, test, or debugging session needs the exact IPC payload
+with full audit and route evidence. `JARVIS_CLI_JSON=1` is available for
+test harnesses that need to keep all CLI calls machine-readable.
+
 To exercise the opt-in ChatGPT/OpenAI-compatible provider boundary, disable
 the local provider and provide an API key. The key is never serialized in
 provider config, provider status, route evidence, diagnostics, or structured
@@ -211,8 +217,11 @@ Run these while `cargo run -p jarvis-cli -- serve` is active:
 
 ```sh
 cargo run -p jarvis-cli -- command --dry-run "status check"
+cargo run -p jarvis-cli -- ask "Check Jarvis status and explain it in plain English."
+cargo run -p jarvis-cli -- command --json "plugin status"
 cargo run -p jarvis-cli -- plugins list
 cargo run -p jarvis-cli -- tools list
+cargo run -p jarvis-cli -- tools list --json
 cargo run -p jarvis-cli -- release readiness
 cargo run -p jarvis-cli -- diagnostics export
 cargo run -p jarvis-cli -- permissions grants

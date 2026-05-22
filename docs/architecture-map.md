@@ -17,7 +17,7 @@ external release checks have happened.
 ```mermaid
 flowchart TB
     User["User or local test operator"]
-    User --> CLI["jarvis-cli"]
+    User --> CLI["jarvis-cli human-readable command/ask/tools; --json for exact IPC payloads"]
     User --> MacShell["JarvisMacApp SwiftUI scaffold"]
     DocsAgent["six-agent production-readiness audit"] --> Docs["DESIGN, README, architecture map, release checklist, build/test commands, knowledge-base"]
     DocsAgent --> Sweep["isolated worktree/branch production sweep"]
@@ -75,7 +75,7 @@ flowchart TB
     MacCore --> Supervisor["JarvisCoreSupervisor configured or bundled process"]
     Supervisor --> CLI
     MacCore -->|"HTTP JSON on configured core URL"| IPC["jarvis-core::ipc Axum loopback server"]
-    CLI -->|"HTTP JSON on 127.0.0.1:7787 by default"| IPC
+    CLI -->|"HTTP JSON on 127.0.0.1:7787 by default; text formatting stays client-side"| IPC
     E2E --> IPC
     Smoke --> IPC
 
@@ -573,10 +573,11 @@ sequenceDiagram
   memory items with provenance/sensitivity/review/soft-delete fields,
   scheduler jobs, pending approvals, and installed plugin metadata/grants.
 - `jarvis-cli`: Local CLI for serving the IPC API with optional `--db-path`
-  SQLite backing, calling health/command/pause/task/audit/memory/plugin
+  SQLite backing, calling health/command/ask/pause/task/audit/memory/plugin
   endpoints, exporting redacted diagnostics, listing/scheduling/cancelling
-  scheduler jobs over HTTP, and running `jarvis smoke` against ephemeral local
-  servers.
+  scheduler jobs over HTTP, showing concise operator-readable command and
+  first-party tool-catalog output by default, preserving raw payloads with
+  `--json`, and running `jarvis smoke` against ephemeral local servers.
 - `apps/mac/JarvisMacCore`: Swift IPC client, core supervisor, command-console
   model, voice state/action scaffold, Speech/AVFoundation input adapter,
   AVFoundation speech-output adapter, and management models that decode Rust

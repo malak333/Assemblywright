@@ -116,7 +116,7 @@ start_server "initial"
 PLUGIN_LIST_OUTPUT="$("$JARVIS" plugins list --endpoint "$ENDPOINT")"
 require_output_contains "plugin manifest list" "$PLUGIN_LIST_OUTPUT" '"id":"fake_echo"'
 
-COMMAND_OUTPUT="$("$JARVIS" command "plugin echo release operator qa smoke" --endpoint "$ENDPOINT")"
+COMMAND_OUTPUT="$("$JARVIS" command --json "plugin echo release operator qa smoke" --endpoint "$ENDPOINT")"
 require_output_contains "operator QA command" "$COMMAND_OUTPUT" '"accepted":true'
 require_output_contains "operator QA command" "$COMMAND_OUTPUT" '"status":"completed"'
 require_output_contains "operator QA command" "$COMMAND_OUTPUT" '"event_type":"plugin_completed"'
@@ -186,7 +186,7 @@ require_output_contains "operator QA diagnostics" "$DIAGNOSTICS_OUTPUT" '"redact
 PAUSE_OUTPUT="$("$JARVIS" pause --endpoint "$ENDPOINT" --reason "release operator QA smoke")"
 require_output_contains "operator QA pause" "$PAUSE_OUTPUT" '"paused":true'
 
-BLOCKED_OUTPUT="$("$JARVIS" command "plugin echo blocked by release operator QA smoke" --endpoint "$ENDPOINT" --dry-run)"
+BLOCKED_OUTPUT="$("$JARVIS" command --json "plugin echo blocked by release operator QA smoke" --endpoint "$ENDPOINT" --dry-run)"
 require_output_contains "operator QA blocked command" "$BLOCKED_OUTPUT" '"accepted":false'
 require_output_contains "operator QA blocked command" "$BLOCKED_OUTPUT" '"status":"blocked"'
 
