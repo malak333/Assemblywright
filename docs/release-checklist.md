@@ -263,9 +263,11 @@ stage or when a PR needs focused evidence for one ownership slice.
   the app signature, app stapling ticket, installer signature, installer
   stapling ticket, and app zip payload before writing the manifest; it still
   does not perform those external validations locally. Production bundle
-  creation must keep local signature validation enabled and must parse every
-  required live-device/plugin-trust report flag before writing evidence; the
-  disabled-signature path is reserved for the fake self-test fixture.
+  creation must keep local signature validation enabled, parse every required
+  live-device/plugin-trust report flag, confirm the live-device QA report
+  matches the expected bundle id/version/build, and write SHA-256 digests for
+  the signed distribution artifacts plus QA reports before writing evidence;
+  the disabled-signature path is reserved for the fake self-test fixture.
 - Confirm the Swift Release tab decodes the same `/release/readiness` contract
   and renders blocking gates, recommended commands, implemented proofs, pending
   features, and proof boundary without enabling release side effects.

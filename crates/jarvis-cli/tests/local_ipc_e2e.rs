@@ -38,6 +38,11 @@ fn release_readiness_cli_falls_back_without_running_server() {
         "unsigned_distribution_launch",
     );
     assert_array_contains(
+        &release_readiness["implemented_features"],
+        "key",
+        "release_evidence_bundle",
+    );
+    assert_array_contains(
         &release_readiness["pending_features"],
         "key",
         "live_voice_loop",
@@ -45,6 +50,10 @@ fn release_readiness_cli_falls_back_without_running_server() {
     assert_string_array_contains(
         &release_readiness["blocking_manual_gates"],
         "Developer ID Application and Installer signing credentials configured and used for a full signed package run",
+    );
+    assert_string_array_contains(
+        &release_readiness["blocking_manual_gates"],
+        "final release evidence bundle generated and archived after signed distribution, live-device QA, and plugin-trust QA reports exist",
     );
     assert!(release_readiness["proof_boundary"]
         .as_str()
@@ -120,6 +129,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         "{stale_recovery}"
     );
     assert_array_contains(&contract["features"], "key", "installed_plugin_execution");
+    assert_array_contains(&contract["features"], "key", "release_evidence_bundle");
     assert_array_contains(&contract["features"], "key", "live_voice_loop");
     assert_array_contains(&contract["features"], "status", "pending_manual_validation");
     assert_array_contains(&contract["endpoints"], "path", "/diagnostics/export");
@@ -172,6 +182,11 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         "installed_plugin_execution",
     );
     assert_array_contains(
+        &release_readiness["implemented_features"],
+        "key",
+        "release_evidence_bundle",
+    );
+    assert_array_contains(
         &release_readiness["pending_features"],
         "key",
         "live_voice_loop",
@@ -179,6 +194,10 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_string_array_contains(
         &release_readiness["blocking_manual_gates"],
         "Developer ID Application and Installer signing credentials configured and used for a full signed package run",
+    );
+    assert_string_array_contains(
+        &release_readiness["blocking_manual_gates"],
+        "final release evidence bundle generated and archived after signed distribution, live-device QA, and plugin-trust QA reports exist",
     );
     assert_string_array_contains(
         &release_readiness["recommended_verification_commands"],

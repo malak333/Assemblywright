@@ -13,6 +13,8 @@ LIVE_QA_REPORT="${JARVIS_EVIDENCE_LIVE_QA_REPORT:-$ROOT_DIR/target/release-live-
 PLUGIN_QA_REPORT="${JARVIS_EVIDENCE_PLUGIN_QA_REPORT:-$ROOT_DIR/target/release-plugin-trust-qa-report.json}"
 OUTPUT_PATH="${JARVIS_EVIDENCE_OUTPUT_PATH:-$ROOT_DIR/target/release-evidence-bundle.json}"
 VALIDATE_LOCAL_SIGNATURES="${JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES:-true}"
+EXPECTED_BUNDLE_ID="${JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID:-com.nobiletechnology.jarvis}"
+EXPECTED_VERSION="${JARVIS_EVIDENCE_EXPECTED_VERSION:-$VERSION}"
 CHECK_ONLY=false
 BUNDLE=false
 SELF_TEST=false
@@ -54,6 +56,8 @@ Optional:
   JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES
                                       Defaults to true. Set to false only for
                                       fake self-test fixtures.
+  JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID  Defaults to com.nobiletechnology.jarvis
+  JARVIS_EVIDENCE_EXPECTED_VERSION    Defaults to JARVIS_EVIDENCE_VERSION
 
 This script validates evidence capture only. It does not sign, notarize,
 install, launch Finder, run live microphone/audio checks, run malware scans, or
@@ -139,6 +143,38 @@ if cursor is not True:
 PY
 }
 
+require_json_string_equals() {
+  local label="$1"
+  local path="$2"
+  local dotted_key="$3"
+  local expected="$4"
+  require_file "$label" "$path"
+  python3 - "$path" "$dotted_key" "$expected" "$label" <<'PY'
+import json
+import sys
+
+path, dotted_key, expected, label = sys.argv[1:5]
+with open(path, encoding="utf-8") as handle:
+    data = json.load(handle)
+
+cursor = data
+for segment in dotted_key.split("."):
+    if not isinstance(cursor, dict) or segment not in cursor:
+        raise SystemExit(f"{label} is missing required evidence field: {dotted_key}")
+    cursor = cursor[segment]
+
+if cursor != expected:
+    raise SystemExit(
+        f"{label} evidence field {dotted_key} mismatch: expected {expected!r}, got {cursor!r}"
+    )
+PY
+}
+
+file_sha256() {
+  local path="$1"
+  shasum -a 256 "$path" | awk '{print $1}'
+}
+
 validate_zip_payload() {
   python3 - "$ZIP_PATH" <<'PY'
 import sys
@@ -192,8 +228,13 @@ write_bundle() {
   local escaped_pkg
   local escaped_live
   local escaped_plugin
+  local zip_sha
+  local pkg_sha
+  local live_sha
+  local plugin_sha
   local escaped_boundary
   local local_signature_validation
+  require_command shasum
   require_command python3
   generated_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   escaped_app="$(json_escape "$APP_PATH")"
@@ -201,6 +242,10 @@ write_bundle() {
   escaped_pkg="$(json_escape "$PKG_PATH")"
   escaped_live="$(json_escape "$LIVE_QA_REPORT")"
   escaped_plugin="$(json_escape "$PLUGIN_QA_REPORT")"
+  zip_sha="$(file_sha256 "$ZIP_PATH")"
+  pkg_sha="$(file_sha256 "$PKG_PATH")"
+  live_sha="$(file_sha256 "$LIVE_QA_REPORT")"
+  plugin_sha="$(file_sha256 "$PLUGIN_QA_REPORT")"
   escaped_boundary="$(json_escape "Evidence bundle manifest only; relies on owner-recorded external validation flags and referenced signed/notarized artifacts plus QA reports.")"
   local_signature_validation="$VALIDATE_LOCAL_SIGNATURES"
 
@@ -212,11 +257,15 @@ write_bundle() {
   "artifacts": {
     "app_path": "$escaped_app",
     "zip_path": "$escaped_zip",
-    "pkg_path": "$escaped_pkg"
+    "pkg_path": "$escaped_pkg",
+    "zip_sha256": "$zip_sha",
+    "pkg_sha256": "$pkg_sha"
   },
   "reports": {
     "live_device_qa_report": "$escaped_live",
-    "plugin_trust_qa_report": "$escaped_plugin"
+    "plugin_trust_qa_report": "$escaped_plugin",
+    "live_device_qa_sha256": "$live_sha",
+    "plugin_trust_qa_sha256": "$plugin_sha"
   },
   "validation_flags": {
     "signed_distribution": true,
@@ -291,6 +340,13 @@ if [[ "$SELF_TEST" == true ]]; then
     "restart": true,
     "manual_release_qa": true
   },
+  "app_bundle": {
+    "bundle_identifier": "com.nobiletechnology.jarvis",
+    "short_version": "0.1.4",
+    "build_version": "0.1.4",
+    "microphone_usage_description": "self-test fixture",
+    "speech_recognition_usage_description": "self-test fixture"
+  },
   "proof_boundary": "self-test fixture"
 }
 JSON
@@ -326,6 +382,8 @@ JSON
     "$0" --bundle >/dev/null
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"reports_archived": true'
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"local_signature_validation": false'
+  require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"zip_sha256"'
+  require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"live_device_qa_sha256"'
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"plugin_trust_qa_report"'
 
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
@@ -436,6 +494,9 @@ validate_local_distribution_evidence
 for flag in clean_profile finder_launch microphone speech_permission audio_output notification restart manual_release_qa; do
   require_json_bool_true "live-device QA report" "$LIVE_QA_REPORT" "validation_flags.$flag"
 done
+require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.bundle_identifier" "$EXPECTED_BUNDLE_ID"
+require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.short_version" "$EXPECTED_VERSION"
+require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.build_version" "$EXPECTED_VERSION"
 for flag in marketplace_review malware_scan os_sandbox egress_enforcement signed_publisher_policy manual_trust_review; do
   require_json_bool_true "plugin trust QA report" "$PLUGIN_QA_REPORT" "validation_flags.$flag"
 done

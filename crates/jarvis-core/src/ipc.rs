@@ -3661,6 +3661,7 @@ fn release_blocking_manual_gates() -> Vec<String> {
         "live audio-output playback validation on a real Mac".to_string(),
         "manual clean-profile release QA pass covering installed-app command, audit, memory, scheduler, plugin, pause, diagnostics, restart behavior, and user-visible prompts".to_string(),
         "broader installed-plugin marketplace trust, malware analysis, and OS-level sandbox/egress enforcement before marketplace claims".to_string(),
+        "final release evidence bundle generated and archived after signed distribution, live-device QA, and plugin-trust QA reports exist".to_string(),
     ]
 }
 
@@ -3759,6 +3760,12 @@ fn contract_features() -> Vec<ContractFeature> {
             "implemented",
             "`package-distribution.sh --unsigned-launch-check` builds the release app layout, creates an unsigned installer payload, launches the release-built app executable with isolated HOME, and verifies bundled-core IPC smoke.",
             "Unsigned distribution-layout proof only; not Developer ID signing, notarization, stapling, /Applications install, Finder/LaunchServices validation, live device validation, App Store review, or manual QA.",
+        ),
+        feature(
+            "release_evidence_bundle",
+            "implemented",
+            "`release-evidence-bundle.sh --check` and `--self-test` are part of the local release gate; `--bundle` validates signed/stapled artifact references, live-device QA bundle metadata, plugin-trust QA flags, and writes SHA-256-bound evidence manifest entries.",
+            "Evidence-bundle mechanics and local artifact/report validation only; production readiness still depends on owner-recorded external signing, notarization, live-device QA, plugin-trust QA, and archived evidence.",
         ),
         feature(
             "live_voice_loop",
@@ -4085,6 +4092,12 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert!(readiness
             .implemented_features
             .iter()
+            .any(|feature| feature.key == "release_evidence_bundle"
+                && feature.proof.contains("SHA-256-bound evidence manifest")
+                && feature.boundary.contains("owner-recorded external")));
+        assert!(readiness
+            .implemented_features
+            .iter()
             .any(|feature| feature.key == "scheduler_stale_running_recovery"
                 && feature.proof.contains("opt-in startup recovery")
                 && feature.boundary.contains("no default background recovery")));
@@ -4101,6 +4114,10 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .blocking_manual_gates
             .iter()
             .any(|gate| gate.contains("live microphone")));
+        assert!(readiness
+            .blocking_manual_gates
+            .iter()
+            .any(|gate| gate.contains("final release evidence bundle")));
         assert!(readiness
             .recommended_verification_commands
             .iter()
