@@ -342,7 +342,7 @@ struct JarvisMacCoreTests {
         )
 
         #expect(!readiness.productionReady)
-        #expect(readiness.verifiedFeatureCount == 14)
+        #expect(readiness.verifiedFeatureCount == 16)
         #expect(readiness.pendingFeatureCount == 1)
         #expect(readiness.implementedFeatures.first?.key == "repository_state")
         #expect(readiness.implementedFeatures.map(\.key).contains("operator_release_qa_smoke"))
@@ -2629,7 +2629,7 @@ private func releaseReadinessJSON() -> Data {
           "generated_at": "2026-05-22T08:00:00Z",
           "production_ready": false,
           "readiness_scope": "local Rust/CLI foundation and Swift shell evidence only; full production distribution still has external manual gates",
-          "verified_feature_count": 14,
+          "verified_feature_count": 16,
           "pending_feature_count": 1,
           "implemented_features": [
             {

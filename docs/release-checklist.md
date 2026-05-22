@@ -26,9 +26,11 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   native ChatGPT/OpenAI-compatible first-party tool execution
   before any broader assistant claim.
 - Confirm local-model tool discipline/recovery remains represented in the
-  architecture map: advertised first-party tool inventory, strict provider
-  envelopes, bounded tool requests, invalid-tool rejection, redacted provider
-  failure responses, and no installed-plugin or external tool execution through
+  architecture map: `/tools/model` as the redacted registered first-party
+  model-tool catalog source, Ollama JSON allowlist projection,
+  ChatGPT/OpenAI-compatible native tool projection, strict provider envelopes,
+  bounded tool requests, invalid-tool rejection, redacted provider failure
+  responses, and no installed-plugin or external tool execution through
   model-planned calls.
 - Confirm the current-vs-target implementation phase table is up to date before
   using any production-readiness language. Release notes may claim foundation

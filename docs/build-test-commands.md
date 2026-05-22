@@ -85,9 +85,11 @@ cargo run -p jarvis-cli -- serve
 
 Live local testing with `llama3.2` has proven this Ollama route can complete
 real model commands. Local model behavior is still model-dependent, so the
-runtime derives the provider-visible tool inventory from the registered
-first-party `PluginHost` manifests, advertises that exact inventory in the
-prompt, and keeps validating every model-planned tool request before execution.
+runtime derives the provider-visible tool catalog from validated first-party
+manifests, exposes the same redacted catalog through `jarvis tools list`,
+advertises it as an Ollama JSON allowlist and ChatGPT/OpenAI-compatible native
+tool definitions, and keeps validating every model-planned tool request before
+execution.
 
 To exercise the opt-in ChatGPT/OpenAI-compatible provider boundary, disable
 the local provider and provide an API key. The key is never serialized in
@@ -175,6 +177,7 @@ Run these while `cargo run -p jarvis-cli -- serve` is active:
 ```sh
 cargo run -p jarvis-cli -- command --dry-run "status check"
 cargo run -p jarvis-cli -- plugins list
+cargo run -p jarvis-cli -- tools list
 cargo run -p jarvis-cli -- release readiness
 cargo run -p jarvis-cli -- diagnostics export
 cargo run -p jarvis-cli -- permissions grants

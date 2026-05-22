@@ -62,6 +62,21 @@ fn release_readiness_cli_falls_back_without_running_server() {
 }
 
 #[test]
+fn model_tools_cli_falls_back_without_running_server() {
+    let endpoint = format!("http://{}", unused_loopback_addr());
+
+    let tools = run_cli_json(["tools", "list", "--endpoint", endpoint.as_str()]);
+
+    assert_eq!(tools["source"], "registered_first_party_plugins");
+    assert_array_contains(&tools["tools"], "plugin_id", "fake_echo");
+    assert_array_contains(&tools["tools"], "plugin_id", "fake_status");
+    let encoded_tools = serde_json::to_string(&tools["tools"]).expect("tools JSON");
+    assert!(!encoded_tools.contains("source_path"));
+    assert!(!encoded_tools.contains("subprocess"));
+    assert!(!encoded_tools.contains("provenance"));
+}
+
+#[test]
 fn release_readiness_cli_uses_explicit_live_voice_evidence() {
     let temp_dir = tempfile::tempdir().expect("temp live QA report");
     let live_report_path = temp_dir.path().join("release-live-device-qa-report.json");
@@ -395,6 +410,19 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     let manifests = run_cli_json(["plugins", "list", "--endpoint", endpoint.as_str()]);
     assert_array_contains(&manifests, "id", "fake_echo");
     assert_array_contains(&manifests, "id", "fake_status");
+
+    let tools = run_cli_json(["tools", "list", "--endpoint", endpoint.as_str()]);
+    assert_eq!(tools["source"], "registered_first_party_plugins");
+    assert_array_contains(&tools["tools"], "plugin_id", "fake_echo");
+    assert_array_contains(&tools["tools"], "plugin_id", "fake_status");
+    assert!(tools["proof_boundary"]
+        .as_str()
+        .expect("proof boundary")
+        .contains("installed plugins"));
+    let tools_encoded = serde_json::to_string(&tools["tools"]).expect("tools JSON");
+    assert!(!tools_encoded.contains("source_path"));
+    assert!(!tools_encoded.contains("subprocess"));
+    assert!(!tools_encoded.contains("provenance"));
 
     let activity = run_cli_json(["activity", "summary", "--endpoint", endpoint.as_str()]);
     assert_eq!(activity["repository_backed"], true);
@@ -2792,10 +2820,27 @@ fn start_ollama_envelope_server() -> (String, thread::JoinHandle<()>) {
             let read = stream.read(&mut buffer).expect("read request");
             let request = String::from_utf8_lossy(&buffer[..read]);
             assert!(request.contains("POST /api/generate"), "{request}");
-            assert!(request.contains("Registered first-party tools are exactly"));
-            assert!(request.contains("fake_echo.approval_echo"), "{request}");
-            assert!(request.contains("fake_echo.echo"), "{request}");
-            assert!(request.contains("fake_status.status"), "{request}");
+            assert!(
+                request.contains("Registered first-party tools are exactly this JSON allowlist")
+            );
+            assert!(
+                request.contains("\\\"plugin_id\\\":\\\"fake_echo\\\""),
+                "{request}"
+            );
+            assert!(
+                request.contains("\\\"action\\\":\\\"approval_echo\\\""),
+                "{request}"
+            );
+            assert!(request.contains("\\\"action\\\":\\\"echo\\\""), "{request}");
+            assert!(
+                request.contains("\\\"plugin_id\\\":\\\"fake_status\\\""),
+                "{request}"
+            );
+            assert!(
+                request.contains("\\\"action\\\":\\\"status\\\""),
+                "{request}"
+            );
+            assert!(request.contains("action names, command aliases, endpoints, and capability names are invalid plugin ids"));
             assert!(!request.contains("chrome_extension"), "{request}");
             let http = format!(
                 "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
@@ -2840,9 +2885,13 @@ fn start_ollama_invalid_tool_server(plugin_id: &str) -> (String, thread::JoinHan
             let read = stream.read(&mut buffer).expect("read request");
             let request = String::from_utf8_lossy(&buffer[..read]);
             assert!(request.contains("POST /api/generate"), "{request}");
-            assert!(request.contains("Registered first-party tools are exactly"));
-            assert!(request.contains("fake_status.status"));
+            assert!(
+                request.contains("Registered first-party tools are exactly this JSON allowlist")
+            );
+            assert!(request.contains("\\\"plugin_id\\\":\\\"fake_status\\\""));
+            assert!(request.contains("\\\"action\\\":\\\"status\\\""));
             assert!(request.contains("Never invent plugin_id or action values"));
+            assert!(request.contains("action names, command aliases, endpoints, and capability names are invalid plugin ids"));
             if index == 1 {
                 assert!(request.contains("rejected"), "{request}");
                 assert!(
