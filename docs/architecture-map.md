@@ -13,8 +13,8 @@ flowchart TB
     User["User or local test operator"]
     User --> CLI["jarvis-cli"]
     User --> MacShell["JarvisMacApp SwiftUI scaffold"]
-    DocsAgent["Worker 6 docs sync"] --> Docs["DESIGN, architecture map, release checklist, build/test commands, knowledge-base"]
-    DocsAgent --> Sweep["six worktree/branch production sweep"]
+    DocsAgent["Worker F phase-3 docs sync"] --> Docs["DESIGN, README, architecture map, release checklist, build/test commands, knowledge-base"]
+    DocsAgent --> Sweep["phase-3 worktree/branch production sweep"]
     Sweep --> LocalGate["./scripts/release-local.sh"]
     LocalGate --> E2E["local_ipc_e2e ignored release proof"]
     LocalGate --> Smoke["jarvis-cli smoke"]
@@ -136,13 +136,17 @@ not prove Developer ID signing, notarization, installer behavior,
 entitlements, Finder/LaunchServices validation, App Store distribution, or real
 voice permissions.
 
-The current production sweep is coordinated through isolated worktrees and
-topic branches against the public repository
-`https://github.com/malak333/Jarvis`. This docs-only slice is
-`codex/production-docs-sync` in
-`/Users/michaelnobile/Antigravity/jarvis-worktrees/production-docs-sync`.
-The six-worker structure is implementation coordination, not release evidence;
-each phase still needs matching docs, knowledge-base facts, and E2E or focused
+The current phase-3 production sweep is coordinated through isolated worktrees
+and topic branches against the public repository
+`https://github.com/malak333/Jarvis`. The active phase-3 worktree set is:
+`model-route-persistence`, `plugin-subprocess-sandbox`,
+`voice-adapter-production`, `packaged-app-release-smoke`,
+`permission-grants-ux`, and `phase3-docs-architecture`. This docs-only slice
+is `codex/phase3-docs-architecture` in
+`/Users/michaelnobile/Antigravity/jarvis-worktrees-phase3/phase3-docs-architecture`.
+Those worktrees are preparation lanes until their code lands on main. The
+six-worker structure is implementation coordination, not release evidence; each
+phase still needs matching docs, knowledge-base facts, and E2E or focused
 verification evidence for the surface it changes.
 
 ## Current Command Flow
@@ -356,7 +360,7 @@ operation.
 | Safety and approvals | Capability scopes, risk tiers, emergency-pause fail-closed behavior, audit-required flags, and approval-required decisions exist in Rust. Repository-backed IPC persists pending approvals and supports CLI and Swift grant/deny decisions without executing side effects. | Human approval prompts, permission center, grants history, policy review, and no bypass for high-risk side effects. | Policy engine plus CLI/IPC/Swift approval decision surface implemented; richer permission center pending. |
 | Voice and diagnostics | Swift has a text-transcript voice state/action scaffold with typed transcript staging, unavailable/degraded/interrupted states, and handoff into the same `CommandConsoleModel.submit` path used by text commands. A protocol-backed macOS Speech/AVFoundation adapter boundary now exists with explicit permission, capture, interruption, and recognition-error states, plus deterministic fake-adapter tests. The SwiftUI surface still stages typed transcripts and live microphone capture is not claimed until app entitlements and manual device validation are complete. Redacted diagnostics export exists over CLI/IPC and omits command bodies, scheduler commands, model route contexts, audit payloads, memory values, and cancellation reason text. | Voice input/output loop, interruption/cancel behavior, microphone degraded modes, and local diagnostics export integrated into the packaged app. | Adapter boundary and text-parity scaffold implemented; live microphone/TTS validation and packaged UX pending. |
 | Release proof | Local Rust and Swift build/test/smoke commands plus the ignored cross-process `local_ipc_e2e` release-proof test document the foundation boundary. `packaged-app-release-smoke.sh` adds local assembled-app launch evidence for app-supervised core health, command, audit, diagnostics, pause, blocked command, resume, and temp SQLite state. | Developer ID signed and notarized packaged app release with clean-profile Mac smoke, app-supervised core, command, audit, pause, restart, migration, recovery, diagnostics, and real-provider checks. | Local foundation proof and assembled-app smoke implemented; distribution-grade signing/notarization/restart/manual QA pending. |
-| Production workflow | Current production effort uses isolated worktrees, topic branches, reviewable PRs, and parallel ownership slices; this docs slice is branch `codex/production-docs-sync` in `/Users/michaelnobile/Antigravity/jarvis-worktrees/production-docs-sync`. | Public repo release train with PR evidence, reproducible local gates, owner-reviewed release notes, and no hidden readiness claims. | Workflow documented; release governance still manual. |
+| Production workflow | Phase 3 was split into isolated branches/worktrees for model route persistence, plugin subprocess sandboxing, voice adapter production, packaged app release smoke, permission grants UX, and docs architecture alignment. This docs slice is branch `codex/phase3-docs-architecture` in `/Users/michaelnobile/Antigravity/jarvis-worktrees-phase3/phase3-docs-architecture`. | Public repo release train with PR evidence, reproducible local gates, owner-reviewed release notes, and no hidden readiness claims. | Phase-3 workflow documented; release governance still manual. |
 | Docs, KB, and E2E discipline | Docs and knowledge-base files record implementation boundaries, the current/end-goal diagrams, and local proof commands. Current E2E evidence is Rust/CLI cross-process, Swift package contract/model coverage, packaged-layout supervision proof, and local assembled-app smoke. | Every feature phase updates docs and durable KB facts, adds or names the relevant E2E coverage, and blocks broader readiness claims when coverage is missing. | Phase discipline documented; broader distribution E2E pending. |
 
 ## Data Ownership

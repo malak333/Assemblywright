@@ -211,12 +211,15 @@ that prove the required docs and diagrams are still present:
 
 ```sh
 rg -n "Current Implementation Diagram|End-Goal Production Architecture" docs/architecture-map.md
-rg -n "six-agent|worktree|E2E|production-readiness|proof" docs/knowledge-base/jarvis-project-facts.md docs/release-checklist.md docs/build-test-commands.md
+rg -n "phase-3|phase3|six-agent|worktree|E2E|production-readiness|proof" docs/knowledge-base/jarvis-project-facts.md docs/release-checklist.md docs/build-test-commands.md README.md
 git diff --check
 ```
 
 These checks do not replace `./scripts/release-local.sh` for executable
 changes. They only support docs-only PR evidence and should be reported as such.
+For the phase-3 docs architecture slice, the expected verification is the two
+`rg` checks above plus `git diff --check`; code gates belong to the executable
+phase-3 slices unless this branch starts changing code.
 
 ## Release Evidence Boundary
 

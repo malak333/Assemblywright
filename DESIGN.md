@@ -270,14 +270,18 @@ HTTP providers. The Swift app includes approval decision controls, management
 surfaces, text-only voice command handoff, and core supervision abstractions,
 but still does not have signed packaged-app release smoke evidence. The product
 still lacks real voice, executable installed-plugin sandboxing, packaged app
-release smoke evidence, and background proactive trigger execution. Swift
-supervision is covered only as a scaffold for configured or packaged-style
-local core binaries.
+release smoke evidence, richer proactive trigger policy, and app notification
+handoff. Swift supervision is covered only as a scaffold for configured or
+packaged-style local core binaries.
 
-The active production sweep uses isolated worktrees, topic branches, reviewable
-PR slices, and docs-only synchronization work on `codex/production-docs-sync`.
-That workflow improves reviewability but is not readiness evidence by itself.
-Readiness language must be tied to checked-in code, documented diagrams,
-knowledge-base updates, and the specific local/E2E checks that passed.
+The active phase-3 production sweep uses isolated worktrees, topic branches,
+reviewable PR slices, and docs-only synchronization work on
+`codex/phase3-docs-architecture`. The phase-3 lanes are
+`model-route-persistence`, `plugin-subprocess-sandbox`,
+`voice-adapter-production`, `packaged-app-release-smoke`,
+`permission-grants-ux`, and `phase3-docs-architecture`. That workflow improves
+reviewability but is not readiness evidence by itself. Readiness language must
+be tied to checked-in code, documented diagrams, knowledge-base updates, and the
+specific local/E2E checks that passed.
 
 Before implementation, the design should be reviewed through a multi-agent brainstorming pass because Jarvis is high-autonomy, security-sensitive, and product-grade.

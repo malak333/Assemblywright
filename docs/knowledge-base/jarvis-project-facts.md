@@ -159,8 +159,13 @@ These notes capture durable facts for future agents working on this repository.
 
 - Work in isolated worktrees and branches for reviewable slices.
 - Use topic branches and PRs for production work. The docs production slice is
-  currently `codex/production-docs-sync` in
-  `/Users/michaelnobile/Antigravity/jarvis-worktrees/production-docs-sync`.
+  currently `codex/phase3-docs-architecture` in
+  `/Users/michaelnobile/Antigravity/jarvis-worktrees-phase3/phase3-docs-architecture`.
+- Phase-3 work is split across separate worktrees and `codex/` branches:
+  `model-route-persistence`, `plugin-subprocess-sandbox`,
+  `voice-adapter-production`, `packaged-app-release-smoke`,
+  `permission-grants-ux`, and `phase3-docs-architecture`. Treat those names as
+  coordination context until each slice is merged and verified on main.
 - When multiple agents are active, stay inside assigned ownership. For docs-only
   architecture work, use `apply_patch` and do not touch implementation files.
 - Do not revert or overwrite unrelated work from other agents.
