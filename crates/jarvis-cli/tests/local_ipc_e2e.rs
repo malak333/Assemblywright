@@ -39,6 +39,11 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         "path",
         "/plugins/installed/:id/execution",
     );
+    assert_array_contains(
+        &contract["endpoints"],
+        "path",
+        "/plugins/installed/:id/publisher/verify",
+    );
     assert_array_contains(&contract["endpoints"], "path", "/plugins/installed/:id/run");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/model-routes");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/model-routes/:id");
@@ -268,7 +273,25 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         "item_type",
         "installed_plugin_provenance",
     );
+    assert_array_contains(
+        &initial_policy_review["items"],
+        "item_type",
+        "publisher_identity",
+    );
     assert_array_contains(&initial_policy_review["items"], "severity", "medium");
+
+    let premature_publisher_verification = run_cli_failure([
+        "plugins",
+        "verify-publisher",
+        "local_e2e_plugin",
+        "--trusted-origin",
+        "Jarvis E2E",
+        "--decided-by",
+        "local_ipc_e2e",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert!(premature_publisher_verification.contains("requires local provenance"));
 
     let blocked_installed_run = run_cli_json([
         "plugins",
@@ -312,6 +335,61 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_eq!(
         contract_dry_run["audit_entry"]["event_type"],
         "installed_plugin_contract_dry_run"
+    );
+
+    let verified_local_plugin = run_cli_json([
+        "plugins",
+        "verify-installed",
+        "local_e2e_plugin",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(
+        verified_local_plugin["provenance"]["integrity_status"],
+        "matches_install_snapshot"
+    );
+    assert_eq!(
+        verified_local_plugin["provenance"]["origin_claim_verified"],
+        false
+    );
+
+    let wrong_publisher_verification = run_cli_failure([
+        "plugins",
+        "verify-publisher",
+        "local_e2e_plugin",
+        "--trusted-origin",
+        "Someone Else",
+        "--decided-by",
+        "local_ipc_e2e",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert!(wrong_publisher_verification.contains("trusted_origin must exactly match"));
+
+    let publisher_verified = run_cli_json([
+        "plugins",
+        "verify-publisher",
+        "local_e2e_plugin",
+        "--trusted-origin",
+        "Jarvis E2E",
+        "--decided-by",
+        "local_ipc_e2e",
+        "--reason",
+        "local test operator pinned the manifest author",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(
+        publisher_verified["provenance"]["origin_claim_verified"],
+        true
+    );
+
+    let publisher_policy_review =
+        run_cli_json(["permissions", "review", "--endpoint", endpoint.as_str()]);
+    assert_array_not_contains(
+        &publisher_policy_review["items"],
+        "item_type",
+        "publisher_identity",
     );
 
     let subprocess_plugin_dir = temp_dir.path().join("local-subprocess-plugin");
@@ -411,6 +489,22 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_eq!(
         subprocess_verified["provenance"]["integrity_status"],
         "matches_install_snapshot"
+    );
+
+    let subprocess_publisher_verified = run_cli_json([
+        "plugins",
+        "verify-publisher",
+        "local_subprocess_e2e",
+        "--trusted-origin",
+        "Jarvis E2E",
+        "--decided-by",
+        "local_ipc_e2e",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(
+        subprocess_publisher_verified["provenance"]["origin_claim_verified"],
+        true
     );
 
     let subprocess_enabled = run_cli_json([
@@ -515,6 +609,11 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         &all_audit,
         "event_type",
         "installed_plugin_execution_blocked",
+    );
+    assert_array_contains(
+        &all_audit,
+        "event_type",
+        "installed_plugin_publisher_verified",
     );
 
     let approval_command = run_cli_json([
@@ -1409,6 +1508,18 @@ fn assert_array_contains(value: &Value, field: &str, expected: &str) {
             .iter()
             .any(|item| item.get(field).and_then(Value::as_str) == Some(expected)),
         "expected array to contain object with {field}={expected}, got {value}"
+    );
+}
+
+fn assert_array_not_contains(value: &Value, field: &str, unexpected: &str) {
+    let array = value.as_array().unwrap_or_else(|| {
+        panic!("expected array, got {}", json!(value));
+    });
+    assert!(
+        !array
+            .iter()
+            .any(|item| item.get(field).and_then(Value::as_str) == Some(unexpected)),
+        "expected array not to contain object with {field}={unexpected}, got {value}"
     );
 }
 

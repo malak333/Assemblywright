@@ -309,6 +309,14 @@ pub struct InstalledPluginExecutionRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstalledPluginPublisherVerificationRequest {
+    pub trusted_origin: String,
+    pub decided_by: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstalledPluginRunRequest {
     pub action: String,
     #[serde(default)]
@@ -1457,6 +1465,48 @@ impl IpcState {
         })
     }
 
+    pub fn verify_installed_plugin_publisher(
+        &self,
+        id: &str,
+        request: InstalledPluginPublisherVerificationRequest,
+    ) -> JarvisResult<InstalledPluginRecord> {
+        self.using_repository(|repository| {
+            let trusted_origin = request.trusted_origin.trim();
+            let decided_by = request.decided_by.trim();
+            if trusted_origin.is_empty() {
+                return Err(JarvisError::Validation(
+                    "trusted_origin is required for publisher verification".to_string(),
+                ));
+            }
+            if decided_by.is_empty() {
+                return Err(JarvisError::Validation(
+                    "decided_by is required for publisher verification".to_string(),
+                ));
+            }
+
+            let record =
+                repository.verify_installed_plugin_publisher(id, trusted_origin, Utc::now())?;
+            let audit_entry = AuditEntry::new(
+                None,
+                "installed_plugin_publisher_verified",
+                "installed plugin publisher origin claim was operator-verified",
+                json!({
+                    "plugin_id": record.id,
+                    "manifest_version": record.manifest.version,
+                    "source": record.manifest.source,
+                    "origin_claim": record.provenance.origin_claim,
+                    "trusted_origin": trusted_origin,
+                    "decided_by": decided_by,
+                    "reason": request.reason,
+                    "integrity_status": record.provenance.integrity_status,
+                    "origin_claim_verified": record.provenance.origin_claim_verified,
+                }),
+            );
+            repository.append_audit_entry(&audit_entry)?;
+            Ok(record)
+        })
+    }
+
     pub fn pause(&self, reason: impl Into<String>) -> JarvisResult<EmergencyPauseResponse> {
         let reason = reason.into();
         let reason_present = !reason.trim().is_empty();
@@ -2192,6 +2242,10 @@ pub fn router(state: IpcState) -> Router {
             "/plugins/installed/:id/provenance/verify",
             post(verify_installed_plugin_provenance),
         )
+        .route(
+            "/plugins/installed/:id/publisher/verify",
+            post(verify_installed_plugin_publisher),
+        )
         .route("/plugins/installed/:id/run", post(run_installed_plugin))
         .route(
             "/emergency-pause",
@@ -2617,6 +2671,17 @@ async fn verify_installed_plugin_provenance(
         .map_err(error_response)
 }
 
+async fn verify_installed_plugin_publisher(
+    State(state): State<IpcState>,
+    Path(id): Path<String>,
+    Json(request): Json<InstalledPluginPublisherVerificationRequest>,
+) -> Result<Json<InstalledPluginRecord>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .verify_installed_plugin_publisher(&id, request)
+        .map(Json)
+        .map_err(error_response)
+}
+
 async fn run_installed_plugin(
     State(state): State<IpcState>,
     Path(id): Path<String>,
@@ -2742,6 +2807,12 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
         endpoint(
             "POST",
             "/plugins/installed/:id/provenance/verify",
+            true,
+            false,
+        ),
+        endpoint(
+            "POST",
+            "/plugins/installed/:id/publisher/verify",
             true,
             false,
         ),
@@ -2874,6 +2945,12 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .iter()
             .any(|endpoint| endpoint.method == "POST"
                 && endpoint.path == "/plugins/installed/:id/provenance/verify"
+                && endpoint.repository_required));
+        assert!(contract
+            .endpoints
+            .iter()
+            .any(|endpoint| endpoint.method == "POST"
+                && endpoint.path == "/plugins/installed/:id/publisher/verify"
                 && endpoint.repository_required));
         assert!(contract
             .endpoints

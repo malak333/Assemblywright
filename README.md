@@ -25,7 +25,7 @@ and not an autonomous external-communication system. Risky side effects must be
 blocked or require approval, and every meaningful decision should be auditable.
 The current implementation should not be described as a finished production
 assistant: distribution signing/notarization, live microphone validation,
-marketplace or signed-publisher plugin trust, signed-publisher verification,
+marketplace plugin trust, cryptographic signed-publisher verification,
 live OS-level scheduler notification validation, and manual release QA are
 still target architecture. The
 default command path still uses `FakeLocalModel`; set
@@ -40,7 +40,9 @@ installation stores validated manifest metadata disabled by default and captures
 a local manifest/subprocess hash snapshot. Executable local subprocess plugins
 require the snapshot to verify as unchanged plus an explicit
 `subprocess_stdio` grant, and still run only through the constrained JSON
-stdin/stdout boundary.
+stdin/stdout boundary. Publisher-origin claims can be operator-pinned only
+after local provenance matches the install snapshot; this is an auditable
+local review step, not cryptographic signed-publisher trust.
 
 ## Production Work Protocol
 
@@ -56,14 +58,15 @@ subprocess sandboxing, voice input controls, packaged app release smoke,
 permission grants UX, docs architecture alignment, distribution packaging, and
 Keychain launch credential injection. Follow-on slices have added Swift memory
 CRUD, local plugin provenance verification, scheduler attention handoff, and
-permission policy review plus scheduler notification controls. Later slices continue the same branch/PR discipline;
+permission policy review plus scheduler notification controls. Later slices
+continue the same branch/PR discipline;
 release language should describe only the merged repo-owned surfaces with
 recorded focused E2E or integration proof.
 The permission center now surfaces installed-plugin provenance status from
 `/permissions/grants`, including unverified plugin counts and local integrity
 state. `/permissions/policy-review` turns pending approvals and installed
 plugin provenance/grant concerns into explicit review items, but it still does
-not grant broader plugin trust or publisher identity.
+not grant broader plugin trust or cryptographic publisher identity.
 
 ## Build
 

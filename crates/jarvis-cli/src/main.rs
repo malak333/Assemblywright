@@ -8,7 +8,8 @@ use clap::{Parser, Subcommand};
 use jarvis_core::{
     ApprovalDecisionRequest, CommandRequest, CreateMemoryItemRequest, CreateSchedulerJobRequest,
     EmergencyPauseRequest, InstallPluginRequest, InstalledPluginExecutionGrant,
-    InstalledPluginExecutionRequest, Sensitivity, TriggerKind, UpdateMemoryItemRequest,
+    InstalledPluginExecutionRequest, InstalledPluginPublisherVerificationRequest, Sensitivity,
+    TriggerKind, UpdateMemoryItemRequest,
 };
 use tokio::net::TcpListener;
 
@@ -343,6 +344,18 @@ enum PluginsCommand {
     /// Verify local installed plugin files against the install-time provenance snapshot.
     VerifyInstalled {
         id: String,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    /// Mark an installed plugin publisher origin claim as operator-verified.
+    VerifyPublisher {
+        id: String,
+        #[arg(long)]
+        trusted_origin: String,
+        #[arg(long, default_value = "cli")]
+        decided_by: String,
+        #[arg(long)]
+        reason: Option<String>,
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
@@ -757,6 +770,28 @@ async fn main() -> anyhow::Result<()> {
                         "POST",
                         &format!("/plugins/installed/{id}/provenance/verify"),
                         None
+                    )?
+                );
+            }
+            PluginsCommand::VerifyPublisher {
+                id,
+                trusted_origin,
+                decided_by,
+                reason,
+                endpoint,
+            } => {
+                let body = serde_json::to_string(&InstalledPluginPublisherVerificationRequest {
+                    trusted_origin,
+                    decided_by,
+                    reason,
+                })?;
+                println!(
+                    "{}",
+                    request(
+                        &endpoint,
+                        "POST",
+                        &format!("/plugins/installed/{id}/publisher/verify"),
+                        Some(&body)
                     )?
                 );
             }
