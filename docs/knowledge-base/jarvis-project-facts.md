@@ -60,9 +60,10 @@ These notes capture durable facts for future agents working on this repository.
   stops, tool-result audit entries, and feedback of tool results into later
   model steps. Ollama-compatible and ChatGPT/OpenAI-compatible text responses
   can return a strict JSON envelope with `message`, `complete`, and
-  `tool_requests`; plain text remains backward-compatible. This is not native
-  OpenAI function calling, installed-plugin orchestration, or broad third-party
-  tool execution.
+  `tool_requests`; ChatGPT/OpenAI-compatible responses can also return native
+  OpenAI `tool_calls` for advertised first-party tool definitions. Plain text
+  remains backward-compatible. This is not installed-plugin orchestration or
+  broad third-party tool execution.
 - Provider-envelope coverage includes
   `ollama_http_provider_parses_tool_request_envelope`,
   `chatgpt_http_provider_parses_tool_request_envelope`,
@@ -70,6 +71,9 @@ These notes capture durable facts for future agents working on this repository.
   `provider_originated_tool_request_executes_first_party_tool_and_feeds_result`,
   and the cross-process `serve_executes_ollama_provider_tool_request_envelope`
   E2E with an Ollama-compatible stub.
+- Native ChatGPT/OpenAI-compatible tool-call coverage includes
+  `chatgpt_http_provider_parses_native_tool_calls` and the cross-process
+  `serve_executes_chatgpt_native_tool_call` E2E with an OpenAI-compatible stub.
 - Repository-backed IPC state exposes task, audit, model-route, and memory
   inspection routes, persists scheduler jobs, restores them at startup, and all
   IPC states expose `/plugins/manifests` for deterministic first-party plugin

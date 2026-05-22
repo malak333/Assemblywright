@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::time::Duration;
 
+use crate::plugin::{EchoPlugin, InProcessPlugin, PluginManifest, StatusPlugin};
 use crate::router::{ModelProvider as RoutedModelProvider, ModelRouteRecord};
 use crate::types::{JarvisError, JarvisResult};
 
@@ -695,7 +696,7 @@ impl ChatGptHttpModel {
                 "messages": [
                     {
                         "role": "system",
-                        "content": "You are Jarvis. Use only the redacted context supplied by the route guardrail. Do not request secrets or claim access to hidden local state. If a first-party tool is needed, reply only with JSON: {\"message\":\"short reason\",\"complete\":false,\"tool_requests\":[{\"plugin_id\":\"fake_status\",\"action\":\"status\",\"input\":{}}]}."
+                        "content": "You are Jarvis. Use only the redacted context supplied by the route guardrail. Do not request secrets or claim access to hidden local state. Prefer the provided first-party tools when a tool is needed. If native tool calls are unavailable, reply only with JSON: {\"message\":\"short reason\",\"complete\":false,\"tool_requests\":[{\"plugin_id\":\"fake_status\",\"action\":\"status\",\"input\":{}}]}."
                     },
                     {
                         "role": "user",
@@ -703,6 +704,8 @@ impl ChatGptHttpModel {
                     }
                 ],
                 "temperature": 0.2,
+                "tools": openai_first_party_tools(),
+                "tool_choice": "auto",
             }))
             .send()
             .await
@@ -738,12 +741,34 @@ impl ChatGptHttpModel {
                 )
             })?;
 
-        let raw_message = body
+        let message = body
             .choices
             .first()
-            .map(|choice| choice.message.content.trim().to_string())
-            .unwrap_or_default();
-        if raw_message.is_empty() {
+            .map(|choice| choice.message.clone())
+            .ok_or_else(|| {
+                chatgpt_error(
+                    "provider returned no choices",
+                    &self.safe_endpoint(),
+                    self.timeout,
+                    None,
+                )
+            })?;
+        let tool_requests =
+            parse_openai_native_tool_calls(&message.tool_calls).map_err(|error| {
+                chatgpt_error(
+                    "provider returned invalid native tool calls",
+                    &self.safe_endpoint(),
+                    self.timeout,
+                    Some(error.to_string()),
+                )
+            })?;
+        let raw_message = message
+            .content
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if raw_message.is_empty() && tool_requests.is_empty() {
             return Err(chatgpt_error(
                 "provider returned an empty response",
                 &self.safe_endpoint(),
@@ -751,14 +776,22 @@ impl ChatGptHttpModel {
                 None,
             ));
         }
-        let envelope = parse_provider_response_envelope(&raw_message).map_err(|error| {
-            chatgpt_error(
-                "provider returned an invalid tool-call envelope",
-                &self.safe_endpoint(),
-                self.timeout,
-                Some(error.to_string()),
-            )
-        })?;
+        let envelope = if tool_requests.is_empty() {
+            parse_provider_response_envelope(&raw_message).map_err(|error| {
+                chatgpt_error(
+                    "provider returned an invalid tool-call envelope",
+                    &self.safe_endpoint(),
+                    self.timeout,
+                    Some(error.to_string()),
+                )
+            })?
+        } else {
+            ProviderResponseEnvelope {
+                message: raw_message,
+                complete: false,
+                tool_requests,
+            }
+        };
 
         Ok(ModelResponse {
             route: ModelRoute::chatgpt(
@@ -787,9 +820,25 @@ struct OpenAiChatChoice {
     message: OpenAiChatMessage,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct OpenAiChatMessage {
-    content: String,
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    tool_calls: Vec<OpenAiToolCall>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct OpenAiToolCall {
+    #[serde(rename = "type")]
+    call_type: String,
+    function: OpenAiToolCallFunction,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct OpenAiToolCallFunction {
+    name: String,
+    arguments: String,
 }
 
 fn chatgpt_prompt(request: &ModelRequest, route: &ModelRouteRecord) -> JarvisResult<String> {
@@ -928,6 +977,69 @@ fn parse_provider_tool_requests(value: Option<&Value>) -> JarvisResult<Vec<Model
     Ok(parsed)
 }
 
+fn parse_openai_native_tool_calls(calls: &[OpenAiToolCall]) -> JarvisResult<Vec<ModelToolRequest>> {
+    let mut parsed = Vec::with_capacity(calls.len());
+    for call in calls {
+        if call.call_type != "function" {
+            return Err(JarvisError::Model(
+                "OpenAI tool_calls entries must be function calls".to_string(),
+            ));
+        }
+        let (plugin_id, action) = parse_openai_function_name(&call.function.name)?;
+        let arguments = call.function.arguments.trim();
+        let input = if arguments.is_empty() {
+            json!({})
+        } else {
+            serde_json::from_str::<Value>(arguments).map_err(|_| {
+                JarvisError::Model("OpenAI function arguments must be valid JSON".to_string())
+            })?
+        };
+        parsed.push(ModelToolRequest::new(plugin_id, action, input));
+    }
+
+    Ok(parsed)
+}
+
+fn parse_openai_function_name(name: &str) -> JarvisResult<(&str, &str)> {
+    let name = name.trim();
+    let (plugin_id, action) = name.split_once("__").ok_or_else(|| {
+        JarvisError::Model(
+            "OpenAI function names must use first-party plugin__action form".to_string(),
+        )
+    })?;
+    if plugin_id.is_empty() || action.is_empty() {
+        return Err(JarvisError::Model(
+            "OpenAI function names require plugin and action".to_string(),
+        ));
+    }
+    Ok((plugin_id, action))
+}
+
+fn openai_first_party_tools() -> Vec<Value> {
+    [EchoPlugin.manifest(), StatusPlugin.manifest()]
+        .into_iter()
+        .flat_map(openai_tools_for_manifest)
+        .collect()
+}
+
+fn openai_tools_for_manifest(manifest: PluginManifest) -> Vec<Value> {
+    let plugin_id = manifest.id;
+    manifest
+        .actions
+        .into_iter()
+        .map(|action| {
+            json!({
+                "type": "function",
+                "function": {
+                    "name": format!("{}__{}", plugin_id, action.name),
+                    "description": action.description,
+                    "parameters": action.input_schema.schema,
+                }
+            })
+        })
+        .collect()
+}
+
 fn ollama_error(
     summary: &str,
     safe_endpoint: &str,
@@ -1024,6 +1136,30 @@ mod tests {
     use axum::{Json, Router};
     use serde_json::Value;
     use tokio::net::TcpListener;
+
+    fn assert_array_contains(value: &Value, field: &str, expected: &str) {
+        let items = value.as_array().expect("array");
+        assert!(
+            items
+                .iter()
+                .any(|item| item.get(field).and_then(Value::as_str) == Some(expected)),
+            "{value}"
+        );
+    }
+
+    fn assert_array_contains_nested(value: &Value, path: &[&str], expected: &str) {
+        let items = value.as_array().expect("array");
+        assert!(
+            items.iter().any(|item| {
+                let mut current = item;
+                for field in path {
+                    current = &current[*field];
+                }
+                current.as_str() == Some(expected)
+            }),
+            "{value}"
+        );
+    }
 
     #[test]
     fn provider_config_parses_ollama_env_without_chatgpt() {
@@ -1304,6 +1440,13 @@ mod tests {
     async fn chatgpt_http_provider_posts_redacted_openai_compatible_request() {
         async fn chat(Json(body): Json<Value>) -> Json<Value> {
             assert_eq!(body["model"], "gpt-test");
+            assert_array_contains(&body["tools"], "type", "function");
+            assert_array_contains_nested(
+                &body["tools"],
+                &["function", "name"],
+                "fake_status__status",
+            );
+            assert_eq!(body["tool_choice"], "auto");
             let messages = body["messages"].as_array().expect("messages");
             assert_eq!(messages[0]["role"], "system");
             let user_content = messages[1]["content"].as_str().expect("user content");
@@ -1436,6 +1579,74 @@ mod tests {
         assert_eq!(response.tool_requests.len(), 1);
         assert_eq!(response.tool_requests[0].plugin_id, "fake_status");
         assert_eq!(response.tool_requests[0].action, "status");
+    }
+
+    #[tokio::test]
+    async fn chatgpt_http_provider_parses_native_tool_calls() {
+        async fn chat(Json(body): Json<Value>) -> Json<Value> {
+            assert_array_contains_nested(&body["tools"], &["function", "name"], "fake_echo__echo");
+            Json(json!({
+                "choices": [
+                    {
+                        "message": {
+                            "content": null,
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "fake_echo__echo",
+                                        "arguments": "{\"message\":\"native call\"}"
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }))
+        }
+
+        let app = Router::new().route("/v1/chat/completions", post(chat));
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let address = listener.local_addr().expect("address");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("test server");
+        });
+
+        let config = ChatGptProviderConfig {
+            enabled: true,
+            model: "gpt-test".to_string(),
+            base_url: format!("http://{address}/v1"),
+            api_key: Some("test-token-value".to_string()),
+            requires_approval: true,
+            timeout_ms: 2_000,
+        };
+        let model = ChatGptHttpModel::from_config(&config).expect("chatgpt model");
+        let route = test_chatgpt_route(&config, "workspace context");
+
+        let response = model
+            .execute_guarded(
+                ModelRequest {
+                    task_id: route.task_id.expect("task id"),
+                    session_id: uuid::Uuid::new_v4(),
+                    user_input: "use native tool".to_string(),
+                    step_index: 0,
+                    tool_results: Vec::new(),
+                },
+                &route,
+            )
+            .await
+            .expect("chatgpt response");
+
+        assert_eq!(response.message, "");
+        assert!(!response.complete);
+        assert_eq!(response.tool_requests.len(), 1);
+        assert_eq!(response.tool_requests[0].plugin_id, "fake_echo");
+        assert_eq!(response.tool_requests[0].action, "echo");
+        assert_eq!(
+            response.tool_requests[0].input,
+            json!({ "message": "native call" })
+        );
     }
 
     #[tokio::test]

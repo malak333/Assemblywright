@@ -22,8 +22,8 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   `ModelExecutor` (`FakeLocalModel` by default, Ollama-compatible HTTP or
   ChatGPT/OpenAI-compatible HTTP only when explicitly enabled), records
   route/policy/plugin audit evidence for deterministic first-party plugin
-  commands, and supports bounded fake-model plus strict provider-envelope
-  planned first-party tool execution
+  commands, and supports bounded fake-model, strict provider-envelope, and
+  native ChatGPT/OpenAI-compatible first-party tool execution
   before any broader assistant claim.
 - Confirm the current-vs-target implementation phase table is up to date before
   using any production-readiness language. Release notes may claim foundation
@@ -140,8 +140,9 @@ stage or when a PR needs focused evidence for one ownership slice.
   first-party command scaffolds persist inspectable pending approvals and record
   CLI/IPC grant or denial decisions without executing side effects. Bounded
   fake-model first-party tool calls, strict Ollama-compatible and
-  ChatGPT/OpenAI-compatible provider-envelope first-party tool requests, and
-  provider request/error behavior are covered in focused tests; selected
+  ChatGPT/OpenAI-compatible provider-envelope first-party tool requests, native
+  ChatGPT/OpenAI-compatible first-party `tool_calls`, and provider
+  request/error behavior are covered in focused tests; selected
   provider failures must return structured failed command responses with
   redacted `model_step_failed` audit and route evidence. Malformed provider
   tool envelopes must fail with redacted diagnostics, and provider-originated
