@@ -379,7 +379,8 @@ permission policy review items, redacted scheduler trigger review items, fail-cl
 subprocess enablement, installed subprocess progress-frame response/audit
 redaction, repository-backed activity summary status/recent-audit
 evidence, bounded activity event streaming over server-sent events, redacted
-scheduler attention handoff, scheduler due-job
+scheduler attention handoff, Swift bounded activity event parsing/model
+coverage, scheduler due-job
 execution/reschedule audit evidence, redacted proactive scheduler policy
 audit evidence before due command submission, explicit and opt-in startup
 stale-running scheduler recovery after persisted running jobs survive restart,

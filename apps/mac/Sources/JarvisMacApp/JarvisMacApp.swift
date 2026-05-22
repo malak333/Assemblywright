@@ -1095,8 +1095,23 @@ struct RunManagementView: View {
         ) {
             HSplitView {
                 List {
+                    Button {
+                        Task { await model.watchActivity() }
+                    } label: {
+                        Label("Watch Events", systemImage: "dot.radiowaves.left.and.right")
+                    }
+                    .disabled(model.isLoading)
+
                     if let activitySummary = model.activitySummary {
                         RunActivitySummaryView(summary: activitySummary)
+                    }
+
+                    if !model.activityEvents.isEmpty {
+                        Section("Recent Event Stream") {
+                            ForEach(model.activityEvents) { event in
+                                RunActivityEventView(event: event)
+                            }
+                        }
                     }
 
                     ForEach(model.tasks) { task in
@@ -1134,6 +1149,37 @@ struct RunManagementView: View {
                 .frame(minWidth: 320)
             }
         }
+    }
+}
+
+struct RunActivityEventView: View {
+    let event: JarvisActivityEvent
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 8) {
+                Label(event.event, systemImage: event.error == nil ? "waveform.path" : "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(event.error == nil ? Color.secondary : Color.orange)
+                Spacer()
+                Text("#\(event.sequence + 1)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let summary = event.summary {
+                Text("\(summary.activeTaskCount) active | \(summary.taskCount) tasks | \(summary.auditEntryCount) audit")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            } else if let error = event.error {
+                Text(error)
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(.vertical, 4)
     }
 }
 

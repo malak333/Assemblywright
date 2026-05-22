@@ -311,6 +311,9 @@ Still future gates for production distribution:
 - Activity view shows current task state, active/status counts, and recent
   audit progress through `/activity/summary`.
 - CLI activity watch receives bounded `/activity/events` progress events.
+- Swift Runs tab can request a bounded `/activity/events` stream, render recent
+  activity-summary/error frames, and update the visible activity summary without
+  starting an unbounded background listener.
 - Memory tab can create, edit mutable fields, mark reviewed, soft-delete,
   restore, and include deleted items through the supervised core IPC contract.
 - Audit entry is written for the command.
