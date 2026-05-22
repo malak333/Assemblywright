@@ -157,7 +157,10 @@ Local plugin install is metadata-only:
 stores a disabled registry record with local provenance hashes when repository
 backing is enabled. Use `jarvis plugins verify-installed <id>` before enabling
 local subprocess execution; enablement fails closed unless the manifest and
-subprocess command still match the install snapshot. Use
+subprocess command still match the install snapshot. Non-network subprocess
+plugins use the default `jarvis plugins enable-installed <id>` grant; plugins
+with network-declaring actions must use
+`jarvis plugins enable-installed <id> --grant subprocess_stdio_network`. Use
 `jarvis plugins verify-publisher <id> --trusted-origin "<manifest author>"`
 only after provenance matches to mark the manifest author claim as
 operator-reviewed. For signed manifests, use
@@ -167,8 +170,10 @@ explicit trusted key, but still does not prove marketplace approval or malware
 safety.
 Network-capable plugin actions must request `network` and declare
 `network_access.mode: declared_hosts` with exact plain-hostname
-`allowed_hosts`; policy review surfaces them as `network_plugin_action` items.
-This is manifest governance, not OS-level network sandboxing.
+`allowed_hosts`; policy review surfaces them as `network_plugin_action` items,
+and executable installed plugins with those actions require
+`subprocess_stdio_network`. This is runtime grant gating plus manifest
+governance, not OS-level network sandboxing or host-level egress filtering.
 Background scheduler execution is opt-in on `jarvis serve`; it does not start
 for default smoke or manual inspection sessions unless `--scheduler-background`
 is passed.

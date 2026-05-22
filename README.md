@@ -41,15 +41,18 @@ blocks restricted data and sends only redacted route context. Local plugin
 installation stores validated manifest metadata disabled by default and captures
 a local manifest/subprocess hash snapshot. Executable local subprocess plugins
 require the snapshot to verify as unchanged plus an explicit
-`subprocess_stdio` grant, and still run only through the constrained JSON
-stdin/stdout boundary. Publisher-origin claims can be operator-pinned only
+`subprocess_stdio` grant, or `subprocess_stdio_network` when an action declares
+network access, and still run only through the constrained JSON stdin/stdout
+boundary. Publisher-origin claims can be operator-pinned only
 after local provenance matches the install snapshot; this is an auditable
 local review step. Manifests can also carry an Ed25519 publisher signature,
 which Jarvis verifies only against an explicit trusted public key after local
 provenance matches; this is not marketplace trust or malware analysis.
 Network-capable plugin actions must declare exact allowed hosts in the manifest
-and appear in policy review; this is manifest governance, not an OS-level
-network sandbox.
+and appear in policy review; Jarvis also fails closed unless executable
+network-capable installed plugins are enabled with `subprocess_stdio_network`.
+This is runtime grant gating and manifest governance, not an OS-level network
+sandbox or host-level egress filter.
 
 ## Production Work Protocol
 

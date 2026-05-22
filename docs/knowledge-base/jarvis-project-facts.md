@@ -66,7 +66,8 @@ These notes capture durable facts for future agents working on this repository.
   validate manifest/action/input schema and audit `side_effect_executed: false`
   without loading or executing plugin code. `local_subprocess` manifests can be
   explicitly enabled through `/plugins/installed/:id/execution` or
-  `plugins enable-installed` with `execution_grant: subprocess_stdio` after
+  `plugins enable-installed` with `execution_grant: subprocess_stdio`, or
+  `subprocess_stdio_network` for network-declaring actions, after
   `plugins verify-installed` confirms `matches_install_snapshot`; only then can
   they run through the constrained subprocess-stdio JSON boundary.
 - Installed plugin publisher-origin claims can be operator-pinned through
@@ -91,8 +92,11 @@ These notes capture durable facts for future agents working on this repository.
   declare `network_access.mode: declared_hosts` and exact plain-hostname
   `allowed_hosts`. Invalid host declarations fail manifest validation, and
   `/permissions/policy-review` emits `network_plugin_action` items for installed
-  plugins with declared network access. This is manifest governance and review
-  evidence, not OS-level network sandboxing.
+  plugins with declared network access. Executable installed plugins with
+  network-declaring actions fail closed unless enabled with
+  `subprocess_stdio_network`. This is runtime grant gating plus manifest
+  governance and review evidence, not OS-level network sandboxing or host-level
+  egress filtering.
 - Repository-backed IPC exposes `/permissions/grants`, and the CLI exposes
   `jarvis permissions grants`, as a read-only permission-center summary. It
   combines approval status counts/history, high-risk pending approval count,
@@ -340,8 +344,10 @@ These notes capture durable facts for future agents working on this repository.
   expanded into arbitrary local code execution. The current executable boundary
   is limited to `local_subprocess` manifests that declare JSON stdin/stdout,
   use a command canonicalized under `source_path`, are explicitly enabled with
-  `execution_grant: subprocess_stdio`, validate input and output schemas, run
-  with the declared timeout, and emit audit evidence including whether the
-  subprocess started. Any broader executable path needs a stronger sandbox,
+  `execution_grant: subprocess_stdio` for non-network actions or
+  `subprocess_stdio_network` for network-declaring actions, validate input and
+  output schemas, run with the declared timeout, and emit audit evidence
+  including whether the subprocess started. Any broader executable path needs a
+  stronger sandbox,
   explicit grant state beyond `metadata_only`, policy checks,
   timeout/cancellation behavior, and E2E audit coverage.

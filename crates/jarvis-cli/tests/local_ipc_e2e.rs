@@ -643,6 +643,143 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         true
     );
 
+    let network_subprocess_plugin_dir = temp_dir.path().join("network-subprocess-plugin");
+    fs::create_dir(&network_subprocess_plugin_dir).expect("create network subprocess plugin dir");
+    let network_subprocess_plugin_dir = network_subprocess_plugin_dir
+        .canonicalize()
+        .expect("canonical network subprocess plugin dir");
+    write_executable_plugin_script(&network_subprocess_plugin_dir);
+    let network_subprocess_manifest_path = network_subprocess_plugin_dir.join("jarvis-plugin.json");
+    fs::write(
+        &network_subprocess_manifest_path,
+        json!({
+            "manifest_schema_version": 1,
+            "id": "network_subprocess_e2e",
+            "name": "Network Subprocess E2E Plugin",
+            "version": "0.1.0",
+            "source": "local_subprocess",
+            "author": "Jarvis E2E",
+            "source_path": network_subprocess_plugin_dir.display().to_string(),
+            "subprocess": {
+                "command": "plugin-runner.py",
+                "args": [],
+                "stdin": "json",
+                "stdout": "json"
+            },
+            "actions": [{
+                "name": "inspect",
+                "description": "Validate explicit network execution grant.",
+                "permissions": ["read_workspace", "network"],
+                "risk_tier": "low",
+                "input_schema": {
+                    "schema": {
+                        "type": "object",
+                        "properties": { "path": { "type": "string" } },
+                        "required": ["path"],
+                        "additionalProperties": false
+                    }
+                },
+                "output_schema": {
+                    "schema": {
+                        "type": "object",
+                        "properties": { "path": { "type": "string" } },
+                        "required": ["path"],
+                        "additionalProperties": false
+                    }
+                },
+                "proactive": false,
+                "memory_access": "none",
+                "model_access": "none",
+                "network_access": {
+                    "mode": "declared_hosts",
+                    "allowed_hosts": ["api.jarvis.local"]
+                },
+                "audit_fields": ["path"],
+                "timeout": { "timeout_ms": 5000, "on_timeout": "cancel" },
+                "cancellation": "cooperative"
+            }]
+        })
+        .to_string(),
+    )
+    .expect("write network subprocess plugin manifest");
+
+    let network_subprocess_installed = run_cli_json([
+        "plugins",
+        "install",
+        network_subprocess_manifest_path
+            .to_str()
+            .expect("network manifest path"),
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(network_subprocess_installed["id"], "network_subprocess_e2e");
+    assert_eq!(network_subprocess_installed["execution_enabled"], false);
+    assert_eq!(
+        network_subprocess_installed["execution_grant"],
+        "metadata_only"
+    );
+
+    let network_subprocess_verified = run_cli_json([
+        "plugins",
+        "verify-installed",
+        "network_subprocess_e2e",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(
+        network_subprocess_verified["provenance"]["integrity_status"],
+        "matches_install_snapshot"
+    );
+
+    let network_subprocess_default_enable = run_cli_failure([
+        "plugins",
+        "enable-installed",
+        "network_subprocess_e2e",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert!(
+        network_subprocess_default_enable.contains("requires subprocess_stdio_network grant"),
+        "{network_subprocess_default_enable}"
+    );
+
+    let network_subprocess_enabled = run_cli_json([
+        "plugins",
+        "enable-installed",
+        "network_subprocess_e2e",
+        "--grant",
+        "subprocess_stdio_network",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(network_subprocess_enabled["execution_enabled"], true);
+    assert_eq!(
+        network_subprocess_enabled["execution_grant"],
+        "subprocess_stdio_network"
+    );
+
+    let network_subprocess_run = run_cli_json([
+        "plugins",
+        "run-installed",
+        "network_subprocess_e2e",
+        "inspect",
+        "--input",
+        r#"{"path":"README.md"}"#,
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(network_subprocess_run["status"], "completed");
+    assert_eq!(
+        network_subprocess_run["execution_grant"],
+        "subprocess_stdio_network"
+    );
+    assert_eq!(network_subprocess_run["output"]["path"], "README.md");
+    assert_eq!(
+        network_subprocess_run["audit_entry"]["payload"]["action_requires_network_grant"],
+        true
+    );
+    assert_eq!(network_subprocess_run["side_effect_executed"], true);
+
     let unsafe_manifest_path = subprocess_plugin_dir.join("unsafe-plugin.json");
     fs::write(
         &unsafe_manifest_path,
@@ -1030,7 +1167,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
 
     let diagnostics = run_cli_json(["diagnostics", "export", "--endpoint", endpoint.as_str()]);
     assert_eq!(diagnostics["repository_backed"], true);
-    assert_eq!(diagnostics["schema_version"], 8);
+    assert_eq!(diagnostics["schema_version"], 9);
     assert_eq!(
         diagnostics["health"]["contract"]["name"],
         "jarvis.local-ipc"
@@ -1229,10 +1366,20 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     );
     assert_array_contains(
         &persisted_grants["installed_plugin_grants"],
+        "plugin_id",
+        "network_subprocess_e2e",
+    );
+    assert_array_contains(
+        &persisted_grants["installed_plugin_grants"],
+        "execution_grant",
+        "subprocess_stdio_network",
+    );
+    assert_array_contains(
+        &persisted_grants["installed_plugin_grants"],
         "integrity_status",
         "matches_install_snapshot",
     );
-    assert_eq!(persisted_grants["executable_installed_plugin_count"], 1);
+    assert_eq!(persisted_grants["executable_installed_plugin_count"], 2);
     assert_eq!(persisted_grants["unverified_installed_plugin_count"], 0);
     assert_eq!(persisted_grants["side_effects_require_approval"], true);
 
@@ -1244,7 +1391,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     ]);
     assert_eq!(
         persisted_policy_review["executable_installed_plugin_count"],
-        1
+        2
     );
     assert_eq!(
         persisted_policy_review["unverified_installed_plugin_count"],
@@ -1275,6 +1422,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         restarted_endpoint.as_str(),
     ]);
     assert_array_contains(&persisted_installed_plugins, "id", "local_e2e_plugin");
+    assert_array_contains(&persisted_installed_plugins, "id", "network_subprocess_e2e");
 
     let persisted_diagnostics = run_cli_json([
         "diagnostics",

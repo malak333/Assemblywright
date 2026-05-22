@@ -290,7 +290,9 @@ local provenance matches; this is audit-backed trusted-key verification, not
 marketplace approval or malware analysis.
 Network-capable actions must request the `network` permission and declare
 plain-hostname allowlists in `network_access`; policy review surfaces those
-actions, but OS-level network sandbox enforcement remains target architecture.
+actions, and executable installed plugins with network-declaring actions must
+be enabled with the explicit `subprocess_stdio_network` grant. OS-level network
+sandbox enforcement and host-level egress filtering remain target architecture.
 The product still lacks
 signed/notarized release evidence, live microphone and audio-output validation,
 marketplace/WASM/OS-network-sandbox plugin trust boundaries, richer
