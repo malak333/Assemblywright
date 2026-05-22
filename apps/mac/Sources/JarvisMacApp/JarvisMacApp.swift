@@ -297,6 +297,11 @@ struct MemoryManagerView: View {
                 memoryForm
                     .padding(.horizontal)
 
+                if let classification = model.classification {
+                    MemoryClassificationSummaryView(summary: classification)
+                        .padding(.horizontal)
+                }
+
                 HStack {
                     Toggle("Include deleted", isOn: $includeDeleted)
                         .onChange(of: includeDeleted) { _, newValue in
@@ -461,6 +466,40 @@ struct MemoryManagerView: View {
         value = ""
         provenance = "manual"
         sensitivity = "workspace"
+    }
+}
+
+struct MemoryClassificationSummaryView: View {
+    let summary: JarvisMemoryClassificationSummary
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 12) {
+                Label("\(summary.activeCount) active", systemImage: "tray.full")
+                Label("\(summary.unreviewedActiveCount) unreviewed", systemImage: "exclamationmark.circle")
+                Label("\(summary.sensitiveActiveCount) sensitive", systemImage: "lock.shield")
+                if summary.includeDeleted {
+                    Label("\(summary.deletedCount) deleted", systemImage: "archivebox")
+                }
+            }
+            .font(.caption)
+
+            Text(classificationText)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+        }
+    }
+
+    private var classificationText: String {
+        let sensitivity = summary.bySensitivity
+            .map { "\($0.label) \($0.activeCount)/\($0.count)" }
+            .joined(separator: ", ")
+        let categories = summary.byCategory
+            .prefix(6)
+            .map { "\($0.label) \($0.activeCount)/\($0.count)" }
+            .joined(separator: ", ")
+        return "sensitivity: \(sensitivity.isEmpty ? "none" : sensitivity) | categories: \(categories.isEmpty ? "none" : categories)"
     }
 }
 

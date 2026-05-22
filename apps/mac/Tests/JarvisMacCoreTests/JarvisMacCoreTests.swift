@@ -428,6 +428,8 @@ struct JarvisMacCoreTests {
                     return (response, Data("[]".utf8))
                 }
                 return (response, memoryItemJSON(id: memoryId))
+            case "/memory/classification":
+                return (response, memoryClassificationJSON())
             case "/memory/\(memoryId.uuidString)":
                 return (response, memoryItemJSON(id: memoryId))
             case "/memory/\(memoryId.uuidString)/review":
@@ -453,6 +455,7 @@ struct JarvisMacCoreTests {
 
         _ = try await client.contract()
         _ = try await client.listMemoryItems(includeDeleted: true)
+        _ = try await client.memoryClassification(includeDeleted: true)
         _ = try await client.createMemoryItem(
             JarvisCreateMemoryItemRequest(
                 category: "release",
@@ -489,6 +492,7 @@ struct JarvisMacCoreTests {
         #expect(requests.map(\.method) == [
             "GET",
             "GET",
+            "GET",
             "POST",
             "GET",
             "PATCH",
@@ -504,6 +508,7 @@ struct JarvisMacCoreTests {
         #expect(requests.map(\.path) == [
             "/contract",
             "/memory",
+            "/memory/classification",
             "/memory",
             "/memory/\(memoryId.uuidString)",
             "/memory/\(memoryId.uuidString)",
@@ -516,9 +521,9 @@ struct JarvisMacCoreTests {
             "/scheduler/jobs/\(jobId.uuidString)",
             "/emergency-pause"
         ])
-        #expect(requests[2].body?["key"] as? String == "release-gate")
-        #expect(requests[4].body?["value"] as? String == "preview then sync")
-        #expect(requests[10].body?["command"] as? String == "status check")
+        #expect(requests[3].body?["key"] as? String == "release-gate")
+        #expect(requests[5].body?["value"] as? String == "preview then sync")
+        #expect(requests[11].body?["command"] as? String == "status check")
     }
 
     @Test("Management payloads decode tasks and audit list")
@@ -596,6 +601,23 @@ struct JarvisMacCoreTests {
         #expect(items.first?.sensitivity == "workspace")
         #expect(items.first?.reviewedAt == "2026-05-20T12:00:02Z")
         #expect(items.first?.deletedAt == nil)
+    }
+
+    @Test("Memory classification summary decodes sensitivity and category counts")
+    func decodesMemoryClassificationSummary() throws {
+        let summary = try JSONDecoder().decode(
+            JarvisMemoryClassificationSummary.self,
+            from: memoryClassificationJSON()
+        )
+
+        #expect(summary.includeDeleted)
+        #expect(summary.totalCount == 2)
+        #expect(summary.activeCount == 1)
+        #expect(summary.deletedCount == 1)
+        #expect(summary.unreviewedActiveCount == 1)
+        #expect(summary.sensitiveActiveCount == 1)
+        #expect(summary.bySensitivity.first?.label == "private")
+        #expect(summary.byCategory.first?.label == "release")
     }
 
     @Test("Memory mutation requests encode Rust IPC names")
@@ -1294,6 +1316,8 @@ struct JarvisMacCoreTests {
         await model.refresh()
         #expect(model.items.map(\.id) == [active.id])
         #expect(client.includeDeletedMemoryRequests == [false])
+        #expect(model.classification?.activeCount == 1)
+        #expect(model.classification?.sensitiveActiveCount == 1)
 
         await model.refresh(includeDeleted: true)
         #expect(model.includeDeleted)
@@ -1675,6 +1699,41 @@ struct JarvisMacCoreTests {
               "updated_at": "2026-05-20T12:00:01Z",
               "reviewed_at": null,
               "deleted_at": null
+            }
+            """.utf8
+        )
+    }
+
+    private func memoryClassificationJSON() -> Data {
+        Data(
+            """
+            {
+              "generated_at": "2026-05-20T12:00:02Z",
+              "include_deleted": true,
+              "total_count": 2,
+              "active_count": 1,
+              "deleted_count": 1,
+              "reviewed_count": 0,
+              "unreviewed_active_count": 1,
+              "sensitive_active_count": 1,
+              "by_sensitivity": [
+                {
+                  "label": "private",
+                  "count": 1,
+                  "active_count": 1,
+                  "deleted_count": 0,
+                  "unreviewed_active_count": 1
+                }
+              ],
+              "by_category": [
+                {
+                  "label": "release",
+                  "count": 2,
+                  "active_count": 1,
+                  "deleted_count": 1,
+                  "unreviewed_active_count": 1
+                }
+              ]
             }
             """.utf8
         )
@@ -2138,6 +2197,44 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
             return memoryItems
         }
         return memoryItems.filter { $0.deletedAt == nil }
+    }
+
+    func memoryClassification(includeDeleted: Bool) async throws -> JarvisMemoryClassificationSummary {
+        try JSONDecoder().decode(
+            JarvisMemoryClassificationSummary.self,
+            from: Data(
+                """
+                {
+                  "generated_at": "2026-05-20T12:00:02Z",
+                  "include_deleted": true,
+                  "total_count": 2,
+                  "active_count": 1,
+                  "deleted_count": 1,
+                  "reviewed_count": 0,
+                  "unreviewed_active_count": 1,
+                  "sensitive_active_count": 1,
+                  "by_sensitivity": [
+                    {
+                      "label": "private",
+                      "count": 1,
+                      "active_count": 1,
+                      "deleted_count": 0,
+                      "unreviewed_active_count": 1
+                    }
+                  ],
+                  "by_category": [
+                    {
+                      "label": "release",
+                      "count": 2,
+                      "active_count": 1,
+                      "deleted_count": 1,
+                      "unreviewed_active_count": 1
+                    }
+                  ]
+                }
+                """.utf8
+            )
+        )
     }
 
     func createMemoryItem(_ request: JarvisCreateMemoryItemRequest) async throws -> JarvisMemoryItem {

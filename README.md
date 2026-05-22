@@ -12,8 +12,9 @@ packaged app.
 It also includes the first buildable Swift/SwiftUI Mac shell scaffold under
 `apps/mac`, with a tested IPC client, command-console state model,
 activity/audit panel for command evidence, memory create/update/review/delete
-and restore management, provenance-aware permission/grant inspection,
-degraded-mode handling, and a core supervisor abstraction.
+and restore management, memory classification summary, provenance-aware
+permission/grant inspection, degraded-mode handling, and a core supervisor
+abstraction.
 
 ## Current Scope
 

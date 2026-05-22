@@ -51,6 +51,7 @@ pub use storage::{
     EmergencyPauseState, InstalledPluginRecord, MemoryItem, NewMemoryItem, NewPendingApproval,
     PendingApproval, SqliteRepository,
 };
+pub use storage::{MemoryClassificationCount, MemoryClassificationSummary};
 pub use types::{
     ApprovalStatus, AuditEntry, JarvisError, JarvisResult, RiskTier, Sensitivity, TaskRecord,
     TaskStatus,

@@ -371,6 +371,50 @@ public struct JarvisCreateMemoryItemRequest: Encodable, Equatable, Sendable {
     }
 }
 
+public struct JarvisMemoryClassificationSummary: Decodable, Equatable, Sendable {
+    public var generatedAt: String
+    public var includeDeleted: Bool
+    public var totalCount: Int
+    public var activeCount: Int
+    public var deletedCount: Int
+    public var reviewedCount: Int
+    public var unreviewedActiveCount: Int
+    public var sensitiveActiveCount: Int
+    public var bySensitivity: [JarvisMemoryClassificationCount]
+    public var byCategory: [JarvisMemoryClassificationCount]
+
+    enum CodingKeys: String, CodingKey {
+        case generatedAt = "generated_at"
+        case includeDeleted = "include_deleted"
+        case totalCount = "total_count"
+        case activeCount = "active_count"
+        case deletedCount = "deleted_count"
+        case reviewedCount = "reviewed_count"
+        case unreviewedActiveCount = "unreviewed_active_count"
+        case sensitiveActiveCount = "sensitive_active_count"
+        case bySensitivity = "by_sensitivity"
+        case byCategory = "by_category"
+    }
+}
+
+public struct JarvisMemoryClassificationCount: Decodable, Equatable, Identifiable, Sendable {
+    public var label: String
+    public var count: Int
+    public var activeCount: Int
+    public var deletedCount: Int
+    public var unreviewedActiveCount: Int
+
+    public var id: String { label }
+
+    enum CodingKeys: String, CodingKey {
+        case label
+        case count
+        case activeCount = "active_count"
+        case deletedCount = "deleted_count"
+        case unreviewedActiveCount = "unreviewed_active_count"
+    }
+}
+
 public struct JarvisPluginManifest: Decodable, Equatable, Identifiable, Sendable {
     public var id: String
     public var name: String
@@ -931,6 +975,7 @@ public protocol JarvisCoreClient: Sendable {
     func task(id: UUID) async throws -> JarvisTask
     func listAuditEntries(taskId: UUID?) async throws -> [JarvisAuditEntry]
     func listMemoryItems(includeDeleted: Bool) async throws -> [JarvisMemoryItem]
+    func memoryClassification(includeDeleted: Bool) async throws -> JarvisMemoryClassificationSummary
     func createMemoryItem(_ request: JarvisCreateMemoryItemRequest) async throws -> JarvisMemoryItem
     func memoryItem(id: UUID) async throws -> JarvisMemoryItem
     func updateMemoryItem(id: UUID, request: JarvisMemoryMutationRequest) async throws -> JarvisMemoryItem
@@ -1006,6 +1051,11 @@ public final class JarvisIPCClient: JarvisCoreClient {
 
     public func listMemoryItems(includeDeleted: Bool = false) async throws -> [JarvisMemoryItem] {
         let path = includeDeleted ? "/memory?include_deleted=true" : "/memory"
+        return try await send(path: path, method: "GET", body: Optional<Data>.none)
+    }
+
+    public func memoryClassification(includeDeleted: Bool = false) async throws -> JarvisMemoryClassificationSummary {
+        let path = includeDeleted ? "/memory/classification?include_deleted=true" : "/memory/classification"
         return try await send(path: path, method: "GET", body: Optional<Data>.none)
     }
 
