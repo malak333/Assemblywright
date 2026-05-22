@@ -186,10 +186,14 @@ These notes capture durable facts for future agents working on this repository.
   validate manifest/action/input schema and audit `side_effect_executed: false`
   without loading or executing plugin code. `local_subprocess` manifests can be
   explicitly enabled through `/plugins/installed/:id/execution` or
-  `plugins enable-installed` with `execution_grant: subprocess_stdio`, or
+  `plugins enable-installed` with an action-scoped grant:
+  `execution_grant: subprocess_stdio` for non-network actions, or
   `subprocess_stdio_network` for network-declaring actions, after
-  `plugins verify-installed` confirms `matches_install_snapshot`; only then can
-  they run through the constrained subprocess-stdio JSON boundary.
+  `plugins verify-installed` confirms `matches_install_snapshot`. The runner
+  treats the network grant as authority only for network-declaring actions, not
+  a superset that can run non-network actions in mixed manifests; only
+  currently granted action classes can run through the constrained
+  subprocess-stdio JSON boundary.
 - Installed plugin publisher-origin claims can be operator-pinned through
   `/plugins/installed/:id/publisher/verify` or `plugins verify-publisher`.
   Verification requires the stored provenance to already match the install
@@ -214,9 +218,10 @@ These notes capture durable facts for future agents working on this repository.
   `/permissions/policy-review` emits `network_plugin_action` items for installed
   plugins with declared network access. Executable installed plugins with
   network-declaring actions fail closed unless enabled with
-  `subprocess_stdio_network`. This is runtime grant gating plus manifest
-  governance and review evidence, not OS-level network sandboxing or host-level
-  egress filtering.
+  `subprocess_stdio_network`; non-network actions fail closed while the
+  installed plugin is enabled under that network grant. This is action-scoped
+  runtime grant gating plus manifest governance and review evidence, not
+  OS-level network sandboxing or host-level egress filtering.
 - `./scripts/release-plugin-trust-qa.sh` keeps the plugin trust release gate
   explicit. `--check` validates repo-owned plugin trust prerequisites and
   prints the marketplace review, malware scan, signed publisher policy, OS
@@ -668,6 +673,8 @@ These notes capture durable facts for future agents working on this repository.
   `subprocess_stdio_network` for network-declaring actions, validate input and
   output schemas, run with the declared timeout, clear inherited environment
   variables, and emit audit evidence including whether the subprocess started.
+  These grants are action-scoped; a network grant does not execute plain
+  non-network actions in mixed manifests.
   Subprocess stderr may contain bounded progress frames, but raw stderr remains
   redacted from response and audit payloads. Any broader executable path or
   real-time plugin progress

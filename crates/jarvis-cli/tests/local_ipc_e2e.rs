@@ -1739,7 +1739,8 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         endpoint.as_str(),
     ]);
     assert!(
-        network_subprocess_default_enable.contains("requires subprocess_stdio_network grant"),
+        network_subprocess_default_enable
+            .contains("subprocess_stdio grant requires at least one non-network action"),
         "{network_subprocess_default_enable}"
     );
 
