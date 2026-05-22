@@ -1023,6 +1023,10 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         subprocess_run["audit_entry"]["payload"]["sandbox_process_started"],
         true
     );
+    assert_eq!(
+        subprocess_run["audit_entry"]["payload"]["subprocess_started"],
+        true
+    );
     assert_eq!(subprocess_run["progress_events"][0]["sequence"], 1);
     assert_eq!(subprocess_run["progress_events"][0]["stage"], "prepare");
     assert_eq!(
@@ -1126,6 +1130,10 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         noisy_stdout_run["audit_entry"]["payload"]["sandbox_process_started"],
         true
     );
+    assert_eq!(
+        noisy_stdout_run["audit_entry"]["payload"]["subprocess_started"],
+        true
+    );
 
     let noisy_stderr_plugin_dir = temp_dir.path().join("noisy-stderr-subprocess-plugin");
     fs::create_dir(&noisy_stderr_plugin_dir).expect("create noisy stderr plugin dir");
@@ -1192,6 +1200,10 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     );
     assert_eq!(
         noisy_stderr_run["audit_entry"]["payload"]["sandbox_process_started"],
+        true
+    );
+    assert_eq!(
+        noisy_stderr_run["audit_entry"]["payload"]["subprocess_started"],
         true
     );
 

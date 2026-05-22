@@ -145,12 +145,14 @@ to explain what happened:
   verifies the Ed25519 signature, stores `origin_claim_verified: true`, and
   appends `installed_plugin_publisher_signature_verified` audit evidence.
   This proves the manifest was signed by the trusted key; it does not prove
-  marketplace approval, malware safety, or sandbox completeness.
+  marketplace approval, malware safety, OS-level process/network sandboxing, or
+  host-level egress enforcement.
 - Policy review emits `network_plugin_action` items for installed plugin
   actions that declare network access so the operator can inspect
   network-capable plugins before enabling execution.
 - `./scripts/release-plugin-trust-qa.sh --check` keeps the manual marketplace,
-  malware-analysis, OS sandbox, and egress-enforcement review path executable
+  malware-analysis, OS-level process/network sandbox, and host-level
+  egress-enforcement review path executable
   in the local release gate. `--self-test` proves only the assertion/report
   mechanics with fake evidence notes; `--assert-complete` writes owner-recorded
   evidence after external validation flags and non-empty owner/timestamp/evidence
@@ -159,7 +161,8 @@ to explain what happened:
   QA report alongside signed distribution artifacts and live-device QA evidence
   for final release review. It records evidence paths, owner flags, and
   owner-recorded plugin trust notes only; it does not turn plugin marketplace,
-  malware, sandbox, or egress checks into repo-local proof.
+  malware, OS-level process/network sandbox, or host-level egress checks into
+  repo-local proof.
 - Installed plugin dry runs are contract-only. `dry_run: true` validates the
   stored manifest, action name, and input schema, then returns `dry_run` with
   `contract_validated: true` and `side_effect_executed: false`; it never loads

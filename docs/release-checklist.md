@@ -289,8 +289,9 @@ stage or when a PR needs focused evidence for one ownership slice.
   `./scripts/release-plugin-trust-qa.sh --self-test` proves only JSON report
   mechanics with fake validation flags and fake evidence notes. Treat
   `--assert-complete` output as owner-recorded external evidence for marketplace
-  review, malware scanning, signed publisher policy, OS sandbox, and host-level
-  egress validation only after owner/timestamp/evidence-note fields are present.
+  review, malware scanning, signed publisher policy, OS-level process/network
+  sandbox validation, and host-level egress validation only after
+  owner/timestamp/evidence-note fields are present.
 - Confirm `./scripts/release-evidence-bundle.sh --check` is included in
   release readiness recommendations and the local release gate, and that
   `./scripts/release-evidence-bundle.sh --self-test` proves only final bundle

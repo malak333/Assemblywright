@@ -300,7 +300,7 @@ preserve the read-only scope, IPC-first/local-fallback behavior, explicit
 inspection boundary for evidence status.
 `./scripts/release-plugin-trust-qa.sh --check` is the local plugin-trust
 preflight for marketplace review, malware scanning, signed publisher policy,
-OS sandbox, and host-level egress validation. Its `--self-test` mode uses fake
+OS-level process/network sandbox validation and host-level egress validation. Its `--self-test` mode uses fake
 flags and fake evidence notes to verify report generation only; real release
 evidence must come from `--assert-complete` after the owner validates every
 `JARVIS_PLUGIN_QA_*` flag and populates the owner/timestamp/evidence-note fields.

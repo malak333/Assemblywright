@@ -1845,7 +1845,8 @@ impl IpcState {
             } else {
                 (
                     "blocked".to_string(),
-                    "installed plugin execution did not satisfy sandbox preconditions".to_string(),
+                    "installed plugin execution did not satisfy subprocess execution preconditions"
+                        .to_string(),
                 )
             };
             let event_type = if status == "completed" {
@@ -1886,6 +1887,7 @@ impl IpcState {
                     "contract_validated": contract_validated,
                     "input_provided": !request.input.is_null(),
                     "side_effect_executed": side_effect_executed,
+                    "subprocess_started": side_effect_executed,
                     "sandbox_process_started": side_effect_executed,
                     "stdout_bytes": stdout_bytes,
                     "stderr_bytes": stderr_bytes,
@@ -5326,6 +5328,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             response.audit_entry.payload["sandbox_process_started"],
             true
         );
+        assert_eq!(response.audit_entry.payload["subprocess_started"], true);
         assert_eq!(response.audit_entry.payload["side_effect_executed"], true);
 
         std::fs::write(
