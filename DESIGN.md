@@ -223,7 +223,7 @@ Version and test shared schemas between Swift and Rust. Breaking the app/core AP
 
 ### Voice Loop Tests
 
-Cover text input parity, wake/listen state transitions, interruption/cancel behavior, and degraded-mode behavior when mic or TTS permissions fail. Until the real voice adapter exists, these tests must stay explicit about the typed-transcript scaffold and must not imply actual speech recognition coverage.
+Cover text input parity, wake/listen state transitions, interruption/cancel behavior, and degraded-mode behavior when mic or TTS permissions fail. Adapter tests use fakes and must stay explicit about what is covered; they do not imply live microphone, Speech permission, or TTS coverage until those checks run against a signed app on a real device.
 
 ### Safety Regression Tests
 

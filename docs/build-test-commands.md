@@ -250,15 +250,16 @@ Runtime unit tests additionally prove bounded fake-model first-party tool-call
 orchestration, including policy checks, approval stops, validation failures, and
 tool-result feedback into later model steps. Focused provider tests prove typed
 Ollama-compatible request/error behavior without requiring a live model during
-the default release gate. They do not prove ChatGPT execution, installed plugin
-sandboxing/execution, memory UX beyond the scaffold, Swift approval decision
-UI, or voice loop until those surfaces exist and are covered. The current Swift gate proves
-the Mac shell scaffold builds, decodes IPC contracts, exposes management models
-for approval evidence, runs/audit, scheduler, diagnostics, text-transcript voice
-handoff state, and the protocol-backed macOS voice adapter boundary without
-requiring live microphone access in tests. It can supervise a configured local
-core process abstraction. It also covers Swift approval decision calls against
-the Rust IPC approval endpoints. The packaged supervision proof additionally checks the
+the default release gate. They do not prove live ChatGPT service execution,
+memory UX beyond the scaffold, live microphone capture, or TTS until those
+surfaces are manually validated. The current Swift gate proves the Mac shell
+scaffold builds, decodes IPC contracts, exposes management models for approval
+evidence, runs/audit, scheduler, diagnostics, text-transcript voice handoff
+state, adapter-backed voice controls, and Keychain-backed supervised-core
+credential injection without requiring live microphone access or real
+credentials in tests. It can supervise a configured local core process
+abstraction. It also covers Swift approval decision calls against the Rust IPC
+approval endpoints. The packaged supervision proof additionally checks the
 expected `Resources/bin/jarvis-cli` bundle layout with a locally built core
 binary and exercises repository-backed command, audit, diagnostics, and
 emergency-pause IPC through that copied binary. The packaged app release smoke

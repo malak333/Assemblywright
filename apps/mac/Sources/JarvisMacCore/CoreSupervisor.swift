@@ -236,16 +236,19 @@ public final class JarvisCoreSupervisor: ObservableObject {
     public let configuration: JarvisCoreSupervisorConfiguration
     private let client: any JarvisCoreClient
     private let processLauncher: any JarvisCoreProcessLaunching
+    private let credentialProvider: JarvisCoreCredentialProvider
     private var process: (any JarvisCoreProcess)?
 
     public init(
         configuration: JarvisCoreSupervisorConfiguration = JarvisCoreSupervisorConfiguration(),
         client: any JarvisCoreClient = JarvisIPCClient(),
-        processLauncher: any JarvisCoreProcessLaunching = FoundationJarvisCoreProcessLauncher()
+        processLauncher: any JarvisCoreProcessLaunching = FoundationJarvisCoreProcessLauncher(),
+        credentialProvider: JarvisCoreCredentialProvider = JarvisCoreCredentialProvider()
     ) {
         self.configuration = configuration
         self.client = client
         self.processLauncher = processLauncher
+        self.credentialProvider = credentialProvider
         self.mode = .stopped
         self.lastHealth = nil
     }
@@ -291,7 +294,7 @@ public final class JarvisCoreSupervisor: ObservableObject {
             process = try processLauncher.launch(
                 executableURL: executableURL,
                 arguments: configuration.launchArguments,
-                environment: ProcessInfo.processInfo.environment
+                environment: credentialProvider.launchEnvironment(base: ProcessInfo.processInfo.environment)
             )
             try await waitUntilHealthy()
             mode = .available
