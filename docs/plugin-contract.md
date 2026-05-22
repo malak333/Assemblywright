@@ -133,6 +133,11 @@ to explain what happened:
   in the local release gate. `--self-test` proves only the assertion/report
   mechanics; `--assert-complete` writes owner-recorded evidence after external
   validation flags are true.
+- `./scripts/release-evidence-bundle.sh --bundle` references the plugin-trust
+  QA report alongside signed distribution artifacts and live-device QA evidence
+  for final release review. It records evidence paths and owner flags only; it
+  does not turn plugin marketplace, malware, sandbox, or egress checks into
+  repo-local proof.
 - Installed plugin dry runs are contract-only. `dry_run: true` validates the
   stored manifest, action name, and input schema, then returns `dry_run` with
   `contract_validated: true` and `side_effect_executed: false`; it never loads
