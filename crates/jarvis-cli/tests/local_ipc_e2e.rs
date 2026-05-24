@@ -298,6 +298,9 @@ fn release_readiness_rejects_semantically_invalid_live_voice_evidence() {
     fn mismatched_observed_transcript(report: &mut Value) {
         report["voice_command_observation"]["observed_transcript"] = json!("Jarvis stats check.");
     }
+    fn malformed_command_result_evidence_id(report: &mut Value) {
+        report["voice_command_observation"]["command_result_evidence_id"] = json!("looked good");
+    }
 
     for (name, mutate, detail_fragment) in [
         (
@@ -334,6 +337,11 @@ fn release_readiness_rejects_semantically_invalid_live_voice_evidence() {
             "mismatched observed transcript",
             mismatched_observed_transcript as fn(&mut Value),
             "observed_transcript",
+        ),
+        (
+            "malformed command result evidence id",
+            malformed_command_result_evidence_id as fn(&mut Value),
+            "command_result_evidence_id",
         ),
     ] {
         let temp_dir = tempfile::tempdir().expect("temp live QA report");
@@ -4060,7 +4068,7 @@ fn valid_live_device_qa_report() -> Value {
             "observed_transcript": "Jarvis status check.",
             "expected_command_text": "status check",
             "observed_command_text": "status check",
-            "command_result_evidence_id": "task:release-voice-fixture",
+            "command_result_evidence_id": "task:00000000-0000-4000-8000-000000000002",
             "audio_output_device_label": "Built-in speakers"
         },
         "proof_boundary": "Owner-recorded live device QA fixture for CLI E2E."

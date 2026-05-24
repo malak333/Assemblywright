@@ -217,6 +217,34 @@ raise SystemExit(0 if get(expected_key) == get(actual_key) else 1)
 PY
 }
 
+json_command_result_evidence_id() {
+  local path="$1"
+  local dotted_key="$2"
+  python3 - "$path" "$dotted_key" <<'PY'
+import json
+import re
+import sys
+
+path, dotted_key = sys.argv[1:3]
+try:
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+except Exception:
+    raise SystemExit(1)
+
+cursor = data
+for segment in dotted_key.split("."):
+    if not isinstance(cursor, dict) or segment not in cursor:
+        raise SystemExit(1)
+    cursor = cursor[segment]
+
+pattern = re.compile(
+    r"^(task|audit):[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+raise SystemExit(0 if isinstance(cursor, str) and pattern.fullmatch(cursor.strip()) else 1)
+PY
+}
+
 json_nonempty_string() {
   local path="$1"
   local dotted_key="$2"
@@ -419,6 +447,18 @@ check_json_string_fields_equal() {
   fi
 }
 
+check_json_command_result_evidence_id() {
+  local label="$1"
+  local path="$2"
+  local dotted_key="$3"
+
+  if json_command_result_evidence_id "$path" "$dotted_key"; then
+    record_satisfied "$label: $dotted_key is a task/audit UUID reference"
+  else
+    record_missing "$label invalid evidence reference: $dotted_key must be task:<uuid> or audit:<uuid> in $path"
+  fi
+}
+
 check_json_nonempty_string() {
   local label="$1"
   local path="$2"
@@ -524,6 +564,7 @@ check_release_evidence() {
     done
     check_json_string_fields_equal "live-device QA report" "$LIVE_QA_REPORT" "voice_command_observation.test_phrase" "voice_command_observation.observed_transcript"
     check_json_string_fields_equal "live-device QA report" "$LIVE_QA_REPORT" "voice_command_observation.expected_command_text" "voice_command_observation.observed_command_text"
+    check_json_command_result_evidence_id "live-device QA report" "$LIVE_QA_REPORT" "voice_command_observation.command_result_evidence_id"
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.bundle_identifier" "$EXPECTED_BUNDLE_ID"
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.short_version" "$EXPECTED_VERSION"
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.build_version" "$EXPECTED_VERSION"
@@ -648,7 +689,7 @@ write_fixture_reports() {
     "observed_transcript": "Jarvis status check.",
     "expected_command_text": "status check",
     "observed_command_text": "status check",
-    "command_result_evidence_id": "self-test-task-id",
+    "command_result_evidence_id": "task:00000000-0000-4000-8000-000000000001",
     "audio_output_device_label": "self-test audio output"
   },
   "app_bundle": {
@@ -935,6 +976,28 @@ PY
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected mismatched installed app path to fail"
+  fi
+
+  python3 - "$tmp_dir/live.json" "$tmp_dir/malformed-command-result-evidence-live.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+with open(source, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["voice_command_observation"]["command_result_evidence_id"] = "looked good"
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+PY
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/malformed-command-result-evidence-live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+    "$0" --assert-complete >/dev/null 2>&1; then
+    fail "release evidence doctor self-test expected malformed command result evidence id to fail"
   fi
 
   python3 - "$tmp_dir/live.json" "$tmp_dir/pregenerated-live.json" <<'PY'

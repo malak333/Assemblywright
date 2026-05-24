@@ -59,8 +59,9 @@ The owner must also record non-empty live voice evidence notes:
 
 The observed transcript must match JARVIS_QA_VOICE_TEST_PHRASE after trimming,
 and the observed command text must match JARVIS_QA_EXPECTED_COMMAND_TEXT after
-trimming. This keeps the spoken phrase, transcript, and command-path evidence
-bound together.
+trimming. JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID must be a `task:<uuid>` or
+`audit:<uuid>` reference from the live command. This keeps the spoken phrase,
+transcript, and command-path evidence bound together.
 
 --self-test builds a fake app fixture in a temporary directory and exercises
 the assertion/report mechanics without claiming live-device validation.
@@ -183,6 +184,24 @@ PY
 
 require_observed_transcript_matches_phrase() {
   require_trimmed_env_match JARVIS_QA_VOICE_TEST_PHRASE JARVIS_QA_OBSERVED_TRANSCRIPT
+}
+
+require_command_result_evidence_id_env() {
+  local name="$1"
+  local value="${!name:-}"
+  require_non_empty_env "$name"
+  require_command python3
+  python3 - "$name" "$value" <<'PY'
+import re
+import sys
+
+name, value = sys.argv[1:3]
+pattern = re.compile(
+    r"^(task|audit):[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+if not pattern.fullmatch(value.strip()):
+    raise SystemExit(f"{name} must be task:<uuid> or audit:<uuid> from the live command")
+PY
 }
 
 plist_value() {
@@ -379,7 +398,7 @@ JARVIS_QA_VOICE_TEST_PHRASE=""
 JARVIS_QA_OBSERVED_TRANSCRIPT=""
 JARVIS_QA_EXPECTED_COMMAND_TEXT=""
 JARVIS_QA_OBSERVED_COMMAND_TEXT=""
-JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID=""
+JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="" # task:<uuid> or audit:<uuid> from the live command
 JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL=""
 EOF
 }
@@ -512,7 +531,7 @@ PLIST
     JARVIS_QA_OBSERVED_TRANSCRIPT="Jarvis status check." \
     JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
     JARVIS_QA_OBSERVED_COMMAND_TEXT="status check" \
-    JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="self-test-task-id" \
+    JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:00000000-0000-4000-8000-000000000001" \
     JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL="self-test audio output" \
     JARVIS_QA_SELF_TEST_FIXTURE=true \
     "$0" --assert-complete >/dev/null
@@ -557,7 +576,7 @@ PLIST
     JARVIS_QA_OBSERVED_TRANSCRIPT="Jarvis status check." \
     JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
     JARVIS_QA_OBSERVED_COMMAND_TEXT="status check" \
-    JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="self-test-task-id" \
+    JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:00000000-0000-4000-8000-000000000001" \
     JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL="self-test audio output" \
     JARVIS_QA_SELF_TEST_FIXTURE=true \
     "$0" --assert-complete >/dev/null 2>&1; then
@@ -589,7 +608,7 @@ PLIST
     JARVIS_QA_OBSERVED_TRANSCRIPT="Jarvis status check." \
     JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
     JARVIS_QA_OBSERVED_COMMAND_TEXT="status check" \
-    JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="self-test-task-id" \
+    JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:00000000-0000-4000-8000-000000000001" \
     JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL="self-test audio output" \
     JARVIS_QA_SELF_TEST_FIXTURE=true \
     "$0" --assert-complete >/dev/null 2>&1; then
@@ -621,7 +640,7 @@ PLIST
     JARVIS_QA_VOICE_TEST_PHRASE="Jarvis status check." \
     JARVIS_QA_OBSERVED_TRANSCRIPT="Jarvis status check." \
     JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
-    JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="self-test-task-id" \
+    JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:00000000-0000-4000-8000-000000000001" \
     JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL="self-test audio output" \
     JARVIS_QA_SELF_TEST_FIXTURE=true \
     "$0" --assert-complete >/dev/null 2>&1; then
@@ -654,7 +673,7 @@ PLIST
     JARVIS_QA_OBSERVED_TRANSCRIPT="Jarvis stats check." \
     JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
     JARVIS_QA_OBSERVED_COMMAND_TEXT="status check" \
-    JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="self-test-task-id" \
+    JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:00000000-0000-4000-8000-000000000001" \
     JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL="self-test audio output" \
     JARVIS_QA_SELF_TEST_FIXTURE=true \
     "$0" --assert-complete >/dev/null 2>&1; then
@@ -687,11 +706,44 @@ PLIST
     JARVIS_QA_OBSERVED_TRANSCRIPT="Jarvis status check." \
     JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
     JARVIS_QA_OBSERVED_COMMAND_TEXT="different command" \
-    JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="self-test-task-id" \
+    JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:00000000-0000-4000-8000-000000000001" \
     JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL="self-test audio output" \
     JARVIS_QA_SELF_TEST_FIXTURE=true \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "live QA self-test expected mismatched command observation to fail"
+  fi
+
+  if JARVIS_QA_INSTALLED_APP_PATH="$fixture_app" \
+    JARVIS_QA_REPORT_PATH="$tmp_dir/malformed-command-result-evidence-id.json" \
+    JARVIS_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.jarvis.selftest" \
+    JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
+    JARVIS_QA_CLEAN_PROFILE_VALIDATED=true \
+    JARVIS_QA_FINDER_LAUNCH_VALIDATED=true \
+    JARVIS_QA_MICROPHONE_VALIDATED=true \
+    JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true \
+    JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true \
+    JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true \
+    JARVIS_QA_NOTIFICATION_VALIDATED=true \
+    JARVIS_QA_RESTART_VALIDATED=true \
+    JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
+    JARVIS_QA_OWNER_NAME="Jarvis QA Self-Test" \
+    JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
+    JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
+    JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
+    JARVIS_QA_VOICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
+    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the fake fixture." \
+    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the fake fixture." \
+    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the fake fixture." \
+    JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the fake fixture." \
+    JARVIS_QA_VOICE_TEST_PHRASE="Jarvis status check." \
+    JARVIS_QA_OBSERVED_TRANSCRIPT="Jarvis status check." \
+    JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
+    JARVIS_QA_OBSERVED_COMMAND_TEXT="status check" \
+    JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="looked good" \
+    JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL="self-test audio output" \
+    JARVIS_QA_SELF_TEST_FIXTURE=true \
+    "$0" --assert-complete >/dev/null 2>&1; then
+    fail "live QA self-test expected malformed command result evidence id to fail"
   fi
 
   if JARVIS_QA_INSTALLED_APP_PATH="$fixture_app" \
@@ -720,7 +772,7 @@ PLIST
     JARVIS_QA_OBSERVED_TRANSCRIPT="Jarvis status check." \
     JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
     JARVIS_QA_OBSERVED_COMMAND_TEXT="status check" \
-    JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="self-test-task-id" \
+    JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:00000000-0000-4000-8000-000000000001" \
     JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL="self-test audio output" \
     JARVIS_QA_SELF_TEST_FIXTURE=true \
     "$0" --assert-complete >/dev/null 2>&1; then
@@ -787,6 +839,7 @@ require_non_empty_env JARVIS_QA_OBSERVED_TRANSCRIPT
 require_observed_transcript_matches_phrase
 require_trimmed_env_match JARVIS_QA_EXPECTED_COMMAND_TEXT JARVIS_QA_OBSERVED_COMMAND_TEXT
 require_non_empty_env JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID
+require_command_result_evidence_id_env JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID
 require_non_empty_env JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL
 write_report
 

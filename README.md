@@ -132,8 +132,8 @@ collected.
 In external evidence mode, the live-device QA report must still pass semantic
 validation for the expected installed app path, bundle identifier, short/build
 version, non-self-test identity, ordered UTC voice-check timestamps, and
-structured spoken-command observation before it can clear the live voice
-blocker.
+structured spoken-command observation with a task/audit command evidence
+reference before it can clear the live voice blocker.
 Opt-in final-transcript auto-submit is text-path parity only; it does not clear
 live microphone/Speech/audio-output validation or manual release QA.
 
@@ -286,7 +286,9 @@ spoken-command observation fields with the installed app path matching the
 expected `/Applications/Jarvis.app` path, unless explicitly overridden with
 `JARVIS_QA_INSTALLED_APP_PATH`, the observed transcript matching the spoken
 test phrase, and expected command text matching observed command text,
-owner/device/profile, ordered UTC timestamps, and voice evidence-note fields. It writes a JSON report, defaulting to
+`JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID` set to `task:<uuid>` or `audit:<uuid>`
+from the live command/audit evidence, owner/device/profile, ordered UTC
+timestamps, and voice evidence-note fields. It writes a JSON report, defaulting to
 `target/release-live-device-qa-report.json`, with installed-app metadata,
 microphone/Speech permission prompt evidence, spoken transcript handoff into
 the command path, speech-output playback evidence, owner-recorded live voice
