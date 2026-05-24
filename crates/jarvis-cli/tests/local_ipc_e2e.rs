@@ -757,8 +757,22 @@ fn release_evidence_status_marks_present_artifacts_as_presence_only() {
     );
     let items = evidence_status["items"].as_array().expect("evidence items");
 
+    let app_bundle_item = items
+        .iter()
+        .find(|item| item["key"] == "signed_app_bundle")
+        .expect("missing app bundle evidence item");
+    assert_eq!(app_bundle_item["status"], "present", "{app_bundle_item}");
+    let app_bundle_detail = app_bundle_item["detail"].as_str().expect("detail string");
+    assert!(
+        app_bundle_detail.contains("Info.plist bundle identifier"),
+        "{app_bundle_detail}"
+    );
+    assert!(
+        app_bundle_detail.contains("not validated by evidence-status"),
+        "{app_bundle_detail}"
+    );
+
     for key in [
-        "signed_app_bundle",
         "app_executable",
         "bundled_core_executable",
         "signed_app_zip",
@@ -803,8 +817,22 @@ fn release_evidence_status_server_marks_present_artifacts_as_presence_only() {
     ]);
     let items = evidence_status["items"].as_array().expect("evidence items");
 
+    let app_bundle_item = items
+        .iter()
+        .find(|item| item["key"] == "signed_app_bundle")
+        .expect("missing app bundle evidence item");
+    assert_eq!(app_bundle_item["status"], "present", "{app_bundle_item}");
+    let app_bundle_detail = app_bundle_item["detail"].as_str().expect("detail string");
+    assert!(
+        app_bundle_detail.contains("Info.plist bundle identifier"),
+        "{app_bundle_detail}"
+    );
+    assert!(
+        app_bundle_detail.contains("not validated by evidence-status"),
+        "{app_bundle_detail}"
+    );
+
     for key in [
-        "signed_app_bundle",
         "app_executable",
         "bundled_core_executable",
         "signed_app_zip",
@@ -828,6 +856,54 @@ fn release_evidence_status_server_marks_present_artifacts_as_presence_only() {
         .expect("proof boundary")
         .contains("does not sign"));
     server.stop();
+}
+
+#[test]
+#[cfg(unix)]
+fn release_evidence_status_rejects_stale_app_bundle_metadata() {
+    let temp_dir = tempfile::tempdir().expect("temp evidence artifacts");
+    let dist_dir = write_placeholder_distribution(temp_dir.path());
+    fs::write(
+        dist_dir.join("Jarvis.app/Contents/Info.plist"),
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>com.example.StaleJarvis</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.1.4</string>
+  <key>CFBundleVersion</key>
+  <string>0.1.4</string>
+</dict>
+</plist>
+"#,
+    )
+    .expect("write stale Info.plist");
+
+    let endpoint = format!("http://{}", unused_loopback_addr());
+    let dist_dir = dist_dir.to_str().expect("dist dir utf8");
+    let evidence_status = run_cli_json_with_env(
+        [
+            "release",
+            "evidence-status",
+            "--endpoint",
+            endpoint.as_str(),
+        ],
+        &[("JARVIS_EVIDENCE_DIST_DIR", dist_dir)],
+    );
+    assert_eq!(evidence_status["complete"], false);
+    assert_eq!(evidence_status["invalid_count"], 1);
+    let app_bundle = evidence_status["items"]
+        .as_array()
+        .expect("evidence items")
+        .iter()
+        .find(|item| item["key"] == "signed_app_bundle")
+        .expect("app bundle item");
+    assert_eq!(app_bundle["status"], "invalid");
+    assert!(app_bundle["detail"]
+        .as_str()
+        .expect("detail")
+        .contains("CFBundleIdentifier mismatch"));
 }
 
 #[test]
@@ -4529,9 +4605,26 @@ fn write_placeholder_distribution(root: &Path) -> std::path::PathBuf {
     let dist_dir = root.join("dist");
     let app_path = dist_dir.join("Jarvis.app");
     let macos_dir = app_path.join("Contents/MacOS");
+    let contents_dir = app_path.join("Contents");
     let resources_dir = app_path.join("Contents/Resources/bin");
     fs::create_dir_all(&macos_dir).expect("create app executable dir");
     fs::create_dir_all(&resources_dir).expect("create bundled core dir");
+    fs::write(
+        contents_dir.join("Info.plist"),
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>com.nobiletechnology.jarvis</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.1.4</string>
+  <key>CFBundleVersion</key>
+  <string>0.1.4</string>
+</dict>
+</plist>
+"#,
+    )
+    .expect("write Info.plist");
     let app_executable = macos_dir.join("JarvisMacApp");
     let bundled_core = resources_dir.join("jarvis-cli");
     fs::write(&app_executable, "#!/bin/sh\n").expect("write app executable");

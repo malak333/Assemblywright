@@ -86,9 +86,11 @@ These notes capture durable facts for future agents working on this repository.
   standard release evidence doctor inventory as structured JSON with present,
   missing, or invalid status for signed artifact paths, signed-distribution
   provenance report, live-device QA report, plugin-trust QA report, and final
-  evidence bundle. This is file/report inventory only; it does not prove
-  signing, notarization, installation, Finder launch, live-device QA,
-  marketplace review, malware scanning, or OS sandboxing.
+  evidence bundle. The app bundle item additionally validates `Info.plist`
+  bundle id, short version, and build version against expected release metadata.
+  This is file/report inventory only; it does not prove signing, notarization,
+  installation, Finder launch, live-device QA, marketplace review, malware
+  scanning, or OS sandboxing.
 - The live-device QA evidence item is stricter than generic JSON presence:
   `/release/evidence-status` validates schema/type, rejects `self_test_fixture`,
   checks the installed app path, expected bundle identifier, short/build
@@ -317,10 +319,11 @@ These notes capture durable facts for future agents working on this repository.
   check.
 - The structured release evidence status endpoint mirrors the doctor inventory
   for app/installer artifacts and JSON reports, including required owner-recorded
-  live-device and plugin-trust evidence fields plus live-device bundle/version
-  and timestamp semantic checks, plugin-trust review timestamp checks, and final
-  bundle version/SHA/local-signature checks, so the CLI and Swift Release tab can
-  show missing or invalid release evidence without parsing script text.
+  live-device and plugin-trust evidence fields plus app bundle `Info.plist`
+  metadata checks, live-device bundle/version and timestamp semantic checks,
+  plugin-trust review timestamp checks, and final bundle version/SHA/local-signature
+  checks, so the CLI and Swift Release tab can show missing or invalid release
+  evidence without parsing script text.
 - Enabled `local_subprocess` plugins run with an environment boundary: Jarvis
   clears the inherited app/core process environment before spawn and provides
   only a deterministic `PATH` plus `JARVIS_PLUGIN_ID`,

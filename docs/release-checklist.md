@@ -364,10 +364,11 @@ stage or when a PR needs focused evidence for one ownership slice.
   command as the final inventory assertion. Treat `--check`,
   `release-evidence-doctor.sh`, `/release/evidence-status`, and
   `jarvis release evidence-status` as present/missing/invalid inventory for
-  expected paths, JSON flags, non-future JSON report timestamps,
-  signed-distribution provenance, and release metadata only; those paths do not
-  validate Developer ID signing, notarization, stapling, installation,
-  live-device QA, plugin-trust QA, owner assertions, or final bundle creation.
+  expected paths, app bundle `Info.plist` metadata, JSON flags, non-future JSON
+  report timestamps, signed-distribution provenance, and release metadata only;
+  those paths do not validate Developer ID signing, notarization, stapling,
+  installation, live-device QA, plugin-trust QA, owner assertions, or final
+  bundle creation.
   Treat `--bundle` output as a manifest of referenced signed/notarized artifacts
   and owner-recorded QA evidence. The production `--bundle` path, unlike
   doctor/status inventory, must keep local signature validation enabled, check
@@ -375,8 +376,8 @@ stage or when a PR needs focused evidence for one ownership slice.
   stapling ticket, and app zip payload before writing the manifest, parse every
   required live-device/plugin-trust report flag, require owner-recorded evidence
   fields in both QA reports, confirm the live-device QA report matches the
-  expected bundle id/version/build, reject future-dated report timestamps,
-  verify signed-provenance zip/pkg digests
+  expected app bundle `Info.plist` bundle id/version/build, reject future-dated
+  report timestamps, verify signed-provenance zip/pkg digests
   against the current artifact files, and write SHA-256 digests for the signed
   distribution artifacts, signed provenance, plus QA reports before writing evidence. The
   disabled-signature path is reserved for the fake self-test fixture.

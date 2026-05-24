@@ -2926,7 +2926,7 @@ private func releaseEvidenceStatusJSON() -> Data {
               "detail": "expected JSON report is missing"
             }
           ],
-          "proof_boundary": "File/report inventory only; complete means expected paths are present and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/non-future timestamp semantics, plugin-trust non-future timestamp semantics, and final evidence-bundle path/digest/signature-validation/non-future timestamp semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
+          "proof_boundary": "File/report inventory only; complete means expected paths are present, app bundle metadata matches the expected bundle identifier/version/build, and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/non-future timestamp semantics, plugin-trust non-future timestamp semantics, and final evidence-bundle path/digest/signature-validation/non-future timestamp semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
         }
         """.utf8
     )
@@ -3033,7 +3033,7 @@ private func completeReleaseEvidenceStatusJSON() -> Data {
               "detail": "JSON report exists, expected release version matches, artifact/report paths and SHA-256 digests match current artifacts and reports, and local signature validation is true; signed_distribution and notarization remain owner-recorded external evidence"
             }
           ],
-          "proof_boundary": "File/report inventory only; complete means expected paths are present and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/non-future timestamp semantics, plugin-trust non-future timestamp semantics, and final evidence-bundle path/digest/signature-validation/non-future timestamp semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
+          "proof_boundary": "File/report inventory only; complete means expected paths are present, app bundle metadata matches the expected bundle identifier/version/build, and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/non-future timestamp semantics, plugin-trust non-future timestamp semantics, and final evidence-bundle path/digest/signature-validation/non-future timestamp semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
         }
         """.utf8
     )
@@ -3070,7 +3070,7 @@ private func invalidLiveDeviceEvidenceStatusJSON() -> Data {
               "detail": "JSON report app_bundle.bundle_identifier mismatch: expected com.nobiletechnology.jarvis, got com.example.StaleJarvis"
             }
           ],
-          "proof_boundary": "File/report inventory only; complete means expected paths are present and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/non-future timestamp semantics, plugin-trust non-future timestamp semantics, and final evidence-bundle path/digest/signature-validation/non-future timestamp semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
+          "proof_boundary": "File/report inventory only; complete means expected paths are present, app bundle metadata matches the expected bundle identifier/version/build, and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/non-future timestamp semantics, plugin-trust non-future timestamp semantics, and final evidence-bundle path/digest/signature-validation/non-future timestamp semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
         }
         """.utf8
     )
