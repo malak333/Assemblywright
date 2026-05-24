@@ -81,6 +81,9 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   timestamp, expected release version, non-empty artifact/report paths,
   SHA-256-shaped artifact/report digests, and
   `validation_flags.local_signature_validation=true`.
+- Confirm `release-evidence-doctor.sh --check` prints the follow-up signing,
+  live-device template/assertion, plugin-trust template/assertion, and final
+  evidence-bundle template/bundle commands whenever evidence is missing.
 - Confirm `jarvis release --help`, `jarvis release readiness --help`, and
   `jarvis release evidence-status --help` preserve the same read-only,
   IPC-first/local-fallback, evidence-mode, and file/report-inspection

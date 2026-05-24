@@ -287,9 +287,12 @@ These notes capture durable facts for future agents working on this repository.
 - `./scripts/release-evidence-doctor.sh` inventories release evidence readiness
   before final bundling. `--check` reports present, missing, or invalid
   signed-artifact, live-device QA, plugin-trust QA, and final bundle evidence
-  without failing the default local gate; `--self-test` uses fake
-  artifacts/reports to prove the inventory mechanics only. Its complete path
-  enforces the same plugin-trust UTC timestamp order as the bundle path. A
+  without failing the default local gate and prints the next signing,
+  live-device template/assertion, plugin-trust template/assertion, and final
+  evidence-bundle template/bundle commands when evidence is missing.
+  `--self-test` uses fake artifacts/reports to prove the inventory mechanics
+  and the next-step guidance only. Its complete path enforces the same
+  plugin-trust UTC timestamp order as the bundle path. A
   complete doctor run is diagnostic status, not proof that signing,
   notarization, stapling, installation, or external validation happened.
 - The structured release evidence status endpoint mirrors the doctor inventory
