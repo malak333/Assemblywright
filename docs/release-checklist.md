@@ -63,13 +63,13 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
 - Confirm the live-device QA report is `present`, not `invalid`, before using
   external evidence mode. Evidence-status semantically checks the expected
   installed app path, bundle ID, short/build version, non-self-test identity,
-  ordered UTC voice-check timestamps, observed transcript, and command
+  ordered non-future UTC voice-check timestamps, observed transcript, and command
   observation; weak or stale hand-written reports must keep
   `live_voice_loop` pending.
 - Confirm signed-distribution provenance, plugin-trust, and final bundle reports
   are `present`, not `invalid`. Evidence-status checks signed provenance
   version/bundle metadata, signing/notary/staple/Gatekeeper evidence fields,
-  required flags, plugin-trust review timestamps, final bundle version,
+  required flags, non-future plugin-trust review timestamps, final bundle version,
   artifact/report path matching, SHA-256 digest shape, signed-provenance
   zip/pkg digests against the current artifact files, final-bundle digests
   against current artifacts/reports, and local signature-validation status
@@ -77,10 +77,10 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
 - Confirm `release-plugin-trust-qa.sh --assert-complete`,
   `release-evidence-bundle.sh --bundle`, and
   `release-evidence-doctor.sh --assert-complete` reject non-UTC plugin-trust
-  timestamps, reversed review windows, and plugin reports generated before the
+  future-dated timestamps, reversed review windows, and plugin reports generated before the
   recorded review completed.
 - Confirm `release-evidence-doctor.sh --assert-complete` enforces the same
-  final-bundle semantic floor as `/release/evidence-status`: UTC generation
+  final-bundle semantic floor as `/release/evidence-status`: non-future UTC generation
   timestamp, expected release version, artifact/report paths matching the
   configured evidence paths, SHA-256-shaped artifact/report digests matching
   the current files, and
@@ -364,7 +364,8 @@ stage or when a PR needs focused evidence for one ownership slice.
   command as the final inventory assertion. Treat `--check`,
   `release-evidence-doctor.sh`, `/release/evidence-status`, and
   `jarvis release evidence-status` as present/missing/invalid inventory for
-  expected paths, JSON flags, signed-distribution provenance, and release metadata only; those paths do not
+  expected paths, JSON flags, non-future JSON report timestamps,
+  signed-distribution provenance, and release metadata only; those paths do not
   validate Developer ID signing, notarization, stapling, installation,
   live-device QA, plugin-trust QA, owner assertions, or final bundle creation.
   Treat `--bundle` output as a manifest of referenced signed/notarized artifacts
@@ -374,7 +375,8 @@ stage or when a PR needs focused evidence for one ownership slice.
   stapling ticket, and app zip payload before writing the manifest, parse every
   required live-device/plugin-trust report flag, require owner-recorded evidence
   fields in both QA reports, confirm the live-device QA report matches the
-  expected bundle id/version/build, verify signed-provenance zip/pkg digests
+  expected bundle id/version/build, reject future-dated report timestamps,
+  verify signed-provenance zip/pkg digests
   against the current artifact files, and write SHA-256 digests for the signed
   distribution artifacts, signed provenance, plus QA reports before writing evidence. The
   disabled-signature path is reserved for the fake self-test fixture.
@@ -516,7 +518,7 @@ Still future gates for production distribution:
   test phrase after trimming, the expected command text must match the observed
   command text after trimming, `JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID` must be
   `task:<uuid>` or `audit:<uuid>` from live command/audit evidence, and the
-  report generation timestamp must be UTC and no earlier than the completed voice check. Confirm the generated report includes
+  report generation timestamp must be UTC, no earlier than the completed voice check, and not future-dated. Confirm the generated report includes
   installed-app metadata, `voice_loop`, `owner_recorded_live_voice_evidence`,
   `voice_command_observation`, validation flags, schema identity, and proof
   boundary, then preserve the `target/release-live-device-qa-report.json`

@@ -92,8 +92,9 @@ These notes capture durable facts for future agents working on this repository.
 - The live-device QA evidence item is stricter than generic JSON presence:
   `/release/evidence-status` validates schema/type, rejects `self_test_fixture`,
   checks the installed app path, expected bundle identifier, short/build
-  version, requires UTC voice-check timestamps ending in `Z`, and requires
-  completion to be at or after start. It also requires the observed transcript
+  version, requires UTC voice-check timestamps ending in `Z`, rejects
+  future-dated generated reports, and requires completion to be at or after
+  start. It also requires the observed transcript
   to match the spoken test phrase after trimming and the observed command text
   to match the expected command text after trimming, with
   `voice_command_observation.command_result_evidence_id` shaped as
@@ -106,12 +107,13 @@ These notes capture durable facts for future agents working on this repository.
   stricter than generic JSON presence: `/release/evidence-status` validates
   signed provenance version/bundle metadata, signing/notary/staple/Gatekeeper
   evidence fields, required signed-distribution flags, plugin-trust UTC review
-  timestamp ordering, rejects self-test review sources, validates final bundle
-  version, requires SHA-256-shaped artifact/report digests including the signed
-  provenance digest, verifies signed-provenance zip/pkg digests against the
-  current artifact files in evidence-status, bundle, and doctor assertions,
-  verifies final-bundle artifact/report paths and digests against the current
-  configured files, and requires `validation_flags.local_signature_validation=true`.
+  timestamp ordering, rejects future-dated generated reports and self-test
+  review sources, validates final bundle version, requires SHA-256-shaped
+  artifact/report digests including the signed provenance digest, verifies
+  signed-provenance zip/pkg digests against the current artifact files in
+  evidence-status, bundle, and doctor assertions, verifies final-bundle
+  artifact/report paths and digests against the current configured files, and
+  requires `validation_flags.local_signature_validation=true`.
 - `release-evidence-doctor.sh --assert-complete` must stay aligned with that
   final-bundle semantic floor. It should reject minimal or hand-written final
   bundles that omit artifact/report paths, point at stale artifact/report paths,
@@ -624,7 +626,7 @@ These notes capture durable facts for future agents working on this repository.
   report to `JARVIS_QA_REPORT_PATH` or
   `target/release-live-device-qa-report.json`. The report records installed-app
   metadata, voice-loop evidence fields, owner-recorded live voice evidence
-  fields for owner/device/profile/timestamps/notes, structured spoken-command
+  fields for owner/device/profile/non-future timestamps/notes, structured spoken-command
   observation fields with observed transcript matching the spoken test phrase
   and expected command text matching observed command text, validation flags,
   schema identity, UTC report generation timestamp, and proof boundary.

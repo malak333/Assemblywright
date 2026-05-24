@@ -4416,7 +4416,7 @@ fn inspect_release_json_report_inner(
 }
 
 fn validate_live_device_qa_report(value: &serde_json::Value) -> Result<(), String> {
-    let generated_at = require_utc_report_timestamp(value, "generated_at")?;
+    let generated_at = require_utc_report_timestamp_not_future(value, "generated_at")?;
     if value
         .get("schema_version")
         .and_then(|schema| schema.as_i64())
@@ -4535,7 +4535,7 @@ fn validate_command_result_evidence_id(value: &str) -> Result<(), String> {
 }
 
 fn validate_plugin_trust_qa_report(value: &serde_json::Value) -> Result<(), String> {
-    let generated_at = require_utc_report_timestamp(value, "generated_at")?;
+    let generated_at = require_utc_report_timestamp_not_future(value, "generated_at")?;
     require_json_bool_value(value, "validation_flags.egress_enforcement", true)?;
     let started_at = require_utc_report_timestamp(
         value,
@@ -4596,7 +4596,7 @@ fn validate_plugin_trust_qa_report(value: &serde_json::Value) -> Result<(), Stri
 }
 
 fn validate_signed_distribution_provenance(value: &serde_json::Value) -> Result<(), String> {
-    require_utc_report_timestamp(value, "generated_at")?;
+    require_utc_report_timestamp_not_future(value, "generated_at")?;
     if value
         .get("schema_version")
         .and_then(|schema| schema.as_i64())
@@ -4683,7 +4683,7 @@ fn file_sha256(path: &FsPath) -> std::io::Result<String> {
 }
 
 fn validate_release_evidence_bundle(value: &serde_json::Value) -> Result<(), String> {
-    require_utc_report_timestamp(value, "generated_at")?;
+    require_utc_report_timestamp_not_future(value, "generated_at")?;
     require_json_string_value(value, "version", &expected_release_evidence_version())?;
     require_json_bool_value(value, "validation_flags.local_signature_validation", true)?;
     for field in [
@@ -4857,6 +4857,19 @@ fn require_utc_report_timestamp(
     DateTime::parse_from_rfc3339(&found)
         .map(|parsed| parsed.with_timezone(&Utc))
         .map_err(|_| format!("JSON report {dotted_path} must be a UTC RFC3339 timestamp"))
+}
+
+fn require_utc_report_timestamp_not_future(
+    value: &serde_json::Value,
+    dotted_path: &str,
+) -> Result<DateTime<Utc>, String> {
+    let timestamp = require_utc_report_timestamp(value, dotted_path)?;
+    if timestamp > Utc::now() {
+        return Err(format!(
+            "JSON report {dotted_path} must not be later than the current time"
+        ));
+    }
+    Ok(timestamp)
 }
 
 fn json_string_at(value: &serde_json::Value, dotted_path: &str) -> Option<String> {
@@ -5922,6 +5935,12 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         )
     }
 
+    fn future_timestamp() -> String {
+        (Utc::now() + Duration::days(1))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string()
+    }
+
     #[test]
     fn live_device_qa_report_accepts_semantically_valid_owner_report() {
         let (status, detail) =
@@ -6014,6 +6033,16 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let (status, detail) = inspect_live_device_qa_report_value(report);
         assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
         assert!(detail.contains("generated_at"), "{detail}");
+    }
+
+    #[test]
+    fn live_device_qa_report_rejects_future_generated_timestamp() {
+        let mut report = valid_live_device_qa_report_json();
+        report["generated_at"] = json!(future_timestamp());
+        let (status, detail) = inspect_live_device_qa_report_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("generated_at"), "{detail}");
+        assert!(detail.contains("current time"), "{detail}");
     }
 
     #[test]
@@ -6131,6 +6160,16 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
     }
 
     #[test]
+    fn plugin_trust_qa_report_rejects_future_generated_timestamp() {
+        let mut report = valid_plugin_trust_qa_report_json();
+        report["generated_at"] = json!(future_timestamp());
+        let (status, detail) = inspect_plugin_trust_qa_report_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("generated_at"), "{detail}");
+        assert!(detail.contains("current time"), "{detail}");
+    }
+
+    #[test]
     fn release_evidence_bundle_accepts_semantically_valid_manifest() {
         let (status, detail) =
             inspect_release_evidence_bundle_value(valid_release_evidence_bundle_json());
@@ -6164,6 +6203,16 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let (status, detail) = inspect_release_evidence_bundle_value(report);
         assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
         assert!(detail.contains("local_signature_validation"), "{detail}");
+    }
+
+    #[test]
+    fn release_evidence_bundle_rejects_future_generated_timestamp() {
+        let mut report = valid_release_evidence_bundle_json();
+        report["generated_at"] = json!(future_timestamp());
+        let (status, detail) = inspect_release_evidence_bundle_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("generated_at"), "{detail}");
+        assert!(detail.contains("current time"), "{detail}");
     }
 
     #[test]
@@ -6324,6 +6373,16 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let (status, detail) = inspect_signed_distribution_provenance_value(report);
         assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
         assert!(detail.contains("version"), "{detail}");
+    }
+
+    #[test]
+    fn signed_distribution_provenance_rejects_future_generated_timestamp() {
+        let mut report = valid_signed_distribution_provenance_json();
+        report["generated_at"] = json!(future_timestamp());
+        let (status, detail) = inspect_signed_distribution_provenance_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("generated_at"), "{detail}");
+        assert!(detail.contains("current time"), "{detail}");
     }
 
     #[test]

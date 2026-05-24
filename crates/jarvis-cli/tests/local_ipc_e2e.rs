@@ -602,6 +602,55 @@ fn release_evidence_status_rejects_stale_final_bundle_report_digests() {
 }
 
 #[test]
+#[cfg(unix)]
+fn release_evidence_status_rejects_future_dated_release_evidence_reports() {
+    let endpoint = format!("http://{}", unused_loopback_addr());
+
+    for item_key in [
+        "signed_distribution_provenance_report",
+        "live_device_qa_report",
+        "plugin_trust_qa_report",
+        "release_evidence_bundle",
+    ] {
+        let temp_dir = tempfile::tempdir().expect("temp release evidence reports");
+        let fixture = write_complete_release_evidence_fixture(temp_dir.path());
+        let report_path = match item_key {
+            "signed_distribution_provenance_report" => fixture.signed_provenance_path.as_str(),
+            "live_device_qa_report" => fixture.live_report_path.as_str(),
+            "plugin_trust_qa_report" => fixture.plugin_report_path.as_str(),
+            "release_evidence_bundle" => fixture.bundle_path.as_str(),
+            _ => unreachable!("unknown release evidence item"),
+        };
+        let mut report: Value = serde_json::from_str(
+            &fs::read_to_string(report_path).expect("read release evidence report"),
+        )
+        .expect("decode release evidence report");
+        report["generated_at"] = json!("2999-01-01T00:00:00Z");
+        write_json_report(Path::new(report_path), report);
+
+        let evidence_status = run_cli_json_with_env(
+            [
+                "release",
+                "evidence-status",
+                "--endpoint",
+                endpoint.as_str(),
+            ],
+            &fixture.env_refs(),
+        );
+        let evidence_item = evidence_status["items"]
+            .as_array()
+            .expect("evidence items")
+            .iter()
+            .find(|item| item["key"] == item_key)
+            .unwrap_or_else(|| panic!("missing evidence item: {item_key}"));
+        assert_eq!(evidence_item["status"], "invalid", "{evidence_item}");
+        let detail = evidence_item["detail"].as_str().expect("evidence detail");
+        assert!(detail.contains("generated_at"), "{evidence_item}");
+        assert!(detail.contains("current time"), "{evidence_item}");
+    }
+}
+
+#[test]
 fn release_evidence_status_cli_falls_back_without_running_server() {
     let endpoint = format!("http://{}", unused_loopback_addr());
 

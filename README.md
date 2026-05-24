@@ -131,7 +131,7 @@ owner-recorded external QA reports and signed-distribution evidence have been
 collected.
 In external evidence mode, the live-device QA report must still pass semantic
 validation for the expected installed app path, bundle identifier, short/build
-version, non-self-test identity, ordered UTC voice-check timestamps, and
+version, non-self-test identity, ordered non-future UTC voice-check timestamps, and
 structured spoken-command observation with a task/audit command evidence
 reference before it can clear the live voice blocker.
 Opt-in final-transcript auto-submit is text-path parity only; it does not clear
@@ -372,7 +372,7 @@ are presence-only checks, while JSON reports receive semantic validation for
 signed-distribution provenance version/bundle metadata, signing/notary/staple
 and Gatekeeper fields, required flags, SHA-256 digests, signed-provenance
 zip/pkg digest matches against current artifact files, live-device QA
-metadata, plugin-trust timestamps, and final bundle signatures. The status
+metadata, non-future plugin-trust timestamps, and final bundle signatures. The status
 surface still does not perform signing, notarization, stapling, installation,
 or manual QA.
 
