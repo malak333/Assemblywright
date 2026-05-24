@@ -331,7 +331,7 @@ json_utc_timestamp() {
   local path="$1"
   local dotted_key="$2"
   python3 - "$path" "$dotted_key" <<'PY'
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import sys
 
@@ -351,8 +351,10 @@ for segment in dotted_key.split("."):
 if not isinstance(cursor, str) or not cursor.endswith("Z"):
     raise SystemExit(1)
 try:
-    datetime.fromisoformat(cursor.replace("Z", "+00:00"))
+    timestamp = datetime.fromisoformat(cursor.replace("Z", "+00:00"))
 except ValueError:
+    raise SystemExit(1)
+if timestamp > datetime.now(timezone.utc):
     raise SystemExit(1)
 raise SystemExit(0)
 PY
@@ -536,9 +538,9 @@ check_json_utc_timestamp() {
   local dotted_key="$3"
 
   if json_utc_timestamp "$path" "$dotted_key"; then
-    record_satisfied "$label: $dotted_key is UTC"
+    record_satisfied "$label: $dotted_key is UTC and not future-dated"
   else
-    record_missing "$label invalid UTC timestamp: $dotted_key in $path"
+    record_missing "$label invalid or future UTC timestamp: $dotted_key in $path"
   fi
 }
 
@@ -1177,6 +1179,28 @@ PY
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected non-UTC plugin trust timestamp to fail"
+  fi
+
+  python3 - "$tmp_dir/plugin.json" "$tmp_dir/future-plugin.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+with open(source, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["generated_at"] = "2999-01-01T00:00:00Z"
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+PY
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/future-plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+    "$0" --assert-complete >/dev/null 2>&1; then
+    fail "release evidence doctor self-test expected future-dated plugin trust report to fail"
   fi
 
   python3 - "$tmp_dir/plugin.json" "$tmp_dir/reversed-plugin.json" <<'PY'

@@ -67,11 +67,11 @@ cargo run -p jarvis-cli -- release readiness
 Evidence-aware readiness only accepts release reports that pass
 `release evidence-status` semantic checks. Live-device QA checks schema/type,
 `self_test_fixture=false`, expected bundle ID, matching short/build version, and
-ordered UTC voice-check timestamps. Plugin-trust checks ordered UTC review
-timestamps. The final evidence bundle checks the expected release version,
+ordered non-future UTC voice-check timestamps. Plugin-trust checks ordered
+non-future UTC review timestamps. The final evidence bundle checks the expected release version,
 signed-distribution provenance report, SHA-256 digest shape, and
 `local_signature_validation=true`. Wrong bundle/version metadata, malformed
-timestamps, reversed timestamps, missing signed provenance, disabled local
+timestamps, future-dated timestamps, reversed timestamps, missing signed provenance, disabled local
 signature validation, or a self-test fixture leave evidence invalid.
 
 Focused regression checks for that release evidence boundary:
@@ -418,7 +418,7 @@ and final-bundle template/bundle commands so operators can move from inventory
 to evidence capture without cross-referencing another checklist. Its
 `--assert-complete` is included in the release-readiness runbook as the final
 inventory assertion after `--bundle`. It requires the final bundle manifest to
-include a UTC generation timestamp, expected release version, non-empty
+include a non-future UTC generation timestamp, expected release version, non-empty
 artifact/report paths matching the configured evidence paths,
 SHA-256-shaped artifact/report digests matching current files, and
 `validation_flags.local_signature_validation=true`, matching the semantic floor
@@ -426,9 +426,9 @@ exposed by `/release/evidence-status`. Its `--self-test` uses fake
 artifacts/reports to prove the inventory logic only; it is not a signing,
 notarization, stapling, or installation validator.
 Plugin-trust evidence is timestamp-strict across the shell evidence path:
-`release-plugin-trust-qa.sh --assert-complete` requires UTC `Z` review
+`release-plugin-trust-qa.sh --assert-complete` requires non-future UTC `Z` review
 timestamps with `review_started_at <= review_completed_at`, and the
-bundle/doctor paths also require plugin report `generated_at` to be UTC and no
+bundle/doctor paths also require plugin report `generated_at` to be UTC, non-future, and no
 earlier than `review_completed_at`. Structured host egress evidence must also
 include the policy/profile label, ordered UTC egress validation timestamp, and
 deny/allow fixture notes.
@@ -597,7 +597,7 @@ expected installed app path must match `JARVIS_QA_INSTALLED_APP_PATH` or
 `/Applications/Jarvis.app`, expected and observed command text must match after
 trimming, `JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID` must be `task:<uuid>` or
 `audit:<uuid>` from live command/audit evidence, and `generated_at` must be UTC
-and no earlier than the completed voice check.
+and no earlier than the completed voice check, but not future-dated.
 On success, `--assert-complete` writes a JSON evidence report to
 `JARVIS_QA_REPORT_PATH` or `target/release-live-device-qa-report.json` by
 default. The report includes installed-app metadata, voice-loop evidence fields,
