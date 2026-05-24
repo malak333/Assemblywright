@@ -335,7 +335,8 @@ stage or when a PR needs focused evidence for one ownership slice.
   owner/timestamp/evidence-note fields are present, including the structured
   egress policy label plus deny/allow fixture notes.
 - Confirm `./scripts/release-evidence-bundle.sh --check` is included in
-  release readiness recommendations and the local release gate, and that
+  release readiness recommendations and the local release gate, that its
+  preflight output points operators to the fillable final-bundle template, and that
   `./scripts/release-evidence-bundle.sh --self-test` proves only final bundle
   manifest mechanics with fake artifacts/reports. Confirm
   `./scripts/release-evidence-bundle.sh --write-template
