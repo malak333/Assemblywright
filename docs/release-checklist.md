@@ -70,8 +70,9 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   are `present`, not `invalid`. Evidence-status checks signed provenance
   version/bundle metadata, signing/notary/staple/Gatekeeper evidence fields,
   required flags, plugin-trust review timestamps, final bundle version, SHA-256
-  digest shape, and local signature-validation status before treating those
-  reports as usable evidence.
+  digest shape, signed-provenance zip/pkg digests against the current artifact
+  files, and local signature-validation status before treating those reports as
+  usable evidence.
 - Confirm `release-plugin-trust-qa.sh --assert-complete`,
   `release-evidence-bundle.sh --bundle`, and
   `release-evidence-doctor.sh --assert-complete` reject non-UTC plugin-trust
@@ -371,7 +372,8 @@ stage or when a PR needs focused evidence for one ownership slice.
   stapling ticket, and app zip payload before writing the manifest, parse every
   required live-device/plugin-trust report flag, require owner-recorded evidence
   fields in both QA reports, confirm the live-device QA report matches the
-  expected bundle id/version/build, and write SHA-256 digests for the signed
+  expected bundle id/version/build, verify signed-provenance zip/pkg digests
+  against the current artifact files, and write SHA-256 digests for the signed
   distribution artifacts, signed provenance, plus QA reports before writing evidence. The
   disabled-signature path is reserved for the fake self-test fixture.
 - Confirm `/release/evidence-status` and `jarvis release evidence-status` expose
