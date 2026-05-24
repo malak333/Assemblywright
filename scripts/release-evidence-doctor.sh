@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-VERSION="${JARVIS_EVIDENCE_VERSION:-0.1.4}"
+VERSION="${JARVIS_EVIDENCE_VERSION:-$("$ROOT_DIR/scripts/release-version.sh")}"
 DIST_DIR="${JARVIS_EVIDENCE_DIST_DIR:-$ROOT_DIR/target/distribution}"
 APP_PATH="${JARVIS_EVIDENCE_APP_PATH:-$DIST_DIR/Jarvis.app}"
 ZIP_PATH="${JARVIS_EVIDENCE_ZIP_PATH:-$DIST_DIR/Jarvis-$VERSION.zip}"
@@ -561,7 +561,7 @@ write_fixture_reports() {
   local plugin_path="$2"
   local bundle_path="$3"
 
-  cat >"$live_path" <<'JSON'
+  cat >"$live_path" <<JSON
 {
   "schema_version": 1,
   "evidence_type": "owner_recorded_live_device_qa",
@@ -606,8 +606,8 @@ write_fixture_reports() {
   },
   "app_bundle": {
     "bundle_identifier": "com.nobiletechnology.jarvis",
-    "short_version": "0.1.4",
-    "build_version": "0.1.4",
+    "short_version": "$VERSION",
+    "build_version": "$VERSION",
     "microphone_usage_description": "self-test fixture",
     "speech_recognition_usage_description": "self-test fixture"
   },
@@ -639,14 +639,14 @@ JSON
   "proof_boundary": "self-test fixture"
 }
 JSON
-  cat >"$bundle_path" <<'JSON'
+  cat >"$bundle_path" <<JSON
 {
   "generated_at": "2026-05-22T16:30:00Z",
-  "version": "0.1.4",
+  "version": "$VERSION",
   "artifacts": {
     "app_path": "target/distribution/Jarvis.app",
-    "zip_path": "target/distribution/Jarvis-0.1.4.zip",
-    "pkg_path": "target/distribution/Jarvis-0.1.4.pkg",
+    "zip_path": "target/distribution/Jarvis-$VERSION.zip",
+    "pkg_path": "target/distribution/Jarvis-$VERSION.pkg",
     "zip_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     "pkg_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
   },
@@ -709,15 +709,17 @@ require_command python3
 if [[ "$SELF_TEST" == true ]]; then
   tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/jarvis-release-evidence-doctor.XXXXXX")"
   trap 'rm -rf "$tmp_dir"' EXIT
+  self_test_zip="$tmp_dir/dist/Jarvis-$VERSION.zip"
+  self_test_pkg="$tmp_dir/dist/Jarvis-$VERSION.pkg"
   mkdir -p "$tmp_dir/dist"
   write_fixture_app "$tmp_dir/dist/Jarvis.app"
-  touch "$tmp_dir/dist/Jarvis-0.1.4.zip" "$tmp_dir/dist/Jarvis-0.1.4.pkg"
+  touch "$self_test_zip" "$self_test_pkg"
   write_fixture_reports "$tmp_dir/live.json" "$tmp_dir/plugin.json" "$tmp_dir/bundle.json"
 
   JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
     JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="$tmp_dir/dist/Jarvis-0.1.4.zip" \
-    JARVIS_EVIDENCE_PKG_PATH="$tmp_dir/dist/Jarvis-0.1.4.pkg" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
     JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
@@ -736,8 +738,8 @@ with open(target, "w", encoding="utf-8") as handle:
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
     JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="$tmp_dir/dist/Jarvis-0.1.4.zip" \
-    JARVIS_EVIDENCE_PKG_PATH="$tmp_dir/dist/Jarvis-0.1.4.pkg" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/missing-observation-live.json" \
     JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
@@ -758,8 +760,8 @@ with open(target, "w", encoding="utf-8") as handle:
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
     JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="$tmp_dir/dist/Jarvis-0.1.4.zip" \
-    JARVIS_EVIDENCE_PKG_PATH="$tmp_dir/dist/Jarvis-0.1.4.pkg" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/mismatched-command-live.json" \
     JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
@@ -780,8 +782,8 @@ with open(target, "w", encoding="utf-8") as handle:
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
     JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="$tmp_dir/dist/Jarvis-0.1.4.zip" \
-    JARVIS_EVIDENCE_PKG_PATH="$tmp_dir/dist/Jarvis-0.1.4.pkg" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/pregenerated-live.json" \
     JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
@@ -802,8 +804,8 @@ with open(target, "w", encoding="utf-8") as handle:
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
     JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="$tmp_dir/dist/Jarvis-0.1.4.zip" \
-    JARVIS_EVIDENCE_PKG_PATH="$tmp_dir/dist/Jarvis-0.1.4.pkg" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
     JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/missing-observation-plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
@@ -824,8 +826,8 @@ with open(target, "w", encoding="utf-8") as handle:
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
     JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="$tmp_dir/dist/Jarvis-0.1.4.zip" \
-    JARVIS_EVIDENCE_PKG_PATH="$tmp_dir/dist/Jarvis-0.1.4.pkg" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
     JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/non-utc-plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
@@ -847,8 +849,8 @@ with open(target, "w", encoding="utf-8") as handle:
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
     JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="$tmp_dir/dist/Jarvis-0.1.4.zip" \
-    JARVIS_EVIDENCE_PKG_PATH="$tmp_dir/dist/Jarvis-0.1.4.pkg" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
     JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/reversed-plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
@@ -870,8 +872,8 @@ with open(target, "w", encoding="utf-8") as handle:
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
     JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="$tmp_dir/dist/Jarvis-0.1.4.zip" \
-    JARVIS_EVIDENCE_PKG_PATH="$tmp_dir/dist/Jarvis-0.1.4.pkg" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
     JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/pregenerated-plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
@@ -893,8 +895,8 @@ with open(target, "w", encoding="utf-8") as handle:
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
     JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="$tmp_dir/dist/Jarvis-0.1.4.zip" \
-    JARVIS_EVIDENCE_PKG_PATH="$tmp_dir/dist/Jarvis-0.1.4.pkg" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
     JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/minimal-bundle.json" \
@@ -915,8 +917,8 @@ with open(target, "w", encoding="utf-8") as handle:
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
     JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="$tmp_dir/dist/Jarvis-0.1.4.zip" \
-    JARVIS_EVIDENCE_PKG_PATH="$tmp_dir/dist/Jarvis-0.1.4.pkg" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
     JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bad-digest-bundle.json" \
@@ -937,8 +939,8 @@ with open(target, "w", encoding="utf-8") as handle:
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
     JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="$tmp_dir/dist/Jarvis-0.1.4.zip" \
-    JARVIS_EVIDENCE_PKG_PATH="$tmp_dir/dist/Jarvis-0.1.4.pkg" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
     JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/disabled-local-signature-bundle.json" \
@@ -949,8 +951,8 @@ PY
   rm "$tmp_dir/plugin.json"
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
     JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="$tmp_dir/dist/Jarvis-0.1.4.zip" \
-    JARVIS_EVIDENCE_PKG_PATH="$tmp_dir/dist/Jarvis-0.1.4.pkg" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
     JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \

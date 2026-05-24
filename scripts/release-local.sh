@@ -3,12 +3,15 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-$ROOT_DIR/target/clang-module-cache}"
+mkdir -p "$CLANG_MODULE_CACHE_PATH"
 
 run() {
   printf '\n==> %s\n' "$*"
   "$@"
 }
 
+run ./scripts/release-version-consistency.sh --check
 run cargo fmt --check
 run cargo clippy --workspace --all-targets -- -D warnings
 run cargo test --workspace
@@ -18,6 +21,7 @@ run cargo build --workspace
 run cargo run -p jarvis-cli -- smoke
 run ./scripts/release-operator-qa-smoke.sh
 run cargo package --workspace --allow-dirty
+run ./scripts/package-distribution.sh --version-consistency-self-test
 run ./scripts/package-distribution.sh --unsigned-launch-check
 run ./scripts/release-live-device-qa.sh --check
 run ./scripts/release-live-device-qa.sh --self-test
@@ -33,7 +37,7 @@ if ! command -v swift >/dev/null 2>&1; then
   exit 1
 fi
 
-run swift test --package-path apps/mac
-run swift build --package-path apps/mac
+run swift test --disable-sandbox --package-path apps/mac
+run swift build --disable-sandbox --package-path apps/mac
 
 printf '\nJarvis local release verification: ok\n'

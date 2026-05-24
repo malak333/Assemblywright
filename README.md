@@ -245,11 +245,15 @@ voice-device validation.
 For distribution packaging work, run:
 
 ```sh
+./scripts/release-version-consistency.sh --check
 ./scripts/package-distribution.sh --check
 ./scripts/package-distribution.sh --unsigned-structure-check
 ./scripts/package-distribution.sh --unsigned-launch-check
 ```
 
+The release version is derived from the Rust package metadata and checked
+against the CLI/core crate versions before packaging or evidence scripts build
+versioned artifact names.
 The unsigned structure check builds release Rust and Swift artifacts, assembles
 the distribution-shaped `Jarvis.app`, optionally ad-hoc signs it when
 `codesign` is available, creates an unsigned `/Applications` installer package,

@@ -513,12 +513,17 @@ SQLite state through the release app layout. Full mode requires
 `JARVIS_DEVELOPER_ID_INSTALLER`, and notarytool credentials. It signs the
 release bundle with hardened runtime and microphone entitlements, submits the
 app zip for notarization, staples the app, then creates a signed
-`/Applications` installer package at `target/distribution/Jarvis-0.1.4.pkg`,
+`/Applications` installer package at
+`target/distribution/Jarvis-<release-version>.pkg`,
 checks its installer signature, submits it for notarization, and staples the
 package. Passing the unsigned structure or launch checks still does not prove
 signing/notarization, and passing full mode still does not replace
 clean-profile install, Finder launch, live microphone/Speech validation, App
 Store review, spoken transcript handoff, or live audio-output validation.
+`./scripts/release-version-consistency.sh --check` derives that release version
+from Rust package metadata and is part of `./scripts/release-local.sh`, so
+package, live QA, evidence bundle, and evidence doctor defaults cannot silently
+drift from the CLI/core crate versions.
 `./scripts/release-live-device-qa.sh --check` keeps the live-device QA runbook
 in the default release gate. It validates the repo-owned entitlement/checklist
 preconditions and prints the required clean-profile install, Finder launch,

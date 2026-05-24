@@ -7,7 +7,7 @@ cd "$ROOT_DIR"
 APP_PATH="${JARVIS_QA_INSTALLED_APP_PATH:-/Applications/Jarvis.app}"
 REPORT_PATH="${JARVIS_QA_REPORT_PATH:-$ROOT_DIR/target/release-live-device-qa-report.json}"
 EXPECTED_BUNDLE_ID="${JARVIS_QA_EXPECTED_BUNDLE_ID:-com.nobiletechnology.jarvis}"
-EXPECTED_VERSION="${JARVIS_QA_EXPECTED_VERSION:-0.1.4}"
+EXPECTED_VERSION="${JARVIS_QA_EXPECTED_VERSION:-$("$ROOT_DIR/scripts/release-version.sh")}"
 CHECK_ONLY=false
 ASSERT_COMPLETE=false
 SELF_TEST=false
@@ -68,7 +68,7 @@ Optional:
   JARVIS_QA_INSTALLED_APP_PATH     Defaults to /Applications/Jarvis.app
   JARVIS_QA_REPORT_PATH            Defaults to target/release-live-device-qa-report.json
   JARVIS_QA_EXPECTED_BUNDLE_ID     Defaults to com.nobiletechnology.jarvis
-  JARVIS_QA_EXPECTED_VERSION       Defaults to 0.1.4
+  JARVIS_QA_EXPECTED_VERSION       Defaults to the Rust package release version
 
 This script records manual proof boundaries only. It does not perform Developer
 ID signing, notarization, App Store review, malware analysis, marketplace
@@ -345,7 +345,7 @@ write_env_template() {
 JARVIS_QA_INSTALLED_APP_PATH="/Applications/Jarvis.app"
 JARVIS_QA_REPORT_PATH="target/release-live-device-qa-report.json"
 JARVIS_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.jarvis"
-JARVIS_QA_EXPECTED_VERSION="0.1.4"
+JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION"
 
 JARVIS_QA_CLEAN_PROFILE_VALIDATED=false
 JARVIS_QA_FINDER_LAUNCH_VALIDATED=false
@@ -443,7 +443,7 @@ if [[ "$SELF_TEST" == true ]]; then
   fixture_report="$tmp_dir/release-live-device-qa-report.json"
   fixture_template="$tmp_dir/release-live-device-qa.env"
   mkdir -p "$fixture_app/Contents/MacOS" "$fixture_app/Contents/Resources/bin"
-  cat >"$fixture_app/Contents/Info.plist" <<'PLIST'
+  cat >"$fixture_app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -453,9 +453,9 @@ if [[ "$SELF_TEST" == true ]]; then
   <key>CFBundleIdentifier</key>
   <string>com.nobiletechnology.jarvis.selftest</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.1.4</string>
+  <string>$EXPECTED_VERSION</string>
   <key>CFBundleVersion</key>
-  <string>0.1.4</string>
+  <string>$EXPECTED_VERSION</string>
   <key>NSMicrophoneUsageDescription</key>
   <string>Jarvis uses microphone input only when you explicitly start local voice capture.</string>
   <key>NSSpeechRecognitionUsageDescription</key>
@@ -480,7 +480,7 @@ PLIST
   JARVIS_QA_INSTALLED_APP_PATH="$fixture_app" \
     JARVIS_QA_REPORT_PATH="$fixture_report" \
     JARVIS_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.jarvis.selftest" \
-    JARVIS_QA_EXPECTED_VERSION="0.1.4" \
+    JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
     JARVIS_QA_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_QA_FINDER_LAUNCH_VALIDATED=true \
     JARVIS_QA_MICROPHONE_VALIDATED=true \
@@ -526,7 +526,7 @@ PLIST
   if JARVIS_QA_INSTALLED_APP_PATH="$fixture_app" \
     JARVIS_QA_REPORT_PATH="$tmp_dir/missing-transcript-handoff.json" \
     JARVIS_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.jarvis.selftest" \
-    JARVIS_QA_EXPECTED_VERSION="0.1.4" \
+    JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
     JARVIS_QA_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_QA_FINDER_LAUNCH_VALIDATED=true \
     JARVIS_QA_MICROPHONE_VALIDATED=true \
@@ -558,7 +558,7 @@ PLIST
   if JARVIS_QA_INSTALLED_APP_PATH="$fixture_app" \
     JARVIS_QA_REPORT_PATH="$tmp_dir/missing-owner-note.json" \
     JARVIS_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.jarvis.selftest" \
-    JARVIS_QA_EXPECTED_VERSION="0.1.4" \
+    JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
     JARVIS_QA_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_QA_FINDER_LAUNCH_VALIDATED=true \
     JARVIS_QA_MICROPHONE_VALIDATED=true \
@@ -590,7 +590,7 @@ PLIST
   if JARVIS_QA_INSTALLED_APP_PATH="$fixture_app" \
     JARVIS_QA_REPORT_PATH="$tmp_dir/missing-structured-transcript.json" \
     JARVIS_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.jarvis.selftest" \
-    JARVIS_QA_EXPECTED_VERSION="0.1.4" \
+    JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
     JARVIS_QA_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_QA_FINDER_LAUNCH_VALIDATED=true \
     JARVIS_QA_MICROPHONE_VALIDATED=true \
@@ -622,7 +622,7 @@ PLIST
   if JARVIS_QA_INSTALLED_APP_PATH="$fixture_app" \
     JARVIS_QA_REPORT_PATH="$tmp_dir/mismatched-command-observation.json" \
     JARVIS_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.jarvis.selftest" \
-    JARVIS_QA_EXPECTED_VERSION="0.1.4" \
+    JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
     JARVIS_QA_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_QA_FINDER_LAUNCH_VALIDATED=true \
     JARVIS_QA_MICROPHONE_VALIDATED=true \
@@ -655,7 +655,7 @@ PLIST
   if JARVIS_QA_INSTALLED_APP_PATH="$fixture_app" \
     JARVIS_QA_REPORT_PATH="$tmp_dir/bad-timestamp-order.json" \
     JARVIS_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.jarvis.selftest" \
-    JARVIS_QA_EXPECTED_VERSION="0.1.4" \
+    JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
     JARVIS_QA_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_QA_FINDER_LAUNCH_VALIDATED=true \
     JARVIS_QA_MICROPHONE_VALIDATED=true \

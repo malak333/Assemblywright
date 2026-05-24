@@ -3,8 +3,10 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-$ROOT_DIR/target/clang-module-cache}"
+mkdir -p "$CLANG_MODULE_CACHE_PATH"
 
-VERSION="0.1.4"
+VERSION="${JARVIS_PACKAGE_VERSION_OVERRIDE:-$("$ROOT_DIR/scripts/release-version.sh")}"
 BUNDLE_ID="${JARVIS_BUNDLE_ID:-com.nobiletechnology.jarvis}"
 APP_NAME="Jarvis"
 APP_EXECUTABLE_NAME="JarvisMacApp"
@@ -17,10 +19,11 @@ PKG_PATH="$DIST_DIR/$APP_NAME-$VERSION.pkg"
 CHECK_ONLY=false
 UNSIGNED_STRUCTURE_CHECK=false
 UNSIGNED_LAUNCH_CHECK=false
+VERSION_CONSISTENCY_SELF_TEST=false
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/package-distribution.sh [--check] [--unsigned-structure-check] [--unsigned-launch-check]
+Usage: scripts/package-distribution.sh [--check] [--unsigned-structure-check] [--unsigned-launch-check] [--version-consistency-self-test]
 
 Build a distribution-shaped Jarvis.app bundle, sign it with Developer ID, zip it,
 submit it for notarization, staple the ticket, then build, sign, notarize, and
@@ -49,6 +52,8 @@ validation.
 isolated HOME and exercises the supervised core over loopback IPC. It still does
 not prove Developer ID signing, notarization, stapling, Finder launch, or live
 device validation.
+--version-consistency-self-test verifies package/crate version drift is rejected
+without signing, notarizing, or building distribution artifacts.
 USAGE
 }
 
@@ -70,6 +75,15 @@ require_output_contains() {
     printf 'error: %s did not include %q\n' "$label" "$expected" >&2
     printf '%s\n%s\n%s\n' "--- $label output ---" "$output" "--- end $label output ---" >&2
     exit 1
+  fi
+}
+
+assert_package_version_consistency() {
+  local canonical_version
+  canonical_version="$("$ROOT_DIR/scripts/release-version.sh")"
+
+  if [[ "$VERSION" != "$canonical_version" ]]; then
+    fail "package version mismatch: package-distribution.sh VERSION=$VERSION, canonical Rust release version=$canonical_version"
   fi
 }
 
@@ -114,6 +128,10 @@ while [[ $# -gt 0 ]]; do
       UNSIGNED_LAUNCH_CHECK=true
       shift
       ;;
+    --version-consistency-self-test)
+      VERSION_CONSISTENCY_SELF_TEST=true
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -126,9 +144,26 @@ done
 
 if [[ "$CHECK_ONLY" == true && "$UNSIGNED_STRUCTURE_CHECK" == true ]] ||
   [[ "$CHECK_ONLY" == true && "$UNSIGNED_LAUNCH_CHECK" == true ]] ||
-  [[ "$UNSIGNED_STRUCTURE_CHECK" == true && "$UNSIGNED_LAUNCH_CHECK" == true ]]; then
-  fail "--check, --unsigned-structure-check, and --unsigned-launch-check are mutually exclusive"
+  [[ "$CHECK_ONLY" == true && "$VERSION_CONSISTENCY_SELF_TEST" == true ]] ||
+  [[ "$UNSIGNED_STRUCTURE_CHECK" == true && "$UNSIGNED_LAUNCH_CHECK" == true ]] ||
+  [[ "$UNSIGNED_STRUCTURE_CHECK" == true && "$VERSION_CONSISTENCY_SELF_TEST" == true ]] ||
+  [[ "$UNSIGNED_LAUNCH_CHECK" == true && "$VERSION_CONSISTENCY_SELF_TEST" == true ]]; then
+  fail "--check, --unsigned-structure-check, --unsigned-launch-check, and --version-consistency-self-test are mutually exclusive"
 fi
+
+if [[ "$VERSION_CONSISTENCY_SELF_TEST" == true ]]; then
+  SELF_TEST_OUTPUT=""
+  if SELF_TEST_OUTPUT="$(JARVIS_PACKAGE_VERSION_OVERRIDE=9.9.9 "$0" --check 2>&1)"; then
+    printf '%s\n' "$SELF_TEST_OUTPUT" >&2
+    fail "version consistency self-test expected mismatched package version to fail"
+  fi
+  require_output_contains "version consistency self-test" "$SELF_TEST_OUTPUT" "package version mismatch"
+  printf '\nJarvis package version consistency self-test: ok\n'
+  printf 'Proof boundary: mismatch guard only; no app was built, signed, notarized, stapled, installed, launched, or manually validated.\n'
+  exit 0
+fi
+
+assert_package_version_consistency
 
 require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "required command is missing: $1"
@@ -139,9 +174,9 @@ build_app_bundle() {
   mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources/bin"
 
   run cargo build --release -p jarvis-cli
-  run swift build -c release --package-path apps/mac
+  run swift build --disable-sandbox -c release --package-path apps/mac
 
-  SWIFT_BIN_DIR="$(swift build -c release --package-path apps/mac --show-bin-path)"
+  SWIFT_BIN_DIR="$(swift build --disable-sandbox -c release --package-path apps/mac --show-bin-path)"
   SWIFT_EXECUTABLE="$SWIFT_BIN_DIR/$APP_EXECUTABLE_NAME"
   CORE_EXECUTABLE="$ROOT_DIR/target/release/jarvis"
 
