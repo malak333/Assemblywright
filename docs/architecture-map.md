@@ -248,7 +248,7 @@ structured JSON with present, missing, or invalid item status. Artifact paths
 remain presence-only checks except the app bundle, whose `Info.plist` bundle id,
 short version, and build version must match expected release metadata. JSON
 reports receive semantic validation for signed provenance version/bundle
-metadata, signing/notary/staple/Gatekeeper fields, required flags, SHA-256
+metadata, bundled core version, signing/notary/staple/Gatekeeper fields, required flags, SHA-256
 digests, signed-provenance zip/pkg digest matches against current artifact
 files, live-device bundle/version/timestamp evidence, non-future plugin-trust
 review timestamps, and final bundle path/digest/local-signature evidence. This mirrors release-evidence-doctor

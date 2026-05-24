@@ -823,7 +823,8 @@ JSON
     "zip_path": "$self_test_zip",
     "pkg_path": "$self_test_pkg",
     "zip_sha256": "$self_test_zip_sha",
-    "pkg_sha256": "$self_test_pkg_sha"
+    "pkg_sha256": "$self_test_pkg_sha",
+    "bundled_core_version": "jarvis $VERSION"
   },
   "signing": {
     "developer_id_application_identity": "Developer ID Application: Jarvis QA Fixture",
@@ -1413,6 +1414,7 @@ require_json_string_equals "signed-distribution provenance report" "$SIGNED_PROV
 require_json_string_equals "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.app_path" "$APP_PATH"
 require_json_string_equals "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.zip_path" "$ZIP_PATH"
 require_json_string_equals "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.pkg_path" "$PKG_PATH"
+require_json_string_equals "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.bundled_core_version" "jarvis $EXPECTED_VERSION"
 for field in artifacts.zip_sha256 artifacts.pkg_sha256; do
   require_json_sha256 "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "$field"
 done

@@ -275,7 +275,8 @@ notarization, stapling, microphone entitlement packaging, and signed installer
 package creation when Apple credentials are provided. It now also writes a
 `Jarvis-<version>-signed-provenance.json` report with signing identities,
 notary submission IDs/log paths, staple validation output, Gatekeeper
-assessment output, and artifact SHA-256 digests for the signed zip/pkg. It
+assessment output, bundled core `jarvis --version` output, and artifact
+SHA-256 digests for the signed zip/pkg. It
 still does not replace clean-profile installer run, Finder launch, App Store
 validation, or live microphone/Speech/audio-output validation.
 For those live checks, `./scripts/release-live-device-qa.sh --check` prints the
