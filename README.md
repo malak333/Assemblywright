@@ -294,6 +294,10 @@ For plugin trust checks, `./scripts/release-plugin-trust-qa.sh --check` prints
 the marketplace, malware-analysis, OS sandbox, and egress-enforcement runbook
 and is part of the default local release gate. Its `--self-test` mode proves
 JSON evidence-report mechanics with fake flags and fake evidence notes only.
+`./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env`
+writes a sourceable checklist of every required `JARVIS_PLUGIN_QA_*` flag and
+evidence field. The template defaults validation flags to `false`; fill and
+source it only after external plugin trust checks have actually completed.
 The owner-recorded `--assert-complete` path writes
 `target/release-plugin-trust-qa-report.json` after all required
 `JARVIS_PLUGIN_QA_*` flags are true and owner/timestamp/evidence-note fields are

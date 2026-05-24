@@ -320,6 +320,12 @@ stage or when a PR needs focused evidence for one ownership slice.
   server-backed proof.
 - Confirm `./scripts/release-plugin-trust-qa.sh --check` is included in release
   readiness recommendations and the local release gate, and that
+  `./scripts/release-plugin-trust-qa.sh --write-template
+  target/release-plugin-trust-qa.env` generates a sourceable plugin-trust QA
+  template with every `JARVIS_PLUGIN_QA_*` validation flag defaulted to `false`.
+  Those flags may be changed only after the corresponding external plugin trust
+  check has actually completed.
+- Confirm
   `./scripts/release-plugin-trust-qa.sh --self-test` proves only JSON report
   mechanics with fake validation flags and fake evidence notes. Treat
   `--assert-complete` output as owner-recorded external evidence for marketplace

@@ -8,10 +8,12 @@ REPORT_PATH="${JARVIS_PLUGIN_QA_REPORT_PATH:-$ROOT_DIR/target/release-plugin-tru
 CHECK_ONLY=false
 ASSERT_COMPLETE=false
 SELF_TEST=false
+WRITE_TEMPLATE=false
+WRITE_TEMPLATE_PATH=""
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/release-plugin-trust-qa.sh [--check|--assert-complete|--self-test]
+Usage: scripts/release-plugin-trust-qa.sh [--check|--assert-complete|--self-test|--write-template PATH]
 
 Prepare or assert the installed-plugin trust release QA gate for Jarvis.
 
@@ -44,6 +46,11 @@ writes a JSON evidence report:
 
 --self-test exercises the assertion/report mechanics with fake validation flags
 without claiming real marketplace, malware-analysis, sandbox, or egress proof.
+
+--write-template PATH writes a sourceable shell env template containing every
+JARVIS_PLUGIN_QA_* field required by --assert-complete. Edit the template on the
+validated release machine after external plugin trust checks finish, source it,
+and then run --assert-complete.
 
 Optional:
   JARVIS_PLUGIN_QA_REPORT_PATH     Defaults to target/release-plugin-trust-qa-report.json
@@ -212,6 +219,48 @@ EOF
   python3 -m json.tool "$REPORT_PATH" >/dev/null
 }
 
+write_env_template() {
+  local template_path="$1"
+  mkdir -p "$(dirname "$template_path")"
+  cat >"$template_path" <<'EOF'
+# Jarvis plugin trust QA evidence template.
+# Edit this file on the validated release machine after marketplace review,
+# malware scan, signed publisher policy review, OS sandbox validation, and
+# host-level egress fixture validation have actually completed. Then run:
+#   set -a
+#   source ./target/release-plugin-trust-qa.env
+#   set +a
+#   ./scripts/release-plugin-trust-qa.sh --assert-complete
+#
+# Keep all validation flags false until the matching external check has
+# actually been observed and archived for this release candidate.
+
+JARVIS_PLUGIN_QA_REPORT_PATH="target/release-plugin-trust-qa-report.json"
+JARVIS_PLUGIN_QA_REVIEW_SOURCE="owner-asserted-manual-review"
+
+JARVIS_PLUGIN_QA_MARKETPLACE_REVIEW_VALIDATED=false
+JARVIS_PLUGIN_QA_MALWARE_SCAN_VALIDATED=false
+JARVIS_PLUGIN_QA_OS_SANDBOX_VALIDATED=false
+JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED=false
+JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_POLICY_VALIDATED=false
+JARVIS_PLUGIN_QA_MANUAL_TRUST_REVIEW_VALIDATED=false
+
+JARVIS_PLUGIN_QA_OWNER_NAME=""
+JARVIS_PLUGIN_QA_REVIEW_STARTED_AT=""
+JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT=""
+JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE=""
+JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE=""
+JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE=""
+JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE=""
+JARVIS_PLUGIN_QA_EGRESS_POLICY_LABEL=""
+JARVIS_PLUGIN_QA_EGRESS_VALIDATION_COMPLETED_AT=""
+JARVIS_PLUGIN_QA_EGRESS_DENY_FIXTURE_EVIDENCE_NOTE=""
+JARVIS_PLUGIN_QA_EGRESS_ALLOW_FIXTURE_EVIDENCE_NOTE=""
+JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE=""
+JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE=""
+EOF
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --check)
@@ -226,6 +275,12 @@ while [[ $# -gt 0 ]]; do
       SELF_TEST=true
       shift
       ;;
+    --write-template)
+      WRITE_TEMPLATE=true
+      [[ $# -ge 2 ]] || fail "--write-template requires a path"
+      WRITE_TEMPLATE_PATH="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -236,12 +291,13 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if { [[ "$CHECK_ONLY" == true ]] && { [[ "$ASSERT_COMPLETE" == true ]] || [[ "$SELF_TEST" == true ]]; }; } ||
-  { [[ "$ASSERT_COMPLETE" == true ]] && [[ "$SELF_TEST" == true ]]; }; then
-  fail "--check, --assert-complete, and --self-test are mutually exclusive"
+if { [[ "$CHECK_ONLY" == true ]] && { [[ "$ASSERT_COMPLETE" == true ]] || [[ "$SELF_TEST" == true ]] || [[ "$WRITE_TEMPLATE" == true ]]; }; } ||
+  { [[ "$ASSERT_COMPLETE" == true ]] && { [[ "$SELF_TEST" == true ]] || [[ "$WRITE_TEMPLATE" == true ]]; }; } ||
+  { [[ "$SELF_TEST" == true ]] && [[ "$WRITE_TEMPLATE" == true ]]; }; then
+  fail "--check, --assert-complete, --self-test, and --write-template are mutually exclusive"
 fi
 
-if [[ "$CHECK_ONLY" != true && "$ASSERT_COMPLETE" != true && "$SELF_TEST" != true ]]; then
+if [[ "$CHECK_ONLY" != true && "$ASSERT_COMPLETE" != true && "$SELF_TEST" != true && "$WRITE_TEMPLATE" != true ]]; then
   usage
   exit 0
 fi
@@ -257,10 +313,28 @@ require_file_contains "readme" "$ROOT_DIR/README.md" "marketplace plugin trust, 
 require_file_contains "plugin runtime" "$ROOT_DIR/crates/jarvis-core/src/plugin.rs" "network_access declared_hosts requires allowed_hosts"
 require_file_contains "cross-process E2E" "$ROOT_DIR/crates/jarvis-cli/tests/local_ipc_e2e.rs" "network_subprocess_e2e"
 
+if [[ "$WRITE_TEMPLATE" == true ]]; then
+  write_env_template "$WRITE_TEMPLATE_PATH"
+  printf 'Jarvis plugin trust QA env template written: %s\n' "$WRITE_TEMPLATE_PATH"
+  printf 'Proof boundary: template generation only; no plugin trust validation was performed.\n'
+  exit 0
+fi
+
 if [[ "$SELF_TEST" == true ]]; then
   tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/jarvis-plugin-trust-qa-self-test.XXXXXX")"
   trap 'rm -rf "$tmp_dir"' EXIT
   fixture_report="$tmp_dir/release-plugin-trust-qa-report.json"
+  fixture_template="$tmp_dir/release-plugin-trust-qa.env"
+
+  "$0" --write-template "$fixture_template" >/dev/null
+  require_file_contains "plugin trust QA env template" "$fixture_template" 'JARVIS_PLUGIN_QA_MARKETPLACE_REVIEW_VALIDATED=false'
+  require_file_contains "plugin trust QA env template" "$fixture_template" 'JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED=false'
+  require_file_contains "plugin trust QA env template" "$fixture_template" 'JARVIS_PLUGIN_QA_EGRESS_DENY_FIXTURE_EVIDENCE_NOTE=""'
+  require_file_contains "plugin trust QA env template" "$fixture_template" 'JARVIS_PLUGIN_QA_EGRESS_ALLOW_FIXTURE_EVIDENCE_NOTE=""'
+  require_file_contains "plugin trust QA env template" "$fixture_template" './scripts/release-plugin-trust-qa.sh --assert-complete'
+  if grep -F 'JARVIS_PLUGIN_QA_MARKETPLACE_REVIEW_VALIDATED=true' "$fixture_template" >/dev/null 2>&1; then
+    fail "plugin trust QA self-test expected env template validation flags to default false"
+  fi
 
   JARVIS_PLUGIN_QA_REPORT_PATH="$fixture_report" \
     JARVIS_PLUGIN_QA_REVIEW_SOURCE="self-test-fixture" \
@@ -390,9 +464,11 @@ Manual plugin trust checks still required before marketplace safety language:
 - Validate the macOS sandbox profile or equivalent OS-level confinement.
 - Validate host-level egress enforcement with a network-deny fixture and a
   declared-host allow fixture.
-- Record all JARVIS_PLUGIN_QA_* flags as true, then rerun this script with
-  --assert-complete on the validated release machine with owner, timestamp, and
-  evidence-note fields populated.
+- Record all JARVIS_PLUGIN_QA_* flags as true, or run --write-template
+  target/release-plugin-trust-qa.env to generate the complete fillable
+  environment file. Then rerun this script with --assert-complete on the
+  validated release machine with owner, timestamp, and evidence-note fields
+  populated.
 - Preserve the generated JSON report from --assert-complete as release evidence.
 
 Proof boundary: preflight and runbook only; no marketplace review, malware scan,
