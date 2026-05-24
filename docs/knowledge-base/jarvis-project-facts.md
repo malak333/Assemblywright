@@ -606,7 +606,10 @@ These notes capture durable facts for future agents working on this repository.
   `./scripts/release-local.sh`, launches the release-built app executable with
   an isolated temporary HOME, verifies the bundled core over loopback IPC, and
   checks command, audit, diagnostics, pause/block/resume, and SQLite state
-  through the release app layout. Full mode requires the owner's Developer ID
+  through the release app layout. The CLI exposes `jarvis --version`, and the
+  packaging/evidence scripts require the bundled `jarvis-cli --version` output
+  to match the expected release version before local artifact evidence can pass.
+  Full mode requires the owner's Developer ID
   Application, Developer ID Installer, and notarytool credentials; signs with
   hardened runtime and microphone entitlements; notarizes and staples the app
   zip; then creates, signs, notarizes, and staples a `/Applications` installer

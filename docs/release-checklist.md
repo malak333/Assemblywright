@@ -577,6 +577,10 @@ Distribution packaging gate:
   supervise its bundled core from an isolated HOME. Treat it as local launch and
   IPC evidence only; it still does not prove signing, notarization, stapling,
   installation, Finder/LaunchServices, live device, or manual QA.
+- Confirm `jarvis --version` reports the canonical release version and that
+  `release-evidence-doctor.sh` / `release-evidence-bundle.sh` accept the
+  bundled `Contents/Resources/bin/jarvis-cli --version` output for the same
+  version before treating local distribution artifacts as valid evidence.
 - For a release candidate, set `JARVIS_DEVELOPER_ID_APPLICATION`,
   `JARVIS_DEVELOPER_ID_INSTALLER`, and either `JARVIS_NOTARYTOOL_PROFILE` or
   the Apple ID/team/password notarytool variables, then run

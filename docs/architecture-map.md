@@ -392,7 +392,8 @@ command, resume, and SQLite state checks. `./scripts/package-distribution.sh
 --unsigned-launch-check` is part of `./scripts/release-local.sh` and adds
 release-built distribution layout launch evidence for the bundled core, unsigned
 installer payload structure, isolated HOME, command/audit/diagnostics,
-pause/block/resume, and SQLite state. These checks do not prove Developer ID
+pause/block/resume, SQLite state, and bundled `jarvis-cli --version` alignment
+with the expected release version. These checks do not prove Developer ID
 signing, notarization, installer behavior, Finder/LaunchServices validation,
 App Store distribution, or live-device microphone/Speech/audio-output
 validation. The

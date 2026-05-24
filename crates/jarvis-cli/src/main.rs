@@ -16,6 +16,7 @@ use tokio::net::TcpListener;
 #[derive(Debug, Parser)]
 #[command(name = "jarvis")]
 #[command(about = "Local-first Jarvis core CLI")]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 struct Cli {
     #[command(subcommand)]
     command: CliCommand,
