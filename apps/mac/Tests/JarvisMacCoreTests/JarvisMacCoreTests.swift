@@ -2926,7 +2926,7 @@ private func releaseEvidenceStatusJSON() -> Data {
               "detail": "expected JSON report is missing"
             }
           ],
-          "proof_boundary": "File/report inventory only; complete means expected paths are present and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/timestamp semantics, plugin-trust timestamp semantics, and final evidence-bundle version/SHA/signature-validation semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
+          "proof_boundary": "File/report inventory only; complete means expected paths are present and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/timestamp semantics, plugin-trust timestamp semantics, and final evidence-bundle path/digest/signature-validation semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
         }
         """.utf8
     )
@@ -3030,10 +3030,10 @@ private func completeReleaseEvidenceStatusJSON() -> Data {
               "status": "present",
               "required_for_production": true,
               "manual_gate": true,
-              "detail": "JSON report exists, expected release version matches, artifact/report SHA-256 digests are present, and local signature validation is true; signed_distribution and notarization remain owner-recorded external evidence"
+              "detail": "JSON report exists, expected release version matches, artifact/report paths and SHA-256 digests match current artifacts and reports, and local signature validation is true; signed_distribution and notarization remain owner-recorded external evidence"
             }
           ],
-          "proof_boundary": "File/report inventory only; complete means expected paths are present and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/timestamp semantics, plugin-trust timestamp semantics, and final evidence-bundle version/SHA/signature-validation semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
+          "proof_boundary": "File/report inventory only; complete means expected paths are present and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/timestamp semantics, plugin-trust timestamp semantics, and final evidence-bundle path/digest/signature-validation semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
         }
         """.utf8
     )
@@ -3070,7 +3070,7 @@ private func invalidLiveDeviceEvidenceStatusJSON() -> Data {
               "detail": "JSON report app_bundle.bundle_identifier mismatch: expected com.nobiletechnology.jarvis, got com.example.StaleJarvis"
             }
           ],
-          "proof_boundary": "File/report inventory only; complete means expected paths are present and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/timestamp semantics, plugin-trust timestamp semantics, and final evidence-bundle version/SHA/signature-validation semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
+          "proof_boundary": "File/report inventory only; complete means expected paths are present and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/timestamp semantics, plugin-trust timestamp semantics, and final evidence-bundle path/digest/signature-validation semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
         }
         """.utf8
     )

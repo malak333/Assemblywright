@@ -466,17 +466,12 @@ fn release_evidence_status_rejects_semantically_invalid_plugin_and_bundle_eviden
 }
 
 #[test]
+#[cfg(unix)]
 fn release_evidence_status_accepts_semantically_valid_plugin_and_bundle_evidence() {
     let endpoint = format!("http://{}", unused_loopback_addr());
 
     let temp_dir = tempfile::tempdir().expect("temp release evidence reports");
-    let plugin_report_path = temp_dir.path().join("release-plugin-trust-qa-report.json");
-    let bundle_path = temp_dir.path().join("release-evidence-bundle.json");
-    write_json_report(&plugin_report_path, valid_plugin_trust_qa_report());
-    write_json_report(&bundle_path, valid_release_evidence_bundle());
-
-    let plugin_path = plugin_report_path.to_str().expect("plugin report utf8");
-    let bundle_path = bundle_path.to_str().expect("bundle report utf8");
+    let fixture = write_complete_release_evidence_fixture(temp_dir.path());
     let evidence_status = run_cli_json_with_env(
         [
             "release",
@@ -484,10 +479,7 @@ fn release_evidence_status_accepts_semantically_valid_plugin_and_bundle_evidence
             "--endpoint",
             endpoint.as_str(),
         ],
-        &[
-            ("JARVIS_EVIDENCE_PLUGIN_QA_REPORT", plugin_path),
-            ("JARVIS_EVIDENCE_OUTPUT_PATH", bundle_path),
-        ],
+        &fixture.env_refs(),
     );
     let items = evidence_status["items"].as_array().expect("evidence items");
     assert!(items
@@ -564,6 +556,48 @@ fn release_evidence_status_rejects_stale_signed_provenance_artifact_digests() {
             .expect("signed provenance detail")
             .contains("artifacts.zip_sha256 does not match current app zip artifact"),
         "{signed_provenance_item}"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn release_evidence_status_rejects_stale_final_bundle_report_digests() {
+    let temp_dir = tempfile::tempdir().expect("temp release evidence reports");
+    let fixture = write_complete_release_evidence_fixture(temp_dir.path());
+    let endpoint = format!("http://{}", unused_loopback_addr());
+
+    let mut stale_bundle: Value = serde_json::from_str(
+        &fs::read_to_string(&fixture.bundle_path).expect("read evidence bundle"),
+    )
+    .expect("decode evidence bundle");
+    stale_bundle["reports"]["plugin_trust_qa_sha256"] =
+        json!("fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210");
+    write_json_report(Path::new(&fixture.bundle_path), stale_bundle);
+
+    let evidence_status = run_cli_json_with_env(
+        [
+            "release",
+            "evidence-status",
+            "--endpoint",
+            endpoint.as_str(),
+        ],
+        &fixture.env_refs(),
+    );
+    let bundle_item = evidence_status["items"]
+        .as_array()
+        .expect("evidence items")
+        .iter()
+        .find(|item| item["key"] == "release_evidence_bundle")
+        .expect("release evidence bundle item");
+    assert_eq!(bundle_item["status"], "invalid", "{bundle_item}");
+    assert!(
+        bundle_item["detail"]
+            .as_str()
+            .expect("bundle detail")
+            .contains(
+                "reports.plugin_trust_qa_sha256 does not match current plugin-trust QA report"
+            ),
+        "{bundle_item}"
     );
 }
 
@@ -4199,6 +4233,51 @@ fn valid_release_evidence_bundle() -> Value {
     })
 }
 
+#[cfg(unix)]
+fn valid_release_evidence_bundle_for_paths(
+    app_path: &Path,
+    zip_path: &Path,
+    pkg_path: &Path,
+    signed_provenance_path: &Path,
+    live_report_path: &Path,
+    plugin_report_path: &Path,
+) -> Value {
+    let zip_sha256 = file_sha256(zip_path);
+    let pkg_sha256 = file_sha256(pkg_path);
+    let signed_provenance_sha256 = file_sha256(signed_provenance_path);
+    let live_device_qa_sha256 = file_sha256(live_report_path);
+    let plugin_trust_qa_sha256 = file_sha256(plugin_report_path);
+    json!({
+        "generated_at": "2026-05-22T17:00:00Z",
+        "version": "0.1.4",
+        "artifacts": {
+            "app_path": app_path.to_str().expect("app path utf8"),
+            "zip_path": zip_path.to_str().expect("zip path utf8"),
+            "pkg_path": pkg_path.to_str().expect("pkg path utf8"),
+            "zip_sha256": zip_sha256,
+            "pkg_sha256": pkg_sha256
+        },
+        "reports": {
+            "signed_distribution_provenance_report": signed_provenance_path.to_str().expect("signed provenance path utf8"),
+            "live_device_qa_report": live_report_path.to_str().expect("live report path utf8"),
+            "plugin_trust_qa_report": plugin_report_path.to_str().expect("plugin report path utf8"),
+            "signed_distribution_provenance_sha256": signed_provenance_sha256,
+            "live_device_qa_sha256": live_device_qa_sha256,
+            "plugin_trust_qa_sha256": plugin_trust_qa_sha256
+        },
+        "validation_flags": {
+            "signed_distribution": true,
+            "notarization": true,
+            "clean_profile": true,
+            "live_device_qa": true,
+            "plugin_trust_qa": true,
+            "reports_archived": true,
+            "local_signature_validation": true
+        },
+        "proof_boundary": "Release evidence bundle fixture for CLI E2E."
+    })
+}
+
 fn valid_signed_distribution_provenance_report(
     app_path: &str,
     zip_path: &str,
@@ -4332,7 +4411,17 @@ fn write_complete_release_evidence_fixture(root: &Path) -> CompleteReleaseEviden
             &pkg_sha256,
         ),
     );
-    write_json_report(&bundle_path, valid_release_evidence_bundle());
+    write_json_report(
+        &bundle_path,
+        valid_release_evidence_bundle_for_paths(
+            &dist_dir.join("Jarvis.app"),
+            &zip_path,
+            &pkg_path,
+            &signed_provenance_path,
+            &live_report_path,
+            &plugin_report_path,
+        ),
+    );
 
     CompleteReleaseEvidenceFixture {
         dist_dir: dist_dir.to_str().expect("dist dir utf8").to_string(),
