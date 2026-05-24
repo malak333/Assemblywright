@@ -294,6 +294,39 @@ raise SystemExit(0 if isinstance(cursor, str) and re.fullmatch(r"[0-9a-f]{64}", 
 PY
 }
 
+file_sha256() {
+  local path="$1"
+  shasum -a 256 "$path" | awk '{print $1}'
+}
+
+json_sha256_matches_file() {
+  local path="$1"
+  local dotted_key="$2"
+  local artifact_path="$3"
+  local expected_sha
+  [[ -f "$artifact_path" ]] || return 1
+  expected_sha="$(file_sha256 "$artifact_path")"
+  python3 - "$path" "$dotted_key" "$expected_sha" <<'PY'
+import json
+import sys
+
+path, dotted_key, expected_sha = sys.argv[1:4]
+try:
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+except Exception:
+    raise SystemExit(1)
+
+cursor = data
+for segment in dotted_key.split("."):
+    if not isinstance(cursor, dict) or segment not in cursor:
+        raise SystemExit(1)
+    cursor = cursor[segment]
+
+raise SystemExit(0 if cursor == expected_sha else 1)
+PY
+}
+
 json_utc_timestamp() {
   local path="$1"
   local dotted_key="$2"
@@ -483,6 +516,20 @@ check_json_sha256() {
   fi
 }
 
+check_json_sha256_matches_file() {
+  local label="$1"
+  local path="$2"
+  local dotted_key="$3"
+  local artifact_label="$4"
+  local artifact_path="$5"
+
+  if json_sha256_matches_file "$path" "$dotted_key" "$artifact_path"; then
+    record_satisfied "$label: $dotted_key matches current $artifact_label"
+  else
+    record_missing "$label digest mismatch: $dotted_key must match current $artifact_label in $path"
+  fi
+}
+
 check_json_utc_timestamp() {
   local label="$1"
   local path="$2"
@@ -527,6 +574,8 @@ check_release_evidence() {
     for field in artifacts.zip_sha256 artifacts.pkg_sha256; do
       check_json_sha256 "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "$field"
     done
+    check_json_sha256_matches_file "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.zip_sha256" "app zip artifact" "$ZIP_PATH"
+    check_json_sha256_matches_file "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.pkg_sha256" "installer package artifact" "$PKG_PATH"
     for flag in developer_id_application_signed developer_id_installer_signed app_zip_notarized installer_pkg_notarized app_stapled installer_pkg_stapled gatekeeper_assessed artifact_digests_recorded; do
       check_json_flag "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "validation_flags.$flag"
     done
@@ -808,6 +857,8 @@ if [[ "$SELF_TEST" == true ]]; then
   mkdir -p "$tmp_dir/dist"
   write_fixture_app "$tmp_dir/dist/Jarvis.app"
   touch "$self_test_zip" "$self_test_pkg"
+  self_test_zip_sha="$(file_sha256 "$self_test_zip")"
+  self_test_pkg_sha="$(file_sha256 "$self_test_pkg")"
   write_fixture_reports "$tmp_dir/live.json" "$tmp_dir/plugin.json" "$tmp_dir/bundle.json"
   cat >"$tmp_dir/dist/Jarvis-$VERSION-signed-provenance.json" <<JSON
 {
@@ -820,8 +871,8 @@ if [[ "$SELF_TEST" == true ]]; then
     "app_path": "$tmp_dir/dist/Jarvis.app",
     "zip_path": "$self_test_zip",
     "pkg_path": "$self_test_pkg",
-    "zip_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-    "pkg_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    "zip_sha256": "$self_test_zip_sha",
+    "pkg_sha256": "$self_test_pkg_sha"
   },
   "signing": {
     "developer_id_application_identity": "Developer ID Application: Jarvis QA Fixture",
@@ -867,6 +918,29 @@ JSON
     JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null
+
+  python3 - "$tmp_dir/dist/Jarvis-$VERSION-signed-provenance.json" "$tmp_dir/dist/stale-digest-signed-provenance.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+with open(source, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["artifacts"]["zip_sha256"] = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+PY
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/dist/stale-digest-signed-provenance.json" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+    "$0" --assert-complete >/dev/null 2>&1; then
+    fail "release evidence doctor self-test expected stale signed provenance digest to fail"
+  fi
 
   check_output="$(JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/missing-dist" \
     JARVIS_EVIDENCE_APP_PATH="$tmp_dir/missing-dist/Jarvis.app" \

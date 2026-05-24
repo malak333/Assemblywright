@@ -108,7 +108,9 @@ These notes capture durable facts for future agents working on this repository.
   evidence fields, required signed-distribution flags, plugin-trust UTC review
   timestamp ordering, rejects self-test review sources, validates final bundle
   version, requires SHA-256-shaped artifact/report digests including the signed
-  provenance digest, and requires `validation_flags.local_signature_validation=true`.
+  provenance digest, verifies signed-provenance zip/pkg digests against the
+  current artifact files in bundle/doctor assertions, and requires
+  `validation_flags.local_signature_validation=true`.
 - `release-evidence-doctor.sh --assert-complete` must stay aligned with that
   final-bundle semantic floor. It should reject minimal or hand-written final
   bundles that omit artifact/report paths, omit or malform SHA-256 digests, omit

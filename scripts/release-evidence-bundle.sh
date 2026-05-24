@@ -358,6 +358,35 @@ if not isinstance(cursor, str) or len(cursor) != 64 or any(char not in hexdigits
 PY
 }
 
+require_json_sha256_matches_file() {
+  local label="$1"
+  local path="$2"
+  local dotted_key="$3"
+  local artifact_label="$4"
+  local artifact_path="$5"
+  local expected_sha
+  require_file "$label" "$path"
+  require_file "$artifact_label" "$artifact_path"
+  expected_sha="$(file_sha256 "$artifact_path")"
+  python3 - "$path" "$dotted_key" "$expected_sha" "$label" "$artifact_label" <<'PY'
+import json
+import sys
+
+path, dotted_key, expected_sha, label, artifact_label = sys.argv[1:6]
+with open(path, encoding="utf-8") as handle:
+    data = json.load(handle)
+
+cursor = data
+for segment in dotted_key.split("."):
+    if not isinstance(cursor, dict) or segment not in cursor:
+        raise SystemExit(f"{label} is missing required evidence field: {dotted_key}")
+    cursor = cursor[segment]
+
+if cursor != expected_sha:
+    raise SystemExit(f"{label} {dotted_key} does not match current {artifact_label}")
+PY
+}
+
 require_json_utc_timestamp() {
   local label="$1"
   local path="$2"
@@ -640,6 +669,8 @@ if [[ "$SELF_TEST" == true ]]; then
   touch "$tmp_dir/dist/Jarvis.app/Contents/Resources/bin/jarvis-cli"
   touch "$self_test_zip"
   touch "$self_test_pkg"
+  self_test_zip_sha="$(file_sha256 "$self_test_zip")"
+  self_test_pkg_sha="$(file_sha256 "$self_test_pkg")"
   cat >"$tmp_dir/live.json" <<JSON
 {
   "schema_version": 1,
@@ -734,8 +765,8 @@ JSON
     "app_path": "$tmp_dir/dist/Jarvis.app",
     "zip_path": "$self_test_zip",
     "pkg_path": "$self_test_pkg",
-    "zip_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-    "pkg_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    "zip_sha256": "$self_test_zip_sha",
+    "pkg_sha256": "$self_test_pkg_sha"
   },
   "signing": {
     "developer_id_application_identity": "Developer ID Application: Jarvis QA Fixture",
@@ -1202,6 +1233,37 @@ PY
     fail "release evidence self-test expected plugin report generated before completion to be rejected"
   fi
 
+  python3 - "$tmp_dir/signed-provenance.json" "$tmp_dir/stale-digest-signed-provenance.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+with open(source, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["artifacts"]["zip_sha256"] = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+PY
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/stale-digest-signed-provenance.json" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/stale-digest-bundle.json" \
+    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
+    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+    "$0" --bundle >/dev/null 2>&1; then
+    fail "release evidence self-test expected stale signed provenance digest to be rejected"
+  fi
+
   check_output="$("$0" --check)"
   case "$check_output" in
     *"--write-template target/release-evidence-bundle.env"* )
@@ -1265,6 +1327,8 @@ require_json_string_equals "signed-distribution provenance report" "$SIGNED_PROV
 for field in artifacts.zip_sha256 artifacts.pkg_sha256; do
   require_json_sha256 "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "$field"
 done
+require_json_sha256_matches_file "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.zip_sha256" "app zip artifact" "$ZIP_PATH"
+require_json_sha256_matches_file "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.pkg_sha256" "installer package artifact" "$PKG_PATH"
 for flag in developer_id_application_signed developer_id_installer_signed app_zip_notarized installer_pkg_notarized app_stapled installer_pkg_stapled gatekeeper_assessed artifact_digests_recorded; do
   require_json_bool_true "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "validation_flags.$flag"
 done
