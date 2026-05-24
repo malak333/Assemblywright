@@ -93,8 +93,10 @@ These notes capture durable facts for future agents working on this repository.
   `/release/evidence-status` validates schema/type, rejects `self_test_fixture`,
   checks the expected bundle identifier plus short/build version, requires UTC
   voice-check timestamps ending in `Z`, and requires completion to be at or
-  after start. Invalid or stale hand-written reports stay `invalid` and cannot
-  clear `live_voice_loop` in evidence-aware readiness mode.
+  after start. It also requires the observed transcript to match the spoken
+  test phrase after trimming and the observed command text to match the expected
+  command text after trimming. Invalid or stale hand-written reports stay
+  `invalid` and cannot clear `live_voice_loop` in evidence-aware readiness mode.
 - Signed provenance, plugin-trust, and final bundle evidence items are also
   stricter than generic JSON presence: `/release/evidence-status` validates
   signed provenance version/bundle metadata, signing/notary/staple/Gatekeeper
@@ -615,8 +617,9 @@ These notes capture durable facts for future agents working on this repository.
   `target/release-live-device-qa-report.json`. The report records installed-app
   metadata, voice-loop evidence fields, owner-recorded live voice evidence
   fields for owner/device/profile/timestamps/notes, structured spoken-command
-  observation fields with expected command text matching observed command text,
-  validation flags, schema identity, UTC report generation timestamp, and proof boundary.
+  observation fields with observed transcript matching the spoken test phrase
+  and expected command text matching observed command text, validation flags,
+  schema identity, UTC report generation timestamp, and proof boundary.
   This standardizes manual evidence only; `--check` does not prove live device
   behavior, and the report remains an owner assertion. When the
   release operator explicitly enables evidence-aware readiness, this report can

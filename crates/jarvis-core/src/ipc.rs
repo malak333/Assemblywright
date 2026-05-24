@@ -4363,6 +4363,25 @@ fn validate_live_device_qa_report(value: &serde_json::Value) -> Result<(), Strin
             "JSON report is missing required field: voice_command_observation.observed_command_text"
                 .to_string()
         })?;
+    let test_phrase =
+        json_string_at(value, "voice_command_observation.test_phrase").ok_or_else(|| {
+            "JSON report is missing required field: voice_command_observation.test_phrase"
+                .to_string()
+        })?;
+    let observed_transcript = json_string_at(
+        value,
+        "voice_command_observation.observed_transcript",
+    )
+    .ok_or_else(|| {
+        "JSON report is missing required field: voice_command_observation.observed_transcript"
+            .to_string()
+    })?;
+    if test_phrase.trim() != observed_transcript.trim() {
+        return Err(
+            "JSON report observed_transcript must match test_phrase after trimming whitespace"
+                .to_string(),
+        );
+    }
     if expected_command.trim() != observed_command.trim() {
         return Err(
             "JSON report observed_command_text must match expected_command_text".to_string(),
@@ -5743,6 +5762,15 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let (status, detail) = inspect_live_device_qa_report_value(report);
         assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
         assert!(detail.contains("observed_command_text"), "{detail}");
+    }
+
+    #[test]
+    fn live_device_qa_report_rejects_mismatched_observed_transcript() {
+        let mut report = valid_live_device_qa_report_json();
+        report["voice_command_observation"]["observed_transcript"] = json!("Jarvis stats check.");
+        let (status, detail) = inspect_live_device_qa_report_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("observed_transcript"), "{detail}");
     }
 
     #[test]

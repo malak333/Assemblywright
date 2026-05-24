@@ -57,6 +57,11 @@ The owner must also record non-empty live voice evidence notes:
   JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID
   JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL
 
+The observed transcript must match JARVIS_QA_VOICE_TEST_PHRASE after trimming,
+and the observed command text must match JARVIS_QA_EXPECTED_COMMAND_TEXT after
+trimming. This keeps the spoken phrase, transcript, and command-path evidence
+bound together.
+
 --self-test builds a fake app fixture in a temporary directory and exercises
 the assertion/report mechanics without claiming live-device validation.
 
@@ -174,6 +179,10 @@ expected_name, expected, actual_name, actual = sys.argv[1:5]
 if expected.strip() != actual.strip():
     raise SystemExit(f"{actual_name} must match {expected_name} after trimming whitespace")
 PY
+}
+
+require_observed_transcript_matches_phrase() {
+  require_trimmed_env_match JARVIS_QA_VOICE_TEST_PHRASE JARVIS_QA_OBSERVED_TRANSCRIPT
 }
 
 plist_value() {
@@ -620,6 +629,39 @@ PLIST
   fi
 
   if JARVIS_QA_INSTALLED_APP_PATH="$fixture_app" \
+    JARVIS_QA_REPORT_PATH="$tmp_dir/mismatched-observed-transcript.json" \
+    JARVIS_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.jarvis.selftest" \
+    JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
+    JARVIS_QA_CLEAN_PROFILE_VALIDATED=true \
+    JARVIS_QA_FINDER_LAUNCH_VALIDATED=true \
+    JARVIS_QA_MICROPHONE_VALIDATED=true \
+    JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true \
+    JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true \
+    JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true \
+    JARVIS_QA_NOTIFICATION_VALIDATED=true \
+    JARVIS_QA_RESTART_VALIDATED=true \
+    JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
+    JARVIS_QA_OWNER_NAME="Jarvis QA Self-Test" \
+    JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
+    JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
+    JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
+    JARVIS_QA_VOICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
+    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the fake fixture." \
+    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the fake fixture." \
+    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the fake fixture." \
+    JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the fake fixture." \
+    JARVIS_QA_VOICE_TEST_PHRASE="Jarvis status check." \
+    JARVIS_QA_OBSERVED_TRANSCRIPT="Jarvis stats check." \
+    JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
+    JARVIS_QA_OBSERVED_COMMAND_TEXT="status check" \
+    JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="self-test-task-id" \
+    JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL="self-test audio output" \
+    JARVIS_QA_SELF_TEST_FIXTURE=true \
+    "$0" --assert-complete >/dev/null 2>&1; then
+    fail "live QA self-test expected mismatched observed transcript to fail"
+  fi
+
+  if JARVIS_QA_INSTALLED_APP_PATH="$fixture_app" \
     JARVIS_QA_REPORT_PATH="$tmp_dir/mismatched-command-observation.json" \
     JARVIS_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.jarvis.selftest" \
     JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
@@ -742,6 +784,7 @@ require_non_empty_env JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE
 require_non_empty_env JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE
 require_non_empty_env JARVIS_QA_VOICE_TEST_PHRASE
 require_non_empty_env JARVIS_QA_OBSERVED_TRANSCRIPT
+require_observed_transcript_matches_phrase
 require_trimmed_env_match JARVIS_QA_EXPECTED_COMMAND_TEXT JARVIS_QA_OBSERVED_COMMAND_TEXT
 require_non_empty_env JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID
 require_non_empty_env JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL
