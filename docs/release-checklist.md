@@ -504,7 +504,9 @@ Still future gates for production distribution:
   All required `JARVIS_QA_*` flags must be set to `true`, including
   `JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true`, plus the required
   owner/device/profile/UTC timestamp, voice evidence-note, and structured
-  spoken-command observation fields. The installed app path must match the
+  spoken-command observation fields. Owner-recorded evidence fields must contain
+  non-whitespace text, and `JARVIS_QA_SELF_TEST_FIXTURE=true` is reserved for
+  the script's internal fake-fixture self-test rather than release evidence. The installed app path must match the
   expected `/Applications/Jarvis.app` path unless explicitly overridden with
   `JARVIS_QA_INSTALLED_APP_PATH`, the observed transcript must match the spoken
   test phrase after trimming, the expected command text must match the observed

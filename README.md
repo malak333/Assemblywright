@@ -288,7 +288,9 @@ expected `/Applications/Jarvis.app` path, unless explicitly overridden with
 test phrase, and expected command text matching observed command text,
 `JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID` set to `task:<uuid>` or `audit:<uuid>`
 from the live command/audit evidence, owner/device/profile, ordered UTC
-timestamps, and voice evidence-note fields. It writes a JSON report, defaulting to
+timestamps, and voice evidence-note fields. Owner-recorded evidence fields must
+contain non-whitespace text; `JARVIS_QA_SELF_TEST_FIXTURE` is reserved for the
+script's internal `--self-test` report and is not valid release evidence. It writes a JSON report, defaulting to
 `target/release-live-device-qa-report.json`, with installed-app metadata,
 microphone/Speech permission prompt evidence, spoken transcript handoff into
 the command path, speech-output playback evidence, owner-recorded live voice
