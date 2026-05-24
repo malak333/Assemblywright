@@ -3857,6 +3857,7 @@ fn valid_live_device_qa_report() -> Value {
         "voice_command_observation": {
             "test_phrase": "Jarvis status check.",
             "observed_transcript": "Jarvis status check.",
+            "expected_command_text": "status check",
             "observed_command_text": "status check",
             "command_result_evidence_id": "task:release-voice-fixture",
             "audio_output_device_label": "Built-in speakers"

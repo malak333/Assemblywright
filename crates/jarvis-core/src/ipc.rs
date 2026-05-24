@@ -52,6 +52,7 @@ pub const MAX_ACTIVITY_EVENT_LIMIT: usize = 50;
 const LIVE_DEVICE_QA_REQUIRED_FIELDS: &[&str] = &[
     "schema_version",
     "evidence_type",
+    "generated_at",
     "validation_flags.clean_profile",
     "validation_flags.finder_launch",
     "validation_flags.microphone",
@@ -82,6 +83,7 @@ const LIVE_DEVICE_QA_REQUIRED_FIELDS: &[&str] = &[
     "owner_recorded_live_voice_evidence.audio_output_evidence_note",
     "voice_command_observation.test_phrase",
     "voice_command_observation.observed_transcript",
+    "voice_command_observation.expected_command_text",
     "voice_command_observation.observed_command_text",
     "voice_command_observation.command_result_evidence_id",
     "voice_command_observation.audio_output_device_label",
@@ -4220,6 +4222,7 @@ fn inspect_release_json_report(
 }
 
 fn validate_live_device_qa_report(value: &serde_json::Value) -> Result<(), String> {
+    let generated_at = require_utc_report_timestamp(value, "generated_at")?;
     if value
         .get("schema_version")
         .and_then(|schema| schema.as_i64())
@@ -4260,6 +4263,28 @@ fn validate_live_device_qa_report(value: &serde_json::Value) -> Result<(), Strin
     )?;
     if completed_at < started_at {
         return Err("JSON report voice_check_completed_at must be greater than or equal to voice_check_started_at".to_string());
+    }
+    if generated_at < completed_at {
+        return Err(
+            "JSON report generated_at must be greater than or equal to voice_check_completed_at"
+                .to_string(),
+        );
+    }
+
+    let expected_command = json_string_at(value, "voice_command_observation.expected_command_text")
+        .ok_or_else(|| {
+            "JSON report is missing required field: voice_command_observation.expected_command_text"
+                .to_string()
+        })?;
+    let observed_command = json_string_at(value, "voice_command_observation.observed_command_text")
+        .ok_or_else(|| {
+            "JSON report is missing required field: voice_command_observation.observed_command_text"
+                .to_string()
+        })?;
+    if expected_command.trim() != observed_command.trim() {
+        return Err(
+            "JSON report observed_command_text must match expected_command_text".to_string(),
+        );
     }
 
     Ok(())
@@ -4405,7 +4430,7 @@ fn json_string_at(value: &serde_json::Value, dotted_path: &str) -> Option<String
 fn release_json_present_detail(key: &str) -> String {
     match key {
         "release_evidence_bundle" => "JSON report exists, expected release version matches, artifact/report SHA-256 digests are present, and local signature validation is true; signed_distribution and notarization remain owner-recorded external evidence".to_string(),
-        "live_device_qa_report" => "JSON report exists, required owner-recorded fields are present, and release metadata plus timestamps match expected values; live-device claims are still owner-recorded external evidence".to_string(),
+        "live_device_qa_report" => "JSON report exists, required owner-recorded fields are present, release metadata plus timestamps match expected values, and observed command text matches the expected command; live-device claims are still owner-recorded external evidence".to_string(),
         "plugin_trust_qa_report" => "JSON report exists, required owner-recorded fields are present, and review timestamps are valid and ordered; marketplace, malware, sandbox, and egress claims remain owner-recorded external evidence".to_string(),
         _ => "JSON report exists and required owner-recorded fields are present; external claims are not revalidated by evidence-status".to_string(),
     }
@@ -4483,7 +4508,7 @@ fn release_verification_commands() -> Vec<String> {
         "./scripts/release-live-device-qa.sh --check".to_string(),
         "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env".to_string(),
         "set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete".to_string(),
-        "JARVIS_QA_CLEAN_PROFILE_VALIDATED=true JARVIS_QA_FINDER_LAUNCH_VALIDATED=true JARVIS_QA_MICROPHONE_VALIDATED=true JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true JARVIS_QA_NOTIFICATION_VALIDATED=true JARVIS_QA_RESTART_VALIDATED=true JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true JARVIS_QA_OWNER_NAME='Release Operator' JARVIS_QA_DEVICE_LABEL='Clean-profile release Mac' JARVIS_QA_PROFILE_LABEL='Clean macOS QA profile' JARVIS_QA_VOICE_CHECK_STARTED_AT='2026-05-22T16:00:00Z' JARVIS_QA_VOICE_CHECK_COMPLETED_AT='2026-05-22T16:05:00Z' JARVIS_QA_MICROPHONE_EVIDENCE_NOTE='Microphone prompt and capture observed' JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE='Speech prompt and recognition observed' JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE='Spoken transcript reached the command path' JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE='Speech output playback observed' JARVIS_QA_VOICE_TEST_PHRASE='Jarvis status check' JARVIS_QA_OBSERVED_TRANSCRIPT='Jarvis status check' JARVIS_QA_OBSERVED_COMMAND_TEXT='status check' JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task or audit id from the live command' JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL='Built-in speakers' ./scripts/release-live-device-qa.sh --assert-complete".to_string(),
+        "JARVIS_QA_CLEAN_PROFILE_VALIDATED=true JARVIS_QA_FINDER_LAUNCH_VALIDATED=true JARVIS_QA_MICROPHONE_VALIDATED=true JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true JARVIS_QA_NOTIFICATION_VALIDATED=true JARVIS_QA_RESTART_VALIDATED=true JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true JARVIS_QA_OWNER_NAME='Release Operator' JARVIS_QA_DEVICE_LABEL='Clean-profile release Mac' JARVIS_QA_PROFILE_LABEL='Clean macOS QA profile' JARVIS_QA_VOICE_CHECK_STARTED_AT='2026-05-22T16:00:00Z' JARVIS_QA_VOICE_CHECK_COMPLETED_AT='2026-05-22T16:05:00Z' JARVIS_QA_MICROPHONE_EVIDENCE_NOTE='Microphone prompt and capture observed' JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE='Speech prompt and recognition observed' JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE='Spoken transcript reached the command path' JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE='Speech output playback observed' JARVIS_QA_VOICE_TEST_PHRASE='Jarvis status check' JARVIS_QA_OBSERVED_TRANSCRIPT='Jarvis status check' JARVIS_QA_EXPECTED_COMMAND_TEXT='status check' JARVIS_QA_OBSERVED_COMMAND_TEXT='status check' JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task or audit id from the live command' JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL='Built-in speakers' ./scripts/release-live-device-qa.sh --assert-complete".to_string(),
         "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness".to_string(),
         "./scripts/release-plugin-trust-qa.sh --check".to_string(),
         "JARVIS_PLUGIN_QA_MARKETPLACE_REVIEW_VALIDATED=true JARVIS_PLUGIN_QA_MALWARE_SCAN_VALIDATED=true JARVIS_PLUGIN_QA_OS_SANDBOX_VALIDATED=true JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED=true JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_POLICY_VALIDATED=true JARVIS_PLUGIN_QA_MANUAL_TRUST_REVIEW_VALIDATED=true JARVIS_PLUGIN_QA_OWNER_NAME='Release Operator' JARVIS_PLUGIN_QA_REVIEW_STARTED_AT='2026-05-22T16:10:00Z' JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT='2026-05-22T16:20:00Z' JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE='Marketplace review evidence archived' JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE='Malware scan evidence archived' JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE='OS sandbox validation evidence archived' JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE='Host-level egress validation evidence archived' JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE='Signed publisher policy evidence archived' JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE='Manual plugin trust review evidence archived' ./scripts/release-plugin-trust-qa.sh --assert-complete".to_string(),
@@ -4990,6 +5015,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 |command| command.contains("JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true")
                     && command.contains("JARVIS_QA_OWNER_NAME=")
                     && command.contains("JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE=")
+                    && command.contains("JARVIS_QA_EXPECTED_COMMAND_TEXT=")
                     && command.contains("JARVIS_QA_OBSERVED_COMMAND_TEXT=")
                     && command.contains("./scripts/release-live-device-qa.sh --assert-complete")
             ));
@@ -5204,6 +5230,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             "schema_version": 1,
             "evidence_type": "owner_recorded_live_device_qa",
             "self_test_fixture": false,
+            "generated_at": "2026-05-22T16:06:00Z",
             "validation_flags": {
                 "clean_profile": true,
                 "finder_launch": true,
@@ -5243,6 +5270,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             "voice_command_observation": {
                 "test_phrase": "Jarvis status check.",
                 "observed_transcript": "Jarvis status check.",
+                "expected_command_text": "status check",
                 "observed_command_text": "status check",
                 "command_result_evidence_id": "task:fixture",
                 "audio_output_device_label": "Built-in speakers"
@@ -5436,6 +5464,24 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let (status, detail) = inspect_live_device_qa_report_value(report);
         assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
         assert!(detail.contains("voice_check_completed_at"), "{detail}");
+    }
+
+    #[test]
+    fn live_device_qa_report_rejects_generated_before_completion() {
+        let mut report = valid_live_device_qa_report_json();
+        report["generated_at"] = json!("2026-05-22T16:04:00Z");
+        let (status, detail) = inspect_live_device_qa_report_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("generated_at"), "{detail}");
+    }
+
+    #[test]
+    fn live_device_qa_report_rejects_mismatched_command_observation() {
+        let mut report = valid_live_device_qa_report_json();
+        report["voice_command_observation"]["observed_command_text"] = json!("different command");
+        let (status, detail) = inspect_live_device_qa_report_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("observed_command_text"), "{detail}");
     }
 
     #[test]
