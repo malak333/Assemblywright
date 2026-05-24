@@ -87,10 +87,12 @@ These notes capture durable facts for future agents working on this repository.
   missing, or invalid status for signed artifact paths, signed-distribution
   provenance report, live-device QA report, plugin-trust QA report, and final
   evidence bundle. The app bundle item additionally validates `Info.plist`
-  bundle id, short version, and build version against expected release metadata.
-  This is file/report inventory only; it does not prove signing, notarization,
-  installation, Finder launch, live-device QA, marketplace review, malware
-  scanning, or OS sandboxing.
+  bundle id, short version, and build version against expected release metadata,
+  and the bundled core item validates the packaged `jarvis-cli.version` marker
+  without executing the artifact path. This is file/report inventory only; it
+  does not prove signing, notarization, installation, Finder launch, executable
+  runtime behavior, live-device QA, marketplace review, malware scanning, or OS
+  sandboxing.
 - The live-device QA evidence item is stricter than generic JSON presence:
   `/release/evidence-status` validates schema/type, rejects `self_test_fixture`,
   checks the installed app path, expected bundle identifier, short/build

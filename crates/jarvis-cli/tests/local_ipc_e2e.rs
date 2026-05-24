@@ -829,9 +829,26 @@ fn release_evidence_status_marks_present_artifacts_as_presence_only() {
         "{app_bundle_detail}"
     );
 
+    let bundled_core_item = items
+        .iter()
+        .find(|item| item["key"] == "bundled_core_executable")
+        .expect("missing bundled core evidence item");
+    assert_eq!(
+        bundled_core_item["status"], "present",
+        "{bundled_core_item}"
+    );
+    let bundled_core_detail = bundled_core_item["detail"].as_str().expect("detail string");
+    assert!(
+        bundled_core_detail.contains("version marker matches expected release version"),
+        "{bundled_core_detail}"
+    );
+    assert!(
+        bundled_core_detail.contains("not validated by evidence-status"),
+        "{bundled_core_detail}"
+    );
+
     for key in [
         "app_executable",
-        "bundled_core_executable",
         "signed_app_zip",
         "signed_installer_package",
     ] {
@@ -889,9 +906,26 @@ fn release_evidence_status_server_marks_present_artifacts_as_presence_only() {
         "{app_bundle_detail}"
     );
 
+    let bundled_core_item = items
+        .iter()
+        .find(|item| item["key"] == "bundled_core_executable")
+        .expect("missing bundled core evidence item");
+    assert_eq!(
+        bundled_core_item["status"], "present",
+        "{bundled_core_item}"
+    );
+    let bundled_core_detail = bundled_core_item["detail"].as_str().expect("detail string");
+    assert!(
+        bundled_core_detail.contains("version marker matches expected release version"),
+        "{bundled_core_detail}"
+    );
+    assert!(
+        bundled_core_detail.contains("not validated by evidence-status"),
+        "{bundled_core_detail}"
+    );
+
     for key in [
         "app_executable",
-        "bundled_core_executable",
         "signed_app_zip",
         "signed_installer_package",
     ] {
@@ -961,6 +995,43 @@ fn release_evidence_status_rejects_stale_app_bundle_metadata() {
         .as_str()
         .expect("detail")
         .contains("CFBundleIdentifier mismatch"));
+}
+
+#[test]
+#[cfg(unix)]
+fn release_evidence_status_rejects_stale_bundled_core_version_marker() {
+    let temp_dir = tempfile::tempdir().expect("temp evidence artifacts");
+    let dist_dir = write_placeholder_distribution(temp_dir.path());
+    fs::write(
+        dist_dir.join("Jarvis.app/Contents/Resources/bin/jarvis-cli.version"),
+        "jarvis 0.0.0\n",
+    )
+    .expect("write stale bundled core version marker");
+    let endpoint = format!("http://{}", unused_loopback_addr());
+    let dist_dir = dist_dir.to_str().expect("dist dir utf8");
+
+    let evidence_status = run_cli_json_with_env(
+        [
+            "release",
+            "evidence-status",
+            "--endpoint",
+            endpoint.as_str(),
+        ],
+        &[("JARVIS_EVIDENCE_DIST_DIR", dist_dir)],
+    );
+    let items = evidence_status["items"].as_array().expect("evidence items");
+    let bundled_core_item = items
+        .iter()
+        .find(|item| item["key"] == "bundled_core_executable")
+        .expect("missing bundled core evidence item");
+    assert_eq!(
+        bundled_core_item["status"], "invalid",
+        "{bundled_core_item}"
+    );
+    assert!(bundled_core_item["detail"]
+        .as_str()
+        .expect("detail")
+        .contains("version marker mismatch"));
 }
 
 #[test]
@@ -4691,6 +4762,8 @@ fn write_placeholder_distribution(root: &Path) -> std::path::PathBuf {
     let bundled_core = resources_dir.join("jarvis-cli");
     fs::write(&app_executable, "#!/bin/sh\n").expect("write app executable");
     fs::write(&bundled_core, "#!/bin/sh\n").expect("write bundled core");
+    fs::write(resources_dir.join("jarvis-cli.version"), "jarvis 0.1.4\n")
+        .expect("write bundled core version marker");
     make_executable(&app_executable);
     make_executable(&bundled_core);
     fs::write(dist_dir.join("Jarvis-0.1.4.zip"), "zip placeholder").expect("write zip placeholder");

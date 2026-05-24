@@ -4076,11 +4076,10 @@ fn release_evidence_status_from_env() -> ReleaseEvidenceStatusResponse {
             app_path.join("Contents/MacOS/JarvisMacApp"),
             ReleaseEvidenceKind::Executable,
         ),
-        release_path_item(
+        release_bundled_core_item(
             "bundled_core_executable",
             "Bundled core executable",
             app_path.join("Contents/Resources/bin/jarvis-cli"),
-            ReleaseEvidenceKind::Executable,
         ),
         release_path_item(
             "signed_app_zip",
@@ -4153,7 +4152,7 @@ fn release_evidence_status_from_env() -> ReleaseEvidenceStatusResponse {
         invalid_count,
         items,
         proof_boundary:
-            "File/report inventory only; complete means expected paths are present, app bundle metadata matches the expected bundle identifier/version/build, and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/non-future timestamp semantics, plugin-trust non-future timestamp semantics, and final evidence-bundle path/digest/signature-validation/non-future timestamp semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
+            "File/report inventory only; complete means expected paths are present, app bundle metadata matches the expected bundle identifier/version/build, bundled core version-marker metadata matches the expected release version, and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/non-future timestamp semantics, plugin-trust non-future timestamp semantics, and final evidence-bundle path/digest/signature-validation/non-future timestamp semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, execute release artifacts, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
                 .to_string(),
     }
 }
@@ -4199,6 +4198,20 @@ fn release_app_bundle_item(key: &str, label: &str, path: PathBuf) -> ReleaseEvid
         label: label.to_string(),
         path: path.display().to_string(),
         kind: ReleaseEvidenceKind::Directory,
+        status,
+        required_for_production: true,
+        manual_gate: true,
+        detail,
+    }
+}
+
+fn release_bundled_core_item(key: &str, label: &str, path: PathBuf) -> ReleaseEvidenceStatusItem {
+    let (status, detail) = inspect_release_bundled_core(&path);
+    ReleaseEvidenceStatusItem {
+        key: key.to_string(),
+        label: label.to_string(),
+        path: path.display().to_string(),
+        kind: ReleaseEvidenceKind::Executable,
         status,
         required_for_production: true,
         manual_gate: true,
@@ -4369,6 +4382,44 @@ fn inspect_release_app_bundle(path: &FsPath) -> (ReleaseEvidenceItemStatus, Stri
     (
         ReleaseEvidenceItemStatus::Present,
         "directory exists; Info.plist bundle identifier, short version, and build version match expected release metadata; signing, notarization, and stapling are not validated by evidence-status".to_string(),
+    )
+}
+
+fn inspect_release_bundled_core(path: &FsPath) -> (ReleaseEvidenceItemStatus, String) {
+    let (status, detail) = inspect_release_path(path, ReleaseEvidenceKind::Executable);
+    if status != ReleaseEvidenceItemStatus::Present {
+        return (status, detail);
+    }
+
+    let version_marker = path.with_file_name(format!(
+        "{}.version",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("jarvis-cli")
+    ));
+    let version = match fs::read_to_string(&version_marker) {
+        Ok(version) => version,
+        Err(_) => {
+            return (
+                ReleaseEvidenceItemStatus::Invalid,
+                "bundled core version marker is missing or not readable".to_string(),
+            )
+        }
+    };
+    let expected_version = format!("jarvis {}", expected_release_evidence_version());
+    if version.trim() != expected_version {
+        return (
+            ReleaseEvidenceItemStatus::Invalid,
+            format!(
+                "bundled core version marker mismatch: expected {expected_version}, observed {}",
+                version.trim()
+            ),
+        );
+    }
+
+    (
+        ReleaseEvidenceItemStatus::Present,
+        "executable file exists; bundled core version marker matches expected release version; signing, notarization, and stapling are not validated by evidence-status".to_string(),
     )
 }
 
@@ -5147,7 +5198,7 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "release_evidence_status",
             "implemented",
-            "`/release/evidence-status` and `jarvis release evidence-status` expose structured present, missing, or invalid status for standard signed artifacts, QA reports, and final evidence bundle paths, including app bundle metadata matching, signed-provenance artifact digest matching, live-device QA bundle/version/non-future timestamp checks, plugin-trust non-future timestamp checks, and final evidence-bundle path/digest/signature-validation/non-future timestamp checks, with Rust, CLI E2E, and Swift model coverage.",
+            "`/release/evidence-status` and `jarvis release evidence-status` expose structured present, missing, or invalid status for standard signed artifacts, QA reports, and final evidence bundle paths, including app bundle metadata matching, bundled core version-marker matching, signed-provenance artifact digest matching, live-device QA bundle/version/non-future timestamp checks, plugin-trust non-future timestamp checks, and final evidence-bundle path/digest/signature-validation/non-future timestamp checks, with Rust, CLI E2E, and Swift model coverage.",
             "Read-only file/report inventory plus report semantic validation only; it does not sign, notarize, install, Finder-launch, run live-device QA, review marketplace trust, scan malware, or enforce OS sandboxing.",
         ),
         feature(
@@ -5851,6 +5902,44 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let (invalid_status, invalid_detail) = inspect_release_app_bundle(&app_dir);
         assert_eq!(invalid_status, ReleaseEvidenceItemStatus::Invalid);
         assert!(invalid_detail.contains("CFBundleIdentifier mismatch"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn release_evidence_bundled_core_requires_matching_version_marker() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = tempfile::tempdir().expect("temp bundled core");
+        let core_path = temp_dir.path().join("jarvis-cli");
+        std::fs::write(&core_path, "#!/bin/sh\nexit 0\n").expect("write bundled core");
+        let mut permissions = std::fs::metadata(&core_path)
+            .expect("core metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&core_path, permissions).expect("chmod bundled core");
+
+        let (missing_status, missing_detail) = inspect_release_bundled_core(&core_path);
+        assert_eq!(missing_status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(missing_detail.contains("version marker"));
+
+        std::fs::write(
+            core_path.with_file_name("jarvis-cli.version"),
+            "jarvis 0.0.0\n",
+        )
+        .expect("write stale version marker");
+        let (stale_status, stale_detail) = inspect_release_bundled_core(&core_path);
+        assert_eq!(stale_status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(stale_detail.contains("version marker mismatch"));
+
+        std::fs::write(
+            core_path.with_file_name("jarvis-cli.version"),
+            format!("jarvis {}\n", env!("CARGO_PKG_VERSION")),
+        )
+        .expect("write matching version marker");
+        let (present_status, present_detail) = inspect_release_bundled_core(&core_path);
+        assert_eq!(present_status, ReleaseEvidenceItemStatus::Present);
+        assert!(present_detail.contains("version marker matches expected release version"));
+        assert!(present_detail.contains("not validated by evidence-status"));
     }
 
     #[test]

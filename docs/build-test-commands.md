@@ -67,7 +67,9 @@ cargo run -p jarvis-cli -- release readiness
 Evidence-aware readiness only accepts release reports that pass
 `release evidence-status` semantic checks. The app bundle item checks
 `Contents/Info.plist` for the expected bundle ID, short version, and build
-version before it can count as present. Live-device QA checks schema/type,
+version before it can count as present, and the bundled core item checks the
+packaged `Contents/Resources/bin/jarvis-cli.version` marker without executing
+the artifact path. Live-device QA checks schema/type,
 `self_test_fixture=false`, expected bundle ID, matching short/build version,
 and ordered non-future UTC voice-check timestamps. Plugin-trust checks ordered
 non-future UTC review timestamps. The final evidence bundle checks the expected
@@ -441,7 +443,7 @@ operator-readable and `--json` preserves the exact structured payload. It
 also rejects signed-provenance zip/pkg digests that no longer match the current
 artifact files. It is file/report inventory plus report semantic validation
 only and does not prove signing, notarization, installed app launch, live-device QA, marketplace review,
-malware scanning, or OS sandboxing. Non-default live-device and plugin-trust
+malware scanning, OS sandboxing, or executable runtime behavior. Non-default live-device and plugin-trust
 report paths can be provided through either the QA script variables
 (`JARVIS_QA_REPORT_PATH`, `JARVIS_PLUGIN_QA_REPORT_PATH`) or the bundle/doctor
 aliases (`JARVIS_EVIDENCE_LIVE_QA_REPORT`,
