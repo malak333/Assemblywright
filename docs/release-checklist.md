@@ -56,10 +56,12 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   the standard signed artifact, live-device QA report, plugin-trust QA report,
   and final evidence bundle inventory. The CLI command should default to
   operator-readable output and use `--json` or `JARVIS_CLI_JSON=1` for the
-  exact structured payload. Treat it as file/report inventory plus report
-  semantic validation only, not proof that
-  signing, notarization, installation, Finder launch, live-device QA,
-  marketplace review, malware scanning, or OS sandboxing was performed.
+  exact structured payload. Confirm the app bundle metadata and bundled
+  `jarvis-cli.version` marker are semantically checked before those items can
+  count as present. Treat it as file/report inventory plus report semantic
+  validation only, not proof that signing, notarization, installation, Finder
+  launch, executable runtime behavior, live-device QA, marketplace review,
+  malware scanning, or OS sandboxing was performed.
 - Confirm the live-device QA report is `present`, not `invalid`, before using
   external evidence mode. Evidence-status semantically checks the expected
   installed app path, bundle ID, short/build version, non-self-test identity,

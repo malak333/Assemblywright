@@ -358,6 +358,7 @@ build_app_bundle() {
 
   cp "$SWIFT_EXECUTABLE" "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME"
   cp "$CORE_EXECUTABLE" "$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
+  printf 'jarvis %s\n' "$VERSION" >"$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME.version"
   chmod 755 "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME" "$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
   assert_bundled_core_version
 

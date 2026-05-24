@@ -2970,7 +2970,7 @@ private func completeReleaseEvidenceStatusJSON() -> Data {
               "status": "present",
               "required_for_production": true,
               "manual_gate": true,
-              "detail": "executable file exists; bundled-core launch is covered by separate smoke checks"
+              "detail": "executable file exists; bundled core version marker matches expected release version; signing, notarization, and stapling are not validated by evidence-status"
             },
             {
               "key": "signed_app_zip",

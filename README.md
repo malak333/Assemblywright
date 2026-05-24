@@ -258,7 +258,10 @@ against the CLI/core crate versions before packaging or evidence scripts build
 versioned artifact names. The CLI also exposes `jarvis --version`, and the
 distribution packaging/evidence scripts now require the bundled
 `Contents/Resources/bin/jarvis-cli --version` output to match that expected
-release version before artifact evidence can pass.
+release version before artifact evidence can pass. Packaging also writes a
+read-only `Contents/Resources/bin/jarvis-cli.version` marker, and
+`/release/evidence-status` validates that marker without executing the bundled
+artifact path.
 The unsigned structure check builds release Rust and Swift artifacts, assembles
 the distribution-shaped `Jarvis.app`, optionally ad-hoc signs it when
 `codesign` is available, creates an unsigned `/Applications` installer package,

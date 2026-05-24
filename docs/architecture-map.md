@@ -246,15 +246,17 @@ standard signed artifact, signed-distribution provenance report, live-device QA
 report, plugin-trust QA report, and final evidence bundle inventory as
 structured JSON with present, missing, or invalid item status. Artifact paths
 remain presence-only checks except the app bundle, whose `Info.plist` bundle id,
-short version, and build version must match expected release metadata. JSON
+short version, and build version must match expected release metadata, and the
+bundled core executable, whose adjacent `jarvis-cli.version` marker must match
+the expected release version. JSON
 reports receive semantic validation for signed provenance version/bundle
 metadata, bundled core version, signing/notary/staple/Gatekeeper fields, required flags, SHA-256
 digests, signed-provenance zip/pkg digest matches against current artifact
 files, live-device bundle/version/timestamp evidence, non-future plugin-trust
 review timestamps, and final bundle path/digest/local-signature evidence. This mirrors release-evidence-doctor
 inventory plus report inspection only; it does not perform signing,
-notarization, installation, Finder launch, live-device QA, marketplace review,
-malware scanning, or OS sandboxing.
+notarization, installation, Finder launch, executable runtime validation,
+live-device QA, marketplace review, malware scanning, or OS sandboxing.
 Repository-backed IPC state stores approval-required plugin command decisions
 in `pending_approvals`, exposes them through CLI/IPC inspection endpoints, and
 lets a user grant or deny the pending record without executing the side effect.
