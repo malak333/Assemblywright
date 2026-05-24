@@ -64,10 +64,12 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   bundle ID, short/build version, non-self-test identity, and ordered UTC
   voice-check timestamps; weak or stale hand-written reports must keep
   `live_voice_loop` pending.
-- Confirm plugin-trust and final bundle reports are `present`, not `invalid`.
-  Evidence-status checks plugin-trust review timestamps, final bundle version,
-  SHA-256 digest shape, and local signature-validation status before treating
-  those reports as usable evidence.
+- Confirm signed-distribution provenance, plugin-trust, and final bundle reports
+  are `present`, not `invalid`. Evidence-status checks signed provenance
+  version/bundle metadata, signing/notary/staple/Gatekeeper evidence fields,
+  required flags, plugin-trust review timestamps, final bundle version, SHA-256
+  digest shape, and local signature-validation status before treating those
+  reports as usable evidence.
 - Confirm `release-plugin-trust-qa.sh --assert-complete`,
   `release-evidence-bundle.sh --bundle`, and
   `release-evidence-doctor.sh --assert-complete` reject non-UTC plugin-trust

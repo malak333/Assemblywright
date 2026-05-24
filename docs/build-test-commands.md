@@ -130,7 +130,8 @@ through `jarvis plugins ...` commands, but they are not exposed to
 model-originated tool planning.
 
 The interactive CLI defaults to operator-readable text for `jarvis command`
-and its `jarvis ask` alias, `jarvis tools list`, `jarvis release readiness`,
+and its `jarvis ask` alias, `jarvis tools list`, `jarvis tasks list/get/audit`,
+`jarvis routes list/get`, `jarvis activity summary`, `jarvis release readiness`,
 and `jarvis release evidence-status`. Use `--json` on those commands when a
 script, test, or debugging session needs the exact IPC payload with full audit,
 route, readiness, or evidence inventory details. `JARVIS_CLI_JSON=1` is
@@ -308,10 +309,12 @@ available:
 
 ```sh
 cargo run -p jarvis-cli -- tasks list
+cargo run -p jarvis-cli -- tasks list --json
 cargo run -p jarvis-cli -- tasks audit
 cargo run -p jarvis-cli -- routes list
 cargo run -p jarvis-cli -- routes list --task-id <task-id>
 cargo run -p jarvis-cli -- routes get <route-id>
+cargo run -p jarvis-cli -- routes get <route-id> --json
 cargo run -p jarvis-cli -- approvals list --status pending
 cargo run -p jarvis-cli -- approvals approve <approval-id> --decided-by cli --reason "reviewed"
 cargo run -p jarvis-cli -- approvals execute <approval-id>
@@ -319,6 +322,7 @@ cargo run -p jarvis-cli -- approvals deny <approval-id> --decided-by cli --reaso
 cargo run -p jarvis-cli -- release readiness
 cargo run -p jarvis-cli -- permissions review
 cargo run -p jarvis-cli -- activity summary
+cargo run -p jarvis-cli -- activity summary --json
 cargo run -p jarvis-cli -- activity watch --max-events 2 --interval-ms 500
 cargo run -p jarvis-cli -- plugins verify-publisher <plugin-id> --trusted-origin "<manifest author>" --decided-by cli
 cargo run -p jarvis-cli -- plugins verify-publisher-signature <plugin-id> --trusted-public-key "<base64 ed25519 public key>" --decided-by cli

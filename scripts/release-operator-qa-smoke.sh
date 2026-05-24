@@ -121,14 +121,14 @@ require_output_contains "operator QA command" "$COMMAND_OUTPUT" '"accepted":true
 require_output_contains "operator QA command" "$COMMAND_OUTPUT" '"status":"completed"'
 require_output_contains "operator QA command" "$COMMAND_OUTPUT" '"event_type":"plugin_completed"'
 
-TASKS_OUTPUT="$("$JARVIS" tasks list --endpoint "$ENDPOINT")"
+TASKS_OUTPUT="$("$JARVIS" tasks list --json --endpoint "$ENDPOINT")"
 require_output_contains "operator QA tasks" "$TASKS_OUTPUT" '"status":"completed"'
 
-AUDIT_OUTPUT="$("$JARVIS" tasks audit --endpoint "$ENDPOINT")"
+AUDIT_OUTPUT="$("$JARVIS" tasks audit --json --endpoint "$ENDPOINT")"
 require_output_contains "operator QA audit" "$AUDIT_OUTPUT" '"event_type":"plugin_completed"'
 require_output_contains "operator QA audit" "$AUDIT_OUTPUT" '"event_type":"task_completed"'
 
-ROUTES_OUTPUT="$("$JARVIS" routes list --endpoint "$ENDPOINT")"
+ROUTES_OUTPUT="$("$JARVIS" routes list --json --endpoint "$ENDPOINT")"
 require_output_contains "operator QA routes" "$ROUTES_OUTPUT" '"selected_provider":"local"'
 require_output_contains "operator QA routes" "$ROUTES_OUTPUT" '"local_model":"fake-local-model"'
 
@@ -168,7 +168,7 @@ require_output_contains "operator QA scheduler run" "$SCHEDULER_RUN_OUTPUT" '"ac
 require_output_contains "operator QA scheduler run" "$SCHEDULER_RUN_OUTPUT" '"event_type":"scheduler_job_completed"'
 require_output_contains "operator QA scheduler run" "$SCHEDULER_RUN_OUTPUT" '"event_type":"scheduler_proactive_policy_checked"'
 
-ACTIVITY_OUTPUT="$("$JARVIS" activity summary --endpoint "$ENDPOINT")"
+ACTIVITY_OUTPUT="$("$JARVIS" activity summary --json --endpoint "$ENDPOINT")"
 require_output_contains "operator QA activity summary" "$ACTIVITY_OUTPUT" '"active_task_count":0'
 require_output_contains "operator QA activity summary" "$ACTIVITY_OUTPUT" '"completed"'
 
@@ -203,7 +203,7 @@ start_server "restart"
 RESTART_MEMORY_OUTPUT="$("$JARVIS" memory get "$MEMORY_ID" --endpoint "$ENDPOINT")"
 require_output_contains "operator QA restart memory" "$RESTART_MEMORY_OUTPUT" '"value":"updated operator QA memory"'
 
-RESTART_TASKS_OUTPUT="$("$JARVIS" tasks list --endpoint "$ENDPOINT")"
+RESTART_TASKS_OUTPUT="$("$JARVIS" tasks list --json --endpoint "$ENDPOINT")"
 require_output_contains "operator QA restart tasks" "$RESTART_TASKS_OUTPUT" '"status":"completed"'
 
 RESTART_SCHEDULER_OUTPUT="$("$JARVIS" scheduler list --endpoint "$ENDPOINT")"

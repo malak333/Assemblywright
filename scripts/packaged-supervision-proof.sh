@@ -98,7 +98,7 @@ require_output_contains "packaged command" "$COMMAND_OUTPUT" '"accepted":true'
 require_output_contains "packaged command" "$COMMAND_OUTPUT" '"status":"completed"'
 require_output_contains "packaged command" "$COMMAND_OUTPUT" '"event_type":"plugin_completed"'
 
-AUDIT_OUTPUT="$("$BUNDLED_CORE" tasks audit --endpoint "$ENDPOINT")"
+AUDIT_OUTPUT="$("$BUNDLED_CORE" tasks audit --json --endpoint "$ENDPOINT")"
 require_output_contains "packaged audit" "$AUDIT_OUTPUT" '"event_type":"plugin_completed"'
 require_output_contains "packaged audit" "$AUDIT_OUTPUT" '"event_type":"task_completed"'
 

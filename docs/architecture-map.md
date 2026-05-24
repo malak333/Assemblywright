@@ -239,11 +239,13 @@ release QA.
 local `IpcState` readiness summary when no server is available; the fallback is
 operator triage only and does not claim server-backed runtime evidence.
 `/release/evidence-status` and `jarvis release evidence-status` expose the
-standard signed artifact, live-device QA report, plugin-trust QA report, and
-final evidence bundle inventory as structured JSON with present, missing, or
-invalid item status. JSON reports receive semantic validation for live-device
-bundle/version/timestamp evidence, plugin-trust review timestamps, and final
-bundle version/SHA/local-signature evidence. This mirrors release-evidence-doctor
+standard signed artifact, signed-distribution provenance report, live-device QA
+report, plugin-trust QA report, and final evidence bundle inventory as
+structured JSON with present, missing, or invalid item status. Artifact paths
+remain presence-only checks; JSON reports receive semantic validation for
+signed provenance version/bundle metadata, signing/notary/staple/Gatekeeper
+fields, required flags, SHA-256 digests, live-device bundle/version/timestamp
+evidence, plugin-trust review timestamps, and final bundle version/SHA/local-signature evidence. This mirrors release-evidence-doctor
 inventory plus report inspection only; it does not perform signing,
 notarization, installation, Finder launch, live-device QA, marketplace review,
 malware scanning, or OS sandboxing.

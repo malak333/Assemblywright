@@ -557,7 +557,7 @@ run_unsigned_launch_check() {
   require_output_contains "release app command" "$COMMAND_OUTPUT" '"status":"completed"'
   require_output_contains "release app command" "$COMMAND_OUTPUT" '"event_type":"plugin_completed"'
 
-  AUDIT_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" tasks audit --endpoint "$ENDPOINT")"
+  AUDIT_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" tasks audit --json --endpoint "$ENDPOINT")"
   require_output_contains "release app audit" "$AUDIT_OUTPUT" '"event_type":"plugin_completed"'
   require_output_contains "release app audit" "$AUDIT_OUTPUT" '"event_type":"task_completed"'
 
