@@ -454,7 +454,8 @@ These notes capture durable facts for future agents working on this repository.
   `./scripts/release-evidence-doctor.sh --self-test`, `swift test
   --package-path apps/mac`, and `swift build --package-path apps/mac`.
   It also runs `./scripts/storage-migration-backup-smoke.sh` so file-backed
-  migration backup/recovery stays part of the default local release evidence.
+  migration backup/recovery and representative schema v1-v8 fixture
+  preservation stay part of the default local release evidence.
 - Local-model proof now includes stubbed provider-envelope E2E plus live
   Ollama route viability observed during manual testing. The proof is still a
   local runtime boundary claim, not a finished conversational assistant claim:
@@ -652,6 +653,11 @@ These notes capture durable facts for future agents working on this repository.
   app-owned local files, may include personal memory/audit/plugin metadata, and
   are not redacted diagnostics exports. Keychain secrets are not stored in
   SQLite backups.
+- Storage migration coverage includes a representative schema v1-v8 fixture
+  matrix that preserves task, audit, emergency-pause, memory, scheduler,
+  approval, installed-plugin, plugin-provenance, and route records through the
+  current schema. This is repo-owned migration proof, not installer upgrade or
+  Finder/LaunchServices validation.
 - `cargo run -p jarvis-cli -- smoke` now covers baseline command/pause smoke,
   plugin manifest listing, and repository-backed task, model-route, explicit
   memory-management paths, diagnostics redaction, and repository-backed

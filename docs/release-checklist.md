@@ -365,8 +365,9 @@ stage or when a PR needs focused evidence for one ownership slice.
   repository-backed local smoke.
 - Confirm `./scripts/storage-migration-backup-smoke.sh` passes for storage
   changes, proving legacy DB backup creation, restore after migration-open
-  failure, and newer-schema diagnostics. Treat broad installer upgrade and
-  full historical fixture matrices as separate release-candidate gates.
+  failure, newer-schema diagnostics, and representative schema v1-v8 fixture
+  preservation. Treat broad installer upgrade behavior as a separate
+  release-candidate gate.
 - Confirm local plugin metadata install/list/get coverage remains in that E2E
   path, and installed plugin execution coverage applies only after an explicit
   `subprocess_stdio` grant.

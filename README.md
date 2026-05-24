@@ -200,8 +200,10 @@ run the focused storage recovery proof:
 ```
 
 That script proves legacy file-backed DB migration creates a preflight backup,
-failed migration-open restores the backup, and newer schema versions fail with
-an explicit upgrade diagnostic. It does not replace installer upgrade QA.
+failed migration-open restores the backup, newer schema versions fail with an
+explicit upgrade diagnostic, and representative schema v1-v8 fixtures preserve
+critical rows through the current migration path. It does not replace installer
+upgrade QA.
 
 For operator-facing release QA over a repository-backed local core, run:
 

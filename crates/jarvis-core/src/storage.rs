@@ -1668,12 +1668,12 @@ impl SqliteRepository {
                         'manifest_path', '',
                         'manifest_sha256', '',
                         'source_path', source_path,
-                        'source_path_canonicalized', 1,
+                        'source_path_canonicalized', json('true'),
                         'captured_at', installed_at,
                         'last_verified_at', NULL,
                         'integrity_status', 'not_verified',
                         'origin_claim', NULL,
-                        'origin_claim_verified', 0
+                        'origin_claim_verified', json('false')
                     ),
                     execution_enabled,
                     execution_grant,
@@ -2265,6 +2265,146 @@ mod tests {
     }
 
     #[test]
+    fn historical_fixture_matrix_migrates_supported_versions() {
+        for fixture_version in 1..CURRENT_SCHEMA_VERSION {
+            let dir = tempdir().unwrap();
+            let db_path = dir
+                .path()
+                .join(format!("jarvis-schema-v{fixture_version}.sqlite"));
+            let backup_dir = dir.path().join("migration-backups");
+            let fixture = create_historical_fixture(&db_path, dir.path(), fixture_version);
+
+            let migrated =
+                SqliteRepository::open_with_migration_backup_dir(&db_path, Some(&backup_dir))
+                    .unwrap();
+
+            assert_eq!(migrated.schema_version().unwrap(), CURRENT_SCHEMA_VERSION);
+            assert!(fs::read_dir(&backup_dir).unwrap().any(|entry| entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".bak")));
+
+            let task = migrated.get_task(fixture.task_id).unwrap().unwrap();
+            assert_eq!(
+                task.user_input,
+                format!("historical fixture v{fixture_version}")
+            );
+
+            let audit_entries = migrated.list_audit_entries(Some(fixture.task_id)).unwrap();
+            assert_eq!(audit_entries.len(), 2);
+            assert_eq!(audit_entries[0].id, fixture.first_audit_id);
+            assert_eq!(audit_entries[1].summary, "fixture second audit");
+
+            let pause = migrated.emergency_pause_state().unwrap();
+            assert!(pause.paused);
+            assert_eq!(pause.reason.as_deref(), Some("historical fixture pause"));
+            assert_eq!(pause.updated_by.as_deref(), Some("fixture"));
+
+            let active_memory = migrated
+                .get_memory_item(fixture.active_memory_id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(active_memory.value, "preserve active memory");
+            assert!(active_memory.deleted_at.is_none());
+            let deleted_memory = migrated
+                .get_memory_item(fixture.deleted_memory_id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(deleted_memory.value, "preserve deleted memory");
+            assert!(deleted_memory.reviewed_at.is_some());
+            assert!(deleted_memory.deleted_at.is_some());
+
+            if fixture_version >= 2 {
+                let job = migrated
+                    .get_scheduler_job(fixture.scheduler_job_id)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(job.name, "historical scheduler");
+                assert_eq!(job.trigger, TriggerKind::Interval { every_seconds: 900 });
+                assert_eq!(job.status, SchedulerJobStatus::Cancelled);
+                assert_eq!(
+                    job.cancellation_reason.as_deref(),
+                    Some("historical cleanup")
+                );
+            }
+
+            if fixture_version >= 3 {
+                let approval = migrated
+                    .get_pending_approval(fixture.approval_id)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(approval.action, "historical.approve");
+                assert_eq!(approval.status, ApprovalStatus::Pending);
+                assert_eq!(
+                    approval.requested_scopes,
+                    vec![CapabilityScope::Conversation, CapabilityScope::PluginRun]
+                );
+            }
+
+            if fixture_version >= 4 {
+                let plugin = migrated
+                    .get_installed_plugin("local_registry_test")
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(plugin.source_path, fixture.plugin_source_path);
+                assert_eq!(plugin.manifest.actions[0].name, "inspect");
+                if fixture_version <= 5 {
+                    assert!(!plugin.execution_enabled);
+                    assert_eq!(
+                        plugin.execution_grant,
+                        InstalledPluginExecutionGrant::MetadataOnly
+                    );
+                } else {
+                    assert!(plugin.execution_enabled);
+                    assert_eq!(
+                        plugin.execution_grant,
+                        InstalledPluginExecutionGrant::SubprocessStdio
+                    );
+                }
+
+                if fixture_version == 8 {
+                    assert_eq!(plugin.provenance.capture_method, "fixture_v8");
+                    assert_eq!(
+                        plugin.provenance.integrity_status,
+                        InstalledPluginIntegrityStatus::MatchesInstallSnapshot
+                    );
+                    assert_eq!(plugin.provenance.source_tree_file_count, Some(3));
+                    assert_eq!(plugin.provenance.origin_claim.as_deref(), Some("fixture"));
+                    assert!(plugin.provenance.origin_claim_verified);
+                } else {
+                    assert_eq!(plugin.provenance.capture_method, "legacy_migration");
+                    assert_eq!(
+                        plugin.provenance.integrity_status,
+                        InstalledPluginIntegrityStatus::NotVerified
+                    );
+                    assert!(plugin.provenance.source_path_canonicalized);
+                    assert!(!plugin.provenance.origin_claim_verified);
+                }
+            }
+
+            if fixture_version >= 7 {
+                let routes = migrated
+                    .list_model_route_records(Some(fixture.task_id))
+                    .unwrap();
+                assert_eq!(routes.len(), 1);
+                assert_eq!(routes[0].id, fixture.route_id);
+                assert_eq!(routes[0].context_for_model, None);
+                assert_eq!(routes[0].selected_provider, Some(RouteModelProvider::Local));
+
+                let update_error = migrated
+                    .raw_connection()
+                    .execute(
+                        "UPDATE model_route_records SET reason = 'tampered' WHERE id = ?1",
+                        params![fixture.route_id.to_string()],
+                    )
+                    .unwrap_err();
+                assert!(update_error.to_string().contains("append-only"));
+            }
+        }
+    }
+
+    #[test]
     fn migrating_legacy_file_database_creates_backup_snapshot() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("jarvis.sqlite");
@@ -2731,6 +2871,267 @@ mod tests {
             persisted.manifest.source_path.as_deref(),
             Some(source_path.as_str())
         );
+    }
+
+    struct HistoricalFixture {
+        task_id: Uuid,
+        first_audit_id: Uuid,
+        active_memory_id: Uuid,
+        deleted_memory_id: Uuid,
+        scheduler_job_id: Uuid,
+        approval_id: Uuid,
+        route_id: Uuid,
+        plugin_source_path: String,
+    }
+
+    fn create_historical_fixture(
+        db_path: &Path,
+        root: &Path,
+        schema_version: i64,
+    ) -> HistoricalFixture {
+        assert!((1..CURRENT_SCHEMA_VERSION).contains(&schema_version));
+
+        let conn = Connection::open(db_path).unwrap();
+        let repo = SqliteRepository { conn };
+        repo.configure().unwrap();
+        repo.raw_connection()
+            .execute_batch(
+                "
+                CREATE TABLE schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    applied_at TEXT NOT NULL
+                );
+                ",
+            )
+            .unwrap();
+        for version in 1..=schema_version {
+            match version {
+                1 => repo.apply_migration_1().unwrap(),
+                2 => repo.apply_migration_2().unwrap(),
+                3 => repo.apply_migration_3().unwrap(),
+                4 => repo.apply_migration_4().unwrap(),
+                5 => repo.apply_migration_5().unwrap(),
+                6 => repo.apply_migration_6().unwrap(),
+                7 => repo.apply_migration_7().unwrap(),
+                8 => repo.apply_migration_8().unwrap(),
+                _ => unreachable!("unsupported fixture version"),
+            }
+        }
+        assert_eq!(repo.schema_version().unwrap(), schema_version);
+
+        let task = repo
+            .create_task(
+                Uuid::new_v4(),
+                format!("historical fixture v{schema_version}"),
+            )
+            .unwrap();
+        let first_audit = AuditEntry::new(
+            Some(task.id),
+            "fixture.created",
+            "fixture first audit",
+            json!({ "schema_version": schema_version }),
+        );
+        let second_audit = AuditEntry::new(
+            Some(task.id),
+            "fixture.checked",
+            "fixture second audit",
+            json!({ "order": 2 }),
+        );
+        repo.append_audit_entry(&first_audit).unwrap();
+        repo.append_audit_entry(&second_audit).unwrap();
+        repo.set_emergency_pause(true, Some("historical fixture pause"), Some("fixture"))
+            .unwrap();
+
+        let active_memory = repo
+            .create_memory_item(NewMemoryItem {
+                category: "historical".to_string(),
+                key: format!("active_v{schema_version}"),
+                value: "preserve active memory".to_string(),
+                provenance: "fixture matrix".to_string(),
+                sensitivity: Sensitivity::Workspace,
+            })
+            .unwrap();
+        let deleted_memory = repo
+            .create_memory_item(NewMemoryItem {
+                category: "historical".to_string(),
+                key: format!("deleted_v{schema_version}"),
+                value: "preserve deleted memory".to_string(),
+                provenance: "fixture matrix".to_string(),
+                sensitivity: Sensitivity::Private,
+            })
+            .unwrap();
+        let deleted_memory = repo.mark_memory_reviewed(deleted_memory.id).unwrap();
+        let deleted_memory = repo.delete_memory_item(deleted_memory.id).unwrap();
+
+        let scheduler_job_id = Uuid::new_v4();
+        if schema_version >= 2 {
+            repo.upsert_scheduler_job(&SchedulerJob {
+                id: scheduler_job_id,
+                name: "historical scheduler".to_string(),
+                command: "preserve scheduler command".to_string(),
+                trigger: TriggerKind::Interval { every_seconds: 900 },
+                status: SchedulerJobStatus::Cancelled,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                cancelled_at: Some(Utc::now()),
+                cancellation_reason: Some("historical cleanup".to_string()),
+            })
+            .unwrap();
+        }
+
+        let approval_id = Uuid::new_v4();
+        if schema_version >= 3 {
+            repo.raw_connection()
+                .execute(
+                    "INSERT INTO pending_approvals
+                     (id, task_id, action, requested_scopes, risk_tier, sensitivity, status,
+                      reason, requested_at, decided_at, decided_by, decision_reason)
+                     VALUES (?1, ?2, 'historical.approve', ?3, 'confirm', 'personal', 'pending',
+                             'fixture approval', ?4, NULL, NULL, NULL)",
+                    params![
+                        approval_id.to_string(),
+                        task.id.to_string(),
+                        scopes_to_json(&[
+                            CapabilityScope::Conversation,
+                            CapabilityScope::PluginRun
+                        ])
+                        .unwrap(),
+                        to_db_time(Utc::now()),
+                    ],
+                )
+                .unwrap();
+        }
+
+        let plugin_source_path = root.join(format!("plugin-source-v{schema_version}"));
+        fs::create_dir(&plugin_source_path).unwrap();
+        let plugin_source_path = plugin_source_path
+            .canonicalize()
+            .unwrap()
+            .display()
+            .to_string();
+        if schema_version >= 4 {
+            insert_historical_plugin(&repo, schema_version, &plugin_source_path);
+        }
+
+        let route_id = Uuid::new_v4();
+        if schema_version >= 7 {
+            let route = ModelRouteRecord {
+                id: route_id,
+                task_id: Some(task.id),
+                outcome: RouteOutcome::Selected,
+                selected_provider: Some(RouteModelProvider::Local),
+                reason: "historical local route".to_string(),
+                sensitivity: Sensitivity::Workspace,
+                approval_status: ApprovalStatus::NotRequired,
+                redaction_applied: true,
+                context_for_model: None,
+                local_available: true,
+                local_sufficient: true,
+                evidence: RouteEvidence {
+                    local_available: true,
+                    local_sufficient: true,
+                    local_provider: crate::LocalModelProviderKind::Fake,
+                    local_model: "fixture-local-model".to_string(),
+                    local_endpoint_configured: false,
+                    chatgpt_enabled: false,
+                    chatgpt_requires_approval: true,
+                    required_scopes: vec![
+                        CapabilityScope::Conversation,
+                        CapabilityScope::LocalModel,
+                    ],
+                    granted_scopes: vec![
+                        CapabilityScope::Conversation,
+                        CapabilityScope::LocalModel,
+                    ],
+                    restricted_cloud_block: false,
+                },
+                created_at: Utc::now(),
+            };
+            repo.append_model_route_record(&route).unwrap();
+        }
+
+        HistoricalFixture {
+            task_id: task.id,
+            first_audit_id: first_audit.id,
+            active_memory_id: active_memory.id,
+            deleted_memory_id: deleted_memory.id,
+            scheduler_job_id,
+            approval_id,
+            route_id,
+            plugin_source_path,
+        }
+    }
+
+    fn insert_historical_plugin(repo: &SqliteRepository, schema_version: i64, source_path: &str) {
+        let manifest_json = serde_json::to_string(&local_test_manifest(source_path)).unwrap();
+        let installed_at = to_db_time(Utc::now());
+
+        match schema_version {
+            4 => {
+                repo.raw_connection()
+                    .execute(
+                        "INSERT INTO installed_plugins
+                         (id, manifest_json, source_path, execution_enabled, installed_at)
+                         VALUES ('local_registry_test', ?1, ?2, 0, ?3)",
+                        params![manifest_json, source_path, installed_at],
+                    )
+                    .unwrap();
+            }
+            5 => {
+                repo.raw_connection()
+                    .execute(
+                        "INSERT INTO installed_plugins
+                         (id, manifest_json, source_path, execution_enabled, execution_grant, installed_at)
+                         VALUES ('local_registry_test', ?1, ?2, 0, 'metadata_only', ?3)",
+                        params![manifest_json, source_path, installed_at],
+                    )
+                    .unwrap();
+            }
+            6 | 7 => {
+                repo.raw_connection()
+                    .execute(
+                        "INSERT INTO installed_plugins
+                         (id, manifest_json, source_path, execution_enabled, execution_grant, installed_at)
+                         VALUES ('local_registry_test', ?1, ?2, 1, 'subprocess_stdio', ?3)",
+                        params![manifest_json, source_path, installed_at],
+                    )
+                    .unwrap();
+            }
+            8 => {
+                let provenance = InstalledPluginProvenance {
+                    provenance_schema_version: 1,
+                    capture_method: "fixture_v8".to_string(),
+                    manifest_path: "manifest.json".to_string(),
+                    manifest_sha256: "manifest-sha256".to_string(),
+                    source_path: source_path.to_string(),
+                    source_path_canonicalized: true,
+                    source_tree_sha256: Some("tree-sha256".to_string()),
+                    source_tree_file_count: Some(3),
+                    subprocess_command_path: None,
+                    subprocess_command_sha256: None,
+                    captured_at: Utc::now(),
+                    last_verified_at: Some(Utc::now()),
+                    integrity_status: InstalledPluginIntegrityStatus::MatchesInstallSnapshot,
+                    origin_claim: Some("fixture".to_string()),
+                    origin_claim_verified: true,
+                };
+                repo.raw_connection()
+                    .execute(
+                        "INSERT INTO installed_plugins
+                         (id, manifest_json, source_path, provenance_json, execution_enabled,
+                          execution_grant, installed_at)
+                         VALUES ('local_registry_test', ?1, ?2, ?3, 1, 'subprocess_stdio', ?4)",
+                        params![
+                            manifest_json,
+                            source_path,
+                            serde_json::to_string(&provenance).unwrap(),
+                            installed_at
+                        ],
+                    )
+                    .unwrap();
+            }
+            _ => unreachable!("unsupported plugin fixture version"),
+        }
     }
 
     fn local_test_manifest(source_path: &str) -> PluginManifest {

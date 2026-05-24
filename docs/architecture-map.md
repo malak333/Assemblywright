@@ -826,9 +826,10 @@ abstractions. It does not support a claim that Jarvis is a finished
 voice assistant, packaged Mac app, autonomous external-action agent, plugin
 marketplace, or production cloud-integrated system.
 The storage migration proof shows preflight file-backed SQLite backups,
-restore after migration-open failure, and newer-schema diagnostics. It does not
-prove installer upgrade behavior, broad v1-through-v7 fixture preservation, or
-Finder/LaunchServices recovery UX.
+restore after migration-open failure, newer-schema diagnostics, and
+representative schema v1-v8 fixture preservation for persisted repository
+rows. It does not prove installer upgrade behavior or Finder/LaunchServices
+recovery UX.
 The six-agent autonomous sweep model is a workflow convention, not proof by
 itself. Only checked-in implementation, documented commands, and captured local
 verification output should be used as release evidence. For each new feature
