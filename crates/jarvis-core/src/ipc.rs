@@ -104,6 +104,10 @@ const PLUGIN_TRUST_QA_REQUIRED_FIELDS: &[&str] = &[
     "owner_recorded_plugin_trust_evidence.malware_scan_evidence_note",
     "owner_recorded_plugin_trust_evidence.os_sandbox_evidence_note",
     "owner_recorded_plugin_trust_evidence.egress_evidence_note",
+    "owner_recorded_plugin_trust_evidence.egress_policy_label",
+    "owner_recorded_plugin_trust_evidence.egress_validation_completed_at",
+    "owner_recorded_plugin_trust_evidence.egress_deny_fixture_evidence_note",
+    "owner_recorded_plugin_trust_evidence.egress_allow_fixture_evidence_note",
     "owner_recorded_plugin_trust_evidence.signed_publisher_evidence_note",
     "owner_recorded_plugin_trust_evidence.manual_review_evidence_note",
     "proof_boundary",
@@ -4370,6 +4374,7 @@ fn validate_live_device_qa_report(value: &serde_json::Value) -> Result<(), Strin
 
 fn validate_plugin_trust_qa_report(value: &serde_json::Value) -> Result<(), String> {
     let generated_at = require_utc_report_timestamp(value, "generated_at")?;
+    require_json_bool_value(value, "validation_flags.egress_enforcement", true)?;
     let started_at = require_utc_report_timestamp(
         value,
         "owner_recorded_plugin_trust_evidence.review_started_at",
@@ -4378,9 +4383,37 @@ fn validate_plugin_trust_qa_report(value: &serde_json::Value) -> Result<(), Stri
         value,
         "owner_recorded_plugin_trust_evidence.review_completed_at",
     )?;
+    let egress_completed_at = require_utc_report_timestamp(
+        value,
+        "owner_recorded_plugin_trust_evidence.egress_validation_completed_at",
+    )?;
+    require_json_nonempty_string_value(
+        value,
+        "owner_recorded_plugin_trust_evidence.egress_policy_label",
+    )?;
+    require_json_nonempty_string_value(
+        value,
+        "owner_recorded_plugin_trust_evidence.egress_deny_fixture_evidence_note",
+    )?;
+    require_json_nonempty_string_value(
+        value,
+        "owner_recorded_plugin_trust_evidence.egress_allow_fixture_evidence_note",
+    )?;
     if completed_at < started_at {
         return Err(
             "JSON report review_completed_at must be greater than or equal to review_started_at"
+                .to_string(),
+        );
+    }
+    if egress_completed_at < started_at {
+        return Err(
+            "JSON report egress_validation_completed_at must be greater than or equal to review_started_at"
+                .to_string(),
+        );
+    }
+    if completed_at < egress_completed_at {
+        return Err(
+            "JSON report review_completed_at must be greater than or equal to egress_validation_completed_at"
                 .to_string(),
         );
     }
@@ -4512,6 +4545,18 @@ fn require_json_bool_value(
     }
 }
 
+fn require_json_nonempty_string_value(
+    value: &serde_json::Value,
+    dotted_path: &str,
+) -> Result<(), String> {
+    let found = json_string_at(value, dotted_path)
+        .ok_or_else(|| format!("JSON report is missing required field: {dotted_path}"))?;
+    if found.trim().is_empty() {
+        return Err(format!("JSON report {dotted_path} must be non-empty"));
+    }
+    Ok(())
+}
+
 fn require_json_sha256_value(value: &serde_json::Value, dotted_path: &str) -> Result<(), String> {
     let found = json_string_at(value, dotted_path)
         .ok_or_else(|| format!("JSON report is missing required field: {dotted_path}"))?;
@@ -4554,7 +4599,7 @@ fn release_json_present_detail(key: &str) -> String {
         "release_evidence_bundle" => "JSON report exists, expected release version matches, artifact/report SHA-256 digests are present including signed-distribution provenance, and local signature validation is true; clean-profile, live-device, and plugin-trust claims remain owner-recorded external evidence".to_string(),
         "signed_distribution_provenance_report" => "JSON report exists, expected release version and bundle identifier match, signing/notarization/stapling/Gatekeeper evidence fields are present, required flags are true, and artifact SHA-256 digests are present; clean-profile install and live-device QA remain separate manual gates".to_string(),
         "live_device_qa_report" => "JSON report exists, required owner-recorded fields are present, release metadata plus timestamps match expected values, and observed command text matches the expected command; live-device claims are still owner-recorded external evidence".to_string(),
-        "plugin_trust_qa_report" => "JSON report exists, required owner-recorded fields are present, and review timestamps are valid and ordered; marketplace, malware, sandbox, and egress claims remain owner-recorded external evidence".to_string(),
+        "plugin_trust_qa_report" => "JSON report exists, required owner-recorded fields are present, review and egress validation timestamps are valid and ordered, and deny/allow egress fixture notes are present; marketplace, malware, sandbox, and host-level egress claims remain owner-recorded external evidence".to_string(),
         _ => "JSON report exists and required owner-recorded fields are present; external claims are not revalidated by evidence-status".to_string(),
     }
 }
@@ -4634,7 +4679,7 @@ fn release_verification_commands() -> Vec<String> {
         "JARVIS_QA_CLEAN_PROFILE_VALIDATED=true JARVIS_QA_FINDER_LAUNCH_VALIDATED=true JARVIS_QA_MICROPHONE_VALIDATED=true JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true JARVIS_QA_NOTIFICATION_VALIDATED=true JARVIS_QA_RESTART_VALIDATED=true JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true JARVIS_QA_OWNER_NAME='Release Operator' JARVIS_QA_DEVICE_LABEL='Clean-profile release Mac' JARVIS_QA_PROFILE_LABEL='Clean macOS QA profile' JARVIS_QA_VOICE_CHECK_STARTED_AT='2026-05-22T16:00:00Z' JARVIS_QA_VOICE_CHECK_COMPLETED_AT='2026-05-22T16:05:00Z' JARVIS_QA_MICROPHONE_EVIDENCE_NOTE='Microphone prompt and capture observed' JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE='Speech prompt and recognition observed' JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE='Spoken transcript reached the command path' JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE='Speech output playback observed' JARVIS_QA_VOICE_TEST_PHRASE='Jarvis status check' JARVIS_QA_OBSERVED_TRANSCRIPT='Jarvis status check' JARVIS_QA_EXPECTED_COMMAND_TEXT='status check' JARVIS_QA_OBSERVED_COMMAND_TEXT='status check' JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task or audit id from the live command' JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL='Built-in speakers' ./scripts/release-live-device-qa.sh --assert-complete".to_string(),
         "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness".to_string(),
         "./scripts/release-plugin-trust-qa.sh --check".to_string(),
-        "JARVIS_PLUGIN_QA_MARKETPLACE_REVIEW_VALIDATED=true JARVIS_PLUGIN_QA_MALWARE_SCAN_VALIDATED=true JARVIS_PLUGIN_QA_OS_SANDBOX_VALIDATED=true JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED=true JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_POLICY_VALIDATED=true JARVIS_PLUGIN_QA_MANUAL_TRUST_REVIEW_VALIDATED=true JARVIS_PLUGIN_QA_OWNER_NAME='Release Operator' JARVIS_PLUGIN_QA_REVIEW_STARTED_AT='2026-05-22T16:10:00Z' JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT='2026-05-22T16:20:00Z' JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE='Marketplace review evidence archived' JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE='Malware scan evidence archived' JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE='OS sandbox validation evidence archived' JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE='Host-level egress validation evidence archived' JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE='Signed publisher policy evidence archived' JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE='Manual plugin trust review evidence archived' ./scripts/release-plugin-trust-qa.sh --assert-complete".to_string(),
+        "JARVIS_PLUGIN_QA_MARKETPLACE_REVIEW_VALIDATED=true JARVIS_PLUGIN_QA_MALWARE_SCAN_VALIDATED=true JARVIS_PLUGIN_QA_OS_SANDBOX_VALIDATED=true JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED=true JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_POLICY_VALIDATED=true JARVIS_PLUGIN_QA_MANUAL_TRUST_REVIEW_VALIDATED=true JARVIS_PLUGIN_QA_OWNER_NAME='Release Operator' JARVIS_PLUGIN_QA_REVIEW_STARTED_AT='2026-05-22T16:10:00Z' JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT='2026-05-22T16:20:00Z' JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE='Marketplace review evidence archived' JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE='Malware scan evidence archived' JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE='OS sandbox validation evidence archived' JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE='Host-level egress validation evidence archived' JARVIS_PLUGIN_QA_EGRESS_POLICY_LABEL='Host egress policy/profile reviewed' JARVIS_PLUGIN_QA_EGRESS_VALIDATION_COMPLETED_AT='2026-05-22T16:18:00Z' JARVIS_PLUGIN_QA_EGRESS_DENY_FIXTURE_EVIDENCE_NOTE='Undeclared-host deny fixture evidence archived' JARVIS_PLUGIN_QA_EGRESS_ALLOW_FIXTURE_EVIDENCE_NOTE='Declared-host allow fixture evidence archived' JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE='Signed publisher policy evidence archived' JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE='Manual plugin trust review evidence archived' ./scripts/release-plugin-trust-qa.sh --assert-complete".to_string(),
         "./scripts/release-evidence-bundle.sh --check".to_string(),
         "./scripts/release-evidence-doctor.sh --check".to_string(),
         "JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true JARVIS_EVIDENCE_REPORTS_ARCHIVED=true ./scripts/release-evidence-bundle.sh --bundle".to_string(),
@@ -5153,6 +5198,8 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .iter()
             .any(|command| command.contains("JARVIS_PLUGIN_QA_OWNER_NAME=")
                 && command.contains("JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE=")
+                && command.contains("JARVIS_PLUGIN_QA_EGRESS_DENY_FIXTURE_EVIDENCE_NOTE=")
+                && command.contains("JARVIS_PLUGIN_QA_EGRESS_ALLOW_FIXTURE_EVIDENCE_NOTE=")
                 && command.contains("./scripts/release-plugin-trust-qa.sh --assert-complete")));
         assert!(readiness
             .recommended_verification_commands
@@ -5345,7 +5392,8 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert!(bundle_detail.contains("owner-recorded external evidence"));
 
         let plugin_detail = release_json_present_detail("plugin_trust_qa_report");
-        assert!(plugin_detail.contains("review timestamps"));
+        assert!(plugin_detail.contains("egress validation timestamps"));
+        assert!(plugin_detail.contains("deny/allow egress fixture notes"));
         assert!(plugin_detail.contains("marketplace"));
         assert!(plugin_detail.contains("owner-recorded external evidence"));
     }
@@ -5440,6 +5488,10 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 "malware_scan_evidence_note": "Malware scan evidence archived.",
                 "os_sandbox_evidence_note": "OS sandbox validation evidence archived.",
                 "egress_evidence_note": "Host-level egress validation evidence archived.",
+                "egress_policy_label": "Host egress policy/profile reviewed.",
+                "egress_validation_completed_at": "2026-05-22T16:18:00Z",
+                "egress_deny_fixture_evidence_note": "Undeclared-host deny fixture evidence archived.",
+                "egress_allow_fixture_evidence_note": "Declared-host allow fixture evidence archived.",
                 "signed_publisher_evidence_note": "Signed publisher policy evidence archived.",
                 "manual_review_evidence_note": "Manual plugin trust review evidence archived."
             },
@@ -5616,7 +5668,55 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let (status, detail) =
             inspect_plugin_trust_qa_report_value(valid_plugin_trust_qa_report_json());
         assert_eq!(status, ReleaseEvidenceItemStatus::Present);
-        assert!(detail.contains("review timestamps"), "{detail}");
+        assert!(detail.contains("egress validation timestamps"), "{detail}");
+    }
+
+    #[test]
+    fn plugin_trust_qa_report_rejects_blank_egress_deny_fixture_note() {
+        let mut report = valid_plugin_trust_qa_report_json();
+        report["owner_recorded_plugin_trust_evidence"]["egress_deny_fixture_evidence_note"] =
+            json!("   ");
+        let (status, detail) = inspect_plugin_trust_qa_report_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(
+            detail.contains("egress_deny_fixture_evidence_note"),
+            "{detail}"
+        );
+    }
+
+    #[test]
+    fn plugin_trust_qa_report_rejects_blank_egress_allow_fixture_note() {
+        let mut report = valid_plugin_trust_qa_report_json();
+        report["owner_recorded_plugin_trust_evidence"]["egress_allow_fixture_evidence_note"] =
+            json!("   ");
+        let (status, detail) = inspect_plugin_trust_qa_report_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(
+            detail.contains("egress_allow_fixture_evidence_note"),
+            "{detail}"
+        );
+    }
+
+    #[test]
+    fn plugin_trust_qa_report_rejects_false_egress_enforcement_flag() {
+        let mut report = valid_plugin_trust_qa_report_json();
+        report["validation_flags"]["egress_enforcement"] = json!(false);
+        let (status, detail) = inspect_plugin_trust_qa_report_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("egress_enforcement"), "{detail}");
+    }
+
+    #[test]
+    fn plugin_trust_qa_report_rejects_egress_completion_after_review_completion() {
+        let mut report = valid_plugin_trust_qa_report_json();
+        report["owner_recorded_plugin_trust_evidence"]["egress_validation_completed_at"] =
+            json!("2026-05-22T16:21:00Z");
+        let (status, detail) = inspect_plugin_trust_qa_report_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(
+            detail.contains("egress_validation_completed_at"),
+            "{detail}"
+        );
     }
 
     #[test]

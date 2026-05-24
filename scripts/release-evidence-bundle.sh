@@ -682,6 +682,10 @@ JSON
     "malware_scan_evidence_note": "Malware scan fixture was observed.",
     "os_sandbox_evidence_note": "OS sandbox fixture was observed.",
     "egress_evidence_note": "Egress fixture was observed.",
+    "egress_policy_label": "Self-test host egress policy fixture",
+    "egress_validation_completed_at": "2026-05-22T16:18:00Z",
+    "egress_deny_fixture_evidence_note": "Deny fixture blocked undeclared outbound traffic.",
+    "egress_allow_fixture_evidence_note": "Allow fixture reached the declared host only.",
     "signed_publisher_evidence_note": "Signed publisher policy fixture was observed.",
     "manual_review_evidence_note": "Manual trust review fixture was observed."
   },
@@ -962,7 +966,7 @@ import sys
 source, target = sys.argv[1:3]
 with open(source, encoding="utf-8") as handle:
     data = json.load(handle)
-data["owner_recorded_plugin_trust_evidence"]["egress_evidence_note"] = ""
+data["owner_recorded_plugin_trust_evidence"]["egress_deny_fixture_evidence_note"] = ""
 with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
@@ -1159,13 +1163,16 @@ require_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "app_bund
 for flag in marketplace_review malware_scan os_sandbox egress_enforcement signed_publisher_policy manual_trust_review; do
   require_json_bool_true "plugin trust QA report" "$PLUGIN_QA_REPORT" "validation_flags.$flag"
 done
-for field in owner_name review_started_at review_completed_at marketplace_evidence_note malware_scan_evidence_note os_sandbox_evidence_note egress_evidence_note signed_publisher_evidence_note manual_review_evidence_note; do
+for field in owner_name review_started_at review_completed_at marketplace_evidence_note malware_scan_evidence_note os_sandbox_evidence_note egress_evidence_note egress_policy_label egress_deny_fixture_evidence_note egress_allow_fixture_evidence_note signed_publisher_evidence_note manual_review_evidence_note; do
   require_json_nonempty_string "plugin trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.$field"
 done
 require_json_utc_timestamp "plugin trust QA report" "$PLUGIN_QA_REPORT" "generated_at"
 require_json_utc_timestamp "plugin trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.review_started_at"
 require_json_utc_timestamp "plugin trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.review_completed_at"
+require_json_utc_timestamp "plugin trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.egress_validation_completed_at"
 require_json_timestamp_order "plugin trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.review_started_at" "owner_recorded_plugin_trust_evidence.review_completed_at"
+require_json_timestamp_order "plugin trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.review_started_at" "owner_recorded_plugin_trust_evidence.egress_validation_completed_at"
+require_json_timestamp_order "plugin trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.egress_validation_completed_at" "owner_recorded_plugin_trust_evidence.review_completed_at"
 require_json_timestamp_order "plugin trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.review_completed_at" "generated_at"
 require_true JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED
 require_true JARVIS_EVIDENCE_NOTARIZATION_VALIDATED
