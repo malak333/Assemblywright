@@ -503,7 +503,8 @@ Still future gates for production distribution:
   All required `JARVIS_QA_*` flags must be set to `true`, including
   `JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true`, plus the required
   owner/device/profile/UTC timestamp, voice evidence-note, and structured
-  spoken-command observation fields. The expected command text must match the
+  spoken-command observation fields. The observed transcript must match the
+  spoken test phrase after trimming, the expected command text must match the
   observed command text after trimming, and the report generation timestamp must
   be UTC and no earlier than the completed voice check. Confirm the generated report includes
   installed-app metadata, `voice_loop`, `owner_recorded_live_voice_evidence`,

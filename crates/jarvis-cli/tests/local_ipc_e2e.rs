@@ -292,6 +292,9 @@ fn release_readiness_rejects_semantically_invalid_live_voice_evidence() {
     fn self_test_fixture(report: &mut Value) {
         report["self_test_fixture"] = json!(true);
     }
+    fn mismatched_observed_transcript(report: &mut Value) {
+        report["voice_command_observation"]["observed_transcript"] = json!("Jarvis stats check.");
+    }
 
     for (name, mutate, detail_fragment) in [
         (
@@ -318,6 +321,11 @@ fn release_readiness_rejects_semantically_invalid_live_voice_evidence() {
             "self-test fixture",
             self_test_fixture as fn(&mut Value),
             "self-test fixture",
+        ),
+        (
+            "mismatched observed transcript",
+            mismatched_observed_transcript as fn(&mut Value),
+            "observed_transcript",
         ),
     ] {
         let temp_dir = tempfile::tempdir().expect("temp live QA report");
