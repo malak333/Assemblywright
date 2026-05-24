@@ -41,7 +41,8 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   The CLI command should default to operator-readable output and also return
   the conservative local readiness summary when no IPC server is running or
   loopback IPC is unavailable, while preserving the same production blockers.
-  Use `--json` or `JARVIS_CLI_JSON=1` for the exact structured payload.
+  Use `--all-commands` for the complete readable verification runbook, or
+  `--json` or `JARVIS_CLI_JSON=1` for the exact structured payload.
   Treat default readiness as conservative inventory only. After owner-recorded
   evidence exists, rerun readiness with
   `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external` and confirm

@@ -237,7 +237,9 @@ signing, notarization/stapling, live-device QA, plugin trust QA, or manual
 release QA.
 `jarvis release readiness` prefers that IPC endpoint and falls back to the same
 local `IpcState` readiness summary when no server is available; the fallback is
-operator triage only and does not claim server-backed runtime evidence.
+operator triage only and does not claim server-backed runtime evidence. The
+default readable output stays compact, while `--all-commands` prints the full
+recommended release runbook without requiring operators to parse JSON.
 `/release/evidence-status` and `jarvis release evidence-status` expose the
 standard signed artifact, signed-distribution provenance report, live-device QA
 report, plugin-trust QA report, and final evidence bundle inventory as

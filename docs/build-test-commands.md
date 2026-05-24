@@ -344,7 +344,8 @@ sensitive memory counts when repository backing is enabled.
 proofs, pending feature boundaries, recommended verification commands, and
 manual production blockers. The default CLI output is operator-readable and
 falls back to conservative local metadata when loopback IPC is unavailable,
-including restricted environments that deny loopback sockets; use `--json` or
+including restricted environments that deny loopback sockets; use
+`--all-commands` for the complete readable verification runbook, or `--json` or
 `JARVIS_CLI_JSON=1` for the exact structured payload. Evidence-aware mode can
 clear the live voice/audio blocker from a valid live-device QA report. In explicit
 `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external`, it can compute

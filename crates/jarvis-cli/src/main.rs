@@ -147,9 +147,9 @@ enum CliCommand {
 
 #[derive(Debug, Subcommand)]
 enum ReleaseCommand {
-    /// Print conservative release-readiness evidence as JSON.
+    /// Print conservative release-readiness evidence.
     #[command(
-        long_about = "Print conservative release-readiness evidence as JSON.\n\nThis is a read-only operator summary of implemented repo-owned proof, pending features, recommended verification commands, and manual production blockers. By default it remains conservative even if local evidence files exist; set JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external only after owner-recorded external evidence has been collected. The production_ready field stays false until signed distribution, notarization/stapling, plugin-trust QA, and final evidence bundle checks validate."
+        long_about = "Print conservative release-readiness evidence.\n\nThis is a read-only operator summary of implemented repo-owned proof, pending features, recommended verification commands, and manual production blockers. By default it remains conservative even if local evidence files exist; set JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external only after owner-recorded external evidence has been collected. The production_ready field stays false until signed distribution, notarization/stapling, plugin-trust QA, and final evidence bundle checks validate."
     )]
     Readiness {
         /// HTTP IPC endpoint. Falls back to local read-only readiness metadata when unavailable.
@@ -158,6 +158,9 @@ enum ReleaseCommand {
         /// Print the raw JSON readiness payload.
         #[arg(long)]
         json: bool,
+        /// Print every recommended verification command in readable output.
+        #[arg(long)]
+        all_commands: bool,
     },
     /// Print structured release evidence file/report status as JSON.
     #[command(
@@ -589,12 +592,16 @@ async fn main() -> anyhow::Result<()> {
             println!("{}", contract(&endpoint)?);
         }
         CliCommand::Release { command } => match command {
-            ReleaseCommand::Readiness { endpoint, json } => {
+            ReleaseCommand::Readiness {
+                endpoint,
+                json,
+                all_commands,
+            } => {
                 let response = release_readiness(&endpoint)?;
                 if json || cli_json_requested() {
                     println!("{response}");
                 } else {
-                    println!("{}", format_release_readiness(&response)?);
+                    println!("{}", format_release_readiness(&response, all_commands)?);
                 }
             }
             ReleaseCommand::EvidenceStatus { endpoint, json } => {
@@ -1556,7 +1563,7 @@ fn json_u64(value: &serde_json::Value, key: &str) -> u64 {
         .unwrap_or(0)
 }
 
-fn format_release_readiness(response: &str) -> anyhow::Result<String> {
+fn format_release_readiness(response: &str, all_commands: bool) -> anyhow::Result<String> {
     let value: serde_json::Value = serde_json::from_str(response)?;
     let production_ready = value
         .get("production_ready")
@@ -1626,13 +1633,28 @@ fn format_release_readiness(response: &str) -> anyhow::Result<String> {
         .and_then(serde_json::Value::as_array)
         .filter(|commands| !commands.is_empty())
     {
-        lines.push("Next verification commands:".to_string());
+        let command_count = commands.len();
+        let shown_command_count = if all_commands {
+            command_count
+        } else {
+            command_count.min(4)
+        };
+        if all_commands {
+            lines.push("Recommended verification commands:".to_string());
+        } else {
+            lines.push("Next verification commands:".to_string());
+        }
         for command in commands
             .iter()
             .filter_map(serde_json::Value::as_str)
-            .take(4)
+            .take(shown_command_count)
         {
             lines.push(format!("- {command}"));
+        }
+        if !all_commands && command_count > shown_command_count {
+            lines.push(format!(
+                "Showing {shown_command_count} of {command_count} commands; rerun with --all-commands for the full readable runbook."
+            ));
         }
     }
 
@@ -1643,7 +1665,14 @@ fn format_release_readiness(response: &str) -> anyhow::Result<String> {
         lines.push(format!("Boundary: {boundary}"));
     }
 
-    lines.push("Raw JSON: rerun with --json for full readiness evidence.".to_string());
+    if all_commands {
+        lines.push("Raw JSON: rerun with --json for full readiness evidence.".to_string());
+    } else {
+        lines.push(
+            "Raw JSON: rerun with --json for full readiness evidence, or --all-commands for the full readable runbook."
+                .to_string(),
+        );
+    }
     Ok(lines.join("\n"))
 }
 

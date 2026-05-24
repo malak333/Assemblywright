@@ -148,10 +148,12 @@ These notes capture durable facts for future agents working on this repository.
   `jarvis tasks list/get/audit`, `jarvis routes list/get`,
   `jarvis activity summary`, `jarvis release readiness`, and
   `jarvis release evidence-status` default to concise operator-readable text,
-  while `--json` returns the exact IPC payload for scripts, diagnostics, task
-  records, route evidence, readiness evidence, release evidence inventory, and
-  E2E assertions. Human task inspection omits stored command text; use `--json`
-  only when the exact task record is needed. Test harnesses may set
+  while `jarvis release readiness --all-commands` prints the complete readable
+  verification runbook and `--json` returns the exact IPC payload for scripts,
+  diagnostics, task records, route evidence, readiness evidence, release
+  evidence inventory, and E2E assertions. Human task inspection omits stored
+  command text; use `--json` only when the exact task record is needed. Test
+  harnesses may set
   `JARVIS_CLI_JSON=1` to keep legacy JSON parsing across command invocations.
   Read-only release/contract/plugin/tool fallback commands treat loopback
   `PermissionDenied` as transport-unavailable so restricted shells can still
