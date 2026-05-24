@@ -130,9 +130,10 @@ Only set `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external` after
 owner-recorded external QA reports and signed-distribution evidence have been
 collected.
 In external evidence mode, the live-device QA report must still pass semantic
-validation for the expected bundle identifier, short/build version, non-self-test
-identity, and ordered UTC voice-check timestamps before it can clear the live
-voice blocker.
+validation for the expected installed app path, bundle identifier, short/build
+version, non-self-test identity, ordered UTC voice-check timestamps, and
+structured spoken-command observation before it can clear the live voice
+blocker.
 Opt-in final-transcript auto-submit is text-path parity only; it does not clear
 live microphone/Speech/audio-output validation or manual release QA.
 
@@ -281,8 +282,10 @@ writes a sourceable checklist of every required `JARVIS_QA_*` flag and evidence
 field. After the owner validates a signed installed app on a real Mac profile,
 fill that template, source it, and rerun the script with `--assert-complete`.
 The assertion requires explicit transcript handoff validation, structured
-spoken-command observation fields with the observed transcript matching the
-spoken test phrase and expected command text matching observed command text,
+spoken-command observation fields with the installed app path matching the
+expected `/Applications/Jarvis.app` path, unless explicitly overridden with
+`JARVIS_QA_INSTALLED_APP_PATH`, the observed transcript matching the spoken
+test phrase, and expected command text matching observed command text,
 owner/device/profile, ordered UTC timestamps, and voice evidence-note fields. It writes a JSON report, defaulting to
 `target/release-live-device-qa-report.json`, with installed-app metadata,
 microphone/Speech permission prompt evidence, spoken transcript handoff into

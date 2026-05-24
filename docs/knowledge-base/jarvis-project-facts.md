@@ -91,11 +91,11 @@ These notes capture durable facts for future agents working on this repository.
   marketplace review, malware scanning, or OS sandboxing.
 - The live-device QA evidence item is stricter than generic JSON presence:
   `/release/evidence-status` validates schema/type, rejects `self_test_fixture`,
-  checks the expected bundle identifier plus short/build version, requires UTC
-  voice-check timestamps ending in `Z`, and requires completion to be at or
-  after start. It also requires the observed transcript to match the spoken
-  test phrase after trimming and the observed command text to match the expected
-  command text after trimming. Invalid or stale hand-written reports stay
+  checks the installed app path, expected bundle identifier, short/build
+  version, requires UTC voice-check timestamps ending in `Z`, and requires
+  completion to be at or after start. It also requires the observed transcript
+  to match the spoken test phrase after trimming and the observed command text
+  to match the expected command text after trimming. Invalid or stale hand-written reports stay
   `invalid` and cannot clear `live_voice_loop` in evidence-aware readiness mode.
 - Signed provenance, plugin-trust, and final bundle evidence items are also
   stricter than generic JSON presence: `/release/evidence-status` validates

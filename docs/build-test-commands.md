@@ -403,8 +403,10 @@ staple validation, Gatekeeper assessment, and artifact digests. It rejects disab
 local signature validation outside the fake self-test lane, parses every required
 live-device/plugin-trust report flag, requires owner-recorded evidence fields in
 both QA reports, requires live-device QA app bundle metadata to match the
-expected bundle id/version, and writes SHA-256 digests for distribution
-artifacts, signed provenance, and QA reports before writing production evidence.
+expected installed app path plus bundle id/version, requires the observed
+transcript to match the spoken test phrase, and writes SHA-256 digests for
+distribution artifacts, signed provenance, and QA reports before writing
+production evidence.
 `./scripts/release-evidence-doctor.sh --check` inventories the expected signed
 artifact paths, signed-distribution provenance report, live-device QA report,
 plugin-trust QA report, and final
@@ -585,8 +587,10 @@ spoken-command observation fields: `JARVIS_QA_VOICE_TEST_PHRASE`,
 `JARVIS_QA_OBSERVED_COMMAND_TEXT`, `JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID`, and
 `JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL`.
 The observed transcript must match the spoken test phrase after trimming, the
-expected and observed command text must match after trimming, and `generated_at`
-must be UTC and no earlier than the completed voice check.
+expected installed app path must match `JARVIS_QA_INSTALLED_APP_PATH` or
+`/Applications/Jarvis.app`, expected and observed command text must match after
+trimming, and `generated_at` must be UTC and no earlier than the completed
+voice check.
 On success, `--assert-complete` writes a JSON evidence report to
 `JARVIS_QA_REPORT_PATH` or `target/release-live-device-qa-report.json` by
 default. The report includes installed-app metadata, voice-loop evidence fields,
