@@ -109,9 +109,11 @@ claim; it is not proof of a finished packaged assistant.
 `/release/readiness`, `jarvis release readiness`, and the Swift Release tab
 summarize implemented feature proofs, pending feature boundaries, recommended
 verification commands, and manual production blockers in read-only surfaces.
-The CLI command prefers a running IPC server but falls back to the same
-conservative local readiness summary when the server is unavailable, so release
-triage still works before starting the supervised core.
+The CLI command defaults to operator-readable text, supports `--json` for the
+exact structured payload, and prefers a running IPC server but falls back to the
+same conservative local readiness summary when the server is unavailable or
+loopback IPC is denied, so release triage still works before starting the
+supervised core.
 Readiness feature metadata includes the repository-backed operator QA smoke as
 implemented local evidence, with clean-profile installed-app and live-device
 QA still listed as manual gates.
