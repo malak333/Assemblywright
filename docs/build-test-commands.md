@@ -388,6 +388,10 @@ The release readiness runbook also includes
 `set -a && source target/release-evidence-bundle.env && set +a &&
 ./scripts/release-evidence-bundle.sh --bundle` as the template-backed bundle
 path.
+`jarvis release readiness --all-commands` is ordered as a release execution
+runbook: local gates, unsigned distribution launch check, signed/notarized
+packaging, live-device QA, plugin-trust QA, final evidence bundle generation,
+evidence-doctor assertion, then the external evidence-mode readiness check.
 The doctor/status paths only inventory expected paths, JSON flags, and release
 metadata; they do not validate Developer ID signing, notarization, stapling, or
 installation. The real `--bundle` path also locally validates the app code

@@ -321,7 +321,11 @@ stage or when a PR needs focused evidence for one ownership slice.
   audio-output validation, App Store review, marketplace plugin review, malware
   analysis, or OS sandbox enforcement. The CLI fallback for an unavailable local
   IPC server must keep the same conservative blocker set instead of claiming
-  server-backed proof.
+  server-backed proof. Confirm `jarvis release readiness --all-commands` is
+  ordered as a release execution runbook: local gates, unsigned distribution
+  launch check, signed/notarized packaging, live-device QA, plugin-trust QA,
+  final evidence bundle generation, evidence-doctor assertion, then external
+  evidence-mode readiness.
 - Confirm `./scripts/release-plugin-trust-qa.sh --check` is included in release
   readiness recommendations and the local release gate, and that
   `./scripts/release-plugin-trust-qa.sh --write-template
