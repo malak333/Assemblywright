@@ -368,13 +368,14 @@ structured release evidence file/report presence over IPC. Task, route, and
 activity summary commands default to operator-readable text; use `--json` or
 `JARVIS_CLI_JSON=1` for exact IPC payloads, including stored task input.
 Evidence-status items report present/missing/invalid inventory. Artifact paths
-are presence-only checks, while JSON reports receive semantic validation for
-signed-distribution provenance version/bundle metadata, signing/notary/staple
-and Gatekeeper fields, required flags, SHA-256 digests, signed-provenance
-zip/pkg digest matches against current artifact files, live-device QA
-metadata, non-future plugin-trust timestamps, and final bundle signatures. The status
-surface still does not perform signing, notarization, stapling, installation,
-or manual QA.
+are presence-only checks except the app bundle, whose `Info.plist` bundle id,
+short version, and build version must match the expected release metadata. JSON
+reports receive semantic validation for signed-distribution provenance
+version/bundle metadata, signing/notary/staple and Gatekeeper fields, required
+flags, SHA-256 digests, signed-provenance zip/pkg digest matches against
+current artifact files, live-device QA metadata, non-future plugin-trust
+timestamps, and final bundle signatures. The status surface still does not
+perform signing, notarization, stapling, installation, or manual QA.
 
 ## Docs
 

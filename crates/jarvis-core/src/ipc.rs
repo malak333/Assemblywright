@@ -4068,12 +4068,7 @@ fn release_evidence_status_from_env() -> ReleaseEvidenceStatusResponse {
     };
 
     let mut items = vec![
-        release_path_item(
-            "signed_app_bundle",
-            "App bundle path",
-            app_path.clone(),
-            ReleaseEvidenceKind::Directory,
-        ),
+        release_app_bundle_item("signed_app_bundle", "App bundle path", app_path.clone()),
         release_path_item(
             "app_executable",
             "App executable",
@@ -4157,7 +4152,7 @@ fn release_evidence_status_from_env() -> ReleaseEvidenceStatusResponse {
         invalid_count,
         items,
         proof_boundary:
-            "File/report inventory only; complete means expected paths are present and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/non-future timestamp semantics, plugin-trust non-future timestamp semantics, and final evidence-bundle path/digest/signature-validation/non-future timestamp semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
+            "File/report inventory only; complete means expected paths are present, app bundle metadata matches the expected bundle identifier/version/build, and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/non-future timestamp semantics, plugin-trust non-future timestamp semantics, and final evidence-bundle path/digest/signature-validation/non-future timestamp semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
                 .to_string(),
     }
 }
@@ -4189,6 +4184,20 @@ fn release_path_item(
         label: label.to_string(),
         path: path.display().to_string(),
         kind,
+        status,
+        required_for_production: true,
+        manual_gate: true,
+        detail,
+    }
+}
+
+fn release_app_bundle_item(key: &str, label: &str, path: PathBuf) -> ReleaseEvidenceStatusItem {
+    let (status, detail) = inspect_release_app_bundle(&path);
+    ReleaseEvidenceStatusItem {
+        key: key.to_string(),
+        label: label.to_string(),
+        path: path.display().to_string(),
+        kind: ReleaseEvidenceKind::Directory,
         status,
         required_for_production: true,
         manual_gate: true,
@@ -4311,6 +4320,63 @@ fn inspect_release_path(
             "path exists but has the wrong type".to_string(),
         ),
     }
+}
+
+fn inspect_release_app_bundle(path: &FsPath) -> (ReleaseEvidenceItemStatus, String) {
+    let (status, detail) = inspect_release_path(path, ReleaseEvidenceKind::Directory);
+    if status != ReleaseEvidenceItemStatus::Present {
+        return (status, detail);
+    }
+
+    let info_plist = path.join("Contents/Info.plist");
+    let contents = match fs::read_to_string(&info_plist) {
+        Ok(contents) => contents,
+        Err(_) => {
+            return (
+                ReleaseEvidenceItemStatus::Invalid,
+                "app bundle Info.plist is missing or not readable as XML".to_string(),
+            )
+        }
+    };
+
+    let expected_bundle_id = expected_release_bundle_id();
+    let expected_version = expected_release_evidence_version();
+    for (key, expected) in [
+        ("CFBundleIdentifier", expected_bundle_id.as_str()),
+        ("CFBundleShortVersionString", expected_version.as_str()),
+        ("CFBundleVersion", expected_version.as_str()),
+    ] {
+        match plist_xml_string_value(&contents, key) {
+            Some(actual) if actual == expected => {}
+            Some(actual) => {
+                return (
+                    ReleaseEvidenceItemStatus::Invalid,
+                    format!(
+                        "app bundle Info.plist {key} mismatch: expected {expected}, got {actual}"
+                    ),
+                )
+            }
+            None => {
+                return (
+                    ReleaseEvidenceItemStatus::Invalid,
+                    format!("app bundle Info.plist missing {key}"),
+                )
+            }
+        }
+    }
+
+    (
+        ReleaseEvidenceItemStatus::Present,
+        "directory exists; Info.plist bundle identifier, short version, and build version match expected release metadata; signing, notarization, and stapling are not validated by evidence-status".to_string(),
+    )
+}
+
+fn plist_xml_string_value(contents: &str, key: &str) -> Option<String> {
+    let key_marker = format!("<key>{key}</key>");
+    let after_key = contents.split_once(&key_marker)?.1;
+    let after_string = after_key.split_once("<string>")?.1;
+    let value = after_string.split_once("</string>")?.0;
+    Some(value.trim().to_string())
 }
 
 fn inspect_release_json_report(
@@ -4783,6 +4849,14 @@ fn expected_release_evidence_version() -> String {
         .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string())
 }
 
+fn expected_release_bundle_id() -> String {
+    env_value_alias(
+        "JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID",
+        "JARVIS_QA_EXPECTED_BUNDLE_ID",
+        "com.nobiletechnology.jarvis",
+    )
+}
+
 fn require_json_string_value(
     value: &serde_json::Value,
     dotted_path: &str,
@@ -5067,7 +5141,7 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "release_evidence_status",
             "implemented",
-            "`/release/evidence-status` and `jarvis release evidence-status` expose structured present, missing, or invalid status for standard signed artifacts, QA reports, and final evidence bundle paths, including signed-provenance artifact digest matching, live-device QA bundle/version/non-future timestamp checks, plugin-trust non-future timestamp checks, and final evidence-bundle path/digest/signature-validation/non-future timestamp checks, with Rust, CLI E2E, and Swift model coverage.",
+            "`/release/evidence-status` and `jarvis release evidence-status` expose structured present, missing, or invalid status for standard signed artifacts, QA reports, and final evidence bundle paths, including app bundle metadata matching, signed-provenance artifact digest matching, live-device QA bundle/version/non-future timestamp checks, plugin-trust non-future timestamp checks, and final evidence-bundle path/digest/signature-validation/non-future timestamp checks, with Rust, CLI E2E, and Swift model coverage.",
             "Read-only file/report inventory plus report semantic validation only; it does not sign, notarize, install, Finder-launch, run live-device QA, review marketplace trust, scan malware, or enforce OS sandboxing.",
         ),
         feature(
@@ -5704,12 +5778,73 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .contains("non-future timestamp semantics"));
         assert!(status.proof_boundary.contains("plugin-trust"));
         assert!(status.proof_boundary.contains("does not sign"));
+        assert!(status.proof_boundary.contains("app bundle metadata"));
         assert!(status.items.iter().any(|item| {
             item.key == "release_evidence_bundle"
                 && item.kind == ReleaseEvidenceKind::JsonReport
                 && item.required_for_production
                 && item.manual_gate
         }));
+    }
+
+    #[test]
+    fn release_evidence_app_bundle_requires_matching_info_plist_metadata() {
+        let temp_dir = tempfile::tempdir().expect("temp app bundle");
+        let app_dir = temp_dir.path().join("Jarvis.app");
+        let contents_dir = app_dir.join("Contents");
+        std::fs::create_dir_all(&contents_dir).expect("create Contents dir");
+
+        let (missing_status, missing_detail) = inspect_release_app_bundle(&app_dir);
+        assert_eq!(missing_status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(missing_detail.contains("Info.plist"));
+
+        let info_plist = contents_dir.join("Info.plist");
+        std::fs::write(
+            &info_plist,
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>com.nobiletechnology.jarvis</string>
+  <key>CFBundleShortVersionString</key>
+  <string>{}</string>
+  <key>CFBundleVersion</key>
+  <string>{}</string>
+</dict>
+</plist>
+"#,
+                env!("CARGO_PKG_VERSION"),
+                env!("CARGO_PKG_VERSION")
+            ),
+        )
+        .expect("write matching Info.plist");
+
+        let (present_status, present_detail) = inspect_release_app_bundle(&app_dir);
+        assert_eq!(present_status, ReleaseEvidenceItemStatus::Present);
+        assert!(present_detail.contains("Info.plist bundle identifier"));
+        assert!(present_detail.contains("not validated by evidence-status"));
+
+        std::fs::write(
+            &info_plist,
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>com.example.StaleJarvis</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.1.4</string>
+  <key>CFBundleVersion</key>
+  <string>0.1.4</string>
+</dict>
+</plist>
+"#,
+        )
+        .expect("write mismatched Info.plist");
+
+        let (invalid_status, invalid_detail) = inspect_release_app_bundle(&app_dir);
+        assert_eq!(invalid_status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(invalid_detail.contains("CFBundleIdentifier mismatch"));
     }
 
     #[test]

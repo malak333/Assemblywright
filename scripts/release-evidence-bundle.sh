@@ -113,6 +113,28 @@ require_dir() {
   [[ -d "$path" ]] || fail "missing $label: $path"
 }
 
+require_app_bundle_metadata() {
+  local info_plist="$APP_PATH/Contents/Info.plist"
+  require_file "app bundle Info.plist" "$info_plist"
+  python3 - "$info_plist" "$EXPECTED_BUNDLE_ID" "$EXPECTED_VERSION" <<'PY'
+import plistlib
+import sys
+
+path, expected_bundle_id, expected_version = sys.argv[1:4]
+with open(path, "rb") as handle:
+    data = plistlib.load(handle)
+
+for key, expected in {
+    "CFBundleIdentifier": expected_bundle_id,
+    "CFBundleShortVersionString": expected_version,
+    "CFBundleVersion": expected_version,
+}.items():
+    actual = data.get(key)
+    if actual != expected:
+        raise SystemExit(f"app bundle Info.plist {key} mismatch: expected {expected}, got {actual!r}")
+PY
+}
+
 require_artifact_validation_mode() {
   case "$VALIDATE_LOCAL_SIGNATURES" in
     true|false)
@@ -667,6 +689,19 @@ if [[ "$SELF_TEST" == true ]]; then
   self_test_zip="$tmp_dir/dist/Jarvis-$VERSION.zip"
   self_test_pkg="$tmp_dir/dist/Jarvis-$VERSION.pkg"
   mkdir -p "$tmp_dir/dist/Jarvis.app/Contents/MacOS" "$tmp_dir/dist/Jarvis.app/Contents/Resources/bin"
+  cat >"$tmp_dir/dist/Jarvis.app/Contents/Info.plist" <<XML
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>com.nobiletechnology.jarvis</string>
+  <key>CFBundleShortVersionString</key>
+  <string>$VERSION</string>
+  <key>CFBundleVersion</key>
+  <string>$VERSION</string>
+</dict>
+</plist>
+XML
   touch "$tmp_dir/dist/Jarvis.app/Contents/MacOS/JarvisMacApp"
   touch "$tmp_dir/dist/Jarvis.app/Contents/Resources/bin/jarvis-cli"
   touch "$self_test_zip"
@@ -1346,6 +1381,7 @@ CHECKLIST
 fi
 
 require_dir "app bundle path" "$APP_PATH"
+require_app_bundle_metadata
 require_file "app zip path" "$ZIP_PATH"
 require_file "installer package path" "$PKG_PATH"
 require_file "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT"

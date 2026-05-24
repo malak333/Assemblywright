@@ -544,6 +544,59 @@ check_json_utc_timestamp() {
   fi
 }
 
+plist_string_value() {
+  local path="$1"
+  local key="$2"
+  python3 - "$path" "$key" <<'PY'
+import plistlib
+import sys
+
+path, key = sys.argv[1:3]
+try:
+    with open(path, "rb") as handle:
+        data = plistlib.load(handle)
+except Exception:
+    raise SystemExit(1)
+
+value = data.get(key)
+if not isinstance(value, str) or not value:
+    raise SystemExit(1)
+print(value)
+PY
+}
+
+check_app_bundle_metadata() {
+  if [[ ! -d "$APP_PATH" ]]; then
+    return 0
+  fi
+  local info_plist="$APP_PATH/Contents/Info.plist"
+  if [[ ! -f "$info_plist" ]]; then
+    record_missing "app bundle Info.plist missing: $info_plist"
+    return
+  fi
+
+  local bundle_id short_version build_version
+  bundle_id="$(plist_string_value "$info_plist" CFBundleIdentifier || true)"
+  short_version="$(plist_string_value "$info_plist" CFBundleShortVersionString || true)"
+  build_version="$(plist_string_value "$info_plist" CFBundleVersion || true)"
+
+  if [[ "$bundle_id" == "$EXPECTED_BUNDLE_ID" ]]; then
+    record_satisfied "app bundle Info.plist CFBundleIdentifier matches expected bundle id"
+  else
+    record_missing "app bundle Info.plist CFBundleIdentifier mismatch: expected $EXPECTED_BUNDLE_ID, got ${bundle_id:-<missing>}"
+  fi
+  if [[ "$short_version" == "$EXPECTED_VERSION" ]]; then
+    record_satisfied "app bundle Info.plist CFBundleShortVersionString matches expected version"
+  else
+    record_missing "app bundle Info.plist CFBundleShortVersionString mismatch: expected $EXPECTED_VERSION, got ${short_version:-<missing>}"
+  fi
+  if [[ "$build_version" == "$EXPECTED_VERSION" ]]; then
+    record_satisfied "app bundle Info.plist CFBundleVersion matches expected version"
+  else
+    record_missing "app bundle Info.plist CFBundleVersion mismatch: expected $EXPECTED_VERSION, got ${build_version:-<missing>}"
+  fi
+}
+
 check_json_timestamp_order() {
   local label="$1"
   local path="$2"
@@ -559,6 +612,7 @@ check_json_timestamp_order() {
 
 check_release_evidence() {
   check_path "app bundle path" "$APP_PATH" dir
+  check_app_bundle_metadata
   check_path "app executable" "$APP_PATH/Contents/MacOS/JarvisMacApp" executable
   check_path "bundled core executable" "$APP_PATH/Contents/Resources/bin/jarvis-cli" executable
   check_path "app zip path" "$ZIP_PATH" file
@@ -701,6 +755,19 @@ print_status() {
 write_fixture_app() {
   local app_path="$1"
   mkdir -p "$app_path/Contents/MacOS" "$app_path/Contents/Resources/bin"
+  cat >"$app_path/Contents/Info.plist" <<XML
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>com.nobiletechnology.jarvis</string>
+  <key>CFBundleShortVersionString</key>
+  <string>$VERSION</string>
+  <key>CFBundleVersion</key>
+  <string>$VERSION</string>
+</dict>
+</plist>
+XML
   touch "$app_path/Contents/MacOS/JarvisMacApp" "$app_path/Contents/Resources/bin/jarvis-cli"
   chmod 755 "$app_path/Contents/MacOS/JarvisMacApp" "$app_path/Contents/Resources/bin/jarvis-cli"
 }
