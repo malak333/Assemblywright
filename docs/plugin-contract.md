@@ -6,8 +6,8 @@ boundary supports first-party Rust modules and local subprocess plugins over
 JSON stdin/stdout. The stable commitment is the manifest, local provenance
 snapshot, optional trusted-key publisher signature verification,
 manifest-level network host declarations, and audit contract; marketplace,
-WASM, OS-level network sandboxing, and malware-analysis trust remain target
-architecture.
+WASM, OS-level network sandboxing, host-level egress enforcement, and
+malware-analysis trust remain target architecture.
 
 ## Manifest Fields
 
@@ -160,7 +160,9 @@ to explain what happened:
   in the local release gate. `--self-test` proves only the assertion/report
   mechanics with fake evidence notes; `--assert-complete` writes owner-recorded
   evidence after external validation flags and non-empty owner/timestamp/evidence
-  fields are present.
+  fields are present. Host-level egress evidence must include the reviewed
+  policy/profile label, ordered UTC egress validation timestamp, denied
+  undeclared-host fixture note, and declared-host allow fixture note.
 - `./scripts/release-evidence-bundle.sh --bundle` references the plugin-trust
   QA report alongside signed distribution artifacts and live-device QA evidence
   for final release review. It records evidence paths, owner flags, and

@@ -237,14 +237,17 @@ These notes capture durable facts for future agents working on this repository.
 - `./scripts/release-plugin-trust-qa.sh` keeps the plugin trust release gate
   explicit. `--check` validates repo-owned plugin trust prerequisites and
   prints the marketplace review, malware scan, signed publisher policy, OS
-  OS-level process/network sandbox and host-level egress runbook. `--self-test` proves JSON report
+  process/network sandbox and host-level egress runbook. `--self-test` proves JSON report
   mechanics with fake validation flags and fake evidence notes only.
   `--assert-complete` writes an owner-recorded JSON report after every
   `JARVIS_PLUGIN_QA_*` flag is true and the owner/timestamp/evidence-note fields
-  are populated. The review timestamps must be UTC `Z` values, the completed
-  timestamp must be greater than or equal to the started timestamp, and the
-  completed timestamp must not be later than report generation. This is manual
-  external release evidence, not repo-local proof of those systems.
+  are populated. Host-level egress evidence must also include the reviewed
+  policy/profile label, ordered UTC egress validation timestamp, denied
+  undeclared-host fixture note, and declared-host allow fixture note. The review
+  timestamps must be UTC `Z` values, the completed timestamp must be greater
+  than or equal to the started timestamp, and the completed timestamp must not
+  be later than report generation. This is manual external release evidence,
+  not repo-local proof of those systems.
 - `./scripts/release-evidence-bundle.sh` is the final release evidence
   manifest gate. `--check` prints the required signed distribution artifact
   paths, live-device QA report, plugin-trust QA report, and owner validation

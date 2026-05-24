@@ -196,6 +196,11 @@ stage or when a PR needs focused evidence for one ownership slice.
   missing host declarations must fail manifest validation. Confirm executable
   installed plugins with network-declaring actions fail closed under the default
   `subprocess_stdio` grant and run only after `subprocess_stdio_network`.
+- Confirm owner-recorded host-level egress evidence names the reviewed
+  policy/profile, records an ordered UTC egress validation timestamp, and
+  includes both an undeclared-host deny fixture note and a declared-host allow
+  fixture note. Treat this as external host-control evidence, not repo-local
+  enforcement proof.
 - Confirm installed plugin run attempts fail closed with manifest/version and
   action validation, default `execution_enabled: false` semantics, local
   provenance verification, safe command path checks, JSON stdin/stdout, timeout
@@ -320,7 +325,8 @@ stage or when a PR needs focused evidence for one ownership slice.
   `--assert-complete` output as owner-recorded external evidence for marketplace
   review, malware scanning, signed publisher policy, OS-level process/network
   sandbox validation, and host-level egress validation only after
-  owner/timestamp/evidence-note fields are present.
+  owner/timestamp/evidence-note fields are present, including the structured
+  egress policy label plus deny/allow fixture notes.
 - Confirm `./scripts/release-evidence-bundle.sh --check` is included in
   release readiness recommendations and the local release gate, and that
   `./scripts/release-evidence-bundle.sh --self-test` proves only final bundle

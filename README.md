@@ -297,8 +297,11 @@ JSON evidence-report mechanics with fake flags and fake evidence notes only.
 The owner-recorded `--assert-complete` path writes
 `target/release-plugin-trust-qa-report.json` after all required
 `JARVIS_PLUGIN_QA_*` flags are true and owner/timestamp/evidence-note fields are
-populated, but that report remains manual external evidence rather than
-repo-local proof of marketplace or host sandbox systems.
+populated. Host-level egress evidence now requires an owner-recorded policy
+label, UTC egress validation timestamp, denied undeclared-host fixture note, and
+declared-host allow fixture note, but that report remains manual external
+evidence rather than repo-local proof of marketplace, host sandbox, or host
+egress enforcement systems.
 `./scripts/release-evidence-bundle.sh --check` ties those external proof paths
 together by listing the expected signed distribution artifact paths,
 signed-distribution provenance report, live-device QA report,
