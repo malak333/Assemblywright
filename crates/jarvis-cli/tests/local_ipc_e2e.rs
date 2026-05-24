@@ -908,6 +908,10 @@ fn release_evidence_status_rejects_stale_app_bundle_metadata() {
 
 #[test]
 fn release_help_documents_operator_boundaries() {
+    let version = run_cli_text(["--version"]);
+    assert!(version.contains("jarvis "));
+    assert!(version.contains(env!("CARGO_PKG_VERSION")));
+
     let release_help = run_cli_text(["release", "--help"]);
     assert!(release_help.contains("Read-only"));
     assert!(release_help.contains("IPC"));

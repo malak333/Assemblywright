@@ -597,6 +597,20 @@ check_app_bundle_metadata() {
   fi
 }
 
+check_bundled_core_version() {
+  local core_path="$APP_PATH/Contents/Resources/bin/jarvis-cli"
+  if [[ ! -x "$core_path" ]]; then
+    return 0
+  fi
+
+  local output
+  if output="$("$core_path" --version 2>&1)" && [[ "$output" == *"jarvis $EXPECTED_VERSION"* ]]; then
+    record_satisfied "bundled core --version matches expected version"
+  else
+    record_missing "bundled core --version mismatch: expected jarvis $EXPECTED_VERSION from $core_path"
+  fi
+}
+
 check_json_timestamp_order() {
   local label="$1"
   local path="$2"
@@ -615,6 +629,7 @@ check_release_evidence() {
   check_app_bundle_metadata
   check_path "app executable" "$APP_PATH/Contents/MacOS/JarvisMacApp" executable
   check_path "bundled core executable" "$APP_PATH/Contents/Resources/bin/jarvis-cli" executable
+  check_bundled_core_version
   check_path "app zip path" "$ZIP_PATH" file
   check_path "installer package path" "$PKG_PATH" file
 
@@ -768,7 +783,15 @@ write_fixture_app() {
 </dict>
 </plist>
 XML
-  touch "$app_path/Contents/MacOS/JarvisMacApp" "$app_path/Contents/Resources/bin/jarvis-cli"
+  touch "$app_path/Contents/MacOS/JarvisMacApp"
+  cat >"$app_path/Contents/Resources/bin/jarvis-cli" <<EOF
+#!/usr/bin/env bash
+if [[ "\${1:-}" == "--version" ]]; then
+  printf 'jarvis $VERSION\n'
+  exit 0
+fi
+printf 'self-test jarvis-cli fixture\n'
+EOF
   chmod 755 "$app_path/Contents/MacOS/JarvisMacApp" "$app_path/Contents/Resources/bin/jarvis-cli"
 }
 

@@ -135,6 +135,18 @@ for key, expected in {
 PY
 }
 
+require_bundled_core_version() {
+  local core_path="$APP_PATH/Contents/Resources/bin/jarvis-cli"
+  local output
+  [[ -x "$core_path" ]] || fail "missing bundled core executable: $core_path"
+  output="$("$core_path" --version)"
+  if [[ "$output" != *"jarvis $EXPECTED_VERSION"* ]]; then
+    printf 'error: bundled core --version did not include %q\n' "jarvis $EXPECTED_VERSION" >&2
+    printf '%s\n%s\n%s\n' "--- bundled core version output ---" "$output" "--- end bundled core version output ---" >&2
+    exit 1
+  fi
+}
+
 require_artifact_validation_mode() {
   case "$VALIDATE_LOCAL_SIGNATURES" in
     true|false)
@@ -703,7 +715,15 @@ if [[ "$SELF_TEST" == true ]]; then
 </plist>
 XML
   touch "$tmp_dir/dist/Jarvis.app/Contents/MacOS/JarvisMacApp"
-  touch "$tmp_dir/dist/Jarvis.app/Contents/Resources/bin/jarvis-cli"
+  cat >"$tmp_dir/dist/Jarvis.app/Contents/Resources/bin/jarvis-cli" <<EOF
+#!/usr/bin/env bash
+if [[ "\${1:-}" == "--version" ]]; then
+  printf 'jarvis $VERSION\n'
+  exit 0
+fi
+printf 'self-test jarvis-cli fixture\n'
+EOF
+  chmod 755 "$tmp_dir/dist/Jarvis.app/Contents/MacOS/JarvisMacApp" "$tmp_dir/dist/Jarvis.app/Contents/Resources/bin/jarvis-cli"
   touch "$self_test_zip"
   touch "$self_test_pkg"
   self_test_zip_sha="$(file_sha256 "$self_test_zip")"
@@ -1382,6 +1402,7 @@ fi
 
 require_dir "app bundle path" "$APP_PATH"
 require_app_bundle_metadata
+require_bundled_core_version
 require_file "app zip path" "$ZIP_PATH"
 require_file "installer package path" "$PKG_PATH"
 require_file "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT"

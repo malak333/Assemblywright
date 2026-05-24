@@ -554,7 +554,9 @@ builds and inspects the release app/pkg structure without Developer ID
 credentials. Its `--unsigned-launch-check` mode also launches the release-built
 app executable with an isolated temporary HOME, verifies the bundled core over
 loopback IPC, and checks command, audit, diagnostics, pause/block/resume, and
-SQLite state through the release app layout. Full mode requires
+SQLite state through the release app layout. The packaged core is also checked
+with `jarvis-cli --version`, and release evidence scripts reject bundles whose
+core binary does not report the expected release version. Full mode requires
 `JARVIS_DEVELOPER_ID_APPLICATION`,
 `JARVIS_DEVELOPER_ID_INSTALLER`, and notarytool credentials. It signs the
 release bundle with hardened runtime and microphone entitlements, submits the

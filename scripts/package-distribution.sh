@@ -127,6 +127,14 @@ assert_package_version_consistency() {
   fi
 }
 
+assert_bundled_core_version() {
+  local core_path="$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
+  local output
+  [[ -x "$core_path" ]] || fail "bundled core executable missing: $core_path"
+  output="$("$core_path" --version)"
+  require_output_contains "bundled core version" "$output" "jarvis $VERSION"
+}
+
 assert_app_audio_input_entitlement() {
   local label="$1"
   local output
@@ -346,6 +354,7 @@ build_app_bundle() {
   cp "$SWIFT_EXECUTABLE" "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME"
   cp "$CORE_EXECUTABLE" "$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
   chmod 755 "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME" "$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
+  assert_bundled_core_version
 
   cat >"$APP_PATH/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
