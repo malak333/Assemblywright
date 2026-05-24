@@ -234,8 +234,10 @@ These notes capture durable facts for future agents working on this repository.
   mechanics with fake validation flags and fake evidence notes only.
   `--assert-complete` writes an owner-recorded JSON report after every
   `JARVIS_PLUGIN_QA_*` flag is true and the owner/timestamp/evidence-note fields
-  are populated; it is manual external release evidence, not repo-local proof of
-  those systems.
+  are populated. The review timestamps must be UTC `Z` values, the completed
+  timestamp must be greater than or equal to the started timestamp, and the
+  completed timestamp must not be later than report generation. This is manual
+  external release evidence, not repo-local proof of those systems.
 - `./scripts/release-evidence-bundle.sh` is the final release evidence
   manifest gate. `--check` prints the required signed distribution artifact
   paths, live-device QA report, plugin-trust QA report, and owner validation
@@ -253,17 +255,21 @@ These notes capture durable facts for future agents working on this repository.
   ticket, and app zip payload. Production bundles must keep local signature
   validation enabled; the script parses every required live-device and
   plugin-trust report flag, requires non-empty owner-recorded evidence fields in
-  both QA reports, requires the live-device QA report's app bundle
-  identifier/version/build metadata to match the expected release, and records
-  SHA-256 digests for the distribution zip, installer package, live-device QA
-  report, and plugin-trust QA report before writing the bundle manifest.
+  both QA reports, requires plugin-trust `generated_at`, `review_started_at`,
+  and `review_completed_at` to be UTC with
+  `review_started_at <= review_completed_at <= generated_at`, requires the
+  live-device QA report's app bundle identifier/version/build metadata to match
+  the expected release, and records SHA-256 digests for the distribution zip,
+  installer package, live-device QA report, and plugin-trust QA report before
+  writing the bundle manifest.
 - `./scripts/release-evidence-doctor.sh` inventories release evidence readiness
   before final bundling. `--check` reports present, missing, or invalid
   signed-artifact, live-device QA, plugin-trust QA, and final bundle evidence
   without failing the default local gate; `--self-test` uses fake
-  artifacts/reports to prove the inventory mechanics only. A complete doctor run
-  is diagnostic status, not proof that signing, notarization, stapling,
-  installation, or external validation happened.
+  artifacts/reports to prove the inventory mechanics only. Its complete path
+  enforces the same plugin-trust UTC timestamp order as the bundle path. A
+  complete doctor run is diagnostic status, not proof that signing,
+  notarization, stapling, installation, or external validation happened.
 - The structured release evidence status endpoint mirrors the doctor inventory
   for app/installer artifacts and JSON reports, including required owner-recorded
   live-device and plugin-trust evidence fields plus live-device bundle/version

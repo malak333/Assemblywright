@@ -385,6 +385,11 @@ digests, and `validation_flags.local_signature_validation=true`, matching the
 semantic floor exposed by `/release/evidence-status`. Its `--self-test` uses
 fake artifacts/reports to prove the inventory logic only; it is not a signing,
 notarization, stapling, or installation validator.
+Plugin-trust evidence is timestamp-strict across the shell evidence path:
+`release-plugin-trust-qa.sh --assert-complete` requires UTC `Z` review
+timestamps with `review_started_at <= review_completed_at`, and the
+bundle/doctor paths also require plugin report `generated_at` to be UTC and no
+earlier than `review_completed_at`.
 `jarvis release evidence-status` exposes the same standard artifact/report
 inventory through `/release/evidence-status`; the default CLI output is
 operator-readable and `--json` preserves the exact structured payload. It is
@@ -408,6 +413,9 @@ cargo test -p jarvis-core
 cargo test -p jarvis-core release_evidence_status -- --nocapture
 cargo test -p jarvis-core permission_policy_review -- --nocapture
 cargo test -p jarvis-core permission_policy_review_summarizes_unreviewed_memory_without_values -- --nocapture
+./scripts/release-plugin-trust-qa.sh --self-test
+./scripts/release-evidence-bundle.sh --self-test
+./scripts/release-evidence-doctor.sh --self-test
 cargo test -p jarvis-core diagnostics_export_is_redacted_and_counts_repository_state -- --nocapture
 cargo test -p jarvis-core scheduler_attention -- --nocapture
 cargo test -p jarvis-core run_due_scheduler_jobs_executes_and_persists_visible_tasks -- --nocapture
