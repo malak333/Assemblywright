@@ -369,7 +369,10 @@ target/release-plugin-trust-qa.env` to generate a sourceable plugin-trust QA
 template. The template defaults every validation flag to `false`; operators
 should edit/source it only after marketplace review, malware scan, signed
 publisher policy review, OS sandbox validation, and host-level egress fixture
-validation have actually completed.
+validation have actually completed. The release readiness runbook also includes
+`set -a && source target/release-plugin-trust-qa.env && set +a &&
+./scripts/release-plugin-trust-qa.sh --assert-complete` as the template-backed
+assertion path.
 `./scripts/release-evidence-bundle.sh --check` is the final evidence-bundle
 preflight. Its `--self-test` validates bundle manifest generation with fake
 artifacts and fake QA reports only; real release evidence must come from
@@ -381,6 +384,10 @@ The `--check` output points operators to
 target/release-evidence-bundle.env` to generate a sourceable final-bundle
 template. The template defaults every validation flag to `false`; operators
 must flip each one only after the matching external release check is complete.
+The release readiness runbook also includes
+`set -a && source target/release-evidence-bundle.env && set +a &&
+./scripts/release-evidence-bundle.sh --bundle` as the template-backed bundle
+path.
 The doctor/status paths only inventory expected paths, JSON flags, and release
 metadata; they do not validate Developer ID signing, notarization, stapling, or
 installation. The real `--bundle` path also locally validates the app code

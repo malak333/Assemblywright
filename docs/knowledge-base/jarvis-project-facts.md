@@ -251,8 +251,10 @@ These notes capture durable facts for future agents working on this repository.
   be later than report generation. `--write-template
   target/release-plugin-trust-qa.env` generates a sourceable checklist with all
   plugin trust validation flags defaulted to `false` and all evidence fields
-  blank. This is manual external release evidence, not repo-local proof of those
-  systems.
+  blank. `/release/readiness` and `jarvis release readiness --all-commands`
+  include the template-backed source command for `--assert-complete` before the
+  long inline owner-flag example. This is manual external release evidence, not
+  repo-local proof of those systems.
 - `./scripts/release-evidence-bundle.sh` is the final release evidence
   manifest gate. `--check` prints the required signed distribution artifact
   paths, live-device QA report, plugin-trust QA report, and owner validation
@@ -265,7 +267,8 @@ These notes capture durable facts for future agents working on this repository.
   generates a sourceable final-bundle environment template whose
   `JARVIS_EVIDENCE_*` validation flags default to `false`, so operators record
   external checks explicitly before any final bundle claim. `/release/readiness`
-  and `jarvis release readiness` include the template command before the
+  and `jarvis release readiness --all-commands` include the template command and
+  the template-backed source command for `--bundle` before the
   owner-flagged `--bundle` command so operators do not have to reconstruct the
   final evidence environment by hand. `--bundle` writes
   `target/release-evidence-bundle.json` after referenced artifacts/reports exist,
