@@ -22,6 +22,13 @@ fn release_readiness_cli_falls_back_without_running_server() {
     let release_readiness = run_cli_json(["release", "readiness", "--endpoint", endpoint.as_str()]);
     let readable_readiness =
         run_cli_text(["release", "readiness", "--endpoint", endpoint.as_str()]);
+    let readable_full_runbook = run_cli_text([
+        "release",
+        "readiness",
+        "--endpoint",
+        endpoint.as_str(),
+        "--all-commands",
+    ]);
 
     assert_eq!(release_readiness["production_ready"], false);
     assert_array_contains(
@@ -67,7 +74,15 @@ fn release_readiness_cli_falls_back_without_running_server() {
     assert!(readable_readiness.contains("live_voice_loop"));
     assert!(readable_readiness.contains("Top manual gates:"));
     assert!(readable_readiness.contains("Next verification commands:"));
+    assert!(readable_readiness.contains("Showing 4 of"));
+    assert!(readable_readiness.contains("--all-commands for the full readable runbook"));
     assert!(readable_readiness.contains("Raw JSON: rerun with --json"));
+    assert!(readable_full_runbook.contains("Recommended verification commands:"));
+    assert!(readable_full_runbook.contains(
+        "./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env"
+    ));
+    assert!(readable_full_runbook.contains("JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true"));
+    assert!(!readable_full_runbook.contains("Showing 4 of"));
     assert!(
         serde_json::from_str::<Value>(&readable_readiness).is_err(),
         "default release readiness output should be operator-readable text"

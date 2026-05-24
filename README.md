@@ -110,10 +110,11 @@ claim; it is not proof of a finished packaged assistant.
 summarize implemented feature proofs, pending feature boundaries, recommended
 verification commands, and manual production blockers in read-only surfaces.
 The CLI command defaults to operator-readable text, supports `--json` for the
-exact structured payload, and prefers a running IPC server but falls back to the
-same conservative local readiness summary when the server is unavailable or
-loopback IPC is denied, so release triage still works before starting the
-supervised core.
+exact structured payload, and supports `--all-commands` when operators need the
+complete readable verification runbook instead of the compact first commands.
+It prefers a running IPC server but falls back to the same conservative local
+readiness summary when the server is unavailable or loopback IPC is denied, so
+release triage still works before starting the supervised core.
 Readiness feature metadata includes the repository-backed operator QA smoke as
 implemented local evidence, with clean-profile installed-app and live-device
 QA still listed as manual gates.
