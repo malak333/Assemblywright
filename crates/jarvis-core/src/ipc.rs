@@ -4673,11 +4673,11 @@ fn release_verification_commands() -> Vec<String> {
         "./scripts/release-operator-qa-smoke.sh".to_string(),
         "./scripts/packaged-app-release-smoke.sh".to_string(),
         "./scripts/package-distribution.sh --unsigned-launch-check".to_string(),
+        "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh".to_string(),
         "./scripts/release-live-device-qa.sh --check".to_string(),
         "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env".to_string(),
         "set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete".to_string(),
         "JARVIS_QA_CLEAN_PROFILE_VALIDATED=true JARVIS_QA_FINDER_LAUNCH_VALIDATED=true JARVIS_QA_MICROPHONE_VALIDATED=true JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true JARVIS_QA_NOTIFICATION_VALIDATED=true JARVIS_QA_RESTART_VALIDATED=true JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true JARVIS_QA_OWNER_NAME='Release Operator' JARVIS_QA_DEVICE_LABEL='Clean-profile release Mac' JARVIS_QA_PROFILE_LABEL='Clean macOS QA profile' JARVIS_QA_VOICE_CHECK_STARTED_AT='2026-05-22T16:00:00Z' JARVIS_QA_VOICE_CHECK_COMPLETED_AT='2026-05-22T16:05:00Z' JARVIS_QA_MICROPHONE_EVIDENCE_NOTE='Microphone prompt and capture observed' JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE='Speech prompt and recognition observed' JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE='Spoken transcript reached the command path' JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE='Speech output playback observed' JARVIS_QA_VOICE_TEST_PHRASE='Jarvis status check' JARVIS_QA_OBSERVED_TRANSCRIPT='Jarvis status check' JARVIS_QA_EXPECTED_COMMAND_TEXT='status check' JARVIS_QA_OBSERVED_COMMAND_TEXT='status check' JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task or audit id from the live command' JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL='Built-in speakers' ./scripts/release-live-device-qa.sh --assert-complete".to_string(),
-        "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness".to_string(),
         "./scripts/release-plugin-trust-qa.sh --check".to_string(),
         "./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env".to_string(),
         "set -a && source target/release-plugin-trust-qa.env && set +a && ./scripts/release-plugin-trust-qa.sh --assert-complete".to_string(),
@@ -4686,9 +4686,9 @@ fn release_verification_commands() -> Vec<String> {
         "./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env".to_string(),
         "./scripts/release-evidence-doctor.sh --check".to_string(),
         "set -a && source target/release-evidence-bundle.env && set +a && ./scripts/release-evidence-bundle.sh --bundle".to_string(),
-        "./scripts/release-evidence-doctor.sh --assert-complete".to_string(),
         "JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true JARVIS_EVIDENCE_REPORTS_ARCHIVED=true ./scripts/release-evidence-bundle.sh --bundle".to_string(),
-        "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh".to_string(),
+        "./scripts/release-evidence-doctor.sh --assert-complete".to_string(),
+        "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness".to_string(),
     ]
 }
 
@@ -4889,6 +4889,20 @@ fn error_response(error: JarvisError) -> (StatusCode, Json<ErrorResponse>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn command_index(commands: &[String], expected: &str) -> usize {
+        commands
+            .iter()
+            .position(|command| command == expected)
+            .unwrap_or_else(|| panic!("missing command: {expected}"))
+    }
+
+    fn command_index_containing(commands: &[String], expected: &str) -> usize {
+        commands
+            .iter()
+            .position(|command| command.contains(expected))
+            .unwrap_or_else(|| panic!("missing command containing: {expected}"))
+    }
 
     #[cfg(unix)]
     fn write_executable_plugin_script(dir: &std::path::Path) {
@@ -5124,6 +5138,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
     fn release_readiness_summarizes_blockers_without_claiming_production_ready() {
         let state = IpcState::new();
         let readiness = state.release_readiness();
+        let commands = &readiness.recommended_verification_commands;
 
         assert!(!readiness.production_ready);
         assert!(readiness
@@ -5238,6 +5253,44 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .recommended_verification_commands
             .iter()
             .any(|command| command == "./scripts/release-evidence-doctor.sh --assert-complete"));
+        let unsigned_distribution_index = command_index(
+            commands,
+            "./scripts/package-distribution.sh --unsigned-launch-check",
+        );
+        let signed_distribution_index = command_index(
+            commands,
+            "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh",
+        );
+        let live_device_template_index = command_index(
+            commands,
+            "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env",
+        );
+        let plugin_trust_assert_index = command_index(
+            commands,
+            "set -a && source target/release-plugin-trust-qa.env && set +a && ./scripts/release-plugin-trust-qa.sh --assert-complete",
+        );
+        let evidence_bundle_source_index = command_index(
+            commands,
+            "set -a && source target/release-evidence-bundle.env && set +a && ./scripts/release-evidence-bundle.sh --bundle",
+        );
+        let evidence_bundle_inline_index = command_index_containing(
+            commands,
+            "JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true",
+        );
+        let evidence_doctor_assert_index = command_index(
+            commands,
+            "./scripts/release-evidence-doctor.sh --assert-complete",
+        );
+        let external_readiness_index = command_index(
+            commands,
+            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness",
+        );
+        assert!(unsigned_distribution_index < signed_distribution_index);
+        assert!(signed_distribution_index < live_device_template_index);
+        assert!(plugin_trust_assert_index < evidence_bundle_source_index);
+        assert!(evidence_bundle_source_index < evidence_doctor_assert_index);
+        assert!(evidence_bundle_inline_index < evidence_doctor_assert_index);
+        assert!(evidence_doctor_assert_index < external_readiness_index);
         assert!(readiness
             .proof_boundary
             .contains("does not perform signing"));

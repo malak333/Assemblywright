@@ -298,6 +298,11 @@ These notes capture durable facts for future agents working on this repository.
   plugin-trust UTC timestamp order as the bundle path. A
   complete doctor run is diagnostic status, not proof that signing,
   notarization, stapling, installation, or external validation happened.
+- `jarvis release readiness --all-commands` is ordered for release execution:
+  local gates, unsigned distribution launch check, signed/notarized packaging,
+  live-device QA, plugin-trust QA, final evidence bundle generation,
+  evidence-doctor assertion, and then the external evidence-mode readiness
+  check.
 - The structured release evidence status endpoint mirrors the doctor inventory
   for app/installer artifacts and JSON reports, including required owner-recorded
   live-device and plugin-trust evidence fields plus live-device bundle/version

@@ -342,6 +342,11 @@ doctor/status inventory, the real `--bundle` path also validates the signed
 provenance report, local app signature, app stapling ticket, installer signature, installer stapling ticket,
 and app zip payload, then records SHA-256 digests for distribution artifacts and
 QA reports before writing the manifest.
+The full readiness runbook is ordered for release execution: local gates and the
+unsigned launch check first, the Developer ID packaging/notarization command
+before live-device QA evidence capture, plugin-trust QA before final bundling,
+the evidence doctor assertion after both bundle paths, and the external
+evidence-mode readiness check last.
 
 With a repository-backed server running, `jarvis release readiness`,
 `jarvis release evidence-status`,

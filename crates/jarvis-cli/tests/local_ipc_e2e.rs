@@ -89,6 +89,31 @@ fn release_readiness_cli_falls_back_without_running_server() {
     ));
     assert!(readable_full_runbook.contains("JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true"));
     assert!(!readable_full_runbook.contains("Showing 4 of"));
+    assert_string_array_order(
+        &release_readiness["recommended_verification_commands"],
+        "./scripts/package-distribution.sh --unsigned-launch-check",
+        "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh",
+    );
+    assert_string_array_order(
+        &release_readiness["recommended_verification_commands"],
+        "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh",
+        "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env",
+    );
+    assert_string_array_order(
+        &release_readiness["recommended_verification_commands"],
+        "set -a && source target/release-plugin-trust-qa.env && set +a && ./scripts/release-plugin-trust-qa.sh --assert-complete",
+        "set -a && source target/release-evidence-bundle.env && set +a && ./scripts/release-evidence-bundle.sh --bundle",
+    );
+    assert_string_array_substring_order(
+        &release_readiness["recommended_verification_commands"],
+        "JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true",
+        "./scripts/release-evidence-doctor.sh --assert-complete",
+    );
+    assert_string_array_order(
+        &release_readiness["recommended_verification_commands"],
+        "./scripts/release-evidence-doctor.sh --assert-complete",
+        "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness",
+    );
     assert!(
         serde_json::from_str::<Value>(&readable_readiness).is_err(),
         "default release readiness output should be operator-readable text"
@@ -4481,6 +4506,30 @@ fn assert_string_array_contains_substring(value: &Value, expected: &str) {
             .filter_map(Value::as_str)
             .any(|item| item.contains(expected)),
         "expected array to contain item with {expected}, got {value}"
+    );
+}
+
+fn assert_string_array_order(value: &Value, first: &str, second: &str) {
+    assert_string_array_substring_order(value, first, second);
+}
+
+fn assert_string_array_substring_order(value: &Value, first: &str, second: &str) {
+    let array = value.as_array().unwrap_or_else(|| {
+        panic!("expected array, got {}", json!(value));
+    });
+    let first_index = array
+        .iter()
+        .filter_map(Value::as_str)
+        .position(|item| item.contains(first))
+        .unwrap_or_else(|| panic!("expected array to contain item with {first}, got {value}"));
+    let second_index = array
+        .iter()
+        .filter_map(Value::as_str)
+        .position(|item| item.contains(second))
+        .unwrap_or_else(|| panic!("expected array to contain item with {second}, got {value}"));
+    assert!(
+        first_index < second_index,
+        "expected {first} before {second}, got {value}"
     );
 }
 
