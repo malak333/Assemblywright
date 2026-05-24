@@ -299,6 +299,11 @@ JSON evidence-report mechanics with fake flags and fake evidence notes only.
 writes a sourceable checklist of every required `JARVIS_PLUGIN_QA_*` flag and
 evidence field. The template defaults validation flags to `false`; fill and
 source it only after external plugin trust checks have actually completed.
+`jarvis release readiness --all-commands` includes the matching
+`set -a && source target/release-plugin-trust-qa.env && set +a &&
+./scripts/release-plugin-trust-qa.sh --assert-complete` command so operators
+can use the generated template instead of reconstructing the long inline env
+command.
 The owner-recorded `--assert-complete` path writes
 `target/release-plugin-trust-qa-report.json` after all required
 `JARVIS_PLUGIN_QA_*` flags are true and owner/timestamp/evidence-note fields are
@@ -319,7 +324,10 @@ manual QA. The `--check` output also points operators to
 target/release-evidence-bundle.env` to generate the sourceable final-bundle
 checklist with every `JARVIS_EVIDENCE_*` validation flag defaulting to `false`;
 source it only after the matching external release evidence has actually been
-validated. Its `--self-test` mode uses fake artifacts/reports to prove bundle
+validated. `jarvis release readiness --all-commands` includes the matching
+`set -a && source target/release-evidence-bundle.env && set +a &&
+./scripts/release-evidence-bundle.sh --bundle` command before the inline
+owner-flag example. Its `--self-test` mode uses fake artifacts/reports to prove bundle
 mechanics only; `--bundle` writes `target/release-evidence-bundle.json` after
 the referenced evidence files, including signed provenance, exist and all
 required `JARVIS_EVIDENCE_*` flags are true. Non-default live-device and

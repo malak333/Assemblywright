@@ -81,6 +81,12 @@ fn release_readiness_cli_falls_back_without_running_server() {
     assert!(readable_full_runbook.contains(
         "./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env"
     ));
+    assert!(readable_full_runbook.contains(
+        "set -a && source target/release-plugin-trust-qa.env && set +a && ./scripts/release-plugin-trust-qa.sh --assert-complete"
+    ));
+    assert!(readable_full_runbook.contains(
+        "set -a && source target/release-evidence-bundle.env && set +a && ./scripts/release-evidence-bundle.sh --bundle"
+    ));
     assert!(readable_full_runbook.contains("JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true"));
     assert!(!readable_full_runbook.contains("Showing 4 of"));
     assert!(
@@ -837,6 +843,10 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         &release_readiness["recommended_verification_commands"],
         "./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env",
     );
+    assert_string_array_contains(
+        &release_readiness["recommended_verification_commands"],
+        "set -a && source target/release-plugin-trust-qa.env && set +a && ./scripts/release-plugin-trust-qa.sh --assert-complete",
+    );
     assert_string_array_contains_substring(
         &release_readiness["recommended_verification_commands"],
         "JARVIS_PLUGIN_QA_OWNER_NAME=",
@@ -860,6 +870,10 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_string_array_contains(
         &release_readiness["recommended_verification_commands"],
         "./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env",
+    );
+    assert_string_array_contains(
+        &release_readiness["recommended_verification_commands"],
+        "set -a && source target/release-evidence-bundle.env && set +a && ./scripts/release-evidence-bundle.sh --bundle",
     );
     assert_string_array_contains(
         &release_readiness["recommended_verification_commands"],

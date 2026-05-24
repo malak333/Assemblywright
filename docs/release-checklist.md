@@ -324,8 +324,10 @@ stage or when a PR needs focused evidence for one ownership slice.
   `./scripts/release-plugin-trust-qa.sh --write-template
   target/release-plugin-trust-qa.env` generates a sourceable plugin-trust QA
   template with every `JARVIS_PLUGIN_QA_*` validation flag defaulted to `false`.
-  Those flags may be changed only after the corresponding external plugin trust
-  check has actually completed.
+  Confirm the readiness runbook also includes the source-and-run
+  `target/release-plugin-trust-qa.env` command for `--assert-complete`. Those
+  flags may be changed only after the corresponding external plugin trust check
+  has actually completed.
 - Confirm
   `./scripts/release-plugin-trust-qa.sh --self-test` proves only JSON report
   mechanics with fake validation flags and fake evidence notes. Treat
@@ -342,7 +344,9 @@ stage or when a PR needs focused evidence for one ownership slice.
   `./scripts/release-evidence-bundle.sh --write-template
   target/release-evidence-bundle.env` is also included in release readiness
   recommendations and generates a sourceable final-bundle template with every
-  `JARVIS_EVIDENCE_*` validation flag defaulted to `false`;
+  `JARVIS_EVIDENCE_*` validation flag defaulted to `false`. Confirm the
+  readiness runbook also includes the source-and-run
+  `target/release-evidence-bundle.env` command for `--bundle`;
   those flags may be changed only after the corresponding external release
   check has actually completed. Treat `--check`,
   `release-evidence-doctor.sh`, `/release/evidence-status`, and
