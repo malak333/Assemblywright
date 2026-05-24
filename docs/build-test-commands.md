@@ -538,9 +538,11 @@ requires ordered UTC timestamps plus non-empty owner-recorded evidence fields:
 `JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE`, and
 `JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE`. It also requires structured
 spoken-command observation fields: `JARVIS_QA_VOICE_TEST_PHRASE`,
-`JARVIS_QA_OBSERVED_TRANSCRIPT`, `JARVIS_QA_OBSERVED_COMMAND_TEXT`,
-`JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID`, and
+`JARVIS_QA_OBSERVED_TRANSCRIPT`, `JARVIS_QA_EXPECTED_COMMAND_TEXT`,
+`JARVIS_QA_OBSERVED_COMMAND_TEXT`, `JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID`, and
 `JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL`.
+The expected and observed command text must match after trimming, and
+`generated_at` must be UTC and no earlier than the completed voice check.
 On success, `--assert-complete` writes a JSON evidence report to
 `JARVIS_QA_REPORT_PATH` or `target/release-live-device-qa-report.json` by
 default. The report includes installed-app metadata, voice-loop evidence fields,

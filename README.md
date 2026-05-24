@@ -273,8 +273,9 @@ writes a sourceable checklist of every required `JARVIS_QA_*` flag and evidence
 field. After the owner validates a signed installed app on a real Mac profile,
 fill that template, source it, and rerun the script with `--assert-complete`.
 The assertion requires explicit transcript handoff validation, structured
-spoken-command observation fields, owner/device/profile, ordered UTC timestamps,
-and voice evidence-note fields. It writes a JSON report, defaulting to
+spoken-command observation fields with expected command text matching observed
+command text, owner/device/profile, ordered UTC timestamps, and voice
+evidence-note fields. It writes a JSON report, defaulting to
 `target/release-live-device-qa-report.json`, with installed-app metadata,
 microphone/Speech permission prompt evidence, spoken transcript handoff into
 the command path, speech-output playback evidence, owner-recorded live voice
