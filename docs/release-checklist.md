@@ -351,7 +351,9 @@ stage or when a PR needs focused evidence for one ownership slice.
   readiness runbook also includes the source-and-run
   `target/release-evidence-bundle.env` command for `--bundle`;
   those flags may be changed only after the corresponding external release
-  check has actually completed. Treat `--check`,
+  check has actually completed. Confirm the readiness runbook also includes
+  `./scripts/release-evidence-doctor.sh --assert-complete` after the bundle
+  command as the final inventory assertion. Treat `--check`,
   `release-evidence-doctor.sh`, `/release/evidence-status`, and
   `jarvis release evidence-status` as present/missing/invalid inventory for
   expected paths, JSON flags, signed-distribution provenance, and release metadata only; those paths do not

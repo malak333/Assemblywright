@@ -4686,6 +4686,7 @@ fn release_verification_commands() -> Vec<String> {
         "./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env".to_string(),
         "./scripts/release-evidence-doctor.sh --check".to_string(),
         "set -a && source target/release-evidence-bundle.env && set +a && ./scripts/release-evidence-bundle.sh --bundle".to_string(),
+        "./scripts/release-evidence-doctor.sh --assert-complete".to_string(),
         "JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true JARVIS_EVIDENCE_REPORTS_ARCHIVED=true ./scripts/release-evidence-bundle.sh --bundle".to_string(),
         "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh".to_string(),
     ]
@@ -5233,6 +5234,10 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .recommended_verification_commands
             .iter()
             .any(|command| command == "./scripts/release-evidence-doctor.sh --check"));
+        assert!(readiness
+            .recommended_verification_commands
+            .iter()
+            .any(|command| command == "./scripts/release-evidence-doctor.sh --assert-complete"));
         assert!(readiness
             .proof_boundary
             .contains("does not perform signing"));

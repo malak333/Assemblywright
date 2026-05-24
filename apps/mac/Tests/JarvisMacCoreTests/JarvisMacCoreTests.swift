@@ -374,6 +374,7 @@ struct JarvisMacCoreTests {
         #expect(readiness.recommendedVerificationCommands.contains("./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env"))
         #expect(readiness.recommendedVerificationCommands.contains("set -a && source target/release-evidence-bundle.env && set +a && ./scripts/release-evidence-bundle.sh --bundle"))
         #expect(readiness.recommendedVerificationCommands.contains("./scripts/release-evidence-doctor.sh --check"))
+        #expect(readiness.recommendedVerificationCommands.contains("./scripts/release-evidence-doctor.sh --assert-complete"))
         #expect(readiness.proofBoundary.contains("does not perform signing"))
     }
 
@@ -2812,6 +2813,7 @@ private func releaseReadinessJSON() -> Data {
             "./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env",
             "set -a && source target/release-evidence-bundle.env && set +a && ./scripts/release-evidence-bundle.sh --bundle",
             "./scripts/release-evidence-doctor.sh --check",
+            "./scripts/release-evidence-doctor.sh --assert-complete",
             "JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true JARVIS_EVIDENCE_REPORTS_ARCHIVED=true ./scripts/release-evidence-bundle.sh --bundle"
           ],
           "proof_boundary": "Read-only summary derived from /contract feature metadata and release checklist blockers; it does not perform signing, notarization, installation, Finder/LaunchServices validation, live microphone/Speech validation, spoken transcript handoff, live audio-output validation, App Store review, marketplace plugin review, malware analysis, or OS sandbox enforcement."

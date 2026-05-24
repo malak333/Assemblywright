@@ -290,6 +290,9 @@ These notes capture durable facts for future agents working on this repository.
   without failing the default local gate and prints the next signing,
   live-device template/assertion, plugin-trust template/assertion, and final
   evidence-bundle template/bundle commands when evidence is missing.
+  `/release/readiness` and `jarvis release readiness --all-commands` include
+  `./scripts/release-evidence-doctor.sh --assert-complete` as the final
+  inventory assertion after the bundle command.
   `--self-test` uses fake artifacts/reports to prove the inventory mechanics
   and the next-step guidance only. Its complete path enforces the same
   plugin-trust UTC timestamp order as the bundle path. A
