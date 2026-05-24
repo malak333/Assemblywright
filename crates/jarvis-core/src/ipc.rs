@@ -108,6 +108,41 @@ const PLUGIN_TRUST_QA_REQUIRED_FIELDS: &[&str] = &[
     "owner_recorded_plugin_trust_evidence.manual_review_evidence_note",
     "proof_boundary",
 ];
+const SIGNED_DISTRIBUTION_PROVENANCE_REQUIRED_FIELDS: &[&str] = &[
+    "schema_version",
+    "evidence_type",
+    "generated_at",
+    "version",
+    "bundle_identifier",
+    "artifacts.app_path",
+    "artifacts.zip_path",
+    "artifacts.pkg_path",
+    "artifacts.zip_sha256",
+    "artifacts.pkg_sha256",
+    "signing.developer_id_application_identity",
+    "signing.developer_id_installer_identity",
+    "signing.app_bundle_codesign",
+    "signing.app_executable_codesign",
+    "signing.bundled_core_codesign",
+    "signing.installer_pkg_signature",
+    "notarization.app_zip_submission_id",
+    "notarization.installer_pkg_submission_id",
+    "notarization.app_zip_notary_log",
+    "notarization.installer_pkg_notary_log",
+    "stapling.app_bundle_validation",
+    "stapling.installer_pkg_validation",
+    "gatekeeper.app_bundle_assessment",
+    "gatekeeper.installer_pkg_assessment",
+    "validation_flags.developer_id_application_signed",
+    "validation_flags.developer_id_installer_signed",
+    "validation_flags.app_zip_notarized",
+    "validation_flags.installer_pkg_notarized",
+    "validation_flags.app_stapled",
+    "validation_flags.installer_pkg_stapled",
+    "validation_flags.gatekeeper_assessed",
+    "validation_flags.artifact_digests_recorded",
+    "proof_boundary",
+];
 const RELEASE_EVIDENCE_BUNDLE_REQUIRED_FIELDS: &[&str] = &[
     "generated_at",
     "version",
@@ -116,8 +151,10 @@ const RELEASE_EVIDENCE_BUNDLE_REQUIRED_FIELDS: &[&str] = &[
     "artifacts.pkg_path",
     "artifacts.zip_sha256",
     "artifacts.pkg_sha256",
+    "reports.signed_distribution_provenance_report",
     "reports.live_device_qa_report",
     "reports.plugin_trust_qa_report",
+    "reports.signed_distribution_provenance_sha256",
     "reports.live_device_qa_sha256",
     "reports.plugin_trust_qa_sha256",
     "validation_flags.signed_distribution",
@@ -3972,6 +4009,7 @@ fn release_required_evidence_complete(evidence_status: &ReleaseEvidenceStatusRes
         "bundled_core_executable",
         "signed_app_zip",
         "signed_installer_package",
+        "signed_distribution_provenance_report",
         "live_device_qa_report",
         "plugin_trust_qa_report",
         "release_evidence_bundle",
@@ -4010,6 +4048,10 @@ fn release_evidence_status_from_env() -> ReleaseEvidenceStatusResponse {
         "JARVIS_EVIDENCE_OUTPUT_PATH",
         "target/release-evidence-bundle.json",
     );
+    let signed_provenance_report = env_path_or(
+        "JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT",
+        dist_dir.join(format!("Jarvis-{version}-signed-provenance.json")),
+    );
 
     let mut items = vec![
         release_path_item(
@@ -4041,6 +4083,12 @@ fn release_evidence_status_from_env() -> ReleaseEvidenceStatusResponse {
             "Installer package path",
             pkg_path,
             ReleaseEvidenceKind::File,
+        ),
+        release_json_report_item(
+            "signed_distribution_provenance_report",
+            "Signed-distribution provenance report",
+            signed_provenance_report,
+            SIGNED_DISTRIBUTION_PROVENANCE_REQUIRED_FIELDS,
         ),
         release_json_report_item(
             "live_device_qa_report",
@@ -4227,6 +4275,10 @@ fn inspect_release_json_report(
             if let Err(error) = validate_plugin_trust_qa_report(&value) {
                 return (ReleaseEvidenceItemStatus::Invalid, error);
             }
+        } else if key == "signed_distribution_provenance_report" {
+            if let Err(error) = validate_signed_distribution_provenance(&value) {
+                return (ReleaseEvidenceItemStatus::Invalid, error);
+            }
         } else if key == "release_evidence_bundle" {
             if let Err(error) = validate_release_evidence_bundle(&value) {
                 return (ReleaseEvidenceItemStatus::Invalid, error);
@@ -4348,6 +4400,49 @@ fn validate_plugin_trust_qa_report(value: &serde_json::Value) -> Result<(), Stri
     Ok(())
 }
 
+fn validate_signed_distribution_provenance(value: &serde_json::Value) -> Result<(), String> {
+    require_utc_report_timestamp(value, "generated_at")?;
+    if value
+        .get("schema_version")
+        .and_then(|schema| schema.as_i64())
+        != Some(1)
+    {
+        return Err("JSON report schema_version must be 1".to_string());
+    }
+    if value.get("evidence_type").and_then(|kind| kind.as_str())
+        != Some("signed_distribution_provenance")
+    {
+        return Err("JSON report evidence_type must be signed_distribution_provenance".to_string());
+    }
+    require_json_string_value(value, "version", &expected_release_evidence_version())?;
+    require_json_string_value(
+        value,
+        "bundle_identifier",
+        &env_value_alias(
+            "JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID",
+            "JARVIS_QA_EXPECTED_BUNDLE_ID",
+            "com.nobiletechnology.jarvis",
+        ),
+    )?;
+    for field in ["artifacts.zip_sha256", "artifacts.pkg_sha256"] {
+        require_json_sha256_value(value, field)?;
+    }
+    for field in [
+        "validation_flags.developer_id_application_signed",
+        "validation_flags.developer_id_installer_signed",
+        "validation_flags.app_zip_notarized",
+        "validation_flags.installer_pkg_notarized",
+        "validation_flags.app_stapled",
+        "validation_flags.installer_pkg_stapled",
+        "validation_flags.gatekeeper_assessed",
+        "validation_flags.artifact_digests_recorded",
+    ] {
+        require_json_bool_value(value, field, true)?;
+    }
+
+    Ok(())
+}
+
 fn validate_release_evidence_bundle(value: &serde_json::Value) -> Result<(), String> {
     require_utc_report_timestamp(value, "generated_at")?;
     require_json_string_value(value, "version", &expected_release_evidence_version())?;
@@ -4355,6 +4450,7 @@ fn validate_release_evidence_bundle(value: &serde_json::Value) -> Result<(), Str
     for field in [
         "artifacts.zip_sha256",
         "artifacts.pkg_sha256",
+        "reports.signed_distribution_provenance_sha256",
         "reports.live_device_qa_sha256",
         "reports.plugin_trust_qa_sha256",
     ] {
@@ -4455,7 +4551,8 @@ fn json_string_at(value: &serde_json::Value, dotted_path: &str) -> Option<String
 
 fn release_json_present_detail(key: &str) -> String {
     match key {
-        "release_evidence_bundle" => "JSON report exists, expected release version matches, artifact/report SHA-256 digests are present, and local signature validation is true; signed_distribution and notarization remain owner-recorded external evidence".to_string(),
+        "release_evidence_bundle" => "JSON report exists, expected release version matches, artifact/report SHA-256 digests are present including signed-distribution provenance, and local signature validation is true; clean-profile, live-device, and plugin-trust claims remain owner-recorded external evidence".to_string(),
+        "signed_distribution_provenance_report" => "JSON report exists, expected release version and bundle identifier match, signing/notarization/stapling/Gatekeeper evidence fields are present, required flags are true, and artifact SHA-256 digests are present; clean-profile install and live-device QA remain separate manual gates".to_string(),
         "live_device_qa_report" => "JSON report exists, required owner-recorded fields are present, release metadata plus timestamps match expected values, and observed command text matches the expected command; live-device claims are still owner-recorded external evidence".to_string(),
         "plugin_trust_qa_report" => "JSON report exists, required owner-recorded fields are present, and review timestamps are valid and ordered; marketplace, malware, sandbox, and egress claims remain owner-recorded external evidence".to_string(),
         _ => "JSON report exists and required owner-recorded fields are present; external claims are not revalidated by evidence-status".to_string(),
@@ -5380,8 +5477,10 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 "pkg_sha256": digest
             },
             "reports": {
+                "signed_distribution_provenance_report": "target/distribution/Jarvis-0.1.4-signed-provenance.json",
                 "live_device_qa_report": "target/release-live-device-qa-report.json",
                 "plugin_trust_qa_report": "target/release-plugin-trust-qa-report.json",
+                "signed_distribution_provenance_sha256": digest,
                 "live_device_qa_sha256": digest,
                 "plugin_trust_qa_sha256": digest
             },
@@ -5587,6 +5686,101 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert!(detail.contains("local_signature_validation"), "{detail}");
     }
 
+    fn valid_signed_distribution_provenance_json() -> serde_json::Value {
+        let digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        json!({
+            "schema_version": 1,
+            "evidence_type": "signed_distribution_provenance",
+            "generated_at": "2026-05-22T16:40:00Z",
+            "version": "0.1.4",
+            "bundle_identifier": "com.nobiletechnology.jarvis",
+            "artifacts": {
+                "app_path": "target/distribution/Jarvis.app",
+                "zip_path": "target/distribution/Jarvis-0.1.4.zip",
+                "pkg_path": "target/distribution/Jarvis-0.1.4.pkg",
+                "zip_sha256": digest,
+                "pkg_sha256": digest
+            },
+            "signing": {
+                "developer_id_application_identity": "Developer ID Application: Jarvis QA Fixture",
+                "developer_id_installer_identity": "Developer ID Installer: Jarvis QA Fixture",
+                "app_bundle_codesign": "Authority=Developer ID Application: Jarvis QA Fixture",
+                "app_executable_codesign": "Authority=Developer ID Application: Jarvis QA Fixture",
+                "bundled_core_codesign": "Authority=Developer ID Application: Jarvis QA Fixture",
+                "installer_pkg_signature": "Developer ID Installer: Jarvis QA Fixture"
+            },
+            "notarization": {
+                "app_zip_submission_id": "00000000-0000-4000-8000-000000000001",
+                "installer_pkg_submission_id": "00000000-0000-4000-8000-000000000002",
+                "app_zip_notary_log": "target/distribution/notary-logs/app.log",
+                "installer_pkg_notary_log": "target/distribution/notary-logs/pkg.log"
+            },
+            "stapling": {
+                "app_bundle_validation": "The validate action worked!",
+                "installer_pkg_validation": "The validate action worked!"
+            },
+            "gatekeeper": {
+                "app_bundle_assessment": "accepted",
+                "installer_pkg_assessment": "accepted"
+            },
+            "validation_flags": {
+                "developer_id_application_signed": true,
+                "developer_id_installer_signed": true,
+                "app_zip_notarized": true,
+                "installer_pkg_notarized": true,
+                "app_stapled": true,
+                "installer_pkg_stapled": true,
+                "gatekeeper_assessed": true,
+                "artifact_digests_recorded": true
+            },
+            "proof_boundary": "Signed distribution provenance fixture."
+        })
+    }
+
+    fn inspect_signed_distribution_provenance_value(
+        value: serde_json::Value,
+    ) -> (ReleaseEvidenceItemStatus, String) {
+        let report_path = tempfile::NamedTempFile::new().expect("temp signed provenance report");
+        std::fs::write(
+            report_path.path(),
+            serde_json::to_string_pretty(&value).expect("serialize signed provenance fixture"),
+        )
+        .expect("write signed provenance fixture");
+
+        inspect_release_json_report(
+            "signed_distribution_provenance_report",
+            report_path.path(),
+            SIGNED_DISTRIBUTION_PROVENANCE_REQUIRED_FIELDS,
+        )
+    }
+
+    #[test]
+    fn signed_distribution_provenance_accepts_semantically_valid_report() {
+        let (status, detail) = inspect_signed_distribution_provenance_value(
+            valid_signed_distribution_provenance_json(),
+        );
+        assert_eq!(status, ReleaseEvidenceItemStatus::Present);
+        assert!(detail.contains("Gatekeeper"), "{detail}");
+    }
+
+    #[test]
+    fn signed_distribution_provenance_rejects_wrong_version() {
+        let mut report = valid_signed_distribution_provenance_json();
+        report["version"] = json!("9.9.9");
+        let (status, detail) = inspect_signed_distribution_provenance_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("version"), "{detail}");
+    }
+
+    #[test]
+    fn signed_distribution_provenance_rejects_missing_notary_submission() {
+        let mut report = valid_signed_distribution_provenance_json();
+        report["notarization"]["app_zip_submission_id"] = json!("");
+        let (status, detail) = inspect_signed_distribution_provenance_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("app_zip_submission_id"), "{detail}");
+    }
+
     fn release_evidence_status_fixture(
         live_device_status: ReleaseEvidenceItemStatus,
     ) -> ReleaseEvidenceStatusResponse {
@@ -5651,6 +5845,10 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             ("bundled_core_executable", ReleaseEvidenceKind::Executable),
             ("signed_app_zip", ReleaseEvidenceKind::File),
             ("signed_installer_package", ReleaseEvidenceKind::File),
+            (
+                "signed_distribution_provenance_report",
+                ReleaseEvidenceKind::JsonReport,
+            ),
             ("live_device_qa_report", ReleaseEvidenceKind::JsonReport),
             ("plugin_trust_qa_report", ReleaseEvidenceKind::JsonReport),
             ("release_evidence_bundle", ReleaseEvidenceKind::JsonReport),

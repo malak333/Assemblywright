@@ -9,6 +9,7 @@ DIST_DIR="${JARVIS_EVIDENCE_DIST_DIR:-$ROOT_DIR/target/distribution}"
 APP_PATH="${JARVIS_EVIDENCE_APP_PATH:-$DIST_DIR/Jarvis.app}"
 ZIP_PATH="${JARVIS_EVIDENCE_ZIP_PATH:-$DIST_DIR/Jarvis-$VERSION.zip}"
 PKG_PATH="${JARVIS_EVIDENCE_PKG_PATH:-$DIST_DIR/Jarvis-$VERSION.pkg}"
+SIGNED_PROVENANCE_REPORT="${JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT:-$DIST_DIR/Jarvis-$VERSION-signed-provenance.json}"
 LIVE_QA_REPORT="${JARVIS_EVIDENCE_LIVE_QA_REPORT:-${JARVIS_QA_REPORT_PATH:-$ROOT_DIR/target/release-live-device-qa-report.json}}"
 PLUGIN_QA_REPORT="${JARVIS_EVIDENCE_PLUGIN_QA_REPORT:-${JARVIS_PLUGIN_QA_REPORT_PATH:-$ROOT_DIR/target/release-plugin-trust-qa-report.json}}"
 OUTPUT_PATH="${JARVIS_EVIDENCE_OUTPUT_PATH:-$ROOT_DIR/target/release-evidence-bundle.json}"
@@ -56,6 +57,8 @@ Optional:
   JARVIS_EVIDENCE_APP_PATH            Defaults to target/distribution/Jarvis.app
   JARVIS_EVIDENCE_ZIP_PATH            Defaults to target/distribution/Jarvis-<version>.zip
   JARVIS_EVIDENCE_PKG_PATH            Defaults to target/distribution/Jarvis-<version>.pkg
+  JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT
+                                      Defaults to target/distribution/Jarvis-<version>-signed-provenance.json
   JARVIS_EVIDENCE_LIVE_QA_REPORT      Defaults to JARVIS_QA_REPORT_PATH or target/release-live-device-qa-report.json
   JARVIS_EVIDENCE_PLUGIN_QA_REPORT    Defaults to JARVIS_PLUGIN_QA_REPORT_PATH or target/release-plugin-trust-qa-report.json
   JARVIS_EVIDENCE_OUTPUT_PATH         Defaults to target/release-evidence-bundle.json
@@ -299,6 +302,32 @@ if not isinstance(cursor, str) or not cursor.strip():
 PY
 }
 
+require_json_sha256() {
+  local label="$1"
+  local path="$2"
+  local dotted_key="$3"
+  require_file "$label" "$path"
+  python3 - "$path" "$dotted_key" "$label" <<'PY'
+import json
+import string
+import sys
+
+path, dotted_key, label = sys.argv[1:4]
+with open(path, encoding="utf-8") as handle:
+    data = json.load(handle)
+
+cursor = data
+for segment in dotted_key.split("."):
+    if not isinstance(cursor, dict) or segment not in cursor:
+        raise SystemExit(f"{label} is missing required evidence field: {dotted_key}")
+    cursor = cursor[segment]
+
+hexdigits = set(string.hexdigits)
+if not isinstance(cursor, str) or len(cursor) != 64 or any(char not in hexdigits for char in cursor):
+    raise SystemExit(f"{label} required evidence field must be a SHA-256 hex digest: {dotted_key}")
+PY
+}
+
 require_json_utc_timestamp() {
   local label="$1"
   local path="$2"
@@ -421,10 +450,12 @@ write_bundle() {
   local escaped_pkg
   local escaped_live
   local escaped_plugin
+  local escaped_signed_provenance
   local zip_sha
   local pkg_sha
   local live_sha
   local plugin_sha
+  local signed_provenance_sha
   local escaped_boundary
   local local_signature_validation
   require_command shasum
@@ -435,11 +466,13 @@ write_bundle() {
   escaped_pkg="$(json_escape "$PKG_PATH")"
   escaped_live="$(json_escape "$LIVE_QA_REPORT")"
   escaped_plugin="$(json_escape "$PLUGIN_QA_REPORT")"
+  escaped_signed_provenance="$(json_escape "$SIGNED_PROVENANCE_REPORT")"
   zip_sha="$(file_sha256 "$ZIP_PATH")"
   pkg_sha="$(file_sha256 "$PKG_PATH")"
   live_sha="$(file_sha256 "$LIVE_QA_REPORT")"
   plugin_sha="$(file_sha256 "$PLUGIN_QA_REPORT")"
-  escaped_boundary="$(json_escape "Evidence bundle manifest only; records artifact paths, local signature/stapling validation status, owner-recorded signing/notarization validation flags, and QA reports.")"
+  signed_provenance_sha="$(file_sha256 "$SIGNED_PROVENANCE_REPORT")"
+  escaped_boundary="$(json_escape "Evidence bundle manifest only; records artifact paths, signed-distribution provenance report path, local signature/stapling validation status, owner-recorded signing/notarization validation flags, and QA reports.")"
   local_signature_validation="$VALIDATE_LOCAL_SIGNATURES"
 
   mkdir -p "$(dirname "$OUTPUT_PATH")"
@@ -455,8 +488,10 @@ write_bundle() {
     "pkg_sha256": "$pkg_sha"
   },
   "reports": {
+    "signed_distribution_provenance_report": "$escaped_signed_provenance",
     "live_device_qa_report": "$escaped_live",
     "plugin_trust_qa_report": "$escaped_plugin",
+    "signed_distribution_provenance_sha256": "$signed_provenance_sha",
     "live_device_qa_sha256": "$live_sha",
     "plugin_trust_qa_sha256": "$plugin_sha"
   },
@@ -496,6 +531,7 @@ JARVIS_EVIDENCE_DIST_DIR="$DIST_DIR"
 JARVIS_EVIDENCE_APP_PATH="$APP_PATH"
 JARVIS_EVIDENCE_ZIP_PATH="$ZIP_PATH"
 JARVIS_EVIDENCE_PKG_PATH="$PKG_PATH"
+JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$SIGNED_PROVENANCE_REPORT"
 JARVIS_EVIDENCE_LIVE_QA_REPORT="$LIVE_QA_REPORT"
 JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$PLUGIN_QA_REPORT"
 JARVIS_EVIDENCE_OUTPUT_PATH="$OUTPUT_PATH"
@@ -652,6 +688,55 @@ JSON
   "proof_boundary": "self-test fixture"
 }
 JSON
+  cat >"$tmp_dir/signed-provenance.json" <<JSON
+{
+  "schema_version": 1,
+  "evidence_type": "signed_distribution_provenance",
+  "generated_at": "2026-05-22T16:40:00Z",
+  "version": "$VERSION",
+  "bundle_identifier": "com.nobiletechnology.jarvis",
+  "artifacts": {
+    "app_path": "$tmp_dir/dist/Jarvis.app",
+    "zip_path": "$self_test_zip",
+    "pkg_path": "$self_test_pkg",
+    "zip_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "pkg_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  },
+  "signing": {
+    "developer_id_application_identity": "Developer ID Application: Jarvis QA Fixture",
+    "developer_id_installer_identity": "Developer ID Installer: Jarvis QA Fixture",
+    "app_bundle_codesign": "Authority=Developer ID Application: Jarvis QA Fixture",
+    "app_executable_codesign": "Authority=Developer ID Application: Jarvis QA Fixture",
+    "bundled_core_codesign": "Authority=Developer ID Application: Jarvis QA Fixture",
+    "installer_pkg_signature": "Developer ID Installer: Jarvis QA Fixture"
+  },
+  "notarization": {
+    "app_zip_submission_id": "00000000-0000-4000-8000-000000000001",
+    "installer_pkg_submission_id": "00000000-0000-4000-8000-000000000002",
+    "app_zip_notary_log": "$tmp_dir/app-zip-notarytool.log",
+    "installer_pkg_notary_log": "$tmp_dir/installer-pkg-notarytool.log"
+  },
+  "stapling": {
+    "app_bundle_validation": "The validate action worked!",
+    "installer_pkg_validation": "The validate action worked!"
+  },
+  "gatekeeper": {
+    "app_bundle_assessment": "accepted",
+    "installer_pkg_assessment": "accepted"
+  },
+  "validation_flags": {
+    "developer_id_application_signed": true,
+    "developer_id_installer_signed": true,
+    "app_zip_notarized": true,
+    "installer_pkg_notarized": true,
+    "app_stapled": true,
+    "installer_pkg_stapled": true,
+    "gatekeeper_assessed": true,
+    "artifact_digests_recorded": true
+  },
+  "proof_boundary": "self-test fixture"
+}
+JSON
 
   "$0" --write-template "$tmp_dir/release-evidence-bundle.env" >/dev/null
   require_file "release evidence template" "$tmp_dir/release-evidence-bundle.env"
@@ -660,6 +745,7 @@ JSON
     JARVIS_EVIDENCE_APP_PATH \
     JARVIS_EVIDENCE_ZIP_PATH \
     JARVIS_EVIDENCE_PKG_PATH \
+    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT \
     JARVIS_EVIDENCE_LIVE_QA_REPORT \
     JARVIS_EVIDENCE_PLUGIN_QA_REPORT \
     JARVIS_EVIDENCE_OUTPUT_PATH \
@@ -685,6 +771,7 @@ JSON
     JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
     JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
@@ -700,6 +787,8 @@ JSON
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"reports_archived": true'
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"local_signature_validation": false'
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"zip_sha256"'
+  require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"signed_distribution_provenance_report"'
+  require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"signed_distribution_provenance_sha256"'
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"live_device_qa_sha256"'
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"plugin_trust_qa_report"'
 
@@ -707,6 +796,7 @@ JSON
     JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
     JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/forbidden-bundle.json" \
@@ -1002,6 +1092,8 @@ if [[ "$CHECK_ONLY" == true ]]; then
 Required before --bundle:
 - App zip artifact path exists, with Developer ID signing/notarization validated separately.
 - /Applications installer package path exists, with Developer ID signing/notarization validated separately.
+- Signed-distribution provenance report generated by package-distribution.sh exists,
+  binds version/bundle ID/artifact digests, and records signing/notary/staple/Gatekeeper evidence.
 - Clean-profile install, Finder launch, live microphone/Speech, audio output,
   notification, restart, and manual release QA report exists.
 - Marketplace review, malware scan, signed publisher policy, OS sandbox, and
@@ -1018,6 +1110,24 @@ fi
 require_dir "app bundle path" "$APP_PATH"
 require_file "app zip path" "$ZIP_PATH"
 require_file "installer package path" "$PKG_PATH"
+require_file "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT"
+require_json_number_equals "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "schema_version" "1"
+require_json_string_equals "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "evidence_type" "signed_distribution_provenance"
+require_json_string_equals "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "version" "$EXPECTED_VERSION"
+require_json_string_equals "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "bundle_identifier" "$EXPECTED_BUNDLE_ID"
+require_json_string_equals "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.app_path" "$APP_PATH"
+require_json_string_equals "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.zip_path" "$ZIP_PATH"
+require_json_string_equals "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.pkg_path" "$PKG_PATH"
+for field in artifacts.zip_sha256 artifacts.pkg_sha256; do
+  require_json_sha256 "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "$field"
+done
+for flag in developer_id_application_signed developer_id_installer_signed app_zip_notarized installer_pkg_notarized app_stapled installer_pkg_stapled gatekeeper_assessed artifact_digests_recorded; do
+  require_json_bool_true "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "validation_flags.$flag"
+done
+for field in signing.developer_id_application_identity signing.developer_id_installer_identity signing.app_bundle_codesign signing.app_executable_codesign signing.bundled_core_codesign signing.installer_pkg_signature notarization.app_zip_submission_id notarization.installer_pkg_submission_id notarization.app_zip_notary_log notarization.installer_pkg_notary_log stapling.app_bundle_validation stapling.installer_pkg_validation gatekeeper.app_bundle_assessment gatekeeper.installer_pkg_assessment; do
+  require_json_nonempty_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "$field"
+done
+require_json_utc_timestamp "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "generated_at"
 require_production_signature_validation
 validate_local_distribution_evidence
 for flag in clean_profile finder_launch microphone speech_permission transcript_handoff audio_output notification restart manual_release_qa; do

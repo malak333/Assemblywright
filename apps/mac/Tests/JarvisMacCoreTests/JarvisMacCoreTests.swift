@@ -2858,7 +2858,7 @@ private func releaseEvidenceStatusJSON() -> Data {
           "generated_at": "2026-05-22T08:05:00Z",
           "complete": false,
           "satisfied_count": 3,
-          "missing_count": 5,
+          "missing_count": 6,
           "invalid_count": 0,
           "items": [
             {
@@ -2880,6 +2880,16 @@ private func releaseEvidenceStatusJSON() -> Data {
               "required_for_production": true,
               "manual_gate": true,
               "detail": "expected JSON report is missing"
+            },
+            {
+              "key": "signed_distribution_provenance_report",
+              "label": "Signed-distribution provenance report",
+              "path": "target/distribution/Jarvis-0.1.4-signed-provenance.json",
+              "kind": "json_report",
+              "status": "missing",
+              "required_for_production": true,
+              "manual_gate": true,
+              "detail": "expected JSON report is missing"
             }
           ],
           "proof_boundary": "File/report inventory only; complete means expected paths are present and JSON reports pass required field checks plus live-device QA release-metadata/timestamp semantics, plugin-trust timestamp semantics, and final evidence-bundle version/SHA/signature-validation semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
@@ -2894,7 +2904,7 @@ private func completeReleaseEvidenceStatusJSON() -> Data {
         {
           "generated_at": "2026-05-22T17:06:00Z",
           "complete": true,
-          "satisfied_count": 8,
+          "satisfied_count": 9,
           "missing_count": 0,
           "invalid_count": 0,
           "items": [
@@ -2947,6 +2957,16 @@ private func completeReleaseEvidenceStatusJSON() -> Data {
               "required_for_production": true,
               "manual_gate": true,
               "detail": "file exists; installer signature and stapling are validated by external evidence bundle inputs"
+            },
+            {
+              "key": "signed_distribution_provenance_report",
+              "label": "Signed-distribution provenance report",
+              "path": "target/distribution/Jarvis-0.1.4-signed-provenance.json",
+              "kind": "json_report",
+              "status": "present",
+              "required_for_production": true,
+              "manual_gate": true,
+              "detail": "JSON report exists, expected release version and bundle identifier match, signing/notarization/stapling/Gatekeeper evidence fields are present, required flags are true, and artifact SHA-256 digests are present; clean-profile install and live-device QA remain separate manual gates"
             },
             {
               "key": "live_device_qa_report",

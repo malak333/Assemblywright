@@ -104,6 +104,7 @@ The script runs the full local gate below, including the opt-in ignored
 release-proof E2E test. Run individual commands only when diagnosing a failing
 stage or when a PR needs focused evidence for one ownership slice.
 
+- `./scripts/release-version-consistency.sh --check`
 - `cargo fmt --check`
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - `cargo test --workspace`
@@ -113,6 +114,7 @@ stage or when a PR needs focused evidence for one ownership slice.
 - `cargo run -p jarvis-cli -- smoke`
 - `./scripts/release-operator-qa-smoke.sh`
 - `cargo package --workspace --allow-dirty`
+- `./scripts/package-distribution.sh --version-consistency-self-test`
 - `./scripts/package-distribution.sh --unsigned-launch-check`
 - `./scripts/release-live-device-qa.sh --check`
 - `./scripts/release-live-device-qa.sh --self-test`
@@ -328,7 +330,7 @@ stage or when a PR needs focused evidence for one ownership slice.
   check has actually completed. Treat `--check`,
   `release-evidence-doctor.sh`, `/release/evidence-status`, and
   `jarvis release evidence-status` as present/missing/invalid inventory for
-  expected paths, JSON flags, and release metadata only; those paths do not
+  expected paths, JSON flags, signed-distribution provenance, and release metadata only; those paths do not
   validate Developer ID signing, notarization, stapling, installation,
   live-device QA, plugin-trust QA, owner assertions, or final bundle creation.
   Treat `--bundle` output as a manifest of referenced signed/notarized artifacts
@@ -339,11 +341,12 @@ stage or when a PR needs focused evidence for one ownership slice.
   required live-device/plugin-trust report flag, require owner-recorded evidence
   fields in both QA reports, confirm the live-device QA report matches the
   expected bundle id/version/build, and write SHA-256 digests for the signed
-  distribution artifacts plus QA reports before writing evidence. The
+  distribution artifacts, signed provenance, plus QA reports before writing evidence. The
   disabled-signature path is reserved for the fake self-test fixture.
 - Confirm `/release/evidence-status` and `jarvis release evidence-status` expose
   the same standard release evidence inventory as structured, redacted status
-  items with `present`, `missing`, or `invalid` state, including JSON-report
+  items with `present`, `missing`, or `invalid` state, including signed
+  provenance JSON-report validation plus JSON-report
   required-field and semantic validation for owner-recorded live-device,
   plugin-trust, and final bundle evidence.
 - Confirm the Swift Release tab decodes the same `/release/readiness` contract
