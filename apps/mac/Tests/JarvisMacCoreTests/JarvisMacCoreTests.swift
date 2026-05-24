@@ -280,7 +280,7 @@ struct JarvisMacCoreTests {
               "endpoints": [
                 { "method": "GET", "path": "/health", "repository_required": false, "redacted": true },
                 { "method": "GET", "path": "/scheduler/jobs/:id", "repository_required": false, "redacted": false },
-                { "method": "GET", "path": "/activity/summary", "repository_required": true, "redacted": false },
+                { "method": "GET", "path": "/activity/summary", "repository_required": true, "redacted": true },
                 { "method": "GET", "path": "/release/readiness", "repository_required": false, "redacted": true },
                 { "method": "GET", "path": "/permissions/grants", "repository_required": true, "redacted": false },
                 { "method": "GET", "path": "/permissions/policy-review", "repository_required": true, "redacted": false }
@@ -744,6 +744,7 @@ struct JarvisMacCoreTests {
         #expect(summary.statusCounts.contains(JarvisActivityStatusCount(status: "running", count: 1)))
         #expect(summary.statusCounts.contains(JarvisActivityStatusCount(status: "completed", count: 1)))
         #expect(summary.recentTasks.first?.id == taskId)
+        #expect(summary.recentTasks.first?.status == "running")
         #expect(summary.recentAuditEntries.first?.eventType == "plugin_completed")
     }
 
@@ -2480,7 +2481,6 @@ struct JarvisMacCoreTests {
                 {
                   "id": "\(taskId.uuidString)",
                   "session_id": "\(UUID().uuidString)",
-                  "user_input": "status check",
                   "status": "running",
                   "created_at": "2026-05-20T12:00:00Z",
                   "updated_at": "2026-05-20T12:00:01Z"
@@ -3461,7 +3461,15 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
             auditEntryCount: auditEntries.count,
             activeTaskCount: tasks.filter { activeStatuses.contains($0.status) }.count,
             statusCounts: statusCounts,
-            recentTasks: Array(tasks.suffix(5).reversed()),
+            recentTasks: tasks.suffix(5).reversed().map {
+                JarvisActivityTaskSummary(
+                    id: $0.id,
+                    sessionId: $0.sessionId,
+                    status: $0.status,
+                    createdAt: $0.createdAt ?? "2026-05-20T12:00:00Z",
+                    updatedAt: $0.updatedAt ?? "2026-05-20T12:00:00Z"
+                )
+            },
             recentAuditEntries: Array(auditEntries.suffix(10).reversed())
         )
     }

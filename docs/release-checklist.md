@@ -481,8 +481,9 @@ Still future gates for production distribution:
   `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external jarvis release readiness`
   against that report and confirm the live voice/audio readiness item is
   cleared only from valid owner-recorded evidence.
-- Activity view shows current task state, active/status counts, and recent
-  audit progress through `/activity/summary`.
+- Activity view shows current task state, active/status counts, redacted recent
+  task metadata, and recent audit progress through `/activity/summary` without
+  exposing recent task command bodies.
 - CLI activity watch receives bounded `/activity/events` progress events.
 - Swift Runs tab can request a bounded `/activity/events` stream, render recent
   activity-summary/error frames, and update the visible activity summary without

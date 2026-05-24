@@ -379,6 +379,27 @@ pub struct ActivityStatusCount {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActivityTaskSummary {
+    pub id: Uuid,
+    pub session_id: Uuid,
+    pub status: TaskStatus,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl From<&TaskRecord> for ActivityTaskSummary {
+    fn from(task: &TaskRecord) -> Self {
+        Self {
+            id: task.id,
+            session_id: task.session_id,
+            status: task.status.clone(),
+            created_at: task.created_at,
+            updated_at: task.updated_at,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActivitySummary {
     pub generated_at: DateTime<Utc>,
     pub repository_backed: bool,
@@ -386,7 +407,7 @@ pub struct ActivitySummary {
     pub audit_entry_count: usize,
     pub active_task_count: usize,
     pub status_counts: Vec<ActivityStatusCount>,
-    pub recent_tasks: Vec<TaskRecord>,
+    pub recent_tasks: Vec<ActivityTaskSummary>,
     pub recent_audit_entries: Vec<AuditEntry>,
 }
 
@@ -955,7 +976,12 @@ impl IpcState {
                 .iter()
                 .filter(|task| active_statuses.contains(&task.status))
                 .count();
-            let recent_tasks = tasks.iter().rev().take(5).cloned().collect::<Vec<_>>();
+            let recent_tasks = tasks
+                .iter()
+                .rev()
+                .take(5)
+                .map(ActivityTaskSummary::from)
+                .collect::<Vec<_>>();
             let recent_audit_entries = audit_entries
                 .iter()
                 .rev()
@@ -3828,8 +3854,8 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
         endpoint("GET", "/tasks/:id", true, false),
         endpoint("GET", "/tasks/:id/audit", true, false),
         endpoint("GET", "/audit", true, false),
-        endpoint("GET", "/activity/summary", true, false),
-        endpoint("GET", "/activity/events", true, false),
+        endpoint("GET", "/activity/summary", true, true),
+        endpoint("GET", "/activity/events", true, true),
         endpoint("GET", "/model-routes", true, true),
         endpoint("GET", "/model-routes/:id", true, true),
         endpoint("GET", "/memory", true, false),
@@ -4530,8 +4556,8 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "activity_events",
             "implemented",
-            "Repository-backed `/activity/events` exposes bounded task/audit event batches plus redacted installed-plugin progress frames and is covered by CLI IPC E2E.",
-            "This is bounded state polling over SSE from audit evidence, not per-token model streaming or unbounded plugin-internal progress streaming.",
+            "Repository-backed `/activity/events` exposes bounded redacted task metadata, audit event batches, and redacted installed-plugin progress frames and is covered by CLI IPC E2E.",
+            "This is bounded state polling over SSE from audit evidence; activity recent tasks omit command bodies and this is not per-token model streaming or unbounded plugin-internal progress streaming.",
         ),
         feature(
             "scheduler_attention",
@@ -4936,13 +4962,15 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .iter()
             .any(|endpoint| endpoint.method == "GET"
                 && endpoint.path == "/activity/summary"
-                && endpoint.repository_required));
+                && endpoint.repository_required
+                && endpoint.redacted));
         assert!(contract
             .endpoints
             .iter()
             .any(|endpoint| endpoint.method == "GET"
                 && endpoint.path == "/activity/events"
-                && endpoint.repository_required));
+                && endpoint.repository_required
+                && endpoint.redacted));
     }
 
     #[test]
@@ -6928,6 +6956,8 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert_eq!(summary.active_task_count, 0);
         assert!(summary.audit_entry_count >= entries.len());
         assert_eq!(summary.recent_tasks[0].id, response.task.id);
+        let summary_json = serde_json::to_value(&summary).expect("activity summary json");
+        assert!(summary_json["recent_tasks"][0].get("user_input").is_none());
         assert!(summary
             .status_counts
             .iter()

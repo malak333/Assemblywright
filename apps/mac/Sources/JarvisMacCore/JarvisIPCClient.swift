@@ -432,6 +432,22 @@ public struct JarvisActivityStatusCount: Decodable, Equatable, Sendable {
     public var count: Int
 }
 
+public struct JarvisActivityTaskSummary: Decodable, Equatable, Identifiable, Sendable {
+    public var id: UUID
+    public var sessionId: UUID
+    public var status: String
+    public var createdAt: String
+    public var updatedAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case sessionId = "session_id"
+        case status
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+}
+
 public struct JarvisActivitySummary: Decodable, Equatable, Sendable {
     public var generatedAt: String
     public var repositoryBacked: Bool
@@ -439,7 +455,7 @@ public struct JarvisActivitySummary: Decodable, Equatable, Sendable {
     public var auditEntryCount: Int
     public var activeTaskCount: Int
     public var statusCounts: [JarvisActivityStatusCount]
-    public var recentTasks: [JarvisTask]
+    public var recentTasks: [JarvisActivityTaskSummary]
     public var recentAuditEntries: [JarvisAuditEntry]
 
     enum CodingKeys: String, CodingKey {

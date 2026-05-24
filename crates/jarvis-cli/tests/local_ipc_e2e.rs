@@ -717,6 +717,16 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_array_contains(&contract["endpoints"], "path", "/model-routes");
     assert_array_contains(&contract["endpoints"], "path", "/activity/summary");
     assert_array_contains(&contract["endpoints"], "path", "/activity/events");
+    assert!(contract["endpoints"]
+        .as_array()
+        .expect("contract endpoints")
+        .iter()
+        .any(|endpoint| endpoint["path"] == "/activity/summary" && endpoint["redacted"] == true));
+    assert!(contract["endpoints"]
+        .as_array()
+        .expect("contract endpoints")
+        .iter()
+        .any(|endpoint| endpoint["path"] == "/activity/events" && endpoint["redacted"] == true));
     assert_array_contains(&contract["endpoints"], "path", "/approvals/:id/approve");
     assert_array_contains(
         &contract["endpoints"],
@@ -964,6 +974,14 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     );
     assert_array_contains(&activity["status_counts"], "status", "completed");
     assert_array_contains(&activity["recent_tasks"], "id", &task_id);
+    assert!(
+        activity["recent_tasks"]
+            .as_array()
+            .expect("activity recent tasks")
+            .iter()
+            .all(|task| task.get("user_input").is_none()),
+        "{activity}"
+    );
     assert_array_contains(
         &activity["recent_audit_entries"],
         "event_type",
@@ -985,6 +1003,10 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     );
     assert!(
         activity_events.contains("\"task_count\""),
+        "{activity_events}"
+    );
+    assert!(
+        !activity_events.contains("\"user_input\""),
         "{activity_events}"
     );
 

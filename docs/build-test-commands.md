@@ -606,8 +606,9 @@ permission policy review items, redacted scheduler trigger review items, fail-cl
 subprocess enablement, installed subprocess minimal environment isolation,
 installed subprocess stdout/stderr byte limits, installed subprocess
 output-limit fail-closed behavior through the CLI IPC path, installed subprocess
-progress-frame response/audit redaction, repository-backed activity summary status/recent-audit
-evidence, bounded activity event streaming over server-sent events, redacted
+progress-frame response/audit redaction, repository-backed activity summary status,
+redacted recent task metadata, recent-audit evidence without recent task command
+bodies, bounded activity event streaming over server-sent events, redacted
 scheduler attention handoff, Swift bounded activity event parsing/model
 coverage, scheduler due-job
 execution/reschedule audit evidence, redacted proactive scheduler policy
