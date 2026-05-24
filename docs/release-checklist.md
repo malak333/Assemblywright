@@ -68,7 +68,7 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   `live_voice_loop` pending.
 - Confirm signed-distribution provenance, plugin-trust, and final bundle reports
   are `present`, not `invalid`. Evidence-status checks signed provenance
-  version/bundle metadata, signing/notary/staple/Gatekeeper evidence fields,
+  version/bundle metadata, bundled core version, signing/notary/staple/Gatekeeper evidence fields,
   required flags, non-future plugin-trust review timestamps, final bundle version,
   artifact/report path matching, SHA-256 digest shape, signed-provenance
   zip/pkg digests against the current artifact files, final-bundle digests

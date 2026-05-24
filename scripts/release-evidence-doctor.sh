@@ -642,6 +642,7 @@ check_release_evidence() {
     check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.app_path" "$APP_PATH"
     check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.zip_path" "$ZIP_PATH"
     check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.pkg_path" "$PKG_PATH"
+    check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.bundled_core_version" "jarvis $EXPECTED_VERSION"
     for field in artifacts.zip_sha256 artifacts.pkg_sha256; do
       check_json_sha256 "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "$field"
     done
@@ -995,7 +996,8 @@ if [[ "$SELF_TEST" == true ]]; then
     "zip_path": "$self_test_zip",
     "pkg_path": "$self_test_pkg",
     "zip_sha256": "$self_test_zip_sha",
-    "pkg_sha256": "$self_test_pkg_sha"
+    "pkg_sha256": "$self_test_pkg_sha",
+    "bundled_core_version": "jarvis $VERSION"
   },
   "signing": {
     "developer_id_application_identity": "Developer ID Application: Jarvis QA Fixture",

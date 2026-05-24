@@ -150,6 +150,7 @@ write_signed_distribution_provenance() {
   local generated_at
   local zip_sha
   local pkg_sha
+  local bundled_core_version
   local app_codesign
   local core_codesign
   local app_executable_codesign
@@ -169,6 +170,8 @@ write_signed_distribution_provenance() {
   generated_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   zip_sha="$(file_sha256 "$ZIP_PATH")"
   pkg_sha="$(file_sha256 "$PKG_PATH")"
+  bundled_core_version="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" --version)"
+  require_output_contains "bundled core version" "$bundled_core_version" "jarvis $VERSION"
   app_codesign="$(codesign -dv "$APP_PATH" 2>&1)"
   core_codesign="$(codesign -dv "$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" 2>&1)"
   app_executable_codesign="$(codesign -dv "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME" 2>&1)"
@@ -190,6 +193,7 @@ write_signed_distribution_provenance() {
     PROVENANCE_PKG_PATH="$PKG_PATH" \
     PROVENANCE_ZIP_SHA="$zip_sha" \
     PROVENANCE_PKG_SHA="$pkg_sha" \
+    PROVENANCE_BUNDLED_CORE_VERSION="$bundled_core_version" \
     PROVENANCE_DEVELOPER_ID_APPLICATION="$JARVIS_DEVELOPER_ID_APPLICATION" \
     PROVENANCE_DEVELOPER_ID_INSTALLER="$JARVIS_DEVELOPER_ID_INSTALLER" \
     PROVENANCE_APP_CODESIGN="$app_codesign" \
@@ -223,6 +227,7 @@ report = {
         "pkg_path": os.environ["PROVENANCE_PKG_PATH"],
         "zip_sha256": os.environ["PROVENANCE_ZIP_SHA"],
         "pkg_sha256": os.environ["PROVENANCE_PKG_SHA"],
+        "bundled_core_version": os.environ["PROVENANCE_BUNDLED_CORE_VERSION"],
     },
     "signing": {
         "developer_id_application_identity": os.environ["PROVENANCE_DEVELOPER_ID_APPLICATION"],
