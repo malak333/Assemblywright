@@ -453,8 +453,10 @@ release-proof smoke command and is run by `./scripts/release-local.sh`.
 `./scripts/storage-migration-backup-smoke.sh` is the focused storage recovery
 proof for migration changes: it runs Rust tests that create a legacy
 file-backed DB, verify preflight backup creation, corrupt the DB after backup
-to prove restore on migration-open failure, and verify newer schema versions
-fail with an explicit upgrade diagnostic.
+to prove restore on migration-open failure, verify newer schema versions fail
+with an explicit upgrade diagnostic, and migrate representative schema v1-v8
+fixtures while preserving tasks, audit, memory, scheduler, approval, plugin,
+and route rows.
 `./scripts/release-operator-qa-smoke.sh` is the local operator-facing release
 QA proof for CLI/repository surfaces: it starts a loopback core with an
 isolated SQLite database, exercises command, audit, route inspection, memory
