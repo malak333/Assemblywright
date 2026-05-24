@@ -417,7 +417,9 @@ production evidence.
 artifact paths, signed-distribution provenance report, live-device QA report,
 plugin-trust QA report, and final
 evidence bundle manifest, then reports present, missing, or invalid evidence
-without failing the local gate. When evidence is missing it also prints the
+without failing the local gate. It also validates the packaged app metadata and
+bundled core version marker before counting the local app artifacts as
+present. When evidence is missing it also prints the
 next signing, live-device template/assertion, plugin-trust template/assertion,
 and final-bundle template/bundle commands so operators can move from inventory
 to evidence capture without cross-referencing another checklist. Its

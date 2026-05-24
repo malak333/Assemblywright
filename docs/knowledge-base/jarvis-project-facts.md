@@ -122,7 +122,8 @@ These notes capture durable facts for future agents working on this repository.
   final-bundle semantic floor. It should reject minimal or hand-written final
   bundles that omit artifact/report paths, point at stale artifact/report paths,
   omit, malform, or stale SHA-256 digests, omit a UTC generation timestamp, use
-  the wrong release version, or set `validation_flags.local_signature_validation=false`.
+  the wrong release version, set `validation_flags.local_signature_validation=false`,
+  or pair the packaged bundled core with a stale `jarvis-cli.version` marker.
 - The Swift shell also decodes `/release/readiness` through
   `ReleaseReadinessModel` and renders a Release tab with blocking manual gates,
   recommended commands, implemented proofs, pending features, the proof
@@ -303,7 +304,8 @@ These notes capture durable facts for future agents working on this repository.
 - `./scripts/release-evidence-doctor.sh` inventories release evidence readiness
   before final bundling. `--check` reports present, missing, or invalid
   signed-artifact, live-device QA, plugin-trust QA, and final bundle evidence
-  without failing the default local gate and prints the next signing,
+  without failing the default local gate, checks the bundled core version marker
+  beside the packaged executable, and prints the next signing,
   live-device template/assertion, plugin-trust template/assertion, and final
   evidence-bundle template/bundle commands when evidence is missing.
   `/release/readiness` and `jarvis release readiness --all-commands` include

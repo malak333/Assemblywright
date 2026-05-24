@@ -137,8 +137,13 @@ PY
 
 require_bundled_core_version() {
   local core_path="$APP_PATH/Contents/Resources/bin/jarvis-cli"
+  local marker_path="$core_path.version"
   local output
   [[ -x "$core_path" ]] || fail "missing bundled core executable: $core_path"
+  [[ -f "$marker_path" ]] || fail "missing bundled core version marker: $marker_path"
+  if [[ "$(tr -d '\r\n' <"$marker_path")" != "jarvis $EXPECTED_VERSION" ]]; then
+    fail "bundled core version marker mismatch: expected jarvis $EXPECTED_VERSION from $marker_path"
+  fi
   output="$("$core_path" --version)"
   if [[ "$output" != *"jarvis $EXPECTED_VERSION"* ]]; then
     printf 'error: bundled core --version did not include %q\n' "jarvis $EXPECTED_VERSION" >&2
@@ -723,6 +728,7 @@ if [[ "\${1:-}" == "--version" ]]; then
 fi
 printf 'self-test jarvis-cli fixture\n'
 EOF
+  printf 'jarvis %s\n' "$VERSION" >"$tmp_dir/dist/Jarvis.app/Contents/Resources/bin/jarvis-cli.version"
   chmod 755 "$tmp_dir/dist/Jarvis.app/Contents/MacOS/JarvisMacApp" "$tmp_dir/dist/Jarvis.app/Contents/Resources/bin/jarvis-cli"
   touch "$self_test_zip"
   touch "$self_test_pkg"
@@ -915,6 +921,28 @@ JSON
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"signed_distribution_provenance_sha256"'
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"live_device_qa_sha256"'
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"plugin_trust_qa_report"'
+
+  printf 'jarvis 0.0.0\n' >"$tmp_dir/dist/Jarvis.app/Contents/Resources/bin/jarvis-cli.version"
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/stale-marker-bundle.json" \
+    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
+    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+    "$0" --bundle >/dev/null 2>&1; then
+    fail "release evidence self-test expected stale bundled core version marker to be rejected"
+  fi
+  printf 'jarvis %s\n' "$VERSION" >"$tmp_dir/dist/Jarvis.app/Contents/Resources/bin/jarvis-cli.version"
 
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
     JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
