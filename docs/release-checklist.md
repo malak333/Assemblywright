@@ -338,8 +338,9 @@ stage or when a PR needs focused evidence for one ownership slice.
   `./scripts/release-evidence-bundle.sh --self-test` proves only final bundle
   manifest mechanics with fake artifacts/reports. Confirm
   `./scripts/release-evidence-bundle.sh --write-template
-  target/release-evidence-bundle.env` generates a sourceable final-bundle
-  template with every `JARVIS_EVIDENCE_*` validation flag defaulted to `false`;
+  target/release-evidence-bundle.env` is also included in release readiness
+  recommendations and generates a sourceable final-bundle template with every
+  `JARVIS_EVIDENCE_*` validation flag defaulted to `false`;
   those flags may be changed only after the corresponding external release
   check has actually completed. Treat `--check`,
   `release-evidence-doctor.sh`, `/release/evidence-status`, and

@@ -844,6 +844,10 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     );
     assert_string_array_contains(
         &release_readiness["recommended_verification_commands"],
+        "./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env",
+    );
+    assert_string_array_contains(
+        &release_readiness["recommended_verification_commands"],
         "./scripts/release-evidence-doctor.sh --check",
     );
     assert!(release_readiness["proof_boundary"]
