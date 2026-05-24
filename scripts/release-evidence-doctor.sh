@@ -71,6 +71,19 @@ record_missing() {
   MISSING_ITEMS+=("$1")
 }
 
+print_next_steps() {
+  cat <<'STEPS'
+Recommended next evidence commands:
+  signing: JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh
+  live-device template: ./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env
+  live-device assertion: set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete
+  plugin-trust template: ./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env
+  plugin-trust assertion: set -a && source target/release-plugin-trust-qa.env && set +a && ./scripts/release-plugin-trust-qa.sh --assert-complete
+  final bundle template: ./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env
+  final bundle: set -a && source target/release-evidence-bundle.env && set +a && ./scripts/release-evidence-bundle.sh --bundle
+STEPS
+}
+
 require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "required command is missing: $1"
 }
@@ -573,6 +586,7 @@ print_status() {
     for item in "${MISSING_ITEMS[@]}"; do
       printf '  missing: %s\n' "$item"
     done
+    print_next_steps
   fi
   printf 'Proof boundary: file/report path inventory only; present artifact paths do not prove Developer ID signing, notarization, stapling, installation, Finder launch, live device QA, marketplace review, malware scan, or OS sandbox enforcement.\n'
 }
@@ -807,6 +821,28 @@ JSON
     JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null
+
+  check_output="$(JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/missing-dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/missing-dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="$tmp_dir/missing-dist/Jarvis-$VERSION.zip" \
+    JARVIS_EVIDENCE_PKG_PATH="$tmp_dir/missing-dist/Jarvis-$VERSION.pkg" \
+    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/missing-dist/Jarvis-$VERSION-signed-provenance.json" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/missing-live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/missing-plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/missing-bundle.json" \
+    "$0" --check)"
+  for expected in \
+    "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env" \
+    "source target/release-live-device-qa.env" \
+    "./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env" \
+    "source target/release-plugin-trust-qa.env" \
+    "./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env" \
+    "source target/release-evidence-bundle.env" \
+    "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...'"; do
+    if [[ "$check_output" != *"$expected"* ]]; then
+      fail "release evidence doctor self-test expected --check output to include: $expected"
+    fi
+  done
 
   python3 - "$tmp_dir/live.json" "$tmp_dir/missing-observation-live.json" <<'PY'
 import json
