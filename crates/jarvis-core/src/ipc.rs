@@ -53,6 +53,7 @@ const LIVE_DEVICE_QA_REQUIRED_FIELDS: &[&str] = &[
     "schema_version",
     "evidence_type",
     "generated_at",
+    "installed_app_path",
     "validation_flags.clean_profile",
     "validation_flags.finder_launch",
     "validation_flags.microphone",
@@ -4334,6 +4335,12 @@ fn validate_live_device_qa_report(value: &serde_json::Value) -> Result<(), Strin
     require_json_string_value(value, "app_bundle.bundle_identifier", &expected_bundle_id)?;
     require_json_string_value(value, "app_bundle.short_version", &expected_version)?;
     require_json_string_value(value, "app_bundle.build_version", &expected_version)?;
+    require_json_string_value(
+        value,
+        "installed_app_path",
+        &std::env::var("JARVIS_QA_INSTALLED_APP_PATH")
+            .unwrap_or_else(|_| "/Applications/Jarvis.app".to_string()),
+    )?;
 
     let started_at = require_utc_report_timestamp(
         value,
@@ -4617,7 +4624,7 @@ fn release_json_present_detail(key: &str) -> String {
     match key {
         "release_evidence_bundle" => "JSON report exists, expected release version matches, artifact/report SHA-256 digests are present including signed-distribution provenance, and local signature validation is true; clean-profile, live-device, and plugin-trust claims remain owner-recorded external evidence".to_string(),
         "signed_distribution_provenance_report" => "JSON report exists, expected release version and bundle identifier match, signing/notarization/stapling/Gatekeeper evidence fields are present, required flags are true, and artifact SHA-256 digests are present; clean-profile install and live-device QA remain separate manual gates".to_string(),
-        "live_device_qa_report" => "JSON report exists, required owner-recorded fields are present, release metadata plus timestamps match expected values, and observed command text matches the expected command; live-device claims are still owner-recorded external evidence".to_string(),
+        "live_device_qa_report" => "JSON report exists, required owner-recorded fields are present, installed app path, release metadata, timestamps, observed transcript, and observed command text match expected values; live-device claims are still owner-recorded external evidence".to_string(),
         "plugin_trust_qa_report" => "JSON report exists, required owner-recorded fields are present, review and egress validation timestamps are valid and ordered, and deny/allow egress fixture notes are present; marketplace, malware, sandbox, and host-level egress claims remain owner-recorded external evidence".to_string(),
         _ => "JSON report exists and required owner-recorded fields are present; external claims are not revalidated by evidence-status".to_string(),
     }
@@ -5483,7 +5490,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
     fn release_evidence_json_report_details_distinguish_presence_from_revalidation() {
         let live_detail = release_json_present_detail("live_device_qa_report");
         assert!(live_detail.contains("required owner-recorded fields"));
-        assert!(live_detail.contains("release metadata plus timestamps"));
+        assert!(live_detail.contains("installed app path"));
         assert!(live_detail.contains("owner-recorded external evidence"));
 
         let bundle_detail = release_json_present_detail("release_evidence_bundle");
@@ -5505,6 +5512,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             "evidence_type": "owner_recorded_live_device_qa",
             "self_test_fixture": false,
             "generated_at": "2026-05-22T16:06:00Z",
+            "installed_app_path": "/Applications/Jarvis.app",
             "validation_flags": {
                 "clean_profile": true,
                 "finder_launch": true,
@@ -5672,10 +5680,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let (status, detail) =
             inspect_live_device_qa_report_value(valid_live_device_qa_report_json());
         assert_eq!(status, ReleaseEvidenceItemStatus::Present);
-        assert!(
-            detail.contains("release metadata plus timestamps"),
-            "{detail}"
-        );
+        assert!(detail.contains("installed app path"), "{detail}");
     }
 
     #[test]
@@ -5712,6 +5717,15 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let (status, detail) = inspect_live_device_qa_report_value(report);
         assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
         assert!(detail.contains("app_bundle.build_version"), "{detail}");
+    }
+
+    #[test]
+    fn live_device_qa_report_rejects_wrong_installed_app_path() {
+        let mut report = valid_live_device_qa_report_json();
+        report["installed_app_path"] = json!("/tmp/Jarvis.app");
+        let (status, detail) = inspect_live_device_qa_report_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("installed_app_path"), "{detail}");
     }
 
     #[test]

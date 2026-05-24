@@ -62,8 +62,9 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   marketplace review, malware scanning, or OS sandboxing was performed.
 - Confirm the live-device QA report is `present`, not `invalid`, before using
   external evidence mode. Evidence-status semantically checks the expected
-  bundle ID, short/build version, non-self-test identity, and ordered UTC
-  voice-check timestamps; weak or stale hand-written reports must keep
+  installed app path, bundle ID, short/build version, non-self-test identity,
+  ordered UTC voice-check timestamps, observed transcript, and command
+  observation; weak or stale hand-written reports must keep
   `live_voice_loop` pending.
 - Confirm signed-distribution provenance, plugin-trust, and final bundle reports
   are `present`, not `invalid`. Evidence-status checks signed provenance
@@ -503,10 +504,12 @@ Still future gates for production distribution:
   All required `JARVIS_QA_*` flags must be set to `true`, including
   `JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true`, plus the required
   owner/device/profile/UTC timestamp, voice evidence-note, and structured
-  spoken-command observation fields. The observed transcript must match the
-  spoken test phrase after trimming, the expected command text must match the
-  observed command text after trimming, and the report generation timestamp must
-  be UTC and no earlier than the completed voice check. Confirm the generated report includes
+  spoken-command observation fields. The installed app path must match the
+  expected `/Applications/Jarvis.app` path unless explicitly overridden with
+  `JARVIS_QA_INSTALLED_APP_PATH`, the observed transcript must match the spoken
+  test phrase after trimming, the expected command text must match the observed
+  command text after trimming, and the report generation timestamp must be UTC
+  and no earlier than the completed voice check. Confirm the generated report includes
   installed-app metadata, `voice_loop`, `owner_recorded_live_voice_evidence`,
   `voice_command_observation`, validation flags, schema identity, and proof
   boundary, then preserve the `target/release-live-device-qa-report.json`

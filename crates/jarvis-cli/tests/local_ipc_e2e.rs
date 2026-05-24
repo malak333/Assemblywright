@@ -292,6 +292,9 @@ fn release_readiness_rejects_semantically_invalid_live_voice_evidence() {
     fn self_test_fixture(report: &mut Value) {
         report["self_test_fixture"] = json!(true);
     }
+    fn wrong_installed_app_path(report: &mut Value) {
+        report["installed_app_path"] = json!("/tmp/Jarvis.app");
+    }
     fn mismatched_observed_transcript(report: &mut Value) {
         report["voice_command_observation"]["observed_transcript"] = json!("Jarvis stats check.");
     }
@@ -321,6 +324,11 @@ fn release_readiness_rejects_semantically_invalid_live_voice_evidence() {
             "self-test fixture",
             self_test_fixture as fn(&mut Value),
             "self-test fixture",
+        ),
+        (
+            "wrong installed app path",
+            wrong_installed_app_path as fn(&mut Value),
+            "installed_app_path",
         ),
         (
             "mismatched observed transcript",
