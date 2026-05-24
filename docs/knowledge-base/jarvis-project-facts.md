@@ -562,7 +562,11 @@ These notes capture durable facts for future agents working on this repository.
   Application, Developer ID Installer, and notarytool credentials; signs with
   hardened runtime and microphone entitlements; notarizes and staples the app
   zip; then creates, signs, notarizes, and staples a `/Applications` installer
-  package. The unsigned structure and launch checks still do not prove Developer
+  package. `./scripts/release-version-consistency.sh --check` derives the
+  release version from Rust package metadata and keeps package, live QA,
+  evidence bundle, and evidence doctor defaults aligned with the CLI/core crate
+  versions in the default local release gate. The unsigned structure and launch
+  checks still do not prove Developer
   ID signing, notarization, stapling, installation, Finder launch, live
   microphone/Speech validation, spoken transcript handoff, App Store review,
   live audio-output validation, or manual QA.

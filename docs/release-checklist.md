@@ -513,6 +513,9 @@ Operator QA gate:
 
 Distribution packaging gate:
 
+- Run `./scripts/release-version-consistency.sh --check` before distribution or
+  evidence changes to verify release scripts derive one canonical version from
+  Rust package metadata.
 - Run `./scripts/package-distribution.sh --check` on packaging-related PRs to
   validate local app signing, installer packaging, notarization tool
   availability, and entitlements templates.
