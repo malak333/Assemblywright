@@ -69,10 +69,11 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
 - Confirm signed-distribution provenance, plugin-trust, and final bundle reports
   are `present`, not `invalid`. Evidence-status checks signed provenance
   version/bundle metadata, signing/notary/staple/Gatekeeper evidence fields,
-  required flags, plugin-trust review timestamps, final bundle version, SHA-256
-  digest shape, signed-provenance zip/pkg digests against the current artifact
-  files, and local signature-validation status before treating those reports as
-  usable evidence.
+  required flags, plugin-trust review timestamps, final bundle version,
+  artifact/report path matching, SHA-256 digest shape, signed-provenance
+  zip/pkg digests against the current artifact files, final-bundle digests
+  against current artifacts/reports, and local signature-validation status
+  before treating those reports as usable evidence.
 - Confirm `release-plugin-trust-qa.sh --assert-complete`,
   `release-evidence-bundle.sh --bundle`, and
   `release-evidence-doctor.sh --assert-complete` reject non-UTC plugin-trust
@@ -80,8 +81,9 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   recorded review completed.
 - Confirm `release-evidence-doctor.sh --assert-complete` enforces the same
   final-bundle semantic floor as `/release/evidence-status`: UTC generation
-  timestamp, expected release version, non-empty artifact/report paths,
-  SHA-256-shaped artifact/report digests, and
+  timestamp, expected release version, artifact/report paths matching the
+  configured evidence paths, SHA-256-shaped artifact/report digests matching
+  the current files, and
   `validation_flags.local_signature_validation=true`.
 - Confirm `release-evidence-doctor.sh --check` prints the follow-up signing,
   live-device template/assertion, plugin-trust template/assertion, and final

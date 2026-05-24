@@ -4058,6 +4058,15 @@ fn release_evidence_status_from_env() -> ReleaseEvidenceStatusResponse {
         dist_dir.join(format!("Jarvis-{version}-signed-provenance.json")),
     );
 
+    let bundle_digest_paths = ReleaseEvidenceBundleDigestPaths {
+        app_path: &app_path,
+        zip_path: &zip_path,
+        pkg_path: &pkg_path,
+        signed_provenance_report: &signed_provenance_report,
+        live_qa_report: &live_qa_report,
+        plugin_qa_report: &plugin_qa_report,
+    };
+
     let mut items = vec![
         release_path_item(
             "signed_app_bundle",
@@ -4092,28 +4101,29 @@ fn release_evidence_status_from_env() -> ReleaseEvidenceStatusResponse {
         release_signed_distribution_provenance_report_item(
             "signed_distribution_provenance_report",
             "Signed-distribution provenance report",
-            signed_provenance_report,
+            signed_provenance_report.clone(),
             SIGNED_DISTRIBUTION_PROVENANCE_REQUIRED_FIELDS,
-            zip_path,
-            pkg_path,
+            zip_path.clone(),
+            pkg_path.clone(),
         ),
         release_json_report_item(
             "live_device_qa_report",
             "Live-device QA report",
-            live_qa_report,
+            live_qa_report.clone(),
             LIVE_DEVICE_QA_REQUIRED_FIELDS,
         ),
         release_json_report_item(
             "plugin_trust_qa_report",
             "Plugin-trust QA report",
-            plugin_qa_report,
+            plugin_qa_report.clone(),
             PLUGIN_TRUST_QA_REQUIRED_FIELDS,
         ),
-        release_json_report_item(
+        release_evidence_bundle_report_item(
             "release_evidence_bundle",
             "Release evidence bundle",
             bundle_path,
             RELEASE_EVIDENCE_BUNDLE_REQUIRED_FIELDS,
+            bundle_digest_paths,
         ),
     ];
 
@@ -4147,7 +4157,7 @@ fn release_evidence_status_from_env() -> ReleaseEvidenceStatusResponse {
         invalid_count,
         items,
         proof_boundary:
-            "File/report inventory only; complete means expected paths are present and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/timestamp semantics, plugin-trust timestamp semantics, and final evidence-bundle version/SHA/signature-validation semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
+            "File/report inventory only; complete means expected paths are present and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/timestamp semantics, plugin-trust timestamp semantics, and final evidence-bundle path/digest/signature-validation semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
                 .to_string(),
     }
 }
@@ -4232,6 +4242,37 @@ fn release_signed_distribution_provenance_report_item(
     }
 }
 
+fn release_evidence_bundle_report_item(
+    key: &str,
+    label: &str,
+    path: PathBuf,
+    required_fields: &[&str],
+    digest_paths: ReleaseEvidenceBundleDigestPaths<'_>,
+) -> ReleaseEvidenceStatusItem {
+    let (status, detail) =
+        inspect_release_json_report_with_bundle_digests(key, &path, required_fields, digest_paths);
+    ReleaseEvidenceStatusItem {
+        key: key.to_string(),
+        label: label.to_string(),
+        path: path.display().to_string(),
+        kind: ReleaseEvidenceKind::JsonReport,
+        status,
+        required_for_production: true,
+        manual_gate: true,
+        detail,
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ReleaseEvidenceBundleDigestPaths<'a> {
+    app_path: &'a FsPath,
+    zip_path: &'a FsPath,
+    pkg_path: &'a FsPath,
+    signed_provenance_report: &'a FsPath,
+    live_qa_report: &'a FsPath,
+    plugin_qa_report: &'a FsPath,
+}
+
 fn inspect_release_path(
     path: &FsPath,
     kind: ReleaseEvidenceKind,
@@ -4277,7 +4318,7 @@ fn inspect_release_json_report(
     path: &FsPath,
     required_fields: &[&str],
 ) -> (ReleaseEvidenceItemStatus, String) {
-    inspect_release_json_report_inner(key, path, required_fields, None)
+    inspect_release_json_report_inner(key, path, required_fields, None, None)
 }
 
 fn inspect_release_json_report_with_artifacts(
@@ -4287,7 +4328,16 @@ fn inspect_release_json_report_with_artifacts(
     zip_path: &FsPath,
     pkg_path: &FsPath,
 ) -> (ReleaseEvidenceItemStatus, String) {
-    inspect_release_json_report_inner(key, path, required_fields, Some((zip_path, pkg_path)))
+    inspect_release_json_report_inner(key, path, required_fields, Some((zip_path, pkg_path)), None)
+}
+
+fn inspect_release_json_report_with_bundle_digests(
+    key: &str,
+    path: &FsPath,
+    required_fields: &[&str],
+    bundle_digest_paths: ReleaseEvidenceBundleDigestPaths<'_>,
+) -> (ReleaseEvidenceItemStatus, String) {
+    inspect_release_json_report_inner(key, path, required_fields, None, Some(bundle_digest_paths))
 }
 
 fn inspect_release_json_report_inner(
@@ -4295,6 +4345,7 @@ fn inspect_release_json_report_inner(
     path: &FsPath,
     required_fields: &[&str],
     signed_artifact_paths: Option<(&FsPath, &FsPath)>,
+    bundle_digest_paths: Option<ReleaseEvidenceBundleDigestPaths<'_>>,
 ) -> (ReleaseEvidenceItemStatus, String) {
     let contents = match fs::read_to_string(path) {
         Ok(contents) => contents,
@@ -4342,6 +4393,11 @@ fn inspect_release_json_report_inner(
         } else if key == "release_evidence_bundle" {
             if let Err(error) = validate_release_evidence_bundle(&value) {
                 return (ReleaseEvidenceItemStatus::Invalid, error);
+            }
+            if let Some(paths) = bundle_digest_paths {
+                if let Err(error) = validate_release_evidence_bundle_file_bindings(&value, paths) {
+                    return (ReleaseEvidenceItemStatus::Invalid, error);
+                }
             }
         }
         (
@@ -4643,6 +4699,73 @@ fn validate_release_evidence_bundle(value: &serde_json::Value) -> Result<(), Str
     Ok(())
 }
 
+fn validate_release_evidence_bundle_file_bindings(
+    value: &serde_json::Value,
+    paths: ReleaseEvidenceBundleDigestPaths<'_>,
+) -> Result<(), String> {
+    require_json_string_value(
+        value,
+        "artifacts.app_path",
+        &paths.app_path.display().to_string(),
+    )?;
+    require_json_string_value(
+        value,
+        "artifacts.zip_path",
+        &paths.zip_path.display().to_string(),
+    )?;
+    require_json_string_value(
+        value,
+        "artifacts.pkg_path",
+        &paths.pkg_path.display().to_string(),
+    )?;
+    require_json_string_value(
+        value,
+        "reports.signed_distribution_provenance_report",
+        &paths.signed_provenance_report.display().to_string(),
+    )?;
+    require_json_string_value(
+        value,
+        "reports.live_device_qa_report",
+        &paths.live_qa_report.display().to_string(),
+    )?;
+    require_json_string_value(
+        value,
+        "reports.plugin_trust_qa_report",
+        &paths.plugin_qa_report.display().to_string(),
+    )?;
+    require_json_sha256_matches_file(
+        value,
+        "artifacts.zip_sha256",
+        "app zip artifact",
+        paths.zip_path,
+    )?;
+    require_json_sha256_matches_file(
+        value,
+        "artifacts.pkg_sha256",
+        "installer package artifact",
+        paths.pkg_path,
+    )?;
+    require_json_sha256_matches_file(
+        value,
+        "reports.signed_distribution_provenance_sha256",
+        "signed-distribution provenance report",
+        paths.signed_provenance_report,
+    )?;
+    require_json_sha256_matches_file(
+        value,
+        "reports.live_device_qa_sha256",
+        "live-device QA report",
+        paths.live_qa_report,
+    )?;
+    require_json_sha256_matches_file(
+        value,
+        "reports.plugin_trust_qa_sha256",
+        "plugin-trust QA report",
+        paths.plugin_qa_report,
+    )?;
+    Ok(())
+}
+
 fn env_value_alias(primary: &str, alias: &str, default: &str) -> String {
     std::env::var(primary)
         .or_else(|_| std::env::var(alias))
@@ -4746,7 +4869,7 @@ fn json_string_at(value: &serde_json::Value, dotted_path: &str) -> Option<String
 
 fn release_json_present_detail(key: &str) -> String {
     match key {
-        "release_evidence_bundle" => "JSON report exists, expected release version matches, artifact/report SHA-256 digests are present including signed-distribution provenance, and local signature validation is true; clean-profile, live-device, and plugin-trust claims remain owner-recorded external evidence".to_string(),
+        "release_evidence_bundle" => "JSON report exists, expected release version matches, artifact/report paths and SHA-256 digests match current artifacts and reports, and local signature validation is true; clean-profile, live-device, and plugin-trust claims remain owner-recorded external evidence".to_string(),
         "signed_distribution_provenance_report" => "JSON report exists, expected release version and bundle identifier match, signing/notarization/stapling/Gatekeeper evidence fields are present, required flags are true, and artifact SHA-256 digests match the current zip/pkg files; clean-profile install and live-device QA remain separate manual gates".to_string(),
         "live_device_qa_report" => "JSON report exists, required owner-recorded fields are present, installed app path, release metadata, timestamps, observed transcript, observed command text, and task/audit command evidence reference match expected values; live-device claims are still owner-recorded external evidence".to_string(),
         "plugin_trust_qa_report" => "JSON report exists, required owner-recorded fields are present, review and egress validation timestamps are valid and ordered, and deny/allow egress fixture notes are present; marketplace, malware, sandbox, and host-level egress claims remain owner-recorded external evidence".to_string(),
@@ -4931,7 +5054,7 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "release_evidence_status",
             "implemented",
-            "`/release/evidence-status` and `jarvis release evidence-status` expose structured present, missing, or invalid status for standard signed artifacts, QA reports, and final evidence bundle paths, including signed-provenance artifact digest matching, live-device QA bundle/version/timestamp checks, plugin-trust timestamp checks, and final evidence-bundle version/SHA/signature-validation checks, with Rust, CLI E2E, and Swift model coverage.",
+            "`/release/evidence-status` and `jarvis release evidence-status` expose structured present, missing, or invalid status for standard signed artifacts, QA reports, and final evidence bundle paths, including signed-provenance artifact digest matching, live-device QA bundle/version/timestamp checks, plugin-trust timestamp checks, and final evidence-bundle path/digest/signature-validation checks, with Rust, CLI E2E, and Swift model coverage.",
             "Read-only file/report inventory plus report semantic validation only; it does not sign, notarize, install, Finder-launch, run live-device QA, review marketplace trust, scan malware, or enforce OS sandboxing.",
         ),
         feature(
@@ -6041,6 +6164,57 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let (status, detail) = inspect_release_evidence_bundle_value(report);
         assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
         assert!(detail.contains("local_signature_validation"), "{detail}");
+    }
+
+    #[test]
+    fn release_evidence_bundle_rejects_stale_report_digest() {
+        let zip_file = tempfile::NamedTempFile::new().expect("temp zip artifact");
+        let pkg_file = tempfile::NamedTempFile::new().expect("temp package artifact");
+        let signed_file = tempfile::NamedTempFile::new().expect("temp signed provenance report");
+        let live_file = tempfile::NamedTempFile::new().expect("temp live QA report");
+        let plugin_file = tempfile::NamedTempFile::new().expect("temp plugin QA report");
+        std::fs::write(zip_file.path(), "current zip").expect("write zip artifact");
+        std::fs::write(pkg_file.path(), "current package").expect("write package artifact");
+        std::fs::write(signed_file.path(), "current signed provenance")
+            .expect("write signed report");
+        std::fs::write(live_file.path(), "current live report").expect("write live report");
+        std::fs::write(plugin_file.path(), "current plugin report").expect("write plugin report");
+
+        let mut report = valid_release_evidence_bundle_json();
+        report["artifacts"]["zip_path"] = json!(zip_file.path().display().to_string());
+        report["artifacts"]["pkg_path"] = json!(pkg_file.path().display().to_string());
+        report["artifacts"]["zip_sha256"] =
+            json!(file_sha256(zip_file.path()).expect("zip digest"));
+        report["artifacts"]["pkg_sha256"] =
+            json!(file_sha256(pkg_file.path()).expect("package digest"));
+        report["reports"]["signed_distribution_provenance_report"] =
+            json!(signed_file.path().display().to_string());
+        report["reports"]["live_device_qa_report"] = json!(live_file.path().display().to_string());
+        report["reports"]["plugin_trust_qa_report"] =
+            json!(plugin_file.path().display().to_string());
+        report["reports"]["signed_distribution_provenance_sha256"] =
+            json!(file_sha256(signed_file.path()).expect("signed digest"));
+        report["reports"]["live_device_qa_sha256"] =
+            json!(file_sha256(live_file.path()).expect("live digest"));
+        report["reports"]["plugin_trust_qa_sha256"] =
+            json!("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+
+        let paths = ReleaseEvidenceBundleDigestPaths {
+            app_path: FsPath::new("target/distribution/Jarvis.app"),
+            zip_path: zip_file.path(),
+            pkg_path: pkg_file.path(),
+            signed_provenance_report: signed_file.path(),
+            live_qa_report: live_file.path(),
+            plugin_qa_report: plugin_file.path(),
+        };
+        let error = validate_release_evidence_bundle_file_bindings(&report, paths)
+            .expect_err("stale plugin report digest should fail");
+        assert!(
+            error.contains(
+                "reports.plugin_trust_qa_sha256 does not match current plugin-trust QA report"
+            ),
+            "{error}"
+        );
     }
 
     fn valid_signed_distribution_provenance_json() -> serde_json::Value {

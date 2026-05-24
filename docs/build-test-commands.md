@@ -419,7 +419,8 @@ to evidence capture without cross-referencing another checklist. Its
 `--assert-complete` is included in the release-readiness runbook as the final
 inventory assertion after `--bundle`. It requires the final bundle manifest to
 include a UTC generation timestamp, expected release version, non-empty
-artifact/report paths, SHA-256-shaped artifact/report digests, and
+artifact/report paths matching the configured evidence paths,
+SHA-256-shaped artifact/report digests matching current files, and
 `validation_flags.local_signature_validation=true`, matching the semantic floor
 exposed by `/release/evidence-status`. Its `--self-test` uses fake
 artifacts/reports to prove the inventory logic only; it is not a signing,

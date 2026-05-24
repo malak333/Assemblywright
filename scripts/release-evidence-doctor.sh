@@ -651,12 +651,23 @@ check_release_evidence() {
     check_json_flag "release evidence bundle" "$BUNDLE_PATH" "validation_flags.local_signature_validation"
     check_json_utc_timestamp "release evidence bundle" "$BUNDLE_PATH" "generated_at"
     check_json_string "release evidence bundle" "$BUNDLE_PATH" "version" "$VERSION"
+    check_json_string "release evidence bundle" "$BUNDLE_PATH" "artifacts.app_path" "$APP_PATH"
+    check_json_string "release evidence bundle" "$BUNDLE_PATH" "artifacts.zip_path" "$ZIP_PATH"
+    check_json_string "release evidence bundle" "$BUNDLE_PATH" "artifacts.pkg_path" "$PKG_PATH"
+    check_json_string "release evidence bundle" "$BUNDLE_PATH" "reports.signed_distribution_provenance_report" "$SIGNED_PROVENANCE_REPORT"
+    check_json_string "release evidence bundle" "$BUNDLE_PATH" "reports.live_device_qa_report" "$LIVE_QA_REPORT"
+    check_json_string "release evidence bundle" "$BUNDLE_PATH" "reports.plugin_trust_qa_report" "$PLUGIN_QA_REPORT"
     for field in artifacts.app_path artifacts.zip_path artifacts.pkg_path reports.signed_distribution_provenance_report reports.live_device_qa_report reports.plugin_trust_qa_report; do
       check_json_nonempty_string "release evidence bundle" "$BUNDLE_PATH" "$field"
     done
     for field in artifacts.zip_sha256 artifacts.pkg_sha256 reports.signed_distribution_provenance_sha256 reports.live_device_qa_sha256 reports.plugin_trust_qa_sha256; do
       check_json_sha256 "release evidence bundle" "$BUNDLE_PATH" "$field"
     done
+    check_json_sha256_matches_file "release evidence bundle" "$BUNDLE_PATH" "artifacts.zip_sha256" "app zip artifact" "$ZIP_PATH"
+    check_json_sha256_matches_file "release evidence bundle" "$BUNDLE_PATH" "artifacts.pkg_sha256" "installer package artifact" "$PKG_PATH"
+    check_json_sha256_matches_file "release evidence bundle" "$BUNDLE_PATH" "reports.signed_distribution_provenance_sha256" "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT"
+    check_json_sha256_matches_file "release evidence bundle" "$BUNDLE_PATH" "reports.live_device_qa_sha256" "live-device QA report" "$LIVE_QA_REPORT"
+    check_json_sha256_matches_file "release evidence bundle" "$BUNDLE_PATH" "reports.plugin_trust_qa_sha256" "plugin-trust QA report" "$PLUGIN_QA_REPORT"
   else
     record_missing "release evidence bundle missing or invalid JSON: $BUNDLE_PATH"
   fi
@@ -695,7 +706,6 @@ write_fixture_app() {
 write_fixture_reports() {
   local live_path="$1"
   local plugin_path="$2"
-  local bundle_path="$3"
 
   cat >"$live_path" <<JSON
 {
@@ -780,24 +790,45 @@ JSON
   "proof_boundary": "self-test fixture"
 }
 JSON
+}
+
+write_fixture_bundle() {
+  local bundle_path="$1"
+  local app_path="$2"
+  local zip_path="$3"
+  local pkg_path="$4"
+  local signed_path="$5"
+  local live_path="$6"
+  local plugin_path="$7"
+  local zip_sha
+  local pkg_sha
+  local signed_sha
+  local live_sha
+  local plugin_sha
+  zip_sha="$(file_sha256 "$zip_path")"
+  pkg_sha="$(file_sha256 "$pkg_path")"
+  signed_sha="$(file_sha256 "$signed_path")"
+  live_sha="$(file_sha256 "$live_path")"
+  plugin_sha="$(file_sha256 "$plugin_path")"
+
   cat >"$bundle_path" <<JSON
 {
   "generated_at": "2026-05-22T16:30:00Z",
   "version": "$VERSION",
   "artifacts": {
-    "app_path": "target/distribution/Jarvis.app",
-    "zip_path": "target/distribution/Jarvis-$VERSION.zip",
-    "pkg_path": "target/distribution/Jarvis-$VERSION.pkg",
-    "zip_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-    "pkg_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    "app_path": "$app_path",
+    "zip_path": "$zip_path",
+    "pkg_path": "$pkg_path",
+    "zip_sha256": "$zip_sha",
+    "pkg_sha256": "$pkg_sha"
   },
   "reports": {
-    "signed_distribution_provenance_report": "target/distribution/Jarvis-$VERSION-signed-provenance.json",
-    "live_device_qa_report": "target/release-live-device-qa-report.json",
-    "plugin_trust_qa_report": "target/release-plugin-trust-qa-report.json",
-    "signed_distribution_provenance_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-    "live_device_qa_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-    "plugin_trust_qa_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    "signed_distribution_provenance_report": "$signed_path",
+    "live_device_qa_report": "$live_path",
+    "plugin_trust_qa_report": "$plugin_path",
+    "signed_distribution_provenance_sha256": "$signed_sha",
+    "live_device_qa_sha256": "$live_sha",
+    "plugin_trust_qa_sha256": "$plugin_sha"
   },
   "validation_flags": {
     "signed_distribution": true,
@@ -859,7 +890,7 @@ if [[ "$SELF_TEST" == true ]]; then
   touch "$self_test_zip" "$self_test_pkg"
   self_test_zip_sha="$(file_sha256 "$self_test_zip")"
   self_test_pkg_sha="$(file_sha256 "$self_test_pkg")"
-  write_fixture_reports "$tmp_dir/live.json" "$tmp_dir/plugin.json" "$tmp_dir/bundle.json"
+  write_fixture_reports "$tmp_dir/live.json" "$tmp_dir/plugin.json"
   cat >"$tmp_dir/dist/Jarvis-$VERSION-signed-provenance.json" <<JSON
 {
   "schema_version": 1,
@@ -909,6 +940,14 @@ if [[ "$SELF_TEST" == true ]]; then
   "proof_boundary": "self-test fixture"
 }
 JSON
+  write_fixture_bundle \
+    "$tmp_dir/bundle.json" \
+    "$tmp_dir/dist/Jarvis.app" \
+    "$self_test_zip" \
+    "$self_test_pkg" \
+    "$tmp_dir/dist/Jarvis-$VERSION-signed-provenance.json" \
+    "$tmp_dir/live.json" \
+    "$tmp_dir/plugin.json"
 
   JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
     JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
@@ -1229,6 +1268,28 @@ PY
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bad-digest-bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected malformed final bundle digest to fail"
+  fi
+
+  python3 - "$tmp_dir/bundle.json" "$tmp_dir/stale-digest-bundle.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+with open(source, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["reports"]["live_device_qa_sha256"] = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+PY
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/stale-digest-bundle.json" \
+    "$0" --assert-complete >/dev/null 2>&1; then
+    fail "release evidence doctor self-test expected stale final bundle report digest to fail"
   fi
 
   python3 - "$tmp_dir/bundle.json" "$tmp_dir/disabled-local-signature-bundle.json" <<'PY'

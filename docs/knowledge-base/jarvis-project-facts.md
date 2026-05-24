@@ -109,13 +109,14 @@ These notes capture durable facts for future agents working on this repository.
   timestamp ordering, rejects self-test review sources, validates final bundle
   version, requires SHA-256-shaped artifact/report digests including the signed
   provenance digest, verifies signed-provenance zip/pkg digests against the
-  current artifact files in evidence-status, bundle, and doctor assertions, and requires
-  `validation_flags.local_signature_validation=true`.
+  current artifact files in evidence-status, bundle, and doctor assertions,
+  verifies final-bundle artifact/report paths and digests against the current
+  configured files, and requires `validation_flags.local_signature_validation=true`.
 - `release-evidence-doctor.sh --assert-complete` must stay aligned with that
   final-bundle semantic floor. It should reject minimal or hand-written final
-  bundles that omit artifact/report paths, omit or malform SHA-256 digests, omit
-  a UTC generation timestamp, use the wrong release version, or set
-  `validation_flags.local_signature_validation=false`.
+  bundles that omit artifact/report paths, point at stale artifact/report paths,
+  omit, malform, or stale SHA-256 digests, omit a UTC generation timestamp, use
+  the wrong release version, or set `validation_flags.local_signature_validation=false`.
 - The Swift shell also decodes `/release/readiness` through
   `ReleaseReadinessModel` and renders a Release tab with blocking manual gates,
   recommended commands, implemented proofs, pending features, the proof
