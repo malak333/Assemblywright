@@ -20,6 +20,8 @@ fn release_readiness_cli_falls_back_without_running_server() {
     let endpoint = format!("http://{}", unused_loopback_addr());
 
     let release_readiness = run_cli_json(["release", "readiness", "--endpoint", endpoint.as_str()]);
+    let readable_readiness =
+        run_cli_text(["release", "readiness", "--endpoint", endpoint.as_str()]);
 
     assert_eq!(release_readiness["production_ready"], false);
     assert_array_contains(
@@ -59,6 +61,17 @@ fn release_readiness_cli_falls_back_without_running_server() {
         .as_str()
         .expect("release readiness proof boundary")
         .contains("does not perform signing"));
+    assert!(readable_readiness.contains("Jarvis release readiness:"));
+    assert!(readable_readiness.contains("Production ready: false"));
+    assert!(readable_readiness.contains("Pending features:"));
+    assert!(readable_readiness.contains("live_voice_loop"));
+    assert!(readable_readiness.contains("Top manual gates:"));
+    assert!(readable_readiness.contains("Next verification commands:"));
+    assert!(readable_readiness.contains("Raw JSON: rerun with --json"));
+    assert!(
+        serde_json::from_str::<Value>(&readable_readiness).is_err(),
+        "default release readiness output should be operator-readable text"
+    );
 }
 
 #[test]
@@ -434,6 +447,12 @@ fn release_evidence_status_cli_falls_back_without_running_server() {
         "--endpoint",
         endpoint.as_str(),
     ]);
+    let readable_status = run_cli_text([
+        "release",
+        "evidence-status",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
 
     assert_eq!(evidence_status["complete"], false);
     assert!(evidence_status["items"]
@@ -463,6 +482,17 @@ fn release_evidence_status_cli_falls_back_without_running_server() {
         .as_str()
         .expect("evidence proof boundary")
         .contains("does not sign"));
+    assert!(readable_status.contains("Jarvis release evidence status:"));
+    assert!(readable_status.contains("Complete: false"));
+    assert!(readable_status.contains("Missing evidence:"));
+    assert!(readable_status.contains("Invalid evidence:"));
+    assert!(readable_status.contains("signed_app_bundle"));
+    assert!(readable_status.contains("release_evidence_bundle"));
+    assert!(readable_status.contains("Raw JSON: rerun with --json"));
+    assert!(
+        serde_json::from_str::<Value>(&readable_status).is_err(),
+        "default evidence-status output should be operator-readable text"
+    );
 }
 
 #[test]
@@ -3695,10 +3725,17 @@ fn array_has_job_status(value: &Value, id: &str, status: &str) -> bool {
 }
 
 fn unused_loopback_addr() -> SocketAddr {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
-    let addr = listener.local_addr().expect("read local addr");
-    drop(listener);
-    addr
+    match TcpListener::bind("127.0.0.1:0") {
+        Ok(listener) => {
+            let addr = listener.local_addr().expect("read local addr");
+            drop(listener);
+            addr
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            "127.0.0.1:9".parse().expect("discard endpoint")
+        }
+        Err(error) => panic!("bind ephemeral port: {error}"),
+    }
 }
 
 fn run_cli_json<const N: usize>(args: [&str; N]) -> Value {
@@ -3713,7 +3750,10 @@ fn run_cli_json<const N: usize>(args: [&str; N]) -> Value {
 }
 
 fn run_cli_json_with_env<const N: usize>(args: [&str; N], env: &[(&str, &str)]) -> Value {
-    let output = run_cli_with_env(args, env);
+    let mut merged_env = Vec::with_capacity(env.len() + 1);
+    merged_env.push(("JARVIS_CLI_JSON", "1"));
+    merged_env.extend_from_slice(env);
+    let output = run_cli_with_env(args, &merged_env);
     serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
         panic!(
             "stdout was not JSON: {error}\nstdout:\n{}\nstderr:\n{}",

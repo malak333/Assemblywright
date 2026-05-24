@@ -38,8 +38,10 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
 - Confirm `jarvis release readiness` or `/release/readiness` reports the same
   implemented feature proofs, pending feature boundaries, recommended
   verification commands, and manual production blockers as this checklist.
-  The CLI command should also return the conservative local readiness summary
-  when no IPC server is running, while preserving the same production blockers.
+  The CLI command should default to operator-readable output and also return
+  the conservative local readiness summary when no IPC server is running or
+  loopback IPC is unavailable, while preserving the same production blockers.
+  Use `--json` or `JARVIS_CLI_JSON=1` for the exact structured payload.
   Treat default readiness as conservative inventory only. After owner-recorded
   evidence exists, rerun readiness with
   `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external` and confirm
@@ -51,8 +53,10 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   live-device QA, marketplace review, malware scanning, or OS sandboxing.
 - Confirm `jarvis release evidence-status` or `/release/evidence-status` reports
   the standard signed artifact, live-device QA report, plugin-trust QA report,
-  and final evidence bundle inventory as structured JSON. Treat it as
-  file/report inventory plus report semantic validation only, not proof that
+  and final evidence bundle inventory. The CLI command should default to
+  operator-readable output and use `--json` or `JARVIS_CLI_JSON=1` for the
+  exact structured payload. Treat it as file/report inventory plus report
+  semantic validation only, not proof that
   signing, notarization, installation, Finder launch, live-device QA,
   marketplace review, malware scanning, or OS sandboxing was performed.
 - Confirm the live-device QA report is `present`, not `invalid`, before using
@@ -72,7 +76,7 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
 - Confirm `jarvis release --help`, `jarvis release readiness --help`, and
   `jarvis release evidence-status --help` preserve the same read-only,
   IPC-first/local-fallback, evidence-mode, and file/report-inspection
-  boundaries as the JSON surfaces.
+  boundaries as the JSON and operator-readable surfaces.
 - Confirm no Marvel branding, copyrighted visuals, or confusing product claims
   were introduced.
 - Confirm any autonomous sweep summary names the active ownership slices and

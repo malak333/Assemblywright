@@ -127,10 +127,11 @@ through `jarvis plugins ...` commands, but they are not exposed to
 model-originated tool planning.
 
 The interactive CLI defaults to operator-readable text for `jarvis command`
-and its `jarvis ask` alias, plus `jarvis tools list`. Use `--json` on those
-commands when a script, test, or debugging session needs the exact IPC payload
-with full audit and route evidence. `JARVIS_CLI_JSON=1` is available for
-test harnesses that need to keep all CLI calls machine-readable.
+and its `jarvis ask` alias, `jarvis tools list`, `jarvis release readiness`,
+and `jarvis release evidence-status`. Use `--json` on those commands when a
+script, test, or debugging session needs the exact IPC payload with full audit,
+route, readiness, or evidence inventory details. `JARVIS_CLI_JSON=1` is
+available for test harnesses that need to keep all CLI calls machine-readable.
 
 To exercise the opt-in ChatGPT/OpenAI-compatible provider boundary, disable
 the local provider and provide an API key. The key is never serialized in
@@ -334,8 +335,11 @@ export. `jarvis diagnostics export` exposes aggregate active, unreviewed, and
 sensitive memory counts when repository backing is enabled.
 `jarvis release readiness` is read-only and summarizes implemented feature
 proofs, pending feature boundaries, recommended verification commands, and
-manual production blockers. Evidence-aware mode can clear the live voice/audio
-blocker from a valid live-device QA report. In explicit
+manual production blockers. The default CLI output is operator-readable and
+falls back to conservative local metadata when loopback IPC is unavailable,
+including restricted environments that deny loopback sockets; use `--json` or
+`JARVIS_CLI_JSON=1` for the exact structured payload. Evidence-aware mode can
+clear the live voice/audio blocker from a valid live-device QA report. In explicit
 `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external`, it can compute
 `production_ready: true` only when every required `/release/evidence-status`
 item is present, no missing or invalid evidence remains, and evidence-cleared
@@ -382,7 +386,8 @@ semantic floor exposed by `/release/evidence-status`. Its `--self-test` uses
 fake artifacts/reports to prove the inventory logic only; it is not a signing,
 notarization, stapling, or installation validator.
 `jarvis release evidence-status` exposes the same standard artifact/report
-inventory as structured JSON through `/release/evidence-status`; it is
+inventory through `/release/evidence-status`; the default CLI output is
+operator-readable and `--json` preserves the exact structured payload. It is
 file/report inventory plus report semantic validation only and does not prove
 signing, notarization, installed app launch, live-device QA, marketplace review,
 malware scanning, or OS sandboxing. Non-default live-device and plugin-trust

@@ -193,7 +193,7 @@ require_output_contains "operator QA blocked command" "$BLOCKED_OUTPUT" '"status
 RESUME_OUTPUT="$("$JARVIS" resume --endpoint "$ENDPOINT")"
 require_output_contains "operator QA resume" "$RESUME_OUTPUT" '"paused":false'
 
-RELEASE_READINESS_OUTPUT="$("$JARVIS" release readiness --endpoint "$ENDPOINT")"
+RELEASE_READINESS_OUTPUT="$("$JARVIS" release readiness --json --endpoint "$ENDPOINT")"
 require_output_contains "operator QA release readiness" "$RELEASE_READINESS_OUTPUT" '"production_ready":false'
 require_output_contains "operator QA release readiness" "$RELEASE_READINESS_OUTPUT" './scripts/release-operator-qa-smoke.sh'
 

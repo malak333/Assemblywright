@@ -140,10 +140,15 @@ These notes capture durable facts for future agents working on this repository.
   excludes installed plugin paths, subprocess configuration, provenance hashes,
   audit payloads, memory values, and provider route context.
 - The CLI interaction contract is now split between human and machine output:
-  `jarvis command`, visible alias `jarvis ask`, and `jarvis tools list` default
-  to concise operator-readable text, while `--json` returns the exact IPC
-  payload for scripts, diagnostics, and E2E assertions. Test harnesses may set
-  `JARVIS_CLI_JSON=1` to keep legacy JSON parsing across command invocations.
+  `jarvis command`, visible alias `jarvis ask`, `jarvis tools list`,
+  `jarvis release readiness`, and `jarvis release evidence-status` default to
+  concise operator-readable text, while `--json` returns the exact IPC payload
+  for scripts, diagnostics, readiness evidence, release evidence inventory, and
+  E2E assertions. Test harnesses may set `JARVIS_CLI_JSON=1` to keep legacy JSON
+  parsing across command invocations. Read-only release/contract/plugin/tool
+  fallback commands treat loopback `PermissionDenied` as transport-unavailable
+  so restricted shells can still inspect conservative local metadata instead of
+  failing with a raw OS error.
 - Provider-envelope coverage includes
   `ollama_http_provider_parses_tool_request_envelope`,
   `chatgpt_http_provider_parses_tool_request_envelope`,

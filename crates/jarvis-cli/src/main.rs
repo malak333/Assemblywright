@@ -155,6 +155,9 @@ enum ReleaseCommand {
         /// HTTP IPC endpoint. Falls back to local read-only readiness metadata when unavailable.
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
+        /// Print the raw JSON readiness payload.
+        #[arg(long)]
+        json: bool,
     },
     /// Print structured release evidence file/report status as JSON.
     #[command(
@@ -164,6 +167,9 @@ enum ReleaseCommand {
         /// HTTP IPC endpoint. Falls back to local read-only evidence inspection when unavailable.
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
+        /// Print the raw JSON evidence-status payload.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -565,11 +571,21 @@ async fn main() -> anyhow::Result<()> {
             println!("{}", contract(&endpoint)?);
         }
         CliCommand::Release { command } => match command {
-            ReleaseCommand::Readiness { endpoint } => {
-                println!("{}", release_readiness(&endpoint)?);
+            ReleaseCommand::Readiness { endpoint, json } => {
+                let response = release_readiness(&endpoint)?;
+                if json || cli_json_requested() {
+                    println!("{response}");
+                } else {
+                    println!("{}", format_release_readiness(&response)?);
+                }
             }
-            ReleaseCommand::EvidenceStatus { endpoint } => {
-                println!("{}", release_evidence_status(&endpoint)?);
+            ReleaseCommand::EvidenceStatus { endpoint, json } => {
+                let response = release_evidence_status(&endpoint)?;
+                if json || cli_json_requested() {
+                    println!("{response}");
+                } else {
+                    println!("{}", format_release_evidence_status(&response)?);
+                }
             }
         },
         CliCommand::Smoke => {
@@ -1312,6 +1328,156 @@ fn format_model_tool_catalog(response: &str) -> anyhow::Result<String> {
     Ok(lines.join("\n"))
 }
 
+fn format_release_readiness(response: &str) -> anyhow::Result<String> {
+    let value: serde_json::Value = serde_json::from_str(response)?;
+    let production_ready = value
+        .get("production_ready")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let verified_feature_count = value
+        .get("verified_feature_count")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let pending_feature_count = value
+        .get("pending_feature_count")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let blocker_count = value
+        .get("blocking_manual_gates")
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+
+    let mut lines = vec![
+        "Jarvis release readiness:".to_string(),
+        format!("Production ready: {production_ready}"),
+        format!("Verified features: {verified_feature_count}"),
+        format!("Pending features: {pending_feature_count}"),
+        format!("Blocking manual gates: {blocker_count}"),
+    ];
+
+    if let Some(scope) = value
+        .get("readiness_scope")
+        .and_then(serde_json::Value::as_str)
+    {
+        lines.push(format!("Scope: {scope}"));
+    }
+
+    if let Some(features) = value
+        .get("pending_features")
+        .and_then(serde_json::Value::as_array)
+        .filter(|features| !features.is_empty())
+    {
+        lines.push("Pending features:".to_string());
+        for feature in features.iter().take(5) {
+            let key = feature
+                .get("key")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown_feature");
+            let status = feature
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown");
+            lines.push(format!("- {key}: {status}"));
+        }
+    }
+
+    if let Some(gates) = value
+        .get("blocking_manual_gates")
+        .and_then(serde_json::Value::as_array)
+        .filter(|gates| !gates.is_empty())
+    {
+        lines.push("Top manual gates:".to_string());
+        for gate in gates.iter().filter_map(serde_json::Value::as_str).take(5) {
+            lines.push(format!("- {gate}"));
+        }
+    }
+
+    if let Some(commands) = value
+        .get("recommended_verification_commands")
+        .and_then(serde_json::Value::as_array)
+        .filter(|commands| !commands.is_empty())
+    {
+        lines.push("Next verification commands:".to_string());
+        for command in commands
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .take(4)
+        {
+            lines.push(format!("- {command}"));
+        }
+    }
+
+    if let Some(boundary) = value
+        .get("proof_boundary")
+        .and_then(serde_json::Value::as_str)
+    {
+        lines.push(format!("Boundary: {boundary}"));
+    }
+
+    lines.push("Raw JSON: rerun with --json for full readiness evidence.".to_string());
+    Ok(lines.join("\n"))
+}
+
+fn format_release_evidence_status(response: &str) -> anyhow::Result<String> {
+    let value: serde_json::Value = serde_json::from_str(response)?;
+    let complete = value
+        .get("complete")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let missing_count = value
+        .get("missing_count")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let invalid_count = value
+        .get("invalid_count")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+
+    let mut lines = vec![
+        "Jarvis release evidence status:".to_string(),
+        format!("Complete: {complete}"),
+        format!("Missing evidence: {missing_count}"),
+        format!("Invalid evidence: {invalid_count}"),
+    ];
+
+    if let Some(items) = value
+        .get("items")
+        .and_then(serde_json::Value::as_array)
+        .filter(|items| !items.is_empty())
+    {
+        lines.push("Evidence items:".to_string());
+        for item in items.iter().take(8) {
+            let key = item
+                .get("key")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown_item");
+            let status = item
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown");
+            let label = item
+                .get("label")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(key);
+            lines.push(format!("- {key}: {status} ({label})"));
+        }
+        if items.len() > 8 {
+            lines.push(format!("- ... {} more items", items.len() - 8));
+        }
+    }
+
+    if let Some(boundary) = value
+        .get("proof_boundary")
+        .and_then(serde_json::Value::as_str)
+    {
+        lines.push(format!("Boundary: {boundary}"));
+    }
+
+    lines.push("Raw JSON: rerun with --json for exact evidence inventory.".to_string());
+    Ok(lines.join("\n"))
+}
+
 fn is_transport_unavailable(error: &anyhow::Error) -> bool {
     let Some(error) = error.downcast_ref::<std::io::Error>() else {
         return false;
@@ -1324,6 +1490,7 @@ fn is_transport_unavailable(error: &anyhow::Error) -> bool {
             | std::io::ErrorKind::ConnectionAborted
             | std::io::ErrorKind::TimedOut
             | std::io::ErrorKind::AddrNotAvailable
+            | std::io::ErrorKind::PermissionDenied
             | std::io::ErrorKind::NotFound
     )
 }
@@ -1655,4 +1822,37 @@ fn require_number_at_least(
         "expected `{field}` to be at least `{minimum}`, got `{actual}`"
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_transport_unavailable;
+
+    #[test]
+    fn transport_unavailable_includes_restricted_loopback_errors() {
+        for kind in [
+            std::io::ErrorKind::ConnectionRefused,
+            std::io::ErrorKind::ConnectionReset,
+            std::io::ErrorKind::ConnectionAborted,
+            std::io::ErrorKind::TimedOut,
+            std::io::ErrorKind::AddrNotAvailable,
+            std::io::ErrorKind::PermissionDenied,
+            std::io::ErrorKind::NotFound,
+        ] {
+            let error = anyhow::Error::from(std::io::Error::from(kind));
+            assert!(
+                is_transport_unavailable(&error),
+                "expected {kind:?} to trigger read-only local fallback"
+            );
+        }
+    }
+
+    #[test]
+    fn transport_unavailable_excludes_protocol_and_http_failures() {
+        let invalid_endpoint = anyhow::anyhow!("only http:// endpoints are supported");
+        assert!(!is_transport_unavailable(&invalid_endpoint));
+
+        let server_error = anyhow::anyhow!("HTTP/1.1 500 Internal Server Error");
+        assert!(!is_transport_unavailable(&server_error));
+    }
 }
