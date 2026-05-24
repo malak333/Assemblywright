@@ -874,6 +874,7 @@ dependencies = [
  "ed25519-dalek",
  "jarvis-core",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
  "tracing-subscriber",

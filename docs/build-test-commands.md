@@ -433,9 +433,10 @@ include the policy/profile label, ordered UTC egress validation timestamp, and
 deny/allow fixture notes.
 `jarvis release evidence-status` exposes the same standard artifact/report
 inventory through `/release/evidence-status`; the default CLI output is
-operator-readable and `--json` preserves the exact structured payload. It is
-file/report inventory plus report semantic validation only and does not prove
-signing, notarization, installed app launch, live-device QA, marketplace review,
+operator-readable and `--json` preserves the exact structured payload. It
+also rejects signed-provenance zip/pkg digests that no longer match the current
+artifact files. It is file/report inventory plus report semantic validation
+only and does not prove signing, notarization, installed app launch, live-device QA, marketplace review,
 malware scanning, or OS sandboxing. Non-default live-device and plugin-trust
 report paths can be provided through either the QA script variables
 (`JARVIS_QA_REPORT_PATH`, `JARVIS_PLUGIN_QA_REPORT_PATH`) or the bundle/doctor
