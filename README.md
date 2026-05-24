@@ -321,8 +321,9 @@ With a repository-backed server running, `jarvis release readiness`,
 `jarvis tasks`, `jarvis memory`, `jarvis activity summary`,
 `jarvis activity watch`, `jarvis scheduler`, `jarvis diagnostics`, and
 `jarvis plugins` expose the current readiness evidence, durable state, status
-counts, recent task/audit progress, bounded activity events, redacted scheduler
-attention handoff, scheduler trigger policy review, redacted diagnostics,
+counts, redacted recent task metadata, recent audit progress, bounded activity
+events, redacted scheduler attention handoff, scheduler trigger policy review,
+redacted diagnostics,
 first-party plugin manifests, disabled installed-plugin registry metadata, and
 structured release evidence file/report presence over IPC. Evidence-status
 items report present/missing/invalid inventory and JSON required-field status;

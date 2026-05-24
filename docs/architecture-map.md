@@ -336,12 +336,14 @@ installed registry endpoint is unavailable, the tab keeps first-party manifests
 visible and shows an installed-registry warning instead of failing the whole
 plugin surface.
 `/activity/summary` adds a repository-backed progress snapshot for current
-status counts, active task count, recent tasks, and recent audit entries.
+status counts, active task count, redacted recent task metadata, and recent
+audit entries.
 `/activity/events` exposes the same evidence as bounded server-sent events for
 CLI progress watching and a manual Swift Runs-tab "Watch Events" action. The
 Swift client collects only bounded streams, decodes `activity_summary`,
 `activity_progress`, and `activity_error` frames, and updates the visible
-activity summary from the latest event. Installed subprocess plugins can also
+activity summary from the latest event without exposing recent task command
+bodies. Installed subprocess plugins can also
 emit bounded `jarvis_progress` JSON frames on stderr; Jarvis records the parsed
 stage/message events in the run response and append-only audit log, emits
 redacted `activity_progress` SSE frames from recent audit evidence, and keeps

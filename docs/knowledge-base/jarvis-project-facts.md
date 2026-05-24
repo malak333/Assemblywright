@@ -41,13 +41,14 @@ These notes capture durable facts for future agents working on this repository.
   command error.
 - Repository-backed IPC exposes `/activity/summary`, and the CLI exposes
   `jarvis activity summary`, as a pollable progress surface for task status
-  counts, active task count, recent tasks, and recent audit entries. It is
-  deterministic repository evidence for current activity.
+  counts, active task count, redacted recent task metadata, and recent audit
+  entries. It omits command bodies from recent tasks and is deterministic
+  repository evidence for current activity.
 - Repository-backed IPC also exposes `/activity/events`, and the CLI exposes
   `jarvis activity watch`, as bounded server-sent events carrying activity
-  summary snapshots and redacted installed-plugin progress frames. This is
-  local progress-streaming evidence for current task/audit state, not per-token
-  model streaming. The Swift Runs tab can manually watch a bounded event stream,
+  summary snapshots with redacted recent task metadata and redacted
+  installed-plugin progress frames. This is local progress-streaming evidence
+  for current task/audit state, not per-token model streaming. The Swift Runs tab can manually watch a bounded event stream,
   decode `activity_summary`, `activity_progress`, and `activity_error` frames,
   update the visible activity summary from the latest summary event, and render
   plugin progress stage/message text without opening an unbounded background
