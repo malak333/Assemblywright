@@ -9,6 +9,7 @@ DIST_DIR="${JARVIS_EVIDENCE_DIST_DIR:-$ROOT_DIR/target/distribution}"
 APP_PATH="${JARVIS_EVIDENCE_APP_PATH:-$DIST_DIR/Jarvis.app}"
 ZIP_PATH="${JARVIS_EVIDENCE_ZIP_PATH:-$DIST_DIR/Jarvis-$VERSION.zip}"
 PKG_PATH="${JARVIS_EVIDENCE_PKG_PATH:-$DIST_DIR/Jarvis-$VERSION.pkg}"
+SIGNED_PROVENANCE_REPORT="${JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT:-$DIST_DIR/Jarvis-$VERSION-signed-provenance.json}"
 LIVE_QA_REPORT="${JARVIS_EVIDENCE_LIVE_QA_REPORT:-${JARVIS_QA_REPORT_PATH:-$ROOT_DIR/target/release-live-device-qa-report.json}}"
 PLUGIN_QA_REPORT="${JARVIS_EVIDENCE_PLUGIN_QA_REPORT:-${JARVIS_PLUGIN_QA_REPORT_PATH:-$ROOT_DIR/target/release-plugin-trust-qa-report.json}}"
 BUNDLE_PATH="${JARVIS_EVIDENCE_OUTPUT_PATH:-$ROOT_DIR/target/release-evidence-bundle.json}"
@@ -44,6 +45,7 @@ Optional paths match scripts/release-evidence-bundle.sh:
   JARVIS_EVIDENCE_APP_PATH
   JARVIS_EVIDENCE_ZIP_PATH
   JARVIS_EVIDENCE_PKG_PATH
+  JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT
   JARVIS_EVIDENCE_LIVE_QA_REPORT      Defaults to JARVIS_QA_REPORT_PATH or target/release-live-device-qa-report.json
   JARVIS_EVIDENCE_PLUGIN_QA_REPORT    Defaults to JARVIS_PLUGIN_QA_REPORT_PATH or target/release-plugin-trust-qa-report.json
   JARVIS_EVIDENCE_OUTPUT_PATH
@@ -458,6 +460,29 @@ check_release_evidence() {
   check_path "app zip path" "$ZIP_PATH" file
   check_path "installer package path" "$PKG_PATH" file
 
+  if valid_json_file "$SIGNED_PROVENANCE_REPORT"; then
+    record_satisfied "signed-distribution provenance report JSON: $SIGNED_PROVENANCE_REPORT"
+    check_json_number "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "schema_version" "1"
+    check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "evidence_type" "signed_distribution_provenance"
+    check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "version" "$EXPECTED_VERSION"
+    check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "bundle_identifier" "$EXPECTED_BUNDLE_ID"
+    check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.app_path" "$APP_PATH"
+    check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.zip_path" "$ZIP_PATH"
+    check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.pkg_path" "$PKG_PATH"
+    for field in artifacts.zip_sha256 artifacts.pkg_sha256; do
+      check_json_sha256 "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "$field"
+    done
+    for flag in developer_id_application_signed developer_id_installer_signed app_zip_notarized installer_pkg_notarized app_stapled installer_pkg_stapled gatekeeper_assessed artifact_digests_recorded; do
+      check_json_flag "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "validation_flags.$flag"
+    done
+    for field in signing.developer_id_application_identity signing.developer_id_installer_identity signing.app_bundle_codesign signing.app_executable_codesign signing.bundled_core_codesign signing.installer_pkg_signature notarization.app_zip_submission_id notarization.installer_pkg_submission_id notarization.app_zip_notary_log notarization.installer_pkg_notary_log stapling.app_bundle_validation stapling.installer_pkg_validation gatekeeper.app_bundle_assessment gatekeeper.installer_pkg_assessment; do
+      check_json_nonempty_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "$field"
+    done
+    check_json_utc_timestamp "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "generated_at"
+  else
+    record_missing "signed-distribution provenance report missing or invalid JSON: $SIGNED_PROVENANCE_REPORT"
+  fi
+
   if valid_json_file "$LIVE_QA_REPORT"; then
     record_satisfied "live-device QA report JSON: $LIVE_QA_REPORT"
     for flag in clean_profile finder_launch microphone speech_permission audio_output notification restart manual_release_qa; do
@@ -516,10 +541,10 @@ check_release_evidence() {
     check_json_flag "release evidence bundle" "$BUNDLE_PATH" "validation_flags.local_signature_validation"
     check_json_utc_timestamp "release evidence bundle" "$BUNDLE_PATH" "generated_at"
     check_json_string "release evidence bundle" "$BUNDLE_PATH" "version" "$VERSION"
-    for field in artifacts.app_path artifacts.zip_path artifacts.pkg_path reports.live_device_qa_report reports.plugin_trust_qa_report; do
+    for field in artifacts.app_path artifacts.zip_path artifacts.pkg_path reports.signed_distribution_provenance_report reports.live_device_qa_report reports.plugin_trust_qa_report; do
       check_json_nonempty_string "release evidence bundle" "$BUNDLE_PATH" "$field"
     done
-    for field in artifacts.zip_sha256 artifacts.pkg_sha256 reports.live_device_qa_sha256 reports.plugin_trust_qa_sha256; do
+    for field in artifacts.zip_sha256 artifacts.pkg_sha256 reports.signed_distribution_provenance_sha256 reports.live_device_qa_sha256 reports.plugin_trust_qa_sha256; do
       check_json_sha256 "release evidence bundle" "$BUNDLE_PATH" "$field"
     done
   else
@@ -651,8 +676,10 @@ JSON
     "pkg_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
   },
   "reports": {
+    "signed_distribution_provenance_report": "target/distribution/Jarvis-$VERSION-signed-provenance.json",
     "live_device_qa_report": "target/release-live-device-qa-report.json",
     "plugin_trust_qa_report": "target/release-plugin-trust-qa-report.json",
+    "signed_distribution_provenance_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     "live_device_qa_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     "plugin_trust_qa_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
   },
@@ -715,6 +742,55 @@ if [[ "$SELF_TEST" == true ]]; then
   write_fixture_app "$tmp_dir/dist/Jarvis.app"
   touch "$self_test_zip" "$self_test_pkg"
   write_fixture_reports "$tmp_dir/live.json" "$tmp_dir/plugin.json" "$tmp_dir/bundle.json"
+  cat >"$tmp_dir/dist/Jarvis-$VERSION-signed-provenance.json" <<JSON
+{
+  "schema_version": 1,
+  "evidence_type": "signed_distribution_provenance",
+  "generated_at": "2026-05-22T16:40:00Z",
+  "version": "$VERSION",
+  "bundle_identifier": "com.nobiletechnology.jarvis",
+  "artifacts": {
+    "app_path": "$tmp_dir/dist/Jarvis.app",
+    "zip_path": "$self_test_zip",
+    "pkg_path": "$self_test_pkg",
+    "zip_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "pkg_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  },
+  "signing": {
+    "developer_id_application_identity": "Developer ID Application: Jarvis QA Fixture",
+    "developer_id_installer_identity": "Developer ID Installer: Jarvis QA Fixture",
+    "app_bundle_codesign": "Authority=Developer ID Application: Jarvis QA Fixture",
+    "app_executable_codesign": "Authority=Developer ID Application: Jarvis QA Fixture",
+    "bundled_core_codesign": "Authority=Developer ID Application: Jarvis QA Fixture",
+    "installer_pkg_signature": "Developer ID Installer: Jarvis QA Fixture"
+  },
+  "notarization": {
+    "app_zip_submission_id": "00000000-0000-4000-8000-000000000001",
+    "installer_pkg_submission_id": "00000000-0000-4000-8000-000000000002",
+    "app_zip_notary_log": "$tmp_dir/app-zip-notarytool.log",
+    "installer_pkg_notary_log": "$tmp_dir/installer-pkg-notarytool.log"
+  },
+  "stapling": {
+    "app_bundle_validation": "The validate action worked!",
+    "installer_pkg_validation": "The validate action worked!"
+  },
+  "gatekeeper": {
+    "app_bundle_assessment": "accepted",
+    "installer_pkg_assessment": "accepted"
+  },
+  "validation_flags": {
+    "developer_id_application_signed": true,
+    "developer_id_installer_signed": true,
+    "app_zip_notarized": true,
+    "installer_pkg_notarized": true,
+    "app_stapled": true,
+    "installer_pkg_stapled": true,
+    "gatekeeper_assessed": true,
+    "artifact_digests_recorded": true
+  },
+  "proof_boundary": "self-test fixture"
+}
+JSON
 
   JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
     JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \

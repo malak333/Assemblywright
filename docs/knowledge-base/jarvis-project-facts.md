@@ -84,21 +84,24 @@ These notes capture durable facts for future agents working on this repository.
   installed-app or live-device manual gates.
 - `/release/evidence-status` and `jarvis release evidence-status` expose the
   standard release evidence doctor inventory as structured JSON with present,
-  missing, or invalid status for signed artifact paths, live-device QA report,
-  plugin-trust QA report, and final evidence bundle. This is file/report
-  inventory only; it does not prove signing, notarization, installation, Finder
-  launch, live-device QA, marketplace review, malware scanning, or OS sandboxing.
+  missing, or invalid status for signed artifact paths, signed-distribution
+  provenance report, live-device QA report, plugin-trust QA report, and final
+  evidence bundle. This is file/report inventory only; it does not prove
+  signing, notarization, installation, Finder launch, live-device QA,
+  marketplace review, malware scanning, or OS sandboxing.
 - The live-device QA evidence item is stricter than generic JSON presence:
   `/release/evidence-status` validates schema/type, rejects `self_test_fixture`,
   checks the expected bundle identifier plus short/build version, requires UTC
   voice-check timestamps ending in `Z`, and requires completion to be at or
   after start. Invalid or stale hand-written reports stay `invalid` and cannot
   clear `live_voice_loop` in evidence-aware readiness mode.
-- Plugin-trust and final bundle evidence items are also stricter than generic
-  JSON presence: `/release/evidence-status` validates plugin-trust UTC review
+- Signed provenance, plugin-trust, and final bundle evidence items are also
+  stricter than generic JSON presence: `/release/evidence-status` validates
+  signed provenance version/bundle metadata, signing/notary/staple/Gatekeeper
+  evidence fields, required signed-distribution flags, plugin-trust UTC review
   timestamp ordering, rejects self-test review sources, validates final bundle
-  version, requires SHA-256-shaped artifact/report digests, and requires
-  `validation_flags.local_signature_validation=true`.
+  version, requires SHA-256-shaped artifact/report digests including the signed
+  provenance digest, and requires `validation_flags.local_signature_validation=true`.
 - `release-evidence-doctor.sh --assert-complete` must stay aligned with that
   final-bundle semantic floor. It should reject minimal or hand-written final
   bundles that omit artifact/report paths, omit or malform SHA-256 digests, omit

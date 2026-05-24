@@ -22,9 +22,11 @@ flowchart TB
     DocsAgent["six-agent production-readiness audit"] --> Docs["DESIGN, README, architecture map, release checklist, build/test commands, knowledge-base"]
     DocsAgent --> Sweep["isolated worktree/branch production sweep"]
     Sweep --> LocalGate["./scripts/release-local.sh"]
+    LocalGate --> VersionConsistency["release-version-consistency.sh check"]
     LocalGate --> E2E["local_ipc_e2e ignored release proof"]
     LocalGate --> Smoke["jarvis-cli smoke"]
     LocalGate --> OperatorQASmoke["release-operator-qa-smoke.sh"]
+    LocalGate --> PackageVersionSelfTest["package-distribution.sh version-consistency-self-test"]
     LocalGate --> UnsignedLaunch["package-distribution.sh unsigned-launch-check"]
     LocalGate --> LiveDeviceQA["release-live-device-qa.sh check/self-test preflight"]
     LocalGate --> PluginTrustQA["release-plugin-trust-qa.sh check/self-test preflight"]
@@ -43,6 +45,8 @@ flowchart TB
         LiveDeviceAssert["release-live-device-qa.sh assert-complete"] --> LiveDeviceQAReport["target/release-live-device-qa-report.json owner-recorded voice evidence"]
         PluginTrustAssert["release-plugin-trust-qa.sh assert-complete"] --> PluginTrustQAReport["target/release-plugin-trust-qa-report.json owner-recorded plugin trust evidence"]
         SignedArtifacts["Developer ID signed, notarized, and stapled zip/pkg"] --> EvidenceBundleRun["release-evidence-bundle.sh bundle"]
+        SignedArtifacts --> SignedProvenance["package-distribution.sh signed provenance report"]
+        SignedProvenance --> EvidenceBundleRun
         EvidenceBundleEnv --> EvidenceBundleRun
         LiveDeviceQAReport --> EvidenceBundleRun
         PluginTrustQAReport --> EvidenceBundleRun
@@ -209,6 +213,12 @@ failures now stay inside
 the command contract: the runtime marks the task failed, appends
 `model_step_failed` with redacted provider diagnostics, and returns route
 evidence instead of letting IPC translate the failure into a transport error.
+`package-distribution.sh` now writes a signed-distribution provenance report
+during the full Developer ID lane after app/pkg signing, notarization, stapling,
+Gatekeeper assessment, notary log capture, and SHA-256 digest capture. The
+report is required by `release-evidence-bundle.sh`, `release-evidence-doctor.sh`,
+and `/release/evidence-status`, but it still does not replace clean-profile
+install, Finder launch, live-device QA, or plugin-trust QA evidence.
 `/release/readiness` derives a conservative read-only readiness summary from
 contract feature metadata, the release-checklist blocker set, and explicitly
 enabled release evidence status. By default it treats standard `target/`

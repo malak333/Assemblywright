@@ -3928,8 +3928,10 @@ fn valid_release_evidence_bundle() -> Value {
             "pkg_sha256": digest
         },
         "reports": {
+            "signed_distribution_provenance_report": "target/distribution/Jarvis-0.1.4-signed-provenance.json",
             "live_device_qa_report": "target/release-live-device-qa-report.json",
             "plugin_trust_qa_report": "target/release-plugin-trust-qa-report.json",
+            "signed_distribution_provenance_sha256": digest,
             "live_device_qa_sha256": digest,
             "plugin_trust_qa_sha256": digest
         },
@@ -3943,6 +3945,61 @@ fn valid_release_evidence_bundle() -> Value {
             "local_signature_validation": true
         },
         "proof_boundary": "Release evidence bundle fixture for CLI E2E."
+    })
+}
+
+fn valid_signed_distribution_provenance_report(
+    app_path: &str,
+    zip_path: &str,
+    pkg_path: &str,
+) -> Value {
+    let digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    json!({
+        "schema_version": 1,
+        "evidence_type": "signed_distribution_provenance",
+        "generated_at": "2026-05-22T16:40:00Z",
+        "version": "0.1.4",
+        "bundle_identifier": "com.nobiletechnology.jarvis",
+        "artifacts": {
+            "app_path": app_path,
+            "zip_path": zip_path,
+            "pkg_path": pkg_path,
+            "zip_sha256": digest,
+            "pkg_sha256": digest
+        },
+        "signing": {
+            "developer_id_application_identity": "Developer ID Application: Jarvis QA Fixture",
+            "developer_id_installer_identity": "Developer ID Installer: Jarvis QA Fixture",
+            "app_bundle_codesign": "Authority=Developer ID Application: Jarvis QA Fixture",
+            "app_executable_codesign": "Authority=Developer ID Application: Jarvis QA Fixture",
+            "bundled_core_codesign": "Authority=Developer ID Application: Jarvis QA Fixture",
+            "installer_pkg_signature": "Developer ID Installer: Jarvis QA Fixture"
+        },
+        "notarization": {
+            "app_zip_submission_id": "00000000-0000-4000-8000-000000000001",
+            "installer_pkg_submission_id": "00000000-0000-4000-8000-000000000002",
+            "app_zip_notary_log": "target/distribution/notary-logs/app.log",
+            "installer_pkg_notary_log": "target/distribution/notary-logs/pkg.log"
+        },
+        "stapling": {
+            "app_bundle_validation": "The validate action worked!",
+            "installer_pkg_validation": "The validate action worked!"
+        },
+        "gatekeeper": {
+            "app_bundle_assessment": "accepted",
+            "installer_pkg_assessment": "accepted"
+        },
+        "validation_flags": {
+            "developer_id_application_signed": true,
+            "developer_id_installer_signed": true,
+            "app_zip_notarized": true,
+            "installer_pkg_notarized": true,
+            "app_stapled": true,
+            "installer_pkg_stapled": true,
+            "gatekeeper_assessed": true,
+            "artifact_digests_recorded": true
+        },
+        "proof_boundary": "Signed distribution provenance fixture for CLI E2E."
     })
 }
 
@@ -3965,6 +4022,7 @@ fn write_json_report(path: &Path, report: Value) {
 #[cfg(unix)]
 struct CompleteReleaseEvidenceFixture {
     dist_dir: String,
+    signed_provenance_path: String,
     live_report_path: String,
     plugin_report_path: String,
     bundle_path: String,
@@ -3975,6 +4033,10 @@ impl CompleteReleaseEvidenceFixture {
     fn env_refs(&self) -> Vec<(&str, &str)> {
         vec![
             ("JARVIS_EVIDENCE_DIST_DIR", self.dist_dir.as_str()),
+            (
+                "JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT",
+                self.signed_provenance_path.as_str(),
+            ),
             (
                 "JARVIS_EVIDENCE_LIVE_QA_REPORT",
                 self.live_report_path.as_str(),
@@ -3999,14 +4061,33 @@ fn write_complete_release_evidence_fixture(root: &Path) -> CompleteReleaseEviden
     let dist_dir = write_placeholder_distribution(root);
     let live_report_path = root.join("release-live-device-qa-report.json");
     let plugin_report_path = root.join("release-plugin-trust-qa-report.json");
+    let signed_provenance_path = dist_dir.join("Jarvis-0.1.4-signed-provenance.json");
     let bundle_path = root.join("release-evidence-bundle.json");
 
     write_valid_live_device_qa_report(&live_report_path);
     write_json_report(&plugin_report_path, valid_plugin_trust_qa_report());
+    write_json_report(
+        &signed_provenance_path,
+        valid_signed_distribution_provenance_report(
+            dist_dir.join("Jarvis.app").to_str().expect("app path utf8"),
+            dist_dir
+                .join("Jarvis-0.1.4.zip")
+                .to_str()
+                .expect("zip path utf8"),
+            dist_dir
+                .join("Jarvis-0.1.4.pkg")
+                .to_str()
+                .expect("pkg path utf8"),
+        ),
+    );
     write_json_report(&bundle_path, valid_release_evidence_bundle());
 
     CompleteReleaseEvidenceFixture {
         dist_dir: dist_dir.to_str().expect("dist dir utf8").to_string(),
+        signed_provenance_path: signed_provenance_path
+            .to_str()
+            .expect("signed provenance path utf8")
+            .to_string(),
         live_report_path: live_report_path
             .to_str()
             .expect("live report path utf8")
@@ -4026,6 +4107,7 @@ fn assert_all_evidence_items_present(evidence_status: &Value) {
         "bundled_core_executable",
         "signed_app_zip",
         "signed_installer_package",
+        "signed_distribution_provenance_report",
         "live_device_qa_report",
         "plugin_trust_qa_report",
         "release_evidence_bundle",

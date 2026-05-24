@@ -1447,7 +1447,7 @@ fn format_release_evidence_status(response: &str) -> anyhow::Result<String> {
         .filter(|items| !items.is_empty())
     {
         lines.push("Evidence items:".to_string());
-        for item in items.iter().take(8) {
+        for item in items {
             let key = item
                 .get("key")
                 .and_then(serde_json::Value::as_str)
@@ -1461,9 +1461,6 @@ fn format_release_evidence_status(response: &str) -> anyhow::Result<String> {
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or(key);
             lines.push(format!("- {key}: {status} ({label})"));
-        }
-        if items.len() > 8 {
-            lines.push(format!("- ... {} more items", items.len() - 8));
         }
     }
 
