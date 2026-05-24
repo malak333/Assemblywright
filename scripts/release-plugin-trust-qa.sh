@@ -82,6 +82,59 @@ require_non_empty_env() {
   [[ -n "${value//[[:space:]]/}" ]] || fail "$name must be set after manual validation"
 }
 
+require_utc_env_timestamp() {
+  local name="$1"
+  local value="${!name:-}"
+  require_non_empty_env "$name"
+  python3 - "$name" "$value" <<'PY'
+from datetime import datetime
+import sys
+
+name, value = sys.argv[1:3]
+if not value.endswith("Z"):
+    raise SystemExit(f"{name} must be a UTC RFC3339 timestamp ending in Z")
+try:
+    datetime.fromisoformat(value.replace("Z", "+00:00"))
+except ValueError as exc:
+    raise SystemExit(f"{name} must be a UTC RFC3339 timestamp") from exc
+PY
+}
+
+require_utc_env_timestamp_order() {
+  local start_name="$1"
+  local completed_name="$2"
+  local started="${!start_name:-}"
+  local completed="${!completed_name:-}"
+  require_utc_env_timestamp "$start_name"
+  require_utc_env_timestamp "$completed_name"
+  python3 - "$start_name" "$started" "$completed_name" "$completed" <<'PY'
+from datetime import datetime
+import sys
+
+start_name, started, completed_name, completed = sys.argv[1:5]
+started_at = datetime.fromisoformat(started.replace("Z", "+00:00"))
+completed_at = datetime.fromisoformat(completed.replace("Z", "+00:00"))
+if completed_at < started_at:
+    raise SystemExit(f"{completed_name} must be greater than or equal to {start_name}")
+PY
+}
+
+require_not_future_utc_env_timestamp() {
+  local name="$1"
+  local value="${!name:-}"
+  require_utc_env_timestamp "$name"
+  python3 - "$name" "$value" <<'PY'
+from datetime import datetime, timezone
+import sys
+
+name, value = sys.argv[1:3]
+timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+now = datetime.now(timezone.utc)
+if timestamp > now:
+    raise SystemExit(f"{name} must not be later than the generated report timestamp")
+PY
+}
+
 json_escape() {
   printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
@@ -178,6 +231,7 @@ if [[ "$CHECK_ONLY" != true && "$ASSERT_COMPLETE" != true && "$SELF_TEST" != tru
 fi
 
 require_command grep
+require_command python3
 
 require_file_contains "plugin contract" "$ROOT_DIR/docs/plugin-contract.md" "WASM, OS-level network sandboxing, and malware-analysis trust remain target"
 require_file_contains "plugin contract" "$ROOT_DIR/docs/plugin-contract.md" "marketplace approval, malware safety, OS-level process/network sandboxing"
@@ -236,6 +290,46 @@ if [[ "$SELF_TEST" == true ]]; then
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "plugin trust QA self-test expected blank egress evidence to be rejected"
   fi
+  if JARVIS_PLUGIN_QA_REPORT_PATH="$tmp_dir/non-utc-timestamp-report.json" \
+    JARVIS_PLUGIN_QA_REVIEW_SOURCE="self-test-fixture" \
+    JARVIS_PLUGIN_QA_MARKETPLACE_REVIEW_VALIDATED=true \
+    JARVIS_PLUGIN_QA_MALWARE_SCAN_VALIDATED=true \
+    JARVIS_PLUGIN_QA_OS_SANDBOX_VALIDATED=true \
+    JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED=true \
+    JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_POLICY_VALIDATED=true \
+    JARVIS_PLUGIN_QA_MANUAL_TRUST_REVIEW_VALIDATED=true \
+    JARVIS_PLUGIN_QA_OWNER_NAME="Jarvis Plugin QA Self-Test" \
+    JARVIS_PLUGIN_QA_REVIEW_STARTED_AT="2026-05-22T16:10:00-04:00" \
+    JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT="2026-05-22T16:20:00Z" \
+    JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE="Marketplace review fixture was observed." \
+    JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE="Malware scan fixture was observed." \
+    JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE="OS sandbox fixture was observed." \
+    JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE="Egress fixture was observed." \
+    JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE="Signed publisher policy fixture was observed." \
+    JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE="Manual trust review fixture was observed." \
+    "$0" --assert-complete >/dev/null 2>&1; then
+    fail "plugin trust QA self-test expected non-UTC review timestamp to be rejected"
+  fi
+  if JARVIS_PLUGIN_QA_REPORT_PATH="$tmp_dir/reversed-timestamp-report.json" \
+    JARVIS_PLUGIN_QA_REVIEW_SOURCE="self-test-fixture" \
+    JARVIS_PLUGIN_QA_MARKETPLACE_REVIEW_VALIDATED=true \
+    JARVIS_PLUGIN_QA_MALWARE_SCAN_VALIDATED=true \
+    JARVIS_PLUGIN_QA_OS_SANDBOX_VALIDATED=true \
+    JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED=true \
+    JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_POLICY_VALIDATED=true \
+    JARVIS_PLUGIN_QA_MANUAL_TRUST_REVIEW_VALIDATED=true \
+    JARVIS_PLUGIN_QA_OWNER_NAME="Jarvis Plugin QA Self-Test" \
+    JARVIS_PLUGIN_QA_REVIEW_STARTED_AT="2026-05-22T16:20:00Z" \
+    JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT="2026-05-22T16:10:00Z" \
+    JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE="Marketplace review fixture was observed." \
+    JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE="Malware scan fixture was observed." \
+    JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE="OS sandbox fixture was observed." \
+    JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE="Egress fixture was observed." \
+    JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE="Signed publisher policy fixture was observed." \
+    JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE="Manual trust review fixture was observed." \
+    "$0" --assert-complete >/dev/null 2>&1; then
+    fail "plugin trust QA self-test expected reversed review timestamps to be rejected"
+  fi
   printf 'Jarvis plugin trust QA self-test: ok\n'
   printf 'Proof boundary: fake flags and evidence notes validate assertion/report mechanics only; no marketplace, malware, sandbox, or egress validation was performed.\n'
   exit 0
@@ -279,8 +373,8 @@ require_true JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED
 require_true JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_POLICY_VALIDATED
 require_true JARVIS_PLUGIN_QA_MANUAL_TRUST_REVIEW_VALIDATED
 require_non_empty_env JARVIS_PLUGIN_QA_OWNER_NAME
-require_non_empty_env JARVIS_PLUGIN_QA_REVIEW_STARTED_AT
-require_non_empty_env JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT
+require_utc_env_timestamp_order JARVIS_PLUGIN_QA_REVIEW_STARTED_AT JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT
+require_not_future_utc_env_timestamp JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT
 require_non_empty_env JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE
 require_non_empty_env JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE
 require_non_empty_env JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE

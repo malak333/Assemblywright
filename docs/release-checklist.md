@@ -68,6 +68,11 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   Evidence-status checks plugin-trust review timestamps, final bundle version,
   SHA-256 digest shape, and local signature-validation status before treating
   those reports as usable evidence.
+- Confirm `release-plugin-trust-qa.sh --assert-complete`,
+  `release-evidence-bundle.sh --bundle`, and
+  `release-evidence-doctor.sh --assert-complete` reject non-UTC plugin-trust
+  timestamps, reversed review windows, and plugin reports generated before the
+  recorded review completed.
 - Confirm `release-evidence-doctor.sh --assert-complete` enforces the same
   final-bundle semantic floor as `/release/evidence-status`: UTC generation
   timestamp, expected release version, non-empty artifact/report paths,
