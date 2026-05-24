@@ -905,6 +905,37 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_eq!(route["id"], route_id);
     assert_eq!(route["context_for_model"], Value::Null);
 
+    let readable_routes = run_cli_text(["routes", "list", "--endpoint", endpoint.as_str()]);
+    assert!(readable_routes.contains("Jarvis model routes:"));
+    assert!(readable_routes.contains(route_id.as_str()));
+    assert!(readable_routes.contains("Raw JSON: rerun with --json"));
+    assert!(
+        serde_json::from_str::<Value>(&readable_routes).is_err(),
+        "default routes list output should be operator-readable text"
+    );
+    let readable_route = run_cli_text([
+        "routes",
+        "get",
+        route_id.as_str(),
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert!(readable_route.contains("Jarvis model route:"));
+    assert!(readable_route.contains("Model context: redacted"));
+    assert!(
+        serde_json::from_str::<Value>(&readable_route).is_err(),
+        "default route get output should be operator-readable text"
+    );
+    let route_json = run_cli_json([
+        "routes",
+        "get",
+        route_id.as_str(),
+        "--json",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(route_json["id"], route_id);
+
     let manifests = run_cli_json(["plugins", "list", "--endpoint", endpoint.as_str()]);
     let manifests_available_alias =
         run_cli_json(["plugins", "available", "--endpoint", endpoint.as_str()]);
@@ -962,6 +993,45 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         "status"
     );
 
+    let readable_tasks = run_cli_text(["tasks", "list", "--endpoint", endpoint.as_str()]);
+    assert!(readable_tasks.contains("Jarvis tasks:"));
+    assert!(readable_tasks.contains(task_id.as_str()));
+    assert!(readable_tasks.contains("Raw JSON: rerun with --json"));
+    assert!(
+        serde_json::from_str::<Value>(&readable_tasks).is_err(),
+        "default tasks list output should be operator-readable text"
+    );
+    let readable_task = run_cli_text([
+        "tasks",
+        "get",
+        task_id.as_str(),
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert!(readable_task.contains("Jarvis task:"));
+    assert!(readable_task.contains("Input: omitted from human output"));
+    assert!(!readable_task.contains("plugin echo cross-process e2e"));
+    assert!(
+        serde_json::from_str::<Value>(&readable_task).is_err(),
+        "default tasks get output should be operator-readable text"
+    );
+    let readable_audit = run_cli_text(["tasks", "audit", "--endpoint", endpoint.as_str()]);
+    assert!(readable_audit.contains("Jarvis audit entries:"));
+    assert!(readable_audit.contains("plugin_completed"));
+    assert!(
+        serde_json::from_str::<Value>(&readable_audit).is_err(),
+        "default tasks audit output should be operator-readable text"
+    );
+    let task_json = run_cli_json([
+        "tasks",
+        "get",
+        task_id.as_str(),
+        "--json",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(task_json["id"], task_id);
+
     let activity = run_cli_json(["activity", "summary", "--endpoint", endpoint.as_str()]);
     assert_eq!(activity["repository_backed"], true);
     assert!(
@@ -987,6 +1057,25 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         "event_type",
         "plugin_completed",
     );
+    let readable_activity = run_cli_text(["activity", "summary", "--endpoint", endpoint.as_str()]);
+    assert!(readable_activity.contains("Jarvis activity summary:"));
+    assert!(readable_activity.contains("Task statuses:"));
+    assert!(readable_activity.contains("Recent tasks:"));
+    assert!(readable_activity.contains("Recent audit:"));
+    assert!(readable_activity.contains("Raw JSON: rerun with --json"));
+    assert!(!readable_activity.contains("plugin echo cross-process e2e"));
+    assert!(
+        serde_json::from_str::<Value>(&readable_activity).is_err(),
+        "default activity summary output should be operator-readable text"
+    );
+    let activity_json = run_cli_json([
+        "activity",
+        "summary",
+        "--json",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(activity_json["repository_backed"], true);
     let activity_events = run_cli_text([
         "activity",
         "watch",

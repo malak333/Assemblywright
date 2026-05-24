@@ -323,17 +323,23 @@ QA reports before writing the manifest.
 
 With a repository-backed server running, `jarvis release readiness`,
 `jarvis release evidence-status`,
-`jarvis tasks`, `jarvis memory`, `jarvis activity summary`,
+`jarvis tasks`, `jarvis routes`, `jarvis memory`, `jarvis activity summary`,
 `jarvis activity watch`, `jarvis scheduler`, `jarvis diagnostics`, and
 `jarvis plugins` expose the current readiness evidence, durable state, status
 counts, redacted recent task metadata, recent audit progress, bounded activity
-events, redacted scheduler attention handoff, scheduler trigger policy review,
-redacted diagnostics,
+events, redacted model-route evidence, redacted scheduler attention handoff,
+scheduler trigger policy review, redacted diagnostics,
 first-party plugin manifests, disabled installed-plugin registry metadata, and
-structured release evidence file/report presence over IPC. Evidence-status
-items report present/missing/invalid inventory and JSON required-field status;
-they do not validate signing, notarization, stapling, installation, or manual
-QA.
+structured release evidence file/report presence over IPC. Task, route, and
+activity summary commands default to operator-readable text; use `--json` or
+`JARVIS_CLI_JSON=1` for exact IPC payloads, including stored task input.
+Evidence-status items report present/missing/invalid inventory. Artifact paths
+are presence-only checks, while JSON reports receive semantic validation for
+signed-distribution provenance version/bundle metadata, signing/notary/staple
+and Gatekeeper fields, required flags, SHA-256 digests, live-device QA
+metadata, plugin-trust timestamps, and final bundle signatures. The status
+surface still does not perform signing, notarization, stapling, installation,
+or manual QA.
 
 ## Docs
 

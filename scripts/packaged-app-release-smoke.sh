@@ -187,7 +187,7 @@ require_output_contains "packaged app command" "$COMMAND_OUTPUT" '"accepted":tru
 require_output_contains "packaged app command" "$COMMAND_OUTPUT" '"status":"completed"'
 require_output_contains "packaged app command" "$COMMAND_OUTPUT" '"event_type":"plugin_completed"'
 
-AUDIT_OUTPUT="$("$BUNDLED_CORE" tasks audit --endpoint "$ENDPOINT")"
+AUDIT_OUTPUT="$("$BUNDLED_CORE" tasks audit --json --endpoint "$ENDPOINT")"
 require_output_contains "packaged app audit" "$AUDIT_OUTPUT" '"event_type":"plugin_completed"'
 require_output_contains "packaged app audit" "$AUDIT_OUTPUT" '"event_type":"task_completed"'
 

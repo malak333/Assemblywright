@@ -2921,7 +2921,7 @@ private func completeReleaseEvidenceStatusJSON() -> Data {
             {
               "key": "app_executable",
               "label": "App executable",
-              "path": "target/distribution/Jarvis.app/Contents/MacOS/Jarvis",
+              "path": "target/distribution/Jarvis.app/Contents/MacOS/JarvisMacApp",
               "kind": "executable",
               "status": "present",
               "required_for_production": true,
@@ -2931,7 +2931,7 @@ private func completeReleaseEvidenceStatusJSON() -> Data {
             {
               "key": "bundled_core_executable",
               "label": "Bundled core executable",
-              "path": "target/distribution/Jarvis.app/Contents/Resources/jarvis-core",
+              "path": "target/distribution/Jarvis.app/Contents/Resources/bin/jarvis-cli",
               "kind": "executable",
               "status": "present",
               "required_for_production": true,
@@ -2940,23 +2940,23 @@ private func completeReleaseEvidenceStatusJSON() -> Data {
             },
             {
               "key": "signed_app_zip",
-              "label": "Signed app zip",
+              "label": "App zip path",
               "path": "target/distribution/Jarvis-0.1.4.zip",
               "kind": "file",
               "status": "present",
               "required_for_production": true,
               "manual_gate": true,
-              "detail": "file exists; notarization and stapling are validated by external evidence bundle inputs"
+              "detail": "file exists; presence only; signing, notarization, and stapling are not validated by evidence-status"
             },
             {
               "key": "signed_installer_package",
-              "label": "Signed installer package",
+              "label": "Installer package path",
               "path": "target/distribution/Jarvis-0.1.4.pkg",
               "kind": "file",
               "status": "present",
               "required_for_production": true,
               "manual_gate": true,
-              "detail": "file exists; installer signature and stapling are validated by external evidence bundle inputs"
+              "detail": "file exists; presence only; signing, notarization, and stapling are not validated by evidence-status"
             },
             {
               "key": "signed_distribution_provenance_report",

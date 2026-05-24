@@ -241,12 +241,18 @@ enum TasksCommand {
     List {
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
+        /// Print the raw JSON task list.
+        #[arg(long)]
+        json: bool,
     },
     /// Fetch one persisted task by id.
     Get {
         id: String,
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
+        /// Print the raw JSON task payload.
+        #[arg(long)]
+        json: bool,
     },
     /// List audit entries, optionally scoped to one task id.
     Audit {
@@ -254,6 +260,9 @@ enum TasksCommand {
         task_id: Option<String>,
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
+        /// Print the raw JSON audit entries.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -263,6 +272,9 @@ enum ActivityCommand {
     Summary {
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
+        /// Print the raw JSON activity summary.
+        #[arg(long)]
+        json: bool,
     },
     /// Stream bounded activity summary events.
     Watch {
@@ -283,12 +295,18 @@ enum RoutesCommand {
         task_id: Option<String>,
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
+        /// Print the raw JSON route list.
+        #[arg(long)]
+        json: bool,
     },
     /// Fetch one persisted model route record by id.
     Get {
         id: String,
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
+        /// Print the raw JSON route payload.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -706,26 +724,47 @@ async fn main() -> anyhow::Result<()> {
             }
         },
         CliCommand::Tasks { command } => match command {
-            TasksCommand::List { endpoint } => {
-                println!("{}", request(&endpoint, "GET", "/tasks", None)?);
+            TasksCommand::List { endpoint, json } => {
+                let response = request(&endpoint, "GET", "/tasks", None)?;
+                if json || cli_json_requested() {
+                    println!("{response}");
+                } else {
+                    println!("{}", format_task_list(&response)?);
+                }
             }
-            TasksCommand::Get { id, endpoint } => {
-                println!(
-                    "{}",
-                    request(&endpoint, "GET", &format!("/tasks/{id}"), None)?
-                );
+            TasksCommand::Get { id, endpoint, json } => {
+                let response = request(&endpoint, "GET", &format!("/tasks/{id}"), None)?;
+                if json || cli_json_requested() {
+                    println!("{response}");
+                } else {
+                    println!("{}", format_task_detail(&response)?);
+                }
             }
-            TasksCommand::Audit { task_id, endpoint } => {
+            TasksCommand::Audit {
+                task_id,
+                endpoint,
+                json,
+            } => {
                 let path = task_id
                     .map(|id| format!("/tasks/{id}/audit"))
                     .unwrap_or_else(|| "/audit".to_string());
-                println!("{}", request(&endpoint, "GET", &path, None)?);
+                let response = request(&endpoint, "GET", &path, None)?;
+                if json || cli_json_requested() {
+                    println!("{response}");
+                } else {
+                    println!("{}", format_audit_entries(&response)?);
+                }
             }
         },
         CliCommand::Activity { command } => {
             match command {
-                ActivityCommand::Summary { endpoint } => {
-                    println!("{}", request(&endpoint, "GET", "/activity/summary", None)?);
+                ActivityCommand::Summary { endpoint, json } => {
+                    let response = request(&endpoint, "GET", "/activity/summary", None)?;
+                    if json || cli_json_requested() {
+                        println!("{response}");
+                    } else {
+                        println!("{}", format_activity_summary(&response)?);
+                    }
                 }
                 ActivityCommand::Watch {
                     endpoint,
@@ -745,17 +784,28 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         CliCommand::Routes { command } => match command {
-            RoutesCommand::List { task_id, endpoint } => {
+            RoutesCommand::List {
+                task_id,
+                endpoint,
+                json,
+            } => {
                 let path = task_id
                     .map(|id| format!("/model-routes?task_id={id}"))
                     .unwrap_or_else(|| "/model-routes".to_string());
-                println!("{}", request(&endpoint, "GET", &path, None)?);
+                let response = request(&endpoint, "GET", &path, None)?;
+                if json || cli_json_requested() {
+                    println!("{response}");
+                } else {
+                    println!("{}", format_route_list(&response)?);
+                }
             }
-            RoutesCommand::Get { id, endpoint } => {
-                println!(
-                    "{}",
-                    request(&endpoint, "GET", &format!("/model-routes/{id}"), None)?
-                );
+            RoutesCommand::Get { id, endpoint, json } => {
+                let response = request(&endpoint, "GET", &format!("/model-routes/{id}"), None)?;
+                if json || cli_json_requested() {
+                    println!("{response}");
+                } else {
+                    println!("{}", format_route_detail(&response)?);
+                }
             }
         },
         CliCommand::Memory { command } => match command {
@@ -1326,6 +1376,184 @@ fn format_model_tool_catalog(response: &str) -> anyhow::Result<String> {
     }
     lines.push("Raw JSON: rerun with --json for the exact catalog payload.".to_string());
     Ok(lines.join("\n"))
+}
+
+fn format_task_list(response: &str) -> anyhow::Result<String> {
+    let value: serde_json::Value = serde_json::from_str(response)?;
+    let tasks = value
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("task list response was not an array"))?;
+    let mut lines = vec![
+        "Jarvis tasks:".to_string(),
+        format!("Total tasks: {}", tasks.len()),
+    ];
+    for task in tasks {
+        lines.push(format!("- {}", format_task_summary(task)));
+    }
+    lines.push("Raw JSON: rerun with --json for exact task records.".to_string());
+    Ok(lines.join("\n"))
+}
+
+fn format_task_detail(response: &str) -> anyhow::Result<String> {
+    let value: serde_json::Value = serde_json::from_str(response)?;
+    let mut lines = vec![
+        "Jarvis task:".to_string(),
+        format!("- {}", format_task_summary(&value)),
+    ];
+    if let Some(session_id) = json_string(&value, "session_id") {
+        lines.push(format!("Session: {session_id}"));
+    }
+    lines.push("Input: omitted from human output; rerun with --json if you need the exact stored task record.".to_string());
+    lines.push("Raw JSON: rerun with --json for the exact task payload.".to_string());
+    Ok(lines.join("\n"))
+}
+
+fn format_audit_entries(response: &str) -> anyhow::Result<String> {
+    let value: serde_json::Value = serde_json::from_str(response)?;
+    let entries = value
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("audit response was not an array"))?;
+    let mut lines = vec![
+        "Jarvis audit entries:".to_string(),
+        format!("Total entries: {}", entries.len()),
+    ];
+    for entry in entries {
+        let event_type = json_string(entry, "event_type").unwrap_or("unknown_event");
+        let summary = json_string(entry, "summary").unwrap_or("no summary");
+        let task_id = json_string(entry, "task_id").unwrap_or("system");
+        let created_at = json_string(entry, "created_at").unwrap_or("unknown time");
+        lines.push(format!(
+            "- {created_at} {event_type} [{task_id}]: {summary}"
+        ));
+    }
+    lines.push("Raw JSON: rerun with --json for exact audit payloads.".to_string());
+    Ok(lines.join("\n"))
+}
+
+fn format_activity_summary(response: &str) -> anyhow::Result<String> {
+    let value: serde_json::Value = serde_json::from_str(response)?;
+    let repository_backed = value
+        .get("repository_backed")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let task_count = json_u64(&value, "task_count");
+    let audit_count = json_u64(&value, "audit_entry_count");
+    let active_count = json_u64(&value, "active_task_count");
+    let mut lines = vec![
+        "Jarvis activity summary:".to_string(),
+        format!("Repository backed: {repository_backed}"),
+        format!("Tasks: {task_count} total, {active_count} active"),
+        format!("Audit entries: {audit_count}"),
+    ];
+
+    if let Some(status_counts) = value
+        .get("status_counts")
+        .and_then(serde_json::Value::as_array)
+        .filter(|counts| !counts.is_empty())
+    {
+        lines.push("Task statuses:".to_string());
+        for status in status_counts {
+            let label = json_string(status, "status").unwrap_or("unknown");
+            let count = json_u64(status, "count");
+            lines.push(format!("- {label}: {count}"));
+        }
+    }
+
+    if let Some(recent_tasks) = value
+        .get("recent_tasks")
+        .and_then(serde_json::Value::as_array)
+        .filter(|tasks| !tasks.is_empty())
+    {
+        lines.push("Recent tasks:".to_string());
+        for task in recent_tasks.iter().take(5) {
+            lines.push(format!("- {}", format_task_summary(task)));
+        }
+    }
+
+    if let Some(entries) = value
+        .get("recent_audit_entries")
+        .and_then(serde_json::Value::as_array)
+        .filter(|entries| !entries.is_empty())
+    {
+        lines.push("Recent audit:".to_string());
+        for entry in entries.iter().take(5) {
+            let event_type = json_string(entry, "event_type").unwrap_or("unknown_event");
+            let summary = json_string(entry, "summary").unwrap_or("no summary");
+            lines.push(format!("- {event_type}: {summary}"));
+        }
+    }
+
+    lines.push("Raw JSON: rerun with --json for exact activity details.".to_string());
+    Ok(lines.join("\n"))
+}
+
+fn format_route_list(response: &str) -> anyhow::Result<String> {
+    let value: serde_json::Value = serde_json::from_str(response)?;
+    let routes = value
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("route list response was not an array"))?;
+    let mut lines = vec![
+        "Jarvis model routes:".to_string(),
+        format!("Total routes: {}", routes.len()),
+    ];
+    for route in routes {
+        lines.push(format!("- {}", format_route_summary(route)));
+    }
+    lines.push("Raw JSON: rerun with --json for exact route evidence.".to_string());
+    Ok(lines.join("\n"))
+}
+
+fn format_route_detail(response: &str) -> anyhow::Result<String> {
+    let value: serde_json::Value = serde_json::from_str(response)?;
+    let mut lines = vec![
+        "Jarvis model route:".to_string(),
+        format!("- {}", format_route_summary(&value)),
+    ];
+    if let Some(reason) = json_string(&value, "reason") {
+        lines.push(format!("Reason: {reason}"));
+    }
+    if let Some(approval_status) = json_string(&value, "approval_status") {
+        lines.push(format!("Approval: {approval_status}"));
+    }
+    if value
+        .get("context_for_model")
+        .is_some_and(|context| !context.is_null())
+    {
+        lines.push("Model context: retained in raw JSON for this route.".to_string());
+    } else {
+        lines.push("Model context: redacted from persisted route inspection.".to_string());
+    }
+    lines.push("Raw JSON: rerun with --json for exact route evidence.".to_string());
+    Ok(lines.join("\n"))
+}
+
+fn format_task_summary(task: &serde_json::Value) -> String {
+    let id = json_string(task, "id").unwrap_or("unknown_task");
+    let status = json_string(task, "status").unwrap_or("unknown");
+    let created_at = json_string(task, "created_at").unwrap_or("unknown time");
+    let updated_at = json_string(task, "updated_at").unwrap_or("unknown update");
+    format!("{id}: {status} (created {created_at}, updated {updated_at})")
+}
+
+fn format_route_summary(route: &serde_json::Value) -> String {
+    let id = json_string(route, "id").unwrap_or("unknown_route");
+    let provider = json_string(route, "selected_provider").unwrap_or("unknown_provider");
+    let outcome = json_string(route, "outcome").unwrap_or("unknown");
+    let sensitivity = json_string(route, "sensitivity").unwrap_or("unknown_sensitivity");
+    let created_at = json_string(route, "created_at").unwrap_or("unknown time");
+    let task_id = json_string(route, "task_id").unwrap_or("unknown_task");
+    format!("{id}: {outcome} {provider} for task {task_id} ({sensitivity}, {created_at})")
+}
+
+fn json_string<'a>(value: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+    value.get(key).and_then(serde_json::Value::as_str)
+}
+
+fn json_u64(value: &serde_json::Value, key: &str) -> u64 {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0)
 }
 
 fn format_release_readiness(response: &str) -> anyhow::Result<String> {
