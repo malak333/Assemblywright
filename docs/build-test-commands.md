@@ -589,8 +589,9 @@ spoken-command observation fields: `JARVIS_QA_VOICE_TEST_PHRASE`,
 The observed transcript must match the spoken test phrase after trimming, the
 expected installed app path must match `JARVIS_QA_INSTALLED_APP_PATH` or
 `/Applications/Jarvis.app`, expected and observed command text must match after
-trimming, and `generated_at` must be UTC and no earlier than the completed
-voice check.
+trimming, `JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID` must be `task:<uuid>` or
+`audit:<uuid>` from live command/audit evidence, and `generated_at` must be UTC
+and no earlier than the completed voice check.
 On success, `--assert-complete` writes a JSON evidence report to
 `JARVIS_QA_REPORT_PATH` or `target/release-live-device-qa-report.json` by
 default. The report includes installed-app metadata, voice-loop evidence fields,

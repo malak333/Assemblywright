@@ -508,8 +508,9 @@ Still future gates for production distribution:
   expected `/Applications/Jarvis.app` path unless explicitly overridden with
   `JARVIS_QA_INSTALLED_APP_PATH`, the observed transcript must match the spoken
   test phrase after trimming, the expected command text must match the observed
-  command text after trimming, and the report generation timestamp must be UTC
-  and no earlier than the completed voice check. Confirm the generated report includes
+  command text after trimming, `JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID` must be
+  `task:<uuid>` or `audit:<uuid>` from live command/audit evidence, and the
+  report generation timestamp must be UTC and no earlier than the completed voice check. Confirm the generated report includes
   installed-app metadata, `voice_loop`, `owner_recorded_live_voice_evidence`,
   `voice_command_observation`, validation flags, schema identity, and proof
   boundary, then preserve the `target/release-live-device-qa-report.json`

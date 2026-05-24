@@ -95,7 +95,9 @@ These notes capture durable facts for future agents working on this repository.
   version, requires UTC voice-check timestamps ending in `Z`, and requires
   completion to be at or after start. It also requires the observed transcript
   to match the spoken test phrase after trimming and the observed command text
-  to match the expected command text after trimming. Invalid or stale hand-written reports stay
+  to match the expected command text after trimming, with
+  `voice_command_observation.command_result_evidence_id` shaped as
+  `task:<uuid>` or `audit:<uuid>` from live command/audit evidence. Invalid or stale hand-written reports stay
   `invalid` and cannot clear `live_voice_loop` in evidence-aware readiness mode.
 - Signed provenance, plugin-trust, and final bundle evidence items are also
   stricter than generic JSON presence: `/release/evidence-status` validates
