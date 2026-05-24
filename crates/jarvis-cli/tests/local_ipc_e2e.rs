@@ -11,6 +11,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use ed25519_dalek::{Signer, SigningKey};
 use jarvis_core::SqliteRepository;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
 const BIN: &str = env!("CARGO_BIN_EXE_jarvis");
@@ -505,6 +506,65 @@ fn release_evidence_status_accepts_semantically_valid_plugin_and_bundle_evidence
                 .as_str()
                 .expect("bundle detail")
                 .contains("SHA-256")));
+}
+
+#[test]
+#[cfg(unix)]
+fn release_evidence_status_rejects_stale_signed_provenance_artifact_digests() {
+    let temp_dir = tempfile::tempdir().expect("temp release evidence reports");
+    let fixture = write_complete_release_evidence_fixture(temp_dir.path());
+    let endpoint = format!("http://{}", unused_loopback_addr());
+
+    let mut stale_report = valid_signed_distribution_provenance_report(
+        temp_dir
+            .path()
+            .join("dist/Jarvis.app")
+            .to_str()
+            .expect("app path utf8"),
+        temp_dir
+            .path()
+            .join("dist/Jarvis-0.1.4.zip")
+            .to_str()
+            .expect("zip path utf8"),
+        temp_dir
+            .path()
+            .join("dist/Jarvis-0.1.4.pkg")
+            .to_str()
+            .expect("pkg path utf8"),
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        &file_sha256(&temp_dir.path().join("dist/Jarvis-0.1.4.pkg")),
+    );
+    stale_report["artifacts"]["zip_sha256"] =
+        json!("fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210");
+    write_json_report(Path::new(&fixture.signed_provenance_path), stale_report);
+
+    let evidence_env = fixture.env_refs();
+    let evidence_status = run_cli_json_with_env(
+        [
+            "release",
+            "evidence-status",
+            "--endpoint",
+            endpoint.as_str(),
+        ],
+        &evidence_env,
+    );
+    let signed_provenance_item = evidence_status["items"]
+        .as_array()
+        .expect("evidence items")
+        .iter()
+        .find(|item| item["key"] == "signed_distribution_provenance_report")
+        .expect("signed provenance item");
+    assert_eq!(
+        signed_provenance_item["status"], "invalid",
+        "{signed_provenance_item}"
+    );
+    assert!(
+        signed_provenance_item["detail"]
+            .as_str()
+            .expect("signed provenance detail")
+            .contains("artifacts.zip_sha256 does not match current app zip artifact"),
+        "{signed_provenance_item}"
+    );
 }
 
 #[test]
@@ -4143,8 +4203,9 @@ fn valid_signed_distribution_provenance_report(
     app_path: &str,
     zip_path: &str,
     pkg_path: &str,
+    zip_sha256: &str,
+    pkg_sha256: &str,
 ) -> Value {
-    let digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     json!({
         "schema_version": 1,
         "evidence_type": "signed_distribution_provenance",
@@ -4155,8 +4216,8 @@ fn valid_signed_distribution_provenance_report(
             "app_path": app_path,
             "zip_path": zip_path,
             "pkg_path": pkg_path,
-            "zip_sha256": digest,
-            "pkg_sha256": digest
+            "zip_sha256": zip_sha256,
+            "pkg_sha256": pkg_sha256
         },
         "signing": {
             "developer_id_application_identity": "Developer ID Application: Jarvis QA Fixture",
@@ -4257,18 +4318,18 @@ fn write_complete_release_evidence_fixture(root: &Path) -> CompleteReleaseEviden
 
     write_valid_live_device_qa_report(&live_report_path);
     write_json_report(&plugin_report_path, valid_plugin_trust_qa_report());
+    let zip_path = dist_dir.join("Jarvis-0.1.4.zip");
+    let pkg_path = dist_dir.join("Jarvis-0.1.4.pkg");
+    let zip_sha256 = file_sha256(&zip_path);
+    let pkg_sha256 = file_sha256(&pkg_path);
     write_json_report(
         &signed_provenance_path,
         valid_signed_distribution_provenance_report(
             dist_dir.join("Jarvis.app").to_str().expect("app path utf8"),
-            dist_dir
-                .join("Jarvis-0.1.4.zip")
-                .to_str()
-                .expect("zip path utf8"),
-            dist_dir
-                .join("Jarvis-0.1.4.pkg")
-                .to_str()
-                .expect("pkg path utf8"),
+            zip_path.to_str().expect("zip path utf8"),
+            pkg_path.to_str().expect("pkg path utf8"),
+            &zip_sha256,
+            &pkg_sha256,
         ),
     );
     write_json_report(&bundle_path, valid_release_evidence_bundle());
@@ -4289,6 +4350,11 @@ fn write_complete_release_evidence_fixture(root: &Path) -> CompleteReleaseEviden
             .to_string(),
         bundle_path: bundle_path.to_str().expect("bundle path utf8").to_string(),
     }
+}
+
+fn file_sha256(path: &Path) -> String {
+    let contents = fs::read(path).expect("read digest fixture");
+    format!("{:x}", Sha256::digest(&contents))
 }
 
 fn assert_all_evidence_items_present(evidence_status: &Value) {
