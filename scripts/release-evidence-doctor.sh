@@ -599,8 +599,15 @@ check_app_bundle_metadata() {
 
 check_bundled_core_version() {
   local core_path="$APP_PATH/Contents/Resources/bin/jarvis-cli"
+  local marker_path="$core_path.version"
   if [[ ! -x "$core_path" ]]; then
     return 0
+  fi
+
+  if [[ -f "$marker_path" ]] && [[ "$(tr -d '\r\n' <"$marker_path")" == "jarvis $EXPECTED_VERSION" ]]; then
+    record_satisfied "bundled core version marker matches expected version"
+  else
+    record_missing "bundled core version marker mismatch: expected jarvis $EXPECTED_VERSION from $marker_path"
   fi
 
   local output
@@ -793,6 +800,7 @@ if [[ "\${1:-}" == "--version" ]]; then
 fi
 printf 'self-test jarvis-cli fixture\n'
 EOF
+  printf 'jarvis %s\n' "$VERSION" >"$app_path/Contents/Resources/bin/jarvis-cli.version"
   chmod 755 "$app_path/Contents/MacOS/JarvisMacApp" "$app_path/Contents/Resources/bin/jarvis-cli"
 }
 
@@ -1051,6 +1059,19 @@ JSON
     JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null
+
+  printf 'jarvis 0.0.0\n' >"$tmp_dir/dist/Jarvis.app/Contents/Resources/bin/jarvis-cli.version"
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+    "$0" --assert-complete >/dev/null 2>&1; then
+    fail "release evidence doctor self-test expected stale bundled core version marker to fail"
+  fi
+  printf 'jarvis %s\n' "$VERSION" >"$tmp_dir/dist/Jarvis.app/Contents/Resources/bin/jarvis-cli.version"
 
   python3 - "$tmp_dir/dist/Jarvis-$VERSION-signed-provenance.json" "$tmp_dir/dist/stale-digest-signed-provenance.json" <<'PY'
 import json

@@ -86,7 +86,8 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   timestamp, expected release version, artifact/report paths matching the
   configured evidence paths, SHA-256-shaped artifact/report digests matching
   the current files, and
-  `validation_flags.local_signature_validation=true`.
+  `validation_flags.local_signature_validation=true`, and rejects a stale
+  packaged `jarvis-cli.version` marker beside the bundled core.
 - Confirm `release-evidence-doctor.sh --check` prints the follow-up signing,
   live-device template/assertion, plugin-trust template/assertion, and final
   evidence-bundle template/bundle commands whenever evidence is missing.

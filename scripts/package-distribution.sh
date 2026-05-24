@@ -129,8 +129,11 @@ assert_package_version_consistency() {
 
 assert_bundled_core_version() {
   local core_path="$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
+  local marker_path="$core_path.version"
   local output
   [[ -x "$core_path" ]] || fail "bundled core executable missing: $core_path"
+  [[ -f "$marker_path" ]] || fail "bundled core version marker missing: $marker_path"
+  require_output_contains "bundled core version marker" "$(tr -d '\r\n' <"$marker_path")" "jarvis $VERSION"
   output="$("$core_path" --version)"
   require_output_contains "bundled core version" "$output" "jarvis $VERSION"
 }
