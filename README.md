@@ -313,7 +313,11 @@ plugin-trust QA report, and owner validation flags
 required before a final release evidence manifest can be written. The `--check`
 and doctor/status paths are presence and JSON-field inventory only; they do not
 validate Developer ID signatures, notarization, stapling, installation, or
-manual QA. Its `--self-test` mode uses fake artifacts/reports to prove bundle
+manual QA. Use `./scripts/release-evidence-bundle.sh --write-template
+target/release-evidence-bundle.env` to generate the sourceable final-bundle
+checklist with every `JARVIS_EVIDENCE_*` validation flag defaulting to `false`;
+source it only after the matching external release evidence has actually been
+validated. Its `--self-test` mode uses fake artifacts/reports to prove bundle
 mechanics only; `--bundle` writes `target/release-evidence-bundle.json` after
 the referenced evidence files, including signed provenance, exist and all
 required `JARVIS_EVIDENCE_*` flags are true. Non-default live-device and
