@@ -4157,7 +4157,7 @@ fn release_evidence_status_from_env() -> ReleaseEvidenceStatusResponse {
         invalid_count,
         items,
         proof_boundary:
-            "File/report inventory only; complete means expected paths are present and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/timestamp semantics, plugin-trust timestamp semantics, and final evidence-bundle path/digest/signature-validation semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
+            "File/report inventory only; complete means expected paths are present and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/non-future timestamp semantics, plugin-trust non-future timestamp semantics, and final evidence-bundle path/digest/signature-validation/non-future timestamp semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
                 .to_string(),
     }
 }
@@ -5067,7 +5067,7 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "release_evidence_status",
             "implemented",
-            "`/release/evidence-status` and `jarvis release evidence-status` expose structured present, missing, or invalid status for standard signed artifacts, QA reports, and final evidence bundle paths, including signed-provenance artifact digest matching, live-device QA bundle/version/timestamp checks, plugin-trust timestamp checks, and final evidence-bundle path/digest/signature-validation checks, with Rust, CLI E2E, and Swift model coverage.",
+            "`/release/evidence-status` and `jarvis release evidence-status` expose structured present, missing, or invalid status for standard signed artifacts, QA reports, and final evidence bundle paths, including signed-provenance artifact digest matching, live-device QA bundle/version/non-future timestamp checks, plugin-trust non-future timestamp checks, and final evidence-bundle path/digest/signature-validation/non-future timestamp checks, with Rust, CLI E2E, and Swift model coverage.",
             "Read-only file/report inventory plus report semantic validation only; it does not sign, notarize, install, Finder-launch, run live-device QA, review marketplace trust, scan malware, or enforce OS sandboxing.",
         ),
         feature(
@@ -5699,7 +5699,9 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let status = state.release_evidence_status();
         assert!(!status.proof_boundary.contains("production ready"));
         assert!(status.proof_boundary.contains("live-device QA"));
-        assert!(status.proof_boundary.contains("timestamp semantics"));
+        assert!(status
+            .proof_boundary
+            .contains("non-future timestamp semantics"));
         assert!(status.proof_boundary.contains("plugin-trust"));
         assert!(status.proof_boundary.contains("does not sign"));
         assert!(status.items.iter().any(|item| {
