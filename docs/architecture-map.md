@@ -413,8 +413,9 @@ signed distribution artifact paths, live-device QA report, plugin-trust QA
 report, and owner validation flags into a final bundle manifest path. `--check`,
 `release-evidence-doctor.sh`, and `/release/evidence-status` are path/JSON
 inventory surfaces only; they do not validate signing, notarization, stapling,
-installation, live-device QA, or plugin-trust QA. `--self-test` uses fake
-artifacts/reports only; `--bundle` writes a manifest after the referenced
+installation, live-device QA, or plugin-trust QA. The `--check` runbook points
+operators to the sourceable final-bundle template before `--bundle`.
+`--self-test` uses fake artifacts/reports only; `--bundle` writes a manifest after the referenced
 evidence exists, the owner flags are true, and the local app signature, app
 stapling ticket, installer signature, installer stapling ticket, and app zip
 payload validate. Production bundle creation keeps local signature validation

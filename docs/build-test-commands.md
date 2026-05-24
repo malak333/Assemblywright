@@ -376,7 +376,8 @@ artifacts and fake QA reports only; real release evidence must come from
 `--bundle` after signed/notarized distribution artifacts, signed-distribution
 provenance, live-device QA, and plugin-trust QA evidence exist and every
 `JARVIS_EVIDENCE_*` flag is true.
-Use `./scripts/release-evidence-bundle.sh --write-template
+The `--check` output points operators to
+`./scripts/release-evidence-bundle.sh --write-template
 target/release-evidence-bundle.env` to generate a sourceable final-bundle
 template. The template defaults every validation flag to `false`; operators
 must flip each one only after the matching external release check is complete.

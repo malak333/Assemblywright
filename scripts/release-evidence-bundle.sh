@@ -1081,6 +1081,22 @@ PY
     fail "release evidence self-test expected plugin report generated before completion to be rejected"
   fi
 
+  check_output="$("$0" --check)"
+  case "$check_output" in
+    *"--write-template target/release-evidence-bundle.env"* )
+      ;;
+    *)
+      fail "release evidence --check output must point operators to the fillable env template"
+      ;;
+  esac
+  case "$check_output" in
+    *"sourceable final-bundle environment file"* )
+      ;;
+    *)
+      fail "release evidence --check output must describe the sourceable final-bundle template"
+      ;;
+  esac
+
   printf 'Jarvis release evidence bundle self-test: ok\n'
   printf 'Proof boundary: fake artifacts and reports validate bundle mechanics only; no production evidence was created.\n'
   exit 0
@@ -1103,6 +1119,9 @@ Required before --bundle:
 - Marketplace review, malware scan, signed publisher policy, OS sandbox, and
   host-level egress evidence report exists.
 - Owner sets every JARVIS_EVIDENCE_* validation flag to true.
+- Run --write-template target/release-evidence-bundle.env to generate the
+  sourceable final-bundle environment file, edit it only after the matching
+  external checks complete, source it, then rerun this script with --bundle.
 - The bundle command can locally verify app signing, app stapling, installer
   signature, installer stapling, and the app zip payload.
 

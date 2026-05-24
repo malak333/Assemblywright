@@ -260,7 +260,8 @@ These notes capture durable facts for future agents working on this repository.
   are presence/JSON inventory surfaces only; they do not validate Developer ID
   signing, notarization, stapling, installation, live-device QA, plugin-trust QA,
   owner assertions, or final bundle creation. `--self-test` uses fake
-  artifacts/reports to prove bundle mechanics only. `--write-template`
+  artifacts/reports to prove bundle mechanics only. The `--check` output points
+  operators to `--write-template`, and `--write-template`
   generates a sourceable final-bundle environment template whose
   `JARVIS_EVIDENCE_*` validation flags default to `false`, so operators record
   external checks explicitly before any final bundle claim. `/release/readiness`
