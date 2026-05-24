@@ -399,9 +399,10 @@ live-device QA runbook executable in the default gate;
 writes a JSON evidence report with installed-app metadata, voice-loop evidence
 fields, owner/device/profile/timestamp/evidence notes, structured
 spoken-command observation fields, validation flags, schema identity, and proof
-boundary, not an automated proof. The
-`--self-test` mode uses a fake app fixture to cover the assertion/report
-mechanics in the local gate.
+boundary, not an automated proof. Owner-recorded evidence fields must contain
+non-whitespace text, and self-test fixture identity is reserved for the script's
+internal fake-fixture self-test. The `--self-test` mode uses that fake app
+fixture to cover the assertion/report mechanics in the local gate.
 The `./scripts/release-plugin-trust-qa.sh --check` command similarly keeps
 marketplace, malware-analysis, signed-publisher-policy, OS sandbox, and
 host-level egress checks on the release path; `--write-template` writes a

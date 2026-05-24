@@ -97,7 +97,10 @@ These notes capture durable facts for future agents working on this repository.
   to match the spoken test phrase after trimming and the observed command text
   to match the expected command text after trimming, with
   `voice_command_observation.command_result_evidence_id` shaped as
-  `task:<uuid>` or `audit:<uuid>` from live command/audit evidence. Invalid or stale hand-written reports stay
+  `task:<uuid>` or `audit:<uuid>` from live command/audit evidence. The
+  `release-live-device-qa.sh --assert-complete` path rejects whitespace-only
+  owner evidence values and reserves `JARVIS_QA_SELF_TEST_FIXTURE=true` for the
+  script's internal fake-fixture self-test. Invalid or stale hand-written reports stay
   `invalid` and cannot clear `live_voice_loop` in evidence-aware readiness mode.
 - Signed provenance, plugin-trust, and final bundle evidence items are also
   stricter than generic JSON presence: `/release/evidence-status` validates

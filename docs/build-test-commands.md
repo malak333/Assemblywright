@@ -586,6 +586,9 @@ spoken-command observation fields: `JARVIS_QA_VOICE_TEST_PHRASE`,
 `JARVIS_QA_OBSERVED_TRANSCRIPT`, `JARVIS_QA_EXPECTED_COMMAND_TEXT`,
 `JARVIS_QA_OBSERVED_COMMAND_TEXT`, `JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID`, and
 `JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL`.
+All owner-recorded evidence fields must contain non-whitespace text, and
+`JARVIS_QA_SELF_TEST_FIXTURE=true` is reserved for the script's internal fake
+fixture self-test rather than release evidence.
 The observed transcript must match the spoken test phrase after trimming, the
 expected installed app path must match `JARVIS_QA_INSTALLED_APP_PATH` or
 `/Applications/Jarvis.app`, expected and observed command text must match after
