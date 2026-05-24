@@ -818,6 +818,10 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         &release_readiness["recommended_verification_commands"],
         "./scripts/release-plugin-trust-qa.sh --check",
     );
+    assert_string_array_contains(
+        &release_readiness["recommended_verification_commands"],
+        "./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env",
+    );
     assert_string_array_contains_substring(
         &release_readiness["recommended_verification_commands"],
         "JARVIS_PLUGIN_QA_OWNER_NAME=",

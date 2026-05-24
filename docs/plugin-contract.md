@@ -157,12 +157,14 @@ to explain what happened:
 - `./scripts/release-plugin-trust-qa.sh --check` keeps the manual marketplace,
   malware-analysis, OS-level process/network sandbox, and host-level
   egress-enforcement review path executable
-  in the local release gate. `--self-test` proves only the assertion/report
-  mechanics with fake evidence notes; `--assert-complete` writes owner-recorded
-  evidence after external validation flags and non-empty owner/timestamp/evidence
-  fields are present. Host-level egress evidence must include the reviewed
-  policy/profile label, ordered UTC egress validation timestamp, denied
-  undeclared-host fixture note, and declared-host allow fixture note.
+  in the local release gate. `--write-template` generates a sourceable
+  `JARVIS_PLUGIN_QA_*` checklist with validation flags defaulting to `false`.
+  `--self-test` proves only the assertion/report mechanics with fake evidence
+  notes; `--assert-complete` writes owner-recorded evidence after external
+  validation flags and non-empty owner/timestamp/evidence fields are present.
+  Host-level egress evidence must include the reviewed policy/profile label,
+  ordered UTC egress validation timestamp, denied undeclared-host fixture note,
+  and declared-host allow fixture note.
 - `./scripts/release-evidence-bundle.sh --bundle` references the plugin-trust
   QA report alongside signed distribution artifacts and live-device QA evidence
   for final release review. It records evidence paths, owner flags, and

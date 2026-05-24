@@ -246,8 +246,11 @@ These notes capture durable facts for future agents working on this repository.
   undeclared-host fixture note, and declared-host allow fixture note. The review
   timestamps must be UTC `Z` values, the completed timestamp must be greater
   than or equal to the started timestamp, and the completed timestamp must not
-  be later than report generation. This is manual external release evidence,
-  not repo-local proof of those systems.
+  be later than report generation. `--write-template
+  target/release-plugin-trust-qa.env` generates a sourceable checklist with all
+  plugin trust validation flags defaulted to `false` and all evidence fields
+  blank. This is manual external release evidence, not repo-local proof of those
+  systems.
 - `./scripts/release-evidence-bundle.sh` is the final release evidence
   manifest gate. `--check` prints the required signed distribution artifact
   paths, live-device QA report, plugin-trust QA report, and owner validation
