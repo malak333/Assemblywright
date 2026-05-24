@@ -327,11 +327,12 @@ source it only after the matching external release evidence has actually been
 validated. `jarvis release readiness --all-commands` includes the matching
 `set -a && source target/release-evidence-bundle.env && set +a &&
 ./scripts/release-evidence-bundle.sh --bundle` command before the inline
-owner-flag example. Its `--self-test` mode uses fake artifacts/reports to prove bundle
-mechanics only; `--bundle` writes `target/release-evidence-bundle.json` after
-the referenced evidence files, including signed provenance, exist and all
-required `JARVIS_EVIDENCE_*` flags are true. Non-default live-device and
-plugin-trust report paths can be supplied
+owner-flag example, followed by `./scripts/release-evidence-doctor.sh
+--assert-complete` as the final inventory assertion. Its `--self-test` mode
+uses fake artifacts/reports to prove bundle mechanics only; `--bundle` writes
+`target/release-evidence-bundle.json` after the referenced evidence files,
+including signed provenance, exist and all required `JARVIS_EVIDENCE_*` flags
+are true. Non-default live-device and plugin-trust report paths can be supplied
 with either the QA script variables (`JARVIS_QA_REPORT_PATH`,
 `JARVIS_PLUGIN_QA_REPORT_PATH`) or the bundle/doctor aliases
 (`JARVIS_EVIDENCE_LIVE_QA_REPORT`, `JARVIS_EVIDENCE_PLUGIN_QA_REPORT`). The
