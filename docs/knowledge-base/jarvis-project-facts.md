@@ -128,12 +128,12 @@ These notes capture durable facts for future agents working on this repository.
   `invalid` and cannot clear `live_voice_loop` in evidence-aware readiness mode.
 - Signed provenance, plugin-trust, and final bundle evidence items are also
   stricter than generic JSON presence: `/release/evidence-status` validates
-  signed provenance version/bundle metadata, bundled core version,
-  signing/notary/staple/Gatekeeper evidence fields, required signed-distribution flags, plugin-trust UTC review
+  signed provenance version/bundle metadata, bundled core path/version/SHA-256
+  binding, signing/notary/staple/Gatekeeper evidence fields, required signed-distribution flags, plugin-trust UTC review
   timestamp ordering, rejects future-dated generated reports and self-test
   review sources, validates final bundle version, requires SHA-256-shaped
   artifact/report digests including the signed provenance digest, verifies
-  signed-provenance zip/pkg digests against the current artifact files in
+  signed-provenance zip/pkg/core digests against the current artifact files in
   evidence-status, bundle, and doctor assertions, verifies final-bundle
   schema/type identity, artifact/report paths, and digests against the current
   configured files, and requires `validation_flags.local_signature_validation=true`.

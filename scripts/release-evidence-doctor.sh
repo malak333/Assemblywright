@@ -650,12 +650,14 @@ check_release_evidence() {
     check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.app_path" "$APP_PATH"
     check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.zip_path" "$ZIP_PATH"
     check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.pkg_path" "$PKG_PATH"
+    check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.bundled_core_path" "$APP_PATH/Contents/Resources/bin/jarvis-cli"
     check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.bundled_core_version" "jarvis $EXPECTED_VERSION"
-    for field in artifacts.zip_sha256 artifacts.pkg_sha256; do
+    for field in artifacts.zip_sha256 artifacts.pkg_sha256 artifacts.bundled_core_sha256; do
       check_json_sha256 "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "$field"
     done
     check_json_sha256_matches_file "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.zip_sha256" "app zip artifact" "$ZIP_PATH"
     check_json_sha256_matches_file "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.pkg_sha256" "installer package artifact" "$PKG_PATH"
+    check_json_sha256_matches_file "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.bundled_core_sha256" "bundled core executable" "$APP_PATH/Contents/Resources/bin/jarvis-cli"
     for flag in developer_id_application_signed developer_id_installer_signed app_zip_notarized installer_pkg_notarized app_stapled installer_pkg_stapled gatekeeper_assessed artifact_digests_recorded; do
       check_json_flag "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "validation_flags.$flag"
     done
@@ -1010,6 +1012,7 @@ if [[ "$SELF_TEST" == true ]]; then
   touch "$self_test_zip" "$self_test_pkg"
   self_test_zip_sha="$(file_sha256 "$self_test_zip")"
   self_test_pkg_sha="$(file_sha256 "$self_test_pkg")"
+  self_test_core_sha="$(file_sha256 "$tmp_dir/dist/Jarvis.app/Contents/Resources/bin/jarvis-cli")"
   write_fixture_reports "$tmp_dir/live.json" "$tmp_dir/plugin.json"
   cat >"$tmp_dir/dist/Jarvis-$VERSION-signed-provenance.json" <<JSON
 {
@@ -1024,6 +1027,8 @@ if [[ "$SELF_TEST" == true ]]; then
     "pkg_path": "$self_test_pkg",
     "zip_sha256": "$self_test_zip_sha",
     "pkg_sha256": "$self_test_pkg_sha",
+    "bundled_core_path": "$tmp_dir/dist/Jarvis.app/Contents/Resources/bin/jarvis-cli",
+    "bundled_core_sha256": "$self_test_core_sha",
     "bundled_core_version": "jarvis $VERSION"
   },
   "signing": {

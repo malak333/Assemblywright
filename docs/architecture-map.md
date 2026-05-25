@@ -260,9 +260,9 @@ the expected release version; missing or stale marker details point operators
 back to the unsigned launch check for local evidence or the signed packaging
 lane for final release evidence. JSON
 reports receive semantic validation for signed provenance version/bundle
-metadata, bundled core version, signing/notary/staple/Gatekeeper fields, required flags, SHA-256
-digests, signed-provenance zip/pkg digest matches against current artifact
-files, live-device bundle/version/timestamp evidence, non-future plugin-trust
+metadata, bundled core path/version/SHA-256 binding, signing/notary/staple/Gatekeeper fields,
+required flags, SHA-256 digests, signed-provenance zip/pkg/core digest matches
+against current artifact files, live-device bundle/version/timestamp evidence, non-future plugin-trust
 review timestamps, and final bundle path/digest/local-signature evidence. This mirrors release-evidence-doctor
 inventory plus report inspection only; it does not perform signing,
 notarization, installation, Finder launch, executable runtime validation,
