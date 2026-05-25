@@ -432,10 +432,11 @@ These notes capture durable facts for future agents working on this repository.
 - A local packaged app release smoke exists, and installed plugin execution now
   has a constrained local subprocess proof. Developer ID signing,
   notarization, installer validation, App Store distribution, owner-recorded
-  live-device voice-loop validation, broader plugin
-  marketplace/WASM/OS-network sandboxing, plugin malware analysis, and broader
-  production operations are not yet complete in this worktree.
-  The SwiftUI shell scaffold and IPC client live under `apps/mac`, including a
+  live-device voice-loop validation, broader plugin marketplace/WASM isolation,
+  OS-level process/network sandboxing, host-level egress filtering, plugin
+  malware analysis, and broader production operations are still external/manual
+  gates.
+  The SwiftUI shell and IPC client live under `apps/mac`, including a
   command transcript, activity/audit panel, approval decision and approved-run
   controls,
   management tabs, permission grant-history summary, degraded-mode handling,
@@ -443,15 +444,18 @@ These notes capture durable facts for future agents working on this repository.
   final-transcript handoff into the text command path, and a core supervisor
   abstraction for configured or bundled local core binaries.
 - The architecture docs must preserve two diagrams: the current implemented
-  Rust/Swift scaffold and the end-goal production architecture. Keep the
+  Rust/Swift surfaces and the end-goal production architecture. Keep the
   current-vs-target phase table aligned with code before answering readiness
   questions.
 - The active architecture docs should also describe the current production
   sweep structure, but that workflow context must remain separate from
   readiness proof.
-- The Swift shell is currently a scaffold with a core supervisor abstraction
-  and local packaged-app smoke evidence. It is not a Developer ID signed or
-  notarized packaged app.
+- The Swift shell has a core supervisor abstraction, management tabs,
+  release/evidence-status inspection, scheduler notification controls, Keychain
+  launch credential injection, adapter-backed voice input/output controls, and
+  local packaged-app smoke evidence. It is not a Developer ID signed or
+  notarized packaged app, and it still needs clean-profile Finder/LaunchServices
+  and live-device validation before production app claims.
 - The Swift Memory tab now uses the Rust IPC memory contract for list,
   include-deleted refresh, create, load, update of mutable fields, review,
   soft-delete, and restore. Category and key remain creation-time fields in
@@ -476,12 +480,12 @@ These notes capture durable facts for future agents working on this repository.
   known credentials such as the OpenAI API key from Keychain and injects only
   missing process environment values when launching the bundled core; explicit
   environment values still win, and the provider does not auto-enable ChatGPT.
-- The Swift shell now exposes production-facing scaffold tabs for approval
+- The Swift shell exposes production-facing management tabs for approval
   evidence, runs/audit, scheduler create/inspect/cancel, redacted diagnostics,
   release readiness, and voice state. Voice supports typed transcript staging,
   manual submit, and opt-in final-transcript auto-submit into the same text
-  command path. The scaffold now models
-  interruption, resume/cancel, unavailable, and degraded typed-fallback states,
+  command path. The voice model handles interruption, resume/cancel,
+  unavailable, and degraded typed-fallback states,
   owns a protocol-backed macOS Speech/AVFoundation adapter model from the
   SwiftUI Voice tab, and exposes permission request, start/stop capture, and
   interrupt controls. The Voice tab also owns a protocol-backed AVFoundation
@@ -498,7 +502,8 @@ These notes capture durable facts for future agents working on this repository.
   per-tick limit, deterministic due ordering, and fail-closed emergency-pause
   behavior as manual execution. Repository-backed IPC exposes
   `/scheduler/attention`, and the CLI exposes `jarvis scheduler attention`, as
-  a redacted app handoff summary for due, running, and failed scheduler jobs.
+  a redacted app handoff summary for due, running, failed, and
+  emergency-pause-blocked scheduler jobs.
   Repository-backed `/permissions/policy-review` also surfaces manual,
   one-time, and recurring scheduler triggers as redacted review items, with
   due and recurring jobs raised above future one-time/manual jobs and scheduler
@@ -521,15 +526,15 @@ These notes capture durable facts for future agents working on this repository.
   is provided. Startup recovery runs the same stale recovery path before the
   server accepts IPC traffic, marks the audit payload with `automatic_recovery:
   true`, and remains bounded by age/limit flags.
-  Release-readiness feature metadata should describe this as explicit plus
-  opt-in startup recovery, with no default background recovery or distributed
-  lease claim.
+  Release-readiness feature metadata describes this as explicit plus opt-in
+  startup recovery, with no default background recovery or distributed lease
+  claim.
   The Swift Scheduler tab renders this summary above the job list and now owns
   a protocol-backed notification model plus macOS `UserNotifications` adapter
-  controls for due/failed attention items. Swift tests use a fake adapter to
-  cover authorization, delivery, duplicate suppression, and denied-permission
-  fail-closed behavior. Broader production trigger policy and live OS
-  notification validation remain target architecture.
+  controls for due, failed, and emergency-pause-blocked attention items. Swift
+  tests use a fake adapter to cover authorization, delivery, duplicate
+  suppression, and denied-permission fail-closed behavior. Broader production
+  trigger policy and live OS notification validation remain target architecture.
 
 ## Proof Boundaries
 
@@ -740,13 +745,9 @@ These notes capture durable facts for future agents working on this repository.
   and docs architecture alignment. Verify current status from
   `/release/readiness` and the checkout before treating any old worktree name
   as active.
-- Follow-on Swift scheduler notification work uses
-  `codex/scheduler-notifications` in
-  `/Users/michaelnobile/Antigravity/jarvis-worktrees-continuation/scheduler-notifications`.
-- Follow-on activity summary work uses `codex/activity-summary` in
-  `/Users/michaelnobile/Antigravity/jarvis-worktrees-continuation/activity-summary`.
-- Follow-on activity event streaming work uses `codex/activity-events` in
-  `/Users/michaelnobile/Antigravity/jarvis-worktrees-continuation/activity-events`.
+- Older scheduler notification, activity summary, and activity event-stream
+  worktree names are historical only unless the branch is re-created and
+  verified active in the current checkout.
 - When multiple agents are active, stay inside assigned ownership. For docs-only
   architecture work, use `apply_patch` and do not touch implementation files.
 - Do not revert or overwrite unrelated work from other agents.
