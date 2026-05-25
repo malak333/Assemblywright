@@ -655,22 +655,31 @@ These notes capture durable facts for future agents working on this repository.
   report to `JARVIS_QA_REPORT_PATH` or
   `target/release-live-device-qa-report.json`. The report records installed-app
   metadata, voice-loop evidence fields, owner-recorded live voice evidence
-  fields for owner/device/profile/non-future timestamps/notes, structured spoken-command
-  observation fields with observed transcript matching the spoken test phrase,
-  and `/release/evidence-status` rejects whitespace-only owner evidence fields
+  fields for owner/device/profile/non-future timestamps/notes, structured
+  spoken-command observation fields with observed transcript matching the spoken
+  test phrase, expected command text matching observed command text, validation
+  flags, schema identity, UTC report generation timestamp, and proof boundary.
+  `/release/evidence-status` rejects whitespace-only owner evidence fields
   before this report can clear `live_voice_loop`.
-  and expected command text matching observed command text, validation flags,
-  schema identity, UTC report generation timestamp, and proof boundary.
   This standardizes manual evidence only; `--check` does not prove live device
-  behavior, and the report remains an owner assertion. When the
-  release operator explicitly enables evidence-aware readiness, this report can
-  support the narrow claim that the live voice loop was validated for that
-  release candidate, not a generalized claim that voice is validated for every
-  device or future release. Use
+  behavior, and the report remains an owner assertion. When the release operator
+  explicitly enables evidence-aware readiness, this report can support the
+  narrow claim that the live voice loop was validated for that release
+  candidate, not a generalized claim that voice is validated for every device or
+  future release. Use
   `./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env`
   to generate a sourceable checklist for all required `JARVIS_QA_*` fields.
   `--self-test` uses a fake app fixture to validate assertion/report mechanics
   in the local release gate without claiming live device validation.
+- `cargo run -p jarvis-cli -- release signed-distribution-runbook` is part of
+  `./scripts/release-local.sh` as a read-only operator companion for signed
+  distribution. It combines conservative readiness with current
+  `/release/evidence-status` inventory for the app bundle, app executable,
+  bundled core, signed app zip, signed installer package, and signed provenance
+  report, then prints the package-distribution, evidence-status,
+  evidence-doctor, and live-device runbook follow-up commands. It does not
+  perform signing, notarization, stapling, Gatekeeper assessment, installation,
+  live-device QA, or plugin-trust QA.
 - It is fair to describe the current repo as a Rust foundation with tested
   scaffolding for IPC, storage, policy, routing, runtime, scheduler, plugin
   contracts, deterministic first-party plugin command execution, bounded

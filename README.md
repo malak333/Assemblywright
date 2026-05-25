@@ -293,6 +293,11 @@ still does not replace clean-profile installer run, Finder launch, App Store
 validation, or live microphone/Speech/audio-output validation.
 For those live checks, `./scripts/release-live-device-qa.sh --check` prints the
 required manual runbook and is part of the default local release gate.
+`cargo run -p jarvis-cli -- release signed-distribution-runbook` summarizes the
+current signed app bundle, bundled core, signed zip/pkg, and signed provenance
+evidence inventory and prints the next signing/evidence commands without
+performing signing, notarization, stapling, Gatekeeper assessment, installation,
+or QA.
 `cargo run -p jarvis-cli -- release live-device-runbook` prints the same
 operator path together with the current `live_voice_loop` and
 `live_device_qa_report` evidence status, without performing live validation,

@@ -24,6 +24,7 @@ run ./scripts/release-operator-qa-smoke.sh
 run cargo package --workspace --allow-dirty
 run ./scripts/package-distribution.sh --version-consistency-self-test
 run ./scripts/package-distribution.sh --unsigned-launch-check
+run cargo run -p jarvis-cli -- release signed-distribution-runbook
 run cargo run -p jarvis-cli -- release live-device-runbook
 run ./scripts/release-live-device-qa.sh --check
 run ./scripts/release-live-device-qa.sh --self-test

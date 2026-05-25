@@ -88,6 +88,8 @@ fn release_readiness_cli_falls_back_without_running_server() {
     assert!(
         readable_full_runbook.contains("cargo run -p jarvis-cli -- release live-device-runbook")
     );
+    assert!(readable_full_runbook
+        .contains("cargo run -p jarvis-cli -- release signed-distribution-runbook"));
     assert!(readable_full_runbook.contains(
         "./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env"
     ));
@@ -107,6 +109,11 @@ fn release_readiness_cli_falls_back_without_running_server() {
     assert_string_array_order(
         &release_readiness["recommended_verification_commands"],
         "./scripts/package-distribution.sh --unsigned-launch-check",
+        "cargo run -p jarvis-cli -- release signed-distribution-runbook",
+    );
+    assert_string_array_order(
+        &release_readiness["recommended_verification_commands"],
+        "cargo run -p jarvis-cli -- release signed-distribution-runbook",
         "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh",
     );
     assert_string_array_order(
@@ -1183,6 +1190,14 @@ fn release_help_documents_operator_boundaries() {
     assert!(live_runbook_help.contains("does not perform live microphone"));
     assert!(live_runbook_help
         .contains("Falls back to local read-only readiness and evidence inspection"));
+
+    let signed_distribution_help =
+        run_cli_text(["release", "signed-distribution-runbook", "--help"]);
+    assert!(signed_distribution_help.contains("signed distribution runbook"));
+    assert!(signed_distribution_help.contains("Developer ID signing"));
+    assert!(signed_distribution_help.contains("does not perform signing"));
+    assert!(signed_distribution_help
+        .contains("Falls back to local read-only readiness and evidence inspection"));
 }
 
 #[test]
@@ -1232,6 +1247,52 @@ fn release_live_device_runbook_summarizes_next_operator_steps() {
         .as_str()
         .expect("proof boundary")
         .contains("does not perform live-device validation"));
+}
+
+#[test]
+fn release_signed_distribution_runbook_summarizes_next_operator_steps() {
+    let endpoint = format!("http://{}", unused_loopback_addr());
+    let readable_runbook = run_cli_text([
+        "release",
+        "signed-distribution-runbook",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    let json_runbook = run_cli_json([
+        "release",
+        "signed-distribution-runbook",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+
+    assert!(readable_runbook.contains("Jarvis signed distribution runbook:"));
+    assert!(readable_runbook.contains("signed_app_bundle:"));
+    assert!(readable_runbook.contains("signed_app_zip:"));
+    assert!(readable_runbook.contains("signed_installer_package:"));
+    assert!(readable_runbook.contains("signed_distribution_provenance_report:"));
+    assert!(readable_runbook.contains("./scripts/package-distribution.sh --unsigned-launch-check"));
+    assert!(readable_runbook.contains("JARVIS_DEVELOPER_ID_APPLICATION="));
+    assert!(readable_runbook.contains("./scripts/release-evidence-doctor.sh --check"));
+    assert!(readable_runbook.contains("Boundary: runbook and local evidence inspection only"));
+
+    assert_eq!(json_runbook["production_ready"], false);
+    assert!(json_runbook["distribution_evidence"]
+        .as_array()
+        .expect("distribution evidence")
+        .iter()
+        .any(|item| item.get("key").and_then(Value::as_str) == Some("signed_app_zip")));
+    assert_string_array_contains(
+        &json_runbook["commands"],
+        "./scripts/package-distribution.sh --unsigned-launch-check",
+    );
+    assert_string_array_contains(
+        &json_runbook["commands"],
+        "./scripts/release-evidence-doctor.sh --check",
+    );
+    assert!(json_runbook["proof_boundary"]
+        .as_str()
+        .expect("proof boundary")
+        .contains("does not perform signing"));
 }
 
 #[test]
@@ -1403,6 +1464,10 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_string_array_contains(
         &release_readiness["recommended_verification_commands"],
         "./scripts/release-operator-qa-smoke.sh",
+    );
+    assert_string_array_contains(
+        &release_readiness["recommended_verification_commands"],
+        "cargo run -p jarvis-cli -- release signed-distribution-runbook",
     );
     assert_string_array_contains(
         &release_readiness["recommended_verification_commands"],
