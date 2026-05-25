@@ -421,12 +421,14 @@ These notes capture durable facts for future agents working on this repository.
   exposes `/approvals/:id/execute`. It checks the approval task audit for
   `approval_executed` and hides records that already have execution evidence,
   so a refresh does not invite duplicate approved replay.
-- The Swift Plugin tab decodes `/plugins/installed` registry records and shows
-  installed plugin source path, execution grant, provenance integrity status,
-  origin-review state, and executable/not-executable status alongside
-  first-party manifests. This surface is read-only and degrades to a warning
-  while keeping first-party manifests visible when the repository-backed
-  installed registry endpoint is unavailable.
+- The Swift Plugin tab decodes `/plugins/installed` registry records through
+  the same redacted inspection contract used by the CLI and IPC surfaces. It
+  shows execution grant, provenance integrity status, origin-review state,
+  action metadata, executable/not-executable status, and redaction markers
+  alongside first-party manifests, while local paths, subprocess command paths,
+  signature material, and provenance hashes stay hidden. This surface is
+  read-only and degrades to a warning while keeping first-party manifests
+  visible when the repository-backed installed registry endpoint is unavailable.
 - The CLI has matching `release readiness`, `release evidence-status`,
   `command`/`ask`, `tools`, `tasks`, `memory`, `scheduler`, `diagnostics`, and
   `plugins` subcommands, including
@@ -705,7 +707,10 @@ These notes capture durable facts for future agents working on this repository.
   candidate, not a generalized claim that voice is validated for every device or
   future release. Use
   `./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env`
-  to generate a sourceable checklist for all required `JARVIS_QA_*` fields.
+  to generate a sourceable checklist for all required `JARVIS_QA_*` fields. The
+  generated template materializes `JARVIS_QA_EXPECTED_VERSION` from the
+  canonical Rust package release version so sourced operator evidence stays
+  aligned with the app/core version under validation.
   `--self-test` uses a fake app fixture to validate assertion/report mechanics
   in the local release gate without claiming live device validation.
 - `cargo run -p jarvis-cli -- release signed-distribution-runbook` is part of

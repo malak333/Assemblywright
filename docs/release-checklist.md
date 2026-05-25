@@ -536,6 +536,8 @@ Still future gates for production distribution:
   actually validated on the release machine, run
   `./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env`,
   fill the generated template, source it, and rerun with `--assert-complete`.
+  The generated template materializes `JARVIS_QA_EXPECTED_VERSION` from the
+  canonical Rust package release version instead of leaving a shell placeholder.
   All required `JARVIS_QA_*` flags must be set to `true`, including
   `JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true`, plus the required
   owner/device/profile/UTC timestamp, voice evidence-note, and structured

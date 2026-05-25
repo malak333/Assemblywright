@@ -632,7 +632,8 @@ preconditions and prints the required clean-profile install, Finder launch,
 microphone/Speech, spoken transcript handoff, live audio-output, notification,
 restart, and manual QA steps. `--write-template target/release-live-device-qa.env`
 writes a sourceable checklist for the release operator to fill on the validated
-machine. `--assert-complete` is for the release machine after those checks are
+machine, with `JARVIS_QA_EXPECTED_VERSION` materialized from the canonical
+Rust package release version at generation time. `--assert-complete` is for the release machine after those checks are
 actually performed and all required `JARVIS_QA_*` flags are explicitly set to
 `true`, including
 `JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true` for the spoken
