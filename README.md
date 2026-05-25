@@ -300,7 +300,10 @@ test phrase, and expected command text matching observed command text,
 from the live command/audit evidence, owner/device/profile, ordered UTC
 timestamps, and voice evidence-note fields. Owner-recorded evidence fields must
 contain non-whitespace text; `JARVIS_QA_SELF_TEST_FIXTURE` is reserved for the
-script's internal `--self-test` report and is not valid release evidence. It writes a JSON report, defaulting to
+script's internal `--self-test` report and is not valid release evidence.
+`/release/evidence-status` applies the same non-empty checks to the generated
+report, so whitespace-only owner evidence cannot clear `live_voice_loop`.
+It writes a JSON report, defaulting to
 `target/release-live-device-qa-report.json`, with installed-app metadata,
 microphone/Speech permission prompt evidence, spoken transcript handoff into
 the command path, speech-output playback evidence, owner-recorded live voice
