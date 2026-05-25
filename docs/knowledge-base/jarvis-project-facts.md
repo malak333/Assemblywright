@@ -680,6 +680,15 @@ These notes capture durable facts for future agents working on this repository.
   evidence-doctor, and live-device runbook follow-up commands. It does not
   perform signing, notarization, stapling, Gatekeeper assessment, installation,
   live-device QA, or plugin-trust QA.
+- `cargo run -p jarvis-cli -- release plugin-trust-runbook` is part of
+  `./scripts/release-local.sh` as a read-only operator companion for plugin
+  trust QA. It combines conservative readiness with current
+  `/release/evidence-status` inventory for `plugin_trust_qa_report`, then
+  prints the plugin-trust check, template, assertion, evidence-status,
+  evidence-doctor, and signed-distribution follow-up commands. It does not
+  perform marketplace review, malware scanning, sandbox deployment, host-level
+  egress enforcement, signing, notarization, live-device QA, or final evidence
+  bundling.
 - It is fair to describe the current repo as a Rust foundation with tested
   scaffolding for IPC, storage, policy, routing, runtime, scheduler, plugin
   contracts, deterministic first-party plugin command execution, bounded

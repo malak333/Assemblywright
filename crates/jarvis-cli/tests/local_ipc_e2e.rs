@@ -90,6 +90,9 @@ fn release_readiness_cli_falls_back_without_running_server() {
     );
     assert!(readable_full_runbook
         .contains("cargo run -p jarvis-cli -- release signed-distribution-runbook"));
+    assert!(
+        readable_full_runbook.contains("cargo run -p jarvis-cli -- release plugin-trust-runbook")
+    );
     assert!(readable_full_runbook.contains(
         "./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env"
     ));
@@ -130,6 +133,21 @@ fn release_readiness_cli_falls_back_without_running_server() {
         &release_readiness["recommended_verification_commands"],
         "./scripts/release-live-device-qa.sh --check",
         "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env",
+    );
+    assert_string_array_order(
+        &release_readiness["recommended_verification_commands"],
+        "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env",
+        "cargo run -p jarvis-cli -- release plugin-trust-runbook",
+    );
+    assert_string_array_order(
+        &release_readiness["recommended_verification_commands"],
+        "cargo run -p jarvis-cli -- release plugin-trust-runbook",
+        "./scripts/release-plugin-trust-qa.sh --check",
+    );
+    assert_string_array_order(
+        &release_readiness["recommended_verification_commands"],
+        "./scripts/release-plugin-trust-qa.sh --check",
+        "./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env",
     );
     assert_string_array_order(
         &release_readiness["recommended_verification_commands"],
@@ -1198,6 +1216,13 @@ fn release_help_documents_operator_boundaries() {
     assert!(signed_distribution_help.contains("does not perform signing"));
     assert!(signed_distribution_help
         .contains("Falls back to local read-only readiness and evidence inspection"));
+
+    let plugin_trust_help = run_cli_text(["release", "plugin-trust-runbook", "--help"]);
+    assert!(plugin_trust_help.contains("plugin-trust QA runbook"));
+    assert!(plugin_trust_help.contains("marketplace review"));
+    assert!(plugin_trust_help.contains("does not perform marketplace review"));
+    assert!(plugin_trust_help
+        .contains("Falls back to local read-only readiness and evidence inspection"));
 }
 
 #[test]
@@ -1293,6 +1318,53 @@ fn release_signed_distribution_runbook_summarizes_next_operator_steps() {
         .as_str()
         .expect("proof boundary")
         .contains("does not perform signing"));
+}
+
+#[test]
+fn release_plugin_trust_runbook_summarizes_next_operator_steps() {
+    let endpoint = format!("http://{}", unused_loopback_addr());
+    let readable_runbook = run_cli_text([
+        "release",
+        "plugin-trust-runbook",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    let json_runbook = run_cli_json([
+        "release",
+        "plugin-trust-runbook",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+
+    assert!(readable_runbook.contains("Jarvis plugin-trust QA runbook:"));
+    assert!(readable_runbook.contains("plugin_trust_qa_report:"));
+    assert!(readable_runbook.contains("./scripts/release-plugin-trust-qa.sh --check"));
+    assert!(readable_runbook.contains(
+        "./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env"
+    ));
+    assert!(readable_runbook.contains(
+        "set -a && source target/release-plugin-trust-qa.env && set +a && ./scripts/release-plugin-trust-qa.sh --assert-complete"
+    ));
+    assert!(readable_runbook.contains("Validate host-level egress enforcement"));
+    assert!(readable_runbook.contains("Boundary: runbook and local evidence inspection only"));
+
+    assert_eq!(json_runbook["production_ready"], false);
+    assert_eq!(
+        json_runbook["plugin_trust_evidence"]["key"],
+        "plugin_trust_qa_report"
+    );
+    assert_string_array_contains(
+        &json_runbook["commands"],
+        "./scripts/release-plugin-trust-qa.sh --check",
+    );
+    assert_string_array_contains(
+        &json_runbook["commands"],
+        "./scripts/release-evidence-doctor.sh --check",
+    );
+    assert!(json_runbook["proof_boundary"]
+        .as_str()
+        .expect("proof boundary")
+        .contains("does not perform marketplace review"));
 }
 
 #[test]
@@ -1472,6 +1544,10 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_string_array_contains(
         &release_readiness["recommended_verification_commands"],
         "cargo run -p jarvis-cli -- release live-device-runbook",
+    );
+    assert_string_array_contains(
+        &release_readiness["recommended_verification_commands"],
+        "cargo run -p jarvis-cli -- release plugin-trust-runbook",
     );
     assert_string_array_contains(
         &release_readiness["recommended_verification_commands"],

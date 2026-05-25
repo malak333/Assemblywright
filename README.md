@@ -339,6 +339,11 @@ source it only after external plugin trust checks have actually completed.
 ./scripts/release-plugin-trust-qa.sh --assert-complete` command so operators
 can use the generated template instead of reconstructing the long inline env
 command.
+`cargo run -p jarvis-cli -- release plugin-trust-runbook` prints the same
+plugin-trust operator path with current `plugin_trust_qa_report` evidence
+status, exact template/assertion/evidence commands, and the explicit boundary
+that no marketplace review, malware scanning, sandbox deployment, or
+host-level egress enforcement was performed.
 The owner-recorded `--assert-complete` path writes
 `target/release-plugin-trust-qa-report.json` after all required
 `JARVIS_PLUGIN_QA_*` flags are true and owner/timestamp/evidence-note fields are
