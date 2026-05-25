@@ -401,7 +401,8 @@ bodies. Installed subprocess plugins can also
 emit bounded `jarvis_progress` JSON frames on stderr; Jarvis records the parsed
 stage/message events in the run response and append-only audit log, emits
 redacted `activity_progress` SSE frames from recent audit evidence, and keeps
-raw stderr redacted. These are local progress evidence surfaces, not yet a
+raw stderr plus installed-plugin local paths and provenance hashes redacted
+from run, audit, and activity-summary evidence. These are local progress evidence surfaces, not yet a
 per-token model response stream or unbounded real-time plugin UI stream.
 The release-proof path remains local: `./scripts/release-local.sh` runs Rust
 formatting, linting, tests, ignored release-proof tests, build/package, CLI

@@ -30,10 +30,10 @@ use crate::storage::{
 use crate::{
     execute_installed_subprocess_plugin, plugin_permission_scopes, ApprovalDecision, ApprovalGrant,
     ApprovalStatus, AuditEntry, CapabilityScope, ConversationRuntime, InstalledPlugin,
-    InstalledPluginExecutionGrant, InstalledPluginIntegrityStatus, InstalledPluginProvenance,
-    InstalledPluginRecord, JarvisError, JarvisResult, LocalModelProviderKind, ModelRoute,
-    ModelRouteRecord, PermissionEngine, PluginCallRequest, PluginCallResult, PluginCallStatus,
-    PluginHost, PluginManifest, PluginSource, PolicyRequest, ProviderConfig, RoutedModelExecutor,
+    InstalledPluginExecutionGrant, InstalledPluginIntegrityStatus, InstalledPluginRecord,
+    JarvisError, JarvisResult, LocalModelProviderKind, ModelRoute, ModelRouteRecord,
+    PermissionEngine, PluginCallRequest, PluginCallResult, PluginCallStatus, PluginHost,
+    PluginManifest, PluginSource, PolicyRequest, ProviderConfig, RoutedModelExecutor,
     RuntimeCommandRequest, RuntimeCommandStore, RuntimeConfig, RuntimeControl, RuntimeStep,
     Scheduler, SchedulerJob, SchedulerJobSpec, SchedulerJobStatus, Sensitivity, TaskRecord,
     TaskStatus, TriggerKind,
@@ -649,7 +649,9 @@ pub struct InstalledPluginRunResponse {
     pub reason: String,
     pub execution_enabled: bool,
     pub execution_grant: crate::InstalledPluginExecutionGrant,
-    pub provenance: InstalledPluginProvenance,
+    pub provenance: InstalledPluginProvenanceInspection,
+    pub local_paths_redacted: bool,
+    pub provenance_hashes_redacted: bool,
     pub manifest_valid: bool,
     pub action_declared: bool,
     pub input_valid: bool,
@@ -761,6 +763,7 @@ pub struct InstalledPluginGrantSurface {
 fn installed_plugin_inspection_record(
     record: InstalledPluginRecord,
 ) -> InstalledPluginInspectionRecord {
+    let provenance = installed_plugin_provenance_inspection(&record);
     let mut manifest = record.manifest;
     manifest.source_path = None;
     manifest.subprocess = None;
@@ -769,21 +772,27 @@ fn installed_plugin_inspection_record(
     InstalledPluginInspectionRecord {
         id: record.id,
         manifest,
-        provenance: InstalledPluginProvenanceInspection {
-            provenance_schema_version: record.provenance.provenance_schema_version,
-            capture_method: record.provenance.capture_method,
-            source_path_canonicalized: record.provenance.source_path_canonicalized,
-            captured_at: record.provenance.captured_at,
-            last_verified_at: record.provenance.last_verified_at,
-            integrity_status: record.provenance.integrity_status,
-            origin_claim: record.provenance.origin_claim,
-            origin_claim_verified: record.provenance.origin_claim_verified,
-        },
+        provenance,
         execution_enabled: record.execution_enabled,
         execution_grant: record.execution_grant,
         installed_at: record.installed_at,
         local_paths_redacted: true,
         provenance_hashes_redacted: true,
+    }
+}
+
+fn installed_plugin_provenance_inspection(
+    record: &InstalledPluginRecord,
+) -> InstalledPluginProvenanceInspection {
+    InstalledPluginProvenanceInspection {
+        provenance_schema_version: record.provenance.provenance_schema_version,
+        capture_method: record.provenance.capture_method.clone(),
+        source_path_canonicalized: record.provenance.source_path_canonicalized,
+        captured_at: record.provenance.captured_at,
+        last_verified_at: record.provenance.last_verified_at,
+        integrity_status: record.provenance.integrity_status,
+        origin_claim: record.provenance.origin_claim.clone(),
+        origin_claim_verified: record.provenance.origin_claim_verified,
     }
 }
 
@@ -2102,8 +2111,9 @@ impl IpcState {
                     "manifest_schema_version": record.manifest.manifest_schema_version,
                     "manifest_version": record.manifest.version,
                     "source": record.manifest.source,
-                    "source_path": record.source_path,
-                    "provenance": record.provenance,
+                    "provenance": installed_plugin_provenance_inspection(&record),
+                    "local_paths_redacted": true,
+                    "provenance_hashes_redacted": true,
                     "execution_enabled": record.execution_enabled,
                     "execution_grant": record.execution_grant,
                     "dry_run": request.dry_run,
@@ -2143,6 +2153,7 @@ impl IpcState {
             }
             repository.append_audit_entry(&audit_entry)?;
 
+            let response_provenance = installed_plugin_provenance_inspection(&record);
             Ok(InstalledPluginRunResponse {
                 plugin_id: record.id,
                 action: request.action,
@@ -2150,7 +2161,9 @@ impl IpcState {
                 reason,
                 execution_enabled: record.execution_enabled,
                 execution_grant: record.execution_grant,
-                provenance: record.provenance,
+                provenance: response_provenance,
+                local_paths_redacted: true,
+                provenance_hashes_redacted: true,
                 manifest_valid,
                 action_declared,
                 input_valid,
@@ -2252,9 +2265,9 @@ impl IpcState {
                     "plugin_id": record.id,
                     "manifest_version": record.manifest.version,
                     "source": record.manifest.source,
-                    "source_path": record.source_path,
                     "integrity_status": record.provenance.integrity_status,
                     "origin_claim_verified": record.provenance.origin_claim_verified,
+                    "local_paths_redacted": true,
                 }),
             );
             repository.append_audit_entry(&audit_entry)?;
@@ -5476,6 +5489,7 @@ fn error_response(error: JarvisError) -> (StatusCode, Json<ErrorResponse>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::InstalledPluginProvenance;
 
     fn command_index(commands: &[String], expected: &str) -> usize {
         commands

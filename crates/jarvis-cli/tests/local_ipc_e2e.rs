@@ -2619,10 +2619,8 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         subprocess_run["provenance"]["integrity_status"],
         "matches_install_snapshot"
     );
-    assert_eq!(
-        subprocess_run["provenance"]["source_tree_sha256"],
-        subprocess_installed["provenance"]["source_tree_sha256"]
-    );
+    assert_eq!(subprocess_run["local_paths_redacted"], true);
+    assert_eq!(subprocess_run["provenance_hashes_redacted"], true);
     assert_eq!(subprocess_run["output"]["path"], "README.md");
     assert_eq!(subprocess_run["output"]["secret_seen"], false);
     assert_eq!(
@@ -2667,6 +2665,12 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     );
     let subprocess_run_encoded =
         serde_json::to_string(&subprocess_run).expect("subprocess run JSON");
+    assert_redacts_installed_plugin_provenance(
+        &subprocess_run_encoded,
+        subprocess_plugin_dir
+            .to_str()
+            .expect("subprocess plugin dir"),
+    );
     assert!(!subprocess_run_encoded.contains("raw stderr secret"));
     assert!(!subprocess_run_encoded.contains("ignored"));
 
@@ -2687,6 +2691,8 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         changed_subprocess_run["provenance"]["integrity_status"],
         "changed_since_install"
     );
+    assert_eq!(changed_subprocess_run["local_paths_redacted"], true);
+    assert_eq!(changed_subprocess_run["provenance_hashes_redacted"], true);
     assert_eq!(changed_subprocess_run["side_effect_executed"], false);
 
     let noisy_stdout_plugin_dir = temp_dir.path().join("noisy-stdout-subprocess-plugin");
@@ -3067,8 +3073,24 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     );
     assert_array_contains(&all_audit, "event_type", "installed_plugin_progress");
     let all_audit_encoded = serde_json::to_string(&all_audit).expect("all audit JSON");
+    assert_redacts_installed_plugin_provenance(
+        &all_audit_encoded,
+        subprocess_plugin_dir
+            .to_str()
+            .expect("subprocess plugin dir"),
+    );
     assert!(!all_audit_encoded.contains("raw stderr secret"));
     assert!(!all_audit_encoded.contains("ignored"));
+
+    let activity_summary = run_cli_json(["activity", "summary", "--endpoint", endpoint.as_str()]);
+    let activity_summary_encoded =
+        serde_json::to_string(&activity_summary).expect("activity summary JSON");
+    assert_redacts_installed_plugin_provenance(
+        &activity_summary_encoded,
+        subprocess_plugin_dir
+            .to_str()
+            .expect("subprocess plugin dir"),
+    );
 
     let progress_activity_events = run_cli_text([
         "activity",
@@ -5583,6 +5605,20 @@ fn assert_array_contains(value: &Value, field: &str, expected: &str) {
             .any(|item| item.get(field).and_then(Value::as_str) == Some(expected)),
         "expected array to contain object with {field}={expected}, got {value}"
     );
+}
+
+fn assert_redacts_installed_plugin_provenance(encoded: &str, plugin_dir: &str) {
+    assert!(!encoded.contains(plugin_dir), "{encoded}");
+    for field in [
+        "\"source_path\":",
+        "\"manifest_path\":",
+        "\"manifest_sha256\":",
+        "\"source_tree_sha256\":",
+        "\"subprocess_command_path\":",
+        "\"subprocess_command_sha256\":",
+    ] {
+        assert!(!encoded.contains(field), "{field} leaked in {encoded}");
+    }
 }
 
 fn assert_array_not_contains(value: &Value, field: &str, unexpected: &str) {
