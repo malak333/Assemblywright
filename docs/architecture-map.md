@@ -490,8 +490,9 @@ persistence, installed plugin subprocess execution boundaries, voice input contr
 release smoke, permission grants UX, docs architecture alignment, versioning,
 distribution packaging, Keychain credential launch injection, Swift memory
 management, plugin provenance surfaces, and scheduler attention handoff.
-Follow-on slices continue in separate worktrees, including scheduler
-notification controls and installed subprocess progress-event auditing.
+Later slices also landed scheduler notification controls and installed
+subprocess progress-event auditing; stale worktree names are historical unless
+verified active in the current checkout.
 The six-worker structure is implementation coordination, not release evidence;
 each phase still needs matching docs, knowledge-base facts, and E2E or focused
 verification evidence for the surface it changes.
