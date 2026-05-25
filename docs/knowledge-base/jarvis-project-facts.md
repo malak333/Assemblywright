@@ -647,7 +647,8 @@ These notes capture durable facts for future agents working on this repository.
   `cargo run -p jarvis-cli -- release live-device-runbook` is the side-effect-free
   CLI companion for operators; it combines conservative readiness with current
   `live_device_qa_report` evidence status and prints the exact template,
-  assertion, evidence-status, and evidence-aware readiness commands to run.
+  assertion, evidence-status, and evidence-aware readiness commands to run. It
+  is part of the default local release gate so the runbook remains executable.
   Its `--assert-complete` mode requires an installed app plus explicit
   `JARVIS_QA_*` owner flags, including
   `JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true`, then writes a JSON evidence

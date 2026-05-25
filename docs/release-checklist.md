@@ -165,7 +165,7 @@ stage or when a PR needs focused evidence for one ownership slice.
 - Live-device QA preflight is part of the default local gate:
   `./scripts/release-live-device-qa.sh --check`
 - Live-device QA operator runbook and current evidence status are available
-  without side effects:
+  without side effects and are part of the default local gate:
   `cargo run -p jarvis-cli -- release live-device-runbook`
 - Live-device QA assertion/report mechanics are covered by a fake fixture in
   the default local gate: `./scripts/release-live-device-qa.sh --self-test`
