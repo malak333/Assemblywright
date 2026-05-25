@@ -50,6 +50,11 @@ fn release_readiness_cli_falls_back_without_running_server() {
     assert_array_contains(
         &release_readiness["implemented_features"],
         "key",
+        "release_ci_gate",
+    );
+    assert_array_contains(
+        &release_readiness["implemented_features"],
+        "key",
         "release_evidence_bundle",
     );
     assert_array_contains(
@@ -79,6 +84,7 @@ fn release_readiness_cli_falls_back_without_running_server() {
     assert!(readable_readiness.contains("--all-commands for the full readable runbook"));
     assert!(readable_readiness.contains("Raw JSON: rerun with --json"));
     assert!(readable_full_runbook.contains("Recommended verification commands:"));
+    assert!(readable_full_runbook.contains("./scripts/release-ci-workflow-smoke.sh"));
     assert!(readable_full_runbook.contains(
         "./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env"
     ));
@@ -90,6 +96,11 @@ fn release_readiness_cli_falls_back_without_running_server() {
     ));
     assert!(readable_full_runbook.contains("JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true"));
     assert!(!readable_full_runbook.contains("Showing 4 of"));
+    assert_string_array_order(
+        &release_readiness["recommended_verification_commands"],
+        "./scripts/release-ci-workflow-smoke.sh",
+        "./scripts/release-operator-qa-smoke.sh",
+    );
     assert_string_array_order(
         &release_readiness["recommended_verification_commands"],
         "./scripts/package-distribution.sh --unsigned-launch-check",
@@ -1222,6 +1233,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         "{stale_recovery}"
     );
     assert_array_contains(&contract["features"], "key", "installed_plugin_execution");
+    assert_array_contains(&contract["features"], "key", "release_ci_gate");
     assert_array_contains(&contract["features"], "key", "release_evidence_bundle");
     assert_array_contains(&contract["features"], "key", "live_voice_loop");
     assert_array_contains(&contract["features"], "status", "pending_manual_validation");
@@ -1291,6 +1303,11 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_array_contains(
         &release_readiness["implemented_features"],
         "key",
+        "release_ci_gate",
+    );
+    assert_array_contains(
+        &release_readiness["implemented_features"],
+        "key",
         "release_evidence_bundle",
     );
     assert_array_contains(
@@ -1309,6 +1326,10 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_string_array_contains(
         &release_readiness["recommended_verification_commands"],
         "./scripts/release-local.sh",
+    );
+    assert_string_array_contains(
+        &release_readiness["recommended_verification_commands"],
+        "./scripts/release-ci-workflow-smoke.sh",
     );
     assert_string_array_contains(
         &release_readiness["recommended_verification_commands"],

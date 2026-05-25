@@ -107,7 +107,9 @@ and treat cross-process E2E plus the local release gate as the evidence bar.
 The public GitHub workflow at `.github/workflows/release-local.yml` mirrors
 that local gate on macOS for pull requests, pushes to `main`, and manual
 dispatch; `scripts/release-ci-workflow-smoke.sh` keeps the workflow wired to
-`./scripts/release-local.sh`.
+`./scripts/release-local.sh`. The same boundary is exposed as the
+`release_ci_gate` contract/readiness feature so clients can cite public CI
+evidence without broadening it into distribution or live-device proof.
 Passing the local gate supports only the implemented Rust/Swift foundation
 claim; it is not proof of a finished packaged assistant.
 `/release/readiness`, `jarvis release readiness`, and the Swift Release tab

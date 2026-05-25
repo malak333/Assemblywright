@@ -5137,6 +5137,7 @@ fn release_blocking_manual_gates(
 fn release_verification_commands() -> Vec<String> {
     vec![
         "./scripts/release-local.sh".to_string(),
+        "./scripts/release-ci-workflow-smoke.sh".to_string(),
         "./scripts/release-operator-qa-smoke.sh".to_string(),
         "./scripts/packaged-app-release-smoke.sh".to_string(),
         "./scripts/package-distribution.sh --unsigned-launch-check".to_string(),
@@ -5238,6 +5239,12 @@ fn contract_features() -> Vec<ContractFeature> {
             "implemented",
             "`release-operator-qa-smoke.sh` exercises repository-backed command, audit, route, memory, scheduler, activity, permission, diagnostics, pause, readiness, and restart paths in one local QA lane.",
             "Local CLI/operator QA evidence only; not clean-profile installed-app QA, Finder/LaunchServices validation, live voice/audio validation, live notification delivery, notarization, or marketplace trust.",
+        ),
+        feature(
+            "release_ci_gate",
+            "implemented",
+            "`.github/workflows/release-local.yml` runs `./scripts/release-local.sh` on macOS for pull requests, pushes to main, and manual dispatch; `release-ci-workflow-smoke.sh` is part of the local gate and verifies the workflow remains wired to the canonical release script.",
+            "Public CI evidence for the repo-owned local release gate only; it does not perform Developer ID signing, notarization, clean-profile installation, Finder/LaunchServices validation, live-device QA, plugin-trust QA, malware review, or OS sandbox enforcement.",
         ),
         feature(
             "unsigned_distribution_launch",
@@ -5632,6 +5639,14 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert!(readiness
             .implemented_features
             .iter()
+            .any(|feature| feature.key == "release_ci_gate"
+                && feature
+                    .proof
+                    .contains(".github/workflows/release-local.yml")
+                && feature.boundary.contains("Public CI evidence")));
+        assert!(readiness
+            .implemented_features
+            .iter()
             .any(|feature| feature.key == "scheduler_stale_running_recovery"
                 && feature.proof.contains("opt-in startup recovery")
                 && feature.boundary.contains("no default background recovery")));
@@ -5656,6 +5671,10 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .recommended_verification_commands
             .iter()
             .any(|command| command == "./scripts/release-local.sh"));
+        assert!(readiness
+            .recommended_verification_commands
+            .iter()
+            .any(|command| command == "./scripts/release-ci-workflow-smoke.sh"));
         assert!(readiness
             .recommended_verification_commands
             .iter()
@@ -5724,6 +5743,9 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             commands,
             "./scripts/package-distribution.sh --unsigned-launch-check",
         );
+        let workflow_smoke_index =
+            command_index(commands, "./scripts/release-ci-workflow-smoke.sh");
+        let operator_qa_index = command_index(commands, "./scripts/release-operator-qa-smoke.sh");
         let signed_distribution_index = command_index(
             commands,
             "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh",
@@ -5752,6 +5774,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             commands,
             "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness",
         );
+        assert!(workflow_smoke_index < operator_qa_index);
         assert!(unsigned_distribution_index < signed_distribution_index);
         assert!(signed_distribution_index < live_device_template_index);
         assert!(plugin_trust_assert_index < evidence_bundle_source_index);

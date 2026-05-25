@@ -384,6 +384,8 @@ The public GitHub Actions workflow runs that same local gate on `macos-latest`
 for pull requests, pushes to `main`, and manual dispatch.
 `release-ci-workflow-smoke.sh` is part of the gate so workflow drift away from
 `./scripts/release-local.sh` fails locally before PR evidence is claimed.
+This lane is also exposed through `/contract` and release readiness as
+`release_ci_gate`, with a boundary limited to repo-owned public CI evidence.
 The current implementation diagram mirrors those `release-local.sh` lanes,
 including the unsigned distribution launch proof and live-device QA preflight
 nodes. That evidence proves only the current implemented foundation surfaces.
@@ -392,7 +394,7 @@ core and verifies command, audit, routes, memory mutation/review/restore,
 scheduler attention/run-due, activity, permission review, diagnostics,
 emergency pause, release readiness, and restart recovery in one operator-facing
 CLI smoke. The same local lane is exposed as the implemented
-`operator_release_qa_smoke` contract feature so Swift and release docs can cite
+`operator_release_qa_smoke` and `release_ci_gate` contract features so Swift and release docs can cite
 it without implying clean-profile installed-app QA. `./scripts/packaged-app-release-smoke.sh`
 adds local packaged app evidence by assembling a SwiftPM-built `Jarvis.app`
 with `Info.plist`, bundled `jarvis-cli`, ad-hoc signing plus audio-input
