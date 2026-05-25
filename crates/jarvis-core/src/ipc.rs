@@ -953,7 +953,7 @@ impl IpcState {
     }
 
     pub fn release_readiness(&self) -> ReleaseReadinessResponse {
-        let evidence_status = release_evidence_status_from_env();
+        let evidence_status = self.release_evidence_status();
         let evidence_mode_enabled = release_readiness_evidence_mode_enabled();
         let features = release_readiness_features(&evidence_status, evidence_mode_enabled);
         let implemented_features = features
@@ -992,7 +992,13 @@ impl IpcState {
     }
 
     pub fn release_evidence_status(&self) -> ReleaseEvidenceStatusResponse {
-        release_evidence_status_from_env()
+        match &self.repository {
+            Some(repository) => {
+                let repository = repository.lock().expect("IPC repository lock poisoned");
+                release_evidence_status_from_env_with_repository(Some(&repository))
+            }
+            None => release_evidence_status_from_env(),
+        }
     }
 
     fn command_runtime_label(&self) -> String {
@@ -4115,6 +4121,12 @@ fn release_required_evidence_complete(evidence_status: &ReleaseEvidenceStatusRes
 }
 
 fn release_evidence_status_from_env() -> ReleaseEvidenceStatusResponse {
+    release_evidence_status_from_env_with_repository(None)
+}
+
+fn release_evidence_status_from_env_with_repository(
+    repository: Option<&SqliteRepository>,
+) -> ReleaseEvidenceStatusResponse {
     let version = std::env::var("JARVIS_EVIDENCE_VERSION")
         .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string());
     let dist_dir = env_path("JARVIS_EVIDENCE_DIST_DIR", "target/distribution");
@@ -4194,12 +4206,14 @@ fn release_evidence_status_from_env() -> ReleaseEvidenceStatusResponse {
             "Live-device QA report",
             live_qa_report.clone(),
             LIVE_DEVICE_QA_REQUIRED_FIELDS,
+            repository,
         ),
         release_json_report_item(
             "plugin_trust_qa_report",
             "Plugin-trust QA report",
             plugin_qa_report.clone(),
             PLUGIN_TRUST_QA_REQUIRED_FIELDS,
+            None,
         ),
         release_evidence_bundle_report_item(
             "release_evidence_bundle",
@@ -4240,7 +4254,7 @@ fn release_evidence_status_from_env() -> ReleaseEvidenceStatusResponse {
         invalid_count,
         items,
         proof_boundary:
-            "File/report inventory only; complete means expected paths are present, app bundle metadata matches the expected bundle identifier/version/build, bundled core version-marker metadata matches the expected release version, and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/non-future timestamp semantics, plugin-trust non-future timestamp semantics, and final evidence-bundle path/digest/signature-validation/non-future timestamp semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, execute release artifacts, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
+            "File/report inventory only; complete means expected paths are present, app bundle metadata matches the expected bundle identifier/version/build, bundled core version-marker metadata matches the expected release version, and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/non-future timestamp semantics, repository-backed task/audit command-result evidence resolution when IPC state has a repository, plugin-trust non-future timestamp semantics, and final evidence-bundle path/digest/signature-validation/non-future timestamp semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, execute release artifacts, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
                 .to_string(),
     }
 }
@@ -4312,8 +4326,9 @@ fn release_json_report_item(
     label: &str,
     path: PathBuf,
     required_fields: &[&str],
+    repository: Option<&SqliteRepository>,
 ) -> ReleaseEvidenceStatusItem {
-    let (status, detail) = inspect_release_json_report(key, &path, required_fields);
+    let (status, detail) = inspect_release_json_report(key, &path, required_fields, repository);
     ReleaseEvidenceStatusItem {
         key: key.to_string(),
         label: label.to_string(),
@@ -4528,8 +4543,9 @@ fn inspect_release_json_report(
     key: &str,
     path: &FsPath,
     required_fields: &[&str],
+    repository: Option<&SqliteRepository>,
 ) -> (ReleaseEvidenceItemStatus, String) {
-    inspect_release_json_report_inner(key, path, required_fields, None, None)
+    inspect_release_json_report_inner(key, path, required_fields, None, None, repository)
 }
 
 fn inspect_release_json_report_with_artifacts(
@@ -4546,6 +4562,7 @@ fn inspect_release_json_report_with_artifacts(
         required_fields,
         Some((app_path, zip_path, pkg_path)),
         None,
+        None,
     )
 }
 
@@ -4555,7 +4572,14 @@ fn inspect_release_json_report_with_bundle_digests(
     required_fields: &[&str],
     bundle_digest_paths: ReleaseEvidenceBundleDigestPaths<'_>,
 ) -> (ReleaseEvidenceItemStatus, String) {
-    inspect_release_json_report_inner(key, path, required_fields, None, Some(bundle_digest_paths))
+    inspect_release_json_report_inner(
+        key,
+        path,
+        required_fields,
+        None,
+        Some(bundle_digest_paths),
+        None,
+    )
 }
 
 fn inspect_release_json_report_inner(
@@ -4564,6 +4588,7 @@ fn inspect_release_json_report_inner(
     required_fields: &[&str],
     signed_artifact_paths: Option<(&FsPath, &FsPath, &FsPath)>,
     bundle_digest_paths: Option<ReleaseEvidenceBundleDigestPaths<'_>>,
+    repository: Option<&SqliteRepository>,
 ) -> (ReleaseEvidenceItemStatus, String) {
     let contents = match fs::read_to_string(path) {
         Ok(contents) => contents,
@@ -4590,7 +4615,7 @@ fn inspect_release_json_report_inner(
         .collect::<Vec<_>>();
     if missing.is_empty() {
         if key == "live_device_qa_report" {
-            if let Err(error) = validate_live_device_qa_report(&value) {
+            if let Err(error) = validate_live_device_qa_report(&value, repository) {
                 return (ReleaseEvidenceItemStatus::Invalid, error);
             }
         } else if key == "plugin_trust_qa_report" {
@@ -4633,7 +4658,10 @@ fn inspect_release_json_report_inner(
     }
 }
 
-fn validate_live_device_qa_report(value: &serde_json::Value) -> Result<(), String> {
+fn validate_live_device_qa_report(
+    value: &serde_json::Value,
+    repository: Option<&SqliteRepository>,
+) -> Result<(), String> {
     let generated_at = require_utc_report_timestamp_not_future(value, "generated_at")?;
     if value
         .get("schema_version")
@@ -4758,12 +4786,15 @@ fn validate_live_device_qa_report(value: &serde_json::Value) -> Result<(), Strin
         "JSON report is missing required field: voice_command_observation.command_result_evidence_id"
             .to_string()
     })?;
-    validate_command_result_evidence_id(&command_result_evidence_id)?;
+    validate_command_result_evidence_id(&command_result_evidence_id, repository)?;
 
     Ok(())
 }
 
-fn validate_command_result_evidence_id(value: &str) -> Result<(), String> {
+fn validate_command_result_evidence_id(
+    value: &str,
+    repository: Option<&SqliteRepository>,
+) -> Result<(), String> {
     let (kind, id) = value.trim().split_once(':').ok_or_else(|| {
         "JSON report command_result_evidence_id must be task:<uuid> or audit:<uuid>".to_string()
     })?;
@@ -4773,9 +4804,35 @@ fn validate_command_result_evidence_id(value: &str) -> Result<(), String> {
                 .to_string(),
         );
     }
-    Uuid::parse_str(id).map_err(|_| {
+    let id = Uuid::parse_str(id).map_err(|_| {
         "JSON report command_result_evidence_id must be task:<uuid> or audit:<uuid>".to_string()
     })?;
+    if let Some(repository) = repository {
+        let exists = match kind {
+            "task" => repository
+                .get_task(id)
+                .map_err(|error| {
+                    format!(
+                        "JSON report command_result_evidence_id repository lookup failed: {error}"
+                    )
+                })?
+                .is_some(),
+            "audit" => repository
+                .get_audit_entry(id)
+                .map_err(|error| {
+                    format!(
+                        "JSON report command_result_evidence_id repository lookup failed: {error}"
+                    )
+                })?
+                .is_some_and(|entry| entry.task_id.is_some()),
+            _ => false,
+        };
+        if !exists {
+            return Err(format!(
+                "JSON report command_result_evidence_id {kind}:{id} does not resolve to repository evidence"
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -6038,11 +6095,13 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             "generic_report",
             &missing_path,
             &["validation_flags.clean_profile"],
+            None,
         );
         let (invalid_status, invalid_detail) = inspect_release_json_report(
             "generic_report",
             invalid_path.path(),
             &["validation_flags.clean_profile"],
+            None,
         );
 
         assert_eq!(missing_status, ReleaseEvidenceItemStatus::Missing);
@@ -6287,6 +6346,13 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
     fn inspect_live_device_qa_report_value(
         value: serde_json::Value,
     ) -> (ReleaseEvidenceItemStatus, String) {
+        inspect_live_device_qa_report_value_with_repository(value, None)
+    }
+
+    fn inspect_live_device_qa_report_value_with_repository(
+        value: serde_json::Value,
+        repository: Option<&SqliteRepository>,
+    ) -> (ReleaseEvidenceItemStatus, String) {
         let report_path = tempfile::NamedTempFile::new().expect("temp live QA report");
         std::fs::write(
             report_path.path(),
@@ -6298,6 +6364,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             "live_device_qa_report",
             report_path.path(),
             LIVE_DEVICE_QA_REQUIRED_FIELDS,
+            repository,
         )
     }
 
@@ -6349,6 +6416,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             "plugin_trust_qa_report",
             report_path.path(),
             PLUGIN_TRUST_QA_REQUIRED_FIELDS,
+            None,
         )
     }
 
@@ -6404,6 +6472,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             "release_evidence_bundle",
             report_path.path(),
             RELEASE_EVIDENCE_BUNDLE_REQUIRED_FIELDS,
+            None,
         )
     }
 
@@ -6563,6 +6632,85 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let (status, detail) = inspect_live_device_qa_report_value(report);
         assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
         assert!(detail.contains("command_result_evidence_id"), "{detail}");
+    }
+
+    #[test]
+    fn live_device_qa_report_resolves_repository_backed_command_result_evidence_id() {
+        let repository = SqliteRepository::in_memory().expect("repository");
+        let task = repository
+            .create_task(Uuid::new_v4(), "status check")
+            .expect("task");
+        let task_audit = AuditEntry::new(
+            Some(task.id),
+            "task_completed",
+            "command completed",
+            json!({ "steps": 1 }),
+        );
+        repository
+            .append_audit_entry(&task_audit)
+            .expect("append task audit");
+        let global_audit = AuditEntry::new(
+            None,
+            "release_note",
+            "not command evidence",
+            json!({ "source": "test" }),
+        );
+        repository
+            .append_audit_entry(&global_audit)
+            .expect("append global audit");
+
+        let mut task_report = valid_live_device_qa_report_json();
+        task_report["voice_command_observation"]["command_result_evidence_id"] =
+            json!(format!("task:{}", task.id));
+        let (status, detail) =
+            inspect_live_device_qa_report_value_with_repository(task_report, Some(&repository));
+        assert_eq!(status, ReleaseEvidenceItemStatus::Present, "{detail}");
+
+        let mut audit_report = valid_live_device_qa_report_json();
+        audit_report["voice_command_observation"]["command_result_evidence_id"] =
+            json!(format!("audit:{}", task_audit.id));
+        let (status, detail) =
+            inspect_live_device_qa_report_value_with_repository(audit_report, Some(&repository));
+        assert_eq!(status, ReleaseEvidenceItemStatus::Present, "{detail}");
+
+        let mut missing_task_report = valid_live_device_qa_report_json();
+        missing_task_report["voice_command_observation"]["command_result_evidence_id"] =
+            json!(format!("task:{}", Uuid::new_v4()));
+        let (status, detail) = inspect_live_device_qa_report_value_with_repository(
+            missing_task_report,
+            Some(&repository),
+        );
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(
+            detail.contains("does not resolve to repository evidence"),
+            "{detail}"
+        );
+
+        let mut missing_audit_report = valid_live_device_qa_report_json();
+        missing_audit_report["voice_command_observation"]["command_result_evidence_id"] =
+            json!(format!("audit:{}", Uuid::new_v4()));
+        let (status, detail) = inspect_live_device_qa_report_value_with_repository(
+            missing_audit_report,
+            Some(&repository),
+        );
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(
+            detail.contains("does not resolve to repository evidence"),
+            "{detail}"
+        );
+
+        let mut global_audit_report = valid_live_device_qa_report_json();
+        global_audit_report["voice_command_observation"]["command_result_evidence_id"] =
+            json!(format!("audit:{}", global_audit.id));
+        let (status, detail) = inspect_live_device_qa_report_value_with_repository(
+            global_audit_report,
+            Some(&repository),
+        );
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(
+            detail.contains("does not resolve to repository evidence"),
+            "{detail}"
+        );
     }
 
     #[test]
@@ -6902,6 +7050,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             "signed_distribution_provenance_report",
             report_path.path(),
             SIGNED_DISTRIBUTION_PROVENANCE_REQUIRED_FIELDS,
+            None,
         )
     }
 

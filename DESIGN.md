@@ -22,6 +22,12 @@
   gate is not the same as finished assistant readiness until packaged-app,
   permission UX, voice, recovery, diagnostics, and release-smoke evidence
   exists for the claimed surface.
+- Live-device QA can clear voice readiness only when owner-recorded report
+  fields pass semantic validation and, for repository-backed IPC readiness, the
+  `command_result_evidence_id` resolves to existing task or task-associated
+  audit evidence.
+- Architecture docs are release artifacts: keep both current-state and
+  end-goal production diagrams aligned with any release-evidence flow change.
 
 ## Non-Goals For v1
 

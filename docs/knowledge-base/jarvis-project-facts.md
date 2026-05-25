@@ -126,7 +126,10 @@ These notes capture durable facts for future agents working on this repository.
   to match the spoken test phrase after trimming and the observed command text
   to match the expected command text after trimming, with
   `voice_command_observation.command_result_evidence_id` shaped as
-  `task:<uuid>` or `audit:<uuid>` from live command/audit evidence. It now
+  `task:<uuid>` or `audit:<uuid>` from live command/audit evidence. When the
+  check runs through repository-backed IPC state, that ID must resolve to an
+  existing task row or a task-associated audit row; offline shell scripts keep
+  shape-only fixture validation because they do not own the SQLite repository. It now
   also requires a `bundled_core` block that binds the installed
   `Contents/Resources/bin/jarvis-cli` path, `jarvis <version>` output, and
   SHA-256 digest to the same live-device report. The
@@ -459,7 +462,8 @@ These notes capture durable facts for future agents working on this repository.
 - The architecture docs must preserve two diagrams: the current implemented
   Rust/Swift surfaces and the end-goal production architecture. Keep the
   current-vs-target phase table aligned with code before answering readiness
-  questions.
+  questions, and show release evidence flow changes such as repository-backed
+  command-result evidence validation in both current and target diagrams.
 - The active architecture docs should also describe the current production
   sweep structure, but that workflow context must remain separate from
   readiness proof.
@@ -694,6 +698,10 @@ These notes capture durable facts for future agents working on this repository.
   Its `--assert-complete` mode requires an installed app plus explicit
   `JARVIS_QA_*` owner flags, including
   `JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true`, then writes a JSON evidence
+  report with `voice_command_observation.command_result_evidence_id`. The
+  script validates the ID shape offline, while `/release/evidence-status` and
+  evidence-aware `/release/readiness` resolve the ID against task/audit records
+  when the server has repository-backed IPC state. The report
   report to `JARVIS_QA_REPORT_PATH` or
   `target/release-live-device-qa-report.json`. The report records installed-app
   metadata, voice-loop evidence fields, owner-recorded live voice evidence

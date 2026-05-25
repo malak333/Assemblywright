@@ -172,6 +172,23 @@ script, test, or debugging session needs the exact IPC payload with full audit,
 route, readiness, or evidence inventory details. `JARVIS_CLI_JSON=1` is
 available for test harnesses that need to keep all CLI calls machine-readable.
 
+Manual model smoke recipes, run from a second terminal while the server above
+is running:
+
+```sh
+cargo run -p jarvis-cli -- health
+cargo run -p jarvis-cli -- tools model --json
+cargo run -p jarvis-cli -- ask "Check Jarvis status and explain it in plain English."
+cargo run -p jarvis-cli -- command --json "plugin status"
+cargo run -p jarvis-cli -- routes list --json
+cargo run -p jarvis-cli -- diagnostics export
+```
+
+Use the same second-terminal commands for fake, Ollama, or
+ChatGPT/OpenAI-compatible server runs. Provider-specific failures should show
+up as failed command responses with redacted route/audit evidence rather than
+as missing CLI/server setup.
+
 To exercise the opt-in ChatGPT/OpenAI-compatible provider boundary, disable
 the local provider and provide an API key. The key is never serialized in
 provider config, provider status, route evidence, diagnostics, or structured
@@ -658,8 +675,10 @@ The observed transcript must match the spoken test phrase after trimming, the
 expected installed app path must match `JARVIS_QA_INSTALLED_APP_PATH` or
 `/Applications/Jarvis.app`, expected and observed command text must match after
 trimming, `JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID` must be `task:<uuid>` or
-`audit:<uuid>` from live command/audit evidence, and `generated_at` must be UTC
-and no earlier than the completed voice check, but not future-dated.
+`audit:<uuid>` from live command/audit evidence, and repository-backed
+`/release/evidence-status` must resolve it to an existing task or
+task-associated audit row before it can clear readiness. `generated_at` must be
+UTC and no earlier than the completed voice check, but not future-dated.
 On success, `--assert-complete` writes a JSON evidence report to
 `JARVIS_QA_REPORT_PATH` or `target/release-live-device-qa-report.json` by
 default. The report includes installed-app metadata, voice-loop evidence fields,
