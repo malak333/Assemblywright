@@ -411,7 +411,8 @@ App Store distribution, or live-device microphone/Speech/audio-output
 validation. The
 `cargo run -p jarvis-cli -- release live-device-runbook` command gives release
 operators a read-only view of the live voice blocker, live-device report status,
-and exact next commands before they move to the external device. The
+and exact next commands before they move to the external device, and the default
+local gate executes it to keep the operator runbook from drifting. The
 `./scripts/release-live-device-qa.sh --check` command keeps the manual
 live-device QA runbook executable in the default gate;
 `--assert-complete` is an owner-recorded assertion after real-device checks and

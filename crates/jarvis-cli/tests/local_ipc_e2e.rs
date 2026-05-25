@@ -85,6 +85,9 @@ fn release_readiness_cli_falls_back_without_running_server() {
     assert!(readable_readiness.contains("Raw JSON: rerun with --json"));
     assert!(readable_full_runbook.contains("Recommended verification commands:"));
     assert!(readable_full_runbook.contains("./scripts/release-ci-workflow-smoke.sh"));
+    assert!(
+        readable_full_runbook.contains("cargo run -p jarvis-cli -- release live-device-runbook")
+    );
     assert!(readable_full_runbook.contains(
         "./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env"
     ));
@@ -109,6 +112,16 @@ fn release_readiness_cli_falls_back_without_running_server() {
     assert_string_array_order(
         &release_readiness["recommended_verification_commands"],
         "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh",
+        "cargo run -p jarvis-cli -- release live-device-runbook",
+    );
+    assert_string_array_order(
+        &release_readiness["recommended_verification_commands"],
+        "cargo run -p jarvis-cli -- release live-device-runbook",
+        "./scripts/release-live-device-qa.sh --check",
+    );
+    assert_string_array_order(
+        &release_readiness["recommended_verification_commands"],
+        "./scripts/release-live-device-qa.sh --check",
         "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env",
     );
     assert_string_array_order(
@@ -1390,6 +1403,10 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_string_array_contains(
         &release_readiness["recommended_verification_commands"],
         "./scripts/release-operator-qa-smoke.sh",
+    );
+    assert_string_array_contains(
+        &release_readiness["recommended_verification_commands"],
+        "cargo run -p jarvis-cli -- release live-device-runbook",
     );
     assert_string_array_contains(
         &release_readiness["recommended_verification_commands"],

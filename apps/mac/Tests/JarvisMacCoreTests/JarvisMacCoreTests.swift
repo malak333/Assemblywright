@@ -377,9 +377,12 @@ struct JarvisMacCoreTests {
         #expect(readiness.recommendedVerificationCommands.contains("set -a && source target/release-evidence-bundle.env && set +a && ./scripts/release-evidence-bundle.sh --bundle"))
         #expect(readiness.recommendedVerificationCommands.contains("./scripts/release-evidence-doctor.sh --check"))
         #expect(readiness.recommendedVerificationCommands.contains("./scripts/release-evidence-doctor.sh --assert-complete"))
+        #expect(readiness.recommendedVerificationCommands.contains("cargo run -p jarvis-cli -- release live-device-runbook"))
         let commands = readiness.recommendedVerificationCommands
         let unsignedDistributionIndex = try #require(commands.firstIndex(of: "./scripts/package-distribution.sh --unsigned-launch-check"))
         let signedDistributionIndex = try #require(commands.firstIndex(of: "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh"))
+        let liveDeviceRunbookIndex = try #require(commands.firstIndex(of: "cargo run -p jarvis-cli -- release live-device-runbook"))
+        let liveDeviceCheckIndex = try #require(commands.firstIndex(of: "./scripts/release-live-device-qa.sh --check"))
         let liveDeviceTemplateIndex = try #require(commands.firstIndex(of: "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env"))
         let pluginTrustAssertIndex = try #require(commands.firstIndex(of: "set -a && source target/release-plugin-trust-qa.env && set +a && ./scripts/release-plugin-trust-qa.sh --assert-complete"))
         let evidenceBundleSourceIndex = try #require(commands.firstIndex(of: "set -a && source target/release-evidence-bundle.env && set +a && ./scripts/release-evidence-bundle.sh --bundle"))
@@ -389,7 +392,9 @@ struct JarvisMacCoreTests {
         let evidenceDoctorAssertIndex = try #require(commands.firstIndex(of: "./scripts/release-evidence-doctor.sh --assert-complete"))
         let externalReadinessIndex = try #require(commands.firstIndex(of: "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness"))
         #expect(unsignedDistributionIndex < signedDistributionIndex)
-        #expect(signedDistributionIndex < liveDeviceTemplateIndex)
+        #expect(signedDistributionIndex < liveDeviceRunbookIndex)
+        #expect(liveDeviceRunbookIndex < liveDeviceCheckIndex)
+        #expect(liveDeviceCheckIndex < liveDeviceTemplateIndex)
         #expect(pluginTrustAssertIndex < evidenceBundleSourceIndex)
         #expect(evidenceBundleSourceIndex < evidenceDoctorAssertIndex)
         #expect(evidenceBundleInlineIndex < evidenceDoctorAssertIndex)
@@ -2831,6 +2836,7 @@ private func releaseReadinessJSON() -> Data {
             "./scripts/packaged-app-release-smoke.sh",
             "./scripts/package-distribution.sh --unsigned-launch-check",
             "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh",
+            "cargo run -p jarvis-cli -- release live-device-runbook",
             "./scripts/release-live-device-qa.sh --check",
             "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env",
             "set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete",

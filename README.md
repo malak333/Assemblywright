@@ -295,7 +295,8 @@ For those live checks, `./scripts/release-live-device-qa.sh --check` prints the
 required manual runbook and is part of the default local release gate.
 `cargo run -p jarvis-cli -- release live-device-runbook` prints the same
 operator path together with the current `live_voice_loop` and
-`live_device_qa_report` evidence status, without performing live validation.
+`live_device_qa_report` evidence status, without performing live validation,
+and is now covered by the default local release gate.
 `./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env`
 writes a sourceable checklist of every required `JARVIS_QA_*` flag and evidence
 field. After the owner validates a signed installed app on a real Mac profile,

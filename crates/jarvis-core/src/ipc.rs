@@ -5142,6 +5142,7 @@ fn release_verification_commands() -> Vec<String> {
         "./scripts/packaged-app-release-smoke.sh".to_string(),
         "./scripts/package-distribution.sh --unsigned-launch-check".to_string(),
         "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh".to_string(),
+        "cargo run -p jarvis-cli -- release live-device-runbook".to_string(),
         "./scripts/release-live-device-qa.sh --check".to_string(),
         "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env".to_string(),
         "set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete".to_string(),
@@ -5682,6 +5683,10 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert!(readiness
             .recommended_verification_commands
             .iter()
+            .any(|command| command == "cargo run -p jarvis-cli -- release live-device-runbook"));
+        assert!(readiness
+            .recommended_verification_commands
+            .iter()
             .any(|command| command
                 == "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env"));
         assert!(readiness
@@ -5750,6 +5755,12 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             commands,
             "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh",
         );
+        let live_device_runbook_index = command_index(
+            commands,
+            "cargo run -p jarvis-cli -- release live-device-runbook",
+        );
+        let live_device_check_index =
+            command_index(commands, "./scripts/release-live-device-qa.sh --check");
         let live_device_template_index = command_index(
             commands,
             "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env",
@@ -5776,7 +5787,9 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         );
         assert!(workflow_smoke_index < operator_qa_index);
         assert!(unsigned_distribution_index < signed_distribution_index);
-        assert!(signed_distribution_index < live_device_template_index);
+        assert!(signed_distribution_index < live_device_runbook_index);
+        assert!(live_device_runbook_index < live_device_check_index);
+        assert!(live_device_check_index < live_device_template_index);
         assert!(plugin_trust_assert_index < evidence_bundle_source_index);
         assert!(evidence_bundle_source_index < evidence_doctor_assert_index);
         assert!(evidence_bundle_inline_index < evidence_doctor_assert_index);
