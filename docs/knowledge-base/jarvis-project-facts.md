@@ -195,6 +195,10 @@ These notes capture durable facts for future agents working on this repository.
   Read-only release/contract/plugin/tool fallback commands treat loopback
   `PermissionDenied` as transport-unavailable so restricted shells can still
   inspect conservative local metadata instead of failing with a raw OS error.
+  `jarvis health` remains a strict IPC liveness check and exits non-zero when
+  the server is unavailable, but the failure is operator-readable and points to
+  `jarvis serve`, `jarvis smoke`, and the read-only fallback inspection commands
+  instead of surfacing only a raw connection error.
 - Provider-envelope coverage includes
   `ollama_http_provider_parses_tool_request_envelope`,
   `chatgpt_http_provider_parses_tool_request_envelope`,

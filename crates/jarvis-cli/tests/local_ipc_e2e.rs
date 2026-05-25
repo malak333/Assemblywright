@@ -191,6 +191,26 @@ fn release_readiness_cli_falls_back_without_running_server() {
 }
 
 #[test]
+fn health_cli_reports_server_unavailable_with_operator_guidance() {
+    let endpoint = format!("http://{}", unused_loopback_addr());
+
+    let output = run_cli_failure(["health", "--endpoint", endpoint.as_str()]);
+
+    assert!(output.contains("jarvis-core is unavailable"), "{output}");
+    assert!(
+        output.contains("cargo run -p jarvis-cli -- serve"),
+        "{output}"
+    );
+    assert!(
+        output.contains("cargo run -p jarvis-cli -- smoke"),
+        "{output}"
+    );
+    assert!(output.contains("jarvis release readiness"), "{output}");
+    assert!(output.contains("jarvis plugins list"), "{output}");
+    assert!(output.contains("jarvis tools list"), "{output}");
+}
+
+#[test]
 fn model_tools_cli_falls_back_without_running_server() {
     let endpoint = format!("http://{}", unused_loopback_addr());
 
