@@ -313,16 +313,19 @@ expected `/Applications/Jarvis.app` path, unless explicitly overridden with
 test phrase, and expected command text matching observed command text,
 `JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID` set to `task:<uuid>` or `audit:<uuid>`
 from the live command/audit evidence, owner/device/profile, ordered UTC
-timestamps, and voice evidence-note fields. Owner-recorded evidence fields must
-contain non-whitespace text; `JARVIS_QA_SELF_TEST_FIXTURE` is reserved for the
-script's internal `--self-test` report and is not valid release evidence.
+timestamps, voice evidence-note fields, and a bundled-core binding for the
+installed `Contents/Resources/bin/jarvis-cli` path, `jarvis <version>` output,
+and SHA-256 digest. Owner-recorded evidence fields must contain non-whitespace
+text; `JARVIS_QA_SELF_TEST_FIXTURE` is reserved for the script's internal
+`--self-test` report and is not valid release evidence.
 `/release/evidence-status` applies the same non-empty checks to the generated
 report, so whitespace-only owner evidence cannot clear `live_voice_loop`.
 It writes a JSON report, defaulting to
 `target/release-live-device-qa-report.json`, with installed-app metadata,
 microphone/Speech permission prompt evidence, spoken transcript handoff into
 the command path, speech-output playback evidence, owner-recorded live voice
-evidence notes, structured command observation, and the proof boundary. The
+evidence notes, bundled-core path/version/digest evidence, structured command
+observation, and the proof boundary. The
 local release gate also runs `./scripts/release-live-device-qa.sh --self-test`
 against a fake app fixture to prove the assertion/report mechanics without
 claiming real device validation.

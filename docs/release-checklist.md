@@ -547,10 +547,13 @@ Still future gates for production distribution:
   test phrase after trimming, the expected command text must match the observed
   command text after trimming, `JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID` must be
   `task:<uuid>` or `audit:<uuid>` from live command/audit evidence, and the
-  report generation timestamp must be UTC, no earlier than the completed voice check, and not future-dated. Confirm the generated report includes
-  installed-app metadata, `voice_loop`, `owner_recorded_live_voice_evidence`,
-  `voice_command_observation`, validation flags, schema identity, and proof
-  boundary, then preserve the `target/release-live-device-qa-report.json`
+  report must bind the installed bundled core path, `jarvis <version>` output,
+  and SHA-256 digest. The report generation timestamp must be UTC, no earlier
+  than the completed voice check, and not future-dated. Confirm the generated
+  report includes installed-app metadata, `bundled_core`, `voice_loop`,
+  `owner_recorded_live_voice_evidence`, `voice_command_observation`,
+  validation flags, schema identity, and proof boundary, then preserve the
+  `target/release-live-device-qa-report.json`
   artifact, or the `JARVIS_QA_REPORT_PATH` override, with the release notes.
   Then rerun `jarvis release evidence-status` and
   `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external jarvis release readiness`

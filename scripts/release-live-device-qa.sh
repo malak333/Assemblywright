@@ -18,6 +18,9 @@ APP_SHORT_VERSION=""
 APP_BUILD_VERSION=""
 APP_MICROPHONE_USAGE=""
 APP_SPEECH_USAGE=""
+APP_BUNDLED_CORE_PATH=""
+APP_BUNDLED_CORE_VERSION=""
+APP_BUNDLED_CORE_SHA256=""
 
 usage() {
   cat <<'USAGE'
@@ -219,18 +222,21 @@ require_plist_value() {
 
 validate_installed_app_bundle_metadata() {
   local info_plist="$APP_PATH/Contents/Info.plist"
+  local core_path="$APP_PATH/Contents/Resources/bin/jarvis-cli"
   plutil -lint "$info_plist" >/dev/null
   APP_BUNDLE_ID="$(plist_value "$info_plist" CFBundleIdentifier)"
   APP_SHORT_VERSION="$(plist_value "$info_plist" CFBundleShortVersionString)"
   APP_BUILD_VERSION="$(plist_value "$info_plist" CFBundleVersion)"
   APP_MICROPHONE_USAGE="$(plist_value "$info_plist" NSMicrophoneUsageDescription)"
   APP_SPEECH_USAGE="$(plist_value "$info_plist" NSSpeechRecognitionUsageDescription)"
+  APP_BUNDLED_CORE_PATH="$core_path"
 
   require_plist_value "CFBundleIdentifier" "$APP_BUNDLE_ID"
   require_plist_value "CFBundleShortVersionString" "$APP_SHORT_VERSION"
   require_plist_value "CFBundleVersion" "$APP_BUILD_VERSION"
   require_plist_value "NSMicrophoneUsageDescription" "$APP_MICROPHONE_USAGE"
   require_plist_value "NSSpeechRecognitionUsageDescription" "$APP_SPEECH_USAGE"
+  [[ -x "$core_path" ]] || fail "installed app bundled core is missing or not executable: $core_path"
 
   [[ "$APP_BUNDLE_ID" == "$EXPECTED_BUNDLE_ID" ]] ||
     fail "installed app bundle id mismatch: expected $EXPECTED_BUNDLE_ID, got $APP_BUNDLE_ID"
@@ -238,6 +244,11 @@ validate_installed_app_bundle_metadata() {
     fail "installed app short version mismatch: expected $EXPECTED_VERSION, got $APP_SHORT_VERSION"
   [[ "$APP_BUILD_VERSION" == "$EXPECTED_VERSION" ]] ||
     fail "installed app build version mismatch: expected $EXPECTED_VERSION, got $APP_BUILD_VERSION"
+  APP_BUNDLED_CORE_VERSION="$("$core_path" --version 2>&1)"
+  [[ "$APP_BUNDLED_CORE_VERSION" == *"jarvis $EXPECTED_VERSION"* ]] ||
+    fail "installed app bundled core version mismatch: expected jarvis $EXPECTED_VERSION, got $APP_BUNDLED_CORE_VERSION"
+  require_command shasum
+  APP_BUNDLED_CORE_SHA256="$(shasum -a 256 "$core_path" | awk '{print $1}')"
 }
 
 json_escape() {
@@ -252,6 +263,9 @@ write_report() {
   local escaped_build_version
   local escaped_microphone_usage
   local escaped_speech_usage
+  local escaped_bundled_core_path
+  local escaped_bundled_core_version
+  local escaped_bundled_core_sha256
   local escaped_owner_name
   local escaped_device_label
   local escaped_profile_label
@@ -285,6 +299,9 @@ write_report() {
   escaped_build_version="$(json_escape "$APP_BUILD_VERSION")"
   escaped_microphone_usage="$(json_escape "$APP_MICROPHONE_USAGE")"
   escaped_speech_usage="$(json_escape "$APP_SPEECH_USAGE")"
+  escaped_bundled_core_path="$(json_escape "$APP_BUNDLED_CORE_PATH")"
+  escaped_bundled_core_version="$(json_escape "$APP_BUNDLED_CORE_VERSION")"
+  escaped_bundled_core_sha256="$(json_escape "$APP_BUNDLED_CORE_SHA256")"
   escaped_owner_name="$(json_escape "$JARVIS_QA_OWNER_NAME")"
   escaped_device_label="$(json_escape "$JARVIS_QA_DEVICE_LABEL")"
   escaped_profile_label="$(json_escape "$JARVIS_QA_PROFILE_LABEL")"
@@ -316,6 +333,11 @@ write_report() {
     "build_version": "$escaped_build_version",
     "microphone_usage_description": "$escaped_microphone_usage",
     "speech_recognition_usage_description": "$escaped_speech_usage"
+  },
+  "bundled_core": {
+    "executable_path": "$escaped_bundled_core_path",
+    "version": "$escaped_bundled_core_version",
+    "sha256": "$escaped_bundled_core_sha256"
   },
   "validation_flags": {
     "clean_profile": true,
@@ -496,7 +518,8 @@ if [[ "$SELF_TEST" == true ]]; then
 </dict>
 </plist>
 PLIST
-  touch "$fixture_app/Contents/MacOS/JarvisMacApp" "$fixture_app/Contents/Resources/bin/jarvis-cli"
+  touch "$fixture_app/Contents/MacOS/JarvisMacApp"
+  printf '#!/usr/bin/env sh\nprintf "jarvis %s\\n"\n' "$EXPECTED_VERSION" >"$fixture_app/Contents/Resources/bin/jarvis-cli"
   chmod 755 "$fixture_app/Contents/MacOS/JarvisMacApp" "$fixture_app/Contents/Resources/bin/jarvis-cli"
 
   "$0" --write-template "$fixture_template" >/dev/null
@@ -546,6 +569,10 @@ PLIST
   require_file_contains "live QA self-test report" "$fixture_report" '"self_test_fixture": true'
   require_file_contains "live QA self-test report" "$fixture_report" '"bundle_identifier": "com.nobiletechnology.jarvis.selftest"'
   require_file_contains "live QA self-test report" "$fixture_report" '"microphone_usage_description"'
+  require_file_contains "live QA self-test report" "$fixture_report" '"bundled_core"'
+  require_file_contains "live QA self-test report" "$fixture_report" '"executable_path"'
+  require_file_contains "live QA self-test report" "$fixture_report" '"version": "jarvis 0.1.4"'
+  require_file_contains "live QA self-test report" "$fixture_report" '"sha256"'
   require_file_contains "live QA self-test report" "$fixture_report" '"transcript_handoff": true'
   require_file_contains "live QA self-test report" "$fixture_report" '"same_command_path": true'
   require_file_contains "live QA self-test report" "$fixture_report" '"owner_recorded_live_voice_evidence"'
