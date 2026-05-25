@@ -4280,6 +4280,48 @@ fn assert_ollama_hallucinated_tool_is_rejected(plugin_id: &str, expected_error: 
         .join()
         .expect("ollama invalid-tool stub thread");
     drop(temp_dir);
+
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let db_path = temp_dir
+        .path()
+        .join("jarvis-provider-invalid-tool-readable-e2e.sqlite");
+    let (ollama_base_url, server_thread) = start_ollama_invalid_tool_server(plugin_id);
+    let mut server = JarvisServer::start_with_env(
+        &db_path,
+        &[
+            ("JARVIS_LOCAL_MODEL_PROVIDER", "ollama"),
+            ("JARVIS_LOCAL_MODEL", "provider-invalid-tool-test"),
+            ("JARVIS_OLLAMA_BASE_URL", ollama_base_url.as_str()),
+        ],
+    );
+    let endpoint = server.endpoint();
+    let readable = run_cli_text([
+        "command",
+        "ask provider to inspect status with a bad tool",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+
+    assert!(readable.contains("Jarvis command: completed"), "{readable}");
+    assert!(readable.contains("Tools:"), "{readable}");
+    assert!(
+        readable.contains("Registered first-party model tools are: fake_echo.approval_echo, fake_echo.echo, fake_status.status"),
+        "{readable}"
+    );
+    assert!(
+        readable.contains("Latest audit: task_completed - command completed"),
+        "{readable}"
+    );
+    assert!(
+        readable.contains("Raw JSON: rerun with --json"),
+        "{readable}"
+    );
+
+    server.stop();
+    server_thread
+        .join()
+        .expect("ollama invalid-tool readable stub thread");
+    drop(temp_dir);
 }
 
 #[test]
