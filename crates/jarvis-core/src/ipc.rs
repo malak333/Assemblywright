@@ -5141,6 +5141,7 @@ fn release_verification_commands() -> Vec<String> {
         "./scripts/release-operator-qa-smoke.sh".to_string(),
         "./scripts/packaged-app-release-smoke.sh".to_string(),
         "./scripts/package-distribution.sh --unsigned-launch-check".to_string(),
+        "cargo run -p jarvis-cli -- release signed-distribution-runbook".to_string(),
         "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh".to_string(),
         "cargo run -p jarvis-cli -- release live-device-runbook".to_string(),
         "./scripts/release-live-device-qa.sh --check".to_string(),

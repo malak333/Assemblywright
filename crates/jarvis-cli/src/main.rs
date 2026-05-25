@@ -187,6 +187,18 @@ enum ReleaseCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Print the signed distribution runbook and current evidence status.
+    #[command(
+        long_about = "Print the signed distribution runbook and current evidence status.\n\nThis is a read-only operator guide for clearing the Developer ID signing, notarization, stapling, and signed-provenance evidence gates. It combines conservative release readiness with local evidence-status inspection and does not perform signing, notarization, stapling, Gatekeeper assessment, installation, Finder launch, live-device QA, or plugin-trust QA."
+    )]
+    SignedDistributionRunbook {
+        /// HTTP IPC endpoint. Falls back to local read-only readiness and evidence inspection when unavailable.
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+        /// Print a structured JSON runbook summary.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -637,6 +649,21 @@ async fn main() -> anyhow::Result<()> {
                     println!(
                         "{}",
                         format_release_live_device_runbook(&readiness, &evidence_status)?
+                    );
+                }
+            }
+            ReleaseCommand::SignedDistributionRunbook { endpoint, json } => {
+                let readiness = release_readiness(&endpoint)?;
+                let evidence_status = release_evidence_status(&endpoint)?;
+                if json || cli_json_requested() {
+                    println!(
+                        "{}",
+                        release_signed_distribution_runbook_json(&readiness, &evidence_status)?
+                    );
+                } else {
+                    println!(
+                        "{}",
+                        format_release_signed_distribution_runbook(&readiness, &evidence_status)?
                     );
                 }
             }
@@ -1866,6 +1893,124 @@ fn format_release_live_device_runbook(
         "Raw JSON: rerun with --json for a structured runbook summary.".to_string(),
     ]
     .join("\n"))
+}
+
+fn release_signed_distribution_runbook_json(
+    readiness_response: &str,
+    evidence_status_response: &str,
+) -> anyhow::Result<String> {
+    let readiness: serde_json::Value = serde_json::from_str(readiness_response)?;
+    let evidence_status: serde_json::Value = serde_json::from_str(evidence_status_response)?;
+    let distribution_keys = [
+        "signed_app_bundle",
+        "app_executable",
+        "bundled_core_executable",
+        "signed_app_zip",
+        "signed_installer_package",
+        "signed_distribution_provenance_report",
+    ];
+    let distribution_evidence = evidence_status
+        .get("items")
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter(|item| {
+                    item.get("key")
+                        .and_then(serde_json::Value::as_str)
+                        .map(|key| distribution_keys.contains(&key))
+                        .unwrap_or(false)
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let payload = serde_json::json!({
+        "generated_from": "release readiness plus evidence-status",
+        "production_ready": readiness.get("production_ready").cloned().unwrap_or(serde_json::Value::Bool(false)),
+        "distribution_evidence": distribution_evidence,
+        "commands": [
+            "./scripts/package-distribution.sh --unsigned-launch-check",
+            "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh",
+            "cargo run -p jarvis-cli -- release evidence-status",
+            "./scripts/release-evidence-doctor.sh --check",
+            "cargo run -p jarvis-cli -- release live-device-runbook"
+        ],
+        "manual_checks": [
+            "Configure Developer ID Application and Installer identities plus the notarytool profile on the release Mac.",
+            "Run the full package-distribution lane and preserve the signed zip, signed installer package, and signed provenance report.",
+            "Confirm the signed app zip and installer package are notarized and stapled before clean-profile installation.",
+            "Rerun evidence-status and evidence-doctor so missing or invalid signed artifact paths are visible before final bundling.",
+            "Continue with live-device QA, plugin-trust QA, final evidence bundle generation, and external evidence-mode readiness."
+        ],
+        "proof_boundary": "Runbook and local evidence inspection only; this command does not perform signing, notarization, stapling, Gatekeeper assessment, installation, live-device QA, or plugin-trust QA."
+    });
+    Ok(serde_json::to_string_pretty(&payload)?)
+}
+
+fn format_release_signed_distribution_runbook(
+    readiness_response: &str,
+    evidence_status_response: &str,
+) -> anyhow::Result<String> {
+    let readiness: serde_json::Value = serde_json::from_str(readiness_response)?;
+    let evidence_status: serde_json::Value = serde_json::from_str(evidence_status_response)?;
+    let distribution_keys = [
+        "signed_app_bundle",
+        "app_executable",
+        "bundled_core_executable",
+        "signed_app_zip",
+        "signed_installer_package",
+        "signed_distribution_provenance_report",
+    ];
+    let mut lines = vec![
+        "Jarvis signed distribution runbook:".to_string(),
+        format!(
+            "Production ready: {}",
+            readiness
+                .get("production_ready")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+        ),
+        "Signed distribution evidence:".to_string(),
+    ];
+    let items = evidence_status
+        .get("items")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for key in distribution_keys {
+        let item = items.iter().find(|item| {
+            item.get("key")
+                .and_then(serde_json::Value::as_str)
+                .map(|candidate| candidate == key)
+                .unwrap_or(false)
+        });
+        let status = item
+            .and_then(|item| item.get("status"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown");
+        let detail = item
+            .and_then(|item| item.get("detail"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("No evidence detail was available.");
+        lines.push(format!("- {key}: {status} ({detail})"));
+    }
+    lines.extend([
+        "Run on the release machine:".to_string(),
+        "- ./scripts/package-distribution.sh --unsigned-launch-check".to_string(),
+        "- JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh".to_string(),
+        "- cargo run -p jarvis-cli -- release evidence-status".to_string(),
+        "- ./scripts/release-evidence-doctor.sh --check".to_string(),
+        "- cargo run -p jarvis-cli -- release live-device-runbook".to_string(),
+        "Manual checks:".to_string(),
+        "- Configure Developer ID Application and Installer identities plus the notarytool profile on the release Mac.".to_string(),
+        "- Preserve the signed zip, signed installer package, and signed provenance report generated by package-distribution.sh.".to_string(),
+        "- Confirm notarization and stapling for both app and installer before clean-profile installation.".to_string(),
+        "- Continue with live-device QA, plugin-trust QA, final evidence bundle generation, and external evidence-mode readiness.".to_string(),
+        "Boundary: runbook and local evidence inspection only; no signing, notarization, stapling, Gatekeeper assessment, installation, live-device QA, or plugin-trust QA was performed.".to_string(),
+        "Raw JSON: rerun with --json for a structured runbook summary.".to_string(),
+    ]);
+    Ok(lines.join("\n"))
 }
 
 fn is_transport_unavailable(error: &anyhow::Error) -> bool {

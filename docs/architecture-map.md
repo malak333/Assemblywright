@@ -30,6 +30,7 @@ flowchart TB
     LocalGate --> OperatorQASmoke["release-operator-qa-smoke.sh"]
     LocalGate --> PackageVersionSelfTest["package-distribution.sh version-consistency-self-test"]
     LocalGate --> UnsignedLaunch["package-distribution.sh unsigned-launch-check"]
+    LocalGate --> SignedDistributionRunbook["jarvis release signed-distribution-runbook read-only signed artifact triage"]
     LocalGate --> LiveDeviceQA["release-live-device-qa.sh check/self-test preflight"]
     LocalGate --> PluginTrustQA["release-plugin-trust-qa.sh check/self-test preflight"]
     LocalGate --> EvidenceBundlePreflight["release-evidence-bundle.sh check/self-test/template preflight"]
@@ -48,6 +49,7 @@ flowchart TB
         PluginTrustAssert["release-plugin-trust-qa.sh assert-complete"] --> PluginTrustQAReport["target/release-plugin-trust-qa-report.json owner-recorded plugin trust evidence"]
         SignedArtifacts["Developer ID signed, notarized, and stapled zip/pkg"] --> EvidenceBundleRun["release-evidence-bundle.sh bundle"]
         SignedArtifacts --> SignedProvenance["package-distribution.sh signed provenance report"]
+        SignedDistributionRunbook -. guides .-> SignedArtifacts
         SignedProvenance --> EvidenceBundleRun
         EvidenceBundleEnv --> EvidenceBundleRun
         LiveDeviceQAReport --> EvidenceBundleRun
