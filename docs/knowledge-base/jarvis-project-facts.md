@@ -71,9 +71,12 @@ These notes capture durable facts for future agents working on this repository.
   stderr JSON frames with `jarvis_progress: true`, `stage`, and `message`.
   Jarvis records parsed sequence/stage/message events in the run response and
   append-only audit entries, then emits redacted `activity_progress` SSE frames
-  from recent audit evidence while redacting raw stderr. This is bounded,
-  audit-backed plugin progress evidence, not per-token or unbounded real-time
-  plugin UI streaming.
+  from recent audit evidence while redacting raw stderr. Installed-plugin run,
+  audit, and activity-summary evidence also use the redacted provenance view:
+  local source paths, manifest paths, subprocess command paths, and provenance
+  hashes stay out of those operator surfaces. This is bounded, audit-backed
+  plugin progress evidence, not per-token or unbounded real-time plugin UI
+  streaming.
 - Installed subprocess audit evidence distinguishes process execution from OS
   sandbox enforcement. A completed local subprocess can report
   `subprocess_started: true`, but the current runner reports
@@ -830,8 +833,9 @@ These notes capture durable facts for future agents working on this repository.
   variables, and emit audit evidence including whether the subprocess started.
   These grants are action-scoped; a network grant does not execute plain
   non-network actions in mixed manifests.
-  Subprocess stderr may contain bounded progress frames, but raw stderr remains
-  redacted from response and audit payloads. Any broader executable path or
+  Subprocess stderr may contain bounded progress frames, but raw stderr plus
+  local plugin paths and provenance hashes remain redacted from response and
+  audit payloads. Any broader executable path or
   real-time plugin progress
   stream needs a stronger OS-level process/network sandbox or equivalent host isolation boundary,
   explicit grant state beyond `metadata_only`, policy checks,
