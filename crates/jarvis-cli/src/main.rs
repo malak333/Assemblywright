@@ -175,6 +175,18 @@ enum ReleaseCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Print the live-device QA runbook and current evidence status.
+    #[command(
+        long_about = "Print the live-device QA runbook and current evidence status.\n\nThis is a read-only operator guide for clearing the live_voice_loop manual validation gate. It combines conservative release readiness with local evidence-status inspection and does not perform live microphone, Speech permission, transcript handoff, audio-output, notification, Finder launch, signing, notarization, or installation validation."
+    )]
+    LiveDeviceRunbook {
+        /// HTTP IPC endpoint. Falls back to local read-only readiness and evidence inspection when unavailable.
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+        /// Print a structured JSON runbook summary.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -611,6 +623,21 @@ async fn main() -> anyhow::Result<()> {
                     println!("{response}");
                 } else {
                     println!("{}", format_release_evidence_status(&response)?);
+                }
+            }
+            ReleaseCommand::LiveDeviceRunbook { endpoint, json } => {
+                let readiness = release_readiness(&endpoint)?;
+                let evidence_status = release_evidence_status(&endpoint)?;
+                if json || cli_json_requested() {
+                    println!(
+                        "{}",
+                        release_live_device_runbook_json(&readiness, &evidence_status)?
+                    );
+                } else {
+                    println!(
+                        "{}",
+                        format_release_live_device_runbook(&readiness, &evidence_status)?
+                    );
                 }
             }
         },
@@ -1731,6 +1758,114 @@ fn format_release_evidence_status(response: &str) -> anyhow::Result<String> {
 
     lines.push("Raw JSON: rerun with --json for exact evidence inventory.".to_string());
     Ok(lines.join("\n"))
+}
+
+fn release_live_device_runbook_json(
+    readiness_response: &str,
+    evidence_status_response: &str,
+) -> anyhow::Result<String> {
+    let readiness: serde_json::Value = serde_json::from_str(readiness_response)?;
+    let evidence_status: serde_json::Value = serde_json::from_str(evidence_status_response)?;
+    let live_voice_feature = readiness
+        .get("pending_features")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|features| {
+            features.iter().find(|feature| {
+                feature.get("key").and_then(serde_json::Value::as_str) == Some("live_voice_loop")
+            })
+        })
+        .cloned();
+    let live_device_evidence = evidence_status
+        .get("items")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|items| {
+            items.iter().find(|item| {
+                item.get("key").and_then(serde_json::Value::as_str) == Some("live_device_qa_report")
+            })
+        })
+        .cloned();
+    let payload = serde_json::json!({
+        "generated_from": "release readiness plus evidence-status",
+        "production_ready": readiness.get("production_ready").cloned().unwrap_or(serde_json::Value::Bool(false)),
+        "live_voice_feature": live_voice_feature,
+        "live_device_evidence": live_device_evidence,
+        "commands": [
+            "./scripts/release-live-device-qa.sh --check",
+            "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env",
+            "set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete",
+            "cargo run -p jarvis-cli -- release evidence-status",
+            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness"
+        ],
+        "manual_checks": [
+            "Install the signed, notarized package into /Applications on a clean Mac profile.",
+            "Launch Jarvis through Finder or LaunchServices.",
+            "Verify microphone and Speech permission prompts during live voice capture.",
+            "Speak the test phrase and confirm the observed transcript reaches the command path.",
+            "Verify live speech output, notification delivery, restart behavior, and manual release QA.",
+            "Preserve target/release-live-device-qa-report.json for final release evidence bundling."
+        ],
+        "proof_boundary": "Runbook and local evidence inspection only; this command does not perform live-device validation."
+    });
+    Ok(serde_json::to_string_pretty(&payload)?)
+}
+
+fn format_release_live_device_runbook(
+    readiness_response: &str,
+    evidence_status_response: &str,
+) -> anyhow::Result<String> {
+    let value: serde_json::Value = serde_json::from_str(evidence_status_response)?;
+    let readiness: serde_json::Value = serde_json::from_str(readiness_response)?;
+    let live_voice_status = readiness
+        .get("pending_features")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|features| {
+            features.iter().find(|feature| {
+                feature.get("key").and_then(serde_json::Value::as_str) == Some("live_voice_loop")
+            })
+        })
+        .and_then(|feature| feature.get("status"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("cleared_or_not_reported");
+    let live_device_item = value
+        .get("items")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|items| {
+            items.iter().find(|item| {
+                item.get("key").and_then(serde_json::Value::as_str) == Some("live_device_qa_report")
+            })
+        });
+    let evidence_status = live_device_item
+        .and_then(|item| item.get("status"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown");
+    let evidence_detail = live_device_item
+        .and_then(|item| item.get("detail"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("No live-device QA report detail was available.");
+
+    Ok([
+        "Jarvis live-device QA runbook:".to_string(),
+        format!("Production ready: {}", readiness.get("production_ready").and_then(serde_json::Value::as_bool).unwrap_or(false)),
+        format!("live_voice_loop: {live_voice_status}"),
+        format!("live_device_qa_report: {evidence_status}"),
+        format!("Evidence detail: {evidence_detail}"),
+        "Run on the release machine:".to_string(),
+        "- ./scripts/release-live-device-qa.sh --check".to_string(),
+        "- ./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env".to_string(),
+        "- set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete".to_string(),
+        "- cargo run -p jarvis-cli -- release evidence-status".to_string(),
+        "- JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness".to_string(),
+        "Manual checks:".to_string(),
+        "- Install the signed, notarized package into /Applications on a clean Mac profile.".to_string(),
+        "- Launch Jarvis through Finder or LaunchServices.".to_string(),
+        "- Verify microphone and Speech permission prompts during live voice capture.".to_string(),
+        "- Speak the test phrase and confirm the observed transcript reaches the command path.".to_string(),
+        "- Verify live speech output, notification delivery, restart behavior, and manual release QA.".to_string(),
+        "- Preserve target/release-live-device-qa-report.json for final release evidence bundling.".to_string(),
+        "Boundary: runbook and local evidence inspection only; no live-device validation was performed.".to_string(),
+        "Raw JSON: rerun with --json for a structured runbook summary.".to_string(),
+    ]
+    .join("\n"))
 }
 
 fn is_transport_unavailable(error: &anyhow::Error) -> bool {

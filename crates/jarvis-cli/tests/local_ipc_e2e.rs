@@ -1163,6 +1163,62 @@ fn release_help_documents_operator_boundaries() {
     assert!(evidence_help.contains("live-device QA"));
     assert!(evidence_help.contains("marketplace review"));
     assert!(evidence_help.contains("Falls back to local read-only evidence inspection"));
+
+    let live_runbook_help = run_cli_text(["release", "live-device-runbook", "--help"]);
+    assert!(live_runbook_help.contains("live-device QA runbook"));
+    assert!(live_runbook_help.contains("live_voice_loop"));
+    assert!(live_runbook_help.contains("does not perform live microphone"));
+    assert!(live_runbook_help
+        .contains("Falls back to local read-only readiness and evidence inspection"));
+}
+
+#[test]
+fn release_live_device_runbook_summarizes_next_operator_steps() {
+    let endpoint = format!("http://{}", unused_loopback_addr());
+    let readable_runbook = run_cli_text([
+        "release",
+        "live-device-runbook",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    let json_runbook = run_cli_json([
+        "release",
+        "live-device-runbook",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+
+    assert!(readable_runbook.contains("Jarvis live-device QA runbook:"));
+    assert!(readable_runbook.contains("live_voice_loop: pending_manual_validation"));
+    assert!(readable_runbook.contains("live_device_qa_report:"));
+    assert!(readable_runbook.contains("./scripts/release-live-device-qa.sh --check"));
+    assert!(readable_runbook.contains(
+        "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env"
+    ));
+    assert!(readable_runbook.contains(
+        "set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete"
+    ));
+    assert!(readable_runbook.contains("Verify microphone and Speech permission prompts"));
+    assert!(readable_runbook.contains("Boundary: runbook and local evidence inspection only"));
+
+    assert_eq!(json_runbook["production_ready"], false);
+    assert_eq!(json_runbook["live_voice_feature"]["key"], "live_voice_loop");
+    assert_eq!(
+        json_runbook["live_voice_feature"]["status"],
+        "pending_manual_validation"
+    );
+    assert_eq!(
+        json_runbook["live_device_evidence"]["key"],
+        "live_device_qa_report"
+    );
+    assert_string_array_contains(
+        &json_runbook["commands"],
+        "./scripts/release-live-device-qa.sh --check",
+    );
+    assert!(json_runbook["proof_boundary"]
+        .as_str()
+        .expect("proof boundary")
+        .contains("does not perform live-device validation"));
 }
 
 #[test]

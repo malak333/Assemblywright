@@ -36,6 +36,7 @@ cargo run -p jarvis-cli -- smoke
 cargo package --workspace --allow-dirty
 ./scripts/package-distribution.sh --version-consistency-self-test
 ./scripts/package-distribution.sh --unsigned-launch-check
+cargo run -p jarvis-cli -- release live-device-runbook
 ./scripts/release-live-device-qa.sh --check
 ./scripts/release-live-device-qa.sh --self-test
 ./scripts/release-plugin-trust-qa.sh --check
