@@ -78,7 +78,10 @@ policy:
   network-declaring actions. The network grant must not execute non-network
   actions. Enabled subprocesses must not inherit the app/core process
   environment; only the documented plugin metadata environment allowlist is
-  exposed.
+  exposed. Subprocess audit evidence must not claim OS sandboxing or
+  host-level egress enforcement until those controls are actually enforced;
+  current subprocess audit payloads report `os_sandbox_enforced: false` and
+  keep OS sandbox/egress proof in the manual plugin-trust QA lane.
 
 ## Regression Tests
 
@@ -95,6 +98,9 @@ Safety regressions should fail release verification:
   is anything other than `matches_install_snapshot`.
 - Installed subprocess plugin execution that inherits unrelated app/core
   environment variables or secrets.
+- Installed subprocess plugin audit evidence that reports an OS sandbox as
+  enforced when the runner only validated manifest/provenance/grants and
+  cleared the inherited environment.
 - Local plugin manifests installing with invalid schema, blocked risk tier,
   missing proactive/memory/model permissions, unsafe source paths, or
   `first_party` source claims.

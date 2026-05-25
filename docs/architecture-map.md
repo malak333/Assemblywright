@@ -151,8 +151,10 @@ flowchart TB
         NetworkDeclarations --> PluginPolicy
         InstalledRunner --> SubprocessRunner["local_subprocess direct Command JSON stdin/stdout runner"]
         SubprocessRunner --> SafePath["canonical command under source_path, no shell interpolation"]
+        SubprocessRunner --> SandboxBoundary["audit truth: subprocess_started can be true; os_sandbox_enforced remains false until real OS sandbox or egress policy exists"]
         SubprocessRunner --> ProgressFrames["bounded stderr JSON progress frames"]
         SubprocessRunner --> InstalledAudit["blocked, dry-run, completed, or failed audit evidence"]
+        SandboxBoundary --> InstalledAudit
         ProgressFrames --> InstalledAudit
 
         SchedulerApi --> Scheduler["Scheduler"]

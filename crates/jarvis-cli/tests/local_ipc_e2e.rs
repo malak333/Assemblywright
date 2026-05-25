@@ -2372,7 +2372,17 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     );
     assert_eq!(
         subprocess_run["audit_entry"]["payload"]["sandbox_process_started"],
-        true
+        false
+    );
+    assert_eq!(
+        subprocess_run["audit_entry"]["payload"]["os_sandbox_enforced"],
+        false
+    );
+    assert!(
+        subprocess_run["audit_entry"]["payload"]["os_sandbox_boundary"]
+            .as_str()
+            .expect("sandbox boundary")
+            .contains("does not enforce an OS sandbox")
     );
     assert_eq!(
         subprocess_run["audit_entry"]["payload"]["subprocess_started"],
@@ -2479,7 +2489,11 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     );
     assert_eq!(
         noisy_stdout_run["audit_entry"]["payload"]["sandbox_process_started"],
-        true
+        false
+    );
+    assert_eq!(
+        noisy_stdout_run["audit_entry"]["payload"]["os_sandbox_enforced"],
+        false
     );
     assert_eq!(
         noisy_stdout_run["audit_entry"]["payload"]["subprocess_started"],
@@ -2551,7 +2565,11 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     );
     assert_eq!(
         noisy_stderr_run["audit_entry"]["payload"]["sandbox_process_started"],
-        true
+        false
+    );
+    assert_eq!(
+        noisy_stderr_run["audit_entry"]["payload"]["os_sandbox_enforced"],
+        false
     );
     assert_eq!(
         noisy_stderr_run["audit_entry"]["payload"]["subprocess_started"],

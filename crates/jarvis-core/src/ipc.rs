@@ -2055,7 +2055,9 @@ impl IpcState {
                     "input_provided": !request.input.is_null(),
                     "side_effect_executed": side_effect_executed,
                     "subprocess_started": side_effect_executed,
-                    "sandbox_process_started": side_effect_executed,
+                    "sandbox_process_started": false,
+                    "os_sandbox_enforced": false,
+                    "os_sandbox_boundary": "installed subprocess execution clears app/core environment and validates manifest/provenance/grants, but does not enforce an OS sandbox or host-level egress policy",
                     "stdout_bytes": stdout_bytes,
                     "stderr_bytes": stderr_bytes,
                     "exit_code": exit_code,
@@ -7237,8 +7239,13 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         );
         assert_eq!(
             response.audit_entry.payload["sandbox_process_started"],
-            true
+            false
         );
+        assert_eq!(response.audit_entry.payload["os_sandbox_enforced"], false);
+        assert!(response.audit_entry.payload["os_sandbox_boundary"]
+            .as_str()
+            .expect("sandbox boundary")
+            .contains("does not enforce an OS sandbox"));
         assert_eq!(response.audit_entry.payload["subprocess_started"], true);
         assert_eq!(response.audit_entry.payload["side_effect_executed"], true);
 
