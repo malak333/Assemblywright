@@ -626,13 +626,7 @@ async fn main() -> anyhow::Result<()> {
             jarvis_core::serve(bind.parse()?, state).await?;
         }
         CliCommand::Health { endpoint } => {
-            let response = request(&endpoint, "GET", "/health", None).map_err(|error| {
-                if is_transport_unavailable(&error) {
-                    health_unavailable_error(&endpoint, &error)
-                } else {
-                    error
-                }
-            })?;
+            let response = server_required_request(&endpoint, "GET", "/health", None)?;
             println!("{}", format_health(&response)?);
         }
         CliCommand::Contract { endpoint } => {
@@ -818,7 +812,7 @@ async fn main() -> anyhow::Result<()> {
             DiagnosticsCommand::Export { endpoint } => {
                 println!(
                     "{}",
-                    request(&endpoint, "GET", "/diagnostics/export", None)?
+                    server_required_request(&endpoint, "GET", "/diagnostics/export", None)?
                 );
             }
         },
@@ -1020,12 +1014,20 @@ async fn main() -> anyhow::Result<()> {
                 );
             }
             PluginsCommand::Installed { endpoint } => {
-                println!("{}", request(&endpoint, "GET", "/plugins/installed", None)?);
+                println!(
+                    "{}",
+                    server_required_request(&endpoint, "GET", "/plugins/installed", None)?
+                );
             }
             PluginsCommand::InstalledGet { id, endpoint } => {
                 println!(
                     "{}",
-                    request(&endpoint, "GET", &format!("/plugins/installed/{id}"), None)?
+                    server_required_request(
+                        &endpoint,
+                        "GET",
+                        &format!("/plugins/installed/{id}"),
+                        None
+                    )?
                 );
             }
             PluginsCommand::EnableInstalled {
@@ -1211,13 +1213,13 @@ async fn main() -> anyhow::Result<()> {
             PermissionsCommand::Grants { endpoint } => {
                 println!(
                     "{}",
-                    request(&endpoint, "GET", "/permissions/grants", None)?
+                    server_required_request(&endpoint, "GET", "/permissions/grants", None)?
                 );
             }
             PermissionsCommand::Review { endpoint } => {
                 println!(
                     "{}",
-                    request(&endpoint, "GET", "/permissions/policy-review", None)?
+                    server_required_request(&endpoint, "GET", "/permissions/policy-review", None)?
                 );
             }
         },
@@ -1255,6 +1257,21 @@ fn request(endpoint: &str, method: &str, path: &str, body: Option<&str>) -> anyh
     }
 
     Ok(response_body.to_string())
+}
+
+fn server_required_request(
+    endpoint: &str,
+    method: &str,
+    path: &str,
+    body: Option<&str>,
+) -> anyhow::Result<String> {
+    request(endpoint, method, path, body).map_err(|error| {
+        if is_transport_unavailable(&error) {
+            server_required_unavailable_error(endpoint, &error)
+        } else {
+            error
+        }
+    })
 }
 
 fn release_readiness(endpoint: &str) -> anyhow::Result<String> {
@@ -2485,9 +2502,9 @@ fn format_health(response_body: &str) -> anyhow::Result<String> {
     ))
 }
 
-fn health_unavailable_error(endpoint: &str, source: &anyhow::Error) -> anyhow::Error {
+fn server_required_unavailable_error(endpoint: &str, source: &anyhow::Error) -> anyhow::Error {
     anyhow::anyhow!(
-        "jarvis-core is unavailable at {endpoint}. Start the IPC server with `cargo run -p jarvis-cli -- serve`, or run `cargo run -p jarvis-cli -- smoke` for an offline ephemeral health smoke. Read-only inspection commands such as `jarvis release readiness`, `jarvis plugins list`, and `jarvis tools list` can still fall back to local metadata when the server is not running. Detail: {source}"
+        "jarvis-core is unavailable at {endpoint}. Start the IPC server with `cargo run -p jarvis-cli -- serve`, or run `cargo run -p jarvis-cli -- smoke` for an offline ephemeral health smoke. This command requires a running repository-backed core. Read-only inspection commands such as `jarvis release readiness`, `jarvis plugins list`, and `jarvis tools list` can still fall back to local metadata when the server is not running. Detail: {source}"
     )
 }
 
