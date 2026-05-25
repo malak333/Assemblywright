@@ -5218,8 +5218,8 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "installed_plugin_execution",
             "implemented",
-            "Local subprocess plugins require full source-tree provenance verification plus explicit subprocess_stdio or subprocess_stdio_network grants, run with inherited environment cleared, enforce stdout/stderr byte limits, and are covered by Rust unit and CLI IPC E2E tests.",
-            "Constrained local subprocess execution only; not a WASM, OS-level, or marketplace sandbox.",
+            "Local subprocess plugins require full source-tree provenance verification plus explicit subprocess_stdio or subprocess_stdio_network grants, run with inherited environment cleared, enforce stdout/stderr byte limits, and emit audit evidence that separates subprocess start from os_sandbox_enforced:false; covered by Rust unit and CLI IPC E2E tests.",
+            "Constrained local subprocess execution only; audit evidence reports os_sandbox_enforced:false, so this is not a WASM, OS-level, host-egress, or marketplace sandbox.",
         ),
         feature(
             "plugin_publisher_signature",
@@ -5628,7 +5628,9 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert!(readiness
             .implemented_features
             .iter()
-            .any(|feature| feature.key == "installed_plugin_execution"));
+            .any(|feature| feature.key == "installed_plugin_execution"
+                && feature.proof.contains("os_sandbox_enforced:false")
+                && feature.boundary.contains("os_sandbox_enforced:false")));
         assert!(readiness
             .implemented_features
             .iter()

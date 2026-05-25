@@ -2788,8 +2788,8 @@ private func releaseReadinessJSON() -> Data {
             {
               "key": "installed_plugin_execution",
               "status": "implemented",
-              "proof": "Local subprocess plugins require full source-tree provenance verification plus explicit grants.",
-              "boundary": "Constrained local subprocess execution only; not a WASM, OS-level, or marketplace sandbox."
+              "proof": "Local subprocess plugins require full source-tree provenance verification plus explicit grants and emit audit evidence that reports os_sandbox_enforced:false.",
+              "boundary": "Constrained local subprocess execution only; audit evidence reports os_sandbox_enforced:false, so this is not a WASM, OS-level, host-egress, or marketplace sandbox."
             },
             {
               "key": "operator_release_qa_smoke",

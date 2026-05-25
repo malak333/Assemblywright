@@ -37,6 +37,26 @@ fn release_readiness_cli_falls_back_without_running_server() {
         "key",
         "installed_plugin_execution",
     );
+    let installed_plugin_feature = release_readiness["implemented_features"]
+        .as_array()
+        .expect("implemented features")
+        .iter()
+        .find(|feature| feature["key"] == "installed_plugin_execution")
+        .expect("installed plugin execution feature");
+    assert!(
+        installed_plugin_feature["proof"]
+            .as_str()
+            .expect("installed plugin proof")
+            .contains("os_sandbox_enforced:false"),
+        "{installed_plugin_feature}"
+    );
+    assert!(
+        installed_plugin_feature["boundary"]
+            .as_str()
+            .expect("installed plugin boundary")
+            .contains("os_sandbox_enforced:false"),
+        "{installed_plugin_feature}"
+    );
     assert_array_contains(
         &release_readiness["implemented_features"],
         "key",
@@ -1501,6 +1521,19 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         &release_readiness["implemented_features"],
         "key",
         "installed_plugin_execution",
+    );
+    let served_installed_plugin_feature = release_readiness["implemented_features"]
+        .as_array()
+        .expect("implemented features")
+        .iter()
+        .find(|feature| feature["key"] == "installed_plugin_execution")
+        .expect("installed plugin execution feature");
+    assert!(
+        served_installed_plugin_feature["boundary"]
+            .as_str()
+            .expect("installed plugin boundary")
+            .contains("os_sandbox_enforced:false"),
+        "{served_installed_plugin_feature}"
     );
     assert_array_contains(
         &release_readiness["implemented_features"],
