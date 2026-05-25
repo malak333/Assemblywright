@@ -214,6 +214,35 @@ fn server_required_cli_inspection_reports_unavailable_with_operator_guidance() {
     }
 }
 
+#[test]
+fn strict_ipc_cli_commands_report_unavailable_with_operator_guidance() {
+    let endpoint = format!("http://{}", unused_loopback_addr());
+    let commands: Vec<Vec<&str>> = vec![
+        vec!["command", "status check", "--endpoint", endpoint.as_str()],
+        vec!["pause-status", "--endpoint", endpoint.as_str()],
+        vec![
+            "pause",
+            "--reason",
+            "manual test",
+            "--endpoint",
+            endpoint.as_str(),
+        ],
+        vec!["resume", "--endpoint", endpoint.as_str()],
+        vec!["scheduler", "list", "--endpoint", endpoint.as_str()],
+        vec!["scheduler", "attention", "--endpoint", endpoint.as_str()],
+        vec!["tasks", "list", "--endpoint", endpoint.as_str()],
+        vec!["activity", "summary", "--endpoint", endpoint.as_str()],
+        vec!["routes", "list", "--endpoint", endpoint.as_str()],
+        vec!["memory", "classification", "--endpoint", endpoint.as_str()],
+        vec!["approvals", "list", "--endpoint", endpoint.as_str()],
+    ];
+
+    for args in commands {
+        let output = run_cli_failure_args(&args);
+        assert_server_required_guidance(&output);
+    }
+}
+
 fn assert_server_required_guidance(output: &str) {
     assert!(output.contains("jarvis-core is unavailable"), "{output}");
     assert!(
@@ -4888,6 +4917,10 @@ fn run_cli_json_with_env<const N: usize>(args: [&str; N], env: &[(&str, &str)]) 
 }
 
 fn run_cli_failure<const N: usize>(args: [&str; N]) -> String {
+    run_cli_failure_args(&args)
+}
+
+fn run_cli_failure_args(args: &[&str]) -> String {
     let output = Command::new(BIN)
         .args(args)
         .stdin(Stdio::null())

@@ -57,13 +57,13 @@ Focused workflow-shape check:
 
 ## Current Health Check
 
-`jarvis health` is a strict IPC liveness check. Server-required inspection
-commands such as `jarvis diagnostics export`, `jarvis plugins installed`,
-`jarvis permissions grants`, and `jarvis permissions review` also require a
-reachable repository-backed core. If the endpoint is down, these commands exit
-non-zero with operator guidance to start `jarvis serve`, run the offline
-ephemeral `jarvis smoke` check, or use read-only fallback inspection commands
-such as `jarvis release readiness`, `jarvis plugins list`, and
+`jarvis health` is a strict IPC liveness check. Strict IPC commands such as
+`jarvis command`, pause/resume, scheduler, task/audit/activity/route, memory,
+approval, diagnostics, installed-plugin, and permission-center operations also
+require a reachable repository-backed core. If the endpoint is down, these
+commands exit non-zero with operator guidance to start `jarvis serve`, run the
+offline ephemeral `jarvis smoke` check, or use read-only fallback inspection
+commands such as `jarvis release readiness`, `jarvis plugins list`, and
 `jarvis tools list`, instead of returning a raw connection-refused error.
 
 `jarvis smoke` starts an ephemeral loopback server and verifies the currently

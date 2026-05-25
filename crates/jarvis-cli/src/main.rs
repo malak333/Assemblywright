@@ -717,7 +717,7 @@ async fn main() -> anyhow::Result<()> {
                 proactive: false,
                 sensitivity: sensitivity.as_deref().map(parse_sensitivity).transpose()?,
             })?;
-            let response = request(&endpoint, "POST", "/commands", Some(&body))?;
+            let response = server_required_request(&endpoint, "POST", "/commands", Some(&body))?;
             if json || cli_json_requested() {
                 println!("{response}");
             } else {
@@ -728,32 +728,43 @@ async fn main() -> anyhow::Result<()> {
             let body = serde_json::to_string(&EmergencyPauseRequest { reason })?;
             println!(
                 "{}",
-                request(&endpoint, "POST", "/emergency-pause", Some(&body))?
+                server_required_request(&endpoint, "POST", "/emergency-pause", Some(&body))?
             );
         }
         CliCommand::Resume { endpoint } => {
             println!(
                 "{}",
-                request(&endpoint, "DELETE", "/emergency-pause", None)?
+                server_required_request(&endpoint, "DELETE", "/emergency-pause", None)?
             );
         }
         CliCommand::PauseStatus { endpoint } => {
-            println!("{}", request(&endpoint, "GET", "/emergency-pause", None)?);
+            println!(
+                "{}",
+                server_required_request(&endpoint, "GET", "/emergency-pause", None)?
+            );
         }
         CliCommand::Scheduler { command } => match command {
             SchedulerCommand::List { endpoint } => {
-                println!("{}", request(&endpoint, "GET", "/scheduler/jobs", None)?);
+                println!(
+                    "{}",
+                    server_required_request(&endpoint, "GET", "/scheduler/jobs", None)?
+                );
             }
             SchedulerCommand::Attention { endpoint } => {
                 println!(
                     "{}",
-                    request(&endpoint, "GET", "/scheduler/attention", None)?
+                    server_required_request(&endpoint, "GET", "/scheduler/attention", None)?
                 );
             }
             SchedulerCommand::Get { id, endpoint } => {
                 println!(
                     "{}",
-                    request(&endpoint, "GET", &format!("/scheduler/jobs/{id}"), None)?
+                    server_required_request(
+                        &endpoint,
+                        "GET",
+                        &format!("/scheduler/jobs/{id}"),
+                        None
+                    )?
                 );
             }
             SchedulerCommand::Schedule {
@@ -770,13 +781,13 @@ async fn main() -> anyhow::Result<()> {
                 })?;
                 println!(
                     "{}",
-                    request(&endpoint, "POST", "/scheduler/jobs", Some(&body))?
+                    server_required_request(&endpoint, "POST", "/scheduler/jobs", Some(&body))?
                 );
             }
             SchedulerCommand::RunDue { limit, endpoint } => {
                 println!(
                     "{}",
-                    request(
+                    server_required_request(
                         &endpoint,
                         "POST",
                         &format!("/scheduler/run-due?limit={limit}"),
@@ -791,7 +802,7 @@ async fn main() -> anyhow::Result<()> {
             } => {
                 println!(
                     "{}",
-                    request(
+                    server_required_request(
                         &endpoint,
                         "POST",
                         &format!(
@@ -804,7 +815,12 @@ async fn main() -> anyhow::Result<()> {
             SchedulerCommand::Cancel { id, endpoint } => {
                 println!(
                     "{}",
-                    request(&endpoint, "DELETE", &format!("/scheduler/jobs/{id}"), None)?
+                    server_required_request(
+                        &endpoint,
+                        "DELETE",
+                        &format!("/scheduler/jobs/{id}"),
+                        None
+                    )?
                 );
             }
         },
@@ -818,7 +834,7 @@ async fn main() -> anyhow::Result<()> {
         },
         CliCommand::Tasks { command } => match command {
             TasksCommand::List { endpoint, json } => {
-                let response = request(&endpoint, "GET", "/tasks", None)?;
+                let response = server_required_request(&endpoint, "GET", "/tasks", None)?;
                 if json || cli_json_requested() {
                     println!("{response}");
                 } else {
@@ -826,7 +842,8 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
             TasksCommand::Get { id, endpoint, json } => {
-                let response = request(&endpoint, "GET", &format!("/tasks/{id}"), None)?;
+                let response =
+                    server_required_request(&endpoint, "GET", &format!("/tasks/{id}"), None)?;
                 if json || cli_json_requested() {
                     println!("{response}");
                 } else {
@@ -841,7 +858,7 @@ async fn main() -> anyhow::Result<()> {
                 let path = task_id
                     .map(|id| format!("/tasks/{id}/audit"))
                     .unwrap_or_else(|| "/audit".to_string());
-                let response = request(&endpoint, "GET", &path, None)?;
+                let response = server_required_request(&endpoint, "GET", &path, None)?;
                 if json || cli_json_requested() {
                     println!("{response}");
                 } else {
@@ -852,7 +869,8 @@ async fn main() -> anyhow::Result<()> {
         CliCommand::Activity { command } => {
             match command {
                 ActivityCommand::Summary { endpoint, json } => {
-                    let response = request(&endpoint, "GET", "/activity/summary", None)?;
+                    let response =
+                        server_required_request(&endpoint, "GET", "/activity/summary", None)?;
                     if json || cli_json_requested() {
                         println!("{response}");
                     } else {
@@ -866,7 +884,7 @@ async fn main() -> anyhow::Result<()> {
                 } => {
                     println!(
                     "{}",
-                    request(
+                    server_required_request(
                         &endpoint,
                         "GET",
                         &format!("/activity/events?max_events={max_events}&interval_ms={interval_ms}"),
@@ -885,7 +903,7 @@ async fn main() -> anyhow::Result<()> {
                 let path = task_id
                     .map(|id| format!("/model-routes?task_id={id}"))
                     .unwrap_or_else(|| "/model-routes".to_string());
-                let response = request(&endpoint, "GET", &path, None)?;
+                let response = server_required_request(&endpoint, "GET", &path, None)?;
                 if json || cli_json_requested() {
                     println!("{response}");
                 } else {
@@ -893,7 +911,12 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
             RoutesCommand::Get { id, endpoint, json } => {
-                let response = request(&endpoint, "GET", &format!("/model-routes/{id}"), None)?;
+                let response = server_required_request(
+                    &endpoint,
+                    "GET",
+                    &format!("/model-routes/{id}"),
+                    None,
+                )?;
                 if json || cli_json_requested() {
                     println!("{response}");
                 } else {
@@ -911,12 +934,12 @@ async fn main() -> anyhow::Result<()> {
                 } else {
                     "/memory"
                 };
-                println!("{}", request(&endpoint, "GET", path, None)?);
+                println!("{}", server_required_request(&endpoint, "GET", path, None)?);
             }
             MemoryCommand::Get { id, endpoint } => {
                 println!(
                     "{}",
-                    request(&endpoint, "GET", &format!("/memory/{id}"), None)?
+                    server_required_request(&endpoint, "GET", &format!("/memory/{id}"), None)?
                 );
             }
             MemoryCommand::Classification {
@@ -928,7 +951,7 @@ async fn main() -> anyhow::Result<()> {
                 } else {
                     "/memory/classification"
                 };
-                println!("{}", request(&endpoint, "GET", path, None)?);
+                println!("{}", server_required_request(&endpoint, "GET", path, None)?);
             }
             MemoryCommand::Create {
                 category,
@@ -945,7 +968,10 @@ async fn main() -> anyhow::Result<()> {
                     provenance,
                     sensitivity: parse_sensitivity(&sensitivity)?,
                 })?;
-                println!("{}", request(&endpoint, "POST", "/memory", Some(&body))?);
+                println!(
+                    "{}",
+                    server_required_request(&endpoint, "POST", "/memory", Some(&body))?
+                );
             }
             MemoryCommand::Update {
                 id,
@@ -961,25 +987,40 @@ async fn main() -> anyhow::Result<()> {
                 })?;
                 println!(
                     "{}",
-                    request(&endpoint, "PATCH", &format!("/memory/{id}"), Some(&body))?
+                    server_required_request(
+                        &endpoint,
+                        "PATCH",
+                        &format!("/memory/{id}"),
+                        Some(&body)
+                    )?
                 );
             }
             MemoryCommand::Review { id, endpoint } => {
                 println!(
                     "{}",
-                    request(&endpoint, "POST", &format!("/memory/{id}/review"), None)?
+                    server_required_request(
+                        &endpoint,
+                        "POST",
+                        &format!("/memory/{id}/review"),
+                        None
+                    )?
                 );
             }
             MemoryCommand::Delete { id, endpoint } => {
                 println!(
                     "{}",
-                    request(&endpoint, "DELETE", &format!("/memory/{id}"), None)?
+                    server_required_request(&endpoint, "DELETE", &format!("/memory/{id}"), None)?
                 );
             }
             MemoryCommand::Restore { id, endpoint } => {
                 println!(
                     "{}",
-                    request(&endpoint, "POST", &format!("/memory/{id}/restore"), None)?
+                    server_required_request(
+                        &endpoint,
+                        "POST",
+                        &format!("/memory/{id}/restore"),
+                        None
+                    )?
                 );
             }
         },
@@ -1010,7 +1051,7 @@ async fn main() -> anyhow::Result<()> {
                 })?;
                 println!(
                     "{}",
-                    request(&endpoint, "POST", "/plugins/installed", Some(&body))?
+                    server_required_request(&endpoint, "POST", "/plugins/installed", Some(&body))?
                 );
             }
             PluginsCommand::Installed { endpoint } => {
@@ -1041,7 +1082,7 @@ async fn main() -> anyhow::Result<()> {
                 })?;
                 println!(
                     "{}",
-                    request(
+                    server_required_request(
                         &endpoint,
                         "POST",
                         &format!("/plugins/installed/{id}/execution"),
@@ -1056,7 +1097,7 @@ async fn main() -> anyhow::Result<()> {
                 })?;
                 println!(
                     "{}",
-                    request(
+                    server_required_request(
                         &endpoint,
                         "POST",
                         &format!("/plugins/installed/{id}/execution"),
@@ -1067,7 +1108,7 @@ async fn main() -> anyhow::Result<()> {
             PluginsCommand::VerifyInstalled { id, endpoint } => {
                 println!(
                     "{}",
-                    request(
+                    server_required_request(
                         &endpoint,
                         "POST",
                         &format!("/plugins/installed/{id}/provenance/verify"),
@@ -1089,7 +1130,7 @@ async fn main() -> anyhow::Result<()> {
                 })?;
                 println!(
                     "{}",
-                    request(
+                    server_required_request(
                         &endpoint,
                         "POST",
                         &format!("/plugins/installed/{id}/publisher/verify"),
@@ -1112,7 +1153,7 @@ async fn main() -> anyhow::Result<()> {
                     })?;
                 println!(
                     "{}",
-                    request(
+                    server_required_request(
                         &endpoint,
                         "POST",
                         &format!("/plugins/installed/{id}/publisher/signature/verify"),
@@ -1136,7 +1177,7 @@ async fn main() -> anyhow::Result<()> {
                 }))?;
                 println!(
                     "{}",
-                    request(
+                    server_required_request(
                         &endpoint,
                         "POST",
                         &format!("/plugins/installed/{id}/run"),
@@ -1160,12 +1201,15 @@ async fn main() -> anyhow::Result<()> {
                 let path = status
                     .map(|status| format!("/approvals?status={status}"))
                     .unwrap_or_else(|| "/approvals".to_string());
-                println!("{}", request(&endpoint, "GET", &path, None)?);
+                println!(
+                    "{}",
+                    server_required_request(&endpoint, "GET", &path, None)?
+                );
             }
             ApprovalsCommand::Get { id, endpoint } => {
                 println!(
                     "{}",
-                    request(&endpoint, "GET", &format!("/approvals/{id}"), None)?
+                    server_required_request(&endpoint, "GET", &format!("/approvals/{id}"), None)?
                 );
             }
             ApprovalsCommand::Approve {
@@ -1177,7 +1221,7 @@ async fn main() -> anyhow::Result<()> {
                 let body = serde_json::to_string(&ApprovalDecisionRequest { decided_by, reason })?;
                 println!(
                     "{}",
-                    request(
+                    server_required_request(
                         &endpoint,
                         "POST",
                         &format!("/approvals/{id}/approve"),
@@ -1194,7 +1238,7 @@ async fn main() -> anyhow::Result<()> {
                 let body = serde_json::to_string(&ApprovalDecisionRequest { decided_by, reason })?;
                 println!(
                     "{}",
-                    request(
+                    server_required_request(
                         &endpoint,
                         "POST",
                         &format!("/approvals/{id}/deny"),
@@ -1205,7 +1249,12 @@ async fn main() -> anyhow::Result<()> {
             ApprovalsCommand::Execute { id, endpoint } => {
                 println!(
                     "{}",
-                    request(&endpoint, "POST", &format!("/approvals/{id}/execute"), None)?
+                    server_required_request(
+                        &endpoint,
+                        "POST",
+                        &format!("/approvals/{id}/execute"),
+                        None
+                    )?
                 );
             }
         },
