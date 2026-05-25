@@ -5148,6 +5148,7 @@ fn release_verification_commands() -> Vec<String> {
         "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env".to_string(),
         "set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete".to_string(),
         "JARVIS_QA_CLEAN_PROFILE_VALIDATED=true JARVIS_QA_FINDER_LAUNCH_VALIDATED=true JARVIS_QA_MICROPHONE_VALIDATED=true JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true JARVIS_QA_NOTIFICATION_VALIDATED=true JARVIS_QA_RESTART_VALIDATED=true JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true JARVIS_QA_OWNER_NAME='Release Operator' JARVIS_QA_DEVICE_LABEL='Clean-profile release Mac' JARVIS_QA_PROFILE_LABEL='Clean macOS QA profile' JARVIS_QA_VOICE_CHECK_STARTED_AT='2026-05-22T16:00:00Z' JARVIS_QA_VOICE_CHECK_COMPLETED_AT='2026-05-22T16:05:00Z' JARVIS_QA_MICROPHONE_EVIDENCE_NOTE='Microphone prompt and capture observed' JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE='Speech prompt and recognition observed' JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE='Spoken transcript reached the command path' JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE='Speech output playback observed' JARVIS_QA_VOICE_TEST_PHRASE='Jarvis status check' JARVIS_QA_OBSERVED_TRANSCRIPT='Jarvis status check' JARVIS_QA_EXPECTED_COMMAND_TEXT='status check' JARVIS_QA_OBSERVED_COMMAND_TEXT='status check' JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid-from-live-command>' JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL='Built-in speakers' ./scripts/release-live-device-qa.sh --assert-complete".to_string(),
+        "cargo run -p jarvis-cli -- release plugin-trust-runbook".to_string(),
         "./scripts/release-plugin-trust-qa.sh --check".to_string(),
         "./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env".to_string(),
         "set -a && source target/release-plugin-trust-qa.env && set +a && ./scripts/release-plugin-trust-qa.sh --assert-complete".to_string(),
@@ -5688,6 +5689,10 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert!(readiness
             .recommended_verification_commands
             .iter()
+            .any(|command| command == "cargo run -p jarvis-cli -- release plugin-trust-runbook"));
+        assert!(readiness
+            .recommended_verification_commands
+            .iter()
             .any(|command| command
                 == "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env"));
         assert!(readiness
@@ -5762,6 +5767,10 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         );
         let live_device_check_index =
             command_index(commands, "./scripts/release-live-device-qa.sh --check");
+        let plugin_trust_runbook_index = command_index(
+            commands,
+            "cargo run -p jarvis-cli -- release plugin-trust-runbook",
+        );
         let live_device_template_index = command_index(
             commands,
             "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env",
@@ -5791,6 +5800,8 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert!(signed_distribution_index < live_device_runbook_index);
         assert!(live_device_runbook_index < live_device_check_index);
         assert!(live_device_check_index < live_device_template_index);
+        assert!(live_device_template_index < plugin_trust_runbook_index);
+        assert!(plugin_trust_runbook_index < plugin_trust_assert_index);
         assert!(plugin_trust_assert_index < evidence_bundle_source_index);
         assert!(evidence_bundle_source_index < evidence_doctor_assert_index);
         assert!(evidence_bundle_inline_index < evidence_doctor_assert_index);

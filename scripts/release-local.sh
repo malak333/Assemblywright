@@ -26,6 +26,7 @@ run ./scripts/package-distribution.sh --version-consistency-self-test
 run ./scripts/package-distribution.sh --unsigned-launch-check
 run cargo run -p jarvis-cli -- release signed-distribution-runbook
 run cargo run -p jarvis-cli -- release live-device-runbook
+run cargo run -p jarvis-cli -- release plugin-trust-runbook
 run ./scripts/release-live-device-qa.sh --check
 run ./scripts/release-live-device-qa.sh --self-test
 run ./scripts/release-plugin-trust-qa.sh --check

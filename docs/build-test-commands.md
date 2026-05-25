@@ -416,15 +416,21 @@ The release readiness runbook also includes
 path.
 `jarvis release readiness --all-commands` is ordered as a release execution
 runbook: local gates, unsigned distribution launch check, signed-distribution
-runbook triage, signed/notarized packaging, live-device QA, plugin-trust QA,
-final evidence bundle generation, evidence-doctor assertion, then the external
-evidence-mode readiness check. `cargo run -p jarvis-cli -- release
+runbook triage, signed/notarized packaging, live-device QA, plugin-trust
+runbook triage, plugin-trust QA, final evidence bundle generation,
+evidence-doctor assertion, then the external evidence-mode readiness check.
+`cargo run -p jarvis-cli -- release
 signed-distribution-runbook` is read-only; it summarizes the current
 signed-app-bundle, app executable, bundled core, signed zip, signed installer,
 and signed-provenance evidence items and prints the exact package-distribution,
 evidence-status, evidence-doctor, and live-device follow-up commands without
 performing signing, notarization, stapling, Gatekeeper assessment, installation,
-or QA.
+or QA. `cargo run -p jarvis-cli -- release plugin-trust-runbook` is read-only;
+it summarizes the current `plugin_trust_qa_report` evidence item and prints the
+exact plugin-trust template, assertion, evidence-status, evidence-doctor, and
+signed-distribution follow-up commands without performing marketplace review,
+malware scanning, sandbox deployment, host-level egress enforcement, signing,
+notarization, live-device QA, or final evidence bundling.
 The doctor/status paths only inventory expected paths, JSON flags, and release
 metadata; they do not validate Developer ID signing, notarization, stapling, or
 installation. The real `--bundle` path also locally validates the app code

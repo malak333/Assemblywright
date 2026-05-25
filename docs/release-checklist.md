@@ -145,6 +145,7 @@ stage or when a PR needs focused evidence for one ownership slice.
 - `./scripts/package-distribution.sh --unsigned-launch-check`
 - `cargo run -p jarvis-cli -- release signed-distribution-runbook`
 - `cargo run -p jarvis-cli -- release live-device-runbook`
+- `cargo run -p jarvis-cli -- release plugin-trust-runbook`
 - `./scripts/release-live-device-qa.sh --check`
 - `./scripts/release-live-device-qa.sh --self-test`
 - `./scripts/release-plugin-trust-qa.sh --check`
