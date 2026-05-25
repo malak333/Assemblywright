@@ -385,7 +385,7 @@ EOF
 write_env_template() {
   local template_path="$1"
   mkdir -p "$(dirname "$template_path")"
-  cat >"$template_path" <<'EOF'
+  cat >"$template_path" <<EOF
 # Jarvis live-device QA evidence template.
 # Edit this file on the validated release machine, then run:
 #   set -a
@@ -523,6 +523,10 @@ PLIST
   chmod 755 "$fixture_app/Contents/MacOS/JarvisMacApp" "$fixture_app/Contents/Resources/bin/jarvis-cli"
 
   "$0" --write-template "$fixture_template" >/dev/null
+  require_file_contains "live QA env template" "$fixture_template" "JARVIS_QA_EXPECTED_VERSION=\"$EXPECTED_VERSION\""
+  if grep -F 'JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION"' "$fixture_template" >/dev/null 2>&1; then
+    fail "live QA self-test expected env template to materialize the expected version"
+  fi
   require_file_contains "live QA env template" "$fixture_template" 'JARVIS_QA_CLEAN_PROFILE_VALIDATED=false'
   require_file_contains "live QA env template" "$fixture_template" 'JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=false'
   require_file_contains "live QA env template" "$fixture_template" 'JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE=""'

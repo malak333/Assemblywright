@@ -269,9 +269,11 @@ Implementation should begin with the smallest product-grade foundation:
 Current implementation status: the repo structure, IPC health/command surface,
 durable task/audit/emergency-pause/memory/scheduler schema, fake local model,
 first-party plugin contracts, metadata-only local plugin installation, local
-plugin provenance snapshot verification, CLI smoke path, redacted diagnostics
-export, repository-backed activity summary, and buildable Swift command/activity
-shell scaffold are implemented. The command runtime can route to fake local,
+plugin provenance snapshot verification, CLI smoke path, operator-readable CLI
+surfaces for command/ask, plugins, tools, tasks, routes, activity, readiness,
+and evidence status with `--json`/`JARVIS_CLI_JSON=1` preserving exact payloads,
+redacted diagnostics export, repository-backed activity summary, and buildable
+Swift command/activity shell scaffold are implemented. The command runtime can route to fake local,
 Ollama-compatible local HTTP, or explicitly enabled ChatGPT/OpenAI-compatible
 HTTP providers. The IPC layer exposes bounded activity event streaming for
 current task/audit progress, contract compatibility policy, and contract
@@ -289,7 +291,10 @@ provenance matches the install snapshot and the supplied trusted origin exactly
 matches the manifest author claim. Signed manifests can also be verified with
 an Ed25519 `publisher_signature` against an explicit trusted public key after
 local provenance matches; this is audit-backed trusted-key verification, not
-marketplace approval or malware analysis.
+marketplace approval or malware analysis. Installed-plugin inspection through
+`/plugins/installed` and `/plugins/installed/:id` is redacted by default: local
+paths, subprocess command paths, signature material, and provenance hashes are
+omitted from the review surface.
 Network-capable actions must request the `network` permission and declare
 plain-hostname allowlists in `network_access`; policy review surfaces those
 actions, and executable installed plugins with network-declaring actions must
