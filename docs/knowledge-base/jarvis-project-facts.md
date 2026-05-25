@@ -280,8 +280,9 @@ These notes capture durable facts for future agents working on this repository.
   `--assert-complete` writes an owner-recorded JSON report after every
   `JARVIS_PLUGIN_QA_*` flag is true and the owner/timestamp/evidence-note fields
   are populated. The accepted report identity is `schema_version: 1` with
-  `evidence_type: owner_recorded_plugin_trust_qa`; doctor/status gates reject
-  stale or misidentified plugin-trust report shapes. Host-level egress evidence
+  `evidence_type: owner_recorded_plugin_trust_qa` and `self_test_fixture: false`;
+  doctor/status gates reject stale, self-test, or misidentified plugin-trust
+  report shapes. Host-level egress evidence
   must also include the reviewed policy/profile label, ordered UTC egress
   validation timestamp, denied undeclared-host fixture note, and declared-host
   allow fixture note. The review timestamps must be UTC `Z` values, the
