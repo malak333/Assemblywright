@@ -20,17 +20,22 @@ These notes capture durable facts for future agents working on this repository.
 - The product direction is a local-first macOS assistant foundation, legally
   distinct from Marvel/JARVIS branding and assets.
 - The current repo contains a Rust workspace with `jarvis-core` and
-  `jarvis-cli`, plus a Swift package scaffold under `apps/mac`.
+  `jarvis-cli`, plus a Swift shell under `apps/mac` with management tabs, core
+  supervision, voice input/output adapters, release/evidence-status
+  inspection, scheduler notifications, Keychain credential launch injection,
+  and packaged-smoke support.
 - Implemented `jarvis-core` surfaces include shared task/audit/safety types,
   an Axum loopback IPC server, runtime-backed command execution with
   `FakeLocalModel` by default, an opt-in Ollama-compatible local HTTP provider,
   or an opt-in ChatGPT/OpenAI-compatible HTTP provider behind explicit
   env/config, sensitivity, redaction, and audit guardrails, emergency-pause
-  state, inspectable scheduler state, a conversation runtime with SQLite
-  task/audit persistence hooks, local-first model routing policy, SQLite
-  repository migrations, memory item persistence, append-only audit table
-  triggers, plugin manifest validation, and deterministic first-party test
-  plugins.
+  state, inspectable scheduler state, scheduler recovery/attention, a
+  conversation runtime with SQLite task/audit persistence hooks, local-first
+  model routing policy, SQLite repository migrations, memory item persistence,
+  append-only audit table triggers, release readiness/evidence-status,
+  approval execution and permission-center review, bounded activity
+  events/progress, installed-plugin metadata/provenance/grants, diagnostics,
+  plugin manifest validation, and deterministic first-party test plugins.
 - IPC `/commands` now uses repository-backed runtime storage when `IpcState` is
   constructed with `SqliteRepository`, records a local-first model-router audit
   entry, and can execute deterministic first-party plugin commands such as
@@ -107,8 +112,8 @@ These notes capture durable facts for future agents working on this repository.
   and the bundled core item validates the packaged `jarvis-cli.version` marker
   without executing the artifact path. This is file/report inventory only; it
   does not prove signing, notarization, installation, Finder launch, executable
-  runtime behavior, live-device QA, marketplace review, malware scanning, or OS
-  sandboxing.
+  runtime behavior, live-device QA, marketplace review, malware scanning, OS
+  sandboxing, or host-level egress enforcement.
 - The live-device QA evidence item is stricter than generic JSON presence:
   `/release/evidence-status` validates schema/type, rejects `self_test_fixture`,
   checks the installed app path, expected bundle identifier, short/build

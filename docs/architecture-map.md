@@ -3,9 +3,11 @@
 Jarvis is a local-first macOS assistant foundation. The current repository
 contains a Rust workspace with the core contracts, loopback IPC server,
 SQLite-backed repository primitives, policy/model-routing rules, in-process
-plugin contracts, scheduler state, CLI client, and a first Swift/SwiftUI Mac
-shell scaffold with core supervision and redacted scheduler attention handoff
-under `apps/mac`.
+and installed-plugin contracts, scheduler persistence/recovery, release
+readiness/evidence-status, redacted diagnostics, CLI client, and a
+Swift/SwiftUI Mac shell under `apps/mac` with core supervision, management tabs,
+voice input/output adapters, scheduler notifications, Keychain launch credential
+injection, and packaged-app smoke support.
 
 ## Current Implementation And Evidence Boundary Diagram
 
@@ -19,8 +21,8 @@ flowchart TB
     User["User or local test operator"]
     User --> CLI["jarvis-cli human-readable command/ask/tools; --json for exact IPC payloads"]
     User --> MacShell["JarvisMacApp SwiftUI scaffold"]
-    DocsAgent["six-agent production-readiness audit"] --> Docs["DESIGN, README, architecture map, release checklist, build/test commands, knowledge-base"]
-    DocsAgent --> Sweep["isolated worktree/branch production sweep"]
+    ReleaseWorkflow["repo-owned release workflow and docs alignment"] --> Docs["DESIGN, README, architecture map, release checklist, build/test commands, knowledge-base"]
+    ReleaseWorkflow --> Sweep["isolated worktree/branch production sweep"]
     Sweep --> LocalGate["./scripts/release-local.sh"]
     GitHubCI["GitHub Actions release-local macOS workflow"] --> LocalGate
     LocalGate --> CIWorkflowSmoke["release-ci-workflow-smoke.sh"]
@@ -36,6 +38,10 @@ flowchart TB
     LocalGate --> PluginTrustQA["release-plugin-trust-qa.sh check/self-test preflight"]
     LocalGate --> EvidenceBundlePreflight["release-evidence-bundle.sh check/self-test/template preflight"]
     EvidenceTemplate["release-evidence-bundle.sh write-template"] --> EvidenceBundleEnv["sourceable final-bundle env with flags default false"]
+    LocalGate --> LiveDeviceTemplate["release-live-device-qa.sh write-template"]
+    LiveDeviceTemplate --> LiveDeviceEnv["sourceable live-device QA env with flags default false"]
+    LocalGate --> PluginTrustTemplate["release-plugin-trust-qa.sh write-template"]
+    PluginTrustTemplate --> PluginTrustEnv["sourceable plugin-trust QA env with flags default false"]
     LocalGate --> EvidenceDoctor["release-evidence-doctor.sh check/self-test evidence inventory and next-step commands"]
     LocalGate --> SwiftGate["Swift package build/test"]
     LocalGate --> CargoGate["fmt, clippy, tests, build, package"]
@@ -43,7 +49,7 @@ flowchart TB
     ReleaseReadiness["/release/readiness and jarvis release readiness"] --> Docs
     ReleaseReadinessFallback["serverless CLI readiness fallback"] --> ReleaseReadiness
     EvidenceStatus["/release/evidence-status and jarvis release evidence-status"] --> EvidenceDoctor
-    EvidenceStatus --> LiveQASemanticValidator["live QA semantic validator: bundle/version/core-digest/timestamp/self-test checks"]
+    EvidenceStatus --> LiveQASemanticValidator["live QA semantic validator: bundle/version/core-digest/timestamp/transcript/command/evidence-id/self-test checks"]
     LiveQASemanticValidator --> ReleaseReadiness
     subgraph ManualExternal["Manual external evidence, not local gate proof"]
         LiveDeviceAssert["release-live-device-qa.sh assert-complete"] --> LiveDeviceQAReport["target/release-live-device-qa-report.json owner-recorded voice evidence"]
@@ -54,6 +60,8 @@ flowchart TB
         SignedDistributionRunbook -. guides .-> SignedArtifacts
         SignedProvenance --> EvidenceBundleRun
         EvidenceBundleEnv --> EvidenceBundleRun
+        LiveDeviceEnv --> LiveDeviceAssert
+        PluginTrustEnv --> PluginTrustAssert
         LiveDeviceQAReport --> EvidenceBundleRun
         PluginTrustQAReport --> EvidenceBundleRun
         EvidenceBundleRun --> EvidenceArchive["archived final release evidence bundle"]
@@ -237,7 +245,11 @@ and related owner-recorded live-device blockers. The live report must pass the
 same semantic validator used by `/release/evidence-status`: schema/type,
 `self_test_fixture=false`, expected installed app path, expected bundle ID,
 matching short/build version, installed bundled core path/version/SHA-256
-binding, UTC `Z` timestamps, and completion not earlier than start. It still keeps
+binding, UTC `Z` timestamps, completion not earlier than start, observed
+transcript matching the spoken test phrase after trimming, observed command text
+matching the expected command text after trimming, and
+`command_result_evidence_id` shaped as a `task:<uuid>` or `audit:<uuid>`
+reference from live command/audit evidence. It still keeps
 `production_ready: false` unless every required evidence-status item is present,
 no missing or invalid evidence remains, and evidence-cleared features leave no
 pending readiness features. Even then, the true state means validated
@@ -262,11 +274,13 @@ lane for final release evidence. JSON
 reports receive semantic validation for signed provenance version/bundle
 metadata, bundled core path/version/SHA-256 binding, signing/notary/staple/Gatekeeper fields,
 required flags, SHA-256 digests, signed-provenance zip/pkg/core digest matches
-against current artifact files, live-device bundle/version/timestamp evidence, non-future plugin-trust
-review timestamps, and final bundle path/digest/local-signature evidence. This mirrors release-evidence-doctor
+against current artifact files, live-device bundle/version/timestamp evidence,
+non-future plugin-trust review and egress validation timestamps, deny/allow
+egress fixture notes, and final bundle path/digest/local-signature evidence. This mirrors release-evidence-doctor
 inventory plus report inspection only; it does not perform signing,
 notarization, installation, Finder launch, executable runtime validation,
-live-device QA, marketplace review, malware scanning, or OS sandboxing.
+live-device QA, marketplace review, malware scanning, OS sandboxing, or
+host-level egress enforcement.
 Repository-backed IPC state stores approval-required plugin command decisions
 in `pending_approvals`, exposes them through CLI/IPC inspection endpoints, and
 lets a user grant or deny the pending record without executing the side effect.
@@ -349,10 +363,10 @@ report mechanics only; `--assert-complete` records owner validation flags plus
 owner/timestamp/evidence-note fields, including a host egress policy label plus
 deny/allow fixture notes, and does not turn those external checks
 into repo-local proof.
-It supports opt-in
-ChatGPT/OpenAI-compatible execution only after route policy allows it. It does
-not yet support a broader WASM/OS-network/plugin-marketplace sandbox or a signed
-packaged Mac approval flow.
+The command runtime supports opt-in ChatGPT/OpenAI-compatible execution only
+after route policy allows it. Installed-plugin execution still does not provide
+broader WASM isolation, OS-level process/network sandboxing, host-level egress
+filtering, marketplace trust, or a signed/notarized packaged Mac approval flow.
 File-backed `SqliteRepository::open` creates a preflight migration backup for
 existing databases below the current schema version and restores the original
 DB/WAL/SHM files if opening/configuring/migrating fails. The backup is
@@ -887,10 +901,14 @@ Current evidence supports a local foundation claim: the workspace has typed
 contracts and tested scaffolding for IPC, policy, routing, runtime, storage,
 plugins, scheduler, CLI behavior, bounded fake-model and provider-envelope
 first-party tool orchestration, local-model invalid-tool fail-closed guidance,
-and a first Swift command/management shell with core supervision
-abstractions. It does not support a claim that Jarvis is a finished
-voice assistant, packaged Mac app, autonomous external-action agent, plugin
-marketplace, or production cloud-integrated system.
+release readiness/evidence-status, evidence-bundle mechanics, and a Swift
+command/management shell with runs, approvals, permissions, memory, plugin,
+scheduler, diagnostics, release, voice input/output, Keychain credential
+injection, and core supervision coverage. It also has local packaged-app and
+unsigned distribution smoke evidence. It does not support a claim that Jarvis is
+a finished voice assistant, signed/notarized packaged Mac app, autonomous
+external-action agent, plugin marketplace, or production cloud-integrated
+system.
 The storage migration proof shows preflight file-backed SQLite backups,
 restore after migration-open failure, newer-schema diagnostics, and
 representative schema v1-v8 fixture preservation for persisted repository
