@@ -800,7 +800,9 @@ JSON
 {
   "schema_version": 1,
   "evidence_type": "owner_recorded_plugin_trust_qa",
+  "self_test_fixture": false,
   "generated_at": "2026-05-22T16:30:00Z",
+  "review_source": "owner-asserted-manual-review",
   "validation_flags": {
     "marketplace_review": true,
     "malware_scan": true,
@@ -1532,6 +1534,8 @@ for flag in marketplace_review malware_scan os_sandbox egress_enforcement signed
 done
 require_json_number_equals "plugin trust QA report" "$PLUGIN_QA_REPORT" "schema_version" "1"
 require_json_string_equals "plugin trust QA report" "$PLUGIN_QA_REPORT" "evidence_type" "owner_recorded_plugin_trust_qa"
+require_json_bool_false "plugin trust QA report" "$PLUGIN_QA_REPORT" "self_test_fixture"
+require_json_nonempty_string "plugin trust QA report" "$PLUGIN_QA_REPORT" "review_source"
 for field in owner_name review_started_at review_completed_at marketplace_evidence_note malware_scan_evidence_note os_sandbox_evidence_note egress_evidence_note egress_policy_label egress_deny_fixture_evidence_note egress_allow_fixture_evidence_note signed_publisher_evidence_note manual_review_evidence_note; do
   require_json_nonempty_string "plugin trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.$field"
 done

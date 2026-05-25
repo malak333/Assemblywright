@@ -388,8 +388,9 @@ flags and fake evidence notes to verify report generation only; real release
 evidence must come from `--assert-complete` after the owner validates every
 `JARVIS_PLUGIN_QA_*` flag and populates the owner/timestamp/evidence-note fields.
 The generated report carries `schema_version: 1` and
-`evidence_type: owner_recorded_plugin_trust_qa`, and the doctor/status gates
-reject plugin-trust reports with the wrong identity.
+`evidence_type: owner_recorded_plugin_trust_qa`; final operator evidence must
+also keep `self_test_fixture=false`, and the doctor/status gates reject
+plugin-trust reports with the wrong or self-test identity.
 Use `./scripts/release-plugin-trust-qa.sh --write-template
 target/release-plugin-trust-qa.env` to generate a sourceable plugin-trust QA
 template. The template defaults every validation flag to `false`; operators

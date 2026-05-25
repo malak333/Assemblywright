@@ -55,6 +55,9 @@ and then run --assert-complete.
 Optional:
   JARVIS_PLUGIN_QA_REPORT_PATH     Defaults to target/release-plugin-trust-qa-report.json
   JARVIS_PLUGIN_QA_REVIEW_SOURCE   Defaults to owner-asserted-manual-review
+  JARVIS_PLUGIN_QA_SELF_TEST_FIXTURE
+                                      Must remain false for operator reports;
+                                      true is reserved for --self-test.
 
 This script records manual proof boundaries only. It does not operate a plugin
 marketplace, run a malware scanner, install a macOS sandbox profile, or enforce
@@ -152,6 +155,7 @@ json_escape() {
 
 write_report() {
   local generated_at
+  local self_test_fixture
   local escaped_boundary
   local escaped_source
   local escaped_owner
@@ -169,6 +173,17 @@ write_report() {
   local escaped_manual_note
   require_command python3
   generated_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  self_test_fixture="${JARVIS_PLUGIN_QA_SELF_TEST_FIXTURE:-false}"
+  case "$self_test_fixture" in
+    true|false)
+      ;;
+    *)
+      fail "JARVIS_PLUGIN_QA_SELF_TEST_FIXTURE must be true or false"
+      ;;
+  esac
+  if [[ "$self_test_fixture" == true && "${JARVIS_PLUGIN_QA_INTERNAL_SELF_TEST:-false}" != true ]]; then
+    fail "JARVIS_PLUGIN_QA_SELF_TEST_FIXTURE=true is only allowed during --self-test"
+  fi
   escaped_boundary="$(json_escape "Owner-recorded marketplace review, malware scan, OS sandbox, host-level egress enforcement, signed publisher policy, and manual plugin trust evidence only; no repo-local command can prove an external marketplace, malware scanner, host-level sandbox deployment, or host-level egress enforcement.")"
   escaped_source="$(json_escape "${JARVIS_PLUGIN_QA_REVIEW_SOURCE:-owner-asserted-manual-review}")"
   escaped_owner="$(json_escape "$JARVIS_PLUGIN_QA_OWNER_NAME")"
@@ -190,6 +205,7 @@ write_report() {
 {
   "schema_version": 1,
   "evidence_type": "owner_recorded_plugin_trust_qa",
+  "self_test_fixture": $self_test_fixture,
   "generated_at": "$generated_at",
   "review_source": "$escaped_source",
   "validation_flags": {
@@ -239,6 +255,7 @@ write_env_template() {
 
 JARVIS_PLUGIN_QA_REPORT_PATH="target/release-plugin-trust-qa-report.json"
 JARVIS_PLUGIN_QA_REVIEW_SOURCE="owner-asserted-manual-review"
+JARVIS_PLUGIN_QA_SELF_TEST_FIXTURE=false
 
 JARVIS_PLUGIN_QA_MARKETPLACE_REVIEW_VALIDATED=false
 JARVIS_PLUGIN_QA_MALWARE_SCAN_VALIDATED=false
@@ -330,6 +347,7 @@ if [[ "$SELF_TEST" == true ]]; then
 
   "$0" --write-template "$fixture_template" >/dev/null
   require_file_contains "plugin trust QA env template" "$fixture_template" 'JARVIS_PLUGIN_QA_MARKETPLACE_REVIEW_VALIDATED=false'
+  require_file_contains "plugin trust QA env template" "$fixture_template" 'JARVIS_PLUGIN_QA_SELF_TEST_FIXTURE=false'
   require_file_contains "plugin trust QA env template" "$fixture_template" 'JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED=false'
   require_file_contains "plugin trust QA env template" "$fixture_template" 'JARVIS_PLUGIN_QA_EGRESS_DENY_FIXTURE_EVIDENCE_NOTE=""'
   require_file_contains "plugin trust QA env template" "$fixture_template" 'JARVIS_PLUGIN_QA_EGRESS_ALLOW_FIXTURE_EVIDENCE_NOTE=""'
@@ -340,6 +358,8 @@ if [[ "$SELF_TEST" == true ]]; then
 
   JARVIS_PLUGIN_QA_REPORT_PATH="$fixture_report" \
     JARVIS_PLUGIN_QA_REVIEW_SOURCE="self-test-fixture" \
+    JARVIS_PLUGIN_QA_SELF_TEST_FIXTURE=true \
+    JARVIS_PLUGIN_QA_INTERNAL_SELF_TEST=true \
     JARVIS_PLUGIN_QA_MARKETPLACE_REVIEW_VALIDATED=true \
     JARVIS_PLUGIN_QA_MALWARE_SCAN_VALIDATED=true \
     JARVIS_PLUGIN_QA_OS_SANDBOX_VALIDATED=true \
@@ -363,6 +383,7 @@ if [[ "$SELF_TEST" == true ]]; then
   require_file_contains "plugin trust QA self-test report" "$fixture_report" '"marketplace_review": true'
   require_file_contains "plugin trust QA self-test report" "$fixture_report" '"schema_version": 1'
   require_file_contains "plugin trust QA self-test report" "$fixture_report" '"evidence_type": "owner_recorded_plugin_trust_qa"'
+  require_file_contains "plugin trust QA self-test report" "$fixture_report" '"self_test_fixture": true'
   require_file_contains "plugin trust QA self-test report" "$fixture_report" '"review_source": "self-test-fixture"'
   require_file_contains "plugin trust QA self-test report" "$fixture_report" '"owner_recorded_plugin_trust_evidence"'
   require_file_contains "plugin trust QA self-test report" "$fixture_report" '"egress_evidence_note": "Egress fixture was observed."'
@@ -370,6 +391,32 @@ if [[ "$SELF_TEST" == true ]]; then
   require_file_contains "plugin trust QA self-test report" "$fixture_report" '"egress_deny_fixture_evidence_note": "Deny fixture blocked undeclared outbound traffic."'
   require_file_contains "plugin trust QA self-test report" "$fixture_report" '"egress_allow_fixture_evidence_note": "Allow fixture reached the declared host only."'
   require_file_contains "plugin trust QA self-test report" "$fixture_report" '"proof_boundary"'
+
+  if JARVIS_PLUGIN_QA_REPORT_PATH="$tmp_dir/operator-self-test-identity-report.json" \
+    JARVIS_PLUGIN_QA_REVIEW_SOURCE="owner-asserted-manual-review" \
+    JARVIS_PLUGIN_QA_SELF_TEST_FIXTURE=true \
+    JARVIS_PLUGIN_QA_MARKETPLACE_REVIEW_VALIDATED=true \
+    JARVIS_PLUGIN_QA_MALWARE_SCAN_VALIDATED=true \
+    JARVIS_PLUGIN_QA_OS_SANDBOX_VALIDATED=true \
+    JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED=true \
+    JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_POLICY_VALIDATED=true \
+    JARVIS_PLUGIN_QA_MANUAL_TRUST_REVIEW_VALIDATED=true \
+    JARVIS_PLUGIN_QA_OWNER_NAME="Jarvis Plugin QA Self-Test" \
+    JARVIS_PLUGIN_QA_REVIEW_STARTED_AT="2026-05-22T16:10:00Z" \
+    JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT="2026-05-22T16:20:00Z" \
+    JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE="Marketplace review fixture was observed." \
+    JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE="Malware scan fixture was observed." \
+    JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE="OS sandbox fixture was observed." \
+    JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE="Egress fixture was observed." \
+    JARVIS_PLUGIN_QA_EGRESS_POLICY_LABEL="Self-test host egress policy fixture" \
+    JARVIS_PLUGIN_QA_EGRESS_VALIDATION_COMPLETED_AT="2026-05-22T16:18:00Z" \
+    JARVIS_PLUGIN_QA_EGRESS_DENY_FIXTURE_EVIDENCE_NOTE="Deny fixture blocked undeclared outbound traffic." \
+    JARVIS_PLUGIN_QA_EGRESS_ALLOW_FIXTURE_EVIDENCE_NOTE="Allow fixture reached the declared host only." \
+    JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE="Signed publisher policy fixture was observed." \
+    JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE="Manual trust review fixture was observed." \
+    "$0" --assert-complete >/dev/null 2>&1; then
+    fail "plugin trust QA self-test expected operator self-test fixture identity to be rejected"
+  fi
 
   if JARVIS_PLUGIN_QA_REPORT_PATH="$tmp_dir/blank-evidence-report.json" \
     JARVIS_PLUGIN_QA_REVIEW_SOURCE="self-test-fixture" \

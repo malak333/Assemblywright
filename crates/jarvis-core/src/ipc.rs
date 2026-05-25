@@ -4718,6 +4718,7 @@ fn validate_plugin_trust_qa_report(value: &serde_json::Value) -> Result<(), Stri
     {
         return Err("JSON report evidence_type must be owner_recorded_plugin_trust_qa".to_string());
     }
+    require_json_bool_value(value, "self_test_fixture", false)?;
     require_json_bool_value(value, "validation_flags.egress_enforcement", true)?;
     let started_at = require_utc_report_timestamp(
         value,
@@ -5113,7 +5114,7 @@ fn release_json_present_detail(key: &str) -> String {
         "release_evidence_bundle" => "JSON report exists, schema/evidence identity is valid, expected release version matches, artifact/report paths and SHA-256 digests match current artifacts and reports, and local signature validation is true; clean-profile, live-device, and plugin-trust claims remain owner-recorded external evidence".to_string(),
         "signed_distribution_provenance_report" => "JSON report exists, expected release version, bundle identifier, bundled core path/version/digest match, signing/notarization/stapling/Gatekeeper evidence fields are present, required flags are true, and artifact SHA-256 digests match the current zip/pkg/core files; clean-profile install and live-device QA remain separate manual gates".to_string(),
         "live_device_qa_report" => "JSON report exists, required owner-recorded fields and proof boundary are non-empty, installed app path, release metadata, bundled core executable path/version/SHA-256 binding, timestamps, observed transcript, observed command text, and task/audit command evidence reference match expected values; live-device claims are still owner-recorded external evidence".to_string(),
-        "plugin_trust_qa_report" => "JSON report exists, schema/evidence identity is valid, required owner-recorded fields are present, review and egress validation timestamps are valid and ordered, and deny/allow egress fixture notes are present; marketplace, malware, sandbox, and host-level egress claims remain owner-recorded external evidence".to_string(),
+        "plugin_trust_qa_report" => "JSON report exists, schema/evidence identity is valid, self-test fixture identity is false, required owner-recorded fields are present, review and egress validation timestamps are valid and ordered, and deny/allow egress fixture notes are present; marketplace, malware, sandbox, and host-level egress claims remain owner-recorded external evidence".to_string(),
         _ => "JSON report exists and required owner-recorded fields are present; external claims are not revalidated by evidence-status".to_string(),
     }
 }
@@ -6228,6 +6229,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         json!({
             "schema_version": 1,
             "evidence_type": "owner_recorded_plugin_trust_qa",
+            "self_test_fixture": false,
             "generated_at": "2026-05-22T16:21:00Z",
             "review_source": "owner-asserted-manual-review",
             "validation_flags": {
@@ -6623,6 +6625,15 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let (status, detail) = inspect_plugin_trust_qa_report_value(report);
         assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
         assert!(detail.contains("self-test-fixture"), "{detail}");
+    }
+
+    #[test]
+    fn plugin_trust_qa_report_rejects_self_test_fixture_identity() {
+        let mut report = valid_plugin_trust_qa_report_json();
+        report["self_test_fixture"] = json!(true);
+        let (status, detail) = inspect_plugin_trust_qa_report_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("self_test_fixture"), "{detail}");
     }
 
     #[test]

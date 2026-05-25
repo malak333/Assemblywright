@@ -436,9 +436,9 @@ sourceable plugin-trust QA env file, and `--assert-complete` writes a manual
 JSON evidence report only after owner validation flags are true and
 owner/timestamp/evidence-note fields are populated, including structured host
 egress policy, deny-fixture, and allow-fixture evidence. The report now carries
-`schema_version: 1` and `evidence_type: owner_recorded_plugin_trust_qa`, and
-the evidence doctor/status validators reject stale or misidentified plugin-trust
-report shapes.
+`schema_version: 1`, `evidence_type: owner_recorded_plugin_trust_qa`, and
+`self_test_fixture: false`, and the evidence doctor/status validators reject
+stale, self-test, or misidentified plugin-trust report shapes.
 The `./scripts/release-evidence-bundle.sh --check` command ties the expected
 signed distribution artifact paths, live-device QA report, plugin-trust QA
 report, and owner validation flags into a final bundle manifest path. `--check`,
