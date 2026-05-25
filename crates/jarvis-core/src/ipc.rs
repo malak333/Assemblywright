@@ -73,6 +73,9 @@ const LIVE_DEVICE_QA_REQUIRED_FIELDS: &[&str] = &[
     "app_bundle.build_version",
     "app_bundle.microphone_usage_description",
     "app_bundle.speech_recognition_usage_description",
+    "bundled_core.executable_path",
+    "bundled_core.version",
+    "bundled_core.sha256",
     "owner_recorded_live_voice_evidence.owner_name",
     "owner_recorded_live_voice_evidence.device_label",
     "owner_recorded_live_voice_evidence.profile_label",
@@ -4574,12 +4577,20 @@ fn validate_live_device_qa_report(value: &serde_json::Value) -> Result<(), Strin
     require_json_string_value(value, "app_bundle.bundle_identifier", &expected_bundle_id)?;
     require_json_string_value(value, "app_bundle.short_version", &expected_version)?;
     require_json_string_value(value, "app_bundle.build_version", &expected_version)?;
+    let expected_installed_app_path = std::env::var("JARVIS_QA_INSTALLED_APP_PATH")
+        .unwrap_or_else(|_| "/Applications/Jarvis.app".to_string());
+    require_json_string_value(value, "installed_app_path", &expected_installed_app_path)?;
     require_json_string_value(
         value,
-        "installed_app_path",
-        &std::env::var("JARVIS_QA_INSTALLED_APP_PATH")
-            .unwrap_or_else(|_| "/Applications/Jarvis.app".to_string()),
+        "bundled_core.executable_path",
+        &format!("{expected_installed_app_path}/Contents/Resources/bin/jarvis-cli"),
     )?;
+    require_json_string_value(
+        value,
+        "bundled_core.version",
+        &format!("jarvis {expected_version}"),
+    )?;
+    require_json_sha256_value(value, "bundled_core.sha256")?;
     for field in [
         "app_bundle.microphone_usage_description",
         "app_bundle.speech_recognition_usage_description",
@@ -5067,7 +5078,7 @@ fn release_json_present_detail(key: &str) -> String {
     match key {
         "release_evidence_bundle" => "JSON report exists, schema/evidence identity is valid, expected release version matches, artifact/report paths and SHA-256 digests match current artifacts and reports, and local signature validation is true; clean-profile, live-device, and plugin-trust claims remain owner-recorded external evidence".to_string(),
         "signed_distribution_provenance_report" => "JSON report exists, expected release version, bundle identifier, and bundled core version match, signing/notarization/stapling/Gatekeeper evidence fields are present, required flags are true, and artifact SHA-256 digests match the current zip/pkg files; clean-profile install and live-device QA remain separate manual gates".to_string(),
-        "live_device_qa_report" => "JSON report exists, required owner-recorded fields and proof boundary are non-empty, installed app path, release metadata, timestamps, observed transcript, observed command text, and task/audit command evidence reference match expected values; live-device claims are still owner-recorded external evidence".to_string(),
+        "live_device_qa_report" => "JSON report exists, required owner-recorded fields and proof boundary are non-empty, installed app path, release metadata, bundled core executable path/version/SHA-256 binding, timestamps, observed transcript, observed command text, and task/audit command evidence reference match expected values; live-device claims are still owner-recorded external evidence".to_string(),
         "plugin_trust_qa_report" => "JSON report exists, schema/evidence identity is valid, required owner-recorded fields are present, review and egress validation timestamps are valid and ordered, and deny/allow egress fixture notes are present; marketplace, malware, sandbox, and host-level egress claims remain owner-recorded external evidence".to_string(),
         _ => "JSON report exists and required owner-recorded fields are present; external claims are not revalidated by evidence-status".to_string(),
     }
@@ -6134,6 +6145,11 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 "microphone_usage_description": "fixture",
                 "speech_recognition_usage_description": "fixture"
             },
+            "bundled_core": {
+                "executable_path": "/Applications/Jarvis.app/Contents/Resources/bin/jarvis-cli",
+                "version": "jarvis 0.1.4",
+                "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            },
             "owner_recorded_live_voice_evidence": {
                 "owner_name": "Release Operator",
                 "device_label": "Clean-profile release Mac",
@@ -6334,6 +6350,27 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let (status, detail) = inspect_live_device_qa_report_value(report);
         assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
         assert!(detail.contains("installed_app_path"), "{detail}");
+    }
+
+    #[test]
+    fn live_device_qa_report_rejects_stale_bundled_core_binding() {
+        let mut report = valid_live_device_qa_report_json();
+        report["bundled_core"]["version"] = json!("jarvis 9.9.9");
+        let (status, detail) = inspect_live_device_qa_report_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("bundled_core.version"), "{detail}");
+
+        let mut report = valid_live_device_qa_report_json();
+        report["bundled_core"]["executable_path"] = json!("/tmp/jarvis-cli");
+        let (status, detail) = inspect_live_device_qa_report_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("bundled_core.executable_path"), "{detail}");
+
+        let mut report = valid_live_device_qa_report_json();
+        report["bundled_core"]["sha256"] = json!("not-a-digest");
+        let (status, detail) = inspect_live_device_qa_report_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("bundled_core.sha256"), "{detail}");
     }
 
     #[test]

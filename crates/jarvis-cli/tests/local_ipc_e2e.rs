@@ -365,6 +365,15 @@ fn release_readiness_rejects_semantically_invalid_live_voice_evidence() {
     fn wrong_installed_app_path(report: &mut Value) {
         report["installed_app_path"] = json!("/tmp/Jarvis.app");
     }
+    fn wrong_bundled_core_path(report: &mut Value) {
+        report["bundled_core"]["executable_path"] = json!("/tmp/jarvis-cli");
+    }
+    fn wrong_bundled_core_version(report: &mut Value) {
+        report["bundled_core"]["version"] = json!("jarvis 9.9.9");
+    }
+    fn malformed_bundled_core_digest(report: &mut Value) {
+        report["bundled_core"]["sha256"] = json!("not-a-digest");
+    }
     fn mismatched_observed_transcript(report: &mut Value) {
         report["voice_command_observation"]["observed_transcript"] = json!("Jarvis stats check.");
     }
@@ -411,6 +420,21 @@ fn release_readiness_rejects_semantically_invalid_live_voice_evidence() {
             "wrong installed app path",
             wrong_installed_app_path as fn(&mut Value),
             "installed_app_path",
+        ),
+        (
+            "wrong bundled core path",
+            wrong_bundled_core_path as fn(&mut Value),
+            "bundled_core.executable_path",
+        ),
+        (
+            "wrong bundled core version",
+            wrong_bundled_core_version as fn(&mut Value),
+            "bundled_core.version",
+        ),
+        (
+            "malformed bundled core digest",
+            malformed_bundled_core_digest as fn(&mut Value),
+            "bundled_core.sha256",
         ),
         (
             "mismatched observed transcript",
@@ -4765,6 +4789,11 @@ fn valid_live_device_qa_report() -> Value {
             "build_version": "0.1.4",
             "microphone_usage_description": "Jarvis uses microphone input only when you explicitly start local voice capture.",
             "speech_recognition_usage_description": "Jarvis uses speech recognition only to turn your spoken command into a local assistant request."
+        },
+        "bundled_core": {
+            "executable_path": "/Applications/Jarvis.app/Contents/Resources/bin/jarvis-cli",
+            "version": "jarvis 0.1.4",
+            "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         },
         "validation_flags": {
             "clean_profile": true,

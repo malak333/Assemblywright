@@ -736,6 +736,7 @@ EOF
   touch "$self_test_pkg"
   self_test_zip_sha="$(file_sha256 "$self_test_zip")"
   self_test_pkg_sha="$(file_sha256 "$self_test_pkg")"
+  self_test_core_sha="$(file_sha256 "$tmp_dir/dist/Jarvis.app/Contents/Resources/bin/jarvis-cli")"
   cat >"$tmp_dir/live.json" <<JSON
 {
   "schema_version": 1,
@@ -786,6 +787,11 @@ EOF
     "build_version": "$VERSION",
     "microphone_usage_description": "self-test fixture",
     "speech_recognition_usage_description": "self-test fixture"
+  },
+  "bundled_core": {
+    "executable_path": "/Applications/Jarvis.app/Contents/Resources/bin/jarvis-cli",
+    "version": "jarvis $VERSION",
+    "sha256": "$self_test_core_sha"
   },
   "proof_boundary": "self-test fixture"
 }
@@ -1513,6 +1519,9 @@ require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "app_bundle
 require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.build_version" "$EXPECTED_VERSION"
 require_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.microphone_usage_description"
 require_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.speech_recognition_usage_description"
+require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "bundled_core.executable_path" "$EXPECTED_INSTALLED_APP_PATH/Contents/Resources/bin/jarvis-cli"
+require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "bundled_core.version" "jarvis $EXPECTED_VERSION"
+require_json_sha256 "live-device QA report" "$LIVE_QA_REPORT" "bundled_core.sha256"
 for flag in marketplace_review malware_scan os_sandbox egress_enforcement signed_publisher_policy manual_trust_review; do
   require_json_bool_true "plugin trust QA report" "$PLUGIN_QA_REPORT" "validation_flags.$flag"
 done

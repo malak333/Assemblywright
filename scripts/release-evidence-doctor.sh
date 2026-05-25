@@ -699,6 +699,9 @@ check_release_evidence() {
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.build_version" "$EXPECTED_VERSION"
     check_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.microphone_usage_description"
     check_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.speech_recognition_usage_description"
+    check_json_string "live-device QA report" "$LIVE_QA_REPORT" "bundled_core.executable_path" "$EXPECTED_INSTALLED_APP_PATH/Contents/Resources/bin/jarvis-cli"
+    check_json_string "live-device QA report" "$LIVE_QA_REPORT" "bundled_core.version" "jarvis $EXPECTED_VERSION"
+    check_json_sha256 "live-device QA report" "$LIVE_QA_REPORT" "bundled_core.sha256"
   else
     record_missing "live-device QA report missing or invalid JSON: $LIVE_QA_REPORT"
   fi
@@ -812,6 +815,8 @@ EOF
 write_fixture_reports() {
   local live_path="$1"
   local plugin_path="$2"
+  local live_core_sha
+  live_core_sha="$(file_sha256 "$(dirname "$live_path")/dist/Jarvis.app/Contents/Resources/bin/jarvis-cli")"
 
   cat >"$live_path" <<JSON
 {
@@ -863,6 +868,11 @@ write_fixture_reports() {
     "build_version": "$VERSION",
     "microphone_usage_description": "self-test fixture",
     "speech_recognition_usage_description": "self-test fixture"
+  },
+  "bundled_core": {
+    "executable_path": "/Applications/Jarvis.app/Contents/Resources/bin/jarvis-cli",
+    "version": "jarvis $VERSION",
+    "sha256": "$live_core_sha"
   },
   "proof_boundary": "self-test fixture"
 }
