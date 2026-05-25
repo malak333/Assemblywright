@@ -550,7 +550,9 @@ Still future gates for production distribution:
   `JARVIS_QA_INSTALLED_APP_PATH`, the observed transcript must match the spoken
   test phrase after trimming, the expected command text must match the observed
   command text after trimming, `JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID` must be
-  `task:<uuid>` or `audit:<uuid>` from live command/audit evidence, and the
+  `task:<uuid>` or `audit:<uuid>` from live command/audit evidence, and
+  repository-backed `/release/evidence-status` must resolve it to an existing
+  task or task-associated audit row before it can clear readiness. The
   report must bind the installed bundled core path, `jarvis <version>` output,
   and SHA-256 digest. The report generation timestamp must be UTC, no earlier
   than the completed voice check, and not future-dated. Confirm the generated

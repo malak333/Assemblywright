@@ -601,6 +601,110 @@ fn release_readiness_rejects_semantically_invalid_live_voice_evidence() {
 }
 
 #[test]
+fn release_evidence_status_resolves_live_voice_command_result_against_repository() {
+    let temp_dir = tempfile::tempdir().expect("temp live QA repository evidence");
+    let db_path = temp_dir.path().join("jarvis-e2e.sqlite");
+    let live_report_path = temp_dir.path().join("release-live-device-qa-report.json");
+    let report_path = live_report_path
+        .to_str()
+        .expect("live report path is UTF-8")
+        .to_string();
+    let mut server =
+        JarvisServer::start_with_env(&db_path, &[("JARVIS_QA_REPORT_PATH", report_path.as_str())]);
+    let endpoint = server.endpoint();
+
+    let command = run_cli_json([
+        "command",
+        "status check",
+        "--json",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(command["accepted"], true, "{command}");
+    let task_id = command["task"]["id"].as_str().expect("task id");
+    let task_audit_id = command["audit_entries"]
+        .as_array()
+        .expect("audit entries")
+        .iter()
+        .find(|entry| entry["task_id"].as_str() == Some(task_id))
+        .and_then(|entry| entry["id"].as_str())
+        .expect("task audit id")
+        .to_string();
+
+    let mut task_report = valid_live_device_qa_report();
+    task_report["voice_command_observation"]["command_result_evidence_id"] =
+        json!(format!("task:{task_id}"));
+    write_live_device_qa_report(&live_report_path, task_report);
+    let task_evidence_status = run_cli_json([
+        "release",
+        "evidence-status",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_release_evidence_item_status(
+        &task_evidence_status,
+        "live_device_qa_report",
+        "present",
+        "task evidence should resolve against the served repository",
+    );
+
+    let mut audit_report = valid_live_device_qa_report();
+    audit_report["voice_command_observation"]["command_result_evidence_id"] =
+        json!(format!("audit:{task_audit_id}"));
+    write_live_device_qa_report(&live_report_path, audit_report);
+    let audit_evidence_status = run_cli_json([
+        "release",
+        "evidence-status",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_release_evidence_item_status(
+        &audit_evidence_status,
+        "live_device_qa_report",
+        "present",
+        "task audit evidence should resolve against the served repository",
+    );
+
+    let mut missing_report = valid_live_device_qa_report();
+    missing_report["voice_command_observation"]["command_result_evidence_id"] =
+        json!("task:00000000-0000-4000-8000-000000009999");
+    write_live_device_qa_report(&live_report_path, missing_report);
+    let missing_evidence_status = run_cli_json([
+        "release",
+        "evidence-status",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_release_evidence_item_status(
+        &missing_evidence_status,
+        "live_device_qa_report",
+        "invalid",
+        "missing task evidence must not clear live-device QA",
+    );
+    let live_item = release_evidence_item(&missing_evidence_status, "live_device_qa_report");
+    assert!(
+        live_item["detail"]
+            .as_str()
+            .expect("live detail")
+            .contains("does not resolve to repository evidence"),
+        "{live_item}"
+    );
+
+    let readiness = run_cli_json_with_env(
+        ["release", "readiness", "--endpoint", endpoint.as_str()],
+        &[("JARVIS_RELEASE_READINESS_EVIDENCE_MODE", "external")],
+    );
+    assert_array_contains(&readiness["pending_features"], "key", "live_voice_loop");
+    assert!(!readiness["implemented_features"]
+        .as_array()
+        .expect("implemented features")
+        .iter()
+        .any(|feature| feature["key"] == "live_voice_loop"));
+
+    server.stop();
+}
+
+#[test]
 fn release_evidence_status_rejects_semantically_invalid_plugin_and_bundle_evidence() {
     let endpoint = format!("http://{}", unused_loopback_addr());
 
@@ -5419,6 +5523,28 @@ fn assert_all_evidence_items_present(evidence_status: &Value) {
             .iter()
             .any(|item| item["key"] == key && item["status"] == "present"));
     }
+}
+
+fn release_evidence_item<'a>(evidence_status: &'a Value, key: &str) -> &'a Value {
+    evidence_status["items"]
+        .as_array()
+        .expect("evidence items")
+        .iter()
+        .find(|item| item["key"] == key)
+        .unwrap_or_else(|| panic!("missing evidence item {key}"))
+}
+
+fn assert_release_evidence_item_status(
+    evidence_status: &Value,
+    key: &str,
+    expected_status: &str,
+    context: &str,
+) {
+    let item = release_evidence_item(evidence_status, key);
+    assert_eq!(
+        item["status"], expected_status,
+        "{context}: expected {key} to be {expected_status}: {item}"
+    );
 }
 
 #[cfg(unix)]
