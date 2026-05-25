@@ -58,7 +58,9 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   operator-readable output and use `--json` or `JARVIS_CLI_JSON=1` for the
   exact structured payload. Confirm the app bundle metadata and bundled
   `jarvis-cli.version` marker are semantically checked before those items can
-  count as present. Treat it as file/report inventory plus report semantic
+  count as present, and that missing or stale marker details point operators to
+  rerun `./scripts/package-distribution.sh --unsigned-launch-check` or the
+  signed packaging lane. Treat it as file/report inventory plus report semantic
   validation only, not proof that signing, notarization, installation, Finder
   launch, executable runtime behavior, live-device QA, marketplace review,
   malware scanning, or OS sandboxing was performed.
@@ -87,7 +89,8 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   configured evidence paths, SHA-256-shaped artifact/report digests matching
   the current files, and
   `validation_flags.local_signature_validation=true`, and rejects a stale
-  packaged `jarvis-cli.version` marker beside the bundled core.
+  packaged `jarvis-cli.version` marker beside the bundled core with packaging
+  remediation guidance.
 - Confirm `release-evidence-doctor.sh --check` prints the follow-up signing,
   live-device template/assertion, plugin-trust template/assertion, and final
   evidence-bundle template/bundle commands whenever evidence is missing.

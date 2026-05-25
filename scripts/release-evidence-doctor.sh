@@ -600,6 +600,7 @@ check_app_bundle_metadata() {
 check_bundled_core_version() {
   local core_path="$APP_PATH/Contents/Resources/bin/jarvis-cli"
   local marker_path="$core_path.version"
+  local remediation="rerun ./scripts/package-distribution.sh --unsigned-launch-check for local evidence, or the signed package-distribution.sh lane before final release evidence"
   if [[ ! -x "$core_path" ]]; then
     return 0
   fi
@@ -607,14 +608,14 @@ check_bundled_core_version() {
   if [[ -f "$marker_path" ]] && [[ "$(tr -d '\r\n' <"$marker_path")" == "jarvis $EXPECTED_VERSION" ]]; then
     record_satisfied "bundled core version marker matches expected version"
   else
-    record_missing "bundled core version marker mismatch: expected jarvis $EXPECTED_VERSION from $marker_path"
+    record_missing "bundled core version marker mismatch: expected jarvis $EXPECTED_VERSION from $marker_path; $remediation"
   fi
 
   local output
   if output="$("$core_path" --version 2>&1)" && [[ "$output" == *"jarvis $EXPECTED_VERSION"* ]]; then
     record_satisfied "bundled core --version matches expected version"
   else
-    record_missing "bundled core --version mismatch: expected jarvis $EXPECTED_VERSION from $core_path"
+    record_missing "bundled core --version mismatch: expected jarvis $EXPECTED_VERSION from $core_path; $remediation"
   fi
 }
 
@@ -1061,6 +1062,18 @@ JSON
     "$0" --assert-complete >/dev/null
 
   printf 'jarvis 0.0.0\n' >"$tmp_dir/dist/Jarvis.app/Contents/Resources/bin/jarvis-cli.version"
+  stale_marker_output=""
+  stale_marker_output="$(JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+    "$0" --check)"
+  if [[ "$stale_marker_output" != *"./scripts/package-distribution.sh --unsigned-launch-check"* ]]; then
+    fail "release evidence doctor self-test expected stale bundled core guidance to include package-distribution.sh --unsigned-launch-check"
+  fi
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
     JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \

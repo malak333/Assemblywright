@@ -69,7 +69,10 @@ Evidence-aware readiness only accepts release reports that pass
 `Contents/Info.plist` for the expected bundle ID, short version, and build
 version before it can count as present, and the bundled core item checks the
 packaged `Contents/Resources/bin/jarvis-cli.version` marker without executing
-the artifact path. Live-device QA checks schema/type,
+the artifact path. Missing or stale bundled-core markers should be remediated
+by rerunning `./scripts/package-distribution.sh --unsigned-launch-check` for
+local evidence, or the signed packaging lane for final release evidence.
+Live-device QA checks schema/type,
 `self_test_fixture=false`, expected bundle ID, matching short/build version,
 and ordered non-future UTC voice-check timestamps. Plugin-trust checks ordered
 non-future UTC review timestamps. The final evidence bundle checks the expected
