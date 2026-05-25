@@ -130,6 +130,8 @@ const SIGNED_DISTRIBUTION_PROVENANCE_REQUIRED_FIELDS: &[&str] = &[
     "artifacts.pkg_path",
     "artifacts.zip_sha256",
     "artifacts.pkg_sha256",
+    "artifacts.bundled_core_path",
+    "artifacts.bundled_core_sha256",
     "artifacts.bundled_core_version",
     "signing.developer_id_application_identity",
     "signing.developer_id_installer_identity",
@@ -4108,6 +4110,7 @@ fn release_evidence_status_from_env() -> ReleaseEvidenceStatusResponse {
             "Signed-distribution provenance report",
             signed_provenance_report.clone(),
             SIGNED_DISTRIBUTION_PROVENANCE_REQUIRED_FIELDS,
+            app_path.clone(),
             zip_path.clone(),
             pkg_path.clone(),
         ),
@@ -4253,6 +4256,7 @@ fn release_signed_distribution_provenance_report_item(
     label: &str,
     path: PathBuf,
     required_fields: &[&str],
+    app_path: PathBuf,
     zip_path: PathBuf,
     pkg_path: PathBuf,
 ) -> ReleaseEvidenceStatusItem {
@@ -4260,6 +4264,7 @@ fn release_signed_distribution_provenance_report_item(
         key,
         &path,
         required_fields,
+        &app_path,
         &zip_path,
         &pkg_path,
     );
@@ -4456,10 +4461,17 @@ fn inspect_release_json_report_with_artifacts(
     key: &str,
     path: &FsPath,
     required_fields: &[&str],
+    app_path: &FsPath,
     zip_path: &FsPath,
     pkg_path: &FsPath,
 ) -> (ReleaseEvidenceItemStatus, String) {
-    inspect_release_json_report_inner(key, path, required_fields, Some((zip_path, pkg_path)), None)
+    inspect_release_json_report_inner(
+        key,
+        path,
+        required_fields,
+        Some((app_path, zip_path, pkg_path)),
+        None,
+    )
 }
 
 fn inspect_release_json_report_with_bundle_digests(
@@ -4475,7 +4487,7 @@ fn inspect_release_json_report_inner(
     key: &str,
     path: &FsPath,
     required_fields: &[&str],
-    signed_artifact_paths: Option<(&FsPath, &FsPath)>,
+    signed_artifact_paths: Option<(&FsPath, &FsPath, &FsPath)>,
     bundle_digest_paths: Option<ReleaseEvidenceBundleDigestPaths<'_>>,
 ) -> (ReleaseEvidenceItemStatus, String) {
     let contents = match fs::read_to_string(path) {
@@ -4514,10 +4526,10 @@ fn inspect_release_json_report_inner(
             if let Err(error) = validate_signed_distribution_provenance(&value) {
                 return (ReleaseEvidenceItemStatus::Invalid, error);
             }
-            if let Some((zip_path, pkg_path)) = signed_artifact_paths {
-                if let Err(error) =
-                    validate_signed_distribution_artifact_digests(&value, zip_path, pkg_path)
-                {
+            if let Some((app_path, zip_path, pkg_path)) = signed_artifact_paths {
+                if let Err(error) = validate_signed_distribution_artifact_digests(
+                    &value, app_path, zip_path, pkg_path,
+                ) {
                     return (ReleaseEvidenceItemStatus::Invalid, error);
                 }
             }
@@ -4782,6 +4794,17 @@ fn validate_signed_distribution_provenance(value: &serde_json::Value) -> Result<
     require_json_string_value(value, "version", &expected_release_evidence_version())?;
     require_json_string_value(
         value,
+        "artifacts.bundled_core_path",
+        &env_path_or(
+            "JARVIS_EVIDENCE_APP_PATH",
+            env_path("JARVIS_EVIDENCE_DIST_DIR", "target/distribution").join("Jarvis.app"),
+        )
+        .join("Contents/Resources/bin/jarvis-cli")
+        .display()
+        .to_string(),
+    )?;
+    require_json_string_value(
+        value,
         "artifacts.bundled_core_version",
         &format!("jarvis {}", expected_release_evidence_version()),
     )?;
@@ -4794,7 +4817,11 @@ fn validate_signed_distribution_provenance(value: &serde_json::Value) -> Result<
             "com.nobiletechnology.jarvis",
         ),
     )?;
-    for field in ["artifacts.zip_sha256", "artifacts.pkg_sha256"] {
+    for field in [
+        "artifacts.zip_sha256",
+        "artifacts.pkg_sha256",
+        "artifacts.bundled_core_sha256",
+    ] {
         require_json_sha256_value(value, field)?;
     }
     for field in [
@@ -4815,6 +4842,7 @@ fn validate_signed_distribution_provenance(value: &serde_json::Value) -> Result<
 
 fn validate_signed_distribution_artifact_digests(
     value: &serde_json::Value,
+    app_path: &FsPath,
     zip_path: &FsPath,
     pkg_path: &FsPath,
 ) -> Result<(), String> {
@@ -4824,6 +4852,12 @@ fn validate_signed_distribution_artifact_digests(
         "artifacts.pkg_sha256",
         "installer package artifact",
         pkg_path,
+    )?;
+    require_json_sha256_matches_file(
+        value,
+        "artifacts.bundled_core_sha256",
+        "bundled core executable",
+        &app_path.join("Contents/Resources/bin/jarvis-cli"),
     )?;
     Ok(())
 }
@@ -5077,7 +5111,7 @@ fn json_string_at(value: &serde_json::Value, dotted_path: &str) -> Option<String
 fn release_json_present_detail(key: &str) -> String {
     match key {
         "release_evidence_bundle" => "JSON report exists, schema/evidence identity is valid, expected release version matches, artifact/report paths and SHA-256 digests match current artifacts and reports, and local signature validation is true; clean-profile, live-device, and plugin-trust claims remain owner-recorded external evidence".to_string(),
-        "signed_distribution_provenance_report" => "JSON report exists, expected release version, bundle identifier, and bundled core version match, signing/notarization/stapling/Gatekeeper evidence fields are present, required flags are true, and artifact SHA-256 digests match the current zip/pkg files; clean-profile install and live-device QA remain separate manual gates".to_string(),
+        "signed_distribution_provenance_report" => "JSON report exists, expected release version, bundle identifier, bundled core path/version/digest match, signing/notarization/stapling/Gatekeeper evidence fields are present, required flags are true, and artifact SHA-256 digests match the current zip/pkg/core files; clean-profile install and live-device QA remain separate manual gates".to_string(),
         "live_device_qa_report" => "JSON report exists, required owner-recorded fields and proof boundary are non-empty, installed app path, release metadata, bundled core executable path/version/SHA-256 binding, timestamps, observed transcript, observed command text, and task/audit command evidence reference match expected values; live-device claims are still owner-recorded external evidence".to_string(),
         "plugin_trust_qa_report" => "JSON report exists, schema/evidence identity is valid, required owner-recorded fields are present, review and egress validation timestamps are valid and ordered, and deny/allow egress fixture notes are present; marketplace, malware, sandbox, and host-level egress claims remain owner-recorded external evidence".to_string(),
         _ => "JSON report exists and required owner-recorded fields are present; external claims are not revalidated by evidence-status".to_string(),
@@ -5271,7 +5305,7 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "release_evidence_status",
             "implemented",
-            "`/release/evidence-status` and `jarvis release evidence-status` expose structured present, missing, or invalid status for standard signed artifacts, QA reports, and final evidence bundle paths, including app bundle metadata matching, bundled core version-marker matching, signed-provenance artifact digest matching, live-device QA bundle/version/non-future timestamp checks, plugin-trust non-future timestamp checks, and final evidence-bundle path/digest/signature-validation/non-future timestamp checks, with Rust, CLI E2E, and Swift model coverage.",
+            "`/release/evidence-status` and `jarvis release evidence-status` expose structured present, missing, or invalid status for standard signed artifacts, QA reports, and final evidence bundle paths, including app bundle metadata matching, bundled core version-marker matching, signed-provenance core path/version/digest binding, signed-provenance artifact digest matching, live-device QA bundle/version/non-future timestamp checks, plugin-trust non-future timestamp checks, and final evidence-bundle path/digest/signature-validation/non-future timestamp checks, with Rust, CLI E2E, and Swift model coverage.",
             "Read-only file/report inventory plus report semantic validation only; it does not sign, notarize, install, Finder-launch, run live-device QA, review marketplace trust, scan malware, or enforce OS sandboxing.",
         ),
         feature(
@@ -6253,6 +6287,8 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 "pkg_path": "target/distribution/Jarvis-0.1.4.pkg",
                 "zip_sha256": digest,
                 "pkg_sha256": digest,
+                "bundled_core_path": "target/distribution/Jarvis.app/Contents/Resources/bin/jarvis-cli",
+                "bundled_core_sha256": digest,
                 "bundled_core_version": "jarvis 0.1.4"
             },
             "reports": {
@@ -6725,6 +6761,8 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 "pkg_path": "target/distribution/Jarvis-0.1.4.pkg",
                 "zip_sha256": digest,
                 "pkg_sha256": digest,
+                "bundled_core_path": "target/distribution/Jarvis.app/Contents/Resources/bin/jarvis-cli",
+                "bundled_core_sha256": digest,
                 "bundled_core_version": "jarvis 0.1.4"
             },
             "signing": {
@@ -6791,16 +6829,25 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
 
     #[test]
     fn signed_distribution_provenance_rejects_stale_artifact_digest() {
+        let app_dir = tempfile::tempdir().expect("temp app bundle");
         let zip_file = tempfile::NamedTempFile::new().expect("temp zip artifact");
         let pkg_file = tempfile::NamedTempFile::new().expect("temp package artifact");
+        let core_path = app_dir.path().join("Contents/Resources/bin/jarvis-cli");
+        std::fs::create_dir_all(core_path.parent().expect("core parent"))
+            .expect("create core parent");
+        std::fs::write(&core_path, "current core").expect("write core artifact");
         std::fs::write(zip_file.path(), "current zip").expect("write zip artifact");
         std::fs::write(pkg_file.path(), "current package").expect("write package artifact");
 
         let mut report = valid_signed_distribution_provenance_json();
         report["artifacts"]["pkg_sha256"] =
             json!(file_sha256(pkg_file.path()).expect("package digest"));
+        report["artifacts"]["bundled_core_path"] = json!(core_path.display().to_string());
+        report["artifacts"]["bundled_core_sha256"] =
+            json!(file_sha256(&core_path).expect("core digest"));
         let error = validate_signed_distribution_artifact_digests(
             &report,
+            app_dir.path(),
             zip_file.path(),
             pkg_file.path(),
         )
@@ -6830,6 +6877,45 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert!(
             detail.contains("artifacts.bundled_core_version"),
             "{detail}"
+        );
+    }
+
+    #[test]
+    fn signed_distribution_provenance_rejects_wrong_bundled_core_path_or_digest() {
+        let app_dir = tempfile::tempdir().expect("temp app bundle");
+        let core_path = app_dir.path().join("Contents/Resources/bin/jarvis-cli");
+        std::fs::create_dir_all(core_path.parent().expect("core parent"))
+            .expect("create core parent");
+        std::fs::write(&core_path, "current core").expect("write core artifact");
+
+        let mut wrong_path = valid_signed_distribution_provenance_json();
+        wrong_path["artifacts"]["bundled_core_path"] = json!("/tmp/jarvis-cli");
+        let (_, detail) = inspect_signed_distribution_provenance_value(wrong_path);
+        assert!(detail.contains("artifacts.bundled_core_path"), "{detail}");
+
+        let zip_file = tempfile::NamedTempFile::new().expect("temp zip artifact");
+        let pkg_file = tempfile::NamedTempFile::new().expect("temp package artifact");
+        std::fs::write(zip_file.path(), "current zip").expect("write zip artifact");
+        std::fs::write(pkg_file.path(), "current package").expect("write package artifact");
+        let mut stale_digest = valid_signed_distribution_provenance_json();
+        stale_digest["artifacts"]["zip_sha256"] =
+            json!(file_sha256(zip_file.path()).expect("zip digest"));
+        stale_digest["artifacts"]["pkg_sha256"] =
+            json!(file_sha256(pkg_file.path()).expect("package digest"));
+        stale_digest["artifacts"]["bundled_core_path"] = json!(core_path.display().to_string());
+        let error = validate_signed_distribution_artifact_digests(
+            &stale_digest,
+            app_dir.path(),
+            zip_file.path(),
+            pkg_file.path(),
+        )
+        .expect_err("stale bundled core digest should fail");
+
+        assert!(
+            error.contains(
+                "artifacts.bundled_core_sha256 does not match current bundled core executable"
+            ),
+            "{error}"
         );
     }
 

@@ -288,7 +288,8 @@ package creation when Apple credentials are provided. It now also writes a
 `Jarvis-<version>-signed-provenance.json` report with signing identities,
 notary submission IDs/log paths, staple validation output, Gatekeeper
 assessment output, bundled core `jarvis --version` output, and artifact
-SHA-256 digests for the signed zip/pkg. It
+SHA-256 digests for the signed zip/pkg, plus the bundled
+`Contents/Resources/bin/jarvis-cli` path and SHA-256 digest. It
 still does not replace clean-profile installer run, Finder launch, App Store
 validation, or live microphone/Speech/audio-output validation.
 For those live checks, `./scripts/release-live-device-qa.sh --check` prints the
@@ -414,10 +415,11 @@ Evidence-status items report present/missing/invalid inventory. Artifact paths
 are presence-only checks except the app bundle, whose `Info.plist` bundle id,
 short version, and build version must match the expected release metadata. JSON
 reports receive semantic validation for signed-distribution provenance
-version/bundle metadata, signing/notary/staple and Gatekeeper fields, required
-flags, SHA-256 digests, signed-provenance zip/pkg digest matches against
-current artifact files, live-device QA metadata, non-future plugin-trust
-timestamps, and final bundle signatures. The status surface still does not
+version/bundle metadata, bundled core path/version/SHA-256 binding,
+signing/notary/staple and Gatekeeper fields, required flags, SHA-256 digests,
+signed-provenance zip/pkg/core digest matches against current artifact files,
+live-device QA metadata, non-future plugin-trust timestamps, and final bundle
+signatures. The status surface still does not
 perform signing, notarization, stapling, installation, or manual QA.
 
 ## Docs

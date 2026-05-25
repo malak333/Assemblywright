@@ -72,12 +72,13 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   `live_voice_loop` pending.
 - Confirm signed-distribution provenance, plugin-trust, and final bundle reports
   are `present`, not `invalid`. Evidence-status checks signed provenance
-  version/bundle metadata, bundled core version, signing/notary/staple/Gatekeeper evidence fields,
-  required flags, non-future plugin-trust review timestamps, final bundle version,
-  artifact/report path matching, SHA-256 digest shape, signed-provenance
-  zip/pkg digests against the current artifact files, final-bundle digests
-  against current artifacts/reports, and local signature-validation status
-  before treating those reports as usable evidence.
+  version/bundle metadata, bundled core path/version/SHA-256 binding,
+  signing/notary/staple/Gatekeeper evidence fields, required flags, non-future
+  plugin-trust review timestamps, final bundle version, artifact/report path
+  matching, SHA-256 digest shape, signed-provenance zip/pkg/core digests against
+  the current artifact files, final-bundle digests against current
+  artifacts/reports, and local signature-validation status before treating
+  those reports as usable evidence.
 - Confirm `release-plugin-trust-qa.sh --assert-complete`,
   `release-evidence-bundle.sh --bundle`, and
   `release-evidence-doctor.sh --assert-complete` reject non-UTC plugin-trust
@@ -403,7 +404,7 @@ stage or when a PR needs focused evidence for one ownership slice.
   required live-device/plugin-trust report flag, require owner-recorded evidence
   fields in both QA reports, confirm the live-device QA report matches the
   expected app bundle `Info.plist` bundle id/version/build, reject future-dated
-  report timestamps, verify signed-provenance zip/pkg digests
+  report timestamps, verify signed-provenance zip/pkg/core digests
   against the current artifact files, and write SHA-256 digests for the signed
   distribution artifacts, signed provenance, plus QA reports before writing evidence. The
   disabled-signature path is reserved for the fake self-test fixture.

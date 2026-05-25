@@ -807,6 +807,66 @@ fn release_evidence_status_rejects_stale_signed_provenance_core_version() {
 
 #[test]
 #[cfg(unix)]
+fn release_evidence_status_rejects_stale_signed_provenance_core_digest() {
+    let temp_dir = tempfile::tempdir().expect("temp release evidence reports");
+    let fixture = write_complete_release_evidence_fixture(temp_dir.path());
+    let endpoint = format!("http://{}", unused_loopback_addr());
+
+    let mut stale_report = valid_signed_distribution_provenance_report(
+        temp_dir
+            .path()
+            .join("dist/Jarvis.app")
+            .to_str()
+            .expect("app path utf8"),
+        temp_dir
+            .path()
+            .join("dist/Jarvis-0.1.4.zip")
+            .to_str()
+            .expect("zip path utf8"),
+        temp_dir
+            .path()
+            .join("dist/Jarvis-0.1.4.pkg")
+            .to_str()
+            .expect("pkg path utf8"),
+        &file_sha256(&temp_dir.path().join("dist/Jarvis-0.1.4.zip")),
+        &file_sha256(&temp_dir.path().join("dist/Jarvis-0.1.4.pkg")),
+    );
+    stale_report["artifacts"]["bundled_core_sha256"] =
+        json!("fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210");
+    write_json_report(Path::new(&fixture.signed_provenance_path), stale_report);
+
+    let evidence_status = run_cli_json_with_env(
+        [
+            "release",
+            "evidence-status",
+            "--endpoint",
+            endpoint.as_str(),
+        ],
+        &fixture.env_refs(),
+    );
+    let signed_provenance_item = evidence_status["items"]
+        .as_array()
+        .expect("evidence items")
+        .iter()
+        .find(|item| item["key"] == "signed_distribution_provenance_report")
+        .expect("signed provenance item");
+    assert_eq!(
+        signed_provenance_item["status"], "invalid",
+        "{signed_provenance_item}"
+    );
+    assert!(
+        signed_provenance_item["detail"]
+            .as_str()
+            .expect("signed provenance detail")
+            .contains(
+                "artifacts.bundled_core_sha256 does not match current bundled core executable"
+            ),
+        "{signed_provenance_item}"
+    );
+}
+
+#[test]
+#[cfg(unix)]
 fn release_evidence_status_rejects_stale_final_bundle_report_digests() {
     let temp_dir = tempfile::tempdir().expect("temp release evidence reports");
     let fixture = write_complete_release_evidence_fixture(temp_dir.path());
@@ -4958,6 +5018,8 @@ fn valid_signed_distribution_provenance_report(
     zip_sha256: &str,
     pkg_sha256: &str,
 ) -> Value {
+    let bundled_core_path = Path::new(app_path).join("Contents/Resources/bin/jarvis-cli");
+    let bundled_core_sha256 = file_sha256(&bundled_core_path);
     json!({
         "schema_version": 1,
         "evidence_type": "signed_distribution_provenance",
@@ -4970,6 +5032,8 @@ fn valid_signed_distribution_provenance_report(
             "pkg_path": pkg_path,
             "zip_sha256": zip_sha256,
             "pkg_sha256": pkg_sha256,
+            "bundled_core_path": bundled_core_path.to_str().expect("bundled core path utf8"),
+            "bundled_core_sha256": bundled_core_sha256,
             "bundled_core_version": "jarvis 0.1.4"
         },
         "signing": {
