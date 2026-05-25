@@ -269,6 +269,86 @@ raise SystemExit(0 if isinstance(cursor, str) and bool(cursor.strip()) else 1)
 PY
 }
 
+json_string_contains() {
+  local path="$1"
+  local dotted_key="$2"
+  local expected="$3"
+  python3 - "$path" "$dotted_key" "$expected" <<'PY'
+import json
+import sys
+
+path, dotted_key, expected = sys.argv[1:4]
+try:
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+except Exception:
+    raise SystemExit(1)
+
+cursor = data
+for segment in dotted_key.split("."):
+    if not isinstance(cursor, dict) or segment not in cursor:
+        raise SystemExit(1)
+    cursor = cursor[segment]
+
+raise SystemExit(0 if isinstance(cursor, str) and expected in cursor else 1)
+PY
+}
+
+json_string_prefix() {
+  local path="$1"
+  local dotted_key="$2"
+  local expected="$3"
+  python3 - "$path" "$dotted_key" "$expected" <<'PY'
+import json
+import sys
+
+path, dotted_key, expected = sys.argv[1:4]
+try:
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+except Exception:
+    raise SystemExit(1)
+
+cursor = data
+for segment in dotted_key.split("."):
+    if not isinstance(cursor, dict) or segment not in cursor:
+        raise SystemExit(1)
+    cursor = cursor[segment]
+
+raise SystemExit(0 if isinstance(cursor, str) and cursor.startswith(expected) else 1)
+PY
+}
+
+json_uuid_string() {
+  local path="$1"
+  local dotted_key="$2"
+  python3 - "$path" "$dotted_key" <<'PY'
+import json
+import sys
+import uuid
+
+path, dotted_key = sys.argv[1:3]
+try:
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+except Exception:
+    raise SystemExit(1)
+
+cursor = data
+for segment in dotted_key.split("."):
+    if not isinstance(cursor, dict) or segment not in cursor:
+        raise SystemExit(1)
+    cursor = cursor[segment]
+
+try:
+    parsed = uuid.UUID(cursor.strip()) if isinstance(cursor, str) else uuid.UUID("")
+except Exception:
+    raise SystemExit(1)
+
+raise SystemExit(0 if parsed.int != 0 else 1)
+PY
+}
+
 json_sha256_string() {
   local path="$1"
   local dotted_key="$2"
@@ -506,6 +586,44 @@ check_json_nonempty_string() {
   fi
 }
 
+check_json_string_prefix() {
+  local label="$1"
+  local path="$2"
+  local dotted_key="$3"
+  local expected="$4"
+
+  if json_string_prefix "$path" "$dotted_key" "$expected"; then
+    record_satisfied "$label: $dotted_key starts with $expected"
+  else
+    record_missing "$label semantic mismatch: $dotted_key must start with $expected in $path"
+  fi
+}
+
+check_json_string_contains() {
+  local label="$1"
+  local path="$2"
+  local dotted_key="$3"
+  local expected="$4"
+
+  if json_string_contains "$path" "$dotted_key" "$expected"; then
+    record_satisfied "$label: $dotted_key includes $expected"
+  else
+    record_missing "$label semantic mismatch: $dotted_key must include $expected in $path"
+  fi
+}
+
+check_json_uuid() {
+  local label="$1"
+  local path="$2"
+  local dotted_key="$3"
+
+  if json_uuid_string "$path" "$dotted_key"; then
+    record_satisfied "$label: $dotted_key is a non-nil UUID"
+  else
+    record_missing "$label invalid UUID field: $dotted_key in $path"
+  fi
+}
+
 check_json_sha256() {
   local label="$1"
   local path="$2"
@@ -661,9 +779,21 @@ check_release_evidence() {
     for flag in developer_id_application_signed developer_id_installer_signed app_zip_notarized installer_pkg_notarized app_stapled installer_pkg_stapled gatekeeper_assessed artifact_digests_recorded; do
       check_json_flag "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "validation_flags.$flag"
     done
-    for field in signing.developer_id_application_identity signing.developer_id_installer_identity signing.app_bundle_codesign signing.app_executable_codesign signing.bundled_core_codesign signing.installer_pkg_signature notarization.app_zip_submission_id notarization.installer_pkg_submission_id notarization.app_zip_notary_log notarization.installer_pkg_notary_log stapling.app_bundle_validation stapling.installer_pkg_validation gatekeeper.app_bundle_assessment gatekeeper.installer_pkg_assessment; do
+    for field in notarization.app_zip_notary_log notarization.installer_pkg_notary_log; do
       check_json_nonempty_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "$field"
     done
+    check_json_string_prefix "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "signing.developer_id_application_identity" "Developer ID Application: "
+    check_json_string_prefix "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "signing.developer_id_installer_identity" "Developer ID Installer: "
+    for field in signing.app_bundle_codesign signing.app_executable_codesign signing.bundled_core_codesign; do
+      check_json_string_contains "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "$field" "Authority=Developer ID Application: "
+    done
+    check_json_string_contains "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "signing.installer_pkg_signature" "Developer ID Installer: "
+    check_json_uuid "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "notarization.app_zip_submission_id"
+    check_json_uuid "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "notarization.installer_pkg_submission_id"
+    check_json_string_contains "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "stapling.app_bundle_validation" "The validate action worked!"
+    check_json_string_contains "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "stapling.installer_pkg_validation" "The validate action worked!"
+    check_json_string_contains "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "gatekeeper.app_bundle_assessment" "accepted"
+    check_json_string_contains "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "gatekeeper.installer_pkg_assessment" "accepted"
     check_json_utc_timestamp "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "generated_at"
   else
     record_missing "signed-distribution provenance report missing or invalid JSON: $SIGNED_PROVENANCE_REPORT"
@@ -1134,6 +1264,29 @@ PY
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected stale signed provenance digest to fail"
+  fi
+
+  python3 - "$tmp_dir/dist/Jarvis-$VERSION-signed-provenance.json" "$tmp_dir/dist/bad-apple-tool-signed-provenance.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+with open(source, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["signing"]["app_bundle_codesign"] = "Authority=Apple Development: Jarvis QA Fixture"
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+PY
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/dist/bad-apple-tool-signed-provenance.json" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+    "$0" --assert-complete >/dev/null 2>&1; then
+    fail "release evidence doctor self-test expected non-Developer-ID signed provenance evidence to fail"
   fi
 
   check_output="$(JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/missing-dist" \

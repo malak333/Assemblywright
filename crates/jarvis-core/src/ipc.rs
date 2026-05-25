@@ -4957,6 +4957,46 @@ fn validate_signed_distribution_provenance(value: &serde_json::Value) -> Result<
     ] {
         require_json_sha256_value(value, field)?;
     }
+    require_json_string_prefix_value(
+        value,
+        "signing.developer_id_application_identity",
+        "Developer ID Application: ",
+    )?;
+    require_json_string_prefix_value(
+        value,
+        "signing.developer_id_installer_identity",
+        "Developer ID Installer: ",
+    )?;
+    for field in [
+        "signing.app_bundle_codesign",
+        "signing.app_executable_codesign",
+        "signing.bundled_core_codesign",
+    ] {
+        require_json_string_contains_value(value, field, "Authority=Developer ID Application: ")?;
+    }
+    require_json_string_contains_value(
+        value,
+        "signing.installer_pkg_signature",
+        "Developer ID Installer: ",
+    )?;
+    for field in [
+        "notarization.app_zip_submission_id",
+        "notarization.installer_pkg_submission_id",
+    ] {
+        require_json_uuid_value(value, field)?;
+    }
+    for field in [
+        "stapling.app_bundle_validation",
+        "stapling.installer_pkg_validation",
+    ] {
+        require_json_string_contains_value(value, field, "The validate action worked!")?;
+    }
+    for field in [
+        "gatekeeper.app_bundle_assessment",
+        "gatekeeper.installer_pkg_assessment",
+    ] {
+        require_json_string_contains_value(value, field, "accepted")?;
+    }
     for field in [
         "validation_flags.developer_id_application_signed",
         "validation_flags.developer_id_installer_signed",
@@ -5191,6 +5231,49 @@ fn require_json_nonempty_string_value(
     Ok(())
 }
 
+fn require_json_string_prefix_value(
+    value: &serde_json::Value,
+    dotted_path: &str,
+    expected_prefix: &str,
+) -> Result<(), String> {
+    let found = json_string_at(value, dotted_path)
+        .ok_or_else(|| format!("JSON report is missing required field: {dotted_path}"))?;
+    if found.starts_with(expected_prefix) {
+        Ok(())
+    } else {
+        Err(format!(
+            "JSON report {dotted_path} must start with {expected_prefix}"
+        ))
+    }
+}
+
+fn require_json_string_contains_value(
+    value: &serde_json::Value,
+    dotted_path: &str,
+    expected_fragment: &str,
+) -> Result<(), String> {
+    let found = json_string_at(value, dotted_path)
+        .ok_or_else(|| format!("JSON report is missing required field: {dotted_path}"))?;
+    if found.contains(expected_fragment) {
+        Ok(())
+    } else {
+        Err(format!(
+            "JSON report {dotted_path} must include {expected_fragment}"
+        ))
+    }
+}
+
+fn require_json_uuid_value(value: &serde_json::Value, dotted_path: &str) -> Result<(), String> {
+    let found = json_string_at(value, dotted_path)
+        .ok_or_else(|| format!("JSON report is missing required field: {dotted_path}"))?;
+    let parsed = Uuid::parse_str(found.trim())
+        .map_err(|_| format!("JSON report {dotted_path} must be a UUID"))?;
+    if parsed.is_nil() {
+        return Err(format!("JSON report {dotted_path} must not be a nil UUID"));
+    }
+    Ok(())
+}
+
 fn require_json_sha256_value(value: &serde_json::Value, dotted_path: &str) -> Result<(), String> {
     let found = json_string_at(value, dotted_path)
         .ok_or_else(|| format!("JSON report is missing required field: {dotted_path}"))?;
@@ -5244,7 +5327,7 @@ fn json_string_at(value: &serde_json::Value, dotted_path: &str) -> Option<String
 fn release_json_present_detail(key: &str) -> String {
     match key {
         "release_evidence_bundle" => "JSON report exists, schema/evidence identity is valid, expected release version matches, artifact/report paths and SHA-256 digests match current artifacts and reports, and local signature validation is true; clean-profile, live-device, and plugin-trust claims remain owner-recorded external evidence".to_string(),
-        "signed_distribution_provenance_report" => "JSON report exists, expected release version, bundle identifier, bundled core path/version/digest match, signing/notarization/stapling/Gatekeeper evidence fields are present, required flags are true, and artifact SHA-256 digests match the current zip/pkg/core files; clean-profile install and live-device QA remain separate manual gates".to_string(),
+        "signed_distribution_provenance_report" => "JSON report exists, expected release version, bundle identifier, bundled core path/version/digest match, Apple-tool-derived signing/notarization/stapling/Gatekeeper evidence is semantically valid, required flags are true, and artifact SHA-256 digests match the current zip/pkg/core files; clean-profile install and live-device QA remain separate manual gates".to_string(),
         "live_device_qa_report" => "JSON report exists, required owner-recorded fields and proof boundary are non-empty, installed app path, release metadata, bundled core executable path/version/SHA-256 binding, timestamps, observed transcript, observed command text, and task/audit command evidence reference match expected values; live-device claims are still owner-recorded external evidence".to_string(),
         "plugin_trust_qa_report" => "JSON report exists, schema/evidence identity is valid, self-test fixture identity is false, required owner-recorded fields are present, review and egress validation timestamps are valid and ordered, and deny/allow egress fixture notes are present; marketplace, malware, sandbox, and host-level egress claims remain owner-recorded external evidence".to_string(),
         _ => "JSON report exists and required owner-recorded fields are present; external claims are not revalidated by evidence-status".to_string(),
@@ -7112,6 +7195,64 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
         assert!(
             detail.contains("artifacts.bundled_core_version"),
+            "{detail}"
+        );
+    }
+
+    #[test]
+    fn signed_distribution_provenance_rejects_non_developer_id_identity() {
+        let mut report = valid_signed_distribution_provenance_json();
+        report["signing"]["developer_id_application_identity"] =
+            json!("Apple Development: Jarvis QA Fixture");
+        let (status, detail) = inspect_signed_distribution_provenance_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(
+            detail.contains("signing.developer_id_application_identity"),
+            "{detail}"
+        );
+    }
+
+    #[test]
+    fn signed_distribution_provenance_rejects_codesign_without_developer_id_authority() {
+        let mut report = valid_signed_distribution_provenance_json();
+        report["signing"]["app_bundle_codesign"] = json!("Authority=Apple Development: Fixture");
+        let (status, detail) = inspect_signed_distribution_provenance_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("signing.app_bundle_codesign"), "{detail}");
+    }
+
+    #[test]
+    fn signed_distribution_provenance_rejects_invalid_notary_submission_uuid() {
+        let mut report = valid_signed_distribution_provenance_json();
+        report["notarization"]["app_zip_submission_id"] = json!("not-a-submission-id");
+        let (status, detail) = inspect_signed_distribution_provenance_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(
+            detail.contains("notarization.app_zip_submission_id"),
+            "{detail}"
+        );
+    }
+
+    #[test]
+    fn signed_distribution_provenance_rejects_failed_stapler_validation() {
+        let mut report = valid_signed_distribution_provenance_json();
+        report["stapling"]["app_bundle_validation"] = json!("The validate action failed!");
+        let (status, detail) = inspect_signed_distribution_provenance_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(
+            detail.contains("stapling.app_bundle_validation"),
+            "{detail}"
+        );
+    }
+
+    #[test]
+    fn signed_distribution_provenance_rejects_gatekeeper_rejection() {
+        let mut report = valid_signed_distribution_provenance_json();
+        report["gatekeeper"]["app_bundle_assessment"] = json!("rejected");
+        let (status, detail) = inspect_signed_distribution_provenance_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(
+            detail.contains("gatekeeper.app_bundle_assessment"),
             "{detail}"
         );
     }

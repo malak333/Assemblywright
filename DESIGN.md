@@ -20,8 +20,9 @@
 - ChatGPT usage is explicit, routed, minimized, policy-checked, and audited.
 - Production-readiness claims are evidence-scoped. A green local foundation
   gate is not the same as finished assistant readiness until packaged-app,
-  permission UX, voice, recovery, diagnostics, and release-smoke evidence
-  exists for the claimed surface.
+  permission UX, voice, recovery, diagnostics, Apple-tool-validated signed
+  distribution evidence, and release-smoke evidence exists for the claimed
+  surface.
 - Live-device QA can clear voice readiness only when owner-recorded report
   fields pass semantic validation and, for repository-backed IPC readiness, the
   `command_result_evidence_id` resolves to existing task or task-associated
@@ -307,7 +308,7 @@ actions, and executable installed plugins with network-declaring actions must
 be enabled with the explicit `subprocess_stdio_network` grant. OS-level network
 sandbox enforcement and host-level egress filtering remain target architecture.
 The product still lacks
-signed/notarized release evidence, live microphone and audio-output validation,
+Apple-tool-validated signed/notarized/stapled release evidence, live microphone and audio-output validation,
 marketplace/WASM/OS-network-sandbox plugin trust boundaries, richer
 proactive trigger policy, and live OS notification validation. Swift supervision is
 covered only as a scaffold for
