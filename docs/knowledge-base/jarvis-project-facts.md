@@ -116,8 +116,8 @@ These notes capture durable facts for future agents working on this repository.
   artifact/report digests including the signed provenance digest, verifies
   signed-provenance zip/pkg digests against the current artifact files in
   evidence-status, bundle, and doctor assertions, verifies final-bundle
-  artifact/report paths and digests against the current configured files, and
-  requires `validation_flags.local_signature_validation=true`.
+  schema/type identity, artifact/report paths, and digests against the current
+  configured files, and requires `validation_flags.local_signature_validation=true`.
 - `release-evidence-doctor.sh --assert-complete` must stay aligned with that
   final-bundle semantic floor. It should reject minimal or hand-written final
   bundles that omit artifact/report paths, point at stale artifact/report paths,

@@ -578,6 +578,8 @@ write_bundle() {
   mkdir -p "$(dirname "$OUTPUT_PATH")"
   cat >"$OUTPUT_PATH" <<EOF
 {
+  "schema_version": 1,
+  "evidence_type": "release_evidence_bundle",
   "generated_at": "$generated_at",
   "version": "$VERSION",
   "artifacts": {
@@ -917,6 +919,8 @@ JSON
     JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"reports_archived": true'
+  require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"schema_version": 1'
+  require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"evidence_type": "release_evidence_bundle"'
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"local_signature_validation": false'
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"zip_sha256"'
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"signed_distribution_provenance_report"'
@@ -1532,6 +1536,8 @@ require_true JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED
 require_true JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED
 require_true JARVIS_EVIDENCE_REPORTS_ARCHIVED
 write_bundle
+require_json_number_equals "release evidence bundle" "$OUTPUT_PATH" "schema_version" "1"
+require_json_string_equals "release evidence bundle" "$OUTPUT_PATH" "evidence_type" "release_evidence_bundle"
 
 cat <<EOF
 Jarvis release evidence bundle: complete

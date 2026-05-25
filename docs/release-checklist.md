@@ -85,9 +85,9 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   recorded review completed.
 - Confirm `release-evidence-doctor.sh --assert-complete` enforces the same
   final-bundle semantic floor as `/release/evidence-status`: non-future UTC generation
-  timestamp, expected release version, artifact/report paths matching the
-  configured evidence paths, SHA-256-shaped artifact/report digests matching
-  the current files, and
+  timestamp, `schema_version: 1`, `evidence_type: release_evidence_bundle`,
+  expected release version, artifact/report paths matching the configured
+  evidence paths, SHA-256-shaped artifact/report digests matching the current files, and
   `validation_flags.local_signature_validation=true`, and rejects a stale
   packaged `jarvis-cli.version` marker beside the bundled core with packaging
   remediation guidance.

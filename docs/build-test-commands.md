@@ -449,7 +449,9 @@ deny/allow fixture notes.
 inventory through `/release/evidence-status`; the default CLI output is
 operator-readable and `--json` preserves the exact structured payload. It
 also rejects signed-provenance zip/pkg digests that no longer match the current
-artifact files. It is file/report inventory plus report semantic validation
+artifact files, and rejects final evidence bundles with the wrong
+`schema_version: 1` / `evidence_type: release_evidence_bundle` identity. It is
+file/report inventory plus report semantic validation
 only and does not prove signing, notarization, installed app launch, live-device QA, marketplace review,
 malware scanning, OS sandboxing, or executable runtime behavior. Non-default live-device and plugin-trust
 report paths can be provided through either the QA script variables
