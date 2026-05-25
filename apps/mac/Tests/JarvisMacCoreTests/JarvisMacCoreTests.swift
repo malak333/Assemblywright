@@ -342,16 +342,18 @@ struct JarvisMacCoreTests {
         )
 
         #expect(!readiness.productionReady)
-        #expect(readiness.verifiedFeatureCount == 16)
+        #expect(readiness.verifiedFeatureCount == 17)
         #expect(readiness.pendingFeatureCount == 1)
         #expect(readiness.implementedFeatures.first?.key == "repository_state")
         #expect(readiness.implementedFeatures.map(\.key).contains("operator_release_qa_smoke"))
+        #expect(readiness.implementedFeatures.map(\.key).contains("release_ci_gate"))
         #expect(readiness.implementedFeatures.map(\.key).contains("unsigned_distribution_launch"))
         #expect(readiness.implementedFeatures.map(\.key).contains("release_evidence_bundle"))
         #expect(readiness.pendingFeatures.first?.key == "live_voice_loop")
         #expect(readiness.blockingManualGates.contains("Developer ID Application and Installer signing credentials configured and used for a full signed package run"))
         #expect(readiness.blockingManualGates.contains("final release evidence bundle generated and archived after signed distribution, live-device QA, and plugin-trust QA reports exist"))
         #expect(readiness.recommendedVerificationCommands.contains("./scripts/release-local.sh"))
+        #expect(readiness.recommendedVerificationCommands.contains("./scripts/release-ci-workflow-smoke.sh"))
         #expect(readiness.recommendedVerificationCommands.contains("./scripts/release-operator-qa-smoke.sh"))
         #expect(readiness.recommendedVerificationCommands.contains("./scripts/release-live-device-qa.sh --check"))
         #expect(readiness.recommendedVerificationCommands.contains { command in
@@ -403,7 +405,7 @@ struct JarvisMacCoreTests {
         )
 
         #expect(readiness.productionReady)
-        #expect(readiness.verifiedFeatureCount == 17)
+        #expect(readiness.verifiedFeatureCount == 18)
         #expect(readiness.pendingFeatureCount == 0)
         #expect(readiness.pendingFeatures.isEmpty)
         #expect(readiness.implementedFeatures.map(\.key).contains("live_voice_loop"))
@@ -2769,7 +2771,7 @@ private func releaseReadinessJSON() -> Data {
           "generated_at": "2026-05-22T08:00:00Z",
           "production_ready": false,
           "readiness_scope": "local Rust/CLI foundation and Swift shell evidence only; full production distribution still has external manual gates",
-          "verified_feature_count": 16,
+          "verified_feature_count": 17,
           "pending_feature_count": 1,
           "implemented_features": [
             {
@@ -2789,6 +2791,12 @@ private func releaseReadinessJSON() -> Data {
               "status": "implemented",
               "proof": "`release-operator-qa-smoke.sh` exercises repository-backed operator QA.",
               "boundary": "Local CLI/operator QA evidence only."
+            },
+            {
+              "key": "release_ci_gate",
+              "status": "implemented",
+              "proof": "`.github/workflows/release-local.yml` runs `./scripts/release-local.sh` on macOS for pull requests, pushes to main, and manual dispatch.",
+              "boundary": "Public CI evidence for the repo-owned local release gate only."
             },
             {
               "key": "unsigned_distribution_launch",
@@ -2818,6 +2826,7 @@ private func releaseReadinessJSON() -> Data {
           ],
           "recommended_verification_commands": [
             "./scripts/release-local.sh",
+            "./scripts/release-ci-workflow-smoke.sh",
             "./scripts/release-operator-qa-smoke.sh",
             "./scripts/packaged-app-release-smoke.sh",
             "./scripts/package-distribution.sh --unsigned-launch-check",
@@ -2851,7 +2860,7 @@ private func externalProductionReadyReleaseReadinessJSON() -> Data {
           "generated_at": "2026-05-22T17:05:00Z",
           "production_ready": true,
           "readiness_scope": "local Rust/CLI foundation and Swift shell evidence plus explicitly enabled external release evidence status",
-          "verified_feature_count": 17,
+          "verified_feature_count": 18,
           "pending_feature_count": 0,
           "implemented_features": [
             {
@@ -2859,6 +2868,12 @@ private func externalProductionReadyReleaseReadinessJSON() -> Data {
               "status": "implemented",
               "proof": "SQLite-backed task, audit, model-route, memory, scheduler, approval, and installed-plugin state is covered by Rust unit tests and local IPC E2E.",
               "boundary": "Local repository evidence only; no hosted sync or multi-device state claim."
+            },
+            {
+              "key": "release_ci_gate",
+              "status": "implemented",
+              "proof": "The public release-local CI gate is present.",
+              "boundary": "Public CI evidence for the repo-owned local release gate only."
             },
             {
               "key": "live_voice_loop",
@@ -2877,6 +2892,7 @@ private func externalProductionReadyReleaseReadinessJSON() -> Data {
           "blocking_manual_gates": [],
           "recommended_verification_commands": [
             "./scripts/release-local.sh",
+            "./scripts/release-ci-workflow-smoke.sh",
             "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness"
           ],
           "proof_boundary": "Read-only summary derived from /contract feature metadata, release checklist blockers, and explicitly enabled external release evidence status; it does not perform signing, notarization, installation, Finder/LaunchServices validation, live microphone/Speech validation, spoken transcript handoff, live audio-output validation, App Store review, marketplace plugin review, malware analysis, or OS sandbox enforcement."

@@ -122,6 +122,9 @@ dispatch. Treat a passing workflow as public PR evidence for the repo-owned
 local gate only; it is not external signing, notarization, clean-profile
 installation, Finder launch, live-device QA, or plugin marketplace trust
 evidence.
+Confirm `/contract`, `jarvis release readiness --json`, and the Swift Release
+tab expose this as `release_ci_gate` with the same proof boundary before using
+CI-passing language in release notes.
 
 The script runs the full local gate below, including the opt-in ignored
 release-proof E2E test. Run individual commands only when diagnosing a failing

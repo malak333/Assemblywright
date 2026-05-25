@@ -15,6 +15,8 @@ These notes capture durable facts for future agents working on this repository.
   canonical release-local script. This is CI evidence for repo-owned local
   verification only, not Developer ID signing, notarization, clean-profile
   install, Finder launch, live-device QA, or plugin marketplace trust evidence.
+  The same boundary is exposed as the `release_ci_gate` feature in `/contract`
+  and release readiness.
 - The product direction is a local-first macOS assistant foundation, legally
   distinct from Marvel/JARVIS branding and assets.
 - The current repo contains a Rust workspace with `jarvis-core` and

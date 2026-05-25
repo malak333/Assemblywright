@@ -19,6 +19,8 @@ On GitHub, `.github/workflows/release-local.yml` runs the same gate on
 workflow is configuration evidence only; it still does not perform Developer ID
 signing, notarization, clean-profile installation, Finder launch validation,
 live-device QA, or plugin marketplace trust review.
+`/contract` and release readiness expose this lane as `release_ci_gate` with
+the same boundary.
 
 ```sh
 ./scripts/release-version-consistency.sh --check
