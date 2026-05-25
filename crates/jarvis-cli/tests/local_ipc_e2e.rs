@@ -490,6 +490,42 @@ fn release_evidence_status_rejects_semantically_invalid_plugin_and_bundle_eviden
 }
 
 #[test]
+fn release_evidence_status_rejects_bundle_report_wrong_schema_identity() {
+    let endpoint = format!("http://{}", unused_loopback_addr());
+
+    let temp_dir = tempfile::tempdir().expect("temp release evidence reports");
+    let bundle_path = temp_dir.path().join("release-evidence-bundle.json");
+
+    let mut bundle_report = valid_release_evidence_bundle();
+    bundle_report["evidence_type"] = json!("self_test_fixture");
+    write_json_report(&bundle_path, bundle_report);
+
+    let bundle_path = bundle_path.to_str().expect("bundle report utf8");
+    let evidence_status = run_cli_json_with_env(
+        [
+            "release",
+            "evidence-status",
+            "--endpoint",
+            endpoint.as_str(),
+        ],
+        &[("JARVIS_EVIDENCE_OUTPUT_PATH", bundle_path)],
+    );
+    let items = evidence_status["items"].as_array().expect("evidence items");
+    let bundle_item = items
+        .iter()
+        .find(|item| item["key"] == "release_evidence_bundle")
+        .expect("release evidence bundle item");
+    assert_eq!(bundle_item["status"], "invalid", "{bundle_item}");
+    assert!(
+        bundle_item["detail"]
+            .as_str()
+            .expect("bundle detail")
+            .contains("evidence_type"),
+        "{bundle_item}"
+    );
+}
+
+#[test]
 fn release_evidence_status_rejects_plugin_report_wrong_schema_identity() {
     let endpoint = format!("http://{}", unused_loopback_addr());
 
@@ -4521,6 +4557,8 @@ fn valid_plugin_trust_qa_report() -> Value {
 fn valid_release_evidence_bundle() -> Value {
     let digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     json!({
+        "schema_version": 1,
+        "evidence_type": "release_evidence_bundle",
         "generated_at": "2026-05-22T17:00:00Z",
         "version": "0.1.4",
         "artifacts": {
@@ -4566,6 +4604,8 @@ fn valid_release_evidence_bundle_for_paths(
     let live_device_qa_sha256 = file_sha256(live_report_path);
     let plugin_trust_qa_sha256 = file_sha256(plugin_report_path);
     json!({
+        "schema_version": 1,
+        "evidence_type": "release_evidence_bundle",
         "generated_at": "2026-05-22T17:00:00Z",
         "version": "0.1.4",
         "artifacts": {

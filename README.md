@@ -338,12 +338,15 @@ host egress enforcement systems.
 together by listing the expected signed distribution artifact paths,
 signed-distribution provenance report, live-device QA report,
 plugin-trust QA report, and owner validation flags
-required before a final release evidence manifest can be written. The `--check`
-and doctor/status paths are presence and JSON-field inventory only; they do not
-validate Developer ID signatures, notarization, stapling, installation, or
-manual QA. They do validate repo-owned packaged metadata, including app bundle
-`Info.plist` values and the bundled `jarvis-cli.version` marker, before
-claiming those local artifacts are present. The `--check` output also points operators to
+required before a final release evidence manifest can be written. The generated
+manifest must identify itself with `schema_version: 1` and
+`evidence_type: release_evidence_bundle` before the doctor/status gates accept
+it. The `--check` and doctor/status paths are presence and JSON-field inventory
+only; they do not validate Developer ID signatures, notarization, stapling,
+installation, or manual QA. They do validate repo-owned packaged metadata,
+including app bundle `Info.plist` values and the bundled `jarvis-cli.version`
+marker, before claiming those local artifacts are present. The `--check` output
+also points operators to
 `./scripts/release-evidence-bundle.sh --write-template
 target/release-evidence-bundle.env` to generate the sourceable final-bundle
 checklist with every `JARVIS_EVIDENCE_*` validation flag defaulting to `false`;

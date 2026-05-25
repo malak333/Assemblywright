@@ -153,6 +153,8 @@ const SIGNED_DISTRIBUTION_PROVENANCE_REQUIRED_FIELDS: &[&str] = &[
     "proof_boundary",
 ];
 const RELEASE_EVIDENCE_BUNDLE_REQUIRED_FIELDS: &[&str] = &[
+    "schema_version",
+    "evidence_type",
     "generated_at",
     "version",
     "artifacts.app_path",
@@ -4844,6 +4846,17 @@ fn file_sha256(path: &FsPath) -> std::io::Result<String> {
 
 fn validate_release_evidence_bundle(value: &serde_json::Value) -> Result<(), String> {
     require_utc_report_timestamp_not_future(value, "generated_at")?;
+    if value
+        .get("schema_version")
+        .and_then(|schema| schema.as_i64())
+        != Some(1)
+    {
+        return Err("JSON report schema_version must be 1".to_string());
+    }
+    if value.get("evidence_type").and_then(|kind| kind.as_str()) != Some("release_evidence_bundle")
+    {
+        return Err("JSON report evidence_type must be release_evidence_bundle".to_string());
+    }
     require_json_string_value(value, "version", &expected_release_evidence_version())?;
     require_json_bool_value(value, "validation_flags.local_signature_validation", true)?;
     for field in [
@@ -5050,7 +5063,7 @@ fn json_string_at(value: &serde_json::Value, dotted_path: &str) -> Option<String
 
 fn release_json_present_detail(key: &str) -> String {
     match key {
-        "release_evidence_bundle" => "JSON report exists, expected release version matches, artifact/report paths and SHA-256 digests match current artifacts and reports, and local signature validation is true; clean-profile, live-device, and plugin-trust claims remain owner-recorded external evidence".to_string(),
+        "release_evidence_bundle" => "JSON report exists, schema/evidence identity is valid, expected release version matches, artifact/report paths and SHA-256 digests match current artifacts and reports, and local signature validation is true; clean-profile, live-device, and plugin-trust claims remain owner-recorded external evidence".to_string(),
         "signed_distribution_provenance_report" => "JSON report exists, expected release version, bundle identifier, and bundled core version match, signing/notarization/stapling/Gatekeeper evidence fields are present, required flags are true, and artifact SHA-256 digests match the current zip/pkg files; clean-profile install and live-device QA remain separate manual gates".to_string(),
         "live_device_qa_report" => "JSON report exists, required owner-recorded fields and proof boundary are non-empty, installed app path, release metadata, timestamps, observed transcript, observed command text, and task/audit command evidence reference match expected values; live-device claims are still owner-recorded external evidence".to_string(),
         "plugin_trust_qa_report" => "JSON report exists, schema/evidence identity is valid, required owner-recorded fields are present, review and egress validation timestamps are valid and ordered, and deny/allow egress fixture notes are present; marketplace, malware, sandbox, and host-level egress claims remain owner-recorded external evidence".to_string(),
@@ -6162,6 +6175,8 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
     fn valid_release_evidence_bundle_json() -> serde_json::Value {
         let digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         json!({
+            "schema_version": 1,
+            "evidence_type": "release_evidence_bundle",
             "generated_at": "2026-05-22T17:00:00Z",
             "version": "0.1.4",
             "artifacts": {
@@ -6510,6 +6525,21 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let (status, detail) = inspect_release_evidence_bundle_value(report);
         assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
         assert!(detail.contains("version"), "{detail}");
+    }
+
+    #[test]
+    fn release_evidence_bundle_rejects_wrong_schema_identity() {
+        let mut report = valid_release_evidence_bundle_json();
+        report["schema_version"] = json!(2);
+        let (status, detail) = inspect_release_evidence_bundle_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("schema_version"), "{detail}");
+
+        let mut report = valid_release_evidence_bundle_json();
+        report["evidence_type"] = json!("self_test_fixture");
+        let (status, detail) = inspect_release_evidence_bundle_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("evidence_type"), "{detail}");
     }
 
     #[test]

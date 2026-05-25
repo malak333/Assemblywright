@@ -727,6 +727,8 @@ check_release_evidence() {
 
   if valid_json_file "$BUNDLE_PATH"; then
     record_satisfied "release evidence bundle JSON: $BUNDLE_PATH"
+    check_json_number "release evidence bundle" "$BUNDLE_PATH" "schema_version" "1"
+    check_json_string "release evidence bundle" "$BUNDLE_PATH" "evidence_type" "release_evidence_bundle"
     for flag in signed_distribution notarization clean_profile live_device_qa plugin_trust_qa reports_archived; do
       check_json_flag "release evidence bundle" "$BUNDLE_PATH" "validation_flags.$flag"
     done
@@ -919,6 +921,8 @@ write_fixture_bundle() {
 
   cat >"$bundle_path" <<JSON
 {
+  "schema_version": 1,
+  "evidence_type": "release_evidence_bundle",
   "generated_at": "2026-05-22T16:30:00Z",
   "version": "$VERSION",
   "artifacts": {
