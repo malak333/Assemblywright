@@ -422,12 +422,18 @@ enum PluginsCommand {
     List {
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
+        /// Print the raw JSON plugin manifest list.
+        #[arg(long)]
+        json: bool,
     },
     /// Fetch one registered plugin manifest by id.
     Get {
         id: String,
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
+        /// Print the raw JSON plugin manifest.
+        #[arg(long)]
+        json: bool,
     },
     /// Validate and store local plugin manifest metadata without enabling execution.
     Install {
@@ -980,11 +986,21 @@ async fn main() -> anyhow::Result<()> {
             }
         },
         CliCommand::Plugins { command } => match command {
-            PluginsCommand::List { endpoint } => {
-                println!("{}", plugin_manifests(&endpoint)?);
+            PluginsCommand::List { endpoint, json } => {
+                let response = plugin_manifests(&endpoint)?;
+                if json || cli_json_requested() {
+                    println!("{response}");
+                } else {
+                    println!("{}", format_plugin_manifest_list(&response)?);
+                }
             }
-            PluginsCommand::Get { id, endpoint } => {
-                println!("{}", plugin_manifest(&endpoint, &id)?);
+            PluginsCommand::Get { id, endpoint, json } => {
+                let response = plugin_manifest(&endpoint, &id)?;
+                if json || cli_json_requested() {
+                    println!("{response}");
+                } else {
+                    println!("{}", format_plugin_manifest_detail(&response)?);
+                }
             }
             PluginsCommand::Install {
                 manifest_path,
@@ -1465,6 +1481,90 @@ fn format_model_tool_catalog(response: &str) -> anyhow::Result<String> {
     }
     lines.push("Raw JSON: rerun with --json for the exact catalog payload.".to_string());
     Ok(lines.join("\n"))
+}
+
+fn format_plugin_manifest_list(response: &str) -> anyhow::Result<String> {
+    let value: serde_json::Value = serde_json::from_str(response)?;
+    let manifests = value
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("plugin manifest list response was not an array"))?;
+    let mut lines = vec![
+        "Registered first-party plugins:".to_string(),
+        format!("Total plugins: {}", manifests.len()),
+    ];
+    for manifest in manifests {
+        lines.push(format!("- {}", format_plugin_manifest_summary(manifest)));
+        if let Some(actions) = manifest
+            .get("actions")
+            .and_then(serde_json::Value::as_array)
+        {
+            let action_names = actions
+                .iter()
+                .filter_map(|action| action.get("name").and_then(serde_json::Value::as_str))
+                .collect::<Vec<_>>();
+            if !action_names.is_empty() {
+                lines.push(format!("  Actions: {}", action_names.join(", ")));
+            }
+        }
+    }
+    lines.push("Model-visible tools: use `jarvis tools list` for exact plugin_id.action pairs models may request.".to_string());
+    lines.push("Raw JSON: rerun with --json for full manifest schemas.".to_string());
+    Ok(lines.join("\n"))
+}
+
+fn format_plugin_manifest_detail(response: &str) -> anyhow::Result<String> {
+    let value: serde_json::Value = serde_json::from_str(response)?;
+    let mut lines = vec![
+        "Registered first-party plugin:".to_string(),
+        format!("- {}", format_plugin_manifest_summary(&value)),
+    ];
+    if let Some(actions) = value.get("actions").and_then(serde_json::Value::as_array) {
+        lines.push("Actions:".to_string());
+        for action in actions {
+            let name = action
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown_action");
+            let description = action
+                .get("description")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("no description");
+            let risk = action
+                .get("risk_tier")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown");
+            let proactive = action
+                .get("proactive")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            lines.push(format!(
+                "- {name}: {description} (risk: {risk}, proactive: {proactive})"
+            ));
+        }
+    }
+    lines.push("Model-visible tools: use `jarvis tools list` for exact plugin_id.action pairs models may request.".to_string());
+    lines.push("Raw JSON: rerun with --json for full manifest schemas.".to_string());
+    Ok(lines.join("\n"))
+}
+
+fn format_plugin_manifest_summary(manifest: &serde_json::Value) -> String {
+    let id = manifest
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown_plugin");
+    let name = manifest
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("Unnamed plugin");
+    let version = manifest
+        .get("version")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown_version");
+    let source = manifest
+        .get("source")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown_source");
+    format!("{id} ({name}, {version}, {source})")
 }
 
 fn format_task_list(response: &str) -> anyhow::Result<String> {

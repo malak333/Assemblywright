@@ -153,9 +153,10 @@ through `jarvis plugins ...` commands, but they are not exposed to
 model-originated tool planning.
 
 The interactive CLI defaults to operator-readable text for `jarvis command`
-and its `jarvis ask` alias, `jarvis tools list`, `jarvis tasks list/get/audit`,
-`jarvis routes list/get`, `jarvis activity summary`, `jarvis release readiness`,
-and `jarvis release evidence-status`. Use `--json` on those commands when a
+and its `jarvis ask` alias, `jarvis plugins list/get`, `jarvis tools list`,
+`jarvis tasks list/get/audit`, `jarvis routes list/get`,
+`jarvis activity summary`, `jarvis release readiness`, and
+`jarvis release evidence-status`. Use `--json` on those commands when a
 script, test, or debugging session needs the exact IPC payload with full audit,
 route, readiness, or evidence inventory details. `JARVIS_CLI_JSON=1` is
 available for test harnesses that need to keep all CLI calls machine-readable.
@@ -248,6 +249,7 @@ cargo run -p jarvis-cli -- command --dry-run "status check"
 cargo run -p jarvis-cli -- ask "Check Jarvis status and explain it in plain English."
 cargo run -p jarvis-cli -- command --json "plugin status"
 cargo run -p jarvis-cli -- plugins list
+cargo run -p jarvis-cli -- plugins list --json
 cargo run -p jarvis-cli -- tools list
 cargo run -p jarvis-cli -- tools list --json
 cargo run -p jarvis-cli -- release readiness

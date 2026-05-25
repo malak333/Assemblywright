@@ -75,6 +75,9 @@ catalog only. `jarvis tools list`, `jarvis tools model`, and
 `jarvis tools catalog` all print that same catalog. Chrome/browser-extension
 capabilities are unavailable unless they appear there, and installed local
 plugins remain outside model-originated planning.
+For broader registered plugin manifest inspection, `jarvis plugins list`
+defaults to a compact operator-readable summary and `jarvis plugins list --json`
+prints full manifest schemas.
 Live Ollama testing has proven the opt-in local HTTP route can complete real
 model commands; model-specific tool discipline can still vary, so the runtime
 boundary remains authoritative. Local plugin
@@ -407,10 +410,11 @@ With a repository-backed server running, `jarvis release readiness`,
 counts, redacted recent task metadata, recent audit progress, bounded activity
 events, redacted model-route evidence, redacted scheduler attention handoff,
 scheduler trigger policy review, redacted diagnostics,
-first-party plugin manifests, disabled installed-plugin registry metadata, and
+operator-readable first-party plugin manifest summaries, disabled installed-plugin registry metadata, and
 structured release evidence file/report presence over IPC. Task, route, and
-activity summary commands default to operator-readable text; use `--json` or
-`JARVIS_CLI_JSON=1` for exact IPC payloads, including stored task input.
+activity summary commands plus registered plugin/tool inspection default to
+operator-readable text; use `--json` or `JARVIS_CLI_JSON=1` for exact IPC
+payloads, including stored task input and full plugin schemas.
 Evidence-status items report present/missing/invalid inventory. Artifact paths
 are presence-only checks except the app bundle, whose `Info.plist` bundle id,
 short version, and build version must match the expected release metadata. JSON

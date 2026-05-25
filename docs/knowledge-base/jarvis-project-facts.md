@@ -180,10 +180,11 @@ These notes capture durable facts for future agents working on this repository.
   excludes installed plugin paths, subprocess configuration, provenance hashes,
   audit payloads, memory values, and provider route context.
 - The CLI interaction contract is now split between human and machine output:
-  `jarvis command`, visible alias `jarvis ask`, `jarvis tools list`,
-  `jarvis tasks list/get/audit`, `jarvis routes list/get`,
-  `jarvis activity summary`, `jarvis release readiness`, and
-  `jarvis release evidence-status` default to concise operator-readable text,
+  `jarvis command`, visible alias `jarvis ask`, `jarvis plugins list/get`,
+  `jarvis tools list`, `jarvis tasks list/get/audit`,
+  `jarvis routes list/get`, `jarvis activity summary`,
+  `jarvis release readiness`, and `jarvis release evidence-status` default to
+  concise operator-readable text,
   while `jarvis release readiness --all-commands` prints the complete readable
   verification runbook and `--json` returns the exact IPC payload for scripts,
   diagnostics, task records, route evidence, readiness evidence, release
@@ -205,8 +206,8 @@ These notes capture durable facts for future agents working on this repository.
   and the cross-process `serve_executes_ollama_provider_tool_request_envelope`
   E2E with an Ollama-compatible stub that asserts the advertised registered
   first-party catalog is a JSON allowlist and excludes invented browser plugin
-  IDs. CLI smoke and local IPC E2E also cover `jarvis tools list` over
-  `/tools/model`.
+  IDs. CLI smoke and local IPC E2E also cover readable `jarvis plugins list`
+  over `/plugins/manifests` and `jarvis tools list` over `/tools/model`.
 - Native ChatGPT/OpenAI-compatible tool-call coverage includes
   `chatgpt_http_provider_parses_native_tool_calls` and the cross-process
   `serve_executes_chatgpt_native_tool_call` E2E.
