@@ -1,0 +1,37 @@
+name: Jarvis Release Local Gate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jarvis-release-local-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-local:
+    name: Release local gate
+    runs-on: macos-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Show toolchain versions
+        run: |
+          rustc --version
+          cargo --version
+          swift --version
+
+      - name: Run local release verification
+        run: ./scripts/release-local.sh

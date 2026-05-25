@@ -8,6 +8,13 @@ These notes capture durable facts for future agents working on this repository.
 - Production implementation work should assume public-repo hygiene: no secrets,
   no private-source material, no hidden readiness claims, and release evidence
   that can be reviewed from the branch/PR.
+- Public PR/release evidence includes `.github/workflows/release-local.yml`,
+  which runs `./scripts/release-local.sh` on macOS for pull requests, pushes to
+  `main`, and manual dispatch. `./scripts/release-ci-workflow-smoke.sh` is part
+  of the local gate and validates that the workflow still points at the
+  canonical release-local script. This is CI evidence for repo-owned local
+  verification only, not Developer ID signing, notarization, clean-profile
+  install, Finder launch, live-device QA, or plugin marketplace trust evidence.
 - The product direction is a local-first macOS assistant foundation, legally
   distinct from Marvel/JARVIS branding and assets.
 - The current repo contains a Rust workspace with `jarvis-core` and
