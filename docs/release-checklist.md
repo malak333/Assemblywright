@@ -143,6 +143,7 @@ stage or when a PR needs focused evidence for one ownership slice.
 - `cargo package --workspace --allow-dirty`
 - `./scripts/package-distribution.sh --version-consistency-self-test`
 - `./scripts/package-distribution.sh --unsigned-launch-check`
+- `cargo run -p jarvis-cli -- release live-device-runbook`
 - `./scripts/release-live-device-qa.sh --check`
 - `./scripts/release-live-device-qa.sh --self-test`
 - `./scripts/release-plugin-trust-qa.sh --check`
@@ -163,6 +164,9 @@ stage or when a PR needs focused evidence for one ownership slice.
   `./scripts/package-distribution.sh --unsigned-launch-check`
 - Live-device QA preflight is part of the default local gate:
   `./scripts/release-live-device-qa.sh --check`
+- Live-device QA operator runbook and current evidence status are available
+  without side effects:
+  `cargo run -p jarvis-cli -- release live-device-runbook`
 - Live-device QA assertion/report mechanics are covered by a fake fixture in
   the default local gate: `./scripts/release-live-device-qa.sh --self-test`
 - `swift test --package-path apps/mac`

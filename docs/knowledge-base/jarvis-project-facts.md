@@ -644,6 +644,10 @@ These notes capture durable facts for future agents working on this repository.
   and prints the manual clean-profile install, Finder/LaunchServices,
   microphone/Speech permission prompts, spoken transcript handoff into the
   command path, live audio-output, notification, restart, and release-QA runbook.
+  `cargo run -p jarvis-cli -- release live-device-runbook` is the side-effect-free
+  CLI companion for operators; it combines conservative readiness with current
+  `live_device_qa_report` evidence status and prints the exact template,
+  assertion, evidence-status, and evidence-aware readiness commands to run.
   Its `--assert-complete` mode requires an installed app plus explicit
   `JARVIS_QA_*` owner flags, including
   `JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true`, then writes a JSON evidence

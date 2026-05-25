@@ -409,6 +409,9 @@ with the expected release version. These checks do not prove Developer ID
 signing, notarization, installer behavior, Finder/LaunchServices validation,
 App Store distribution, or live-device microphone/Speech/audio-output
 validation. The
+`cargo run -p jarvis-cli -- release live-device-runbook` command gives release
+operators a read-only view of the live voice blocker, live-device report status,
+and exact next commands before they move to the external device. The
 `./scripts/release-live-device-qa.sh --check` command keeps the manual
 live-device QA runbook executable in the default gate;
 `--assert-complete` is an owner-recorded assertion after real-device checks and
