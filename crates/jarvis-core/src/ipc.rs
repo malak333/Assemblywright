@@ -4391,6 +4391,9 @@ fn inspect_release_bundled_core(path: &FsPath) -> (ReleaseEvidenceItemStatus, St
         return (status, detail);
     }
 
+    let remediation =
+        "rerun ./scripts/package-distribution.sh --unsigned-launch-check for local evidence, \
+         or the signed package-distribution.sh lane before final release evidence";
     let version_marker = path.with_file_name(format!(
         "{}.version",
         path.file_name()
@@ -4402,7 +4405,7 @@ fn inspect_release_bundled_core(path: &FsPath) -> (ReleaseEvidenceItemStatus, St
         Err(_) => {
             return (
                 ReleaseEvidenceItemStatus::Invalid,
-                "bundled core version marker is missing or not readable".to_string(),
+                format!("bundled core version marker is missing or not readable; {remediation}"),
             )
         }
     };
@@ -4411,7 +4414,7 @@ fn inspect_release_bundled_core(path: &FsPath) -> (ReleaseEvidenceItemStatus, St
         return (
             ReleaseEvidenceItemStatus::Invalid,
             format!(
-                "bundled core version marker mismatch: expected {expected_version}, observed {}",
+                "bundled core version marker mismatch: expected {expected_version}, observed {}; {remediation}",
                 version.trim()
             ),
         );
@@ -5921,6 +5924,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let (missing_status, missing_detail) = inspect_release_bundled_core(&core_path);
         assert_eq!(missing_status, ReleaseEvidenceItemStatus::Invalid);
         assert!(missing_detail.contains("version marker"));
+        assert!(missing_detail.contains("package-distribution.sh --unsigned-launch-check"));
 
         std::fs::write(
             core_path.with_file_name("jarvis-cli.version"),
@@ -5930,6 +5934,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let (stale_status, stale_detail) = inspect_release_bundled_core(&core_path);
         assert_eq!(stale_status, ReleaseEvidenceItemStatus::Invalid);
         assert!(stale_detail.contains("version marker mismatch"));
+        assert!(stale_detail.contains("package-distribution.sh --unsigned-launch-check"));
 
         std::fs::write(
             core_path.with_file_name("jarvis-cli.version"),

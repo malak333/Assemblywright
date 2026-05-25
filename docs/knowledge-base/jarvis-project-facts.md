@@ -305,7 +305,9 @@ These notes capture durable facts for future agents working on this repository.
   before final bundling. `--check` reports present, missing, or invalid
   signed-artifact, live-device QA, plugin-trust QA, and final bundle evidence
   without failing the default local gate, checks the bundled core version marker
-  beside the packaged executable, and prints the next signing,
+  beside the packaged executable, tells operators to rerun
+  `./scripts/package-distribution.sh --unsigned-launch-check` or the signed
+  packaging lane when that marker is missing or stale, and prints the next signing,
   live-device template/assertion, plugin-trust template/assertion, and final
   evidence-bundle template/bundle commands when evidence is missing.
   `/release/readiness` and `jarvis release readiness --all-commands` include

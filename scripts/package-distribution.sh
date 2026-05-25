@@ -132,7 +132,7 @@ assert_bundled_core_version() {
   local marker_path="$core_path.version"
   local output
   [[ -x "$core_path" ]] || fail "bundled core executable missing: $core_path"
-  [[ -f "$marker_path" ]] || fail "bundled core version marker missing: $marker_path"
+  [[ -f "$marker_path" ]] || fail "bundled core version marker missing: $marker_path; rerun this packaging command so the app bundle is rebuilt from the current jarvis-cli"
   require_output_contains "bundled core version marker" "$(tr -d '\r\n' <"$marker_path")" "jarvis $VERSION"
   output="$("$core_path" --version)"
   require_output_contains "bundled core version" "$output" "jarvis $VERSION"

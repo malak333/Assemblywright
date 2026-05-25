@@ -248,7 +248,9 @@ structured JSON with present, missing, or invalid item status. Artifact paths
 remain presence-only checks except the app bundle, whose `Info.plist` bundle id,
 short version, and build version must match expected release metadata, and the
 bundled core executable, whose adjacent `jarvis-cli.version` marker must match
-the expected release version. JSON
+the expected release version; missing or stale marker details point operators
+back to the unsigned launch check for local evidence or the signed packaging
+lane for final release evidence. JSON
 reports receive semantic validation for signed provenance version/bundle
 metadata, bundled core version, signing/notary/staple/Gatekeeper fields, required flags, SHA-256
 digests, signed-provenance zip/pkg digest matches against current artifact

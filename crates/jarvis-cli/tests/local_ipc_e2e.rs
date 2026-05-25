@@ -1028,10 +1028,9 @@ fn release_evidence_status_rejects_stale_bundled_core_version_marker() {
         bundled_core_item["status"], "invalid",
         "{bundled_core_item}"
     );
-    assert!(bundled_core_item["detail"]
-        .as_str()
-        .expect("detail")
-        .contains("version marker mismatch"));
+    let bundled_core_detail = bundled_core_item["detail"].as_str().expect("detail");
+    assert!(bundled_core_detail.contains("version marker mismatch"));
+    assert!(bundled_core_detail.contains("package-distribution.sh --unsigned-launch-check"));
 }
 
 #[test]
