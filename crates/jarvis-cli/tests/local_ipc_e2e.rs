@@ -196,7 +196,30 @@ fn health_cli_reports_server_unavailable_with_operator_guidance() {
 
     let output = run_cli_failure(["health", "--endpoint", endpoint.as_str()]);
 
+    assert_server_required_guidance(&output);
+}
+
+#[test]
+fn server_required_cli_inspection_reports_unavailable_with_operator_guidance() {
+    let endpoint = format!("http://{}", unused_loopback_addr());
+
+    for args in [
+        ["diagnostics", "export", "--endpoint", endpoint.as_str()],
+        ["plugins", "installed", "--endpoint", endpoint.as_str()],
+        ["permissions", "grants", "--endpoint", endpoint.as_str()],
+        ["permissions", "review", "--endpoint", endpoint.as_str()],
+    ] {
+        let output = run_cli_failure(args);
+        assert_server_required_guidance(&output);
+    }
+}
+
+fn assert_server_required_guidance(output: &str) {
     assert!(output.contains("jarvis-core is unavailable"), "{output}");
+    assert!(
+        output.contains("requires a running repository-backed core"),
+        "{output}"
+    );
     assert!(
         output.contains("cargo run -p jarvis-cli -- serve"),
         "{output}"

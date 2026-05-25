@@ -196,11 +196,13 @@ cargo run -p jarvis-cli -- serve
 cargo run -p jarvis-cli -- health
 ```
 
-`jarvis health` is intentionally a strict liveness check for a running IPC
-server. If the server is down, it exits non-zero with guidance to start
-`jarvis serve`, run the offline ephemeral `jarvis smoke` check, or use
-read-only fallback inspection commands such as `jarvis release readiness`,
-`jarvis plugins list`, and `jarvis tools list`.
+`jarvis health` and repository-backed inspection commands such as
+`jarvis diagnostics export`, `jarvis plugins installed`,
+`jarvis permissions grants`, and `jarvis permissions review` are intentionally
+strict checks for a running IPC server. If the server is down, they exit
+non-zero with guidance to start `jarvis serve`, run the offline ephemeral
+`jarvis smoke` check, or use read-only fallback inspection commands such as
+`jarvis release readiness`, `jarvis plugins list`, and `jarvis tools list`.
 
 Use `cargo run -p jarvis-cli -- serve --db-path /tmp/jarvis.sqlite` when you
 want manual IPC commands to persist task and audit state locally.
