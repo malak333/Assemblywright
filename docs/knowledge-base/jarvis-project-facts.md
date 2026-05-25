@@ -639,7 +639,9 @@ These notes capture durable facts for future agents working on this repository.
   `target/release-live-device-qa-report.json`. The report records installed-app
   metadata, voice-loop evidence fields, owner-recorded live voice evidence
   fields for owner/device/profile/non-future timestamps/notes, structured spoken-command
-  observation fields with observed transcript matching the spoken test phrase
+  observation fields with observed transcript matching the spoken test phrase,
+  and `/release/evidence-status` rejects whitespace-only owner evidence fields
+  before this report can clear `live_voice_loop`.
   and expected command text matching observed command text, validation flags,
   schema identity, UTC report generation timestamp, and proof boundary.
   This standardizes manual evidence only; `--check` does not prove live device

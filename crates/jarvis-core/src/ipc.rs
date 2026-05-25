@@ -88,6 +88,7 @@ const LIVE_DEVICE_QA_REQUIRED_FIELDS: &[&str] = &[
     "voice_command_observation.observed_command_text",
     "voice_command_observation.command_result_evidence_id",
     "voice_command_observation.audio_output_device_label",
+    "proof_boundary",
 ];
 const PLUGIN_TRUST_QA_REQUIRED_FIELDS: &[&str] = &[
     "generated_at",
@@ -4573,6 +4574,25 @@ fn validate_live_device_qa_report(value: &serde_json::Value) -> Result<(), Strin
         &std::env::var("JARVIS_QA_INSTALLED_APP_PATH")
             .unwrap_or_else(|_| "/Applications/Jarvis.app".to_string()),
     )?;
+    for field in [
+        "app_bundle.microphone_usage_description",
+        "app_bundle.speech_recognition_usage_description",
+        "owner_recorded_live_voice_evidence.owner_name",
+        "owner_recorded_live_voice_evidence.device_label",
+        "owner_recorded_live_voice_evidence.profile_label",
+        "owner_recorded_live_voice_evidence.microphone_evidence_note",
+        "owner_recorded_live_voice_evidence.speech_permission_evidence_note",
+        "owner_recorded_live_voice_evidence.transcript_handoff_evidence_note",
+        "owner_recorded_live_voice_evidence.audio_output_evidence_note",
+        "voice_command_observation.test_phrase",
+        "voice_command_observation.observed_transcript",
+        "voice_command_observation.expected_command_text",
+        "voice_command_observation.observed_command_text",
+        "voice_command_observation.audio_output_device_label",
+        "proof_boundary",
+    ] {
+        require_json_nonempty_string_value(value, field)?;
+    }
 
     let started_at = require_utc_report_timestamp(
         value,
@@ -5018,7 +5038,7 @@ fn release_json_present_detail(key: &str) -> String {
     match key {
         "release_evidence_bundle" => "JSON report exists, expected release version matches, artifact/report paths and SHA-256 digests match current artifacts and reports, and local signature validation is true; clean-profile, live-device, and plugin-trust claims remain owner-recorded external evidence".to_string(),
         "signed_distribution_provenance_report" => "JSON report exists, expected release version, bundle identifier, and bundled core version match, signing/notarization/stapling/Gatekeeper evidence fields are present, required flags are true, and artifact SHA-256 digests match the current zip/pkg files; clean-profile install and live-device QA remain separate manual gates".to_string(),
-        "live_device_qa_report" => "JSON report exists, required owner-recorded fields are present, installed app path, release metadata, timestamps, observed transcript, observed command text, and task/audit command evidence reference match expected values; live-device claims are still owner-recorded external evidence".to_string(),
+        "live_device_qa_report" => "JSON report exists, required owner-recorded fields and proof boundary are non-empty, installed app path, release metadata, timestamps, observed transcript, observed command text, and task/audit command evidence reference match expected values; live-device claims are still owner-recorded external evidence".to_string(),
         "plugin_trust_qa_report" => "JSON report exists, required owner-recorded fields are present, review and egress validation timestamps are valid and ordered, and deny/allow egress fixture notes are present; marketplace, malware, sandbox, and host-level egress claims remain owner-recorded external evidence".to_string(),
         _ => "JSON report exists and required owner-recorded fields are present; external claims are not revalidated by evidence-status".to_string(),
     }
@@ -6053,7 +6073,8 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 "observed_command_text": "status check",
                 "command_result_evidence_id": "task:00000000-0000-4000-8000-000000000001",
                 "audio_output_device_label": "Built-in speakers"
-            }
+            },
+            "proof_boundary": "Owner-recorded live-device QA fixture."
         })
     }
 
@@ -6308,6 +6329,42 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let (status, detail) = inspect_live_device_qa_report_value(report);
         assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
         assert!(detail.contains("command_result_evidence_id"), "{detail}");
+    }
+
+    #[test]
+    fn live_device_qa_report_rejects_blank_owner_evidence_values() {
+        for (field, path) in [
+            (
+                "owner_recorded_live_voice_evidence.audio_output_evidence_note",
+                [
+                    "owner_recorded_live_voice_evidence",
+                    "audio_output_evidence_note",
+                ],
+            ),
+            (
+                "voice_command_observation.audio_output_device_label",
+                ["voice_command_observation", "audio_output_device_label"],
+            ),
+            (
+                "voice_command_observation.expected_command_text",
+                ["voice_command_observation", "expected_command_text"],
+            ),
+            ("proof_boundary", ["proof_boundary", ""]),
+        ] {
+            let mut report = valid_live_device_qa_report_json();
+            if path[1].is_empty() {
+                report[path[0]] = json!("   ");
+            } else {
+                report[path[0]][path[1]] = json!("   ");
+            }
+            let (status, detail) = inspect_live_device_qa_report_value(report);
+            assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+            assert!(detail.contains(field), "{field}: {detail}");
+            assert!(
+                detail.contains("must be non-empty") || detail.contains("missing required fields"),
+                "{field}: {detail}"
+            );
+        }
     }
 
     #[test]

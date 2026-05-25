@@ -519,7 +519,9 @@ Still future gates for production distribution:
   owner/device/profile/UTC timestamp, voice evidence-note, and structured
   spoken-command observation fields. Owner-recorded evidence fields must contain
   non-whitespace text, and `JARVIS_QA_SELF_TEST_FIXTURE=true` is reserved for
-  the script's internal fake-fixture self-test rather than release evidence. The installed app path must match the
+  the script's internal fake-fixture self-test rather than release evidence.
+  `/release/evidence-status` also rejects whitespace-only owner evidence before
+  the report can clear `live_voice_loop`. The installed app path must match the
   expected `/Applications/Jarvis.app` path unless explicitly overridden with
   `JARVIS_QA_INSTALLED_APP_PATH`, the observed transcript must match the spoken
   test phrase after trimming, the expected command text must match the observed
@@ -604,6 +606,7 @@ Distribution packaging gate:
   live voice evidence notes, structured spoken-command observation fields,
   installed-app metadata, schema identity, and proof boundary.
   Confirm the same report is visible through `jarvis release evidence-status`
+  without missing, whitespace-only, or invalid live voice evidence fields.
   before using evidence-aware readiness language.
 
 ## Release Notes

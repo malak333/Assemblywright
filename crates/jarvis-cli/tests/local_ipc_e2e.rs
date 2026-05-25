@@ -302,6 +302,15 @@ fn release_readiness_rejects_semantically_invalid_live_voice_evidence() {
     fn malformed_command_result_evidence_id(report: &mut Value) {
         report["voice_command_observation"]["command_result_evidence_id"] = json!("looked good");
     }
+    fn blank_owner_evidence_note(report: &mut Value) {
+        report["owner_recorded_live_voice_evidence"]["audio_output_evidence_note"] = json!("   ");
+    }
+    fn blank_audio_output_device_label(report: &mut Value) {
+        report["voice_command_observation"]["audio_output_device_label"] = json!("   ");
+    }
+    fn blank_proof_boundary(report: &mut Value) {
+        report["proof_boundary"] = json!("   ");
+    }
 
     for (name, mutate, detail_fragment) in [
         (
@@ -343,6 +352,21 @@ fn release_readiness_rejects_semantically_invalid_live_voice_evidence() {
             "malformed command result evidence id",
             malformed_command_result_evidence_id as fn(&mut Value),
             "command_result_evidence_id",
+        ),
+        (
+            "blank owner evidence note",
+            blank_owner_evidence_note as fn(&mut Value),
+            "audio_output_evidence_note",
+        ),
+        (
+            "blank audio output device label",
+            blank_audio_output_device_label as fn(&mut Value),
+            "audio_output_device_label",
+        ),
+        (
+            "blank proof boundary",
+            blank_proof_boundary as fn(&mut Value),
+            "proof_boundary",
         ),
     ] {
         let temp_dir = tempfile::tempdir().expect("temp live QA report");
