@@ -113,7 +113,10 @@ to explain what happened:
   checks the requested action is declared, validates input schema, verifies the
   local source-tree provenance snapshot, honors `execution_enabled` and
   `execution_grant`, checks that the stored source path is canonical, and
-  appends audit evidence.
+  appends audit evidence. That audit evidence distinguishes subprocess
+  execution from OS sandbox enforcement: `subprocess_started` can be true for
+  a completed local subprocess, while `os_sandbox_enforced` remains false until
+  a real OS sandbox or host-level egress policy is enforced by the runner.
 - Model-originated tool requests are stricter than direct plugin registry
   inspection. They may target only registered first-party plugin actions
   advertised to the provider. `/tools/model` exposes the redacted registered

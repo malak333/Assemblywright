@@ -69,6 +69,13 @@ These notes capture durable facts for future agents working on this repository.
   from recent audit evidence while redacting raw stderr. This is bounded,
   audit-backed plugin progress evidence, not per-token or unbounded real-time
   plugin UI streaming.
+- Installed subprocess audit evidence distinguishes process execution from OS
+  sandbox enforcement. A completed local subprocess can report
+  `subprocess_started: true`, but the current runner reports
+  `os_sandbox_enforced: false` and an explicit sandbox boundary because it
+  validates manifest/provenance/grants and clears inherited environment
+  variables without enforcing an OS sandbox or host-level egress policy. Those
+  external controls remain part of plugin-trust QA evidence.
 - `/contract` includes a `compatibility` block with supported version range,
   additive-change, deprecation, removed/deprecated endpoint, and client
   requirement policy, plus a `features` list with stable keys, status, proof,
