@@ -1466,6 +1466,12 @@ fn format_command_response(response: &str) -> anyhow::Result<String> {
                 {
                     line.push_str(&format!(" ({error})"));
                 }
+                if let Some(guidance) = result
+                    .pointer("/output/guidance")
+                    .and_then(serde_json::Value::as_str)
+                {
+                    line.push_str(&format!(" Guidance: {guidance}"));
+                }
                 tool_lines.push(line);
             }
         }
@@ -1496,6 +1502,12 @@ fn format_command_response(response: &str) -> anyhow::Result<String> {
             {
                 line.push_str(&format!(" ({error})"));
             }
+            if let Some(guidance) = result
+                .pointer("/output/guidance")
+                .and_then(serde_json::Value::as_str)
+            {
+                line.push_str(&format!(" Guidance: {guidance}"));
+            }
             tool_lines.push(line);
         }
     }
@@ -1504,10 +1516,17 @@ fn format_command_response(response: &str) -> anyhow::Result<String> {
         lines.extend(tool_lines);
     }
 
-    if let Some(entry) = value
+    let latest_audit_entry = value
         .get("audit_entry")
         .and_then(serde_json::Value::as_object)
-    {
+        .or_else(|| {
+            value
+                .get("audit_entries")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|entries| entries.last())
+                .and_then(serde_json::Value::as_object)
+        });
+    if let Some(entry) = latest_audit_entry {
         let event_type = entry
             .get("event_type")
             .and_then(serde_json::Value::as_str)
@@ -1517,6 +1536,13 @@ fn format_command_response(response: &str) -> anyhow::Result<String> {
             .and_then(serde_json::Value::as_str)
             .unwrap_or("no audit summary");
         lines.push(format!("Latest audit: {event_type} - {summary}"));
+        if let Some(error) = entry
+            .get("payload")
+            .and_then(|payload| payload.get("error"))
+            .and_then(serde_json::Value::as_str)
+        {
+            lines.push(format!("Latest audit detail: {error}"));
+        }
     }
 
     lines.push("Raw JSON: rerun with --json for full audit and route evidence.".to_string());

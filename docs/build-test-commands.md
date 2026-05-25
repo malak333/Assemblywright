@@ -36,7 +36,9 @@ cargo run -p jarvis-cli -- smoke
 cargo package --workspace --allow-dirty
 ./scripts/package-distribution.sh --version-consistency-self-test
 ./scripts/package-distribution.sh --unsigned-launch-check
+cargo run -p jarvis-cli -- release signed-distribution-runbook
 cargo run -p jarvis-cli -- release live-device-runbook
+cargo run -p jarvis-cli -- release plugin-trust-runbook
 ./scripts/release-live-device-qa.sh --check
 ./scripts/release-live-device-qa.sh --self-test
 ./scripts/release-plugin-trust-qa.sh --check
@@ -45,8 +47,8 @@ cargo run -p jarvis-cli -- release live-device-runbook
 ./scripts/release-evidence-bundle.sh --self-test
 ./scripts/release-evidence-doctor.sh --check
 ./scripts/release-evidence-doctor.sh --self-test
-swift test --package-path apps/mac
-swift build --package-path apps/mac
+swift test --disable-sandbox --package-path apps/mac
+swift build --disable-sandbox --package-path apps/mac
 ```
 
 Focused workflow-shape check:

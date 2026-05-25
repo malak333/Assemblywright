@@ -172,8 +172,8 @@ stage or when a PR needs focused evidence for one ownership slice.
   `cargo run -p jarvis-cli -- release live-device-runbook`
 - Live-device QA assertion/report mechanics are covered by a fake fixture in
   the default local gate: `./scripts/release-live-device-qa.sh --self-test`
-- `swift test --package-path apps/mac`
-- `swift build --package-path apps/mac`
+- `swift test --disable-sandbox --package-path apps/mac`
+- `swift build --disable-sandbox --package-path apps/mac`
 - Optional manual CLI/IPC smoke against a running local server:
   - Terminal 1: `cargo run -p jarvis-cli -- serve`
   - Terminal 2: `cargo run -p jarvis-cli -- health`

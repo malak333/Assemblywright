@@ -238,7 +238,9 @@ The packaged Mac app launches, starts the Rust core, handles a command, writes a
 
 ## Packaging And Operations
 
-- `Jarvis.app` bundles or installs the `jarvis-core` Rust executable.
+- `Jarvis.app` bundles the release-built CLI executable at
+  `Contents/Resources/bin/jarvis-cli`; the executable hosts the Rust
+  `jarvis-core` library behind the local IPC contract.
 - The app supervises the core in v1; LaunchAgent support is deferred until needed.
 - Diagnostics export produces redacted logs, config summaries, schema versions, plugin state, model status, and recent failure reports.
 - SQLite migrations run predictably with file-backed preflight backup and
@@ -300,16 +302,13 @@ proactive trigger policy, and live OS notification validation. Swift supervision
 covered only as a scaffold for
 configured or packaged-style local core binaries.
 
-The active phase-3 production sweep uses isolated worktrees, topic branches,
-reviewable PR slices, and docs-only synchronization work on
-`codex/phase3-docs-architecture`. The phase-3 lanes are
-`model-route-persistence`, `plugin-subprocess-grant-gating`,
-`voice-adapter-production`, `packaged-app-release-smoke`,
-`permission-grants-ux`, and `phase3-docs-architecture`. Follow-on slices
-include Swift memory classification/CRUD/restore and local plugin provenance
-verification plus scheduler attention handoff, scheduler notification controls,
-permission policy review, and scheduler trigger review.
-That workflow improves reviewability but is not readiness evidence by itself.
+Historical phase-3 production sweeps used isolated worktrees, topic branches,
+and reviewable PR slices for lanes such as model-route persistence, plugin
+grant gating, voice adapters, packaged-app smoke, permission UX, scheduler
+attention, notification controls, policy review, and architecture docs. Treat
+those lane names as historical routing context unless a current checkout,
+branch, or open PR proves that a lane is active. The workflow improves
+reviewability, but it is not readiness evidence by itself.
 Readiness language must be tied to checked-in code, documented diagrams,
 knowledge-base updates, and the specific local/E2E checks that passed.
 
