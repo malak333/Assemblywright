@@ -557,7 +557,7 @@ struct PluginManagerView: View {
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
-                                Text(plugin.sourcePath)
+                                Text(plugin.sourcePath ?? "local paths redacted")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)

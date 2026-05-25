@@ -669,6 +669,32 @@ pub struct InstalledPluginRunResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstalledPluginInspectionRecord {
+    pub id: String,
+    pub manifest: PluginManifest,
+    pub provenance: InstalledPluginProvenanceInspection,
+    pub execution_enabled: bool,
+    pub execution_grant: crate::InstalledPluginExecutionGrant,
+    pub installed_at: DateTime<Utc>,
+    pub local_paths_redacted: bool,
+    pub provenance_hashes_redacted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstalledPluginProvenanceInspection {
+    pub provenance_schema_version: u16,
+    pub capture_method: String,
+    pub source_path_canonicalized: bool,
+    pub captured_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_verified_at: Option<DateTime<Utc>>,
+    pub integrity_status: crate::InstalledPluginIntegrityStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin_claim: Option<String>,
+    pub origin_claim_verified: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionGrantSummary {
     pub generated_at: DateTime<Utc>,
     pub approval_counts: Vec<ApprovalStatusCount>,
@@ -730,6 +756,35 @@ pub struct InstalledPluginGrantSurface {
     pub installed_at: DateTime<Utc>,
     pub action_count: usize,
     pub high_risk_action_count: usize,
+}
+
+fn installed_plugin_inspection_record(
+    record: InstalledPluginRecord,
+) -> InstalledPluginInspectionRecord {
+    let mut manifest = record.manifest;
+    manifest.source_path = None;
+    manifest.subprocess = None;
+    manifest.publisher_signature = None;
+
+    InstalledPluginInspectionRecord {
+        id: record.id,
+        manifest,
+        provenance: InstalledPluginProvenanceInspection {
+            provenance_schema_version: record.provenance.provenance_schema_version,
+            capture_method: record.provenance.capture_method,
+            source_path_canonicalized: record.provenance.source_path_canonicalized,
+            captured_at: record.provenance.captured_at,
+            last_verified_at: record.provenance.last_verified_at,
+            integrity_status: record.provenance.integrity_status,
+            origin_claim: record.provenance.origin_claim,
+            origin_claim_verified: record.provenance.origin_claim_verified,
+        },
+        execution_enabled: record.execution_enabled,
+        execution_grant: record.execution_grant,
+        installed_at: record.installed_at,
+        local_paths_redacted: true,
+        provenance_hashes_redacted: true,
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -3714,9 +3769,15 @@ fn registered_first_party_model_tool_catalog() -> JarvisResult<ModelToolCatalogR
 
 async fn list_installed_plugins(
     State(state): State<IpcState>,
-) -> Result<Json<Vec<InstalledPluginRecord>>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<Vec<InstalledPluginInspectionRecord>>, (StatusCode, Json<ErrorResponse>)> {
     state
         .using_repository(SqliteRepository::list_installed_plugins)
+        .map(|records| {
+            records
+                .into_iter()
+                .map(installed_plugin_inspection_record)
+                .collect()
+        })
         .map(Json)
         .map_err(error_response)
 }
@@ -3724,13 +3785,14 @@ async fn list_installed_plugins(
 async fn get_installed_plugin(
     State(state): State<IpcState>,
     Path(id): Path<String>,
-) -> Result<Json<InstalledPluginRecord>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<InstalledPluginInspectionRecord>, (StatusCode, Json<ErrorResponse>)> {
     state
         .using_repository(|repository| {
             repository
                 .get_installed_plugin(&id)?
                 .ok_or_else(|| JarvisError::Storage(format!("installed plugin not found: {id}")))
         })
+        .map(installed_plugin_inspection_record)
         .map(Json)
         .map_err(error_response)
 }
