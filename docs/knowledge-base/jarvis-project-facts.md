@@ -184,6 +184,14 @@ These notes capture durable facts for future agents working on this repository.
   grants, but model-originated tool calls cannot target them and `/tools/model`
   excludes installed plugin paths, subprocess configuration, provenance hashes,
   audit payloads, memory values, and provider route context.
+- Installed-plugin safe inspection is redacted by default:
+  `/plugins/installed` and `/plugins/installed/:id` omit local `source_path`
+  values, manifest paths, subprocess command paths, publisher-signature
+  material, and provenance SHA-256 hashes. They keep execution grant,
+  integrity status, publisher-origin review state, action metadata, install
+  timestamp, and explicit redaction markers for operator review. Mutating
+  install, verification, enablement, and run paths remain separate operational
+  surfaces.
 - The CLI interaction contract is now split between human and machine output:
   `jarvis command`, visible alias `jarvis ask`, `jarvis plugins list/get`,
   `jarvis tools list`, `jarvis tasks list/get/audit`,

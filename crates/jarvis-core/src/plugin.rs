@@ -403,9 +403,9 @@ pub struct PluginManifest {
     pub version: String,
     pub source: PluginSource,
     pub author: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_path: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subprocess: Option<PluginSubprocessManifest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub publisher_signature: Option<PluginPublisherSignature>,

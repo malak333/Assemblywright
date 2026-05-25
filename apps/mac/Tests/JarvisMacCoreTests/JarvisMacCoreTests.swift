@@ -927,9 +927,12 @@ struct JarvisMacCoreTests {
 
         #expect(record.id == "local_runner_test")
         #expect(record.manifest.source == "local_subprocess")
-        #expect(record.sourcePath == "/tmp/jarvis-plugin")
+        #expect(record.sourcePath == nil)
         #expect(!record.executionEnabled)
         #expect(record.executionGrant == "metadata_only")
+        #expect(record.provenance.manifestPath == nil)
+        #expect(record.provenance.manifestSha256 == nil)
+        #expect(record.provenance.sourcePath == nil)
         #expect(record.provenance.integrityStatus == "not_verified")
         #expect(record.provenance.needsReview)
         #expect(!record.isExecutable)
@@ -3235,7 +3238,6 @@ private func installedPluginsJSON() -> Data {
               "version": "0.1.0",
               "source": "local_subprocess",
               "author": "Jarvis Test",
-              "source_path": "/tmp/jarvis-plugin",
               "actions": [
                 {
                   "name": "inspect",
@@ -3252,24 +3254,12 @@ private func installedPluginsJSON() -> Data {
                   "timeout": { "timeout_ms": 5000, "on_timeout": "cancel" },
                   "cancellation": "cooperative"
                 }
-              ],
-              "subprocess": {
-                "command": "plugin-runner.py",
-                "args": [],
-                "stdin": "json",
-                "stdout": "json"
-              }
+              ]
             },
-            "source_path": "/tmp/jarvis-plugin",
             "provenance": {
               "provenance_schema_version": 1,
               "capture_method": "local_manifest_snapshot",
-              "manifest_path": "/tmp/jarvis-plugin/jarvis-plugin.json",
-              "manifest_sha256": "abc123",
-              "source_path": "/tmp/jarvis-plugin",
               "source_path_canonicalized": true,
-              "subprocess_command_path": "/tmp/jarvis-plugin/plugin-runner.py",
-              "subprocess_command_sha256": "def456",
               "captured_at": "2026-05-20T12:00:00Z",
               "last_verified_at": null,
               "integrity_status": "not_verified",

@@ -2212,6 +2212,17 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
 
     let installed_plugins = run_cli_json(["plugins", "installed", "--endpoint", endpoint.as_str()]);
     assert_array_contains(&installed_plugins, "id", "local_e2e_plugin");
+    let installed_plugins_encoded =
+        serde_json::to_string(&installed_plugins).expect("installed plugins JSON");
+    assert!(!installed_plugins_encoded.contains(plugin_dir.to_str().expect("plugin dir")));
+    assert!(!installed_plugins_encoded.contains("\"source_path\":"));
+    assert!(!installed_plugins_encoded.contains("\"manifest_path\":"));
+    assert!(!installed_plugins_encoded.contains("\"manifest_sha256\":"));
+    assert!(!installed_plugins_encoded.contains("\"source_tree_sha256\":"));
+    assert!(!installed_plugins_encoded.contains("\"subprocess_command_path\":"));
+    assert!(!installed_plugins_encoded.contains("\"subprocess_command_sha256\":"));
+    assert_eq!(installed_plugins[0]["local_paths_redacted"], true);
+    assert_eq!(installed_plugins[0]["provenance_hashes_redacted"], true);
 
     let installed_plugin_get = run_cli_json([
         "plugins",
@@ -2223,6 +2234,15 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_eq!(installed_plugin_get["id"], "local_e2e_plugin");
     assert_eq!(installed_plugin_get["execution_enabled"], false);
     assert_eq!(installed_plugin_get["execution_grant"], "metadata_only");
+    let installed_plugin_get_encoded =
+        serde_json::to_string(&installed_plugin_get).expect("installed plugin JSON");
+    assert!(!installed_plugin_get_encoded.contains(plugin_dir.to_str().expect("plugin dir")));
+    assert!(!installed_plugin_get_encoded.contains("\"source_path\":"));
+    assert!(!installed_plugin_get_encoded.contains("\"manifest_path\":"));
+    assert!(!installed_plugin_get_encoded.contains("\"manifest_sha256\":"));
+    assert!(!installed_plugin_get_encoded.contains("\"source_tree_sha256\":"));
+    assert!(!installed_plugin_get_encoded.contains("\"subprocess_command_path\":"));
+    assert!(!installed_plugin_get_encoded.contains("\"subprocess_command_sha256\":"));
 
     let initial_grants = run_cli_json(["permissions", "grants", "--endpoint", endpoint.as_str()]);
     assert_eq!(initial_grants["executable_installed_plugin_count"], 0);

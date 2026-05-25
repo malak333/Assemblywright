@@ -771,9 +771,9 @@ public struct JarvisPluginTimeout: Decodable, Equatable, Sendable {
 public struct JarvisInstalledPluginProvenance: Decodable, Equatable, Sendable {
     public var provenanceSchemaVersion: Int
     public var captureMethod: String
-    public var manifestPath: String
-    public var manifestSha256: String
-    public var sourcePath: String
+    public var manifestPath: String?
+    public var manifestSha256: String?
+    public var sourcePath: String?
     public var sourcePathCanonicalized: Bool
     public var subprocessCommandPath: String?
     public var subprocessCommandSha256: String?
@@ -807,7 +807,7 @@ public struct JarvisInstalledPluginProvenance: Decodable, Equatable, Sendable {
 public struct JarvisInstalledPluginRecord: Decodable, Equatable, Identifiable, Sendable {
     public var id: String
     public var manifest: JarvisPluginManifest
-    public var sourcePath: String
+    public var sourcePath: String?
     public var provenance: JarvisInstalledPluginProvenance
     public var executionEnabled: Bool
     public var executionGrant: String

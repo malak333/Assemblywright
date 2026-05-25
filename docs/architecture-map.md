@@ -340,6 +340,12 @@ the install-time snapshot can the runner start the declared command directly
 with JSON stdin and JSON stdout, with canonical source-path checks, timeout
 enforcement, output schema validation, and audit evidence recording whether the
 subprocess started.
+The safe installed-plugin inspection endpoints return a redacted view: local
+source paths, manifest paths, subprocess command paths, publisher-signature
+material, and provenance hashes are omitted from `/plugins/installed` and
+`/plugins/installed/:id`, while execution grant, integrity status,
+publisher-origin review state, action metadata, and redaction markers remain
+visible for operator review.
 Publisher-origin review is a separate fail-closed step: the operator can mark
 the manifest author claim as verified only after local provenance matches the
 install snapshot and the supplied trusted origin exactly matches the stored
