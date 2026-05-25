@@ -626,10 +626,14 @@ async fn main() -> anyhow::Result<()> {
             jarvis_core::serve(bind.parse()?, state).await?;
         }
         CliCommand::Health { endpoint } => {
-            println!(
-                "{}",
-                format_health(&request(&endpoint, "GET", "/health", None)?)?
-            );
+            let response = request(&endpoint, "GET", "/health", None).map_err(|error| {
+                if is_transport_unavailable(&error) {
+                    health_unavailable_error(&endpoint, &error)
+                } else {
+                    error
+                }
+            })?;
+            println!("{}", format_health(&response)?);
         }
         CliCommand::Contract { endpoint } => {
             println!("{}", contract(&endpoint)?);
@@ -2479,6 +2483,12 @@ fn format_health(response_body: &str) -> anyhow::Result<String> {
     Ok(format!(
         "jarvis-core: {status} (runtime: {runtime}, paused: {paused}, scheduler_jobs: {scheduler_jobs}, contract: v{contract_version})"
     ))
+}
+
+fn health_unavailable_error(endpoint: &str, source: &anyhow::Error) -> anyhow::Error {
+    anyhow::anyhow!(
+        "jarvis-core is unavailable at {endpoint}. Start the IPC server with `cargo run -p jarvis-cli -- serve`, or run `cargo run -p jarvis-cli -- smoke` for an offline ephemeral health smoke. Read-only inspection commands such as `jarvis release readiness`, `jarvis plugins list`, and `jarvis tools list` can still fall back to local metadata when the server is not running. Detail: {source}"
+    )
 }
 
 fn require_json_field(
