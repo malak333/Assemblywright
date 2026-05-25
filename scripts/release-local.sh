@@ -12,6 +12,7 @@ run() {
 }
 
 run ./scripts/release-version-consistency.sh --check
+run ./scripts/release-ci-workflow-smoke.sh
 run cargo fmt --check
 run cargo clippy --workspace --all-targets -- -D warnings
 run cargo test --workspace

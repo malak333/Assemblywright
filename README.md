@@ -104,6 +104,10 @@ This public repository is being advanced through isolated worktrees, topic
 branches, and reviewable PR slices. During the autonomous production sweep,
 agents should stay inside their assigned ownership, preserve unrelated edits,
 and treat cross-process E2E plus the local release gate as the evidence bar.
+The public GitHub workflow at `.github/workflows/release-local.yml` mirrors
+that local gate on macOS for pull requests, pushes to `main`, and manual
+dispatch; `scripts/release-ci-workflow-smoke.sh` keeps the workflow wired to
+`./scripts/release-local.sh`.
 Passing the local gate supports only the implemented Rust/Swift foundation
 claim; it is not proof of a finished packaged assistant.
 `/release/readiness`, `jarvis release readiness`, and the Swift Release tab
@@ -175,7 +179,7 @@ For executable PR evidence, run the canonical local release gate:
 
 It wraps Rust fmt/clippy/tests, ignored release-proof tests, smoke scripts,
 unsigned release-layout launch checks, release evidence preflights/self-tests,
-and Swift build/test. Focused commands below are for local iteration or
+the GitHub workflow smoke check, and Swift build/test. Focused commands below are for local iteration or
 ownership-specific proof; they do not replace the full gate for executable
 changes.
 

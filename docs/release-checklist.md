@@ -116,11 +116,19 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
 
 - `./scripts/release-local.sh`
 
+The public GitHub workflow `.github/workflows/release-local.yml` runs this
+same gate on `macos-latest` for pull requests, pushes to `main`, and manual
+dispatch. Treat a passing workflow as public PR evidence for the repo-owned
+local gate only; it is not external signing, notarization, clean-profile
+installation, Finder launch, live-device QA, or plugin marketplace trust
+evidence.
+
 The script runs the full local gate below, including the opt-in ignored
 release-proof E2E test. Run individual commands only when diagnosing a failing
 stage or when a PR needs focused evidence for one ownership slice.
 
 - `./scripts/release-version-consistency.sh --check`
+- `./scripts/release-ci-workflow-smoke.sh`
 - `cargo fmt --check`
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - `cargo test --workspace`

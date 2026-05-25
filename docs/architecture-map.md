@@ -22,6 +22,8 @@ flowchart TB
     DocsAgent["six-agent production-readiness audit"] --> Docs["DESIGN, README, architecture map, release checklist, build/test commands, knowledge-base"]
     DocsAgent --> Sweep["isolated worktree/branch production sweep"]
     Sweep --> LocalGate["./scripts/release-local.sh"]
+    GitHubCI["GitHub Actions release-local macOS workflow"] --> LocalGate
+    LocalGate --> CIWorkflowSmoke["release-ci-workflow-smoke.sh"]
     LocalGate --> VersionConsistency["release-version-consistency.sh check"]
     LocalGate --> E2E["local_ipc_e2e ignored release proof"]
     LocalGate --> Smoke["jarvis-cli smoke"]
@@ -378,6 +380,10 @@ formatting, linting, tests, ignored release-proof tests, build/package, CLI
 smoke, repository-backed operator QA smoke, unsigned distribution launch proof,
 live-device QA preflight/self-test, plugin-trust QA preflight/template/self-test,
 release-evidence bundle preflight/self-test, and Swift package build/test.
+The public GitHub Actions workflow runs that same local gate on `macos-latest`
+for pull requests, pushes to `main`, and manual dispatch.
+`release-ci-workflow-smoke.sh` is part of the gate so workflow drift away from
+`./scripts/release-local.sh` fails locally before PR evidence is claimed.
 The current implementation diagram mirrors those `release-local.sh` lanes,
 including the unsigned distribution launch proof and live-device QA preflight
 nodes. That evidence proves only the current implemented foundation surfaces.
@@ -529,6 +535,8 @@ sequenceDiagram
 |-- Cargo.toml
 |-- DESIGN.md
 |-- README.md
+|-- .github/
+|   `-- workflows/release-local.yml
 |-- apps/
 |   `-- mac/
 |       |-- Package.swift
@@ -554,6 +562,7 @@ sequenceDiagram
 |       `-- tests/e2e_scaffold.rs
 |-- scripts/
 |   |-- release-local.sh
+|   |-- release-ci-workflow-smoke.sh
 |   |-- package-distribution.sh
 |   |-- packaged-app-release-smoke.sh
 |   |-- release-live-device-qa.sh
@@ -695,7 +704,10 @@ flowchart TB
     AppFiles["app-owned files and plugin bundles"] --> RuntimeProd
     DiagnosticsProd --> Diagnostics["local diagnostics export"]
     Diagnostics --> MacApp
-    ReleaseOps["release operator"] --> SignedApp["Developer ID signed, notarized, and stapled app zip"]
+    ReleaseOps["release operator"] --> PublicCI["public GitHub release-local PR gate"]
+    PublicCI --> FinalReleaseGate["./scripts/release-local.sh on macOS"]
+    FinalReleaseGate --> SignedApp["Developer ID signed, notarized, and stapled app zip"]
+    ReleaseOps --> SignedApp
     ReleaseOps --> SignedInstaller["Developer ID signed and notarized /Applications installer package"]
     ReleaseOps --> CleanProfileQA["clean-profile install and Finder/LaunchServices launch QA"]
     ReleaseOps --> LiveDeviceQAProd["owner-recorded live microphone, Speech, transcript handoff, and audio-output QA"]

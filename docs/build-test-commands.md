@@ -14,9 +14,15 @@ The script is a wrapper around the ordered command set in this section and
 intentionally stays local-only. Use this gate as the default PR evidence for
 current foundation work unless a narrower docs-only change justifies a focused
 documentation check.
+On GitHub, `.github/workflows/release-local.yml` runs the same gate on
+`macos-latest` for pull requests, pushes to `main`, and manual dispatch. The
+workflow is configuration evidence only; it still does not perform Developer ID
+signing, notarization, clean-profile installation, Finder launch validation,
+live-device QA, or plugin marketplace trust review.
 
 ```sh
 ./scripts/release-version-consistency.sh --check
+./scripts/release-ci-workflow-smoke.sh
 cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
@@ -38,6 +44,12 @@ cargo package --workspace --allow-dirty
 ./scripts/release-evidence-doctor.sh --self-test
 swift test --package-path apps/mac
 swift build --package-path apps/mac
+```
+
+Focused workflow-shape check:
+
+```sh
+./scripts/release-ci-workflow-smoke.sh
 ```
 
 ## Current Health Check
