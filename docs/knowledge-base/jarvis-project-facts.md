@@ -140,7 +140,9 @@ These notes capture durable facts for future agents working on this repository.
 - Signed provenance, plugin-trust, and final bundle evidence items are also
   stricter than generic JSON presence: `/release/evidence-status` validates
   signed provenance version/bundle metadata, bundled core path/version/SHA-256
-  binding, signing/notary/staple/Gatekeeper evidence fields, required signed-distribution flags, plugin-trust UTC review
+  binding, Apple-tool-derived signing/notary/staple/Gatekeeper evidence fields
+  from `codesign`, `pkgutil --check-signature`, `xcrun notarytool`,
+  `xcrun stapler`, and `spctl`, required signed-distribution flags, plugin-trust UTC review
   timestamp ordering, rejects future-dated generated reports and self-test
   review sources, validates final bundle version, requires SHA-256-shaped
   artifact/report digests including the signed provenance digest, verifies
@@ -341,7 +343,7 @@ These notes capture durable facts for future agents working on this repository.
   `target/release-evidence-bundle.json` after referenced artifacts/reports exist,
   every `JARVIS_EVIDENCE_*` flag is true, and local artifact checks validate the
   app signature, app stapling ticket, installer signature, installer stapling
-  ticket, and app zip payload. Production bundles must keep local signature
+  ticket, and app zip payload through Apple-tool-derived validation. Production bundles must keep local signature
   validation enabled; the script parses every required live-device and
   plugin-trust report flag, requires non-empty owner-recorded evidence fields in
   both QA reports, requires plugin-trust `generated_at`, `review_started_at`,
@@ -677,7 +679,9 @@ These notes capture durable facts for future agents working on this repository.
   Application, Developer ID Installer, and notarytool credentials; signs with
   hardened runtime and microphone entitlements; notarizes and staples the app
   zip; then creates, signs, notarizes, and staples a `/Applications` installer
-  package. `./scripts/release-version-consistency.sh --check` derives the
+  package. It records and validates Developer ID, notary UUID, stapler success,
+  package signature, and Gatekeeper acceptance evidence before writing signed
+  provenance. `./scripts/release-version-consistency.sh --check` derives the
   release version from Rust package metadata and keeps package, live QA,
   evidence bundle, and evidence doctor defaults aligned with the CLI/core crate
   versions in the default local release gate. The unsigned structure and launch

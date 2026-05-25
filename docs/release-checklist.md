@@ -73,7 +73,9 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
 - Confirm signed-distribution provenance, plugin-trust, and final bundle reports
   are `present`, not `invalid`. Evidence-status checks signed provenance
   version/bundle metadata, bundled core path/version/SHA-256 binding,
-  signing/notary/staple/Gatekeeper evidence fields, required flags, non-future
+  Apple-tool-derived signing/notary/staple/Gatekeeper evidence fields from
+  `codesign`, `pkgutil --check-signature`, `xcrun notarytool`,
+  `xcrun stapler`, and `spctl`, required flags, non-future
   plugin-trust review timestamps, final bundle version, artifact/report path
   matching, SHA-256 digest shape, signed-provenance zip/pkg/core digests against
   the current artifact files, final-bundle digests against current
@@ -401,7 +403,8 @@ stage or when a PR needs focused evidence for one ownership slice.
   and owner-recorded QA evidence. The production `--bundle` path, unlike
   doctor/status inventory, must keep local signature validation enabled, check
   the app signature, app stapling ticket, installer signature, installer
-  stapling ticket, and app zip payload before writing the manifest, parse every
+  stapling ticket, and app zip payload through Apple-tool-derived validation
+  before writing the manifest, parse every
   required live-device/plugin-trust report flag, require owner-recorded evidence
   fields in both QA reports, confirm the live-device QA report matches the
   expected app bundle `Info.plist` bundle id/version/build, reject future-dated
@@ -624,7 +627,9 @@ Distribution packaging gate:
   `./scripts/package-distribution.sh`.
 - Confirm the resulting app zip and installer package are Developer ID signed,
   notarized, and stapled. The script also verifies the app signature, installer
-  signature, app staple, and package staple.
+  package signature, app staple, package staple, notary submission IDs, and
+  Gatekeeper acceptance from the Apple tool output recorded in signed
+  provenance.
 - Still perform clean-profile installer run, Finder launch, microphone/Speech
   permission prompts, spoken transcript handoff into the command path, live
   audio-output, and manual QA before any broader production distribution claim.
