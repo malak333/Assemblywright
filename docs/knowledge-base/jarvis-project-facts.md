@@ -260,12 +260,15 @@ These notes capture durable facts for future agents working on this repository.
   mechanics with fake validation flags and fake evidence notes only.
   `--assert-complete` writes an owner-recorded JSON report after every
   `JARVIS_PLUGIN_QA_*` flag is true and the owner/timestamp/evidence-note fields
-  are populated. Host-level egress evidence must also include the reviewed
-  policy/profile label, ordered UTC egress validation timestamp, denied
-  undeclared-host fixture note, and declared-host allow fixture note. The review
-  timestamps must be UTC `Z` values, the completed timestamp must be greater
-  than or equal to the started timestamp, and the completed timestamp must not
-  be later than report generation. `--write-template
+  are populated. The accepted report identity is `schema_version: 1` with
+  `evidence_type: owner_recorded_plugin_trust_qa`; doctor/status gates reject
+  stale or misidentified plugin-trust report shapes. Host-level egress evidence
+  must also include the reviewed policy/profile label, ordered UTC egress
+  validation timestamp, denied undeclared-host fixture note, and declared-host
+  allow fixture note. The review timestamps must be UTC `Z` values, the
+  completed timestamp must be greater than or equal to the started timestamp,
+  and the completed timestamp must not be later than report generation.
+  `--write-template
   target/release-plugin-trust-qa.env` generates a sourceable checklist with all
   plugin trust validation flags defaulted to `false` and all evidence fields
   blank. `/release/readiness` and `jarvis release readiness --all-commands`

@@ -705,6 +705,8 @@ check_release_evidence() {
 
   if valid_json_file "$PLUGIN_QA_REPORT"; then
     record_satisfied "plugin-trust QA report JSON: $PLUGIN_QA_REPORT"
+    check_json_number "plugin-trust QA report" "$PLUGIN_QA_REPORT" "schema_version" "1"
+    check_json_string "plugin-trust QA report" "$PLUGIN_QA_REPORT" "evidence_type" "owner_recorded_plugin_trust_qa"
     for flag in marketplace_review malware_scan os_sandbox egress_enforcement signed_publisher_policy manual_trust_review; do
       check_json_flag "plugin-trust QA report" "$PLUGIN_QA_REPORT" "validation_flags.$flag"
     done
@@ -865,6 +867,8 @@ write_fixture_reports() {
 JSON
   cat >"$plugin_path" <<'JSON'
 {
+  "schema_version": 1,
+  "evidence_type": "owner_recorded_plugin_trust_qa",
   "generated_at": "2026-05-22T16:30:00Z",
   "validation_flags": {
     "marketplace_review": true,

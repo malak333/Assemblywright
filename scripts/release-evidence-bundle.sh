@@ -790,6 +790,8 @@ EOF
 JSON
   cat >"$tmp_dir/plugin.json" <<'JSON'
 {
+  "schema_version": 1,
+  "evidence_type": "owner_recorded_plugin_trust_qa",
   "generated_at": "2026-05-22T16:30:00Z",
   "validation_flags": {
     "marketplace_review": true,
@@ -1510,6 +1512,8 @@ require_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "app_bund
 for flag in marketplace_review malware_scan os_sandbox egress_enforcement signed_publisher_policy manual_trust_review; do
   require_json_bool_true "plugin trust QA report" "$PLUGIN_QA_REPORT" "validation_flags.$flag"
 done
+require_json_number_equals "plugin trust QA report" "$PLUGIN_QA_REPORT" "schema_version" "1"
+require_json_string_equals "plugin trust QA report" "$PLUGIN_QA_REPORT" "evidence_type" "owner_recorded_plugin_trust_qa"
 for field in owner_name review_started_at review_completed_at marketplace_evidence_note malware_scan_evidence_note os_sandbox_evidence_note egress_evidence_note egress_policy_label egress_deny_fixture_evidence_note egress_allow_fixture_evidence_note signed_publisher_evidence_note manual_review_evidence_note; do
   require_json_nonempty_string "plugin trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.$field"
 done

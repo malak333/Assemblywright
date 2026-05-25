@@ -490,6 +490,42 @@ fn release_evidence_status_rejects_semantically_invalid_plugin_and_bundle_eviden
 }
 
 #[test]
+fn release_evidence_status_rejects_plugin_report_wrong_schema_identity() {
+    let endpoint = format!("http://{}", unused_loopback_addr());
+
+    let temp_dir = tempfile::tempdir().expect("temp release evidence reports");
+    let plugin_report_path = temp_dir.path().join("release-plugin-trust-qa-report.json");
+
+    let mut plugin_report = valid_plugin_trust_qa_report();
+    plugin_report["evidence_type"] = json!("self_test_fixture");
+    write_json_report(&plugin_report_path, plugin_report);
+
+    let plugin_path = plugin_report_path.to_str().expect("plugin report utf8");
+    let evidence_status = run_cli_json_with_env(
+        [
+            "release",
+            "evidence-status",
+            "--endpoint",
+            endpoint.as_str(),
+        ],
+        &[("JARVIS_EVIDENCE_PLUGIN_QA_REPORT", plugin_path)],
+    );
+    let items = evidence_status["items"].as_array().expect("evidence items");
+    let plugin_item = items
+        .iter()
+        .find(|item| item["key"] == "plugin_trust_qa_report")
+        .expect("plugin trust item");
+    assert_eq!(plugin_item["status"], "invalid", "{plugin_item}");
+    assert!(
+        plugin_item["detail"]
+            .as_str()
+            .expect("plugin detail")
+            .contains("evidence_type"),
+        "{plugin_item}"
+    );
+}
+
+#[test]
 #[cfg(unix)]
 fn release_evidence_status_accepts_semantically_valid_plugin_and_bundle_evidence() {
     let endpoint = format!("http://{}", unused_loopback_addr());
@@ -4451,6 +4487,8 @@ fn valid_live_device_qa_report() -> Value {
 
 fn valid_plugin_trust_qa_report() -> Value {
     json!({
+        "schema_version": 1,
+        "evidence_type": "owner_recorded_plugin_trust_qa",
         "generated_at": "2026-05-22T16:21:00Z",
         "review_source": "owner-asserted-manual-review",
         "validation_flags": {

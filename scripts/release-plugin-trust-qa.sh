@@ -188,6 +188,8 @@ write_report() {
   mkdir -p "$(dirname "$REPORT_PATH")"
   cat >"$REPORT_PATH" <<EOF
 {
+  "schema_version": 1,
+  "evidence_type": "owner_recorded_plugin_trust_qa",
   "generated_at": "$generated_at",
   "review_source": "$escaped_source",
   "validation_flags": {
@@ -359,6 +361,8 @@ if [[ "$SELF_TEST" == true ]]; then
     JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE="Manual trust review fixture was observed." \
     "$0" --assert-complete >/dev/null
   require_file_contains "plugin trust QA self-test report" "$fixture_report" '"marketplace_review": true'
+  require_file_contains "plugin trust QA self-test report" "$fixture_report" '"schema_version": 1'
+  require_file_contains "plugin trust QA self-test report" "$fixture_report" '"evidence_type": "owner_recorded_plugin_trust_qa"'
   require_file_contains "plugin trust QA self-test report" "$fixture_report" '"review_source": "self-test-fixture"'
   require_file_contains "plugin trust QA self-test report" "$fixture_report" '"owner_recorded_plugin_trust_evidence"'
   require_file_contains "plugin trust QA self-test report" "$fixture_report" '"egress_evidence_note": "Egress fixture was observed."'
