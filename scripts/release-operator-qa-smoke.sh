@@ -113,7 +113,7 @@ run cargo build -p jarvis-cli
 
 start_server "initial"
 
-PLUGIN_LIST_OUTPUT="$("$JARVIS" plugins list --endpoint "$ENDPOINT")"
+PLUGIN_LIST_OUTPUT="$("$JARVIS" plugins list --json --endpoint "$ENDPOINT")"
 require_output_contains "plugin manifest list" "$PLUGIN_LIST_OUTPUT" '"id":"fake_echo"'
 
 COMMAND_OUTPUT="$("$JARVIS" command --json "plugin echo release operator qa smoke" --endpoint "$ENDPOINT")"

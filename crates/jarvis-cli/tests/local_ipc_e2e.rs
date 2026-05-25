@@ -221,9 +221,14 @@ fn contract_and_first_party_plugins_fall_back_without_running_server() {
     assert_array_contains(&contract["endpoints"], "path", "/tools/model");
     assert_array_contains(&contract["features"], "key", "model_tool_catalog_grounding");
 
-    let manifests = run_cli_json(["plugins", "list", "--endpoint", endpoint.as_str()]);
-    let manifests_available_alias =
-        run_cli_json(["plugins", "available", "--endpoint", endpoint.as_str()]);
+    let manifests = run_cli_json(["plugins", "list", "--json", "--endpoint", endpoint.as_str()]);
+    let manifests_available_alias = run_cli_json([
+        "plugins",
+        "available",
+        "--json",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
     assert_array_contains(&manifests_available_alias, "id", "fake_echo");
     assert_array_contains(&manifests_available_alias, "id", "fake_status");
     assert_array_contains(&manifests, "id", "fake_echo");
@@ -233,6 +238,7 @@ fn contract_and_first_party_plugins_fall_back_without_running_server() {
         "plugins",
         "get",
         "fake_status",
+        "--json",
         "--endpoint",
         endpoint.as_str(),
     ]);
@@ -1868,9 +1874,14 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     ]);
     assert_eq!(route_json["id"], route_id);
 
-    let manifests = run_cli_json(["plugins", "list", "--endpoint", endpoint.as_str()]);
-    let manifests_available_alias =
-        run_cli_json(["plugins", "available", "--endpoint", endpoint.as_str()]);
+    let manifests = run_cli_json(["plugins", "list", "--json", "--endpoint", endpoint.as_str()]);
+    let manifests_available_alias = run_cli_json([
+        "plugins",
+        "available",
+        "--json",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
     assert_array_contains(&manifests_available_alias, "id", "fake_echo");
     assert_array_contains(&manifests_available_alias, "id", "fake_status");
     assert_array_contains(&manifests, "id", "fake_echo");
@@ -1894,6 +1905,14 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert!(readable_tools.contains("fake_echo.echo"));
     assert!(readable_tools.contains("fake_status.status"));
     assert!(readable_tools.contains("Raw JSON: rerun with --json"));
+
+    let readable_plugins = run_cli_text(["plugins", "list", "--endpoint", endpoint.as_str()]);
+    assert!(readable_plugins.contains("Registered first-party plugins:"));
+    assert!(readable_plugins.contains("fake_echo"));
+    assert!(readable_plugins.contains("fake_status"));
+    assert!(readable_plugins.contains("Actions:"));
+    assert!(readable_plugins.contains("jarvis tools list"));
+    assert!(readable_plugins.contains("Raw JSON: rerun with --json"));
 
     let readable_ask = run_cli_text(["ask", "plugin status", "--endpoint", endpoint.as_str()]);
     assert!(readable_ask.contains("Jarvis command: completed"));
@@ -2035,6 +2054,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         "plugins",
         "get",
         "fake_echo",
+        "--json",
         "--endpoint",
         endpoint.as_str(),
     ]);
