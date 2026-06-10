@@ -4912,6 +4912,7 @@ fn validate_plugin_trust_qa_report(value: &serde_json::Value) -> Result<(), Stri
         return Err("JSON report evidence_type must be owner_recorded_plugin_trust_qa".to_string());
     }
     require_json_bool_value(value, "self_test_fixture", false)?;
+    require_json_string_value(value, "review_source", "owner-asserted-manual-review")?;
     for field in [
         "validation_flags.marketplace_review",
         "validation_flags.malware_scan",
@@ -4970,13 +4971,6 @@ fn validate_plugin_trust_qa_report(value: &serde_json::Value) -> Result<(), Stri
                 .to_string(),
         );
     }
-    if json_string_at(value, "review_source")
-        .map(|source| source == "self-test-fixture")
-        .unwrap_or(false)
-    {
-        return Err("JSON report review_source must not be self-test-fixture".to_string());
-    }
-
     Ok(())
 }
 
@@ -7206,12 +7200,15 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
     }
 
     #[test]
-    fn plugin_trust_qa_report_rejects_self_test_source() {
+    fn plugin_trust_qa_report_rejects_non_owner_review_source() {
         let mut report = valid_plugin_trust_qa_report_json();
-        report["review_source"] = json!("self-test-fixture");
-        let (status, detail) = inspect_plugin_trust_qa_report_value(report);
-        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
-        assert!(detail.contains("self-test-fixture"), "{detail}");
+        for source in ["self-test-fixture", "imported-ci-report"] {
+            report["review_source"] = json!(source);
+            let (status, detail) = inspect_plugin_trust_qa_report_value(report.clone());
+            assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+            assert!(detail.contains("review_source"), "{detail}");
+            assert!(detail.contains("owner-asserted-manual-review"), "{detail}");
+        }
     }
 
     #[test]

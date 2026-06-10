@@ -368,7 +368,10 @@ The owner-recorded `--assert-complete` path writes
 `JARVIS_PLUGIN_QA_*` flags are true and owner/timestamp/evidence-note fields are
 populated. The report must identify itself with `schema_version: 1` and
 `evidence_type: owner_recorded_plugin_trust_qa`, and `self_test_fixture` must be
-`false`, before the doctor/status gates will accept it. Host-level egress evidence now requires an owner-recorded
+`false`, before the doctor/status gates will accept it. Operator reports must
+also keep `review_source: owner-asserted-manual-review`; imported or
+self-test review sources are rejected by the assertion, doctor, bundle, and
+evidence-status paths. Host-level egress evidence now requires an owner-recorded
 policy label, UTC egress validation timestamp, denied undeclared-host fixture
 note, and declared-host allow fixture note, but that report remains manual
 external evidence rather than repo-local proof of marketplace, host sandbox, or
