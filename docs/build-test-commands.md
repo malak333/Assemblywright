@@ -101,14 +101,18 @@ by rerunning `./scripts/package-distribution.sh --unsigned-launch-check` for
 local evidence, or the signed packaging lane for final release evidence.
 Live-device QA checks schema/type,
 `self_test_fixture=false`, expected bundle ID, matching short/build version,
-and ordered non-future UTC voice-check timestamps. Plugin-trust checks ordered
-non-future UTC review timestamps. The final evidence bundle checks the expected
-release version, signed-distribution provenance report, SHA-256 digest shape,
-semantic validity of the signed-provenance, live-device QA, and plugin-trust QA
-child reports referenced by the bundle, and `local_signature_validation=true`.
-Wrong bundle/version metadata, malformed
-timestamps, future-dated timestamps, reversed timestamps, missing signed
-provenance, disabled local signature validation, or a self-test fixture leave
+repository-backed command-result evidence, and ordered non-future UTC
+voice-check timestamps. Plugin-trust checks ordered non-future UTC review and
+egress validation timestamps, `review_source=owner-asserted-manual-review`,
+and non-empty owner-recorded marketplace, malware, signed-publisher, OS
+sandbox, host-egress, deny-fixture, allow-fixture, and manual-review evidence
+fields. The final evidence bundle checks the expected release version,
+signed-distribution provenance report, SHA-256 digest shape, semantic validity
+of the signed-provenance, live-device QA, and plugin-trust QA child reports
+referenced by the bundle, and `local_signature_validation=true`. Wrong
+bundle/version metadata, malformed timestamps, future-dated timestamps,
+reversed timestamps, missing signed provenance, non-owner plugin-trust review
+source, disabled local signature validation, or a self-test fixture leave
 evidence invalid.
 
 Focused regression checks for that release evidence boundary:
@@ -116,6 +120,7 @@ Focused regression checks for that release evidence boundary:
 ```sh
 cargo test -p jarvis-core live_device_qa_report -- --nocapture
 cargo test -p jarvis-cli --test local_ipc_e2e release_readiness_rejects_semantically_invalid_live_voice_evidence -- --nocapture
+cargo test -p jarvis-cli --test local_ipc_e2e release_help_surfaces_current_evidence_boundaries -- --nocapture
 ```
 
 For manual inspection, `jarvis-cli health` calls a loopback HTTP server, so
@@ -413,7 +418,12 @@ stapling, live-device QA, plugin trust QA, or manual release QA.
 The release command `--help` output is part of the operator contract: it should
 preserve the read-only scope, IPC-first/local-fallback behavior, explicit
 `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external` opt-in, and file/report
-inspection boundary for evidence status.
+inspection plus semantic-validation boundary for evidence status. The
+`release_help_surfaces_current_evidence_boundaries` CLI E2E test keeps
+`jarvis release evidence-status --help` aligned with the default
+operator-readable output, `--json` escape hatch, owner-asserted plugin-trust
+review-source requirement, host-egress evidence fields, and final-bundle local
+signature-validation check.
 `./scripts/release-plugin-trust-qa.sh --check` is the local plugin-trust
 preflight for marketplace review, malware scanning, signed publisher policy,
 OS-level process/network sandbox validation and host-level egress validation. Its `--self-test` mode uses fake

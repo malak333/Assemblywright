@@ -95,6 +95,7 @@ coverage is:
 - `cargo test -p jarvis-cli --test local_ipc_e2e release_readiness_cli_computes_production_ready_only_from_external_complete_evidence_status -- --nocapture`
 - `cargo test -p jarvis-cli --test local_ipc_e2e release_readiness_rejects_semantically_invalid_live_voice_evidence -- --nocapture`
 - `cargo test -p jarvis-cli --test local_ipc_e2e release_evidence_status_rejects_plugin_report_non_owner_review_source -- --nocapture`
+- `cargo test -p jarvis-cli --test local_ipc_e2e release_help_surfaces_current_evidence_boundaries -- --nocapture`
 - `swift test --disable-sandbox --package-path apps/mac --filter JarvisMacCoreTests`
 - `./scripts/release-local.sh` before merging executable or release-boundary
   changes.
@@ -103,3 +104,7 @@ For this phase, the release boundary is the feature: Jarvis must keep reporting
 `production_ready: false` until owner-recorded external evidence is complete,
 and production plugin-trust evidence must stay owner-asserted rather than
 imported or self-test sourced.
+The release CLI help is also part of that operator contract: it must describe
+operator-readable default output, `--json` for exact evidence payloads, and the
+current owner-source, host-egress, child-report, and local-signature-validation
+checks without implying Jarvis performs the external manual gates.

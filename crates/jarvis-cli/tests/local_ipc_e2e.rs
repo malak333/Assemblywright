@@ -191,6 +191,27 @@ fn release_readiness_cli_falls_back_without_running_server() {
 }
 
 #[test]
+fn release_help_surfaces_current_evidence_boundaries() {
+    let release_help = run_cli_text(["release", "--help"]);
+    let readiness_help = run_cli_text(["release", "readiness", "--help"]);
+    let evidence_status_help = run_cli_text(["release", "evidence-status", "--help"]);
+
+    assert!(release_help.contains("Read-only release operator commands."));
+    assert!(release_help.contains("fall back to conservative local metadata"));
+    assert!(readiness_help.contains("JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external"));
+    assert!(readiness_help.contains("production_ready field stays false"));
+
+    assert!(evidence_status_help.contains("Print release evidence file/report status."));
+    assert!(evidence_status_help.contains("semantic report validation"));
+    assert!(evidence_status_help.contains("owner-asserted plugin-trust review source"));
+    assert!(evidence_status_help.contains("host-egress evidence fields"));
+    assert!(evidence_status_help.contains("final-bundle local signature-validation status"));
+    assert!(evidence_status_help.contains("Default output is operator-readable"));
+    assert!(evidence_status_help.contains("use --json for the exact structured payload"));
+    assert!(!evidence_status_help.contains("status as JSON."));
+}
+
+#[test]
 fn health_cli_reports_server_unavailable_with_operator_guidance() {
     let endpoint = format!("http://{}", unused_loopback_addr());
 
@@ -2017,7 +2038,11 @@ fn release_help_documents_operator_boundaries() {
     assert!(readiness_help.contains("Falls back to local read-only readiness metadata"));
 
     let evidence_help = run_cli_text(["release", "evidence-status", "--help"]);
-    assert!(evidence_help.contains("file/report inventory only"));
+    assert!(evidence_help.contains("file/report inventory plus semantic report validation"));
+    assert!(evidence_help.contains("owner-asserted plugin-trust review source"));
+    assert!(evidence_help.contains("host-egress evidence fields"));
+    assert!(evidence_help.contains("Default output is operator-readable"));
+    assert!(evidence_help.contains("use --json for the exact structured payload"));
     assert!(evidence_help.contains("does not prove Developer ID signing"));
     assert!(evidence_help.contains("live-device QA"));
     assert!(evidence_help.contains("marketplace review"));
