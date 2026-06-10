@@ -565,8 +565,11 @@ Clean-profile and manual production gates not proven by this local smoke:
   test phrase after trimming, the expected command text must match the observed
   command text after trimming, `JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID` must be
   `task:<uuid>` or `audit:<uuid>` from live command/audit evidence, and
-  repository-backed `/release/evidence-status` must resolve it to an existing
-  task or task-associated audit row before it can clear readiness. The
+  `/release/evidence-status` must run against repository-backed IPC state and
+  resolve it to an existing task or task-associated audit row before it can
+  clear readiness. Fallback/no-server CLI evidence-status treats shape-only
+  command evidence as invalid; the shell scripts only preflight the ID shape
+  because they cannot inspect the SQLite repository. The
   report must bind the installed bundled core path, `jarvis <version>` output,
   and SHA-256 digest. The report generation timestamp must be UTC, no earlier
   than the completed voice check, and not future-dated. Confirm the generated

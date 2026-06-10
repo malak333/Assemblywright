@@ -128,9 +128,11 @@ These notes capture durable facts for future agents working on this repository.
   to match the expected command text after trimming, with
   `voice_command_observation.command_result_evidence_id` shaped as
   `task:<uuid>` or `audit:<uuid>` from live command/audit evidence. When the
-  check runs through repository-backed IPC state, that ID must resolve to an
-  existing task row or a task-associated audit row; offline shell scripts keep
-  shape-only fixture validation because they do not own the SQLite repository. It now
+  check runs through CLI/IPC evidence-status, that ID must resolve through
+  repository-backed IPC state to an existing task row or a task-associated audit
+  row; fallback/no-server CLI evidence-status fails closed instead of accepting
+  shape-only IDs. Offline shell scripts keep shape-only fixture validation
+  because they do not own the SQLite repository. It now
   also requires a `bundled_core` block that binds the installed
   `Contents/Resources/bin/jarvis-cli` path, `jarvis <version>` output, and
   SHA-256 digest to the same live-device report, all live-device
@@ -392,8 +394,9 @@ These notes capture durable facts for future agents working on this repository.
   live-device and plugin-trust evidence fields plus app bundle `Info.plist`
   metadata checks, live-device bundle/version and timestamp semantic checks,
   plugin-trust review timestamp checks, and final bundle version/SHA/local-signature
-  checks, so the CLI and Swift Release tab can show missing or invalid release
-  evidence without parsing script text.
+  checks, and repository-backed live command evidence resolution, so the CLI
+  and Swift Release tab can show missing or invalid release evidence without
+  parsing script text.
 - Release evidence status rejects false live-device validation flags, false
   live voice-loop flags, false plugin-trust validation flags, and false final
   evidence-bundle validation flags; CLI E2E now covers those semantics and
@@ -730,8 +733,9 @@ These notes capture durable facts for future agents working on this repository.
   `JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true`, then writes a JSON evidence
   report with `voice_command_observation.command_result_evidence_id`. The
   script validates the ID shape offline, while `/release/evidence-status` and
-  evidence-aware `/release/readiness` resolve the ID against task/audit records
-  when the server has repository-backed IPC state. The script writes the report
+  evidence-aware `/release/readiness` require the ID to resolve against
+  task/audit records through repository-backed IPC state before the report can
+  clear readiness. The script writes the report
   to `JARVIS_QA_REPORT_PATH` or
   `target/release-live-device-qa-report.json`. The report records installed-app
   metadata, voice-loop evidence fields, owner-recorded live voice evidence

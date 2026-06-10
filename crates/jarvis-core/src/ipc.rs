@@ -4236,6 +4236,7 @@ fn release_evidence_status_from_env_with_repository(
             bundle_path,
             RELEASE_EVIDENCE_BUNDLE_REQUIRED_FIELDS,
             bundle_digest_paths,
+            repository,
         ),
     ];
 
@@ -4269,7 +4270,7 @@ fn release_evidence_status_from_env_with_repository(
         invalid_count,
         items,
         proof_boundary:
-            "File/report inventory only; complete means expected paths are present, app bundle metadata matches the expected bundle identifier/version/build, bundled core version-marker metadata matches the expected release version, and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/non-future timestamp semantics, repository-backed task/audit command-result evidence resolution when IPC state has a repository, plugin-trust non-future timestamp semantics, and final evidence-bundle path/digest/signature-validation/non-future timestamp semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, execute release artifacts, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
+            "File/report inventory only; complete means expected paths are present, app bundle metadata matches the expected bundle identifier/version/build, bundled core version-marker metadata matches the expected release version, and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/non-future timestamp semantics, required repository-backed task/audit command-result evidence resolution, plugin-trust non-future timestamp semantics, and final evidence-bundle path/digest/signature-validation/non-future timestamp semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, execute release artifacts, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
                 .to_string(),
     }
 }
@@ -4391,9 +4392,15 @@ fn release_evidence_bundle_report_item(
     path: PathBuf,
     required_fields: &[&str],
     digest_paths: ReleaseEvidenceBundleDigestPaths<'_>,
+    repository: Option<&SqliteRepository>,
 ) -> ReleaseEvidenceStatusItem {
-    let (status, detail) =
-        inspect_release_json_report_with_bundle_digests(key, &path, required_fields, digest_paths);
+    let (status, detail) = inspect_release_json_report_with_bundle_digests(
+        key,
+        &path,
+        required_fields,
+        digest_paths,
+        repository,
+    );
     ReleaseEvidenceStatusItem {
         key: key.to_string(),
         label: label.to_string(),
@@ -4586,6 +4593,7 @@ fn inspect_release_json_report_with_bundle_digests(
     path: &FsPath,
     required_fields: &[&str],
     bundle_digest_paths: ReleaseEvidenceBundleDigestPaths<'_>,
+    repository: Option<&SqliteRepository>,
 ) -> (ReleaseEvidenceItemStatus, String) {
     inspect_release_json_report_inner(
         key,
@@ -4593,7 +4601,7 @@ fn inspect_release_json_report_with_bundle_digests(
         required_fields,
         None,
         Some(bundle_digest_paths),
-        None,
+        repository,
     )
 }
 
@@ -4653,7 +4661,9 @@ fn inspect_release_json_report_inner(
                 return (ReleaseEvidenceItemStatus::Invalid, error);
             }
             if let Some(paths) = bundle_digest_paths {
-                if let Err(error) = validate_release_evidence_bundle_file_bindings(&value, paths) {
+                if let Err(error) =
+                    validate_release_evidence_bundle_file_bindings(&value, paths, repository)
+                {
                     return (ReleaseEvidenceItemStatus::Invalid, error);
                 }
             }
@@ -4858,31 +4868,31 @@ fn validate_command_result_evidence_id(
     let id = Uuid::parse_str(id).map_err(|_| {
         "JSON report command_result_evidence_id must be task:<uuid> or audit:<uuid>".to_string()
     })?;
-    if let Some(repository) = repository {
-        let exists = match kind {
-            "task" => repository
-                .get_task(id)
-                .map_err(|error| {
-                    format!(
-                        "JSON report command_result_evidence_id repository lookup failed: {error}"
-                    )
-                })?
-                .is_some(),
-            "audit" => repository
-                .get_audit_entry(id)
-                .map_err(|error| {
-                    format!(
-                        "JSON report command_result_evidence_id repository lookup failed: {error}"
-                    )
-                })?
-                .is_some_and(|entry| entry.task_id.is_some()),
-            _ => false,
-        };
-        if !exists {
-            return Err(format!(
-                "JSON report command_result_evidence_id {kind}:{id} does not resolve to repository evidence"
-            ));
-        }
+    let Some(repository) = repository else {
+        return Err(
+            "JSON report command_result_evidence_id requires repository-backed IPC evidence-status"
+                .to_string(),
+        );
+    };
+    let exists = match kind {
+        "task" => repository
+            .get_task(id)
+            .map_err(|error| {
+                format!("JSON report command_result_evidence_id repository lookup failed: {error}")
+            })?
+            .is_some(),
+        "audit" => repository
+            .get_audit_entry(id)
+            .map_err(|error| {
+                format!("JSON report command_result_evidence_id repository lookup failed: {error}")
+            })?
+            .is_some_and(|entry| entry.task_id.is_some()),
+        _ => false,
+    };
+    if !exists {
+        return Err(format!(
+            "JSON report command_result_evidence_id {kind}:{id} does not resolve to repository evidence"
+        ));
     }
     Ok(())
 }
@@ -5186,6 +5196,7 @@ fn validate_release_evidence_bundle(value: &serde_json::Value) -> Result<(), Str
 fn validate_release_evidence_bundle_file_bindings(
     value: &serde_json::Value,
     paths: ReleaseEvidenceBundleDigestPaths<'_>,
+    repository: Option<&SqliteRepository>,
 ) -> Result<(), String> {
     require_json_string_value(
         value,
@@ -5267,7 +5278,7 @@ fn validate_release_evidence_bundle_file_bindings(
     })?;
     let live_qa =
         read_release_evidence_child_report(paths.live_qa_report, "live-device QA report")?;
-    validate_live_device_qa_report(&live_qa, None).map_err(|error| {
+    validate_live_device_qa_report(&live_qa, repository).map_err(|error| {
         format!("live-device QA report referenced by release evidence bundle is invalid: {error}")
     })?;
     let plugin_qa =
@@ -6737,11 +6748,14 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
     }
 
     #[test]
-    fn live_device_qa_report_accepts_semantically_valid_owner_report() {
+    fn live_device_qa_report_requires_repository_backed_command_result_evidence() {
         let (status, detail) =
             inspect_live_device_qa_report_value(valid_live_device_qa_report_json());
-        assert_eq!(status, ReleaseEvidenceItemStatus::Present);
-        assert!(detail.contains("installed app path"), "{detail}");
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(
+            detail.contains("requires repository-backed IPC evidence-status"),
+            "{detail}"
+        );
     }
 
     #[test]
@@ -7374,7 +7388,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             live_qa_report: &live_file,
             plugin_qa_report: &plugin_file,
         };
-        let error = validate_release_evidence_bundle_file_bindings(&report, paths)
+        let error = validate_release_evidence_bundle_file_bindings(&report, paths, None)
             .expect_err("stale plugin report digest should fail");
         assert!(
             error.contains(
@@ -7455,7 +7469,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             live_qa_report: &live_file,
             plugin_qa_report: &plugin_file,
         };
-        let error = validate_release_evidence_bundle_file_bindings(&report, paths)
+        let error = validate_release_evidence_bundle_file_bindings(&report, paths, None)
             .expect_err("invalid live-device child report should fail");
         assert!(
             error
