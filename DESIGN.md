@@ -68,7 +68,9 @@ The app should feel like a real Mac product: menu bar presence, command surface,
 
 `jarvis-core` is a Rust local service started and supervised by the Swift app. It owns durable execution: task planning, model routing, memory reads and writes, plugin execution, scheduled jobs, event triggers, risk policy evaluation, and audit logging.
 
-The initial IPC boundary can be loopback HTTP or a Unix domain socket. A future version can move the core into a LaunchAgent if stronger background execution is needed.
+Current v1 IPC uses loopback HTTP. A future version can move the IPC boundary
+to a Unix domain socket, or move the core into a LaunchAgent if stronger
+background execution is needed.
 
 Primary design rule: Swift should not become the agent brain, and Rust should not become the Mac UX layer.
 
@@ -291,7 +293,8 @@ controls over the existing Rust IPC contract, run activity summary,
 voice input/output adapter controls, text-transcript command handoff,
 permission policy review,
 redacted scheduler attention handoff, scheduler trigger policy-review items,
-adapter-backed scheduler notification controls for due/failed attention items,
+adapter-backed scheduler notification controls for due, failed, and
+emergency-pause-blocked attention items,
 and core supervision abstractions.
 Installed plugin publisher-origin claims can be operator-pinned after local
 provenance matches the install snapshot and the supplied trusted origin exactly
@@ -310,9 +313,11 @@ sandbox enforcement and host-level egress filtering remain target architecture.
 The product still lacks
 Apple-tool-validated signed/notarized/stapled release evidence, live microphone and audio-output validation,
 marketplace/WASM/OS-network-sandbox plugin trust boundaries, richer
-proactive trigger policy, and live OS notification validation. Swift supervision is
-covered only as a scaffold for
-configured or packaged-style local core binaries.
+proactive trigger policy, and live OS notification validation. Swift supervision
+remains unsigned production-wise, but local packaged-app smoke and unsigned
+distribution-layout launch proof now cover configured/bundled core discovery;
+signed/notarized app, clean-profile Finder launch, live-device QA, and manual
+release QA remain external gates.
 
 Historical phase-3 production sweeps used isolated worktrees, topic branches,
 and reviewable PR slices for lanes such as model-route persistence, plugin

@@ -410,11 +410,38 @@ fn release_readiness_cli_computes_production_ready_only_from_external_complete_e
         .as_array()
         .expect("blocking gates")
         .is_empty());
+    assert!(external_readiness["proof_boundary"]
+        .as_str()
+        .expect("external proof boundary")
+        .contains("does not perform signing"));
     assert_array_contains(
         &external_readiness["implemented_features"],
         "key",
         "live_voice_loop",
     );
+    let live_voice_feature = readiness_feature(&external_readiness, "live_voice_loop");
+    assert_eq!(live_voice_feature["status"], "implemented");
+    assert!(live_voice_feature["boundary"]
+        .as_str()
+        .expect("live voice external boundary")
+        .contains("Owner-recorded live-device QA evidence"));
+    let evidence_bundle_feature = readiness_feature(&external_readiness, "release_evidence_bundle");
+    assert!(evidence_bundle_feature["boundary"]
+        .as_str()
+        .expect("evidence bundle boundary")
+        .contains("owner-recorded external signing"));
+    let signed_bundle = release_evidence_item(&evidence_status, "signed_app_bundle");
+    assert_eq!(signed_bundle["manual_gate"], true);
+    assert!(signed_bundle["detail"]
+        .as_str()
+        .expect("signed app detail")
+        .contains("not validated by evidence-status"));
+    let live_report = release_evidence_item(&evidence_status, "live_device_qa_report");
+    assert_eq!(live_report["manual_gate"], true);
+    assert!(live_report["detail"]
+        .as_str()
+        .expect("live report detail")
+        .contains("owner-recorded"));
 }
 
 #[test]
@@ -5532,6 +5559,15 @@ fn release_evidence_item<'a>(evidence_status: &'a Value, key: &str) -> &'a Value
         .iter()
         .find(|item| item["key"] == key)
         .unwrap_or_else(|| panic!("missing evidence item {key}"))
+}
+
+fn readiness_feature<'a>(readiness: &'a Value, key: &str) -> &'a Value {
+    readiness["implemented_features"]
+        .as_array()
+        .expect("implemented readiness features")
+        .iter()
+        .find(|feature| feature["key"] == key)
+        .unwrap_or_else(|| panic!("missing readiness feature {key}"))
 }
 
 fn assert_release_evidence_item_status(

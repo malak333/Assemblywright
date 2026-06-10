@@ -294,6 +294,33 @@ raise SystemExit(0 if isinstance(cursor, str) and expected in cursor else 1)
 PY
 }
 
+json_gatekeeper_accepted() {
+  local path="$1"
+  local dotted_key="$2"
+  python3 - "$path" "$dotted_key" <<'PY'
+import json
+import re
+import sys
+
+path, dotted_key = sys.argv[1:3]
+with open(path, encoding="utf-8") as handle:
+    data = json.load(handle)
+
+cursor = data
+for segment in dotted_key.split("."):
+    if not isinstance(cursor, dict) or segment not in cursor:
+        raise SystemExit(1)
+    cursor = cursor[segment]
+
+if not isinstance(cursor, str):
+    raise SystemExit(1)
+
+lines = [line.strip() for line in cursor.splitlines() if line.strip()]
+if not any(line == "accepted" or re.search(r":\s*accepted$", line) for line in lines):
+    raise SystemExit(1)
+PY
+}
+
 json_string_prefix() {
   local path="$1"
   local dotted_key="$2"
@@ -612,6 +639,18 @@ check_json_string_contains() {
   fi
 }
 
+check_json_gatekeeper_accepted() {
+  local label="$1"
+  local path="$2"
+  local dotted_key="$3"
+
+  if json_gatekeeper_accepted "$path" "$dotted_key"; then
+    record_satisfied "$label: $dotted_key has exact Gatekeeper accepted evidence"
+  else
+    record_missing "$label semantic mismatch: $dotted_key must include an exact Gatekeeper accepted result in $path"
+  fi
+}
+
 check_json_uuid() {
   local label="$1"
   local path="$2"
@@ -792,8 +831,8 @@ check_release_evidence() {
     check_json_uuid "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "notarization.installer_pkg_submission_id"
     check_json_string_contains "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "stapling.app_bundle_validation" "The validate action worked!"
     check_json_string_contains "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "stapling.installer_pkg_validation" "The validate action worked!"
-    check_json_string_contains "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "gatekeeper.app_bundle_assessment" "accepted"
-    check_json_string_contains "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "gatekeeper.installer_pkg_assessment" "accepted"
+    check_json_gatekeeper_accepted "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "gatekeeper.app_bundle_assessment"
+    check_json_gatekeeper_accepted "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "gatekeeper.installer_pkg_assessment"
     check_json_utc_timestamp "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "generated_at"
   else
     record_missing "signed-distribution provenance report missing or invalid JSON: $SIGNED_PROVENANCE_REPORT"
@@ -1287,6 +1326,29 @@ PY
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected non-Developer-ID signed provenance evidence to fail"
+  fi
+
+  python3 - "$tmp_dir/dist/Jarvis-$VERSION-signed-provenance.json" "$tmp_dir/dist/negated-gatekeeper-signed-provenance.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+with open(source, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["gatekeeper"]["app_bundle_assessment"] = "not accepted"
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+PY
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/dist/negated-gatekeeper-signed-provenance.json" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+    "$0" --assert-complete >/dev/null 2>&1; then
+    fail "release evidence doctor self-test expected negated Gatekeeper acceptance to fail"
   fi
 
   check_output="$(JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/missing-dist" \

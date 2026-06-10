@@ -421,6 +421,35 @@ if not isinstance(cursor, str) or expected not in cursor:
 PY
 }
 
+require_json_gatekeeper_accepted() {
+  local label="$1"
+  local path="$2"
+  local dotted_key="$3"
+  require_file "$label" "$path"
+  python3 - "$path" "$dotted_key" "$label" <<'PY'
+import json
+import re
+import sys
+
+path, dotted_key, label = sys.argv[1:4]
+with open(path, encoding="utf-8") as handle:
+    data = json.load(handle)
+
+cursor = data
+for segment in dotted_key.split("."):
+    if not isinstance(cursor, dict) or segment not in cursor:
+        raise SystemExit(f"{label} is missing required evidence field: {dotted_key}")
+    cursor = cursor[segment]
+
+if not isinstance(cursor, str):
+    raise SystemExit(f"{label} evidence field {dotted_key} must be a string")
+
+lines = [line.strip() for line in cursor.splitlines() if line.strip()]
+if not any(line == "accepted" or re.search(r":\s*accepted$", line) for line in lines):
+    raise SystemExit(f"{label} evidence field {dotted_key} must include an exact Gatekeeper accepted result")
+PY
+}
+
 require_json_uuid() {
   local label="$1"
   local path="$2"
@@ -1017,6 +1046,37 @@ JSON
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"signed_distribution_provenance_sha256"'
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"live_device_qa_sha256"'
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"plugin_trust_qa_report"'
+
+  python3 - "$tmp_dir/signed-provenance.json" "$tmp_dir/negated-gatekeeper-signed-provenance.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+with open(source, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["gatekeeper"]["app_bundle_assessment"] = "not accepted"
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+PY
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/negated-gatekeeper-signed-provenance.json" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/negated-gatekeeper-bundle.json" \
+    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
+    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+    "$0" --bundle >/dev/null 2>&1; then
+    fail "release evidence self-test expected negated Gatekeeper acceptance to be rejected"
+  fi
 
   printf 'jarvis 0.0.0\n' >"$tmp_dir/dist/Jarvis.app/Contents/Resources/bin/jarvis-cli.version"
   stale_marker_output=""
@@ -1615,8 +1675,8 @@ require_json_uuid "signed-distribution provenance report" "$SIGNED_PROVENANCE_RE
 require_json_uuid "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "notarization.installer_pkg_submission_id"
 require_json_string_contains "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "stapling.app_bundle_validation" "The validate action worked!"
 require_json_string_contains "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "stapling.installer_pkg_validation" "The validate action worked!"
-require_json_string_contains "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "gatekeeper.app_bundle_assessment" "accepted"
-require_json_string_contains "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "gatekeeper.installer_pkg_assessment" "accepted"
+require_json_gatekeeper_accepted "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "gatekeeper.app_bundle_assessment"
+require_json_gatekeeper_accepted "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "gatekeeper.installer_pkg_assessment"
 require_json_utc_timestamp "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "generated_at"
 require_production_signature_validation
 validate_local_distribution_evidence

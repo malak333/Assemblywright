@@ -140,16 +140,18 @@ public final class VoiceAdapterStateModel: ObservableObject {
 
     public func requestPermissions() async {
         phase = .requestingPermission
+        let previousPhase = phase
         switch await adapter.requestPermissions() {
         case .success:
             lastError = nil
             phase = adapter.phase
         case let .failure(error):
-            fail(error)
+            fail(error, preserving: previousPhase)
         }
     }
 
     public func startCapture() async {
+        let previousPhase = phase
         let callbacks = JarvisVoiceCaptureCallbacks(
             onPartialTranscript: { [weak self, weak voiceState] transcript in
                 self?.phase = .transcribing
@@ -174,7 +176,8 @@ public final class VoiceAdapterStateModel: ObservableObject {
                 }
             },
             onError: { [weak self] error in
-                self?.fail(error)
+                guard let self else { return }
+                self.fail(error, preserving: self.phase)
             }
         )
 
@@ -184,28 +187,30 @@ public final class VoiceAdapterStateModel: ObservableObject {
             phase = adapter.phase
             voiceState.apply(.beginTranscript)
         case let .failure(error):
-            fail(error)
+            fail(error, preserving: previousPhase)
         }
     }
 
     public func stopCapture() async {
+        let previousPhase = phase
         switch await adapter.stopCapture() {
         case .success:
             lastError = nil
             phase = adapter.phase
         case let .failure(error):
-            fail(error)
+            fail(error, preserving: previousPhase)
         }
     }
 
     public func interrupt(reason: String) async {
+        let previousPhase = phase
         switch await adapter.interrupt(reason: reason) {
         case .success:
             lastError = nil
             phase = adapter.phase
             voiceState.interruptTranscript(reason: reason)
         case let .failure(error):
-            fail(error)
+            fail(error, preserving: previousPhase)
         }
     }
 
@@ -213,10 +218,30 @@ public final class VoiceAdapterStateModel: ObservableObject {
         isFinalTranscriptAutoSubmitEnabled = enabled
     }
 
-    private func fail(_ error: JarvisVoiceAdapterError) {
+    private func fail(_ error: JarvisVoiceAdapterError, preserving previousPhase: JarvisVoiceAdapterPhase) {
         lastError = error
-        phase = .unavailable(reason: error.description)
-        voiceState.setUnavailable(reason: error.description)
+        if error.isRecoverableCommandState {
+            phase = previousPhase
+        } else {
+            phase = .unavailable(reason: error.description)
+            voiceState.setUnavailable(reason: error.description)
+        }
+    }
+}
+
+private extension JarvisVoiceAdapterError {
+    var isRecoverableCommandState: Bool {
+        switch self {
+        case .alreadyCapturing, .noActiveCapture:
+            return true
+        case .frameworkUnavailable,
+             .permissionDenied,
+             .permissionRestricted,
+             .speechRecognizerUnavailable,
+             .captureStartFailed,
+             .recognitionFailed:
+            return false
+        }
     }
 }
 
