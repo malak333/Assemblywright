@@ -1001,7 +1001,7 @@ impl IpcState {
             blocking_manual_gates: release_blocking_manual_gates(&evidence_status, evidence_mode_enabled),
             recommended_verification_commands: release_verification_commands(),
             proof_boundary:
-                "Read-only summary derived from /contract feature metadata, release checklist blockers, and explicitly enabled release evidence status; it does not perform signing, notarization, installation, Finder/LaunchServices validation, live microphone/Speech validation, spoken transcript handoff, live audio-output validation, App Store review, marketplace plugin review, malware analysis, or OS sandbox enforcement."
+                "Read-only summary derived from /contract feature metadata, release checklist blockers, and explicitly enabled release evidence status; it does not perform signing, notarization, stapling, installation, Finder/LaunchServices validation, live microphone/Speech validation, spoken transcript handoff, live audio-output validation, App Store review, marketplace plugin review, malware analysis, or OS sandbox enforcement."
                     .to_string(),
         }
     }
@@ -4086,7 +4086,7 @@ fn release_readiness_features(
             if feature.key == "live_voice_loop" && live_device_qa_valid {
                 feature.status = "implemented".to_string();
                 feature.proof = "A valid owner-recorded live-device QA report is present through explicitly enabled release evidence status, including microphone/Speech permission prompts, spoken transcript handoff into the command path, and speech-output playback evidence.".to_string();
-                feature.boundary = "Owner-recorded live-device QA evidence for the referenced release candidate only; readiness still does not perform signing, notarization, installation, Finder/LaunchServices validation, live audio capture, App Store review, marketplace review, malware analysis, or OS sandbox/egress enforcement.".to_string();
+                feature.boundary = "Owner-recorded live-device QA evidence for the referenced release candidate only; readiness still does not perform signing, notarization, stapling, installation, Finder/LaunchServices validation, live audio capture, App Store review, marketplace review, malware analysis, or OS sandbox/egress enforcement.".to_string();
             }
             feature
         })
@@ -5678,13 +5678,13 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "release_evidence_status",
             "implemented",
-            "`/release/evidence-status` and `jarvis release evidence-status` expose structured present, missing, or invalid status for standard signed artifacts, QA reports, and final evidence bundle paths, including app bundle metadata matching, bundled core version-marker matching, signed-provenance core path/version/digest binding, signed-provenance artifact digest matching, live-device QA bundle/version/non-future timestamp checks, plugin-trust non-future timestamp and owner-review-source checks, and final evidence-bundle path/digest/signature-validation/non-future timestamp checks, with Rust, CLI E2E, and Swift model coverage.",
-            "Read-only file/report inventory plus report semantic validation only; it does not sign, notarize, install, Finder-launch, run live-device QA, review marketplace trust, scan malware, or enforce OS sandboxing.",
+            "`/release/evidence-status` and `jarvis release evidence-status` expose structured present, missing, or invalid status for standard signed artifacts, QA reports, and final evidence bundle paths, including app bundle metadata matching, bundled core version-marker matching, signed-provenance core path/version/digest binding, signed-provenance artifact digest matching, live-device QA bundle/version/non-future timestamp and repository-backed command-result evidence checks, plugin-trust non-future timestamp, owner-review-source, host-egress policy and deny/allow fixture checks, and final-bundle path/digest/local-signature-validation plus child-report semantic revalidation, with Rust, CLI E2E, and Swift model coverage.",
+            "Read-only file/report inventory plus report semantic validation only; it does not sign, notarize, staple, install, Finder-launch, execute release artifacts, run live-device QA, review marketplace trust, scan malware, or enforce OS sandboxing.",
         ),
         feature(
             "release_evidence_bundle",
             "implemented",
-            "`release-evidence-bundle.sh --check`, `--write-template`, `--self-test`, and `release-evidence-doctor.sh --check` are part of the release evidence workflow; `--bundle` validates signed/stapled artifact references, live-device QA bundle metadata, plugin-trust QA flags and owner evidence fields, and writes SHA-256-bound evidence manifest entries.",
+            "`release-evidence-bundle.sh --check`, `--write-template`, `--self-test`, and `release-evidence-doctor.sh --check` are part of the release evidence workflow; `--bundle` validates signed/stapled artifact references, live-device QA bundle metadata and command observation, plugin-trust QA flags, owner evidence, review source, and host-egress fields, then writes SHA-256-bound evidence manifest entries whose child reports are revalidated by doctor/status checks.",
             "Evidence-bundle mechanics, local artifact/report validation, and release-evidence inventory only; production readiness still depends on owner-recorded external signing, notarization, live-device QA, plugin-trust QA, and archived evidence.",
         ),
         feature(
@@ -6055,12 +6055,19 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .iter()
             .any(|feature| feature.key == "release_evidence_bundle"
                 && feature.proof.contains("SHA-256-bound evidence manifest")
+                && feature.proof.contains("host-egress fields")
+                && feature.proof.contains("child reports are revalidated")
                 && feature.boundary.contains("owner-recorded external")));
         assert!(readiness
             .implemented_features
             .iter()
             .any(|feature| feature.key == "release_evidence_status"
                 && feature.proof.contains("/release/evidence-status")
+                && feature
+                    .proof
+                    .contains("repository-backed command-result evidence")
+                && feature.proof.contains("host-egress policy")
+                && feature.proof.contains("child-report semantic revalidation")
                 && feature.boundary.contains("file/report inventory")));
         assert!(readiness
             .implemented_features

@@ -342,12 +342,14 @@ struct JarvisMacCoreTests {
         )
 
         #expect(!readiness.productionReady)
-        #expect(readiness.verifiedFeatureCount == 17)
+        #expect(readiness.verifiedFeatureCount == readiness.implementedFeatures.count)
         #expect(readiness.pendingFeatureCount == 1)
         #expect(readiness.implementedFeatures.first?.key == "repository_state")
+        #expect(readiness.implementedFeatures.map(\.key).contains("plugin_network_governance"))
         #expect(readiness.implementedFeatures.map(\.key).contains("operator_release_qa_smoke"))
         #expect(readiness.implementedFeatures.map(\.key).contains("release_ci_gate"))
         #expect(readiness.implementedFeatures.map(\.key).contains("unsigned_distribution_launch"))
+        #expect(readiness.implementedFeatures.map(\.key).contains("release_evidence_status"))
         #expect(readiness.implementedFeatures.map(\.key).contains("release_evidence_bundle"))
         #expect(readiness.pendingFeatures.first?.key == "live_voice_loop")
         #expect(readiness.blockingManualGates.contains("Developer ID Application and Installer signing credentials configured and used for a full signed package run"))
@@ -368,6 +370,8 @@ struct JarvisMacCoreTests {
         #expect(readiness.recommendedVerificationCommands.contains { command in
             command.contains("JARVIS_PLUGIN_QA_OWNER_NAME=") &&
                 command.contains("JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE=") &&
+                command.contains("JARVIS_PLUGIN_QA_EGRESS_POLICY_LABEL=") &&
+                command.contains("JARVIS_PLUGIN_QA_EGRESS_VALIDATION_COMPLETED_AT=") &&
                 command.contains("JARVIS_PLUGIN_QA_EGRESS_DENY_FIXTURE_EVIDENCE_NOTE=") &&
                 command.contains("JARVIS_PLUGIN_QA_EGRESS_ALLOW_FIXTURE_EVIDENCE_NOTE=") &&
                 command.contains("./scripts/release-plugin-trust-qa.sh --assert-complete")
@@ -1203,6 +1207,7 @@ struct JarvisMacCoreTests {
         #expect(model.evidenceStatus?.items.map(\.key).contains("live_device_qa_report") == true)
         #expect(model.evidenceStatus?.items.first { $0.key == "signed_app_bundle" }?.detail.contains("presence only") == true)
         #expect(model.readiness?.implementedFeatures.map(\.key).contains("repository_state") == true)
+        #expect(model.readiness?.implementedFeatures.map(\.key).contains("release_evidence_status") == true)
         #expect(model.readiness?.implementedFeatures.map(\.key).contains("release_evidence_bundle") == true)
         #expect(model.readiness?.pendingFeatures.map(\.key).contains("live_voice_loop") == true)
         #expect(model.readiness?.blockingManualGates.contains("Developer ID Application and Installer signing credentials configured and used for a full signed package run") == true)
@@ -1251,6 +1256,8 @@ struct JarvisMacCoreTests {
         #expect(evidenceStatus.items.map(\.key).contains("plugin_trust_qa_report"))
         #expect(evidenceStatus.items.map(\.key).contains("release_evidence_bundle"))
         #expect(evidenceStatus.proofBoundary.contains("does not sign"))
+        #expect(evidenceStatus.proofBoundary.contains("repository-backed task/audit command-result evidence resolution"))
+        #expect(evidenceStatus.proofBoundary.contains("execute release artifacts"))
     }
 
     @MainActor
@@ -1286,7 +1293,9 @@ struct JarvisMacCoreTests {
         #expect(model.evidenceStatus?.complete == true)
         #expect(model.evidenceStatus?.items.first { $0.key == "live_device_qa_report" }?.status == "present")
         #expect(model.evidenceStatus?.items.first { $0.key == "plugin_trust_qa_report" }?.status == "present")
+        #expect(model.evidenceStatus?.items.first { $0.key == "plugin_trust_qa_report" }?.detail.contains("review_source=owner-asserted-manual-review") == true)
         #expect(model.evidenceStatus?.items.first { $0.key == "release_evidence_bundle" }?.status == "present")
+        #expect(model.evidenceStatus?.items.first { $0.key == "release_evidence_bundle" }?.detail.contains("child reports are semantically valid") == true)
         #expect(model.lastError == nil)
         #expect(model.isShowingStaleReadiness == false)
     }
@@ -2919,7 +2928,7 @@ private func releaseReadinessJSON() -> Data {
           "generated_at": "2026-05-22T08:00:00Z",
           "production_ready": false,
           "readiness_scope": "local Rust/CLI foundation and Swift shell evidence only; full production distribution still has external manual gates",
-          "verified_feature_count": 17,
+          "verified_feature_count": 8,
           "pending_feature_count": 1,
           "implemented_features": [
             {
@@ -2933,6 +2942,12 @@ private func releaseReadinessJSON() -> Data {
               "status": "implemented",
               "proof": "Local subprocess plugins require full source-tree provenance verification plus explicit grants and emit audit evidence that reports os_sandbox_enforced:false.",
               "boundary": "Constrained local subprocess execution only; audit evidence reports os_sandbox_enforced:false, so this is not a WASM, OS-level, host-egress, or marketplace sandbox."
+            },
+            {
+              "key": "plugin_network_governance",
+              "status": "implemented",
+              "proof": "Network-capable plugin actions must declare exact allowed hosts and require the explicit subprocess_stdio_network execution grant.",
+              "boundary": "Runtime grant gate plus manifest governance only; not OS-level network sandbox enforcement or host-level egress filtering."
             },
             {
               "key": "operator_release_qa_smoke",
@@ -2953,9 +2968,15 @@ private func releaseReadinessJSON() -> Data {
               "boundary": "Unsigned distribution-layout proof only."
             },
             {
+              "key": "release_evidence_status",
+              "status": "implemented",
+              "proof": "`/release/evidence-status` and `jarvis release evidence-status` validate release evidence inventory, repository-backed command-result evidence, host-egress policy fields, and child-report semantic revalidation.",
+              "boundary": "Read-only file/report inventory plus report semantic validation only."
+            },
+            {
               "key": "release_evidence_bundle",
               "status": "implemented",
-              "proof": "`release-evidence-bundle.sh --bundle` writes SHA-256-bound evidence manifest entries.",
+              "proof": "`release-evidence-bundle.sh --bundle` writes SHA-256-bound evidence manifest entries and child reports are revalidated by doctor/status checks.",
               "boundary": "Evidence-bundle mechanics and local artifact/report validation only."
             }
           ],
@@ -2996,7 +3017,7 @@ private func releaseReadinessJSON() -> Data {
             "./scripts/release-evidence-doctor.sh --assert-complete",
             "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness"
           ],
-          "proof_boundary": "Read-only summary derived from /contract feature metadata and release checklist blockers; it does not perform signing, notarization, installation, Finder/LaunchServices validation, live microphone/Speech validation, spoken transcript handoff, live audio-output validation, App Store review, marketplace plugin review, malware analysis, or OS sandbox enforcement."
+          "proof_boundary": "Read-only summary derived from /contract feature metadata and release checklist blockers; it does not perform signing, notarization, stapling, installation, Finder/LaunchServices validation, live microphone/Speech validation, spoken transcript handoff, live audio-output validation, App Store review, marketplace plugin review, malware analysis, or OS sandbox enforcement."
         }
         """.utf8
     )
@@ -3044,7 +3065,7 @@ private func externalProductionReadyReleaseReadinessJSON() -> Data {
             "./scripts/release-ci-workflow-smoke.sh",
             "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness"
           ],
-          "proof_boundary": "Read-only summary derived from /contract feature metadata, release checklist blockers, and explicitly enabled external release evidence status; it does not perform signing, notarization, installation, Finder/LaunchServices validation, live microphone/Speech validation, spoken transcript handoff, live audio-output validation, App Store review, marketplace plugin review, malware analysis, or OS sandbox enforcement."
+          "proof_boundary": "Read-only summary derived from /contract feature metadata, release checklist blockers, and explicitly enabled external release evidence status; it does not perform signing, notarization, stapling, installation, Finder/LaunchServices validation, live microphone/Speech validation, spoken transcript handoff, live audio-output validation, App Store review, marketplace plugin review, malware analysis, or OS sandbox enforcement."
         }
         """.utf8
     )
@@ -3091,7 +3112,7 @@ private func releaseEvidenceStatusJSON() -> Data {
               "detail": "expected JSON report is missing"
             }
           ],
-          "proof_boundary": "File/report inventory only; complete means expected paths are present, app bundle metadata matches the expected bundle identifier/version/build, and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/non-future timestamp semantics, plugin-trust non-future timestamp and owner-asserted review-source semantics, and final evidence-bundle path/digest/signature-validation/non-future timestamp semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
+          "proof_boundary": "File/report inventory only; complete means expected paths are present, app bundle metadata matches the expected bundle identifier/version/build, bundled core version-marker metadata matches the expected release version, and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/non-future timestamp semantics, required repository-backed task/audit command-result evidence resolution, plugin-trust non-future timestamp and owner-asserted review-source semantics, and final evidence-bundle path/digest/signature-validation/non-future timestamp semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, execute release artifacts, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
         }
         """.utf8
     )
@@ -3185,7 +3206,7 @@ private func completeReleaseEvidenceStatusJSON() -> Data {
               "status": "present",
               "required_for_production": true,
               "manual_gate": true,
-              "detail": "JSON report exists, required owner-recorded fields are present, review and egress validation timestamps are valid and ordered, and deny/allow egress fixture notes are present; marketplace, malware, sandbox, and host-level egress claims remain owner-recorded external evidence"
+              "detail": "JSON report exists, self_test_fixture=false, review_source=owner-asserted-manual-review, required owner-recorded fields are present, review and egress validation timestamps are valid and ordered, and deny/allow egress fixture notes are present; marketplace, malware, sandbox, and host-level egress claims remain owner-recorded external evidence"
             },
             {
               "key": "release_evidence_bundle",
@@ -3195,10 +3216,10 @@ private func completeReleaseEvidenceStatusJSON() -> Data {
               "status": "present",
               "required_for_production": true,
               "manual_gate": true,
-              "detail": "JSON report exists, expected release version matches, artifact/report paths and SHA-256 digests match current artifacts and reports, and local signature validation is true; signed_distribution and notarization remain owner-recorded external evidence"
+              "detail": "JSON report exists, expected release version matches, artifact/report paths and SHA-256 digests match current artifacts and reports, referenced child reports are semantically valid, and local signature validation is true; signed_distribution and notarization remain owner-recorded external evidence"
             }
           ],
-          "proof_boundary": "File/report inventory only; complete means expected paths are present, app bundle metadata matches the expected bundle identifier/version/build, and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/non-future timestamp semantics, plugin-trust non-future timestamp and owner-asserted review-source semantics, and final evidence-bundle path/digest/signature-validation/non-future timestamp semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
+          "proof_boundary": "File/report inventory only; complete means expected paths are present, app bundle metadata matches the expected bundle identifier/version/build, bundled core version-marker metadata matches the expected release version, and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/non-future timestamp semantics, required repository-backed task/audit command-result evidence resolution, plugin-trust non-future timestamp and owner-asserted review-source semantics, and final evidence-bundle path/digest/signature-validation/non-future timestamp semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, execute release artifacts, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
         }
         """.utf8
     )
@@ -3235,7 +3256,7 @@ private func invalidLiveDeviceEvidenceStatusJSON() -> Data {
               "detail": "JSON report app_bundle.bundle_identifier mismatch: expected com.nobiletechnology.jarvis, got com.example.StaleJarvis"
             }
           ],
-          "proof_boundary": "File/report inventory only; complete means expected paths are present, app bundle metadata matches the expected bundle identifier/version/build, and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/non-future timestamp semantics, plugin-trust non-future timestamp and owner-asserted review-source semantics, and final evidence-bundle path/digest/signature-validation/non-future timestamp semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
+          "proof_boundary": "File/report inventory only; complete means expected paths are present, app bundle metadata matches the expected bundle identifier/version/build, bundled core version-marker metadata matches the expected release version, and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/non-future timestamp semantics, required repository-backed task/audit command-result evidence resolution, plugin-trust non-future timestamp and owner-asserted review-source semantics, and final evidence-bundle path/digest/signature-validation/non-future timestamp semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, execute release artifacts, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
         }
         """.utf8
     )
