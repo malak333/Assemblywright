@@ -900,7 +900,7 @@ check_release_evidence() {
     check_json_number "plugin-trust QA report" "$PLUGIN_QA_REPORT" "schema_version" "1"
     check_json_string "plugin-trust QA report" "$PLUGIN_QA_REPORT" "evidence_type" "owner_recorded_plugin_trust_qa"
     check_json_false_flag "plugin-trust QA report" "$PLUGIN_QA_REPORT" "self_test_fixture"
-    check_json_nonempty_string "plugin-trust QA report" "$PLUGIN_QA_REPORT" "review_source"
+    check_json_string "plugin-trust QA report" "$PLUGIN_QA_REPORT" "review_source" "owner-asserted-manual-review"
     for flag in marketplace_review malware_scan os_sandbox egress_enforcement signed_publisher_policy manual_trust_review; do
       check_json_flag "plugin-trust QA report" "$PLUGIN_QA_REPORT" "validation_flags.$flag"
     done

@@ -77,8 +77,9 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   Apple-tool-derived signing/notary/staple/Gatekeeper evidence fields from
   `codesign`, `pkgutil --check-signature`, `xcrun notarytool`,
   `xcrun stapler`, and `spctl`, required flags, non-future
-  plugin-trust review timestamps, final bundle version, artifact/report path
-  matching, SHA-256 digest shape, signed-provenance zip/pkg/core digests against
+  plugin-trust review timestamps, owner-asserted plugin-trust review source,
+  final bundle version, artifact/report path matching, SHA-256 digest shape,
+  signed-provenance zip/pkg/core digests against
   the current artifact files, final-bundle digests against current
   artifacts/reports, semantic validity of the signed-provenance, live-device
   QA, and plugin-trust QA child reports referenced by the final bundle, and
@@ -87,7 +88,8 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   `release-evidence-bundle.sh --bundle`, and
   `release-evidence-doctor.sh --assert-complete` reject non-UTC plugin-trust
   future-dated timestamps, reversed review windows, and plugin reports generated before the
-  recorded review completed.
+  recorded review completed, and plugin reports whose `review_source` is not
+  `owner-asserted-manual-review`.
 - Confirm `release-evidence-doctor.sh --assert-complete` enforces the same
   final-bundle semantic floor as `/release/evidence-status`: non-future UTC generation
   timestamp, `schema_version: 1`, `evidence_type: release_evidence_bundle`,
@@ -376,6 +378,8 @@ stage or when a PR needs focused evidence for one ownership slice.
   mechanics with fake validation flags and fake evidence notes. The report must
   include `schema_version: 1` and
   `evidence_type: owner_recorded_plugin_trust_qa`, while final operator evidence
+  must keep `review_source: owner-asserted-manual-review`; self-test or imported
+  review sources are reserved for negative fixtures and cannot clear readiness.
   must keep `self_test_fixture: false`; stale, self-test, or misidentified
   report shapes are rejected by the doctor/status gates. Treat `--assert-complete`
   output as owner-recorded external evidence for marketplace review, malware
@@ -417,7 +421,8 @@ stage or when a PR needs focused evidence for one ownership slice.
   required live-device/plugin-trust report flag, require owner-recorded evidence
   fields in both QA reports, confirm the live-device QA report matches the
   expected app bundle `Info.plist` bundle id/version/build, reject future-dated
-  report timestamps, verify signed-provenance zip/pkg/core digests
+  report timestamps, require plugin-trust
+  `review_source: owner-asserted-manual-review`, verify signed-provenance zip/pkg/core digests
   against the current artifact files, and write SHA-256 digests for the signed
   distribution artifacts, signed provenance, plus QA reports before writing evidence. The
   disabled-signature path is reserved for the fake self-test fixture.

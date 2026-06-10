@@ -422,8 +422,10 @@ evidence must come from `--assert-complete` after the owner validates every
 `JARVIS_PLUGIN_QA_*` flag and populates the owner/timestamp/evidence-note fields.
 The generated report carries `schema_version: 1` and
 `evidence_type: owner_recorded_plugin_trust_qa`; final operator evidence must
-also keep `self_test_fixture=false`, and the doctor/status gates reject
-plugin-trust reports with the wrong or self-test identity.
+also keep `self_test_fixture=false` and
+`review_source=owner-asserted-manual-review`, and the doctor/status gates reject
+plugin-trust reports with the wrong identity, self-test identity, or non-owner
+review source.
 Use `./scripts/release-plugin-trust-qa.sh --write-template
 target/release-plugin-trust-qa.env` to generate a sourceable plugin-trust QA
 template. The template defaults every validation flag to `false`; operators
@@ -513,7 +515,9 @@ timestamps with `review_started_at <= review_completed_at`, and the
 bundle/doctor paths also require plugin report `generated_at` to be UTC, non-future, and no
 earlier than `review_completed_at`. Structured host egress evidence must also
 include the policy/profile label, ordered UTC egress validation timestamp, and
-deny/allow fixture notes.
+deny/allow fixture notes. Production plugin-trust reports must carry
+`review_source=owner-asserted-manual-review`; imported reports and self-test
+review sources are rejected before they can clear evidence-aware readiness.
 `jarvis release evidence-status` exposes the same standard artifact/report
 inventory through `/release/evidence-status`; the default CLI output is
 operator-readable and `--json` preserves the exact structured payload. It

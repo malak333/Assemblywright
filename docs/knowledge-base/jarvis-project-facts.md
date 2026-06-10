@@ -150,8 +150,9 @@ These notes capture durable facts for future agents working on this repository.
   binding, Apple-tool-derived signing/notary/staple/Gatekeeper evidence fields
   from `codesign`, `pkgutil --check-signature`, `xcrun notarytool`,
   `xcrun stapler`, and `spctl`, required signed-distribution flags, plugin-trust UTC review
-  timestamp ordering, rejects future-dated generated reports and self-test
-  review sources, validates final bundle version, requires SHA-256-shaped
+  timestamp ordering, rejects future-dated generated reports and any
+  plugin-trust `review_source` other than `owner-asserted-manual-review`,
+  validates final bundle version, requires SHA-256-shaped
   artifact/report digests including the signed provenance digest, verifies
   signed-provenance zip/pkg/core digests against the current artifact files in
   evidence-status, bundle, and doctor assertions, verifies final-bundle
@@ -321,8 +322,10 @@ These notes capture durable facts for future agents working on this repository.
   `JARVIS_PLUGIN_QA_*` flag is true and the owner/timestamp/evidence-note fields
   are populated. The accepted report identity is `schema_version: 1` with
   `evidence_type: owner_recorded_plugin_trust_qa` and `self_test_fixture: false`;
-  doctor/status gates reject stale, self-test, or misidentified plugin-trust
-  report shapes. Host-level egress evidence
+  accepted operator reports must also use
+  `review_source: owner-asserted-manual-review`. Doctor/status gates reject
+  stale, self-test, misidentified, or non-owner-source plugin-trust report
+  shapes. Host-level egress evidence
   must also include the reviewed policy/profile label, ordered UTC egress
   validation timestamp, denied undeclared-host fixture note, and declared-host
   allow fixture note. The review timestamps must be UTC `Z` values, the
@@ -363,6 +366,7 @@ These notes capture durable facts for future agents working on this repository.
   both QA reports, requires plugin-trust `generated_at`, `review_started_at`,
   and `review_completed_at` to be UTC with
   `review_started_at <= review_completed_at <= generated_at`, requires the
+  plugin-trust `review_source` to be `owner-asserted-manual-review`, requires the
   live-device QA report's app bundle identifier/version/build metadata to match
   the expected release, and records SHA-256 digests for the distribution zip,
   installer package, live-device QA report, and plugin-trust QA report before
@@ -393,7 +397,7 @@ These notes capture durable facts for future agents working on this repository.
   for app/installer artifacts and JSON reports, including required owner-recorded
   live-device and plugin-trust evidence fields plus app bundle `Info.plist`
   metadata checks, live-device bundle/version and timestamp semantic checks,
-  plugin-trust review timestamp checks, and final bundle version/SHA/local-signature
+  plugin-trust review timestamp and owner-review-source checks, and final bundle version/SHA/local-signature
   checks, and repository-backed live command evidence resolution, so the CLI
   and Swift Release tab can show missing or invalid release evidence without
   parsing script text.
