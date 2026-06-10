@@ -501,8 +501,10 @@ inventory assertion after `--bundle`. It requires the final bundle manifest to
 include a non-future UTC generation timestamp, expected release version, non-empty
 artifact/report paths matching the configured evidence paths,
 SHA-256-shaped artifact/report digests matching current files, and
-`validation_flags.local_signature_validation=true`, matching the semantic floor
-exposed by `/release/evidence-status`. Its `--self-test` uses fake
+`validation_flags.local_signature_validation=true`, and it rejects final bundles
+that reference semantically invalid signed-provenance, live-device QA, or
+plugin-trust QA child reports even when their recorded digests match. This
+matches the semantic floor exposed by `/release/evidence-status`. Its `--self-test` uses fake
 artifacts/reports to prove the inventory logic only; it is not a signing,
 notarization, stapling, or installation validator.
 Plugin-trust evidence is timestamp-strict across the shell evidence path:

@@ -540,6 +540,44 @@ fn release_evidence_doctor_assert_complete_matches_cli_evidence_status_fixture()
 }
 
 #[test]
+#[cfg(unix)]
+fn release_evidence_doctor_rejects_final_bundle_with_invalid_child_report() {
+    let temp_dir = tempfile::tempdir().expect("temp complete release evidence");
+    let fixture = write_complete_release_evidence_fixture(temp_dir.path());
+
+    let mut live_report: Value = serde_json::from_str(
+        &fs::read_to_string(&fixture.live_report_path).expect("read live report"),
+    )
+    .expect("decode live report");
+    live_report["validation_flags"]["notification"] = json!(false);
+    write_json_report(Path::new(&fixture.live_report_path), live_report);
+
+    let mut bundle_report: Value = serde_json::from_str(
+        &fs::read_to_string(&fixture.bundle_path).expect("read evidence bundle"),
+    )
+    .expect("decode evidence bundle");
+    bundle_report["reports"]["live_device_qa_sha256"] =
+        json!(file_sha256(Path::new(&fixture.live_report_path)));
+    write_json_report(Path::new(&fixture.bundle_path), bundle_report);
+
+    let doctor_output = run_repo_script_with_env(
+        "scripts/release-evidence-doctor.sh",
+        &["--check"],
+        &fixture.env_refs(),
+    );
+    let doctor_text = String::from_utf8(doctor_output.stdout).expect("doctor stdout is utf8");
+    assert!(
+        doctor_text.contains("release evidence bundle references invalid live-device QA report"),
+        "{doctor_text}"
+    );
+    assert!(
+        doctor_text
+            .contains("live-device QA report missing true flag: validation_flags.notification"),
+        "{doctor_text}"
+    );
+}
+
+#[test]
 fn release_readiness_rejects_semantically_invalid_live_voice_evidence() {
     let endpoint = format!("http://{}", unused_loopback_addr());
 

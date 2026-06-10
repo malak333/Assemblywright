@@ -161,7 +161,9 @@ These notes capture durable facts for future agents working on this repository.
   final-bundle semantic floor. It should reject minimal or hand-written final
   bundles that omit artifact/report paths, point at stale artifact/report paths,
   omit, malform, or stale SHA-256 digests, omit a UTC generation timestamp, use
-  the wrong release version, set `validation_flags.local_signature_validation=false`,
+  the wrong release version, reference semantically invalid signed-provenance,
+  live-device QA, or plugin-trust QA child reports even when their digests
+  match, set `validation_flags.local_signature_validation=false`,
   or pair the packaged bundled core with a stale `jarvis-cli.version` marker.
 - The Swift shell also decodes `/release/readiness` through
   `ReleaseReadinessModel` and renders a Release tab with blocking manual gates,
