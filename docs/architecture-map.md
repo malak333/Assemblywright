@@ -505,7 +505,10 @@ The `./scripts/release-evidence-doctor.sh --check` command inventories the
 standard signed-artifact, live-device QA, plugin-trust QA, and final bundle
 manifest paths so operators can see present, missing, or invalid evidence before
 `--bundle`; it validates local app bundle metadata and the packaged bundled-core
-version marker before counting those local artifacts as present. When evidence is missing it prints the signing, live-device
+version marker before counting those local artifacts as present, and it rejects
+final bundles that reference semantically invalid signed-provenance,
+live-device QA, or plugin-trust QA child reports even when the recorded child
+digests match. When evidence is missing it prints the signing, live-device
 template/assertion, plugin-trust template/assertion, and final evidence-bundle
 template/bundle commands. It is a diagnostic inventory, not release proof or
 signing/notary validation by itself.

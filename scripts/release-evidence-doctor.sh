@@ -22,6 +22,9 @@ ASSERT_COMPLETE=false
 SELF_TEST=false
 MISSING_ITEMS=()
 SATISFIED_ITEMS=()
+SIGNED_PROVENANCE_REPORT_VALID=false
+LIVE_QA_REPORT_VALID=false
+PLUGIN_QA_REPORT_VALID=false
 
 usage() {
   cat <<'USAGE'
@@ -800,6 +803,7 @@ check_release_evidence() {
 
   if valid_json_file "$SIGNED_PROVENANCE_REPORT"; then
     record_satisfied "signed-distribution provenance report JSON: $SIGNED_PROVENANCE_REPORT"
+    local missing_before_signed="${#MISSING_ITEMS[@]}"
     check_json_number "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "schema_version" "1"
     check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "evidence_type" "signed_distribution_provenance"
     check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "version" "$EXPECTED_VERSION"
@@ -834,12 +838,16 @@ check_release_evidence() {
     check_json_gatekeeper_accepted "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "gatekeeper.app_bundle_assessment"
     check_json_gatekeeper_accepted "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "gatekeeper.installer_pkg_assessment"
     check_json_utc_timestamp "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "generated_at"
+    if [[ "${#MISSING_ITEMS[@]}" -eq "$missing_before_signed" ]]; then
+      SIGNED_PROVENANCE_REPORT_VALID=true
+    fi
   else
     record_missing "signed-distribution provenance report missing or invalid JSON: $SIGNED_PROVENANCE_REPORT"
   fi
 
   if valid_json_file "$LIVE_QA_REPORT"; then
     record_satisfied "live-device QA report JSON: $LIVE_QA_REPORT"
+    local missing_before_live="${#MISSING_ITEMS[@]}"
     for flag in clean_profile finder_launch microphone speech_permission audio_output notification restart manual_release_qa; do
       check_json_flag "live-device QA report" "$LIVE_QA_REPORT" "validation_flags.$flag"
     done
@@ -879,12 +887,16 @@ check_release_evidence() {
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "bundled_core.executable_path" "$EXPECTED_INSTALLED_APP_PATH/Contents/Resources/bin/jarvis-cli"
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "bundled_core.version" "jarvis $EXPECTED_VERSION"
     check_json_sha256 "live-device QA report" "$LIVE_QA_REPORT" "bundled_core.sha256"
+    if [[ "${#MISSING_ITEMS[@]}" -eq "$missing_before_live" ]]; then
+      LIVE_QA_REPORT_VALID=true
+    fi
   else
     record_missing "live-device QA report missing or invalid JSON: $LIVE_QA_REPORT"
   fi
 
   if valid_json_file "$PLUGIN_QA_REPORT"; then
     record_satisfied "plugin-trust QA report JSON: $PLUGIN_QA_REPORT"
+    local missing_before_plugin="${#MISSING_ITEMS[@]}"
     check_json_number "plugin-trust QA report" "$PLUGIN_QA_REPORT" "schema_version" "1"
     check_json_string "plugin-trust QA report" "$PLUGIN_QA_REPORT" "evidence_type" "owner_recorded_plugin_trust_qa"
     check_json_false_flag "plugin-trust QA report" "$PLUGIN_QA_REPORT" "self_test_fixture"
@@ -903,6 +915,9 @@ check_release_evidence() {
     check_json_timestamp_order "plugin-trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.review_started_at" "owner_recorded_plugin_trust_evidence.egress_validation_completed_at"
     check_json_timestamp_order "plugin-trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.egress_validation_completed_at" "owner_recorded_plugin_trust_evidence.review_completed_at"
     check_json_timestamp_order "plugin-trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.review_completed_at" "generated_at"
+    if [[ "${#MISSING_ITEMS[@]}" -eq "$missing_before_plugin" ]]; then
+      PLUGIN_QA_REPORT_VALID=true
+    fi
   else
     record_missing "plugin-trust QA report missing or invalid JSON: $PLUGIN_QA_REPORT"
   fi
@@ -939,6 +954,15 @@ check_release_evidence() {
     check_json_sha256_matches_file "release evidence bundle" "$BUNDLE_PATH" "reports.signed_distribution_provenance_sha256" "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT"
     check_json_sha256_matches_file "release evidence bundle" "$BUNDLE_PATH" "reports.live_device_qa_sha256" "live-device QA report" "$LIVE_QA_REPORT"
     check_json_sha256_matches_file "release evidence bundle" "$BUNDLE_PATH" "reports.plugin_trust_qa_sha256" "plugin-trust QA report" "$PLUGIN_QA_REPORT"
+    if [[ "$SIGNED_PROVENANCE_REPORT_VALID" != true ]]; then
+      record_missing "release evidence bundle references invalid signed-distribution provenance report: $SIGNED_PROVENANCE_REPORT"
+    fi
+    if [[ "$LIVE_QA_REPORT_VALID" != true ]]; then
+      record_missing "release evidence bundle references invalid live-device QA report: $LIVE_QA_REPORT"
+    fi
+    if [[ "$PLUGIN_QA_REPORT_VALID" != true ]]; then
+      record_missing "release evidence bundle references invalid plugin-trust QA report: $PLUGIN_QA_REPORT"
+    fi
   else
     record_missing "release evidence bundle missing or invalid JSON: $BUNDLE_PATH"
   fi
@@ -1712,6 +1736,47 @@ PY
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/stale-digest-bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected stale final bundle report digest to fail"
+  fi
+
+  python3 - "$tmp_dir/live.json" "$tmp_dir/invalid-bundle-child-live.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+with open(source, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["validation_flags"]["notification"] = False
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+PY
+  write_fixture_bundle \
+    "$tmp_dir/invalid-child-bundle.json" \
+    "$tmp_dir/dist/Jarvis.app" \
+    "$self_test_zip" \
+    "$self_test_pkg" \
+    "$tmp_dir/dist/Jarvis-$VERSION-signed-provenance.json" \
+    "$tmp_dir/invalid-bundle-child-live.json" \
+    "$tmp_dir/plugin.json"
+  invalid_child_output="$(JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/invalid-bundle-child-live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/invalid-child-bundle.json" \
+    "$0" --check)"
+  if [[ "$invalid_child_output" != *"release evidence bundle references invalid live-device QA report"* ]]; then
+    fail "release evidence doctor self-test expected final bundle to reject invalid live-device child report"
+  fi
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/invalid-bundle-child-live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/invalid-child-bundle.json" \
+    "$0" --assert-complete >/dev/null 2>&1; then
+    fail "release evidence doctor self-test expected invalid final bundle child report to fail"
   fi
 
   python3 - "$tmp_dir/bundle.json" "$tmp_dir/disabled-local-signature-bundle.json" <<'PY'
