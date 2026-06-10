@@ -142,7 +142,9 @@ In external evidence mode, the live-device QA report must still pass semantic
 validation for the expected installed app path, bundle identifier, short/build
 version, non-self-test identity, ordered non-future UTC voice-check timestamps, and
 structured spoken-command observation with a task/audit command evidence
-reference before it can clear the live voice blocker.
+reference that resolves through repository-backed IPC evidence-status before it
+can clear the live voice blocker. The shell QA scripts still preflight that
+field by shape only because they do not own the SQLite repository.
 Opt-in final-transcript auto-submit is text-path parity only; it does not clear
 live microphone/Speech/audio-output validation or manual release QA.
 
