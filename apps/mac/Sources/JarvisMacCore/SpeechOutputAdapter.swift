@@ -86,43 +86,61 @@ public final class SpeechOutputStateModel: ObservableObject {
     public func speak(_ text: String) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            fail(.emptyUtterance)
+            fail(.emptyUtterance, preserving: phase)
             return
         }
 
+        let previousPhase = phase
         switch await adapter.speak(trimmed) {
         case .success:
             lastError = nil
             lastSpokenText = trimmed
             phase = adapter.phase
         case let .failure(error):
-            fail(error)
+            fail(error, preserving: previousPhase)
         }
     }
 
     public func stop() async {
+        let previousPhase = phase
         switch await adapter.stop() {
         case .success:
             lastError = nil
             phase = adapter.phase
         case let .failure(error):
-            fail(error)
+            fail(error, preserving: previousPhase)
         }
     }
 
     public func interrupt(reason: String) async {
+        let previousPhase = phase
         switch await adapter.interrupt(reason: reason) {
         case .success:
             lastError = nil
             phase = adapter.phase
         case let .failure(error):
-            fail(error)
+            fail(error, preserving: previousPhase)
         }
     }
 
-    private func fail(_ error: JarvisSpeechOutputError) {
+    private func fail(_ error: JarvisSpeechOutputError, preserving previousPhase: JarvisSpeechOutputPhase) {
         lastError = error
-        phase = .unavailable(reason: error.description)
+        if error.isRecoverableCommandState {
+            phase = previousPhase
+        } else {
+            phase = .unavailable(reason: error.description)
+        }
+    }
+}
+
+private extension JarvisSpeechOutputError {
+    var isRecoverableCommandState: Bool {
+        switch self {
+        case .emptyUtterance, .noActiveSpeech:
+            return true
+        case .frameworkUnavailable, .playbackUnavailable:
+            return false
+        }
     }
 }
 
@@ -141,7 +159,6 @@ public final class MacSpeechOutputAdapter: JarvisSpeechOutputAdapter {
     public func speak(_ text: String) async -> Result<Void, JarvisSpeechOutputError> {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            phase = .unavailable(reason: JarvisSpeechOutputError.emptyUtterance.description)
             return .failure(.emptyUtterance)
         }
 

@@ -143,7 +143,7 @@ stage or when a PR needs focused evidence for one ownership slice.
 - `cargo build --workspace`
 - `cargo run -p jarvis-cli -- smoke`
 - `./scripts/release-operator-qa-smoke.sh`
-- `cargo package --workspace --allow-dirty`
+- `./scripts/release-cargo-package.sh`
 - `./scripts/package-distribution.sh --version-consistency-self-test`
 - `./scripts/package-distribution.sh --unsigned-launch-check`
 - `cargo run -p jarvis-cli -- release signed-distribution-runbook`
@@ -510,13 +510,15 @@ Current local gate:
   emergency pause, blocked command, pause status, resume, and temp-profile
   SQLite state.
 
-Still future gates for production distribution:
+Clean-profile and manual production gates not proven by this local smoke:
 
 - Packaged app launches on a clean Mac user profile.
-- App starts and supervises `jarvis-core`.
-- Text command reaches the Rust core.
-- Typed transcript staging and fake-adapter final-transcript handoff into the
-  text command path are verified locally.
+- Installed app starts and supervises the bundled `jarvis-core` from
+  `/Applications`.
+- A text command reaches the Rust core from the clean-profile installed app.
+- Typed transcript staging and fake-adapter final-transcript handoff are
+  verified locally, but spoken transcript handoff still needs manual
+  live-device validation.
 - Scheduler attention produces OS-level user notifications with user-visible
   permission handling for due, failed, and emergency-pause-blocked attention.
   The Swift adapter boundary is implemented and tested with fakes; live

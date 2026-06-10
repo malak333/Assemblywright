@@ -1852,6 +1852,34 @@ struct JarvisMacCoreTests {
     }
 
     @MainActor
+    @Test("Voice adapter command-state errors are recoverable")
+    func voiceAdapterCommandStateErrorsAreRecoverable() async {
+        let activeAdapter = FakeVoiceAdapter(
+            phase: .listening,
+            startResult: .failure(.alreadyCapturing)
+        )
+        let activeVoice = VoiceStateModel()
+        let activeModel = VoiceAdapterStateModel(adapter: activeAdapter, voiceState: activeVoice)
+
+        await activeModel.startCapture()
+
+        #expect(activeModel.phase == .listening)
+        #expect(activeModel.lastError == .alreadyCapturing)
+        #expect(activeVoice.statusText.contains("Text-only voice scaffold"))
+
+        let idleAdapter = FakeVoiceAdapter(stopResult: .failure(.noActiveCapture))
+        let idleVoice = VoiceStateModel()
+        let idleModel = VoiceAdapterStateModel(adapter: idleAdapter, voiceState: idleVoice)
+
+        await idleModel.stopCapture()
+
+        #expect(idleModel.phase == .idle)
+        #expect(idleModel.lastError == .noActiveCapture)
+        #expect(idleModel.canStartCapture)
+        #expect(idleVoice.statusText.contains("Text-only voice scaffold"))
+    }
+
+    @MainActor
     @Test("Speech output model speaks trimmed preview text")
     func speechOutputModelSpeaksTrimmedPreviewText() async {
         let adapter = FakeSpeechOutputAdapter()
@@ -1876,9 +1904,23 @@ struct JarvisMacCoreTests {
         await model.speak("   ")
 
         #expect(adapter.spokenTexts.isEmpty)
-        #expect(model.phase == .unavailable(reason: JarvisSpeechOutputError.emptyUtterance.description))
+        #expect(model.phase == .idle)
         #expect(model.lastError == .emptyUtterance)
-        #expect(model.statusText.contains("Speech output unavailable"))
+        #expect(model.canSpeak)
+        #expect(model.statusText == "Speech output idle.")
+    }
+
+    @MainActor
+    @Test("Speech output model keeps command-state errors recoverable")
+    func speechOutputModelKeepsCommandStateErrorsRecoverable() async {
+        let adapter = FakeSpeechOutputAdapter(stopResult: .failure(.noActiveSpeech))
+        let model = SpeechOutputStateModel(adapter: adapter)
+
+        await model.stop()
+
+        #expect(model.phase == .idle)
+        #expect(model.lastError == .noActiveSpeech)
+        #expect(model.canSpeak)
     }
 
     @MainActor
@@ -2843,7 +2885,7 @@ private func releaseReadinessJSON() -> Data {
             "./scripts/release-live-device-qa.sh --check",
             "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env",
             "set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete",
-            "JARVIS_QA_CLEAN_PROFILE_VALIDATED=true JARVIS_QA_FINDER_LAUNCH_VALIDATED=true JARVIS_QA_MICROPHONE_VALIDATED=true JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true JARVIS_QA_NOTIFICATION_VALIDATED=true JARVIS_QA_RESTART_VALIDATED=true JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true JARVIS_QA_OWNER_NAME='Release Operator' JARVIS_QA_DEVICE_LABEL='Clean-profile release Mac' JARVIS_QA_PROFILE_LABEL='Clean macOS QA profile' JARVIS_QA_VOICE_CHECK_STARTED_AT='2026-05-22T16:00:00Z' JARVIS_QA_VOICE_CHECK_COMPLETED_AT='2026-05-22T16:05:00Z' JARVIS_QA_MICROPHONE_EVIDENCE_NOTE='Microphone prompt and capture observed' JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE='Speech prompt and recognition observed' JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE='Spoken transcript reached the command path' JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE='Speech output playback observed' ./scripts/release-live-device-qa.sh --assert-complete",
+            "JARVIS_QA_CLEAN_PROFILE_VALIDATED=true JARVIS_QA_FINDER_LAUNCH_VALIDATED=true JARVIS_QA_MICROPHONE_VALIDATED=true JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true JARVIS_QA_NOTIFICATION_VALIDATED=true JARVIS_QA_RESTART_VALIDATED=true JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true JARVIS_QA_OWNER_NAME='Release Operator' JARVIS_QA_DEVICE_LABEL='Clean-profile release Mac' JARVIS_QA_PROFILE_LABEL='Clean macOS QA profile' JARVIS_QA_VOICE_CHECK_STARTED_AT='2026-05-22T16:00:00Z' JARVIS_QA_VOICE_CHECK_COMPLETED_AT='2026-05-22T16:05:00Z' JARVIS_QA_MICROPHONE_EVIDENCE_NOTE='Microphone prompt and capture observed' JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE='Speech prompt and recognition observed' JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE='Spoken transcript reached the command path' JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE='Speech output playback observed' JARVIS_QA_VOICE_TEST_PHRASE='Jarvis status check' JARVIS_QA_OBSERVED_TRANSCRIPT='Jarvis status check' JARVIS_QA_EXPECTED_COMMAND_TEXT='status check' JARVIS_QA_OBSERVED_COMMAND_TEXT='status check' JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid-from-live-command>' JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL='Built-in speakers' ./scripts/release-live-device-qa.sh --assert-complete",
             "./scripts/release-plugin-trust-qa.sh --check",
             "./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env",
             "set -a && source target/release-plugin-trust-qa.env && set +a && ./scripts/release-plugin-trust-qa.sh --assert-complete",

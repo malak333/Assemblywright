@@ -33,7 +33,7 @@ cargo test --workspace -- --ignored
 cargo build --workspace
 cargo run -p jarvis-cli -- smoke
 ./scripts/release-operator-qa-smoke.sh
-cargo package --workspace --allow-dirty
+./scripts/release-cargo-package.sh
 ./scripts/package-distribution.sh --version-consistency-self-test
 ./scripts/package-distribution.sh --unsigned-launch-check
 cargo run -p jarvis-cli -- release signed-distribution-runbook

@@ -561,8 +561,9 @@ These notes capture durable facts for future agents working on this repository.
   `cargo fmt --check`, `cargo clippy
   --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `cargo
   test --workspace -- --ignored`, `cargo build --workspace`, `cargo run -p
-  jarvis-cli -- smoke`, `./scripts/release-operator-qa-smoke.sh`, `cargo
-  package --workspace --allow-dirty`,
+  jarvis-cli -- smoke`, `./scripts/release-operator-qa-smoke.sh`,
+  workspace package tarball creation, packaged CLI verification against the
+  freshly packaged core source,
   `./scripts/package-distribution.sh --unsigned-launch-check`,
   `./scripts/release-live-device-qa.sh --check`,
   `./scripts/release-live-device-qa.sh --self-test`,
@@ -705,14 +706,17 @@ These notes capture durable facts for future agents working on this repository.
   report with `voice_command_observation.command_result_evidence_id`. The
   script validates the ID shape offline, while `/release/evidence-status` and
   evidence-aware `/release/readiness` resolve the ID against task/audit records
-  when the server has repository-backed IPC state. The report
-  report to `JARVIS_QA_REPORT_PATH` or
+  when the server has repository-backed IPC state. The script writes the report
+  to `JARVIS_QA_REPORT_PATH` or
   `target/release-live-device-qa-report.json`. The report records installed-app
   metadata, voice-loop evidence fields, owner-recorded live voice evidence
   fields for owner/device/profile/non-future timestamps/notes, structured
   spoken-command observation fields with observed transcript matching the spoken
   test phrase, expected command text matching observed command text, validation
   flags, schema identity, UTC report generation timestamp, and proof boundary.
+  Live macOS notification prompt/delivery validation is part of the manual
+  clean-profile release QA runbook and final release evidence boundary; it is
+  not currently a separate field in the live-device voice report.
   `/release/evidence-status` rejects whitespace-only owner evidence fields
   before this report can clear `live_voice_loop`.
   This standardizes manual evidence only; `--check` does not prove live device
@@ -804,6 +808,17 @@ These notes capture durable facts for future agents working on this repository.
 - The user explicitly expects each feature/phase to follow docs and
   documentation, add useful conversation-derived knowledge-base facts, and add
   or confirm end-to-end testing for the discussed scope.
+- The June 10, 2026 autonomous production-readiness sweep used six parallel
+  audit lanes for release readiness, architecture/KB consistency, E2E coverage,
+  Swift voice coverage, release evidence scripts, and GitHub/PR state. The
+  live readiness snapshot at sweep start reported `production_ready: false`,
+  17 verified features, and one pending feature: `live_voice_loop`. That
+  pending feature remains a manual external validation gate, not a missing
+  repo-local docs-only task.
+- For docs-only readiness synchronization phases, record the relevant existing
+  E2E or focused integration coverage instead of adding artificial tests.
+  Behavior changes still require matching coverage before broader readiness
+  language can be used.
 - `jarvis-cli serve --db-path <path>` starts IPC with SQLite-backed task,
   audit, memory, and emergency-pause state for manual persistence checks.
 - File-backed `SqliteRepository::open` creates a preflight migration backup

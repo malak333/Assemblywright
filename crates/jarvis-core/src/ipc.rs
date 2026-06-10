@@ -4995,7 +4995,7 @@ fn validate_signed_distribution_provenance(value: &serde_json::Value) -> Result<
         "gatekeeper.app_bundle_assessment",
         "gatekeeper.installer_pkg_assessment",
     ] {
-        require_json_string_contains_value(value, field, "accepted")?;
+        require_gatekeeper_accepted_value(value, field)?;
     }
     for field in [
         "validation_flags.developer_id_application_signed",
@@ -5259,6 +5259,27 @@ fn require_json_string_contains_value(
     } else {
         Err(format!(
             "JSON report {dotted_path} must include {expected_fragment}"
+        ))
+    }
+}
+
+fn require_gatekeeper_accepted_value(
+    value: &serde_json::Value,
+    dotted_path: &str,
+) -> Result<(), String> {
+    let found = json_string_at(value, dotted_path)
+        .ok_or_else(|| format!("JSON report is missing required field: {dotted_path}"))?;
+    let accepted = found.lines().map(str::trim).any(|line| {
+        line == "accepted"
+            || line
+                .rsplit_once(':')
+                .is_some_and(|(_, tail)| tail.trim() == "accepted")
+    });
+    if accepted {
+        Ok(())
+    } else {
+        Err(format!(
+            "JSON report {dotted_path} must include an exact Gatekeeper accepted result"
         ))
     }
 }
@@ -7249,6 +7270,18 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
     fn signed_distribution_provenance_rejects_gatekeeper_rejection() {
         let mut report = valid_signed_distribution_provenance_json();
         report["gatekeeper"]["app_bundle_assessment"] = json!("rejected");
+        let (status, detail) = inspect_signed_distribution_provenance_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(
+            detail.contains("gatekeeper.app_bundle_assessment"),
+            "{detail}"
+        );
+    }
+
+    #[test]
+    fn signed_distribution_provenance_rejects_negated_gatekeeper_acceptance() {
+        let mut report = valid_signed_distribution_provenance_json();
+        report["gatekeeper"]["app_bundle_assessment"] = json!("not accepted");
         let (status, detail) = inspect_signed_distribution_provenance_value(report);
         assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
         assert!(

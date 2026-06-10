@@ -437,6 +437,7 @@ perform signing, notarization, stapling, installation, or manual QA.
 ## Docs
 
 - [Architecture map](docs/architecture-map.md)
+- [Production readiness sweep - 2026-06-10](docs/production-readiness-sweep-2026-06-10.md)
 - [Plugin contract](docs/plugin-contract.md)
 - [Safety rules](docs/safety-rules.md)
 - [Build and test commands](docs/build-test-commands.md)
