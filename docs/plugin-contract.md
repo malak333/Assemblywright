@@ -92,11 +92,14 @@ to explain what happened:
 - Unknown manifest fields are allowed only when versioned and ignored safely.
 - Missing required fields fail validation.
 - Plugin trust QA reports that are used as production release evidence must use
-  UTC report and review timestamps that are not future-dated at validation time.
+  UTC report and review timestamps that are not future-dated at validation time
+  and must keep `review_source: owner-asserted-manual-review` for operator
+  evidence. Imported reports, self-test review sources, and stale or
+  future-dated plugin-trust reports cannot clear readiness.
   `/release/evidence-status`, `jarvis release evidence-status`,
   `release-evidence-doctor.sh`, and `release-evidence-bundle.sh` all reject
-  future-dated plugin trust evidence instead of treating report presence as
-  sufficient proof.
+  non-owner review sources and future-dated plugin trust evidence instead of
+  treating report presence as sufficient proof.
 - Local plugin installation stays metadata-only by default. Validated installed
   manifests are stored as `execution_enabled: false` with
   `execution_grant: metadata_only`, including `local_subprocess` manifests.
