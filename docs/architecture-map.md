@@ -51,6 +51,7 @@ flowchart TB
     ReleaseReadinessFallback["serverless CLI readiness fallback"] --> ReleaseReadiness
     EvidenceStatus["/release/evidence-status and jarvis release evidence-status"] --> EvidenceDoctor
     EvidenceStatus --> LiveQASemanticValidator["live QA semantic validator: bundle/version/core-digest/timestamp/transcript/command/non-voice-owner/self-test checks"]
+    EvidenceStatus --> FinalBundleValidator["final bundle validator: path/digest/local-signature/owner-attestation and child-report semantic checks"]
     LiveQASemanticValidator --> RepoEvidenceLookup["repository-backed command-result lookup: task/audit record must exist"]
     RepoEvidenceLookup --> Repository["SQLite tasks and audit entries"]
     LiveQASemanticValidator --> ReleaseReadiness
@@ -287,7 +288,10 @@ against current artifact files, live-device bundle/version/timestamp evidence,
 repository-backed live command-result task/audit evidence resolution when IPC
 state has a repository,
 non-future plugin-trust review and egress validation timestamps, deny/allow
-egress fixture notes, and final bundle path/digest/local-signature evidence. This mirrors release-evidence-doctor
+egress fixture notes, and final bundle path/digest/local-signature evidence.
+Final bundle inspection also revalidates the signed-provenance, live-device QA,
+and plugin-trust QA child reports referenced by the bundle instead of accepting
+matching report digests alone. This mirrors release-evidence-doctor
 inventory plus report inspection only; it does not perform signing,
 notarization, installation, Finder launch, executable runtime validation,
 live-device QA, marketplace review, malware scanning, OS sandboxing, or

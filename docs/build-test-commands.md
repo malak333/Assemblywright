@@ -104,7 +104,9 @@ Live-device QA checks schema/type,
 and ordered non-future UTC voice-check timestamps. Plugin-trust checks ordered
 non-future UTC review timestamps. The final evidence bundle checks the expected
 release version, signed-distribution provenance report, SHA-256 digest shape,
-and `local_signature_validation=true`. Wrong bundle/version metadata, malformed
+semantic validity of the signed-provenance, live-device QA, and plugin-trust QA
+child reports referenced by the bundle, and `local_signature_validation=true`.
+Wrong bundle/version metadata, malformed
 timestamps, future-dated timestamps, reversed timestamps, missing signed
 provenance, disabled local signature validation, or a self-test fixture leave
 evidence invalid.
@@ -466,7 +468,8 @@ notarization, live-device QA, or final evidence bundling.
 The doctor/status paths are read-only inventory plus semantic validation for
 expected paths, app bundle metadata, bundled-core marker metadata, JSON flags,
 non-future report timestamps, signed-distribution provenance, artifact/report
-digest bindings, owner-recorded release evidence fields, and release metadata;
+digest bindings, final-bundle child-report semantic validity, owner-recorded
+release evidence fields, and release metadata;
 they do not perform Developer ID signing, notarization, stapling, installation,
 live-device QA, plugin-trust QA, owner assertions, final bundle creation, or
 host-level egress enforcement. The real `--bundle` path also locally validates
