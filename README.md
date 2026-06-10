@@ -439,7 +439,8 @@ reports receive semantic validation for signed-distribution provenance
 version/bundle metadata, bundled core path/version/SHA-256 binding,
 signing/notary/staple and Gatekeeper fields, required flags, SHA-256 digests,
 signed-provenance zip/pkg/core digest matches against current artifact files,
-live-device QA metadata, non-future plugin-trust timestamps, and final bundle
+live-device QA metadata, plugin-trust non-future timestamps plus
+`review_source: owner-asserted-manual-review`, and final bundle
 signatures. The status surface still does not
 perform signing, notarization, stapling, installation, or manual QA.
 
