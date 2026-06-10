@@ -589,6 +589,13 @@ fn release_readiness_rejects_semantically_invalid_live_voice_evidence() {
     fn blank_owner_evidence_note(report: &mut Value) {
         report["owner_recorded_live_voice_evidence"]["audio_output_evidence_note"] = json!("   ");
     }
+    fn blank_non_voice_owner_evidence_note(report: &mut Value) {
+        report["owner_recorded_non_voice_evidence"]["clean_profile_evidence_note"] = json!("   ");
+    }
+    fn malformed_notification_timestamp(report: &mut Value) {
+        report["owner_recorded_non_voice_evidence"]["notification_observed_at"] =
+            json!("2026-05-22T16:04:00-04:00");
+    }
     fn blank_audio_output_device_label(report: &mut Value) {
         report["voice_command_observation"]["audio_output_device_label"] = json!("   ");
     }
@@ -666,6 +673,16 @@ fn release_readiness_rejects_semantically_invalid_live_voice_evidence() {
             "blank owner evidence note",
             blank_owner_evidence_note as fn(&mut Value),
             "audio_output_evidence_note",
+        ),
+        (
+            "blank non-voice owner evidence note",
+            blank_non_voice_owner_evidence_note as fn(&mut Value),
+            "owner_recorded_non_voice_evidence.clean_profile_evidence_note",
+        ),
+        (
+            "malformed notification timestamp",
+            malformed_notification_timestamp as fn(&mut Value),
+            "notification_observed_at",
         ),
         (
             "blank audio output device label",
@@ -900,6 +917,65 @@ fn release_evidence_status_rejects_semantically_invalid_plugin_and_bundle_eviden
             .contains("local_signature_validation"),
         "{bundle_item}"
     );
+}
+
+#[test]
+fn release_evidence_status_rejects_invalid_final_bundle_owner_evidence() {
+    let endpoint = format!("http://{}", unused_loopback_addr());
+    let temp_dir = tempfile::tempdir().expect("temp release evidence bundle");
+    let bundle_path = temp_dir.path().join("release-evidence-bundle.json");
+
+    fn blank_archive_uri(report: &mut Value) {
+        report["owner_recorded_release_evidence"]["reports_archive_uri"] = json!("   ");
+    }
+    fn malformed_completed_timestamp(report: &mut Value) {
+        report["owner_recorded_release_evidence"]["completed_at"] =
+            json!("2026-05-22T16:45:00-04:00");
+    }
+    fn completed_after_generated(report: &mut Value) {
+        report["owner_recorded_release_evidence"]["completed_at"] = json!("2026-05-22T17:01:00Z");
+    }
+
+    for (name, mutate, detail_fragment) in [
+        (
+            "blank archive uri",
+            blank_archive_uri as fn(&mut Value),
+            "owner_recorded_release_evidence.reports_archive_uri",
+        ),
+        (
+            "malformed completed timestamp",
+            malformed_completed_timestamp as fn(&mut Value),
+            "completed_at",
+        ),
+        (
+            "completed after generated",
+            completed_after_generated as fn(&mut Value),
+            "completed_at",
+        ),
+    ] {
+        let mut bundle_report = valid_release_evidence_bundle();
+        mutate(&mut bundle_report);
+        write_json_report(&bundle_path, bundle_report);
+        let bundle_path_str = bundle_path.to_str().expect("bundle path utf8");
+        let evidence_status = run_cli_json_with_env(
+            [
+                "release",
+                "evidence-status",
+                "--endpoint",
+                endpoint.as_str(),
+            ],
+            &[("JARVIS_EVIDENCE_OUTPUT_PATH", bundle_path_str)],
+        );
+        let bundle_item = release_evidence_item(&evidence_status, "release_evidence_bundle");
+        assert_eq!(bundle_item["status"], "invalid", "{name}: {bundle_item}");
+        assert!(
+            bundle_item["detail"]
+                .as_str()
+                .expect("bundle detail")
+                .contains(detail_fragment),
+            "{name}: {bundle_item}"
+        );
+    }
 }
 
 #[test]
@@ -5555,6 +5631,14 @@ fn valid_live_device_qa_report() -> Value {
             "transcript_handoff_evidence_note": "Spoken transcript reached the command path.",
             "audio_output_evidence_note": "Speech output playback observed."
         },
+        "owner_recorded_non_voice_evidence": {
+            "clean_profile_evidence_note": "Clean profile install observed.",
+            "finder_launch_evidence_note": "Finder launch observed.",
+            "notification_evidence_note": "Scheduler notification observed.",
+            "notification_observed_at": "2026-05-22T16:04:00Z",
+            "restart_evidence_note": "Restart recovery observed.",
+            "manual_release_qa_evidence_note": "Manual release QA surfaces observed."
+        },
         "voice_command_observation": {
             "test_phrase": "Jarvis status check.",
             "observed_transcript": "Jarvis status check.",
@@ -5632,6 +5716,17 @@ fn valid_release_evidence_bundle() -> Value {
             "reports_archived": true,
             "local_signature_validation": true
         },
+        "owner_recorded_release_evidence": {
+            "owner_name": "Release Operator",
+            "completed_at": "2026-05-22T16:45:00Z",
+            "signed_distribution_note": "Signed distribution provenance reviewed.",
+            "notarization_note": "Notarization evidence reviewed.",
+            "clean_profile_note": "Clean profile evidence reviewed.",
+            "live_device_qa_note": "Live-device QA evidence reviewed.",
+            "plugin_trust_qa_note": "Plugin-trust QA evidence reviewed.",
+            "reports_archive_note": "Release evidence reports archived.",
+            "reports_archive_uri": "file://release-evidence/archive"
+        },
         "proof_boundary": "Release evidence bundle fixture for CLI E2E."
     })
 }
@@ -5678,6 +5773,17 @@ fn valid_release_evidence_bundle_for_paths(
             "plugin_trust_qa": true,
             "reports_archived": true,
             "local_signature_validation": true
+        },
+        "owner_recorded_release_evidence": {
+            "owner_name": "Release Operator",
+            "completed_at": "2026-05-22T16:45:00Z",
+            "signed_distribution_note": "Signed distribution provenance reviewed.",
+            "notarization_note": "Notarization evidence reviewed.",
+            "clean_profile_note": "Clean profile evidence reviewed.",
+            "live_device_qa_note": "Live-device QA evidence reviewed.",
+            "plugin_trust_qa_note": "Plugin-trust QA evidence reviewed.",
+            "reports_archive_note": "Release evidence reports archived.",
+            "reports_archive_uri": "file://release-evidence/archive"
         },
         "proof_boundary": "Release evidence bundle fixture for CLI E2E."
     })

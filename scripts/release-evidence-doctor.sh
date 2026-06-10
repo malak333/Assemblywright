@@ -854,11 +854,17 @@ check_release_evidence() {
     for field in owner_name device_label profile_label voice_check_started_at voice_check_completed_at microphone_evidence_note speech_permission_evidence_note transcript_handoff_evidence_note audio_output_evidence_note; do
       check_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.$field"
     done
+    for field in clean_profile_evidence_note finder_launch_evidence_note notification_evidence_note notification_observed_at restart_evidence_note manual_release_qa_evidence_note; do
+      check_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_non_voice_evidence.$field"
+    done
     check_json_utc_timestamp "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.voice_check_started_at"
     check_json_utc_timestamp "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.voice_check_completed_at"
+    check_json_utc_timestamp "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_non_voice_evidence.notification_observed_at"
     check_json_timestamp_order "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.voice_check_started_at" "owner_recorded_live_voice_evidence.voice_check_completed_at"
+    check_json_timestamp_order "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.voice_check_started_at" "owner_recorded_non_voice_evidence.notification_observed_at"
     check_json_utc_timestamp "live-device QA report" "$LIVE_QA_REPORT" "generated_at"
     check_json_timestamp_order "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.voice_check_completed_at" "generated_at"
+    check_json_timestamp_order "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_non_voice_evidence.notification_observed_at" "generated_at"
     for field in test_phrase observed_transcript expected_command_text observed_command_text command_result_evidence_id audio_output_device_label; do
       check_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "voice_command_observation.$field"
     done
@@ -920,6 +926,11 @@ check_release_evidence() {
     for field in artifacts.app_path artifacts.zip_path artifacts.pkg_path reports.signed_distribution_provenance_report reports.live_device_qa_report reports.plugin_trust_qa_report; do
       check_json_nonempty_string "release evidence bundle" "$BUNDLE_PATH" "$field"
     done
+    for field in owner_name completed_at signed_distribution_note notarization_note clean_profile_note live_device_qa_note plugin_trust_qa_note reports_archive_note reports_archive_uri; do
+      check_json_nonempty_string "release evidence bundle" "$BUNDLE_PATH" "owner_recorded_release_evidence.$field"
+    done
+    check_json_utc_timestamp "release evidence bundle" "$BUNDLE_PATH" "owner_recorded_release_evidence.completed_at"
+    check_json_timestamp_order "release evidence bundle" "$BUNDLE_PATH" "owner_recorded_release_evidence.completed_at" "generated_at"
     for field in artifacts.zip_sha256 artifacts.pkg_sha256 reports.signed_distribution_provenance_sha256 reports.live_device_qa_sha256 reports.plugin_trust_qa_sha256; do
       check_json_sha256 "release evidence bundle" "$BUNDLE_PATH" "$field"
     done
@@ -953,7 +964,7 @@ print_status() {
     done
     print_next_steps
   fi
-  printf 'Proof boundary: file/report path inventory only; present artifact paths do not prove Developer ID signing, notarization, stapling, installation, Finder launch, live device QA, marketplace review, malware scan, OS sandbox, or host-level egress enforcement.\n'
+  printf 'Proof boundary: file/report inventory plus semantic report validation only; present artifact paths do not prove Developer ID signing, notarization, stapling, installation, Finder launch, live device QA, marketplace review, malware scan, OS sandbox, or host-level egress enforcement.\n'
 }
 
 write_fixture_app() {
@@ -1027,6 +1038,14 @@ write_fixture_reports() {
     "transcript_handoff_evidence_note": "Observed transcript handoff reach the command path in the fake fixture.",
     "audio_output_evidence_note": "Observed speech output playback in the fake fixture."
   },
+  "owner_recorded_non_voice_evidence": {
+    "clean_profile_evidence_note": "Clean profile install observed in the fake fixture.",
+    "finder_launch_evidence_note": "Finder launch observed in the fake fixture.",
+    "notification_evidence_note": "Visible scheduler notification observed in the fake fixture.",
+    "notification_observed_at": "2026-05-22T16:04:00Z",
+    "restart_evidence_note": "Restart recovery observed in the fake fixture.",
+    "manual_release_qa_evidence_note": "Manual release QA surfaces observed in the fake fixture."
+  },
   "voice_command_observation": {
     "test_phrase": "Jarvis status check.",
     "observed_transcript": "Jarvis status check.",
@@ -1055,7 +1074,7 @@ JSON
   "schema_version": 1,
   "evidence_type": "owner_recorded_plugin_trust_qa",
   "self_test_fixture": false,
-  "generated_at": "2026-05-22T16:30:00Z",
+  "generated_at": "2026-05-22T17:00:00Z",
   "review_source": "owner-asserted-manual-review",
   "validation_flags": {
     "marketplace_review": true,
@@ -1108,7 +1127,7 @@ write_fixture_bundle() {
 {
   "schema_version": 1,
   "evidence_type": "release_evidence_bundle",
-  "generated_at": "2026-05-22T16:30:00Z",
+  "generated_at": "2026-05-22T17:00:00Z",
   "version": "$VERSION",
   "artifacts": {
     "app_path": "$app_path",
@@ -1133,6 +1152,17 @@ write_fixture_bundle() {
     "plugin_trust_qa": true,
     "reports_archived": true,
     "local_signature_validation": true
+  },
+  "owner_recorded_release_evidence": {
+    "owner_name": "Jarvis Release Self-Test",
+    "completed_at": "2026-05-22T16:45:00Z",
+    "signed_distribution_note": "Signed distribution provenance fixture reviewed.",
+    "notarization_note": "Notarization fixture reviewed.",
+    "clean_profile_note": "Clean profile fixture reviewed.",
+    "live_device_qa_note": "Live-device QA fixture reviewed.",
+    "plugin_trust_qa_note": "Plugin-trust QA fixture reviewed.",
+    "reports_archive_note": "Release evidence reports archived in the fixture.",
+    "reports_archive_uri": "file://self-test/release-evidence"
   },
   "proof_boundary": "self-test fixture"
 }

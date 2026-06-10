@@ -85,6 +85,12 @@ const LIVE_DEVICE_QA_REQUIRED_FIELDS: &[&str] = &[
     "owner_recorded_live_voice_evidence.speech_permission_evidence_note",
     "owner_recorded_live_voice_evidence.transcript_handoff_evidence_note",
     "owner_recorded_live_voice_evidence.audio_output_evidence_note",
+    "owner_recorded_non_voice_evidence.clean_profile_evidence_note",
+    "owner_recorded_non_voice_evidence.finder_launch_evidence_note",
+    "owner_recorded_non_voice_evidence.notification_evidence_note",
+    "owner_recorded_non_voice_evidence.notification_observed_at",
+    "owner_recorded_non_voice_evidence.restart_evidence_note",
+    "owner_recorded_non_voice_evidence.manual_release_qa_evidence_note",
     "voice_command_observation.test_phrase",
     "voice_command_observation.observed_transcript",
     "voice_command_observation.expected_command_text",
@@ -180,6 +186,15 @@ const RELEASE_EVIDENCE_BUNDLE_REQUIRED_FIELDS: &[&str] = &[
     "validation_flags.plugin_trust_qa",
     "validation_flags.reports_archived",
     "validation_flags.local_signature_validation",
+    "owner_recorded_release_evidence.owner_name",
+    "owner_recorded_release_evidence.completed_at",
+    "owner_recorded_release_evidence.signed_distribution_note",
+    "owner_recorded_release_evidence.notarization_note",
+    "owner_recorded_release_evidence.clean_profile_note",
+    "owner_recorded_release_evidence.live_device_qa_note",
+    "owner_recorded_release_evidence.plugin_trust_qa_note",
+    "owner_recorded_release_evidence.reports_archive_note",
+    "owner_recorded_release_evidence.reports_archive_uri",
     "proof_boundary",
 ];
 
@@ -4734,6 +4749,11 @@ fn validate_live_device_qa_report(
         "owner_recorded_live_voice_evidence.speech_permission_evidence_note",
         "owner_recorded_live_voice_evidence.transcript_handoff_evidence_note",
         "owner_recorded_live_voice_evidence.audio_output_evidence_note",
+        "owner_recorded_non_voice_evidence.clean_profile_evidence_note",
+        "owner_recorded_non_voice_evidence.finder_launch_evidence_note",
+        "owner_recorded_non_voice_evidence.notification_evidence_note",
+        "owner_recorded_non_voice_evidence.restart_evidence_note",
+        "owner_recorded_non_voice_evidence.manual_release_qa_evidence_note",
         "voice_command_observation.test_phrase",
         "voice_command_observation.observed_transcript",
         "voice_command_observation.expected_command_text",
@@ -4755,9 +4775,22 @@ fn validate_live_device_qa_report(
     if completed_at < started_at {
         return Err("JSON report voice_check_completed_at must be greater than or equal to voice_check_started_at".to_string());
     }
+    let notification_observed_at = require_utc_report_timestamp(
+        value,
+        "owner_recorded_non_voice_evidence.notification_observed_at",
+    )?;
+    if notification_observed_at < started_at {
+        return Err("JSON report notification_observed_at must be greater than or equal to voice_check_started_at".to_string());
+    }
     if generated_at < completed_at {
         return Err(
             "JSON report generated_at must be greater than or equal to voice_check_completed_at"
+                .to_string(),
+        );
+    }
+    if generated_at < notification_observed_at {
+        return Err(
+            "JSON report generated_at must be greater than or equal to notification_observed_at"
                 .to_string(),
         );
     }
@@ -5092,7 +5125,7 @@ fn file_sha256(path: &FsPath) -> std::io::Result<String> {
 }
 
 fn validate_release_evidence_bundle(value: &serde_json::Value) -> Result<(), String> {
-    require_utc_report_timestamp_not_future(value, "generated_at")?;
+    let generated_at = require_utc_report_timestamp_not_future(value, "generated_at")?;
     if value
         .get("schema_version")
         .and_then(|schema| schema.as_i64())
@@ -5124,6 +5157,27 @@ fn validate_release_evidence_bundle(value: &serde_json::Value) -> Result<(), Str
         "reports.plugin_trust_qa_sha256",
     ] {
         require_json_sha256_value(value, field)?;
+    }
+    for field in [
+        "owner_recorded_release_evidence.owner_name",
+        "owner_recorded_release_evidence.signed_distribution_note",
+        "owner_recorded_release_evidence.notarization_note",
+        "owner_recorded_release_evidence.clean_profile_note",
+        "owner_recorded_release_evidence.live_device_qa_note",
+        "owner_recorded_release_evidence.plugin_trust_qa_note",
+        "owner_recorded_release_evidence.reports_archive_note",
+        "owner_recorded_release_evidence.reports_archive_uri",
+        "proof_boundary",
+    ] {
+        require_json_nonempty_string_value(value, field)?;
+    }
+    let completed_at =
+        require_utc_report_timestamp(value, "owner_recorded_release_evidence.completed_at")?;
+    if generated_at < completed_at {
+        return Err(
+            "JSON report generated_at must be greater than or equal to owner_recorded_release_evidence.completed_at"
+                .to_string(),
+        );
     }
 
     Ok(())
@@ -5468,7 +5522,7 @@ fn release_verification_commands() -> Vec<String> {
         "./scripts/release-live-device-qa.sh --check".to_string(),
         "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env".to_string(),
         "set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete".to_string(),
-        "JARVIS_QA_CLEAN_PROFILE_VALIDATED=true JARVIS_QA_FINDER_LAUNCH_VALIDATED=true JARVIS_QA_MICROPHONE_VALIDATED=true JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true JARVIS_QA_NOTIFICATION_VALIDATED=true JARVIS_QA_RESTART_VALIDATED=true JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true JARVIS_QA_OWNER_NAME='Release Operator' JARVIS_QA_DEVICE_LABEL='Clean-profile release Mac' JARVIS_QA_PROFILE_LABEL='Clean macOS QA profile' JARVIS_QA_VOICE_CHECK_STARTED_AT='2026-05-22T16:00:00Z' JARVIS_QA_VOICE_CHECK_COMPLETED_AT='2026-05-22T16:05:00Z' JARVIS_QA_MICROPHONE_EVIDENCE_NOTE='Microphone prompt and capture observed' JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE='Speech prompt and recognition observed' JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE='Spoken transcript reached the command path' JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE='Speech output playback observed' JARVIS_QA_VOICE_TEST_PHRASE='Jarvis status check' JARVIS_QA_OBSERVED_TRANSCRIPT='Jarvis status check' JARVIS_QA_EXPECTED_COMMAND_TEXT='status check' JARVIS_QA_OBSERVED_COMMAND_TEXT='status check' JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid-from-live-command>' JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL='Built-in speakers' ./scripts/release-live-device-qa.sh --assert-complete".to_string(),
+        "JARVIS_QA_CLEAN_PROFILE_VALIDATED=true JARVIS_QA_FINDER_LAUNCH_VALIDATED=true JARVIS_QA_MICROPHONE_VALIDATED=true JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true JARVIS_QA_NOTIFICATION_VALIDATED=true JARVIS_QA_RESTART_VALIDATED=true JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true JARVIS_QA_OWNER_NAME='Release Operator' JARVIS_QA_DEVICE_LABEL='Clean-profile release Mac' JARVIS_QA_PROFILE_LABEL='Clean macOS QA profile' JARVIS_QA_VOICE_CHECK_STARTED_AT='2026-05-22T16:00:00Z' JARVIS_QA_VOICE_CHECK_COMPLETED_AT='2026-05-22T16:05:00Z' JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE='Clean profile install observed' JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE='Finder launch observed' JARVIS_QA_MICROPHONE_EVIDENCE_NOTE='Microphone prompt and capture observed' JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE='Speech prompt and recognition observed' JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE='Spoken transcript reached the command path' JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE='Speech output playback observed' JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE='Scheduler notification observed' JARVIS_QA_NOTIFICATION_OBSERVED_AT='2026-05-22T16:04:00Z' JARVIS_QA_RESTART_EVIDENCE_NOTE='Restart recovery observed' JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE='Manual release QA surfaces observed' JARVIS_QA_VOICE_TEST_PHRASE='Jarvis status check' JARVIS_QA_OBSERVED_TRANSCRIPT='Jarvis status check' JARVIS_QA_EXPECTED_COMMAND_TEXT='status check' JARVIS_QA_OBSERVED_COMMAND_TEXT='status check' JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid-from-live-command>' JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL='Built-in speakers' ./scripts/release-live-device-qa.sh --assert-complete".to_string(),
         "cargo run -p jarvis-cli -- release plugin-trust-runbook".to_string(),
         "./scripts/release-plugin-trust-qa.sh --check".to_string(),
         "./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env".to_string(),
@@ -5478,7 +5532,7 @@ fn release_verification_commands() -> Vec<String> {
         "./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env".to_string(),
         "./scripts/release-evidence-doctor.sh --check".to_string(),
         "set -a && source target/release-evidence-bundle.env && set +a && ./scripts/release-evidence-bundle.sh --bundle".to_string(),
-        "JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true JARVIS_EVIDENCE_REPORTS_ARCHIVED=true ./scripts/release-evidence-bundle.sh --bundle".to_string(),
+        "JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true JARVIS_EVIDENCE_REPORTS_ARCHIVED=true JARVIS_EVIDENCE_OWNER_NAME='Release Operator' JARVIS_EVIDENCE_COMPLETED_AT='2026-05-22T17:00:00Z' JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_NOTE='Signed distribution evidence archived' JARVIS_EVIDENCE_NOTARIZATION_NOTE='Notarization evidence archived' JARVIS_EVIDENCE_CLEAN_PROFILE_NOTE='Clean-profile evidence archived' JARVIS_EVIDENCE_LIVE_DEVICE_QA_NOTE='Live-device QA evidence archived' JARVIS_EVIDENCE_PLUGIN_TRUST_QA_NOTE='Plugin-trust QA evidence archived' JARVIS_EVIDENCE_REPORTS_ARCHIVE_NOTE='Release reports archived' JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI='<archive-uri>' ./scripts/release-evidence-bundle.sh --bundle".to_string(),
         "./scripts/release-evidence-doctor.sh --assert-complete".to_string(),
         "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness".to_string(),
     ]
@@ -6472,6 +6526,14 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 "transcript_handoff_evidence_note": "Transcript handoff observed.",
                 "audio_output_evidence_note": "Audio output observed."
             },
+            "owner_recorded_non_voice_evidence": {
+                "clean_profile_evidence_note": "Clean profile install observed.",
+                "finder_launch_evidence_note": "Finder launch observed.",
+                "notification_evidence_note": "Scheduler notification observed.",
+                "notification_observed_at": "2026-05-22T16:04:00Z",
+                "restart_evidence_note": "Restart recovery observed.",
+                "manual_release_qa_evidence_note": "Manual release QA surfaces observed."
+            },
             "voice_command_observation": {
                 "test_phrase": "Jarvis status check.",
                 "observed_transcript": "Jarvis status check.",
@@ -6594,6 +6656,17 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 "plugin_trust_qa": true,
                 "reports_archived": true,
                 "local_signature_validation": true
+            },
+            "owner_recorded_release_evidence": {
+                "owner_name": "Release Operator",
+                "completed_at": "2026-05-22T16:45:00Z",
+                "signed_distribution_note": "Signed distribution provenance reviewed.",
+                "notarization_note": "Notarization evidence reviewed.",
+                "clean_profile_note": "Clean profile evidence reviewed.",
+                "live_device_qa_note": "Live-device QA evidence reviewed.",
+                "plugin_trust_qa_note": "Plugin-trust QA evidence reviewed.",
+                "reports_archive_note": "Release evidence reports archived.",
+                "reports_archive_uri": "file://release-evidence/archive"
             },
             "proof_boundary": "Evidence bundle fixture."
         })
@@ -6805,6 +6878,32 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let (status, detail) = inspect_live_device_qa_report_value(report);
         assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
         assert!(detail.contains("generated_at"), "{detail}");
+    }
+
+    #[test]
+    fn live_device_qa_report_rejects_invalid_non_voice_owner_evidence() {
+        let mut report = valid_live_device_qa_report_json();
+        report["owner_recorded_non_voice_evidence"]["clean_profile_evidence_note"] = json!("   ");
+        let (status, detail) = inspect_live_device_qa_report_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(
+            detail.contains("owner_recorded_non_voice_evidence.clean_profile_evidence_note"),
+            "{detail}"
+        );
+
+        let mut report = valid_live_device_qa_report_json();
+        report["owner_recorded_non_voice_evidence"]["notification_observed_at"] =
+            json!("2026-05-22T16:04:00-04:00");
+        let (status, detail) = inspect_live_device_qa_report_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("notification_observed_at"), "{detail}");
+
+        let mut report = valid_live_device_qa_report_json();
+        report["owner_recorded_non_voice_evidence"]["notification_observed_at"] =
+            json!("2026-05-22T15:59:00Z");
+        let (status, detail) = inspect_live_device_qa_report_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("notification_observed_at"), "{detail}");
     }
 
     #[test]
@@ -7139,6 +7238,31 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
         assert!(detail.contains("generated_at"), "{detail}");
         assert!(detail.contains("current time"), "{detail}");
+    }
+
+    #[test]
+    fn release_evidence_bundle_rejects_invalid_owner_recorded_release_evidence() {
+        let mut report = valid_release_evidence_bundle_json();
+        report["owner_recorded_release_evidence"]["reports_archive_uri"] = json!("   ");
+        let (status, detail) = inspect_release_evidence_bundle_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(
+            detail.contains("owner_recorded_release_evidence.reports_archive_uri"),
+            "{detail}"
+        );
+
+        let mut report = valid_release_evidence_bundle_json();
+        report["owner_recorded_release_evidence"]["completed_at"] =
+            json!("2026-05-22T16:45:00-04:00");
+        let (status, detail) = inspect_release_evidence_bundle_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("completed_at"), "{detail}");
+
+        let mut report = valid_release_evidence_bundle_json();
+        report["owner_recorded_release_evidence"]["completed_at"] = json!("2026-05-22T17:01:00Z");
+        let (status, detail) = inspect_release_evidence_bundle_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("completed_at"), "{detail}");
     }
 
     #[test]

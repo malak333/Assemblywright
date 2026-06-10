@@ -122,9 +122,10 @@ Speech/AVFoundation input adapter, a protocol-backed AVFoundation speech-output
 adapter, visible degraded/interrupted states, and typed transcript handoff to
 the same text command submit path. Automated tests use fakes for input/output
 adapter behavior; live microphone, Speech permission, audio output, signed-app
-validation, owner-recorded live-device QA, and repository-backed
-`task:<uuid>` or `audit:<uuid>` command-result evidence remain release gates
-before `live_voice_loop` can clear in evidence-aware readiness mode.
+validation, owner-recorded live-device voice and non-voice QA, final owner
+release evidence, and repository-backed `task:<uuid>` or `audit:<uuid>`
+command-result evidence remain release gates before `live_voice_loop` can clear
+in evidence-aware readiness mode.
 
 ### Activity And Audit View
 

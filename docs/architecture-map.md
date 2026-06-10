@@ -50,12 +50,12 @@ flowchart TB
     ReleaseReadiness["/release/readiness and jarvis release readiness"] --> Docs
     ReleaseReadinessFallback["serverless CLI readiness fallback"] --> ReleaseReadiness
     EvidenceStatus["/release/evidence-status and jarvis release evidence-status"] --> EvidenceDoctor
-    EvidenceStatus --> LiveQASemanticValidator["live QA semantic validator: bundle/version/core-digest/timestamp/transcript/command/self-test checks"]
+    EvidenceStatus --> LiveQASemanticValidator["live QA semantic validator: bundle/version/core-digest/timestamp/transcript/command/non-voice-owner/self-test checks"]
     LiveQASemanticValidator --> RepoEvidenceLookup["repository-backed command-result lookup: task/audit record must exist"]
     RepoEvidenceLookup --> Repository["SQLite tasks and audit entries"]
     LiveQASemanticValidator --> ReleaseReadiness
     subgraph ManualExternal["Manual external evidence, not local gate proof"]
-        LiveDeviceAssert["release-live-device-qa.sh assert-complete"] --> LiveDeviceQAReport["target/release-live-device-qa-report.json owner-recorded voice evidence"]
+        LiveDeviceAssert["release-live-device-qa.sh assert-complete"] --> LiveDeviceQAReport["target/release-live-device-qa-report.json owner-recorded voice and non-voice evidence"]
         PluginTrustAssert["release-plugin-trust-qa.sh assert-complete"] --> PluginTrustQAReport["target/release-plugin-trust-qa-report.json owner-recorded plugin trust evidence"]
         PluginTrustRunbook -. guides .-> PluginTrustAssert
         SignedArtifacts["Developer ID signed, notarized, and stapled zip/pkg"] --> EvidenceBundleRun["release-evidence-bundle.sh bundle"]
@@ -68,7 +68,7 @@ flowchart TB
         LiveNotificationQA["owner-recorded live macOS notification prompt and delivery QA"] --> EvidenceBundleRun
         LiveDeviceQAReport --> EvidenceBundleRun
         PluginTrustQAReport --> EvidenceBundleRun
-        EvidenceBundleRun --> EvidenceArchive["archived final release evidence bundle"]
+        EvidenceBundleRun --> EvidenceArchive["archived final release evidence bundle with owner attestation"]
     end
     EvidenceBundleRun -. referenced by .-> EvidenceStatus
     AppReleaseSmoke["packaged-app-release-smoke.sh"] --> LocalApp["temp Jarvis.app bundle"]
@@ -476,22 +476,25 @@ stale, self-test, or misidentified plugin-trust report shapes.
 The `./scripts/release-evidence-bundle.sh --check` command ties the expected
 signed distribution artifact paths, live-device QA report, plugin-trust QA
 report, and owner validation flags into a final bundle manifest path. `--check`,
-`release-evidence-doctor.sh`, and `/release/evidence-status` are path/JSON
-inventory surfaces only; they do not validate signing, notarization, stapling,
-installation, live-device QA, or plugin-trust QA. Final bundle manifests now
-carry `schema_version: 1` and `evidence_type: release_evidence_bundle`, and the
-doctor/status validators reject stale or misidentified final-bundle report
-shapes. The `--check` runbook points operators to the sourceable final-bundle
-template before `--bundle`, and readiness exposes the source-and-run template
-command alongside the inline owner-flag example.
+`release-evidence-doctor.sh`, and `/release/evidence-status` are read-only
+inventory plus semantic validation surfaces; they do not perform signing,
+notarization, stapling, installation, live-device QA, plugin-trust QA, final
+bundle creation, or host-level egress enforcement. Final bundle manifests now
+carry `schema_version: 1`, `evidence_type: release_evidence_bundle`, and
+`owner_recorded_release_evidence`, and the doctor/status validators reject
+stale, weak, or misidentified final-bundle report shapes. The `--check` runbook
+points operators to the sourceable final-bundle template before `--bundle`, and
+readiness exposes the source-and-run template command alongside the inline
+owner-flag example.
 `--self-test` uses fake artifacts/reports only; `--bundle` writes a manifest after the referenced
 evidence exists, the owner flags are true, and the local app signature, app
 stapling ticket, installer signature, installer stapling ticket, and app zip
 payload validate through Apple-tool-derived checks. Production bundle creation keeps local signature validation
 mandatory, parses every required live-device/plugin-trust report flag, requires
-non-empty owner-recorded evidence fields in both QA reports, confirms the
-live-device QA bundle id/version/build metadata matches the expected release,
-checks live-device voice-check timestamps are ordered UTC values,
+non-empty owner-recorded evidence fields in both QA reports plus the final
+bundle owner attestation, confirms the live-device QA bundle id/version/build
+metadata matches the expected release, checks live-device voice and notification
+timestamps are ordered UTC values,
 and records SHA-256 digests for distribution artifacts and QA reports before
 writing evidence.
 The `./scripts/release-evidence-doctor.sh --check` command inventories the

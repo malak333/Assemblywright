@@ -113,10 +113,11 @@ These notes capture durable facts for future agents working on this repository.
   evidence bundle. The app bundle item additionally validates `Info.plist`
   bundle id, short version, and build version against expected release metadata,
   and the bundled core item validates the packaged `jarvis-cli.version` marker
-  without executing the artifact path. This is file/report inventory only; it
-  does not prove signing, notarization, installation, Finder launch, executable
-  runtime behavior, live-device QA, marketplace review, malware scanning, OS
-  sandboxing, or host-level egress enforcement.
+  without executing the artifact path. This is read-only file/report inventory
+  plus semantic validation. It does not perform signing, notarization,
+  installation, Finder launch, executable runtime behavior, live-device QA,
+  marketplace review, malware scanning, OS sandboxing, or host-level egress
+  enforcement.
 - The live-device QA evidence item is stricter than generic JSON presence:
   `/release/evidence-status` validates schema/type, rejects `self_test_fixture`,
   checks the installed app path, expected bundle identifier, short/build
@@ -132,7 +133,11 @@ These notes capture durable facts for future agents working on this repository.
   shape-only fixture validation because they do not own the SQLite repository. It now
   also requires a `bundled_core` block that binds the installed
   `Contents/Resources/bin/jarvis-cli` path, `jarvis <version>` output, and
-  SHA-256 digest to the same live-device report. The
+  SHA-256 digest to the same live-device report, all live-device
+  `validation_flags` and `voice_loop` flags set to true, non-empty
+  microphone/Speech usage descriptions, non-empty audio output device label,
+  and non-voice owner notes for clean-profile, Finder launch, notification,
+  restart, and manual QA with an ordered UTC notification timestamp. The
   `release-live-device-qa.sh --assert-complete` path rejects whitespace-only
   owner evidence values and reserves `JARVIS_QA_SELF_TEST_FIXTURE=true` for the
   script's internal fake-fixture self-test. Invalid or stale hand-written reports stay
@@ -328,8 +333,11 @@ These notes capture durable facts for future agents working on this repository.
   manifest gate. `--check` prints the required signed distribution artifact
   paths, live-device QA report, plugin-trust QA report, and owner validation
   flags. `--check`, `release-evidence-doctor.sh`, and `/release/evidence-status`
-  are presence/JSON inventory surfaces only; they do not validate Developer ID
-  signing, notarization, stapling, installation, live-device QA, plugin-trust QA,
+  are read-only inventory plus semantic-validation surfaces: they do not
+  perform external validation, but they reject stale or weak signed-provenance,
+  live-device, plugin-trust, and final-bundle reports before evidence-aware
+  readiness can use them. They do not validate Developer ID signing,
+  notarization, stapling, installation, live-device QA, plugin-trust QA,
   owner assertions, or final bundle creation. `--self-test` uses fake
   artifacts/reports to prove bundle mechanics only. The `--check` output points
   operators to `--write-template`, and `--write-template`
