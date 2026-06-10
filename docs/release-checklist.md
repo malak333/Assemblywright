@@ -63,7 +63,8 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   signed packaging lane. Treat it as file/report inventory plus report semantic
   validation only, not proof that signing, notarization, installation, Finder
   launch, executable runtime behavior, live-device QA, marketplace review,
-  malware scanning, or OS sandboxing was performed.
+  malware scanning, OS sandboxing, or host-level egress enforcement was
+  performed.
 - Confirm the live-device QA report is `present`, not `invalid`, before using
   external evidence mode. Evidence-status semantically checks the expected
   installed app path, bundle ID, short/build version, non-self-test identity,
@@ -396,12 +397,14 @@ stage or when a PR needs focused evidence for one ownership slice.
   `./scripts/release-evidence-doctor.sh --assert-complete` after the bundle
   command as the final inventory assertion. Treat `--check`,
   `release-evidence-doctor.sh`, `/release/evidence-status`, and
-  `jarvis release evidence-status` as present/missing/invalid inventory for
-  expected paths, app bundle `Info.plist` metadata, JSON flags, non-future JSON
-  report timestamps, signed-distribution provenance, and release metadata only;
-  those paths do not validate Developer ID signing, notarization, stapling,
-  installation, live-device QA, plugin-trust QA, owner assertions, or final
-  bundle creation.
+  `jarvis release evidence-status` as read-only present/missing/invalid
+  inventory plus semantic validation for expected paths, app bundle `Info.plist`
+  metadata, bundled-core marker metadata, JSON flags, non-future report
+  timestamps, signed-distribution provenance, artifact/report digest bindings,
+  owner-recorded release evidence fields, and release metadata. Those paths do
+  not perform Developer ID signing, notarization, stapling, installation,
+  live-device QA, plugin-trust QA, owner assertions, final bundle creation, or
+  host-level egress enforcement.
   Treat `--bundle` output as a manifest of referenced signed/notarized artifacts
   and owner-recorded QA evidence. The production `--bundle` path, unlike
   doctor/status inventory, must keep local signature validation enabled, check
@@ -548,7 +551,7 @@ Clean-profile and manual production gates not proven by this local smoke:
   canonical Rust package release version instead of leaving a shell placeholder.
   All required `JARVIS_QA_*` flags must be set to `true`, including
   `JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true`, plus the required
-  owner/device/profile/UTC timestamp, voice evidence-note, and structured
+  owner/device/profile/UTC timestamp, non-voice owner evidence-note, voice evidence-note, and structured
   spoken-command observation fields. Owner-recorded evidence fields must contain
   non-whitespace text, and `JARVIS_QA_SELF_TEST_FIXTURE=true` is reserved for
   the script's internal fake-fixture self-test rather than release evidence.
@@ -564,9 +567,11 @@ Clean-profile and manual production gates not proven by this local smoke:
   report must bind the installed bundled core path, `jarvis <version>` output,
   and SHA-256 digest. The report generation timestamp must be UTC, no earlier
   than the completed voice check, and not future-dated. Confirm the generated
-  report includes installed-app metadata, `bundled_core`, `voice_loop`,
-  `owner_recorded_live_voice_evidence`, `voice_command_observation`,
-  validation flags, schema identity, and proof boundary, then preserve the
+  report includes installed-app metadata, app microphone/Speech usage
+  descriptions, `bundled_core`, all live-device validation flags, `voice_loop`,
+  `owner_recorded_live_voice_evidence`, `owner_recorded_non_voice_evidence`,
+  `voice_command_observation` including `audio_output_device_label`, schema
+  identity, and proof boundary, then preserve the
   `target/release-live-device-qa-report.json`
   artifact, or the `JARVIS_QA_REPORT_PATH` override, with the release notes.
   Then rerun `jarvis release evidence-status` and
@@ -642,8 +647,8 @@ Distribution packaging gate:
   to record that those checks were completed; it remains an owner assertion,
   not automated live-device proof. The resulting JSON report records
   owner-asserted validation flags, voice-loop evidence fields, owner-recorded
-  live voice evidence notes, structured spoken-command observation fields,
-  installed-app metadata, schema identity, and proof boundary.
+  live voice and non-voice evidence notes, structured spoken-command
+  observation fields, installed-app metadata, schema identity, and proof boundary.
   Confirm the same report is visible through `jarvis release evidence-status`
   without missing, whitespace-only, or invalid live voice evidence fields.
   before using evidence-aware readiness language.

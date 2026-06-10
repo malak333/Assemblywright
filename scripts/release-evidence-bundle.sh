@@ -51,6 +51,15 @@ Required before --bundle:
   JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true
   JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true
   JARVIS_EVIDENCE_REPORTS_ARCHIVED=true
+  JARVIS_EVIDENCE_OWNER_NAME
+  JARVIS_EVIDENCE_COMPLETED_AT
+  JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_NOTE
+  JARVIS_EVIDENCE_NOTARIZATION_NOTE
+  JARVIS_EVIDENCE_CLEAN_PROFILE_NOTE
+  JARVIS_EVIDENCE_LIVE_DEVICE_QA_NOTE
+  JARVIS_EVIDENCE_PLUGIN_TRUST_QA_NOTE
+  JARVIS_EVIDENCE_REPORTS_ARCHIVE_NOTE
+  JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI
 
 Optional:
   JARVIS_EVIDENCE_VERSION             Defaults to the Rust package release version
@@ -89,6 +98,46 @@ require_true() {
   local name="$1"
   local value="${!name:-}"
   [[ "$value" == "true" ]] || fail "$name must be set to true after external validation"
+}
+
+require_non_empty_env() {
+  local name="$1"
+  local value="${!name:-}"
+  [[ -n "${value//[[:space:]]/}" ]] || fail "$name must be set to a non-empty owner-recorded evidence value"
+}
+
+require_utc_timestamp_env() {
+  local name="$1"
+  local value="${!name:-}"
+  require_non_empty_env "$name"
+  require_command python3
+  python3 - "$name" "$value" <<'PY'
+import datetime
+import sys
+
+name, value = sys.argv[1:3]
+try:
+    datetime.datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+except ValueError as exc:
+    raise SystemExit(f"{name} must be a UTC RFC3339 timestamp like 2026-05-22T17:00:00Z") from exc
+PY
+}
+
+require_not_future_timestamp_env() {
+  local name="$1"
+  local value="${!name:-}"
+  require_utc_timestamp_env "$name"
+  require_command python3
+  python3 - "$name" "$value" <<'PY'
+import datetime
+import sys
+
+name, value = sys.argv[1:3]
+timestamp = datetime.datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+now = datetime.datetime.now(datetime.timezone.utc)
+if timestamp > now:
+    raise SystemExit(f"{name} must not be future-dated")
+PY
 }
 
 require_file() {
@@ -660,6 +709,15 @@ write_bundle() {
   local escaped_live
   local escaped_plugin
   local escaped_signed_provenance
+  local escaped_owner_name
+  local escaped_completed_at
+  local escaped_signed_distribution_note
+  local escaped_notarization_note
+  local escaped_clean_profile_note
+  local escaped_live_device_qa_note
+  local escaped_plugin_trust_qa_note
+  local escaped_reports_archive_note
+  local escaped_reports_archive_uri
   local zip_sha
   local pkg_sha
   local live_sha
@@ -676,6 +734,15 @@ write_bundle() {
   escaped_live="$(json_escape "$LIVE_QA_REPORT")"
   escaped_plugin="$(json_escape "$PLUGIN_QA_REPORT")"
   escaped_signed_provenance="$(json_escape "$SIGNED_PROVENANCE_REPORT")"
+  escaped_owner_name="$(json_escape "$JARVIS_EVIDENCE_OWNER_NAME")"
+  escaped_completed_at="$(json_escape "$JARVIS_EVIDENCE_COMPLETED_AT")"
+  escaped_signed_distribution_note="$(json_escape "$JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_NOTE")"
+  escaped_notarization_note="$(json_escape "$JARVIS_EVIDENCE_NOTARIZATION_NOTE")"
+  escaped_clean_profile_note="$(json_escape "$JARVIS_EVIDENCE_CLEAN_PROFILE_NOTE")"
+  escaped_live_device_qa_note="$(json_escape "$JARVIS_EVIDENCE_LIVE_DEVICE_QA_NOTE")"
+  escaped_plugin_trust_qa_note="$(json_escape "$JARVIS_EVIDENCE_PLUGIN_TRUST_QA_NOTE")"
+  escaped_reports_archive_note="$(json_escape "$JARVIS_EVIDENCE_REPORTS_ARCHIVE_NOTE")"
+  escaped_reports_archive_uri="$(json_escape "$JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI")"
   zip_sha="$(file_sha256 "$ZIP_PATH")"
   pkg_sha="$(file_sha256 "$PKG_PATH")"
   live_sha="$(file_sha256 "$LIVE_QA_REPORT")"
@@ -714,6 +781,17 @@ write_bundle() {
     "plugin_trust_qa": true,
     "reports_archived": true,
     "local_signature_validation": $local_signature_validation
+  },
+  "owner_recorded_release_evidence": {
+    "owner_name": "$escaped_owner_name",
+    "completed_at": "$escaped_completed_at",
+    "signed_distribution_note": "$escaped_signed_distribution_note",
+    "notarization_note": "$escaped_notarization_note",
+    "clean_profile_note": "$escaped_clean_profile_note",
+    "live_device_qa_note": "$escaped_live_device_qa_note",
+    "plugin_trust_qa_note": "$escaped_plugin_trust_qa_note",
+    "reports_archive_note": "$escaped_reports_archive_note",
+    "reports_archive_uri": "$escaped_reports_archive_uri"
   },
   "proof_boundary": "$escaped_boundary"
 }
@@ -756,6 +834,16 @@ JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=false
 JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=false
 JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=false
 JARVIS_EVIDENCE_REPORTS_ARCHIVED=false
+
+JARVIS_EVIDENCE_OWNER_NAME=""
+JARVIS_EVIDENCE_COMPLETED_AT=""
+JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_NOTE=""
+JARVIS_EVIDENCE_NOTARIZATION_NOTE=""
+JARVIS_EVIDENCE_CLEAN_PROFILE_NOTE=""
+JARVIS_EVIDENCE_LIVE_DEVICE_QA_NOTE=""
+JARVIS_EVIDENCE_PLUGIN_TRUST_QA_NOTE=""
+JARVIS_EVIDENCE_REPORTS_ARCHIVE_NOTE=""
+JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI=""
 EOF
 }
 
@@ -882,6 +970,14 @@ EOF
     "transcript_handoff_evidence_note": "Observed transcript handoff reach the command path in the fake fixture.",
     "audio_output_evidence_note": "Observed speech output playback in the fake fixture."
   },
+  "owner_recorded_non_voice_evidence": {
+    "clean_profile_evidence_note": "Clean profile install observed in the fake fixture.",
+    "finder_launch_evidence_note": "Finder launch observed in the fake fixture.",
+    "notification_evidence_note": "Visible scheduler notification observed in the fake fixture.",
+    "notification_observed_at": "2026-05-22T16:04:00Z",
+    "restart_evidence_note": "Restart recovery observed in the fake fixture.",
+    "manual_release_qa_evidence_note": "Manual release QA surfaces observed in the fake fixture."
+  },
   "voice_command_observation": {
     "test_phrase": "Jarvis status check.",
     "observed_transcript": "Jarvis status check.",
@@ -1004,7 +1100,16 @@ JSON
     JARVIS_EVIDENCE_OUTPUT_PATH \
     JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES \
     JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID \
-    JARVIS_EVIDENCE_EXPECTED_VERSION; do
+    JARVIS_EVIDENCE_EXPECTED_VERSION \
+    JARVIS_EVIDENCE_OWNER_NAME \
+    JARVIS_EVIDENCE_COMPLETED_AT \
+    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_NOTE \
+    JARVIS_EVIDENCE_NOTARIZATION_NOTE \
+    JARVIS_EVIDENCE_CLEAN_PROFILE_NOTE \
+    JARVIS_EVIDENCE_LIVE_DEVICE_QA_NOTE \
+    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_NOTE \
+    JARVIS_EVIDENCE_REPORTS_ARCHIVE_NOTE \
+    JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI; do
     require_file_contains "release evidence template" "$tmp_dir/release-evidence-bundle.env" "$field="
   done
   for flag in \
@@ -1019,6 +1124,15 @@ JSON
       fail "release evidence template must not default $flag to true"
     fi
   done
+  export JARVIS_EVIDENCE_OWNER_NAME="Jarvis Release Self-Test"
+  export JARVIS_EVIDENCE_COMPLETED_AT="2026-05-22T16:45:00Z"
+  export JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_NOTE="Signed distribution provenance fixture reviewed."
+  export JARVIS_EVIDENCE_NOTARIZATION_NOTE="Notarization fixture reviewed."
+  export JARVIS_EVIDENCE_CLEAN_PROFILE_NOTE="Clean profile fixture reviewed."
+  export JARVIS_EVIDENCE_LIVE_DEVICE_QA_NOTE="Live-device QA fixture reviewed."
+  export JARVIS_EVIDENCE_PLUGIN_TRUST_QA_NOTE="Plugin-trust QA fixture reviewed."
+  export JARVIS_EVIDENCE_REPORTS_ARCHIVE_NOTE="Release evidence reports archived in the fixture."
+  export JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI="file://self-test/release-evidence"
 
   JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
     JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
@@ -1046,6 +1160,8 @@ JSON
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"signed_distribution_provenance_sha256"'
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"live_device_qa_sha256"'
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"plugin_trust_qa_report"'
+  require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"owner_recorded_release_evidence"'
+  require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"owner_name": "Jarvis Release Self-Test"'
 
   python3 - "$tmp_dir/signed-provenance.json" "$tmp_dir/negated-gatekeeper-signed-provenance.json" <<'PY'
 import json
@@ -1626,7 +1742,8 @@ Required before --bundle:
   notification, restart, and manual release QA report exists.
 - Marketplace review, malware scan, signed publisher policy, OS sandbox, and
   host-level egress evidence report exists.
-- Owner sets every JARVIS_EVIDENCE_* validation flag to true.
+- Owner sets every JARVIS_EVIDENCE_* validation flag to true and fills the
+  owner name, completion timestamp, evidence notes, and reports archive URI.
 - Run --write-template target/release-evidence-bundle.env to generate the
   sourceable final-bundle environment file, edit it only after the matching
   external checks complete, source it, then rerun this script with --bundle.
@@ -1693,11 +1810,17 @@ require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "installed_
 for field in owner_name device_label profile_label voice_check_started_at voice_check_completed_at microphone_evidence_note speech_permission_evidence_note transcript_handoff_evidence_note audio_output_evidence_note; do
   require_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.$field"
 done
+for field in clean_profile_evidence_note finder_launch_evidence_note notification_evidence_note notification_observed_at restart_evidence_note manual_release_qa_evidence_note; do
+  require_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_non_voice_evidence.$field"
+done
 require_json_utc_timestamp "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.voice_check_started_at"
 require_json_utc_timestamp "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.voice_check_completed_at"
+require_json_utc_timestamp "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_non_voice_evidence.notification_observed_at"
 require_json_timestamp_order "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.voice_check_started_at" "owner_recorded_live_voice_evidence.voice_check_completed_at"
+require_json_timestamp_order "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.voice_check_started_at" "owner_recorded_non_voice_evidence.notification_observed_at"
 require_json_utc_timestamp "live-device QA report" "$LIVE_QA_REPORT" "generated_at"
 require_json_timestamp_order "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.voice_check_completed_at" "generated_at"
+require_json_timestamp_order "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_non_voice_evidence.notification_observed_at" "generated_at"
 for field in test_phrase observed_transcript expected_command_text observed_command_text command_result_evidence_id audio_output_device_label; do
   require_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "voice_command_observation.$field"
 done
@@ -1736,9 +1859,23 @@ require_true JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED
 require_true JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED
 require_true JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED
 require_true JARVIS_EVIDENCE_REPORTS_ARCHIVED
+require_non_empty_env JARVIS_EVIDENCE_OWNER_NAME
+require_not_future_timestamp_env JARVIS_EVIDENCE_COMPLETED_AT
+require_non_empty_env JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_NOTE
+require_non_empty_env JARVIS_EVIDENCE_NOTARIZATION_NOTE
+require_non_empty_env JARVIS_EVIDENCE_CLEAN_PROFILE_NOTE
+require_non_empty_env JARVIS_EVIDENCE_LIVE_DEVICE_QA_NOTE
+require_non_empty_env JARVIS_EVIDENCE_PLUGIN_TRUST_QA_NOTE
+require_non_empty_env JARVIS_EVIDENCE_REPORTS_ARCHIVE_NOTE
+require_non_empty_env JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI
 write_bundle
 require_json_number_equals "release evidence bundle" "$OUTPUT_PATH" "schema_version" "1"
 require_json_string_equals "release evidence bundle" "$OUTPUT_PATH" "evidence_type" "release_evidence_bundle"
+for field in owner_name completed_at signed_distribution_note notarization_note clean_profile_note live_device_qa_note plugin_trust_qa_note reports_archive_note reports_archive_uri; do
+  require_json_nonempty_string "release evidence bundle" "$OUTPUT_PATH" "owner_recorded_release_evidence.$field"
+done
+require_json_utc_timestamp "release evidence bundle" "$OUTPUT_PATH" "owner_recorded_release_evidence.completed_at"
+require_json_timestamp_order "release evidence bundle" "$OUTPUT_PATH" "owner_recorded_release_evidence.completed_at" "generated_at"
 
 cat <<EOF
 Jarvis release evidence bundle: complete

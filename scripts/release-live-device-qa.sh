@@ -43,16 +43,22 @@ explicitly recorded each live validation flag below as true:
   JARVIS_QA_RESTART_VALIDATED=true
   JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true
 
-The owner must also record non-empty live voice evidence notes:
+The owner must also record non-empty live QA evidence notes:
   JARVIS_QA_OWNER_NAME
   JARVIS_QA_DEVICE_LABEL
   JARVIS_QA_PROFILE_LABEL
   JARVIS_QA_VOICE_CHECK_STARTED_AT
   JARVIS_QA_VOICE_CHECK_COMPLETED_AT
+  JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE
+  JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE
   JARVIS_QA_MICROPHONE_EVIDENCE_NOTE
   JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE
   JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE
   JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE
+  JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE
+  JARVIS_QA_NOTIFICATION_OBSERVED_AT
+  JARVIS_QA_RESTART_EVIDENCE_NOTE
+  JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE
   JARVIS_QA_VOICE_TEST_PHRASE
   JARVIS_QA_OBSERVED_TRANSCRIPT
   JARVIS_QA_EXPECTED_COMMAND_TEXT
@@ -275,6 +281,12 @@ write_report() {
   local escaped_speech_note
   local escaped_transcript_note
   local escaped_audio_note
+  local escaped_clean_profile_note
+  local escaped_finder_launch_note
+  local escaped_notification_note
+  local escaped_notification_observed_at
+  local escaped_restart_note
+  local escaped_manual_release_qa_note
   local escaped_voice_test_phrase
   local escaped_observed_transcript
   local escaped_expected_command_text
@@ -311,6 +323,12 @@ write_report() {
   escaped_speech_note="$(json_escape "$JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE")"
   escaped_transcript_note="$(json_escape "$JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE")"
   escaped_audio_note="$(json_escape "$JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE")"
+  escaped_clean_profile_note="$(json_escape "$JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE")"
+  escaped_finder_launch_note="$(json_escape "$JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE")"
+  escaped_notification_note="$(json_escape "$JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE")"
+  escaped_notification_observed_at="$(json_escape "$JARVIS_QA_NOTIFICATION_OBSERVED_AT")"
+  escaped_restart_note="$(json_escape "$JARVIS_QA_RESTART_EVIDENCE_NOTE")"
+  escaped_manual_release_qa_note="$(json_escape "$JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE")"
   escaped_voice_test_phrase="$(json_escape "$JARVIS_QA_VOICE_TEST_PHRASE")"
   escaped_observed_transcript="$(json_escape "$JARVIS_QA_OBSERVED_TRANSCRIPT")"
   escaped_expected_command_text="$(json_escape "$JARVIS_QA_EXPECTED_COMMAND_TEXT")"
@@ -368,6 +386,14 @@ write_report() {
     "transcript_handoff_evidence_note": "$escaped_transcript_note",
     "audio_output_evidence_note": "$escaped_audio_note"
   },
+  "owner_recorded_non_voice_evidence": {
+    "clean_profile_evidence_note": "$escaped_clean_profile_note",
+    "finder_launch_evidence_note": "$escaped_finder_launch_note",
+    "notification_evidence_note": "$escaped_notification_note",
+    "notification_observed_at": "$escaped_notification_observed_at",
+    "restart_evidence_note": "$escaped_restart_note",
+    "manual_release_qa_evidence_note": "$escaped_manual_release_qa_note"
+  },
   "voice_command_observation": {
     "test_phrase": "$escaped_voice_test_phrase",
     "observed_transcript": "$escaped_observed_transcript",
@@ -416,10 +442,16 @@ JARVIS_QA_DEVICE_LABEL=""
 JARVIS_QA_PROFILE_LABEL=""
 JARVIS_QA_VOICE_CHECK_STARTED_AT=""
 JARVIS_QA_VOICE_CHECK_COMPLETED_AT=""
+JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE=""
+JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE=""
 JARVIS_QA_MICROPHONE_EVIDENCE_NOTE=""
 JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE=""
 JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE=""
 JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE=""
+JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE=""
+JARVIS_QA_NOTIFICATION_OBSERVED_AT=""
+JARVIS_QA_RESTART_EVIDENCE_NOTE=""
+JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE=""
 JARVIS_QA_VOICE_TEST_PHRASE=""
 JARVIS_QA_OBSERVED_TRANSCRIPT=""
 JARVIS_QA_EXPECTED_COMMAND_TEXT=""
@@ -529,6 +561,8 @@ PLIST
   fi
   require_file_contains "live QA env template" "$fixture_template" 'JARVIS_QA_CLEAN_PROFILE_VALIDATED=false'
   require_file_contains "live QA env template" "$fixture_template" 'JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=false'
+  require_file_contains "live QA env template" "$fixture_template" 'JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE=""'
+  require_file_contains "live QA env template" "$fixture_template" 'JARVIS_QA_NOTIFICATION_OBSERVED_AT=""'
   require_file_contains "live QA env template" "$fixture_template" 'JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE=""'
   require_file_contains "live QA env template" "$fixture_template" 'JARVIS_QA_EXPECTED_COMMAND_TEXT=""'
   require_file_contains "live QA env template" "$fixture_template" 'JARVIS_QA_OBSERVED_COMMAND_TEXT=""'
@@ -555,10 +589,16 @@ PLIST
     JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
     JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
     JARVIS_QA_VOICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
+    JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE="Clean profile install observed in the fake fixture." \
+    JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE="Finder launch observed in the fake fixture." \
     JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the fake fixture." \
     JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the fake fixture." \
     JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the fake fixture." \
     JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the fake fixture." \
+    JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE="Visible scheduler notification observed in the fake fixture." \
+    JARVIS_QA_NOTIFICATION_OBSERVED_AT="2026-05-22T16:04:00Z" \
+    JARVIS_QA_RESTART_EVIDENCE_NOTE="Restart recovery observed in the fake fixture." \
+    JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE="Manual release QA surfaces observed in the fake fixture." \
     JARVIS_QA_VOICE_TEST_PHRASE="Jarvis status check." \
     JARVIS_QA_OBSERVED_TRANSCRIPT="Jarvis status check." \
     JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
@@ -580,6 +620,9 @@ PLIST
   require_file_contains "live QA self-test report" "$fixture_report" '"transcript_handoff": true'
   require_file_contains "live QA self-test report" "$fixture_report" '"same_command_path": true'
   require_file_contains "live QA self-test report" "$fixture_report" '"owner_recorded_live_voice_evidence"'
+  require_file_contains "live QA self-test report" "$fixture_report" '"owner_recorded_non_voice_evidence"'
+  require_file_contains "live QA self-test report" "$fixture_report" '"clean_profile_evidence_note": "Clean profile install observed in the fake fixture."'
+  require_file_contains "live QA self-test report" "$fixture_report" '"notification_observed_at": "2026-05-22T16:04:00Z"'
   require_file_contains "live QA self-test report" "$fixture_report" '"owner_name": "Jarvis QA Self-Test"'
   require_file_contains "live QA self-test report" "$fixture_report" '"voice_command_observation"'
   require_file_contains "live QA self-test report" "$fixture_report" '"expected_command_text": "status check"'
@@ -606,10 +649,16 @@ PLIST
     JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
     JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
     JARVIS_QA_VOICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
+    JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE="Clean profile install observed in the fake fixture." \
+    JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE="Finder launch observed in the fake fixture." \
     JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the fake fixture." \
     JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the fake fixture." \
     JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the fake fixture." \
     JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the fake fixture." \
+    JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE="Visible scheduler notification observed in the fake fixture." \
+    JARVIS_QA_NOTIFICATION_OBSERVED_AT="2026-05-22T16:04:00Z" \
+    JARVIS_QA_RESTART_EVIDENCE_NOTE="Restart recovery observed in the fake fixture." \
+    JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE="Manual release QA surfaces observed in the fake fixture." \
     JARVIS_QA_VOICE_TEST_PHRASE="Jarvis status check." \
     JARVIS_QA_OBSERVED_TRANSCRIPT="Jarvis status check." \
     JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
@@ -619,6 +668,45 @@ PLIST
     JARVIS_QA_SELF_TEST_FIXTURE=true \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "live QA self-test expected operator-authored self-test fixture reports to fail"
+  fi
+
+  if JARVIS_QA_INSTALLED_APP_PATH="$fixture_app" \
+    JARVIS_QA_REPORT_PATH="$tmp_dir/blank-clean-profile-evidence.json" \
+    JARVIS_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.jarvis.selftest" \
+    JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
+    JARVIS_QA_CLEAN_PROFILE_VALIDATED=true \
+    JARVIS_QA_FINDER_LAUNCH_VALIDATED=true \
+    JARVIS_QA_MICROPHONE_VALIDATED=true \
+    JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true \
+    JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true \
+    JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true \
+    JARVIS_QA_NOTIFICATION_VALIDATED=true \
+    JARVIS_QA_RESTART_VALIDATED=true \
+    JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
+    JARVIS_QA_OWNER_NAME="Jarvis QA Self-Test" \
+    JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
+    JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
+    JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
+    JARVIS_QA_VOICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
+    JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE="   " \
+    JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE="Finder launch observed in the fake fixture." \
+    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the fake fixture." \
+    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the fake fixture." \
+    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the fake fixture." \
+    JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the fake fixture." \
+    JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE="Visible scheduler notification observed in the fake fixture." \
+    JARVIS_QA_NOTIFICATION_OBSERVED_AT="2026-05-22T16:04:00Z" \
+    JARVIS_QA_RESTART_EVIDENCE_NOTE="Restart recovery observed in the fake fixture." \
+    JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE="Manual release QA surfaces observed in the fake fixture." \
+    JARVIS_QA_VOICE_TEST_PHRASE="Jarvis status check." \
+    JARVIS_QA_OBSERVED_TRANSCRIPT="Jarvis status check." \
+    JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
+    JARVIS_QA_OBSERVED_COMMAND_TEXT="status check" \
+    JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:00000000-0000-4000-8000-000000000001" \
+    JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL="self-test audio output" \
+    JARVIS_QA_SELF_TEST_FIXTURE=true \
+    "$0" --assert-complete >/dev/null 2>&1; then
+    fail "live QA self-test expected blank non-voice owner evidence to fail"
   fi
 
   if JARVIS_QA_INSTALLED_APP_PATH="$fixture_app" \
@@ -901,7 +989,7 @@ Manual release checks still required before production-ready language:
 - Play speech output and verify live audio output on the device.
 - Verify scheduler notification permission and at least one visible notification.
 - Record all JARVIS_QA_* flags as true, add owner/device/profile/timestamp and
-  voice evidence notes, or run --write-template target/release-live-device-qa.env
+  voice and non-voice evidence notes, or run --write-template target/release-live-device-qa.env
   to generate the complete fillable environment file. Then rerun this script
   with --assert-complete on the validated release machine.
 - Preserve the generated JSON report from --assert-complete as release evidence.
@@ -933,10 +1021,18 @@ require_utc_timestamp_env JARVIS_QA_VOICE_CHECK_STARTED_AT
 require_utc_timestamp_env JARVIS_QA_VOICE_CHECK_COMPLETED_AT
 require_timestamp_order JARVIS_QA_VOICE_CHECK_STARTED_AT JARVIS_QA_VOICE_CHECK_COMPLETED_AT
 require_not_future_timestamp_env JARVIS_QA_VOICE_CHECK_COMPLETED_AT
+require_non_empty_env JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE
+require_non_empty_env JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE
 require_non_empty_env JARVIS_QA_MICROPHONE_EVIDENCE_NOTE
 require_non_empty_env JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE
 require_non_empty_env JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE
 require_non_empty_env JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE
+require_non_empty_env JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE
+require_utc_timestamp_env JARVIS_QA_NOTIFICATION_OBSERVED_AT
+require_timestamp_order JARVIS_QA_VOICE_CHECK_STARTED_AT JARVIS_QA_NOTIFICATION_OBSERVED_AT
+require_not_future_timestamp_env JARVIS_QA_NOTIFICATION_OBSERVED_AT
+require_non_empty_env JARVIS_QA_RESTART_EVIDENCE_NOTE
+require_non_empty_env JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE
 require_non_empty_env JARVIS_QA_VOICE_TEST_PHRASE
 require_non_empty_env JARVIS_QA_OBSERVED_TRANSCRIPT
 require_observed_transcript_matches_phrase

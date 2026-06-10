@@ -326,7 +326,8 @@ expected `/Applications/Jarvis.app` path, unless explicitly overridden with
 test phrase, and expected command text matching observed command text,
 `JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID` set to `task:<uuid>` or `audit:<uuid>`
 from the live command/audit evidence, owner/device/profile, ordered UTC
-timestamps, voice evidence-note fields, and a bundled-core binding for the
+timestamps, non-voice owner evidence notes for clean-profile, Finder launch,
+notification, restart, and manual QA, voice evidence-note fields, and a bundled-core binding for the
 installed `Contents/Resources/bin/jarvis-cli` path, `jarvis <version>` output,
 and SHA-256 digest. Owner-recorded evidence fields must contain non-whitespace
 text; `JARVIS_QA_SELF_TEST_FIXTURE` is reserved for the script's internal
@@ -337,7 +338,7 @@ It writes a JSON report, defaulting to
 `target/release-live-device-qa-report.json`, with installed-app metadata,
 microphone/Speech permission prompt evidence, spoken transcript handoff into
 the command path, speech-output playback evidence, owner-recorded live voice
-evidence notes, bundled-core path/version/digest evidence, structured command
+and non-voice evidence notes, bundled-core path/version/digest evidence, structured command
 observation, and the proof boundary. The
 local release gate also runs `./scripts/release-live-device-qa.sh --self-test`
 against a fake app fixture to prove the assertion/report mechanics without
@@ -377,11 +378,12 @@ plugin-trust QA report, and owner validation flags
 required before a final release evidence manifest can be written. The generated
 manifest must identify itself with `schema_version: 1` and
 `evidence_type: release_evidence_bundle` before the doctor/status gates accept
-it. The `--check` and doctor/status paths are presence and JSON-field inventory
-only; they do not validate Developer ID signatures, notarization, stapling,
-installation, or manual QA. They do validate repo-owned packaged metadata,
-including app bundle `Info.plist` values and the bundled `jarvis-cli.version`
-marker, before claiming those local artifacts are present. The `--check` output
+it. The `--check` and doctor/status paths are read-only inventory plus report
+semantic validation: they do not perform Developer ID signing, notarization,
+stapling, installation, or manual QA, but they validate signed-provenance JSON
+semantics, app bundle metadata, bundled-core version/digest binding, QA report
+fields, final-bundle path/digest bindings, owner-recorded release evidence
+fields, and local-signature-validation flags before reporting evidence as usable. The `--check` output
 also points operators to
 `./scripts/release-evidence-bundle.sh --write-template
 target/release-evidence-bundle.env` to generate the sourceable final-bundle
@@ -394,8 +396,9 @@ owner-flag example, followed by `./scripts/release-evidence-doctor.sh
 --assert-complete` as the final inventory assertion. Its `--self-test` mode
 uses fake artifacts/reports to prove bundle mechanics only; `--bundle` writes
 `target/release-evidence-bundle.json` after the referenced evidence files,
-including signed provenance, exist and all required `JARVIS_EVIDENCE_*` flags
-are true. Non-default live-device and plugin-trust report paths can be supplied
+including signed provenance, exist, all required `JARVIS_EVIDENCE_*` flags
+are true, and final owner name/timestamp/evidence-note/archive fields are
+populated. Non-default live-device and plugin-trust report paths can be supplied
 with either the QA script variables (`JARVIS_QA_REPORT_PATH`,
 `JARVIS_PLUGIN_QA_REPORT_PATH`) or the bundle/doctor aliases
 (`JARVIS_EVIDENCE_LIVE_QA_REPORT`, `JARVIS_EVIDENCE_PLUGIN_QA_REPORT`). The
