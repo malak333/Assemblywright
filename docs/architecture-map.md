@@ -814,13 +814,16 @@ The active sweep state is documented in
 That note records the six-agent audit ownership, the live readiness snapshot,
 and the relevant E2E coverage for this docs-sync phase.
 
-The live readiness payload observed at the start of the sweep reported
+The current readiness payload should be refreshed before release claims. In the
+2026-06-10 docs audit, `jarvis release readiness --json` reported
 `production_ready: false`, `verified_feature_count: 17`, and
-`pending_feature_count: 1`, with `live_voice_loop` still pending manual
-validation. That is the correct repo boundary until owner-recorded external
-evidence exists for signed distribution, clean-profile install/Finder launch,
-live microphone/Speech/transcript/audio validation, plugin-trust QA, and final
-release evidence archival.
+`pending_feature_count: 1`, with `live_voice_loop` still
+`pending_manual_validation`; `jarvis release evidence-status --json` reported
+the live-device QA report missing. That is the correct repo boundary until
+owner-recorded external evidence exists for signed distribution, clean-profile
+install/Finder launch, live microphone/Speech/transcript/audio validation,
+plugin-trust QA, final release evidence archival, and evidence-aware readiness
+is explicitly rerun.
 
 ## Data Ownership
 

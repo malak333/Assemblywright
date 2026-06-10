@@ -446,6 +446,59 @@ fn release_readiness_cli_computes_production_ready_only_from_external_complete_e
 
 #[test]
 #[cfg(unix)]
+fn release_readiness_rejects_invalid_live_voice_evidence_even_when_other_evidence_is_complete() {
+    let temp_dir = tempfile::tempdir().expect("temp complete release evidence");
+    let fixture = write_complete_release_evidence_fixture(temp_dir.path());
+    let endpoint = format!("http://{}", unused_loopback_addr());
+
+    let mut live_report = valid_live_device_qa_report();
+    live_report["validation_flags"]["transcript_handoff"] = json!(false);
+    write_json_report(Path::new(&fixture.live_report_path), live_report);
+
+    let evidence_env = fixture.env_refs();
+    let evidence_status = run_cli_json_with_env(
+        [
+            "release",
+            "evidence-status",
+            "--endpoint",
+            endpoint.as_str(),
+        ],
+        &evidence_env,
+    );
+    let live_item = release_evidence_item(&evidence_status, "live_device_qa_report");
+    assert_eq!(live_item["status"], "invalid", "{live_item}");
+    assert!(live_item["detail"]
+        .as_str()
+        .expect("live detail")
+        .contains("validation_flags.transcript_handoff"));
+
+    let external_readiness = run_cli_json_with_env(
+        ["release", "readiness", "--endpoint", endpoint.as_str()],
+        &fixture.env_refs_with_external_mode(),
+    );
+    assert_eq!(external_readiness["production_ready"], false);
+    assert_array_contains(
+        &external_readiness["pending_features"],
+        "key",
+        "live_voice_loop",
+    );
+    assert!(!external_readiness["implemented_features"]
+        .as_array()
+        .expect("implemented features")
+        .iter()
+        .any(|feature| feature["key"] == "live_voice_loop"));
+    assert!(external_readiness["blocking_manual_gates"]
+        .as_array()
+        .expect("blocking gates")
+        .iter()
+        .any(|gate| gate
+            .as_str()
+            .expect("gate string")
+            .contains("live microphone")));
+}
+
+#[test]
+#[cfg(unix)]
 fn release_evidence_doctor_assert_complete_matches_cli_evidence_status_fixture() {
     let temp_dir = tempfile::tempdir().expect("temp complete release evidence");
     let fixture = write_complete_release_evidence_fixture(temp_dir.path());
@@ -521,6 +574,12 @@ fn release_readiness_rejects_semantically_invalid_live_voice_evidence() {
     fn malformed_bundled_core_digest(report: &mut Value) {
         report["bundled_core"]["sha256"] = json!("not-a-digest");
     }
+    fn false_live_validation_flag(report: &mut Value) {
+        report["validation_flags"]["clean_profile"] = json!(false);
+    }
+    fn false_voice_loop_flag(report: &mut Value) {
+        report["voice_loop"]["same_command_path"] = json!(false);
+    }
     fn mismatched_observed_transcript(report: &mut Value) {
         report["voice_command_observation"]["observed_transcript"] = json!("Jarvis stats check.");
     }
@@ -582,6 +641,16 @@ fn release_readiness_rejects_semantically_invalid_live_voice_evidence() {
             "malformed bundled core digest",
             malformed_bundled_core_digest as fn(&mut Value),
             "bundled_core.sha256",
+        ),
+        (
+            "false live validation flag",
+            false_live_validation_flag as fn(&mut Value),
+            "validation_flags.clean_profile",
+        ),
+        (
+            "false voice loop flag",
+            false_voice_loop_flag as fn(&mut Value),
+            "voice_loop.same_command_path",
         ),
         (
             "mismatched observed transcript",
@@ -831,6 +900,92 @@ fn release_evidence_status_rejects_semantically_invalid_plugin_and_bundle_eviden
             .contains("local_signature_validation"),
         "{bundle_item}"
     );
+}
+
+#[test]
+fn release_evidence_status_rejects_false_plugin_and_bundle_validation_flags() {
+    let endpoint = format!("http://{}", unused_loopback_addr());
+
+    let temp_dir = tempfile::tempdir().expect("temp release evidence reports");
+    let plugin_report_path = temp_dir.path().join("release-plugin-trust-qa-report.json");
+    let bundle_path = temp_dir.path().join("release-evidence-bundle.json");
+
+    for (field, detail_fragment) in [
+        ("marketplace_review", "validation_flags.marketplace_review"),
+        ("malware_scan", "validation_flags.malware_scan"),
+        ("os_sandbox", "validation_flags.os_sandbox"),
+        ("egress_enforcement", "validation_flags.egress_enforcement"),
+        (
+            "signed_publisher_policy",
+            "validation_flags.signed_publisher_policy",
+        ),
+        (
+            "manual_trust_review",
+            "validation_flags.manual_trust_review",
+        ),
+    ] {
+        let mut plugin_report = valid_plugin_trust_qa_report();
+        plugin_report["validation_flags"][field] = json!(false);
+        write_json_report(&plugin_report_path, plugin_report);
+        let plugin_path = plugin_report_path.to_str().expect("plugin report utf8");
+        let evidence_status = run_cli_json_with_env(
+            [
+                "release",
+                "evidence-status",
+                "--endpoint",
+                endpoint.as_str(),
+            ],
+            &[("JARVIS_EVIDENCE_PLUGIN_QA_REPORT", plugin_path)],
+        );
+        let plugin_item = release_evidence_item(&evidence_status, "plugin_trust_qa_report");
+        assert_eq!(plugin_item["status"], "invalid", "{field}: {plugin_item}");
+        assert!(
+            plugin_item["detail"]
+                .as_str()
+                .expect("plugin detail")
+                .contains(detail_fragment),
+            "{field}: {plugin_item}"
+        );
+    }
+
+    for (field, detail_fragment) in [
+        (
+            "signed_distribution",
+            "validation_flags.signed_distribution",
+        ),
+        ("notarization", "validation_flags.notarization"),
+        ("clean_profile", "validation_flags.clean_profile"),
+        ("live_device_qa", "validation_flags.live_device_qa"),
+        ("plugin_trust_qa", "validation_flags.plugin_trust_qa"),
+        ("reports_archived", "validation_flags.reports_archived"),
+        (
+            "local_signature_validation",
+            "validation_flags.local_signature_validation",
+        ),
+    ] {
+        let mut bundle_report = valid_release_evidence_bundle();
+        bundle_report["validation_flags"][field] = json!(false);
+        write_json_report(&bundle_path, bundle_report);
+        let bundle_path = bundle_path.to_str().expect("bundle report utf8");
+        let evidence_status = run_cli_json_with_env(
+            [
+                "release",
+                "evidence-status",
+                "--endpoint",
+                endpoint.as_str(),
+            ],
+            &[("JARVIS_EVIDENCE_OUTPUT_PATH", bundle_path)],
+        );
+        let bundle_item = release_evidence_item(&evidence_status, "release_evidence_bundle");
+        assert_eq!(bundle_item["status"], "invalid", "{field}: {bundle_item}");
+        assert!(
+            bundle_item["detail"]
+                .as_str()
+                .expect("bundle detail")
+                .contains(detail_fragment),
+            "{field}: {bundle_item}"
+        );
+    }
 }
 
 #[test]
@@ -1642,9 +1797,20 @@ fn release_live_device_runbook_summarizes_next_operator_steps() {
     assert!(readable_runbook.contains(
         "set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete"
     ));
+    assert!(readable_runbook.contains("Evidence detail: expected JSON report is missing"));
+    assert!(readable_runbook.contains("Run on the release machine:"));
+    assert!(readable_runbook.contains("cargo run -p jarvis-cli -- release evidence-status"));
+    assert!(readable_runbook.contains(
+        "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness"
+    ));
     assert!(readable_runbook.contains("Verify microphone and Speech permission prompts"));
     assert!(readable_runbook.contains("Boundary: runbook and local evidence inspection only"));
+    assert!(readable_runbook.contains("Raw JSON: rerun with --json"));
 
+    assert_eq!(
+        json_runbook["generated_from"],
+        "release readiness plus evidence-status"
+    );
     assert_eq!(json_runbook["production_ready"], false);
     assert_eq!(json_runbook["live_voice_feature"]["key"], "live_voice_loop");
     assert_eq!(
@@ -1655,9 +1821,50 @@ fn release_live_device_runbook_summarizes_next_operator_steps() {
         json_runbook["live_device_evidence"]["key"],
         "live_device_qa_report"
     );
-    assert_string_array_contains(
+    assert_eq!(json_runbook["live_device_evidence"]["status"], "missing");
+    assert_eq!(json_runbook["live_device_evidence"]["kind"], "json_report");
+    assert_eq!(
+        json_runbook["live_device_evidence"]["path"],
+        "target/release-live-device-qa-report.json"
+    );
+    assert_eq!(json_runbook["live_device_evidence"]["manual_gate"], true);
+    assert_eq!(
+        json_runbook["live_device_evidence"]["required_for_production"],
+        true
+    );
+    assert_string_array_exact(
         &json_runbook["commands"],
-        "./scripts/release-live-device-qa.sh --check",
+        &[
+            "./scripts/release-live-device-qa.sh --check",
+            "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env",
+            "set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete",
+            "cargo run -p jarvis-cli -- release evidence-status",
+            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness",
+        ],
+    );
+    assert_string_array_contains_substring(
+        &json_runbook["manual_checks"],
+        "signed, notarized package into /Applications",
+    );
+    assert_string_array_contains_substring(
+        &json_runbook["manual_checks"],
+        "Finder or LaunchServices",
+    );
+    assert_string_array_contains_substring(
+        &json_runbook["manual_checks"],
+        "microphone and Speech permission prompts",
+    );
+    assert_string_array_contains_substring(
+        &json_runbook["manual_checks"],
+        "observed transcript reaches the command path",
+    );
+    assert_string_array_contains_substring(
+        &json_runbook["manual_checks"],
+        "live speech output, notification delivery, restart behavior, and manual release QA",
+    );
+    assert_string_array_contains_substring(
+        &json_runbook["manual_checks"],
+        "release-live-device-qa-report.json",
     );
     assert!(json_runbook["proof_boundary"]
         .as_str()
@@ -1736,26 +1943,70 @@ fn release_plugin_trust_runbook_summarizes_next_operator_steps() {
     assert!(readable_runbook.contains(
         "set -a && source target/release-plugin-trust-qa.env && set +a && ./scripts/release-plugin-trust-qa.sh --assert-complete"
     ));
+    assert!(readable_runbook.contains("Evidence detail: expected JSON report is missing"));
+    assert!(readable_runbook.contains("Run on the release machine:"));
+    assert!(readable_runbook.contains("cargo run -p jarvis-cli -- release evidence-status"));
+    assert!(
+        readable_runbook.contains("cargo run -p jarvis-cli -- release signed-distribution-runbook")
+    );
     assert!(readable_runbook.contains("Validate host-level egress enforcement"));
     assert!(readable_runbook.contains("Boundary: runbook and local evidence inspection only"));
+    assert!(readable_runbook.contains("host-level egress enforcement"));
+    assert!(readable_runbook.contains("Raw JSON: rerun with --json"));
 
+    assert_eq!(
+        json_runbook["generated_from"],
+        "release readiness plus evidence-status"
+    );
     assert_eq!(json_runbook["production_ready"], false);
     assert_eq!(
         json_runbook["plugin_trust_evidence"]["key"],
         "plugin_trust_qa_report"
     );
-    assert_string_array_contains(
-        &json_runbook["commands"],
-        "./scripts/release-plugin-trust-qa.sh --check",
+    assert_eq!(json_runbook["plugin_trust_evidence"]["status"], "missing");
+    assert_eq!(json_runbook["plugin_trust_evidence"]["kind"], "json_report");
+    assert_eq!(
+        json_runbook["plugin_trust_evidence"]["path"],
+        "target/release-plugin-trust-qa-report.json"
     );
-    assert_string_array_contains(
+    assert_eq!(json_runbook["plugin_trust_evidence"]["manual_gate"], true);
+    assert_eq!(
+        json_runbook["plugin_trust_evidence"]["required_for_production"],
+        true
+    );
+    assert_string_array_exact(
         &json_runbook["commands"],
-        "./scripts/release-evidence-doctor.sh --check",
+        &[
+            "./scripts/release-plugin-trust-qa.sh --check",
+            "./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env",
+            "set -a && source target/release-plugin-trust-qa.env && set +a && ./scripts/release-plugin-trust-qa.sh --assert-complete",
+            "cargo run -p jarvis-cli -- release evidence-status",
+            "./scripts/release-evidence-doctor.sh --check",
+            "cargo run -p jarvis-cli -- release signed-distribution-runbook",
+        ],
+    );
+    assert_string_array_contains_substring(
+        &json_runbook["manual_checks"],
+        "marketplace review workflow",
+    );
+    assert_string_array_contains_substring(&json_runbook["manual_checks"], "malware scan");
+    assert_string_array_contains_substring(
+        &json_runbook["manual_checks"],
+        "signed publisher policy",
+    );
+    assert_string_array_contains_substring(&json_runbook["manual_checks"], "macOS sandbox");
+    assert_string_array_contains_substring(
+        &json_runbook["manual_checks"],
+        "host-level egress enforcement with deny and declared-host allow fixtures",
+    );
+    assert_string_array_contains_substring(
+        &json_runbook["manual_checks"],
+        "release-plugin-trust-qa-report.json",
     );
     assert!(json_runbook["proof_boundary"]
         .as_str()
         .expect("proof boundary")
-        .contains("does not perform marketplace review"));
+        .contains("host-level egress enforcement"));
 }
 
 #[test]
@@ -5907,6 +6158,20 @@ fn assert_string_array_contains(value: &Value, expected: &str) {
         array.iter().any(|item| item.as_str() == Some(expected)),
         "expected array to contain {expected}, got {value}"
     );
+}
+
+fn assert_string_array_exact(value: &Value, expected: &[&str]) {
+    let array = value.as_array().unwrap_or_else(|| {
+        panic!("expected array, got {}", json!(value));
+    });
+    let actual = array
+        .iter()
+        .map(|item| {
+            item.as_str()
+                .unwrap_or_else(|| panic!("expected string array item, got {item}"))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(actual, expected, "unexpected string array: {value}");
 }
 
 fn assert_string_array_contains_substring(value: &Value, expected: &str) {
