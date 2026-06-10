@@ -235,6 +235,15 @@ These notes capture durable facts for future agents working on this repository.
   operator-readable and points to `jarvis serve`, `jarvis smoke`, and the
   read-only fallback inspection commands instead of surfacing only a raw
   connection error.
+- Release command help text is part of the operator contract.
+  `jarvis release evidence-status --help` must describe default
+  operator-readable output, `--json` for exact payloads, file/report inventory
+  plus semantic validation, owner-asserted plugin-trust review source,
+  host-egress evidence fields, child report validity, and final-bundle local
+  signature-validation status without implying Jarvis performs signing,
+  notarization, live-device QA, marketplace review, malware scanning, OS
+  sandboxing, or host-level egress enforcement. CLI E2E covers this with
+  `release_help_surfaces_current_evidence_boundaries`.
 - Provider-envelope coverage includes
   `ollama_http_provider_parses_tool_request_envelope`,
   `chatgpt_http_provider_parses_tool_request_envelope`,

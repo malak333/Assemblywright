@@ -163,9 +163,9 @@ enum ReleaseCommand {
         #[arg(long)]
         all_commands: bool,
     },
-    /// Print structured release evidence file/report status as JSON.
+    /// Print release evidence file/report status.
     #[command(
-        long_about = "Print structured release evidence file/report status as JSON.\n\nThis is file/report inventory only. It can report whether expected artifact paths and JSON reports are present, missing, or invalid, but it does not prove Developer ID signing, notarization, stapling, Finder launch, live-device QA, marketplace review, malware scanning, OS sandboxing, or host-level egress enforcement."
+        long_about = "Print release evidence file/report status.\n\nThis is file/report inventory plus semantic report validation only. It can report whether expected artifact paths and JSON reports are present, missing, or invalid, and checks app bundle metadata, bundled-core version markers, signed-provenance digests, live-device command evidence, owner-asserted plugin-trust review source, host-egress evidence fields, child-report validity, and final-bundle local signature-validation status. It does not prove Developer ID signing, notarization, stapling, installation, Finder launch, live-device QA, marketplace review, malware scanning, OS sandboxing, or host-level egress enforcement. Default output is operator-readable; use --json for the exact structured payload."
     )]
     EvidenceStatus {
         /// HTTP IPC endpoint. Falls back to local read-only evidence inspection when unavailable.
