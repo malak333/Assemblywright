@@ -1767,6 +1767,63 @@ struct JarvisMacCoreTests {
     }
 
     @MainActor
+    @Test("Voice adapter auto-submit encodes the real IPC command request")
+    func voiceAdapterAutoSubmitEncodesRealIPCCommandRequest() async throws {
+        let adapter = FakeVoiceAdapter()
+        let voice = VoiceStateModel()
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [IPCURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let client = JarvisIPCClient(
+            endpoint: JarvisEndpoint(baseURL: URL(string: "http://127.0.0.1:7787")!),
+            session: session
+        )
+        let console = CommandConsoleModel(client: client)
+        var requests: [(method: String, path: String, body: [String: Any]?)] = []
+
+        IPCURLProtocol.handler = { request in
+            requests.append((
+                method: request.httpMethod ?? "",
+                path: request.url?.path(percentEncoded: false) ?? "",
+                body: decodeRequestBody(request)
+            ))
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, commandResponseJSON(input: "status check"))
+        }
+        defer { IPCURLProtocol.handler = nil }
+
+        let model = VoiceAdapterStateModel(
+            adapter: adapter,
+            voiceState: voice,
+            submitFinalTranscript: { handoff in
+                await console.submit(input: handoff.text, dryRun: handoff.dryRun)
+            }
+        )
+
+        model.setFinalTranscriptAutoSubmitEnabled(true)
+        await model.startCapture()
+        adapter.emitFinal("  status check  ")
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        #expect(requests.map(\.method) == ["POST"])
+        #expect(requests.map(\.path) == ["/commands"])
+        #expect(requests.first?.body?["input"] as? String == "status check")
+        #expect(requests.first?.body?["dry_run"] as? Bool == true)
+        #expect(console.transcript.map(\.text) == [
+            "status check",
+            "local response: status check"
+        ])
+        #expect(console.activity.contains { $0.title == "Task completed" })
+        #expect(voice.lastHandoff?.source == "voice-final-transcript")
+        #expect(voice.transcriptDraft.isEmpty)
+    }
+
+    @MainActor
     @Test("Voice adapter keeps final transcript staged when auto-submit is blocked")
     func voiceAdapterModelKeepsFinalTranscriptStagedWhenAutoSubmitBlocked() async throws {
         let adapter = FakeVoiceAdapter()

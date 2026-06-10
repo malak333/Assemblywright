@@ -4707,6 +4707,24 @@ fn validate_live_device_qa_report(
     )?;
     require_json_sha256_value(value, "bundled_core.sha256")?;
     for field in [
+        "validation_flags.clean_profile",
+        "validation_flags.finder_launch",
+        "validation_flags.microphone",
+        "validation_flags.speech_permission",
+        "validation_flags.transcript_handoff",
+        "validation_flags.audio_output",
+        "validation_flags.notification",
+        "validation_flags.restart",
+        "validation_flags.manual_release_qa",
+        "voice_loop.microphone_permission_prompt",
+        "voice_loop.speech_permission_prompt",
+        "voice_loop.spoken_transcript_handoff",
+        "voice_loop.same_command_path",
+        "voice_loop.speech_output_playback",
+    ] {
+        require_json_bool_value(value, field, true)?;
+    }
+    for field in [
         "app_bundle.microphone_usage_description",
         "app_bundle.speech_recognition_usage_description",
         "owner_recorded_live_voice_evidence.owner_name",
@@ -4851,7 +4869,16 @@ fn validate_plugin_trust_qa_report(value: &serde_json::Value) -> Result<(), Stri
         return Err("JSON report evidence_type must be owner_recorded_plugin_trust_qa".to_string());
     }
     require_json_bool_value(value, "self_test_fixture", false)?;
-    require_json_bool_value(value, "validation_flags.egress_enforcement", true)?;
+    for field in [
+        "validation_flags.marketplace_review",
+        "validation_flags.malware_scan",
+        "validation_flags.os_sandbox",
+        "validation_flags.egress_enforcement",
+        "validation_flags.signed_publisher_policy",
+        "validation_flags.manual_trust_review",
+    ] {
+        require_json_bool_value(value, field, true)?;
+    }
     let started_at = require_utc_report_timestamp(
         value,
         "owner_recorded_plugin_trust_evidence.review_started_at",
@@ -5078,7 +5105,17 @@ fn validate_release_evidence_bundle(value: &serde_json::Value) -> Result<(), Str
         return Err("JSON report evidence_type must be release_evidence_bundle".to_string());
     }
     require_json_string_value(value, "version", &expected_release_evidence_version())?;
-    require_json_bool_value(value, "validation_flags.local_signature_validation", true)?;
+    for field in [
+        "validation_flags.signed_distribution",
+        "validation_flags.notarization",
+        "validation_flags.clean_profile",
+        "validation_flags.live_device_qa",
+        "validation_flags.plugin_trust_qa",
+        "validation_flags.reports_archived",
+        "validation_flags.local_signature_validation",
+    ] {
+        require_json_bool_value(value, field, true)?;
+    }
     for field in [
         "artifacts.zip_sha256",
         "artifacts.pkg_sha256",
@@ -6658,6 +6695,75 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let (status, detail) = inspect_live_device_qa_report_value(report);
         assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
         assert!(detail.contains("bundled_core.sha256"), "{detail}");
+    }
+
+    #[test]
+    fn live_device_qa_report_rejects_false_validation_and_voice_loop_flags() {
+        for (field, path) in [
+            (
+                "validation_flags.clean_profile",
+                ["validation_flags", "clean_profile"],
+            ),
+            (
+                "validation_flags.finder_launch",
+                ["validation_flags", "finder_launch"],
+            ),
+            (
+                "validation_flags.microphone",
+                ["validation_flags", "microphone"],
+            ),
+            (
+                "validation_flags.speech_permission",
+                ["validation_flags", "speech_permission"],
+            ),
+            (
+                "validation_flags.transcript_handoff",
+                ["validation_flags", "transcript_handoff"],
+            ),
+            (
+                "validation_flags.audio_output",
+                ["validation_flags", "audio_output"],
+            ),
+            (
+                "validation_flags.notification",
+                ["validation_flags", "notification"],
+            ),
+            ("validation_flags.restart", ["validation_flags", "restart"]),
+            (
+                "validation_flags.manual_release_qa",
+                ["validation_flags", "manual_release_qa"],
+            ),
+            (
+                "voice_loop.microphone_permission_prompt",
+                ["voice_loop", "microphone_permission_prompt"],
+            ),
+            (
+                "voice_loop.speech_permission_prompt",
+                ["voice_loop", "speech_permission_prompt"],
+            ),
+            (
+                "voice_loop.spoken_transcript_handoff",
+                ["voice_loop", "spoken_transcript_handoff"],
+            ),
+            (
+                "voice_loop.same_command_path",
+                ["voice_loop", "same_command_path"],
+            ),
+            (
+                "voice_loop.speech_output_playback",
+                ["voice_loop", "speech_output_playback"],
+            ),
+        ] {
+            let mut report = valid_live_device_qa_report_json();
+            report[path[0]][path[1]] = json!(false);
+            let (status, detail) = inspect_live_device_qa_report_value(report);
+            assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+            assert!(detail.contains(field), "{field}: {detail}");
+            assert!(
+                detail.contains("must be true") || detail.contains("missing required fields"),
+                "{field}: {detail}"
+            );
+        }
     }
 
     #[test]

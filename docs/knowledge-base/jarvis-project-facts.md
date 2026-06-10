@@ -382,6 +382,11 @@ These notes capture durable facts for future agents working on this repository.
   plugin-trust review timestamp checks, and final bundle version/SHA/local-signature
   checks, so the CLI and Swift Release tab can show missing or invalid release
   evidence without parsing script text.
+- Release evidence status rejects false live-device validation flags, false
+  live voice-loop flags, false plugin-trust validation flags, and false final
+  evidence-bundle validation flags; CLI E2E now covers those semantics and
+  proves invalid live-device QA keeps `live_voice_loop` pending even when the
+  rest of the release evidence fixture is complete.
 - Enabled `local_subprocess` plugins run with an environment boundary: Jarvis
   clears the inherited app/core process environment before spawn and provides
   only a deterministic `PATH` plus `JARVIS_PLUGIN_ID`,
@@ -512,7 +517,9 @@ These notes capture durable facts for future agents working on this repository.
   cover both adapter boundaries with fakes and do not require live microphone
   access or live audio output. The app still must not claim real voice parity
   until entitlements, clean-profile permission prompts, live microphone capture,
-  live audio output, and manual device validation are complete.
+  spoken transcript handoff, live audio output, owner-recorded manual device
+  validation, and repository-backed command-result evidence are complete for the
+  release candidate.
 - The scheduler is inspectable, cancellable, explicitly runnable through
   `scheduler run-due`, and opt-in runnable as a bounded background loop with
   `jarvis serve --scheduler-background`. Scheduler jobs are in-memory without
@@ -766,8 +773,9 @@ These notes capture durable facts for future agents working on this repository.
   adapter-backed voice input/output controls, typed transcript handoff, and
   opt-in final-transcript auto-submit proof when the local gate passes. Live
   microphone/Speech capture, spoken transcript handoff, and live audio-output
-  remain pending until owner-recorded live-device QA evidence is explicitly
-  enabled.
+  remain pending until a valid owner-recorded live-device QA report passes
+  `/release/evidence-status` semantics and evidence-aware readiness is
+  explicitly enabled for that release candidate.
 - Do not claim autonomous external communication, smart-home control, or
   third-party plugin marketplace readiness for v1.
 - Keep public-facing claims scoped to tested local behavior.
