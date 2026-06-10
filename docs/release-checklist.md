@@ -80,8 +80,9 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   plugin-trust review timestamps, final bundle version, artifact/report path
   matching, SHA-256 digest shape, signed-provenance zip/pkg/core digests against
   the current artifact files, final-bundle digests against current
-  artifacts/reports, and local signature-validation status before treating
-  those reports as usable evidence.
+  artifacts/reports, semantic validity of the signed-provenance, live-device
+  QA, and plugin-trust QA child reports referenced by the final bundle, and
+  local signature-validation status before treating those reports as usable evidence.
 - Confirm `release-plugin-trust-qa.sh --assert-complete`,
   `release-evidence-bundle.sh --bundle`, and
   `release-evidence-doctor.sh --assert-complete` reject non-UTC plugin-trust
@@ -91,7 +92,8 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   final-bundle semantic floor as `/release/evidence-status`: non-future UTC generation
   timestamp, `schema_version: 1`, `evidence_type: release_evidence_bundle`,
   expected release version, artifact/report paths matching the configured
-  evidence paths, SHA-256-shaped artifact/report digests matching the current files, and
+  evidence paths, SHA-256-shaped artifact/report digests matching the current files,
+  semantic validity of referenced child reports, and
   `validation_flags.local_signature_validation=true`, and rejects a stale
   packaged `jarvis-cli.version` marker beside the bundled core with packaging
   remediation guidance.
@@ -401,7 +403,8 @@ stage or when a PR needs focused evidence for one ownership slice.
   inventory plus semantic validation for expected paths, app bundle `Info.plist`
   metadata, bundled-core marker metadata, JSON flags, non-future report
   timestamps, signed-distribution provenance, artifact/report digest bindings,
-  owner-recorded release evidence fields, and release metadata. Those paths do
+  final-bundle child-report semantic validity, owner-recorded release evidence
+  fields, and release metadata. Those paths do
   not perform Developer ID signing, notarization, stapling, installation,
   live-device QA, plugin-trust QA, owner assertions, final bundle creation, or
   host-level egress enforcement.

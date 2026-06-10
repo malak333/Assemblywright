@@ -1427,6 +1427,52 @@ fn release_evidence_status_rejects_stale_final_bundle_report_digests() {
 
 #[test]
 #[cfg(unix)]
+fn release_evidence_status_rejects_final_bundle_with_invalid_child_report() {
+    let temp_dir = tempfile::tempdir().expect("temp release evidence reports");
+    let fixture = write_complete_release_evidence_fixture(temp_dir.path());
+    let endpoint = format!("http://{}", unused_loopback_addr());
+
+    let mut live_report: Value = serde_json::from_str(
+        &fs::read_to_string(&fixture.live_report_path).expect("read live report"),
+    )
+    .expect("decode live report");
+    live_report["validation_flags"]["notification"] = json!(false);
+    write_json_report(Path::new(&fixture.live_report_path), live_report);
+
+    let mut bundle_report: Value = serde_json::from_str(
+        &fs::read_to_string(&fixture.bundle_path).expect("read evidence bundle"),
+    )
+    .expect("decode evidence bundle");
+    bundle_report["reports"]["live_device_qa_sha256"] =
+        json!(file_sha256(Path::new(&fixture.live_report_path)));
+    write_json_report(Path::new(&fixture.bundle_path), bundle_report);
+
+    let evidence_status = run_cli_json_with_env(
+        [
+            "release",
+            "evidence-status",
+            "--endpoint",
+            endpoint.as_str(),
+        ],
+        &fixture.env_refs(),
+    );
+    let live_item = release_evidence_item(&evidence_status, "live_device_qa_report");
+    assert_eq!(live_item["status"], "invalid", "{live_item}");
+    let bundle_item = release_evidence_item(&evidence_status, "release_evidence_bundle");
+    assert_eq!(bundle_item["status"], "invalid", "{bundle_item}");
+    let detail = bundle_item["detail"].as_str().expect("bundle detail");
+    assert!(
+        detail.contains("live-device QA report referenced by release evidence bundle is invalid"),
+        "{bundle_item}"
+    );
+    assert!(
+        detail.contains("validation_flags.notification"),
+        "{bundle_item}"
+    );
+}
+
+#[test]
+#[cfg(unix)]
 fn release_evidence_status_rejects_future_dated_release_evidence_reports() {
     let endpoint = format!("http://{}", unused_loopback_addr());
 

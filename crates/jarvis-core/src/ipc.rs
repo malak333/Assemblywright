@@ -5247,7 +5247,47 @@ fn validate_release_evidence_bundle_file_bindings(
         "plugin-trust QA report",
         paths.plugin_qa_report,
     )?;
+    let signed_provenance = read_release_evidence_child_report(
+        paths.signed_provenance_report,
+        "signed-distribution provenance report",
+    )?;
+    validate_signed_distribution_provenance(&signed_provenance).map_err(|error| {
+        format!("signed-distribution provenance report referenced by release evidence bundle is invalid: {error}")
+    })?;
+    validate_signed_distribution_artifact_digests(
+        &signed_provenance,
+        paths.app_path,
+        paths.zip_path,
+        paths.pkg_path,
+    )
+    .map_err(|error| {
+        format!(
+            "signed-distribution provenance report referenced by release evidence bundle is invalid: {error}"
+        )
+    })?;
+    let live_qa =
+        read_release_evidence_child_report(paths.live_qa_report, "live-device QA report")?;
+    validate_live_device_qa_report(&live_qa, None).map_err(|error| {
+        format!("live-device QA report referenced by release evidence bundle is invalid: {error}")
+    })?;
+    let plugin_qa =
+        read_release_evidence_child_report(paths.plugin_qa_report, "plugin-trust QA report")?;
+    validate_plugin_trust_qa_report(&plugin_qa).map_err(|error| {
+        format!("plugin-trust QA report referenced by release evidence bundle is invalid: {error}")
+    })?;
     Ok(())
+}
+
+fn read_release_evidence_child_report(
+    path: &FsPath,
+    label: &str,
+) -> Result<serde_json::Value, String> {
+    let contents = fs::read_to_string(path).map_err(|error| {
+        format!("{label} referenced by release evidence bundle is not readable: {error}")
+    })?;
+    serde_json::from_str(&contents).map_err(|error| {
+        format!("{label} referenced by release evidence bundle is invalid JSON: {error}")
+    })
 }
 
 fn env_value_alias(primary: &str, alias: &str, default: &str) -> String {
@@ -7267,44 +7307,72 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
 
     #[test]
     fn release_evidence_bundle_rejects_stale_report_digest() {
-        let zip_file = tempfile::NamedTempFile::new().expect("temp zip artifact");
-        let pkg_file = tempfile::NamedTempFile::new().expect("temp package artifact");
-        let signed_file = tempfile::NamedTempFile::new().expect("temp signed provenance report");
-        let live_file = tempfile::NamedTempFile::new().expect("temp live QA report");
-        let plugin_file = tempfile::NamedTempFile::new().expect("temp plugin QA report");
-        std::fs::write(zip_file.path(), "current zip").expect("write zip artifact");
-        std::fs::write(pkg_file.path(), "current package").expect("write package artifact");
-        std::fs::write(signed_file.path(), "current signed provenance")
-            .expect("write signed report");
-        std::fs::write(live_file.path(), "current live report").expect("write live report");
-        std::fs::write(plugin_file.path(), "current plugin report").expect("write plugin report");
+        let temp_dir = tempfile::tempdir().expect("temp release evidence");
+        let app_path = PathBuf::from("target/distribution/Jarvis.app");
+        let bundled_core_path = app_path.join("Contents/Resources/bin/jarvis-cli");
+        std::fs::create_dir_all(bundled_core_path.parent().expect("bundled core parent"))
+            .expect("create app bundle fixture");
+        std::fs::write(&bundled_core_path, "current bundled core")
+            .expect("write bundled core artifact");
+        let zip_file = temp_dir.path().join("Jarvis-0.1.4.zip");
+        let pkg_file = temp_dir.path().join("Jarvis-0.1.4.pkg");
+        let signed_file = temp_dir.path().join("Jarvis-0.1.4-signed-provenance.json");
+        let live_file = temp_dir.path().join("release-live-device-qa-report.json");
+        let plugin_file = temp_dir.path().join("release-plugin-trust-qa-report.json");
+        std::fs::write(&zip_file, "current zip").expect("write zip artifact");
+        std::fs::write(&pkg_file, "current package").expect("write package artifact");
+        let mut signed_report = valid_signed_distribution_provenance_json();
+        signed_report["artifacts"]["app_path"] = json!(app_path.display().to_string());
+        signed_report["artifacts"]["zip_path"] = json!(zip_file.display().to_string());
+        signed_report["artifacts"]["pkg_path"] = json!(pkg_file.display().to_string());
+        signed_report["artifacts"]["bundled_core_path"] =
+            json!(bundled_core_path.display().to_string());
+        signed_report["artifacts"]["zip_sha256"] =
+            json!(file_sha256(&zip_file).expect("zip digest"));
+        signed_report["artifacts"]["pkg_sha256"] =
+            json!(file_sha256(&pkg_file).expect("package digest"));
+        signed_report["artifacts"]["bundled_core_sha256"] =
+            json!(file_sha256(&bundled_core_path).expect("bundled core digest"));
+        std::fs::write(
+            &signed_file,
+            serde_json::to_vec(&signed_report).expect("encode signed report"),
+        )
+        .expect("write signed report");
+        std::fs::write(
+            &live_file,
+            serde_json::to_vec(&valid_live_device_qa_report_json()).expect("encode live report"),
+        )
+        .expect("write live report");
+        std::fs::write(
+            &plugin_file,
+            serde_json::to_vec(&valid_plugin_trust_qa_report_json()).expect("encode plugin report"),
+        )
+        .expect("write plugin report");
 
         let mut report = valid_release_evidence_bundle_json();
-        report["artifacts"]["zip_path"] = json!(zip_file.path().display().to_string());
-        report["artifacts"]["pkg_path"] = json!(pkg_file.path().display().to_string());
-        report["artifacts"]["zip_sha256"] =
-            json!(file_sha256(zip_file.path()).expect("zip digest"));
-        report["artifacts"]["pkg_sha256"] =
-            json!(file_sha256(pkg_file.path()).expect("package digest"));
+        report["artifacts"]["app_path"] = json!(app_path.display().to_string());
+        report["artifacts"]["zip_path"] = json!(zip_file.display().to_string());
+        report["artifacts"]["pkg_path"] = json!(pkg_file.display().to_string());
+        report["artifacts"]["zip_sha256"] = json!(file_sha256(&zip_file).expect("zip digest"));
+        report["artifacts"]["pkg_sha256"] = json!(file_sha256(&pkg_file).expect("package digest"));
         report["reports"]["signed_distribution_provenance_report"] =
-            json!(signed_file.path().display().to_string());
-        report["reports"]["live_device_qa_report"] = json!(live_file.path().display().to_string());
-        report["reports"]["plugin_trust_qa_report"] =
-            json!(plugin_file.path().display().to_string());
+            json!(signed_file.display().to_string());
+        report["reports"]["live_device_qa_report"] = json!(live_file.display().to_string());
+        report["reports"]["plugin_trust_qa_report"] = json!(plugin_file.display().to_string());
         report["reports"]["signed_distribution_provenance_sha256"] =
-            json!(file_sha256(signed_file.path()).expect("signed digest"));
+            json!(file_sha256(&signed_file).expect("signed digest"));
         report["reports"]["live_device_qa_sha256"] =
-            json!(file_sha256(live_file.path()).expect("live digest"));
+            json!(file_sha256(&live_file).expect("live digest"));
         report["reports"]["plugin_trust_qa_sha256"] =
             json!("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
 
         let paths = ReleaseEvidenceBundleDigestPaths {
-            app_path: FsPath::new("target/distribution/Jarvis.app"),
-            zip_path: zip_file.path(),
-            pkg_path: pkg_file.path(),
-            signed_provenance_report: signed_file.path(),
-            live_qa_report: live_file.path(),
-            plugin_qa_report: plugin_file.path(),
+            app_path: &app_path,
+            zip_path: &zip_file,
+            pkg_path: &pkg_file,
+            signed_provenance_report: &signed_file,
+            live_qa_report: &live_file,
+            plugin_qa_report: &plugin_file,
         };
         let error = validate_release_evidence_bundle_file_bindings(&report, paths)
             .expect_err("stale plugin report digest should fail");
@@ -7314,6 +7382,87 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             ),
             "{error}"
         );
+    }
+
+    #[test]
+    fn release_evidence_bundle_rejects_semantically_invalid_child_report() {
+        let temp_dir = tempfile::tempdir().expect("temp release evidence");
+        let app_path = PathBuf::from("target/distribution/Jarvis.app");
+        let bundled_core_path = app_path.join("Contents/Resources/bin/jarvis-cli");
+        std::fs::create_dir_all(bundled_core_path.parent().expect("bundled core parent"))
+            .expect("create app bundle fixture");
+        std::fs::write(&bundled_core_path, "current bundled core")
+            .expect("write bundled core artifact");
+        let zip_file = temp_dir.path().join("Jarvis-0.1.4.zip");
+        let pkg_file = temp_dir.path().join("Jarvis-0.1.4.pkg");
+        let signed_file = temp_dir.path().join("Jarvis-0.1.4-signed-provenance.json");
+        let live_file = temp_dir.path().join("release-live-device-qa-report.json");
+        let plugin_file = temp_dir.path().join("release-plugin-trust-qa-report.json");
+        std::fs::write(&zip_file, "current zip").expect("write zip artifact");
+        std::fs::write(&pkg_file, "current package").expect("write package artifact");
+        let mut signed_report = valid_signed_distribution_provenance_json();
+        signed_report["artifacts"]["app_path"] = json!(app_path.display().to_string());
+        signed_report["artifacts"]["zip_path"] = json!(zip_file.display().to_string());
+        signed_report["artifacts"]["pkg_path"] = json!(pkg_file.display().to_string());
+        signed_report["artifacts"]["bundled_core_path"] =
+            json!(bundled_core_path.display().to_string());
+        signed_report["artifacts"]["zip_sha256"] =
+            json!(file_sha256(&zip_file).expect("zip digest"));
+        signed_report["artifacts"]["pkg_sha256"] =
+            json!(file_sha256(&pkg_file).expect("package digest"));
+        signed_report["artifacts"]["bundled_core_sha256"] =
+            json!(file_sha256(&bundled_core_path).expect("bundled core digest"));
+        std::fs::write(
+            &signed_file,
+            serde_json::to_vec(&signed_report).expect("encode signed report"),
+        )
+        .expect("write signed report");
+        let mut live_report = valid_live_device_qa_report_json();
+        live_report["validation_flags"]["notification"] = json!(false);
+        std::fs::write(
+            &live_file,
+            serde_json::to_vec(&live_report).expect("encode live report"),
+        )
+        .expect("write live report");
+        std::fs::write(
+            &plugin_file,
+            serde_json::to_vec(&valid_plugin_trust_qa_report_json()).expect("encode plugin report"),
+        )
+        .expect("write plugin report");
+
+        let mut report = valid_release_evidence_bundle_json();
+        report["artifacts"]["app_path"] = json!(app_path.display().to_string());
+        report["artifacts"]["zip_path"] = json!(zip_file.display().to_string());
+        report["artifacts"]["pkg_path"] = json!(pkg_file.display().to_string());
+        report["artifacts"]["zip_sha256"] = json!(file_sha256(&zip_file).expect("zip digest"));
+        report["artifacts"]["pkg_sha256"] = json!(file_sha256(&pkg_file).expect("package digest"));
+        report["reports"]["signed_distribution_provenance_report"] =
+            json!(signed_file.display().to_string());
+        report["reports"]["live_device_qa_report"] = json!(live_file.display().to_string());
+        report["reports"]["plugin_trust_qa_report"] = json!(plugin_file.display().to_string());
+        report["reports"]["signed_distribution_provenance_sha256"] =
+            json!(file_sha256(&signed_file).expect("signed digest"));
+        report["reports"]["live_device_qa_sha256"] =
+            json!(file_sha256(&live_file).expect("live digest"));
+        report["reports"]["plugin_trust_qa_sha256"] =
+            json!(file_sha256(&plugin_file).expect("plugin digest"));
+
+        let paths = ReleaseEvidenceBundleDigestPaths {
+            app_path: &app_path,
+            zip_path: &zip_file,
+            pkg_path: &pkg_file,
+            signed_provenance_report: &signed_file,
+            live_qa_report: &live_file,
+            plugin_qa_report: &plugin_file,
+        };
+        let error = validate_release_evidence_bundle_file_bindings(&report, paths)
+            .expect_err("invalid live-device child report should fail");
+        assert!(
+            error
+                .contains("live-device QA report referenced by release evidence bundle is invalid"),
+            "{error}"
+        );
+        assert!(error.contains("validation_flags.notification"), "{error}");
     }
 
     fn valid_signed_distribution_provenance_json() -> serde_json::Value {

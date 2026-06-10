@@ -154,7 +154,9 @@ These notes capture durable facts for future agents working on this repository.
   signed-provenance zip/pkg/core digests against the current artifact files in
   evidence-status, bundle, and doctor assertions, verifies final-bundle
   schema/type identity, artifact/report paths, and digests against the current
-  configured files, and requires `validation_flags.local_signature_validation=true`.
+  configured files, revalidates the signed-provenance, live-device QA, and
+  plugin-trust QA child reports referenced by the final bundle, and requires
+  `validation_flags.local_signature_validation=true`.
 - `release-evidence-doctor.sh --assert-complete` must stay aligned with that
   final-bundle semantic floor. It should reject minimal or hand-written final
   bundles that omit artifact/report paths, point at stale artifact/report paths,
