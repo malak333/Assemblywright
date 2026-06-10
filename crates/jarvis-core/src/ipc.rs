@@ -4270,7 +4270,7 @@ fn release_evidence_status_from_env_with_repository(
         invalid_count,
         items,
         proof_boundary:
-            "File/report inventory only; complete means expected paths are present, app bundle metadata matches the expected bundle identifier/version/build, bundled core version-marker metadata matches the expected release version, and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/non-future timestamp semantics, required repository-backed task/audit command-result evidence resolution, plugin-trust non-future timestamp semantics, and final evidence-bundle path/digest/signature-validation/non-future timestamp semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, execute release artifacts, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
+            "File/report inventory only; complete means expected paths are present, app bundle metadata matches the expected bundle identifier/version/build, bundled core version-marker metadata matches the expected release version, and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/non-future timestamp semantics, required repository-backed task/audit command-result evidence resolution, plugin-trust non-future timestamp and owner-asserted review-source semantics, and final evidence-bundle path/digest/signature-validation/non-future timestamp semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, execute release artifacts, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
                 .to_string(),
     }
 }
@@ -5678,7 +5678,7 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "release_evidence_status",
             "implemented",
-            "`/release/evidence-status` and `jarvis release evidence-status` expose structured present, missing, or invalid status for standard signed artifacts, QA reports, and final evidence bundle paths, including app bundle metadata matching, bundled core version-marker matching, signed-provenance core path/version/digest binding, signed-provenance artifact digest matching, live-device QA bundle/version/non-future timestamp checks, plugin-trust non-future timestamp checks, and final evidence-bundle path/digest/signature-validation/non-future timestamp checks, with Rust, CLI E2E, and Swift model coverage.",
+            "`/release/evidence-status` and `jarvis release evidence-status` expose structured present, missing, or invalid status for standard signed artifacts, QA reports, and final evidence bundle paths, including app bundle metadata matching, bundled core version-marker matching, signed-provenance core path/version/digest binding, signed-provenance artifact digest matching, live-device QA bundle/version/non-future timestamp checks, plugin-trust non-future timestamp and owner-review-source checks, and final evidence-bundle path/digest/signature-validation/non-future timestamp checks, with Rust, CLI E2E, and Swift model coverage.",
             "Read-only file/report inventory plus report semantic validation only; it does not sign, notarize, install, Finder-launch, run live-device QA, review marketplace trust, scan malware, or enforce OS sandboxing.",
         ),
         feature(
@@ -6356,6 +6356,9 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert!(status
             .proof_boundary
             .contains("non-future timestamp semantics"));
+        assert!(status
+            .proof_boundary
+            .contains("owner-asserted review-source semantics"));
         assert!(status.proof_boundary.contains("plugin-trust"));
         assert!(status.proof_boundary.contains("does not sign"));
         assert!(status.proof_boundary.contains("app bundle metadata"));
