@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 WORKFLOW=".github/workflows/release-local.yml"
+LOCAL_GATE="scripts/release-local.sh"
 
 require_file() {
   if [[ ! -f "$1" ]]; then
@@ -23,6 +24,7 @@ require_text() {
 }
 
 require_file "$WORKFLOW"
+require_file "$LOCAL_GATE"
 
 require_text "name: Jarvis Release Local Gate" "$WORKFLOW"
 require_text "pull_request:" "$WORKFLOW"
@@ -34,5 +36,57 @@ require_text "uses: actions/checkout@v4" "$WORKFLOW"
 require_text "uses: dtolnay/rust-toolchain@stable" "$WORKFLOW"
 require_text "swift --version" "$WORKFLOW"
 require_text "run: ./scripts/release-local.sh" "$WORKFLOW"
+
+expected_local_gate_commands=(
+  "run ./scripts/release-version-consistency.sh --check"
+  "run ./scripts/release-ci-workflow-smoke.sh"
+  "run cargo fmt --check"
+  "run cargo clippy --workspace --all-targets -- -D warnings"
+  "run cargo test --workspace"
+  "run cargo test --workspace -- --ignored"
+  "run ./scripts/storage-migration-backup-smoke.sh"
+  "run cargo build --workspace"
+  "run cargo run -p jarvis-cli -- smoke"
+  "run ./scripts/release-operator-qa-smoke.sh"
+  "run ./scripts/release-cargo-package.sh"
+  "run ./scripts/package-distribution.sh --version-consistency-self-test"
+  "run ./scripts/package-distribution.sh --provenance-self-test"
+  "run ./scripts/package-distribution.sh --unsigned-launch-check"
+  "run cargo run -p jarvis-cli -- release signed-distribution-runbook"
+  "run cargo run -p jarvis-cli -- release live-device-runbook"
+  "run cargo run -p jarvis-cli -- release plugin-trust-runbook"
+  "run ./scripts/release-live-device-qa.sh --check"
+  "run ./scripts/release-live-device-qa.sh --self-test"
+  "run ./scripts/release-plugin-trust-qa.sh --check"
+  "run ./scripts/release-plugin-trust-qa.sh --self-test"
+  "run ./scripts/release-evidence-bundle.sh --check"
+  "run ./scripts/release-evidence-bundle.sh --self-test"
+  "run ./scripts/release-evidence-doctor.sh --check"
+  "run ./scripts/release-evidence-doctor.sh --self-test"
+  "run swift test --disable-sandbox --package-path apps/mac"
+  "run swift build --disable-sandbox --package-path apps/mac"
+)
+
+actual_local_gate_commands=()
+while IFS= read -r command; do
+  actual_local_gate_commands+=("$command")
+done < <(grep -E '^[[:space:]]*run ' "$LOCAL_GATE" | sed -E 's/^[[:space:]]*//')
+
+if [[ "${#actual_local_gate_commands[@]}" -ne "${#expected_local_gate_commands[@]}" ]]; then
+  printf 'error: expected %s release-local run commands, found %s\n' \
+    "${#expected_local_gate_commands[@]}" "${#actual_local_gate_commands[@]}" >&2
+  printf 'actual release-local run command manifest:\n' >&2
+  printf '  %s\n' "${actual_local_gate_commands[@]}" >&2
+  exit 1
+fi
+
+for index in "${!expected_local_gate_commands[@]}"; do
+  if [[ "${actual_local_gate_commands[$index]}" != "${expected_local_gate_commands[$index]}" ]]; then
+    printf 'error: release-local command %s mismatch\n' "$((index + 1))" >&2
+    printf '  expected: %s\n' "${expected_local_gate_commands[$index]}" >&2
+    printf '  actual:   %s\n' "${actual_local_gate_commands[$index]}" >&2
+    exit 1
+  fi
+done
 
 printf 'Jarvis release CI workflow smoke: ok\n'

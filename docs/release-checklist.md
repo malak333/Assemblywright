@@ -145,6 +145,7 @@ stage or when a PR needs focused evidence for one ownership slice.
 - `./scripts/release-operator-qa-smoke.sh`
 - `./scripts/release-cargo-package.sh`
 - `./scripts/package-distribution.sh --version-consistency-self-test`
+- `./scripts/package-distribution.sh --provenance-self-test`
 - `./scripts/package-distribution.sh --unsigned-launch-check`
 - `cargo run -p jarvis-cli -- release signed-distribution-runbook`
 - `cargo run -p jarvis-cli -- release live-device-runbook`
@@ -157,6 +158,8 @@ stage or when a PR needs focused evidence for one ownership slice.
 - `./scripts/release-evidence-bundle.sh --self-test`
 - `./scripts/release-evidence-doctor.sh --check`
 - `./scripts/release-evidence-doctor.sh --self-test`
+- `swift test --disable-sandbox --package-path apps/mac`
+- `swift build --disable-sandbox --package-path apps/mac`
 - Focused supervision proof for branches that touch Swift core launch or bundle
   discovery: `./scripts/packaged-supervision-proof.sh`
 - Focused packaged app release smoke for branches that touch packaging,

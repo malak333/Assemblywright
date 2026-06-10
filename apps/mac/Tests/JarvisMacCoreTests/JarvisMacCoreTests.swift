@@ -1212,6 +1212,47 @@ struct JarvisMacCoreTests {
         #expect(model.isShowingStaleReadiness == false)
     }
 
+    @Test("Release decoders accept live CLI fallback JSON")
+    func releaseDecodersAcceptLiveCLIFallbackJSON() throws {
+        let endpoint = "http://127.0.0.1:9"
+        let readinessData = try runJarvisCLIJSON([
+            "release",
+            "readiness",
+            "--json",
+            "--endpoint",
+            endpoint
+        ])
+        let evidenceStatusData = try runJarvisCLIJSON([
+            "release",
+            "evidence-status",
+            "--json",
+            "--endpoint",
+            endpoint
+        ])
+
+        let readiness = try JSONDecoder().decode(JarvisReleaseReadiness.self, from: readinessData)
+        let evidenceStatus = try JSONDecoder().decode(JarvisReleaseEvidenceStatus.self, from: evidenceStatusData)
+
+        #expect(readiness.productionReady == false)
+        #expect(readiness.implementedFeatures.count == readiness.verifiedFeatureCount)
+        #expect(readiness.pendingFeatures.count == readiness.pendingFeatureCount)
+        #expect(readiness.implementedFeatures.map(\.key).contains("release_evidence_status"))
+        #expect(readiness.implementedFeatures.map(\.key).contains("release_evidence_bundle"))
+        #expect(readiness.pendingFeatures.map(\.key).contains("live_voice_loop"))
+        #expect(readiness.proofBoundary.contains("does not perform signing"))
+
+        let satisfied = evidenceStatus.items.filter { $0.status == "present" }.count
+        let missing = evidenceStatus.items.filter { $0.status == "missing" }.count
+        let invalid = evidenceStatus.items.filter { $0.status == "invalid" }.count
+        #expect(evidenceStatus.satisfiedCount == satisfied)
+        #expect(evidenceStatus.missingCount == missing)
+        #expect(evidenceStatus.invalidCount == invalid)
+        #expect(evidenceStatus.items.map(\.key).contains("live_device_qa_report"))
+        #expect(evidenceStatus.items.map(\.key).contains("plugin_trust_qa_report"))
+        #expect(evidenceStatus.items.map(\.key).contains("release_evidence_bundle"))
+        #expect(evidenceStatus.proofBoundary.contains("does not sign"))
+    }
+
     @MainActor
     @Test("Release readiness model surfaces invalid live-device evidence details")
     func releaseReadinessModelSurfacesInvalidLiveDeviceEvidenceDetails() async throws {
@@ -3871,4 +3912,50 @@ private func decodeRequestBody(_ request: URLRequest) -> [String: Any]? {
     }
 
     return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+}
+
+private func runJarvisCLIJSON(_ args: [String]) throws -> Data {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    process.arguments = ["cargo", "run", "-p", "jarvis-cli", "--"] + args
+    process.currentDirectoryURL = jarvisRepositoryRoot()
+
+    let stdout = Pipe()
+    let stderr = Pipe()
+    process.standardOutput = stdout
+    process.standardError = stderr
+
+    try process.run()
+    process.waitUntilExit()
+
+    let output = stdout.fileHandleForReading.readDataToEndOfFile()
+    let errorOutput = stderr.fileHandleForReading.readDataToEndOfFile()
+    if process.terminationStatus != 0 {
+        let stderrText = String(decoding: errorOutput, as: UTF8.self)
+        let stdoutText = String(decoding: output, as: UTF8.self)
+        throw JarvisCLISmokeError(
+            status: process.terminationStatus,
+            stdout: stdoutText,
+            stderr: stderrText
+        )
+    }
+    return output
+}
+
+private func jarvisRepositoryRoot() -> URL {
+    var url = URL(fileURLWithPath: #filePath)
+    for _ in 0..<5 {
+        url.deleteLastPathComponent()
+    }
+    return url
+}
+
+private struct JarvisCLISmokeError: Error, CustomStringConvertible {
+    var status: Int32
+    var stdout: String
+    var stderr: String
+
+    var description: String {
+        "jarvis CLI smoke failed with status \(status)\nstdout:\n\(stdout)\nstderr:\n\(stderr)"
+    }
 }
