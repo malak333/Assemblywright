@@ -18,10 +18,13 @@
 - The UI can be polished and high-tech, but must remain practical, inspectable, and legally distinct from Marvel/JARVIS assets.
 - Smart-home control, autonomous external communication, and multi-user sync are deferred or heavily gated in v1.
 - ChatGPT usage is explicit, routed, minimized, policy-checked, and audited.
-- Production-readiness claims are evidence-scoped. A green local foundation
-  gate is not the same as finished assistant readiness until packaged-app,
-  permission UX, voice, recovery, diagnostics, Apple-tool-validated signed
-  distribution evidence, and release-smoke evidence exists for the claimed
+- Production-readiness claims are evidence-scoped. The repo now has local
+  packaged-app, unsigned distribution-layout, release-smoke, permission UX,
+  voice-adapter, recovery, diagnostics, and release-evidence mechanics, but a
+  green local foundation gate is not the same as finished assistant readiness
+  until Developer ID signing, notarization/stapling, clean-profile install and
+  Finder launch, live voice/audio/notification QA, plugin-trust QA, and the
+  final evidence bundle are owner-recorded and archived for the claimed
   surface.
 - Live-device QA can clear voice readiness only when owner-recorded report
   fields pass semantic validation and, for repository-backed IPC readiness, the

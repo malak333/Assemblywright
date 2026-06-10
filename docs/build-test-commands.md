@@ -35,6 +35,7 @@ cargo run -p jarvis-cli -- smoke
 ./scripts/release-operator-qa-smoke.sh
 ./scripts/release-cargo-package.sh
 ./scripts/package-distribution.sh --version-consistency-self-test
+./scripts/package-distribution.sh --provenance-self-test
 ./scripts/package-distribution.sh --unsigned-launch-check
 cargo run -p jarvis-cli -- release signed-distribution-runbook
 cargo run -p jarvis-cli -- release live-device-runbook
@@ -764,7 +765,8 @@ live ChatGPT service execution,
 advanced memory classification policy beyond the current summary surface, live
 microphone capture, or live audio output until those surfaces are manually
 validated. The current Swift gate proves the
-Mac shell scaffold builds, decodes IPC contracts, exposes management models for
+Mac shell scaffold builds, decodes IPC contracts, decodes live CLI fallback JSON
+for release readiness and release evidence-status, exposes management models for
 approval evidence, memory classification summary, memory policy review counts,
 memory create/update/review/delete/restore state, runs/audit,
 activity summary, permission policy review, scheduler attention summaries,

@@ -445,6 +445,48 @@ fn release_readiness_cli_computes_production_ready_only_from_external_complete_e
 }
 
 #[test]
+#[cfg(unix)]
+fn release_evidence_doctor_assert_complete_matches_cli_evidence_status_fixture() {
+    let temp_dir = tempfile::tempdir().expect("temp complete release evidence");
+    let fixture = write_complete_release_evidence_fixture(temp_dir.path());
+    let endpoint = format!("http://{}", unused_loopback_addr());
+    let evidence_env = fixture.env_refs();
+
+    let evidence_status = run_cli_json_with_env(
+        [
+            "release",
+            "evidence-status",
+            "--endpoint",
+            endpoint.as_str(),
+        ],
+        &evidence_env,
+    );
+    assert_eq!(evidence_status["complete"], true);
+    assert_eq!(evidence_status["missing_count"], 0);
+    assert_eq!(evidence_status["invalid_count"], 0);
+    assert_all_evidence_items_present(&evidence_status);
+
+    let doctor_output = run_repo_script_with_env(
+        "scripts/release-evidence-doctor.sh",
+        &["--assert-complete"],
+        &evidence_env,
+    );
+    let doctor_text = String::from_utf8(doctor_output.stdout).expect("doctor stdout is utf8");
+    assert!(
+        doctor_text.contains("Jarvis release evidence inventory: complete"),
+        "{doctor_text}"
+    );
+    assert!(
+        doctor_text.contains("Missing evidence items: 0"),
+        "{doctor_text}"
+    );
+    assert!(
+        doctor_text.contains("host-level egress enforcement"),
+        "{doctor_text}"
+    );
+}
+
+#[test]
 fn release_readiness_rejects_semantically_invalid_live_voice_evidence() {
     let endpoint = format!("http://{}", unused_loopback_addr());
 
@@ -5183,6 +5225,37 @@ fn run_cli_with_env<const N: usize>(args: [&str; N], env: &[(&str, &str)]) -> Ou
     output
 }
 
+#[cfg(unix)]
+fn run_repo_script_with_env(script: &str, args: &[&str], env: &[(&str, &str)]) -> Output {
+    let mut command = Command::new(workspace_root().join(script));
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .current_dir(workspace_root());
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    let output = command.output().expect("run repository script");
+
+    assert!(
+        output.status.success(),
+        "repository script failed: {:?}\nstdout:\n{}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output
+}
+
+#[cfg(unix)]
+fn workspace_root() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root")
+        .to_path_buf()
+}
+
 fn valid_live_device_qa_report() -> Value {
     json!({
         "schema_version": 1,
@@ -5620,7 +5693,7 @@ fn write_placeholder_distribution(root: &Path) -> std::path::PathBuf {
     let app_executable = macos_dir.join("JarvisMacApp");
     let bundled_core = resources_dir.join("jarvis-cli");
     fs::write(&app_executable, "#!/bin/sh\n").expect("write app executable");
-    fs::write(&bundled_core, "#!/bin/sh\n").expect("write bundled core");
+    write_fixture_bundled_core_executable(&bundled_core);
     fs::write(resources_dir.join("jarvis-cli.version"), "jarvis 0.1.4\n")
         .expect("write bundled core version marker");
     make_executable(&app_executable);
@@ -5628,6 +5701,17 @@ fn write_placeholder_distribution(root: &Path) -> std::path::PathBuf {
     fs::write(dist_dir.join("Jarvis-0.1.4.zip"), "zip placeholder").expect("write zip placeholder");
     fs::write(dist_dir.join("Jarvis-0.1.4.pkg"), "pkg placeholder").expect("write pkg placeholder");
     dist_dir
+}
+
+#[cfg(unix)]
+fn write_fixture_bundled_core_executable(path: &Path) {
+    let debug_cli = workspace_root().join("target/debug/jarvis");
+    if debug_cli.is_file() {
+        fs::copy(&debug_cli, path).expect("copy current CLI into fixture bundle");
+    } else {
+        fs::write(path, "#!/bin/sh\nprintf 'jarvis 0.1.4\\n'\n")
+            .expect("write bundled core fallback");
+    }
 }
 
 fn signed_manifest(mut manifest: Value, signing_key: &SigningKey) -> Value {

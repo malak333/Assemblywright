@@ -563,7 +563,8 @@ These notes capture durable facts for future agents working on this repository.
   test --workspace -- --ignored`, `cargo build --workspace`, `cargo run -p
   jarvis-cli -- smoke`, `./scripts/release-operator-qa-smoke.sh`,
   workspace package tarball creation, packaged CLI verification against the
-  freshly packaged core source,
+  freshly packaged core source, package distribution version-consistency and
+  signed-provenance self-tests,
   `./scripts/package-distribution.sh --unsigned-launch-check`,
   `./scripts/release-live-device-qa.sh --check`,
   `./scripts/release-live-device-qa.sh --self-test`,
@@ -585,6 +586,11 @@ These notes capture durable facts for future agents working on this repository.
 - The current E2E expectation for Rust/CLI foundation changes is
   `cargo test -p jarvis-cli --test local_ipc_e2e`; the ignored variant is
   release-proof coverage and is included by `./scripts/release-local.sh`.
+  The CLI E2E also reuses the complete release-evidence fixture across
+  `jarvis release evidence-status` and
+  `./scripts/release-evidence-doctor.sh --assert-complete`, including the
+  bundled core executable `--version` check, so the Rust CLI status and shell
+  doctor inventory do not drift independently.
   The E2E covers scheduler proactive policy audit evidence during `scheduler
   run-due` by asserting both one-time and recurring due jobs emit redacted
   `scheduler_proactive_policy_checked` audit entries.

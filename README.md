@@ -183,8 +183,9 @@ For executable PR evidence, run the canonical local release gate:
 ```
 
 It wraps Rust fmt/clippy/tests, ignored release-proof tests, smoke scripts,
-unsigned release-layout launch checks, release evidence preflights/self-tests,
-the GitHub workflow smoke check, and Swift build/test. Focused commands below are for local iteration or
+cargo package verification, signed-provenance self-tests, unsigned
+release-layout launch checks, release evidence preflights/self-tests, the
+GitHub workflow smoke check, and Swift build/test. Focused commands below are for local iteration or
 ownership-specific proof; they do not replace the full gate for executable
 changes.
 

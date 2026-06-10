@@ -953,7 +953,7 @@ print_status() {
     done
     print_next_steps
   fi
-  printf 'Proof boundary: file/report path inventory only; present artifact paths do not prove Developer ID signing, notarization, stapling, installation, Finder launch, live device QA, marketplace review, malware scan, or OS sandbox enforcement.\n'
+  printf 'Proof boundary: file/report path inventory only; present artifact paths do not prove Developer ID signing, notarization, stapling, installation, Finder launch, live device QA, marketplace review, malware scan, OS sandbox, or host-level egress enforcement.\n'
 }
 
 write_fixture_app() {
