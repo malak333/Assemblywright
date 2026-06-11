@@ -12,7 +12,7 @@ Command:
 cargo run -p jarvis-cli -- release readiness --json
 ```
 
-Observed on 2026-06-11 from `main` at `d5d3c6f` after PR #221:
+Observed on 2026-06-11 from `main` at `89076f5` after PR #222:
 
 - `production_ready: false`
 - `verified_feature_count: 17`
