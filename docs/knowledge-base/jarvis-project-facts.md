@@ -867,6 +867,23 @@ These notes capture durable facts for future agents working on this repository.
   17 verified features, and one pending feature: `live_voice_loop`. That
   pending feature remains a manual external validation gate, not a missing
   repo-local docs-only task.
+- PR #213 refreshed the sweep snapshot after the PR #212 contract/evidence
+  metadata alignment and preserved the same readiness boundary: 17 verified
+  repo-owned features, one pending manual `live_voice_loop` feature, and six
+  missing external/manual evidence artifacts.
+- Release evidence structural hardening now treats the final evidence chain as
+  cross-bound evidence, not independent files: app zips are rejected unless they
+  contain exactly one top-level `Jarvis.app` payload with `Info.plist`, the app
+  executable, and the bundled core; live-device QA `bundled_core.sha256` must
+  match signed-provenance `artifacts.bundled_core_sha256`; and final bundle
+  owner completion must occur after signed-provenance, live-device QA, and
+  plugin-trust child reports are generated but no later than the final bundle
+  generation timestamp.
+- `release-evidence-doctor.sh --check` remains a read-only inventory and report
+  semantics check: it validates the bundled-core version marker and report/file
+  bindings without executing the bundled core. `--assert-complete` keeps the
+  stronger executable bundled-core `--version` check for final local inventory
+  assertion after owner evidence exists.
 - For docs-only readiness synchronization phases, record the relevant existing
   E2E or focused integration coverage instead of adding artificial tests.
   Behavior changes still require matching coverage before broader readiness

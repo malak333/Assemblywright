@@ -516,9 +516,17 @@ SHA-256-shaped artifact/report digests matching current files, and
 `validation_flags.local_signature_validation=true`, and it rejects final bundles
 that reference semantically invalid signed-provenance, live-device QA, or
 plugin-trust QA child reports even when their recorded digests match. This
-matches the semantic floor exposed by `/release/evidence-status`. Its `--self-test` uses fake
+also binds live-device QA back to the signed distribution by requiring
+`bundled_core.sha256` to match signed-provenance
+`artifacts.bundled_core_sha256`, requires the owner final-bundle completion time
+to sit after all child report generation timestamps and before final bundle
+generation, and rejects app zips that do not contain exactly one top-level
+`Jarvis.app` payload with `Info.plist`, the app executable, and the bundled
+core. This matches the semantic floor exposed by `/release/evidence-status`.
+Its `--self-test` uses fake
 artifacts/reports to prove the inventory logic only; it is not a signing,
-notarization, stapling, or installation validator.
+notarization, stapling, clean-profile installation, live-device QA,
+marketplace review, malware scan, OS sandbox, or host-level egress validator.
 Plugin-trust evidence is timestamp-strict across the shell evidence path:
 `release-plugin-trust-qa.sh --assert-complete` requires non-future UTC `Z` review
 timestamps with `review_started_at <= review_completed_at`, and the

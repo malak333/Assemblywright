@@ -12,7 +12,7 @@ Command:
 cargo run -p jarvis-cli -- release readiness --json
 ```
 
-Observed on 2026-06-11 from `main` at `1e8767f` after PR #212:
+Observed on 2026-06-11 from `main` at `9f2d2ed` after PR #213:
 
 - `production_ready: false`
 - `verified_feature_count: 17`
@@ -86,6 +86,10 @@ Jarvis is currently a production-shaped local assistant foundation:
   evidence-status and final-bundle semantics, including repository-backed live
   command evidence, plugin-trust host-egress fields, and child-report semantic
   revalidation.
+- PR #213 refreshed this sweep note after PR #212 and preserved the current
+  conservative readiness boundary: 17 verified repo-owned features, one
+  pending manual live voice validation feature, and six missing external/manual
+  evidence artifacts.
 
 ## End-Goal Production Phase
 
@@ -133,3 +137,10 @@ checks without implying Jarvis performs the external manual gates.
 proof text must name repository-backed live command evidence, plugin-trust
 host-egress fields, and child-report revalidation so clients cannot infer a
 weaker release-evidence floor from feature presence alone.
+The release evidence bundle and doctor paths also enforce structural release
+evidence binding: the app zip must contain exactly one top-level `Jarvis.app`
+payload with the app executable, bundled core, and `Info.plist`; the
+live-device QA bundled-core SHA-256 must match the signed-provenance bundled
+core SHA-256; and the owner final-bundle completion time must be no earlier than
+the signed-provenance, live-device QA, and plugin-trust child report generation
+times and no later than the final bundle generation time.

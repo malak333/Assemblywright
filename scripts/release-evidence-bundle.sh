@@ -661,7 +661,7 @@ import sys
 import zipfile
 
 zip_path = sys.argv[1]
-required_suffixes = (
+required_entries = (
     "Jarvis.app/Contents/MacOS/JarvisMacApp",
     "Jarvis.app/Contents/Resources/bin/jarvis-cli",
     "Jarvis.app/Contents/Info.plist",
@@ -671,12 +671,108 @@ with zipfile.ZipFile(zip_path) as archive:
     names = archive.namelist()
 
 missing = [
-    suffix
-    for suffix in required_suffixes
-    if not any(name.endswith(suffix) for name in names)
+    entry
+    for entry in required_entries
+    if entry not in names
 ]
 if missing:
     raise SystemExit(f"zip payload missing required app entries: {', '.join(missing)}")
+
+nested = [
+    name
+    for name in names
+    if "/Jarvis.app/" in name and not name.startswith("Jarvis.app/")
+]
+if nested:
+    raise SystemExit(f"zip payload contains nested Jarvis.app entries: {', '.join(nested[:3])}")
+
+app_roots = {
+    name.split("Jarvis.app/", 1)[0] + "Jarvis.app/"
+    for name in names
+    if "Jarvis.app/" in name
+}
+if app_roots != {"Jarvis.app/"}:
+    raise SystemExit(f"zip payload must contain exactly one top-level Jarvis.app root, got: {', '.join(sorted(app_roots))}")
+PY
+}
+
+require_json_fields_equal() {
+  local label="$1"
+  local left_path="$2"
+  local left_key="$3"
+  local right_path="$4"
+  local right_key="$5"
+  require_file "$label left report" "$left_path"
+  require_file "$label right report" "$right_path"
+  python3 - "$left_path" "$left_key" "$right_path" "$right_key" "$label" <<'PY'
+import json
+import sys
+
+left_path, left_key, right_path, right_key, label = sys.argv[1:6]
+
+def load(path):
+    with open(path, encoding="utf-8") as handle:
+        return json.load(handle)
+
+def get(data, dotted_key):
+    cursor = data
+    for segment in dotted_key.split("."):
+        if not isinstance(cursor, dict) or segment not in cursor:
+            raise SystemExit(f"{label} is missing required evidence field: {dotted_key}")
+        cursor = cursor[segment]
+    return cursor
+
+left = get(load(left_path), left_key)
+right = get(load(right_path), right_key)
+if left != right:
+    raise SystemExit(
+        f"{label} mismatch: {left_key} from {left_path} must match {right_key} from {right_path}"
+    )
+PY
+}
+
+require_json_timestamp_between_reports() {
+  local label="$1"
+  local lower_path="$2"
+  local lower_key="$3"
+  local value_path="$4"
+  local value_key="$5"
+  local upper_path="$6"
+  local upper_key="$7"
+  require_file "$label lower report" "$lower_path"
+  require_file "$label value report" "$value_path"
+  require_file "$label upper report" "$upper_path"
+  python3 - "$lower_path" "$lower_key" "$value_path" "$value_key" "$upper_path" "$upper_key" "$label" <<'PY'
+from datetime import datetime
+import json
+import sys
+
+lower_path, lower_key, value_path, value_key, upper_path, upper_key, label = sys.argv[1:8]
+
+def load(path):
+    with open(path, encoding="utf-8") as handle:
+        return json.load(handle)
+
+def get(data, dotted_key):
+    cursor = data
+    for segment in dotted_key.split("."):
+        if not isinstance(cursor, dict) or segment not in cursor:
+            raise SystemExit(f"{label} is missing required evidence timestamp: {dotted_key}")
+        cursor = cursor[segment]
+    if not isinstance(cursor, str) or not cursor.endswith("Z"):
+        raise SystemExit(f"{label} required evidence timestamp must end in Z: {dotted_key}")
+    try:
+        return datetime.fromisoformat(cursor.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise SystemExit(f"{label} required evidence timestamp must be RFC3339 UTC: {dotted_key}") from exc
+
+lower = get(load(lower_path), lower_key)
+value = get(load(value_path), value_key)
+upper = get(load(upper_path), upper_key)
+if lower > value:
+    raise SystemExit(f"{label} timestamp order invalid: {value_key} must be >= {lower_key}")
+if value > upper:
+    raise SystemExit(f"{label} timestamp order invalid: {value_key} must be <= {upper_key}")
 PY
 }
 
@@ -694,7 +790,6 @@ validate_local_distribution_evidence() {
   xcrun stapler validate "$APP_PATH" >/dev/null
   pkgutil --check-signature "$PKG_PATH" >/dev/null
   xcrun stapler validate "$PKG_PATH" >/dev/null
-  validate_zip_payload
 }
 
 json_escape() {
@@ -929,7 +1024,7 @@ printf 'self-test jarvis-cli fixture\n'
 EOF
   printf 'jarvis %s\n' "$VERSION" >"$tmp_dir/dist/Jarvis.app/Contents/Resources/bin/jarvis-cli.version"
   chmod 755 "$tmp_dir/dist/Jarvis.app/Contents/MacOS/JarvisMacApp" "$tmp_dir/dist/Jarvis.app/Contents/Resources/bin/jarvis-cli"
-  touch "$self_test_zip"
+  (cd "$tmp_dir/dist" && zip -qr "$self_test_zip" Jarvis.app)
   touch "$self_test_pkg"
   self_test_zip_sha="$(file_sha256 "$self_test_zip")"
   self_test_pkg_sha="$(file_sha256 "$self_test_pkg")"
@@ -1162,6 +1257,30 @@ JSON
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"plugin_trust_qa_report"'
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"owner_recorded_release_evidence"'
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"owner_name": "Jarvis Release Self-Test"'
+
+  nested_zip="$tmp_dir/dist/nested-Jarvis-$VERSION.zip"
+  mkdir -p "$tmp_dir/nested/payload"
+  cp -R "$tmp_dir/dist/Jarvis.app" "$tmp_dir/nested/payload/Jarvis.app"
+  (cd "$tmp_dir/nested" && zip -qr "$nested_zip" payload/Jarvis.app)
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="$nested_zip" \
+    JARVIS_EVIDENCE_PKG_PATH="$self_test_pkg" \
+    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/nested-zip-bundle.json" \
+    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
+    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+    "$0" --bundle >/dev/null 2>&1; then
+    fail "release evidence self-test expected nested app zip payload to be rejected"
+  fi
 
   python3 - "$tmp_dir/signed-provenance.json" "$tmp_dir/negated-gatekeeper-signed-provenance.json" <<'PY'
 import json
@@ -1642,6 +1761,68 @@ PY
     fail "release evidence self-test expected plugin report generated before completion to be rejected"
   fi
 
+  python3 - "$tmp_dir/live.json" "$tmp_dir/mismatched-core-digest-live.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+with open(source, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["bundled_core"]["sha256"] = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+PY
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/mismatched-core-digest-live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/mismatched-core-digest-bundle.json" \
+    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
+    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+    "$0" --bundle >/dev/null 2>&1; then
+    fail "release evidence self-test expected mismatched live bundled-core digest to be rejected"
+  fi
+
+  python3 - "$tmp_dir/live.json" "$tmp_dir/post-completion-live.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+with open(source, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["generated_at"] = "2026-05-22T16:50:00Z"
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+PY
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/post-completion-live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/post-completion-live-bundle.json" \
+    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
+    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+    "$0" --bundle >/dev/null 2>&1; then
+    fail "release evidence self-test expected child report generated after owner completion to be rejected"
+  fi
+
   python3 - "$tmp_dir/signed-provenance.json" "$tmp_dir/stale-digest-signed-provenance.json" <<'PY'
 import json
 import sys
@@ -1760,6 +1941,7 @@ require_app_bundle_metadata
 require_bundled_core_version
 require_file "app zip path" "$ZIP_PATH"
 require_file "installer package path" "$PKG_PATH"
+validate_zip_payload
 require_file "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT"
 require_json_number_equals "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "schema_version" "1"
 require_json_string_equals "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "evidence_type" "signed_distribution_provenance"
@@ -1835,6 +2017,7 @@ require_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "app_bund
 require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "bundled_core.executable_path" "$EXPECTED_INSTALLED_APP_PATH/Contents/Resources/bin/jarvis-cli"
 require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "bundled_core.version" "jarvis $EXPECTED_VERSION"
 require_json_sha256 "live-device QA report" "$LIVE_QA_REPORT" "bundled_core.sha256"
+require_json_fields_equal "live-device bundled-core digest" "$LIVE_QA_REPORT" "bundled_core.sha256" "$SIGNED_PROVENANCE_REPORT" "artifacts.bundled_core_sha256"
 for flag in marketplace_review malware_scan os_sandbox egress_enforcement signed_publisher_policy manual_trust_review; do
   require_json_bool_true "plugin trust QA report" "$PLUGIN_QA_REPORT" "validation_flags.$flag"
 done
@@ -1876,6 +2059,9 @@ for field in owner_name completed_at signed_distribution_note notarization_note 
 done
 require_json_utc_timestamp "release evidence bundle" "$OUTPUT_PATH" "owner_recorded_release_evidence.completed_at"
 require_json_timestamp_order "release evidence bundle" "$OUTPUT_PATH" "owner_recorded_release_evidence.completed_at" "generated_at"
+require_json_timestamp_between_reports "release evidence bundle signed provenance" "$SIGNED_PROVENANCE_REPORT" "generated_at" "$OUTPUT_PATH" "owner_recorded_release_evidence.completed_at" "$OUTPUT_PATH" "generated_at"
+require_json_timestamp_between_reports "release evidence bundle live-device QA" "$LIVE_QA_REPORT" "generated_at" "$OUTPUT_PATH" "owner_recorded_release_evidence.completed_at" "$OUTPUT_PATH" "generated_at"
+require_json_timestamp_between_reports "release evidence bundle plugin-trust QA" "$PLUGIN_QA_REPORT" "generated_at" "$OUTPUT_PATH" "owner_recorded_release_evidence.completed_at" "$OUTPUT_PATH" "generated_at"
 
 cat <<EOF
 Jarvis release evidence bundle: complete

@@ -4847,13 +4847,18 @@ fn validate_live_device_qa_report(
         "JSON report is missing required field: voice_command_observation.command_result_evidence_id"
             .to_string()
     })?;
-    validate_command_result_evidence_id(&command_result_evidence_id, repository)?;
+    validate_command_result_evidence_id(
+        &command_result_evidence_id,
+        &observed_command,
+        repository,
+    )?;
 
     Ok(())
 }
 
 fn validate_command_result_evidence_id(
     value: &str,
+    expected_command_text: &str,
     repository: Option<&SqliteRepository>,
 ) -> Result<(), String> {
     let (kind, id) = value.trim().split_once(':').ok_or_else(|| {
@@ -4874,24 +4879,54 @@ fn validate_command_result_evidence_id(
                 .to_string(),
         );
     };
-    let exists = match kind {
+    let task = match kind {
         "task" => repository
             .get_task(id)
             .map_err(|error| {
                 format!("JSON report command_result_evidence_id repository lookup failed: {error}")
             })?
-            .is_some(),
-        "audit" => repository
-            .get_audit_entry(id)
-            .map_err(|error| {
-                format!("JSON report command_result_evidence_id repository lookup failed: {error}")
-            })?
-            .is_some_and(|entry| entry.task_id.is_some()),
-        _ => false,
+            .ok_or_else(|| {
+                format!(
+                    "JSON report command_result_evidence_id {kind}:{id} does not resolve to repository evidence"
+                )
+            })?,
+        "audit" => {
+            let entry = repository
+                .get_audit_entry(id)
+                .map_err(|error| {
+                    format!("JSON report command_result_evidence_id repository lookup failed: {error}")
+                })?
+                .ok_or_else(|| {
+                    format!(
+                        "JSON report command_result_evidence_id {kind}:{id} does not resolve to repository evidence"
+                    )
+                })?;
+            let task_id = entry.task_id.ok_or_else(|| {
+                format!(
+                    "JSON report command_result_evidence_id {kind}:{id} does not resolve to task-associated repository evidence"
+                )
+            })?;
+            repository
+                .get_task(task_id)
+                .map_err(|error| {
+                    format!("JSON report command_result_evidence_id repository lookup failed: {error}")
+                })?
+                .ok_or_else(|| {
+                    format!(
+                        "JSON report command_result_evidence_id {kind}:{id} does not resolve to repository task evidence"
+                    )
+                })?
+        }
+        _ => unreachable!("validated command result evidence kind"),
     };
-    if !exists {
+    if task.status != TaskStatus::Completed {
         return Err(format!(
-            "JSON report command_result_evidence_id {kind}:{id} does not resolve to repository evidence"
+            "JSON report command_result_evidence_id {kind}:{id} resolves to a task that is not completed"
+        ));
+    }
+    if task.user_input.trim() != expected_command_text.trim() {
+        return Err(format!(
+            "JSON report command_result_evidence_id {kind}:{id} resolves to task input that does not match observed_command_text"
         ));
     }
     Ok(())
@@ -5275,11 +5310,50 @@ fn validate_release_evidence_bundle_file_bindings(
     validate_live_device_qa_report(&live_qa, repository).map_err(|error| {
         format!("live-device QA report referenced by release evidence bundle is invalid: {error}")
     })?;
+    let live_core_sha = json_string_at(&live_qa, "bundled_core.sha256").ok_or_else(|| {
+        "live-device QA report referenced by release evidence bundle is missing bundled_core.sha256"
+            .to_string()
+    })?;
+    let signed_core_sha =
+        json_string_at(&signed_provenance, "artifacts.bundled_core_sha256").ok_or_else(|| {
+            "signed-distribution provenance report referenced by release evidence bundle is missing artifacts.bundled_core_sha256"
+                .to_string()
+        })?;
+    if live_core_sha != signed_core_sha {
+        return Err(
+            "live-device QA report referenced by release evidence bundle has bundled_core.sha256 that does not match signed-distribution provenance artifacts.bundled_core_sha256"
+                .to_string(),
+        );
+    }
     let plugin_qa =
         read_release_evidence_child_report(paths.plugin_qa_report, "plugin-trust QA report")?;
     validate_plugin_trust_qa_report(&plugin_qa).map_err(|error| {
         format!("plugin-trust QA report referenced by release evidence bundle is invalid: {error}")
     })?;
+    let bundle_generated_at = require_utc_report_timestamp_not_future(value, "generated_at")?;
+    let bundle_completed_at =
+        require_utc_report_timestamp(value, "owner_recorded_release_evidence.completed_at")?;
+    for (label, report) in [
+        ("signed-distribution provenance report", &signed_provenance),
+        ("live-device QA report", &live_qa),
+        ("plugin-trust QA report", &plugin_qa),
+    ] {
+        let child_generated_at =
+            require_utc_report_timestamp(report, "generated_at").map_err(|error| {
+                format!("{label} referenced by release evidence bundle is invalid: {error}")
+            })?;
+        if child_generated_at > bundle_completed_at {
+            return Err(format!(
+                "{label} referenced by release evidence bundle was generated after owner_recorded_release_evidence.completed_at"
+            ));
+        }
+        if bundle_completed_at > bundle_generated_at {
+            return Err(
+                "release evidence bundle owner_recorded_release_evidence.completed_at must be less than or equal to generated_at"
+                    .to_string(),
+            );
+        }
+    }
     Ok(())
 }
 
@@ -7007,6 +7081,9 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let task = repository
             .create_task(Uuid::new_v4(), "status check")
             .expect("task");
+        repository
+            .update_task_status(task.id, TaskStatus::Completed)
+            .expect("mark task completed");
         let task_audit = AuditEntry::new(
             Some(task.id),
             "task_completed",
@@ -7039,6 +7116,25 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let (status, detail) =
             inspect_live_device_qa_report_value_with_repository(audit_report, Some(&repository));
         assert_eq!(status, ReleaseEvidenceItemStatus::Present, "{detail}");
+
+        let wrong_command_task = repository
+            .create_task(Uuid::new_v4(), "different command")
+            .expect("wrong command task");
+        repository
+            .update_task_status(wrong_command_task.id, TaskStatus::Completed)
+            .expect("mark wrong command task completed");
+        let mut wrong_command_report = valid_live_device_qa_report_json();
+        wrong_command_report["voice_command_observation"]["command_result_evidence_id"] =
+            json!(format!("task:{}", wrong_command_task.id));
+        let (status, detail) = inspect_live_device_qa_report_value_with_repository(
+            wrong_command_report,
+            Some(&repository),
+        );
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(
+            detail.contains("does not match observed_command_text"),
+            "{detail}"
+        );
 
         let mut missing_task_report = valid_live_device_qa_report_json();
         missing_task_report["voice_command_observation"]["command_result_evidence_id"] =
@@ -7075,7 +7171,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         );
         assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
         assert!(
-            detail.contains("does not resolve to repository evidence"),
+            detail.contains("does not resolve to task-associated repository evidence"),
             "{detail}"
         );
     }
@@ -7359,9 +7455,12 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             serde_json::to_vec(&signed_report).expect("encode signed report"),
         )
         .expect("write signed report");
+        let mut live_report = valid_live_device_qa_report_json();
+        live_report["bundled_core"]["sha256"] =
+            json!(file_sha256(&bundled_core_path).expect("bundled core digest"));
         std::fs::write(
             &live_file,
-            serde_json::to_vec(&valid_live_device_qa_report_json()).expect("encode live report"),
+            serde_json::to_vec(&live_report).expect("encode live report"),
         )
         .expect("write live report");
         std::fs::write(
@@ -7439,6 +7538,8 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         )
         .expect("write signed report");
         let mut live_report = valid_live_device_qa_report_json();
+        live_report["bundled_core"]["sha256"] =
+            json!(file_sha256(&bundled_core_path).expect("bundled core digest"));
         live_report["validation_flags"]["notification"] = json!(false);
         std::fs::write(
             &live_file,
