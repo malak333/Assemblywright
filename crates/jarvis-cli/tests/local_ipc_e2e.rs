@@ -2041,6 +2041,10 @@ fn release_evidence_status_cli_falls_back_without_running_server() {
         .as_str()
         .expect("evidence proof boundary")
         .contains("owner-asserted review-source semantics"));
+    assert!(evidence_status["proof_boundary"]
+        .as_str()
+        .expect("evidence proof boundary")
+        .contains("archive-URI"));
     assert!(readable_status.contains("Jarvis release evidence status:"));
     assert!(readable_status.contains("Complete: false"));
     assert!(readable_status.contains("Missing evidence:"));
@@ -2967,6 +2971,10 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         .as_str()
         .expect("evidence proof boundary")
         .contains("owner-asserted review-source semantics"));
+    assert!(evidence_status["proof_boundary"]
+        .as_str()
+        .expect("evidence proof boundary")
+        .contains("archive-URI"));
 
     let command = run_cli_json([
         "command",
