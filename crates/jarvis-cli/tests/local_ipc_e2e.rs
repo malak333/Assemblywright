@@ -1236,6 +1236,14 @@ fn release_evidence_status_rejects_invalid_final_bundle_owner_evidence() {
     fn blank_archive_uri(report: &mut Value) {
         report["owner_recorded_release_evidence"]["reports_archive_uri"] = json!("   ");
     }
+    fn placeholder_archive_uri(report: &mut Value) {
+        report["owner_recorded_release_evidence"]["reports_archive_uri"] =
+            json!("file://self-test/release-evidence");
+    }
+    fn archive_location_without_uri_scheme(report: &mut Value) {
+        report["owner_recorded_release_evidence"]["reports_archive_uri"] =
+            json!("release-evidence/archive");
+    }
     fn malformed_completed_timestamp(report: &mut Value) {
         report["owner_recorded_release_evidence"]["completed_at"] =
             json!("2026-05-22T16:45:00-04:00");
@@ -1249,6 +1257,16 @@ fn release_evidence_status_rejects_invalid_final_bundle_owner_evidence() {
             "blank archive uri",
             blank_archive_uri as fn(&mut Value),
             "owner_recorded_release_evidence.reports_archive_uri",
+        ),
+        (
+            "placeholder archive uri",
+            placeholder_archive_uri as fn(&mut Value),
+            "durable release evidence archive",
+        ),
+        (
+            "archive location without URI scheme",
+            archive_location_without_uri_scheme as fn(&mut Value),
+            "URI with a scheme",
         ),
         (
             "malformed completed timestamp",

@@ -96,9 +96,11 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   expected release version, artifact/report paths matching the configured
   evidence paths, SHA-256-shaped artifact/report digests matching the current files,
   semantic validity of referenced child reports even when their digests match, and
-  `validation_flags.local_signature_validation=true`, and rejects a stale
-  packaged `jarvis-cli.version` marker beside the bundled core with packaging
-  remediation guidance.
+  `validation_flags.local_signature_validation=true`, requires the owner-recorded
+  reports archive reference to be a durable URI-shaped location rather than a
+  placeholder or self-test path, and rejects a stale packaged
+  `jarvis-cli.version` marker beside the bundled core with packaging remediation
+  guidance.
 - Confirm `release-evidence-doctor.sh --check` prints the follow-up signing,
   live-device template/assertion, plugin-trust template/assertion, and final
   evidence-bundle template/bundle commands whenever evidence is missing.

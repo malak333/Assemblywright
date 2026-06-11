@@ -106,6 +106,32 @@ require_non_empty_env() {
   [[ -n "${value//[[:space:]]/}" ]] || fail "$name must be set to a non-empty owner-recorded evidence value"
 }
 
+require_reports_archive_uri_env() {
+  local name="$1"
+  local value="${!name:-}"
+  require_non_empty_env "$name"
+  require_command python3
+  python3 - "$name" "$value" <<'PY'
+import re
+import sys
+from urllib.parse import urlparse
+
+name, value = sys.argv[1:3]
+trimmed = value.strip()
+parsed = urlparse(trimmed)
+if not parsed.scheme:
+    raise SystemExit(f"{name} must be a URI with a scheme such as file:, https:, s3:, or gs:")
+if parsed.scheme == "file" and not (parsed.netloc or parsed.path):
+    raise SystemExit(f"{name} file URI must include an archive location")
+if parsed.scheme != "file" and not (parsed.netloc or parsed.path):
+    raise SystemExit(f"{name} URI must include an archive location")
+
+placeholder = re.compile(r"(self-test|placeholder|example|fixture|todo|tbd|replace-me|changeme|/tmp/|/temp/)", re.IGNORECASE)
+if placeholder.search(trimmed):
+    raise SystemExit(f"{name} must point to a durable release evidence archive, not a placeholder or self-test location")
+PY
+}
+
 require_utc_timestamp_env() {
   local name="$1"
   local value="${!name:-}"
@@ -417,6 +443,45 @@ for segment in dotted_key.split("."):
 
 if not isinstance(cursor, str) or not cursor.strip():
     raise SystemExit(f"{label} required evidence field is blank: {dotted_key}")
+PY
+}
+
+require_json_reports_archive_uri() {
+  local label="$1"
+  local path="$2"
+  local dotted_key="$3"
+  require_file "$label" "$path"
+  python3 - "$path" "$dotted_key" "$label" <<'PY'
+import json
+import re
+import sys
+from urllib.parse import urlparse
+
+path, dotted_key, label = sys.argv[1:4]
+with open(path, encoding="utf-8") as handle:
+    data = json.load(handle)
+
+cursor = data
+for segment in dotted_key.split("."):
+    if not isinstance(cursor, dict) or segment not in cursor:
+        raise SystemExit(f"{label} is missing required evidence field: {dotted_key}")
+    cursor = cursor[segment]
+
+if not isinstance(cursor, str) or not cursor.strip():
+    raise SystemExit(f"{label} required evidence field is blank: {dotted_key}")
+
+trimmed = cursor.strip()
+parsed = urlparse(trimmed)
+if not parsed.scheme:
+    raise SystemExit(f"{label} evidence field {dotted_key} must be a URI with a scheme")
+if parsed.scheme == "file" and not (parsed.netloc or parsed.path):
+    raise SystemExit(f"{label} evidence field {dotted_key} file URI must include an archive location")
+if parsed.scheme != "file" and not (parsed.netloc or parsed.path):
+    raise SystemExit(f"{label} evidence field {dotted_key} URI must include an archive location")
+
+placeholder = re.compile(r"(self-test|placeholder|example|fixture|todo|tbd|replace-me|changeme|/tmp/|/temp/)", re.IGNORECASE)
+if placeholder.search(trimmed):
+    raise SystemExit(f"{label} evidence field {dotted_key} must point to a durable release evidence archive, not a placeholder or self-test location")
 PY
 }
 
@@ -1258,6 +1323,22 @@ JSON
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"owner_recorded_release_evidence"'
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"owner_name": "Jarvis Release Self-Test"'
 
+  python3 - "$tmp_dir/bundle.json" "$tmp_dir/placeholder-archive-bundle.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+with open(source, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["owner_recorded_release_evidence"]["reports_archive_uri"] = "file://self-test/release-evidence"
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+PY
+  if require_json_reports_archive_uri "release evidence self-test placeholder bundle" "$tmp_dir/placeholder-archive-bundle.json" "owner_recorded_release_evidence.reports_archive_uri" >/dev/null 2>"$tmp_dir/placeholder-archive.err"; then
+    fail "release evidence self-test expected placeholder archive URI to be rejected"
+  fi
+  require_file_contains "placeholder archive URI error" "$tmp_dir/placeholder-archive.err" "durable release evidence archive"
+
   nested_zip="$tmp_dir/dist/nested-Jarvis-$VERSION.zip"
   mkdir -p "$tmp_dir/nested/payload"
   cp -R "$tmp_dir/dist/Jarvis.app" "$tmp_dir/nested/payload/Jarvis.app"
@@ -2050,13 +2131,20 @@ require_non_empty_env JARVIS_EVIDENCE_CLEAN_PROFILE_NOTE
 require_non_empty_env JARVIS_EVIDENCE_LIVE_DEVICE_QA_NOTE
 require_non_empty_env JARVIS_EVIDENCE_PLUGIN_TRUST_QA_NOTE
 require_non_empty_env JARVIS_EVIDENCE_REPORTS_ARCHIVE_NOTE
-require_non_empty_env JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI
+if [[ "${JARVIS_EVIDENCE_SELF_TEST_MODE:-}" == "true" ]]; then
+  require_non_empty_env JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI
+else
+  require_reports_archive_uri_env JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI
+fi
 write_bundle
 require_json_number_equals "release evidence bundle" "$OUTPUT_PATH" "schema_version" "1"
 require_json_string_equals "release evidence bundle" "$OUTPUT_PATH" "evidence_type" "release_evidence_bundle"
 for field in owner_name completed_at signed_distribution_note notarization_note clean_profile_note live_device_qa_note plugin_trust_qa_note reports_archive_note reports_archive_uri; do
   require_json_nonempty_string "release evidence bundle" "$OUTPUT_PATH" "owner_recorded_release_evidence.$field"
 done
+if [[ "${JARVIS_EVIDENCE_SELF_TEST_MODE:-}" != "true" ]]; then
+  require_json_reports_archive_uri "release evidence bundle" "$OUTPUT_PATH" "owner_recorded_release_evidence.reports_archive_uri"
+fi
 require_json_utc_timestamp "release evidence bundle" "$OUTPUT_PATH" "owner_recorded_release_evidence.completed_at"
 require_json_timestamp_order "release evidence bundle" "$OUTPUT_PATH" "owner_recorded_release_evidence.completed_at" "generated_at"
 require_json_timestamp_between_reports "release evidence bundle signed provenance" "$SIGNED_PROVENANCE_REPORT" "generated_at" "$OUTPUT_PATH" "owner_recorded_release_evidence.completed_at" "$OUTPUT_PATH" "generated_at"
