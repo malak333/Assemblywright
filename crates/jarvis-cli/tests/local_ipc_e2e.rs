@@ -149,6 +149,7 @@ fn release_readiness_cli_falls_back_without_running_server() {
     assert!(readable_readiness.contains("Raw JSON: rerun with --json"));
     assert!(readable_full_runbook.contains("Recommended verification commands:"));
     assert!(readable_full_runbook.contains("./scripts/release-ci-workflow-smoke.sh"));
+    assert!(readable_full_runbook.contains("./scripts/packaged-app-release-smoke.sh"));
     assert!(
         readable_full_runbook.contains("cargo run -p jarvis-cli -- release live-device-runbook")
     );
@@ -172,6 +173,11 @@ fn release_readiness_cli_falls_back_without_running_server() {
         &release_readiness["recommended_verification_commands"],
         "./scripts/release-ci-workflow-smoke.sh",
         "./scripts/release-operator-qa-smoke.sh",
+    );
+    assert_string_array_order(
+        &release_readiness["recommended_verification_commands"],
+        "./scripts/release-operator-qa-smoke.sh",
+        "./scripts/packaged-app-release-smoke.sh",
     );
     assert_string_array_order(
         &release_readiness["recommended_verification_commands"],
@@ -2992,6 +2998,10 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_string_array_contains(
         &release_readiness["recommended_verification_commands"],
         "./scripts/release-operator-qa-smoke.sh",
+    );
+    assert_string_array_contains(
+        &release_readiness["recommended_verification_commands"],
+        "./scripts/packaged-app-release-smoke.sh",
     );
     assert_string_array_contains(
         &release_readiness["recommended_verification_commands"],

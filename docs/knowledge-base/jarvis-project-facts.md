@@ -564,13 +564,14 @@ These notes capture durable facts for future agents working on this repository.
   owns a protocol-backed macOS Speech/AVFoundation adapter model from the
   SwiftUI Voice tab, and exposes permission request, start/stop capture, and
   interrupt controls. The Voice tab also owns a protocol-backed AVFoundation
-  speech-output adapter with preview, stop, and interrupt controls. Swift tests
-  cover both adapter boundaries with fakes and do not require live microphone
-  access or live audio output. The app still must not claim real voice parity
-  until entitlements, clean-profile permission prompts, live microphone capture,
-  spoken transcript handoff, live audio output, owner-recorded manual device
-  validation, and repository-backed command-result evidence are complete for the
-  release candidate.
+  speech-output adapter with preview, stop, interrupt, and natural completion
+  handling. Swift tests cover both adapter boundaries with fakes, including
+  speech-output completion returning the model to idle, and do not require live
+  microphone access or live audio output. The app still must not claim real
+  voice parity until entitlements, clean-profile permission prompts, live
+  microphone capture, spoken transcript handoff, live audio output,
+  owner-recorded manual device validation, and repository-backed command-result
+  evidence are complete for the release candidate.
 - The scheduler is inspectable, cancellable, explicitly runnable through
   `scheduler run-due`, and opt-in runnable as a bounded background loop with
   `jarvis serve --scheduler-background`. Scheduler jobs are in-memory without
@@ -934,7 +935,7 @@ These notes capture durable facts for future agents working on this repository.
   Behavior changes still require matching coverage before broader readiness
   language can be used.
 - The June 11, 2026 production-readiness sweep refresh was captured after PR
-  #228 from `main` at `8c9107d`: readiness still reported
+  #229 from `main` at `fb13a7f`: readiness still reported
   `production_ready: false`, 17 verified features, and one pending feature
   (`live_voice_loop`). In a fresh worktree before generating local distribution
   artifacts, evidence-status reported 0 satisfied, 9 missing, and 0 invalid

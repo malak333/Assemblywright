@@ -35,6 +35,7 @@ public enum JarvisSpeechOutputError: Error, Equatable, Sendable, CustomStringCon
 @MainActor
 public protocol JarvisSpeechOutputAdapter: AnyObject {
     var phase: JarvisSpeechOutputPhase { get }
+    var onPhaseChange: (@MainActor (JarvisSpeechOutputPhase) -> Void)? { get set }
     func speak(_ text: String) async -> Result<Void, JarvisSpeechOutputError>
     func stop() async -> Result<Void, JarvisSpeechOutputError>
     func interrupt(reason: String) async -> Result<Void, JarvisSpeechOutputError>
@@ -53,6 +54,9 @@ public final class SpeechOutputStateModel: ObservableObject {
         self.phase = adapter.phase
         self.lastError = nil
         self.lastSpokenText = nil
+        self.adapter.onPhaseChange = { [weak self] phase in
+            self?.phase = phase
+        }
     }
 
     public var statusText: String {
@@ -146,14 +150,23 @@ private extension JarvisSpeechOutputError {
 
 #if canImport(AVFoundation)
 @MainActor
-public final class MacSpeechOutputAdapter: JarvisSpeechOutputAdapter {
-    public private(set) var phase: JarvisSpeechOutputPhase
+public final class MacSpeechOutputAdapter: NSObject, JarvisSpeechOutputAdapter, AVSpeechSynthesizerDelegate {
+    public private(set) var phase: JarvisSpeechOutputPhase {
+        didSet {
+            onPhaseChange?(phase)
+        }
+    }
+
+    public var onPhaseChange: (@MainActor (JarvisSpeechOutputPhase) -> Void)?
 
     private let synthesizer: AVSpeechSynthesizer
 
-    public init() {
+    override public init() {
         self.synthesizer = AVSpeechSynthesizer()
         self.phase = .idle
+        self.onPhaseChange = nil
+        super.init()
+        self.synthesizer.delegate = self
     }
 
     public func speak(_ text: String) async -> Result<Void, JarvisSpeechOutputError> {
@@ -191,6 +204,30 @@ public final class MacSpeechOutputAdapter: JarvisSpeechOutputAdapter {
         phase = .interrupted(reason: reason)
         return .success(())
     }
+
+    nonisolated public func speechSynthesizer(
+        _: AVSpeechSynthesizer,
+        didFinish _: AVSpeechUtterance
+    ) {
+        Task { @MainActor [weak self] in
+            self?.markSpeechCompleted()
+        }
+    }
+
+    nonisolated public func speechSynthesizer(
+        _: AVSpeechSynthesizer,
+        didCancel _: AVSpeechUtterance
+    ) {
+        Task { @MainActor [weak self] in
+            self?.markSpeechCompleted()
+        }
+    }
+
+    private func markSpeechCompleted() {
+        if phase == .speaking {
+            phase = .idle
+        }
+    }
 }
 #else
 @MainActor
@@ -198,6 +235,7 @@ public final class MacSpeechOutputAdapter: JarvisSpeechOutputAdapter {
     public private(set) var phase: JarvisSpeechOutputPhase = .unavailable(
         reason: JarvisSpeechOutputError.frameworkUnavailable("AVFoundation is not available in this build.").description
     )
+    public var onPhaseChange: (@MainActor (JarvisSpeechOutputPhase) -> Void)?
 
     public init() {}
 
