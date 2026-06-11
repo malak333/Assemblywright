@@ -1566,6 +1566,9 @@ fn validate_network_host(host: &str) -> Result<(), &'static str> {
     if host.starts_with('.') || host.ends_with('.') {
         return Err("host cannot start or end with a dot");
     }
+    if host.parse::<std::net::IpAddr>().is_ok() {
+        return Err("host must be a hostname, not an IP literal");
+    }
     if host
         .split('.')
         .any(|label| label.is_empty() || label.starts_with('-') || label.ends_with('-'))
@@ -2135,6 +2138,19 @@ mod tests {
         let error = invalid_network_host
             .validate()
             .expect_err("network host must be plain hostname");
+        assert!(error.to_string().contains("network host"));
+
+        let mut ip_literal_network_host = EchoPlugin.manifest();
+        ip_literal_network_host.actions[0]
+            .permissions
+            .push(PluginPermission::Network);
+        ip_literal_network_host.actions[0].network_access = PluginNetworkAccess {
+            mode: PluginNetworkAccessMode::DeclaredHosts,
+            allowed_hosts: vec!["127.0.0.1".to_string()],
+        };
+        let error = ip_literal_network_host
+            .validate()
+            .expect_err("network host must reject IP literals");
         assert!(error.to_string().contains("network host"));
 
         let mut blocked = EchoPlugin.manifest();

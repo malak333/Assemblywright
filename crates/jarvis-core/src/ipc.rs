@@ -1994,6 +1994,15 @@ impl IpcState {
             let contract_validated = manifest_valid && action_declared && input_valid;
             let action_requires_network_grant = action_manifest
                 .is_some_and(|action| action.network_access.mode != crate::PluginNetworkAccessMode::None);
+            let action_network_allowed_hosts = action_manifest
+                .map(|action| {
+                    if action.network_access.mode == crate::PluginNetworkAccessMode::DeclaredHosts {
+                        action.network_access.allowed_hosts.clone()
+                    } else {
+                        Vec::new()
+                    }
+                })
+                .unwrap_or_default();
             let execution_ready = contract_validated
                 && record.execution_enabled
                 && installed_plugin_grant_allows_action(
@@ -2141,6 +2150,7 @@ impl IpcState {
                     "manifest_valid": manifest_valid,
                     "action_declared": action_declared,
                     "action_requires_network_grant": action_requires_network_grant,
+                    "action_network_allowed_hosts": action_network_allowed_hosts,
                     "input_valid": input_valid,
                     "contract_validated": contract_validated,
                     "input_provided": !request.input.is_null(),
@@ -4970,18 +4980,19 @@ fn validate_plugin_trust_qa_report(value: &serde_json::Value) -> Result<(), Stri
         value,
         "owner_recorded_plugin_trust_evidence.egress_validation_completed_at",
     )?;
-    require_json_nonempty_string_value(
-        value,
+    for field in [
+        "owner_recorded_plugin_trust_evidence.marketplace_evidence_note",
+        "owner_recorded_plugin_trust_evidence.malware_scan_evidence_note",
+        "owner_recorded_plugin_trust_evidence.os_sandbox_evidence_note",
+        "owner_recorded_plugin_trust_evidence.egress_evidence_note",
         "owner_recorded_plugin_trust_evidence.egress_policy_label",
-    )?;
-    require_json_nonempty_string_value(
-        value,
         "owner_recorded_plugin_trust_evidence.egress_deny_fixture_evidence_note",
-    )?;
-    require_json_nonempty_string_value(
-        value,
         "owner_recorded_plugin_trust_evidence.egress_allow_fixture_evidence_note",
-    )?;
+        "owner_recorded_plugin_trust_evidence.signed_publisher_evidence_note",
+        "owner_recorded_plugin_trust_evidence.manual_review_evidence_note",
+    ] {
+        require_json_meaningful_plugin_trust_evidence(value, field)?;
+    }
     if completed_at < started_at {
         return Err(
             "JSON report review_completed_at must be greater than or equal to review_started_at"
@@ -5005,6 +5016,26 @@ fn validate_plugin_trust_qa_report(value: &serde_json::Value) -> Result<(), Stri
             "JSON report generated_at must be greater than or equal to review_completed_at"
                 .to_string(),
         );
+    }
+    Ok(())
+}
+
+fn require_json_meaningful_plugin_trust_evidence(
+    value: &serde_json::Value,
+    path: &str,
+) -> Result<(), String> {
+    require_json_nonempty_string_value(value, path)?;
+    let evidence = json_string_at(value, path)
+        .ok_or_else(|| format!("JSON report is missing required field: {path}"))?;
+    let normalized = evidence.trim().to_ascii_lowercase();
+    let placeholder = matches!(
+        normalized.as_str(),
+        "fixture" | "self-test fixture" | "todo" | "tbd" | "n/a" | "na" | "pending"
+    );
+    if placeholder {
+        return Err(format!(
+            "JSON report {path} must contain owner-recorded external evidence, not placeholder or fixture text"
+        ));
     }
     Ok(())
 }
@@ -7123,6 +7154,15 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         repository
             .update_task_status(wrong_command_task.id, TaskStatus::Completed)
             .expect("mark wrong command task completed");
+        let wrong_command_audit = AuditEntry::new(
+            Some(wrong_command_task.id),
+            "task_completed",
+            "different command completed",
+            json!({ "steps": 1 }),
+        );
+        repository
+            .append_audit_entry(&wrong_command_audit)
+            .expect("append wrong command audit");
         let mut wrong_command_report = valid_live_device_qa_report_json();
         wrong_command_report["voice_command_observation"]["command_result_evidence_id"] =
             json!(format!("task:{}", wrong_command_task.id));
@@ -7135,6 +7175,41 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             detail.contains("does not match observed_command_text"),
             "{detail}"
         );
+
+        let mut wrong_audit_report = valid_live_device_qa_report_json();
+        wrong_audit_report["voice_command_observation"]["command_result_evidence_id"] =
+            json!(format!("audit:{}", wrong_command_audit.id));
+        let (status, detail) = inspect_live_device_qa_report_value_with_repository(
+            wrong_audit_report,
+            Some(&repository),
+        );
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(
+            detail.contains("does not match observed_command_text"),
+            "{detail}"
+        );
+
+        let non_completed_task = repository
+            .create_task(Uuid::new_v4(), "status check")
+            .expect("non-completed task");
+        let non_completed_audit = AuditEntry::new(
+            Some(non_completed_task.id),
+            "task_created",
+            "command accepted",
+            json!({ "steps": 0 }),
+        );
+        repository
+            .append_audit_entry(&non_completed_audit)
+            .expect("append non-completed audit");
+        let mut non_completed_audit_report = valid_live_device_qa_report_json();
+        non_completed_audit_report["voice_command_observation"]["command_result_evidence_id"] =
+            json!(format!("audit:{}", non_completed_audit.id));
+        let (status, detail) = inspect_live_device_qa_report_value_with_repository(
+            non_completed_audit_report,
+            Some(&repository),
+        );
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("not completed"), "{detail}");
 
         let mut missing_task_report = valid_live_device_qa_report_json();
         missing_task_report["voice_command_observation"]["command_result_evidence_id"] =
@@ -7259,6 +7334,55 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             detail.contains("egress_allow_fixture_evidence_note"),
             "{detail}"
         );
+    }
+
+    #[test]
+    fn plugin_trust_qa_report_rejects_placeholder_owner_evidence() {
+        for (field, path) in [
+            (
+                "marketplace_evidence_note",
+                "owner_recorded_plugin_trust_evidence.marketplace_evidence_note",
+            ),
+            (
+                "malware_scan_evidence_note",
+                "owner_recorded_plugin_trust_evidence.malware_scan_evidence_note",
+            ),
+            (
+                "os_sandbox_evidence_note",
+                "owner_recorded_plugin_trust_evidence.os_sandbox_evidence_note",
+            ),
+            (
+                "egress_evidence_note",
+                "owner_recorded_plugin_trust_evidence.egress_evidence_note",
+            ),
+            (
+                "egress_policy_label",
+                "owner_recorded_plugin_trust_evidence.egress_policy_label",
+            ),
+            (
+                "egress_deny_fixture_evidence_note",
+                "owner_recorded_plugin_trust_evidence.egress_deny_fixture_evidence_note",
+            ),
+            (
+                "egress_allow_fixture_evidence_note",
+                "owner_recorded_plugin_trust_evidence.egress_allow_fixture_evidence_note",
+            ),
+            (
+                "signed_publisher_evidence_note",
+                "owner_recorded_plugin_trust_evidence.signed_publisher_evidence_note",
+            ),
+            (
+                "manual_review_evidence_note",
+                "owner_recorded_plugin_trust_evidence.manual_review_evidence_note",
+            ),
+        ] {
+            let mut report = valid_plugin_trust_qa_report_json();
+            report["owner_recorded_plugin_trust_evidence"][field] = json!("TODO");
+            let (status, detail) = inspect_plugin_trust_qa_report_value(report);
+            assert_eq!(status, ReleaseEvidenceItemStatus::Invalid, "{path}");
+            assert!(detail.contains(path), "{detail}");
+            assert!(detail.contains("placeholder"), "{detail}");
+        }
     }
 
     #[test]
@@ -8511,6 +8635,15 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             blocked.audit_entry.payload["action_requires_network_grant"],
             true
         );
+        assert_eq!(
+            blocked.audit_entry.payload["action_network_allowed_hosts"],
+            json!(["api.jarvis.local"])
+        );
+        assert_eq!(blocked.audit_entry.payload["os_sandbox_enforced"], false);
+        assert!(blocked.audit_entry.payload["os_sandbox_boundary"]
+            .as_str()
+            .expect("sandbox boundary")
+            .contains("does not enforce an OS sandbox or host-level egress policy"));
 
         state
             .using_repository(|repository| {
@@ -8537,6 +8670,10 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert_eq!(
             completed.execution_grant,
             InstalledPluginExecutionGrant::SubprocessStdioNetwork
+        );
+        assert_eq!(
+            completed.audit_entry.payload["action_network_allowed_hosts"],
+            json!(["api.jarvis.local"])
         );
     }
 
@@ -8611,6 +8748,10 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert!(fetch_blocked
             .reason
             .contains("requires subprocess_stdio_network grant"));
+        assert_eq!(
+            fetch_blocked.audit_entry.payload["action_network_allowed_hosts"],
+            json!(["api.jarvis.local"])
+        );
 
         let network_enabled = state
             .set_installed_plugin_execution(
@@ -8642,6 +8783,10 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             fetch.output.as_ref().expect("fetch output")["plugin_action"],
             "fetch"
         );
+        assert_eq!(
+            fetch.audit_entry.payload["action_network_allowed_hosts"],
+            json!(["api.jarvis.local"])
+        );
 
         let inspect_blocked = state
             .run_installed_plugin(
@@ -8659,6 +8804,10 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert!(inspect_blocked
             .reason
             .contains("reserved for network-declaring actions"));
+        assert_eq!(
+            inspect_blocked.audit_entry.payload["action_network_allowed_hosts"],
+            json!([])
+        );
     }
 
     #[tokio::test]

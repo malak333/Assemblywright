@@ -37,8 +37,9 @@ Each plugin manifest must declare:
 - Optional per-action `network_access`. Actions that request the `network`
   permission must set `network_access.mode: declared_hosts` and provide
   non-empty `allowed_hosts` with plain hostnames only. Wildcards, schemes,
-  paths, ports, whitespace, and non-ASCII hostnames fail manifest validation.
-  This is manifest governance and review evidence, not an OS network sandbox.
+  paths, ports, whitespace, IP literals, and non-ASCII hostnames fail manifest
+  validation. This is manifest governance and review evidence, not an OS
+  network sandbox.
 - `local_subprocess` manifests must declare a `subprocess` block with a command
   under `source_path`, optional argument array, and `stdin: json` /
   `stdout: json`. Jarvis starts the command directly and never interpolates it
@@ -85,6 +86,10 @@ to explain what happened:
 - Output summary with sensitive fields redacted.
 - Files touched, external actions attempted, and network targets when relevant.
 - Start time, end time, timeout, cancellation, and failure state.
+- Installed local subprocess plugin runs include the manifest-declared
+  `action_network_allowed_hosts` for the requested action. That field is audit
+  visibility only; the same audit entry must continue to state that no OS
+  sandbox or host-level egress policy is enforced by the local runner.
 
 ## Safety Rules
 
@@ -93,6 +98,8 @@ to explain what happened:
 - Missing required fields fail validation.
 - Plugin trust QA reports that are used as production release evidence must use
   UTC report and review timestamps that are not future-dated at validation time
+  and owner-recorded evidence notes that are not placeholders such as `TODO`,
+  `pending`, `n/a`, or self-test/fixture text.
   and must keep `review_source: owner-asserted-manual-review` for operator
   evidence. Imported reports, self-test review sources, and stale or
   future-dated plugin-trust reports cannot clear readiness.
