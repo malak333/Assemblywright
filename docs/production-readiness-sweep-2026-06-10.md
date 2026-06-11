@@ -12,12 +12,28 @@ Command:
 cargo run -p jarvis-cli -- release readiness --json
 ```
 
-Observed on 2026-06-10 from `main` before this docs sync:
+Observed on 2026-06-11 from `main` at `1e8767f` after PR #212:
 
 - `production_ready: false`
 - `verified_feature_count: 17`
 - `pending_feature_count: 1`
 - Remaining pending feature: `live_voice_loop`
+
+Companion command:
+
+```sh
+cargo run -p jarvis-cli -- release evidence-status --json
+```
+
+Observed evidence inventory:
+
+- `complete: false`
+- `satisfied_count: 3`
+- `missing_count: 6`
+- `invalid_count: 0`
+- Missing external/manual evidence remains the signed zip, signed installer,
+  signed-distribution provenance report, live-device QA report,
+  plugin-trust QA report, and final release evidence bundle.
 
 The pending `live_voice_loop` feature is intentionally manual. Swift fake-adapter
 coverage proves the text-path and adapter state behavior, but it does not prove
@@ -66,6 +82,10 @@ Jarvis is currently a production-shaped local assistant foundation:
   repository-backed operator smoke, packaged-app smoke, unsigned distribution
   launch proof, release evidence script self-tests, Rust/CLI E2E, and Swift
   package tests.
+- PR #212 aligned `/contract` release-evidence proof metadata with current
+  evidence-status and final-bundle semantics, including repository-backed live
+  command evidence, plugin-trust host-egress fields, and child-report semantic
+  revalidation.
 
 ## End-Goal Production Phase
 
@@ -96,7 +116,6 @@ coverage is:
 - `cargo test -p jarvis-cli --test local_ipc_e2e release_readiness_rejects_semantically_invalid_live_voice_evidence -- --nocapture`
 - `cargo test -p jarvis-cli --test local_ipc_e2e release_evidence_status_rejects_plugin_report_non_owner_review_source -- --nocapture`
 - `cargo test -p jarvis-cli --test local_ipc_e2e release_help_surfaces_current_evidence_boundaries -- --nocapture`
-- `cargo test -p jarvis-cli --test local_ipc_e2e release_readiness_cli_falls_back_without_running_server -- --nocapture`
 - `cargo test -p jarvis-cli --test local_ipc_e2e serve_exposes_local_ipc_contract_and_persists_state -- --nocapture`
 - `swift test --disable-sandbox --package-path apps/mac --filter JarvisMacCoreTests`
 - `./scripts/release-local.sh` before merging executable or release-boundary
