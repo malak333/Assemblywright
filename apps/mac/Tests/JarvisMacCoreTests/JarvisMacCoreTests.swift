@@ -343,7 +343,7 @@ struct JarvisMacCoreTests {
 
         #expect(!readiness.productionReady)
         #expect(readiness.verifiedFeatureCount == readiness.implementedFeatures.count)
-        #expect(readiness.pendingFeatureCount == 1)
+        #expect(readiness.pendingFeatureCount == readiness.pendingFeatures.count)
         #expect(readiness.implementedFeatures.first?.key == "repository_state")
         #expect(readiness.implementedFeatures.map(\.key).contains("plugin_network_governance"))
         #expect(readiness.implementedFeatures.map(\.key).contains("operator_release_qa_smoke"))
@@ -414,8 +414,8 @@ struct JarvisMacCoreTests {
         )
 
         #expect(readiness.productionReady)
-        #expect(readiness.verifiedFeatureCount == 18)
-        #expect(readiness.pendingFeatureCount == 0)
+        #expect(readiness.verifiedFeatureCount == readiness.implementedFeatures.count)
+        #expect(readiness.pendingFeatureCount == readiness.pendingFeatures.count)
         #expect(readiness.pendingFeatures.isEmpty)
         #expect(readiness.implementedFeatures.map(\.key).contains("live_voice_loop"))
         #expect(readiness.blockingManualGates.isEmpty)
@@ -1292,10 +1292,12 @@ struct JarvisMacCoreTests {
         #expect(model.readiness?.blockingManualGates.isEmpty == true)
         #expect(model.evidenceStatus?.complete == true)
         #expect(model.evidenceStatus?.items.first { $0.key == "live_device_qa_report" }?.status == "present")
+        #expect(model.evidenceStatus?.items.first { $0.key == "live_device_qa_report" }?.detail.contains("bundled_core.sha256 matches signed-provenance") == true)
         #expect(model.evidenceStatus?.items.first { $0.key == "plugin_trust_qa_report" }?.status == "present")
         #expect(model.evidenceStatus?.items.first { $0.key == "plugin_trust_qa_report" }?.detail.contains("review_source=owner-asserted-manual-review") == true)
         #expect(model.evidenceStatus?.items.first { $0.key == "release_evidence_bundle" }?.status == "present")
         #expect(model.evidenceStatus?.items.first { $0.key == "release_evidence_bundle" }?.detail.contains("child reports are semantically valid") == true)
+        #expect(model.evidenceStatus?.items.first { $0.key == "release_evidence_bundle" }?.detail.contains("owner completion is ordered after child report generation") == true)
         #expect(model.lastError == nil)
         #expect(model.isShowingStaleReadiness == false)
     }
@@ -3030,7 +3032,7 @@ private func externalProductionReadyReleaseReadinessJSON() -> Data {
           "generated_at": "2026-05-22T17:05:00Z",
           "production_ready": true,
           "readiness_scope": "local Rust/CLI foundation and Swift shell evidence plus explicitly enabled external release evidence status",
-          "verified_feature_count": 18,
+          "verified_feature_count": 4,
           "pending_feature_count": 0,
           "implemented_features": [
             {
@@ -3092,6 +3094,46 @@ private func releaseEvidenceStatusJSON() -> Data {
               "detail": "directory exists; presence only; signing, notarization, and stapling are not validated by evidence-status"
             },
             {
+              "key": "app_executable",
+              "label": "App executable",
+              "path": "target/distribution/Jarvis.app/Contents/MacOS/JarvisMacApp",
+              "kind": "executable",
+              "status": "present",
+              "required_for_production": true,
+              "manual_gate": true,
+              "detail": "executable file exists; runtime behavior is covered by separate smoke checks"
+            },
+            {
+              "key": "bundled_core_executable",
+              "label": "Bundled core executable",
+              "path": "target/distribution/Jarvis.app/Contents/Resources/bin/jarvis-cli",
+              "kind": "executable",
+              "status": "present",
+              "required_for_production": true,
+              "manual_gate": true,
+              "detail": "executable file exists; bundled core version marker matches expected release version; signing, notarization, and stapling are not validated by evidence-status"
+            },
+            {
+              "key": "signed_app_zip",
+              "label": "App zip path",
+              "path": "target/distribution/Jarvis-0.1.4.zip",
+              "kind": "file",
+              "status": "missing",
+              "required_for_production": true,
+              "manual_gate": true,
+              "detail": "expected file is missing"
+            },
+            {
+              "key": "signed_installer_package",
+              "label": "Installer package path",
+              "path": "target/distribution/Jarvis-0.1.4.pkg",
+              "kind": "file",
+              "status": "missing",
+              "required_for_production": true,
+              "manual_gate": true,
+              "detail": "expected file is missing"
+            },
+            {
               "key": "live_device_qa_report",
               "label": "Live-device QA report",
               "path": "target/release-live-device-qa-report.json",
@@ -3102,9 +3144,29 @@ private func releaseEvidenceStatusJSON() -> Data {
               "detail": "expected JSON report is missing"
             },
             {
+              "key": "plugin_trust_qa_report",
+              "label": "Plugin trust QA report",
+              "path": "target/release-plugin-trust-qa-report.json",
+              "kind": "json_report",
+              "status": "missing",
+              "required_for_production": true,
+              "manual_gate": true,
+              "detail": "expected JSON report is missing"
+            },
+            {
               "key": "signed_distribution_provenance_report",
               "label": "Signed-distribution provenance report",
               "path": "target/distribution/Jarvis-0.1.4-signed-provenance.json",
+              "kind": "json_report",
+              "status": "missing",
+              "required_for_production": true,
+              "manual_gate": true,
+              "detail": "expected JSON report is missing"
+            },
+            {
+              "key": "release_evidence_bundle",
+              "label": "Final release evidence bundle",
+              "path": "target/release-evidence-bundle.json",
               "kind": "json_report",
               "status": "missing",
               "required_for_production": true,
@@ -3196,7 +3258,7 @@ private func completeReleaseEvidenceStatusJSON() -> Data {
               "status": "present",
               "required_for_production": true,
               "manual_gate": true,
-              "detail": "JSON report exists, required owner-recorded fields are present, and release metadata plus timestamps match expected values; live-device claims are still owner-recorded external evidence"
+              "detail": "JSON report exists, required owner-recorded fields are present, release metadata plus timestamps match expected values, repository-backed task/audit command-result evidence resolves, and bundled_core.sha256 matches signed-provenance artifacts.bundled_core_sha256; live-device claims are still owner-recorded external evidence"
             },
             {
               "key": "plugin_trust_qa_report",
@@ -3216,7 +3278,7 @@ private func completeReleaseEvidenceStatusJSON() -> Data {
               "status": "present",
               "required_for_production": true,
               "manual_gate": true,
-              "detail": "JSON report exists, expected release version matches, artifact/report paths and SHA-256 digests match current artifacts and reports, referenced child reports are semantically valid, and local signature validation is true; signed_distribution and notarization remain owner-recorded external evidence"
+              "detail": "JSON report exists, expected release version matches, artifact/report paths and SHA-256 digests match current artifacts and reports, referenced child reports are semantically valid, owner completion is ordered after child report generation and before final bundle generation, and local signature validation is true; signed_distribution and notarization remain owner-recorded external evidence"
             }
           ],
           "proof_boundary": "File/report inventory only; complete means expected paths are present, app bundle metadata matches the expected bundle identifier/version/build, bundled core version-marker metadata matches the expected release version, and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/non-future timestamp semantics, required repository-backed task/audit command-result evidence resolution, plugin-trust non-future timestamp and owner-asserted review-source semantics, and final evidence-bundle path/digest/signature-validation/non-future timestamp semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, execute release artifacts, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."

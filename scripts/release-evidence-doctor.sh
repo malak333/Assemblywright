@@ -503,6 +503,110 @@ raise SystemExit(0 if get_timestamp(completed_key) >= get_timestamp(start_key) e
 PY
 }
 
+zip_payload_valid() {
+  local zip_path="$1"
+  python3 - "$zip_path" <<'PY'
+import sys
+import zipfile
+
+zip_path = sys.argv[1]
+required_entries = (
+    "Jarvis.app/Contents/MacOS/JarvisMacApp",
+    "Jarvis.app/Contents/Resources/bin/jarvis-cli",
+    "Jarvis.app/Contents/Info.plist",
+)
+
+try:
+    with zipfile.ZipFile(zip_path) as archive:
+        names = archive.namelist()
+except Exception:
+    raise SystemExit(1)
+
+if any(entry not in names for entry in required_entries):
+    raise SystemExit(1)
+if any("/Jarvis.app/" in name and not name.startswith("Jarvis.app/") for name in names):
+    raise SystemExit(1)
+
+app_roots = {
+    name.split("Jarvis.app/", 1)[0] + "Jarvis.app/"
+    for name in names
+    if "Jarvis.app/" in name
+}
+raise SystemExit(0 if app_roots == {"Jarvis.app/"} else 1)
+PY
+}
+
+json_fields_equal_across_files() {
+  local left_path="$1"
+  local left_key="$2"
+  local right_path="$3"
+  local right_key="$4"
+  python3 - "$left_path" "$left_key" "$right_path" "$right_key" <<'PY'
+import json
+import sys
+
+left_path, left_key, right_path, right_key = sys.argv[1:5]
+
+def load(path):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle)
+    except Exception:
+        raise SystemExit(1)
+
+def get(data, dotted_key):
+    cursor = data
+    for segment in dotted_key.split("."):
+        if not isinstance(cursor, dict) or segment not in cursor:
+            raise SystemExit(1)
+        cursor = cursor[segment]
+    return cursor
+
+raise SystemExit(0 if get(load(left_path), left_key) == get(load(right_path), right_key) else 1)
+PY
+}
+
+json_timestamp_between_reports() {
+  local lower_path="$1"
+  local lower_key="$2"
+  local value_path="$3"
+  local value_key="$4"
+  local upper_path="$5"
+  local upper_key="$6"
+  python3 - "$lower_path" "$lower_key" "$value_path" "$value_key" "$upper_path" "$upper_key" <<'PY'
+from datetime import datetime
+import json
+import sys
+
+lower_path, lower_key, value_path, value_key, upper_path, upper_key = sys.argv[1:7]
+
+def load(path):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle)
+    except Exception:
+        raise SystemExit(1)
+
+def get(data, dotted_key):
+    cursor = data
+    for segment in dotted_key.split("."):
+        if not isinstance(cursor, dict) or segment not in cursor:
+            raise SystemExit(1)
+        cursor = cursor[segment]
+    if not isinstance(cursor, str) or not cursor.endswith("Z"):
+        raise SystemExit(1)
+    try:
+        return datetime.fromisoformat(cursor.replace("Z", "+00:00"))
+    except ValueError:
+        raise SystemExit(1)
+
+lower = get(load(lower_path), lower_key)
+value = get(load(value_path), value_key)
+upper = get(load(upper_path), upper_key)
+raise SystemExit(0 if lower <= value <= upper else 1)
+PY
+}
+
 valid_json_file() {
   local path="$1"
   [[ -f "$path" ]] && python3 -m json.tool "$path" >/dev/null 2>&1
@@ -527,6 +631,21 @@ check_path() {
       fail "unknown path kind: $kind"
       ;;
   esac
+}
+
+check_zip_payload() {
+  local label="$1"
+  local path="$2"
+
+  if [[ ! -f "$path" ]]; then
+    return
+  fi
+
+  if zip_payload_valid "$path"; then
+    record_satisfied "$label payload has exactly one top-level Jarvis.app"
+  else
+    record_missing "$label payload invalid: expected exactly one top-level Jarvis.app with Info.plist, app executable, and bundled core"
+  fi
 }
 
 check_json_flag() {
@@ -589,6 +708,20 @@ check_json_string_fields_equal() {
     record_satisfied "$label: $actual_key matches $expected_key"
   else
     record_missing "$label field mismatch: $actual_key must match $expected_key in $path"
+  fi
+}
+
+check_json_fields_equal_across_files() {
+  local label="$1"
+  local left_path="$2"
+  local left_key="$3"
+  local right_path="$4"
+  local right_key="$5"
+
+  if json_fields_equal_across_files "$left_path" "$left_key" "$right_path" "$right_key"; then
+    record_satisfied "$label: $left_key matches $right_key"
+  else
+    record_missing "$label mismatch: $left_key in $left_path must match $right_key in $right_path"
   fi
 }
 
@@ -771,6 +904,10 @@ check_bundled_core_version() {
     record_missing "bundled core version marker mismatch: expected jarvis $EXPECTED_VERSION from $marker_path; $remediation"
   fi
 
+  if [[ "$ASSERT_COMPLETE" != true ]]; then
+    return 0
+  fi
+
   local output
   if output="$("$core_path" --version 2>&1)" && [[ "$output" == *"jarvis $EXPECTED_VERSION"* ]]; then
     record_satisfied "bundled core --version matches expected version"
@@ -792,6 +929,22 @@ check_json_timestamp_order() {
   fi
 }
 
+check_json_timestamp_between_reports() {
+  local label="$1"
+  local lower_path="$2"
+  local lower_key="$3"
+  local value_path="$4"
+  local value_key="$5"
+  local upper_path="$6"
+  local upper_key="$7"
+
+  if json_timestamp_between_reports "$lower_path" "$lower_key" "$value_path" "$value_key" "$upper_path" "$upper_key"; then
+    record_satisfied "$label: $lower_key <= $value_key <= $upper_key"
+  else
+    record_missing "$label timestamp order invalid: $value_key must be after $lower_key and before $upper_key"
+  fi
+}
+
 check_release_evidence() {
   check_path "app bundle path" "$APP_PATH" dir
   check_app_bundle_metadata
@@ -799,6 +952,7 @@ check_release_evidence() {
   check_path "bundled core executable" "$APP_PATH/Contents/Resources/bin/jarvis-cli" executable
   check_bundled_core_version
   check_path "app zip path" "$ZIP_PATH" file
+  check_zip_payload "app zip" "$ZIP_PATH"
   check_path "installer package path" "$PKG_PATH" file
 
   if valid_json_file "$SIGNED_PROVENANCE_REPORT"; then
@@ -887,6 +1041,9 @@ check_release_evidence() {
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "bundled_core.executable_path" "$EXPECTED_INSTALLED_APP_PATH/Contents/Resources/bin/jarvis-cli"
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "bundled_core.version" "jarvis $EXPECTED_VERSION"
     check_json_sha256 "live-device QA report" "$LIVE_QA_REPORT" "bundled_core.sha256"
+    if valid_json_file "$SIGNED_PROVENANCE_REPORT"; then
+      check_json_fields_equal_across_files "live-device bundled-core digest" "$LIVE_QA_REPORT" "bundled_core.sha256" "$SIGNED_PROVENANCE_REPORT" "artifacts.bundled_core_sha256"
+    fi
     if [[ "${#MISSING_ITEMS[@]}" -eq "$missing_before_live" ]]; then
       LIVE_QA_REPORT_VALID=true
     fi
@@ -946,6 +1103,15 @@ check_release_evidence() {
     done
     check_json_utc_timestamp "release evidence bundle" "$BUNDLE_PATH" "owner_recorded_release_evidence.completed_at"
     check_json_timestamp_order "release evidence bundle" "$BUNDLE_PATH" "owner_recorded_release_evidence.completed_at" "generated_at"
+    if valid_json_file "$SIGNED_PROVENANCE_REPORT"; then
+      check_json_timestamp_between_reports "release evidence bundle signed provenance" "$SIGNED_PROVENANCE_REPORT" "generated_at" "$BUNDLE_PATH" "owner_recorded_release_evidence.completed_at" "$BUNDLE_PATH" "generated_at"
+    fi
+    if valid_json_file "$LIVE_QA_REPORT"; then
+      check_json_timestamp_between_reports "release evidence bundle live-device QA" "$LIVE_QA_REPORT" "generated_at" "$BUNDLE_PATH" "owner_recorded_release_evidence.completed_at" "$BUNDLE_PATH" "generated_at"
+    fi
+    if valid_json_file "$PLUGIN_QA_REPORT"; then
+      check_json_timestamp_between_reports "release evidence bundle plugin-trust QA" "$PLUGIN_QA_REPORT" "generated_at" "$BUNDLE_PATH" "owner_recorded_release_evidence.completed_at" "$BUNDLE_PATH" "generated_at"
+    fi
     for field in artifacts.zip_sha256 artifacts.pkg_sha256 reports.signed_distribution_provenance_sha256 reports.live_device_qa_sha256 reports.plugin_trust_qa_sha256; do
       check_json_sha256 "release evidence bundle" "$BUNDLE_PATH" "$field"
     done
@@ -1098,7 +1264,7 @@ JSON
   "schema_version": 1,
   "evidence_type": "owner_recorded_plugin_trust_qa",
   "self_test_fixture": false,
-  "generated_at": "2026-05-22T17:00:00Z",
+  "generated_at": "2026-05-22T16:30:00Z",
   "review_source": "owner-asserted-manual-review",
   "validation_flags": {
     "marketplace_review": true,
@@ -1236,7 +1402,8 @@ if [[ "$SELF_TEST" == true ]]; then
   self_test_pkg="$tmp_dir/dist/Jarvis-$VERSION.pkg"
   mkdir -p "$tmp_dir/dist"
   write_fixture_app "$tmp_dir/dist/Jarvis.app"
-  touch "$self_test_zip" "$self_test_pkg"
+  (cd "$tmp_dir/dist" && zip -qr "$self_test_zip" Jarvis.app)
+  touch "$self_test_pkg"
   self_test_zip_sha="$(file_sha256 "$self_test_zip")"
   self_test_pkg_sha="$(file_sha256 "$self_test_pkg")"
   self_test_core_sha="$(file_sha256 "$tmp_dir/dist/Jarvis.app/Contents/Resources/bin/jarvis-cli")"
@@ -1335,6 +1502,22 @@ JSON
     fail "release evidence doctor self-test expected stale bundled core version marker to fail"
   fi
   printf 'jarvis %s\n' "$VERSION" >"$tmp_dir/dist/Jarvis.app/Contents/Resources/bin/jarvis-cli.version"
+
+  nested_zip="$tmp_dir/dist/nested-Jarvis-$VERSION.zip"
+  mkdir -p "$tmp_dir/nested/payload"
+  cp -R "$tmp_dir/dist/Jarvis.app" "$tmp_dir/nested/payload/Jarvis.app"
+  (cd "$tmp_dir/nested" && zip -qr "$nested_zip" payload/Jarvis.app)
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="$nested_zip" \
+    JARVIS_EVIDENCE_PKG_PATH="$self_test_pkg" \
+    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/dist/Jarvis-$VERSION-signed-provenance.json" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+    "$0" --assert-complete >/dev/null 2>&1; then
+    fail "release evidence doctor self-test expected nested app zip payload to fail"
+  fi
 
   python3 - "$tmp_dir/dist/Jarvis-$VERSION-signed-provenance.json" "$tmp_dir/dist/stale-digest-signed-provenance.json" <<'PY'
 import json
@@ -1537,6 +1720,28 @@ PY
     fail "release evidence doctor self-test expected malformed command result evidence id to fail"
   fi
 
+  python3 - "$tmp_dir/live.json" "$tmp_dir/mismatched-core-digest-live.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+with open(source, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["bundled_core"]["sha256"] = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+PY
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/mismatched-core-digest-live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+    "$0" --assert-complete >/dev/null 2>&1; then
+    fail "release evidence doctor self-test expected mismatched live bundled-core digest to fail"
+  fi
+
   python3 - "$tmp_dir/live.json" "$tmp_dir/pregenerated-live.json" <<'PY'
 import json
 import sys
@@ -1736,6 +1941,28 @@ PY
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/stale-digest-bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected stale final bundle report digest to fail"
+  fi
+
+  python3 - "$tmp_dir/bundle.json" "$tmp_dir/post-child-completion-bundle.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+with open(source, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["owner_recorded_release_evidence"]["completed_at"] = "2026-05-22T16:00:00Z"
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+PY
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/post-child-completion-bundle.json" \
+    "$0" --assert-complete >/dev/null 2>&1; then
+    fail "release evidence doctor self-test expected final bundle completed before child reports to fail"
   fi
 
   python3 - "$tmp_dir/live.json" "$tmp_dir/invalid-bundle-child-live.json" <<'PY'
