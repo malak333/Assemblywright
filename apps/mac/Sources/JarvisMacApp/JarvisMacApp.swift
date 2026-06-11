@@ -610,6 +610,9 @@ struct SchedulerJobsView: View {
     @State private var runAt = "2026-05-20T13:00:00Z"
     @State private var intervalSeconds = "3600"
     @State private var triggerMode = "manual"
+    @State private var runDueLimit = "8"
+    @State private var staleOlderThanSeconds = "3600"
+    @State private var staleRecoveryLimit = "8"
 
     var body: some View {
         ManagementListView(
@@ -626,6 +629,10 @@ struct SchedulerJobsView: View {
                 }
 
                 schedulerForm
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
+
+                schedulerActions
                     .padding(.horizontal)
                     .padding(.bottom, 8)
 
@@ -692,6 +699,60 @@ struct SchedulerJobsView: View {
             if let selectedJob = model.selectedJob {
                 Text("Selected \(selectedJob.id.uuidString): \(selectedJob.status)")
                     .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+        }
+    }
+
+    private var schedulerActions: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                TextField("Due limit", text: $runDueLimit)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 90)
+                Button {
+                    Task { await model.runDue(limit: Int(runDueLimit) ?? 8) }
+                } label: {
+                    Label("Run Due", systemImage: "play.circle")
+                }
+                .disabled(model.isLoading)
+
+                Divider()
+                    .frame(height: 22)
+
+                TextField("Older than seconds", text: $staleOlderThanSeconds)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 150)
+                TextField("Limit", text: $staleRecoveryLimit)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 70)
+                Button {
+                    Task {
+                        await model.recoverStale(
+                            olderThanSeconds: UInt64(staleOlderThanSeconds) ?? 3600,
+                            limit: Int(staleRecoveryLimit) ?? 8
+                        )
+                    }
+                } label: {
+                    Label("Recover Stale", systemImage: "arrow.clockwise.circle")
+                }
+                .disabled(model.isLoading)
+            }
+            .buttonStyle(.bordered)
+
+            if let lastRunDue = model.lastRunDue {
+                Text(
+                    "Run due checked \(lastRunDue.executions.count) job(s); emergency pause: \(lastRunDue.emergencyPaused ? "yes" : "no")"
+                )
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+            }
+
+            if let lastStaleRecovery = model.lastStaleRecovery {
+                Text("Recovered \(lastStaleRecovery.recovered.count) stale job(s)")
+                    .font(.caption2)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
             }
