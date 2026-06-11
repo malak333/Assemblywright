@@ -5241,6 +5241,10 @@ fn validate_release_evidence_bundle(value: &serde_json::Value) -> Result<(), Str
     ] {
         require_json_nonempty_string_value(value, field)?;
     }
+    require_json_release_reports_archive_uri_value(
+        value,
+        "owner_recorded_release_evidence.reports_archive_uri",
+    )?;
     let completed_at =
         require_utc_report_timestamp(value, "owner_recorded_release_evidence.completed_at")?;
     if generated_at < completed_at {
@@ -5468,6 +5472,52 @@ fn require_json_nonempty_string_value(
         .ok_or_else(|| format!("JSON report is missing required field: {dotted_path}"))?;
     if found.trim().is_empty() {
         return Err(format!("JSON report {dotted_path} must be non-empty"));
+    }
+    Ok(())
+}
+
+fn require_json_release_reports_archive_uri_value(
+    value: &serde_json::Value,
+    dotted_path: &str,
+) -> Result<(), String> {
+    let found = json_string_at(value, dotted_path)
+        .ok_or_else(|| format!("JSON report is missing required field: {dotted_path}"))?;
+    let trimmed = found.trim();
+    if trimmed.is_empty() {
+        return Err(format!("JSON report {dotted_path} must be non-empty"));
+    }
+    let Some((scheme, location)) = trimmed.split_once(':') else {
+        return Err(format!(
+            "JSON report {dotted_path} must be a URI with a scheme"
+        ));
+    };
+    let valid_scheme = !scheme.is_empty()
+        && scheme
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'));
+    if !valid_scheme || location.trim().is_empty() {
+        return Err(format!(
+            "JSON report {dotted_path} must be a URI with an archive location"
+        ));
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    for placeholder in [
+        "self-test",
+        "placeholder",
+        "example",
+        "fixture",
+        "todo",
+        "tbd",
+        "replace-me",
+        "changeme",
+        "/tmp/",
+        "/temp/",
+    ] {
+        if lower.contains(placeholder) {
+            return Err(format!(
+                "JSON report {dotted_path} must point to a durable release evidence archive, not a placeholder or self-test location"
+            ));
+        }
     }
     Ok(())
 }
@@ -7531,6 +7581,23 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             detail.contains("owner_recorded_release_evidence.reports_archive_uri"),
             "{detail}"
         );
+
+        let mut report = valid_release_evidence_bundle_json();
+        report["owner_recorded_release_evidence"]["reports_archive_uri"] =
+            json!("file://self-test/release-evidence");
+        let (status, detail) = inspect_release_evidence_bundle_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(
+            detail.contains("durable release evidence archive"),
+            "{detail}"
+        );
+
+        let mut report = valid_release_evidence_bundle_json();
+        report["owner_recorded_release_evidence"]["reports_archive_uri"] =
+            json!("release-evidence/archive");
+        let (status, detail) = inspect_release_evidence_bundle_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("URI with a scheme"), "{detail}");
 
         let mut report = valid_release_evidence_bundle_json();
         report["owner_recorded_release_evidence"]["completed_at"] =

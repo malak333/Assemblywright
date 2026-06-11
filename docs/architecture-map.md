@@ -51,7 +51,7 @@ flowchart TB
     ReleaseReadinessFallback["serverless CLI readiness fallback"] --> ReleaseReadiness
     EvidenceStatus["/release/evidence-status and jarvis release evidence-status"] --> EvidenceDoctor
     EvidenceStatus --> LiveQASemanticValidator["live QA semantic validator: bundle/version/core-digest/timestamp/transcript/command/non-voice-owner/self-test checks"]
-    EvidenceStatus --> FinalBundleValidator["final bundle validator: path/digest/local-signature/owner-attestation and child-report semantic checks"]
+    EvidenceStatus --> FinalBundleValidator["final bundle validator: path/digest/local-signature/archive-URI/owner-attestation and child-report semantic checks"]
     LiveQASemanticValidator --> RepoEvidenceLookup["repository-backed command-result lookup: task/audit record must exist"]
     RepoEvidenceLookup --> Repository["SQLite tasks and audit entries"]
     LiveQASemanticValidator --> ReleaseReadiness

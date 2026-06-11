@@ -161,7 +161,10 @@ These notes capture durable facts for future agents working on this repository.
   schema/type identity, artifact/report paths, and digests against the current
   configured files, revalidates the signed-provenance, live-device QA, and
   plugin-trust QA child reports referenced by the final bundle, and requires
-  `validation_flags.local_signature_validation=true`.
+  `validation_flags.local_signature_validation=true`. Final bundle owner
+  evidence also requires `reports_archive_uri` to be URI-shaped and durable;
+  blank values, missing schemes, placeholders, examples, fixtures, and
+  self-test archive paths are invalid production evidence.
 - `release-evidence-doctor.sh --assert-complete` must stay aligned with that
   final-bundle semantic floor. It should reject minimal or hand-written final
   bundles that omit artifact/report paths, point at stale artifact/report paths,
