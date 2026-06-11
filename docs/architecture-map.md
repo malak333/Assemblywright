@@ -828,26 +828,28 @@ external action, or broader production operation.
 | Production workflow | Phase 3 and follow-on release-hardening work were split into isolated branches/worktrees for model route persistence, plugin subprocess execution, voice adapter production, packaged app release smoke, permission grants UX, docs architecture alignment, distribution launch proof, live-device QA evidence-capture mechanics, and plugin trust QA evidence-capture mechanics. | Public repo release train with PR evidence, reproducible local gates, owner-reviewed release notes, and no hidden readiness claims. | Isolated PR workflow documented; release governance still manual. |
 | Docs, KB, and E2E discipline | Docs and knowledge-base files record implementation boundaries, the current/end-goal diagrams, and local proof commands. Current E2E evidence is Rust/CLI cross-process, Swift package contract/model coverage including scheduler run/recovery IPC client and model actions, packaged-layout supervision proof, local assembled-app smoke, distribution-layout launch proof, and local release-gate preflight/self-tests for live-device, plugin-trust, and final evidence-bundle capture. | Every feature phase updates docs and durable KB facts, adds or names the relevant E2E coverage, and blocks broader readiness claims when coverage is missing. | Phase discipline documented; broader signed distribution and external manual evidence pending. |
 
-## 2026-06-10 Autonomous Sweep Status
+## 2026-06-11 Autonomous Sweep Status
 
 The active sweep state is documented in
-[Production readiness sweep - 2026-06-10](production-readiness-sweep-2026-06-10.md).
+[Production readiness sweep - 2026-06-11](production-readiness-sweep-2026-06-11.md).
 That note records the six-agent audit ownership, the live readiness snapshot,
 and the relevant E2E coverage for this docs-sync phase.
 
 The current readiness payload should be refreshed before release claims. In the
-2026-06-11 sweep refresh after PR #222, `jarvis release readiness --json`
+2026-06-11 sweep refresh after PR #228, `jarvis release readiness --json`
 reported `production_ready: false`, `verified_feature_count: 17`, and
 `pending_feature_count: 1`, with `live_voice_loop` still
 `pending_manual_validation`; `jarvis release evidence-status --json` reported
-`complete: false`, `satisfied_count: 3`, `missing_count: 6`, and
-`invalid_count: 0`. Missing external evidence remains the signed zip, signed
-installer package, signed-distribution provenance report, live-device QA
-report, plugin-trust QA report, and final release evidence bundle. That is the
-correct repo boundary until owner-recorded external evidence exists for signed
-distribution, clean-profile install/Finder launch, live
-microphone/Speech/transcript/audio validation, plugin-trust QA, durable final
-release evidence archival, and evidence-aware readiness is explicitly rerun.
+`complete: false`, `satisfied_count: 0`, `missing_count: 9`, and
+`invalid_count: 0` in a fresh worktree before local distribution artifacts were
+generated. Missing evidence in that clean snapshot includes the local app
+bundle/executable/core paths plus the signed zip, signed installer package,
+signed-distribution provenance report, live-device QA report, plugin-trust QA
+report, and final release evidence bundle. `release-local.sh` or
+`package-distribution.sh --unsigned-launch-check` can create local app presence
+evidence, but the status surface still does not perform signing, notarization,
+stapling, installation, live-device QA, plugin-trust QA, final evidence
+bundling, or manual QA.
 
 ## Data Ownership
 

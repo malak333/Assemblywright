@@ -933,6 +933,15 @@ These notes capture durable facts for future agents working on this repository.
   E2E or focused integration coverage instead of adding artificial tests.
   Behavior changes still require matching coverage before broader readiness
   language can be used.
+- The June 11, 2026 production-readiness sweep refresh was captured after PR
+  #228 from `main` at `8c9107d`: readiness still reported
+  `production_ready: false`, 17 verified features, and one pending feature
+  (`live_voice_loop`). In a fresh worktree before generating local distribution
+  artifacts, evidence-status reported 0 satisfied, 9 missing, and 0 invalid
+  items; local unsigned distribution commands can make app
+  bundle/executable/core paths present, but production readiness still requires
+  signed/notarized artifacts, live-device QA, plugin-trust QA, and final
+  evidence bundle reports.
 - `jarvis-cli serve --db-path <path>` starts IPC with SQLite-backed task,
   audit, memory, and emergency-pause state for manual persistence checks.
 - File-backed `SqliteRepository::open` creates a preflight migration backup
