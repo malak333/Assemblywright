@@ -890,10 +890,13 @@ These notes capture durable facts for future agents working on this repository.
   17 verified features, and one pending feature: `live_voice_loop`. That
   pending feature remains a manual external validation gate, not a missing
   repo-local docs-only task.
-- PR #214 added structural release-evidence hardening after the PR #213 sweep
-  refresh and preserved the same readiness boundary: 17 verified repo-owned
-  features, one pending manual `live_voice_loop` feature, and six missing
-  external/manual evidence artifacts.
+- PRs #214 through #222 added structural release-evidence hardening, plugin
+  trust evidence hardening, package provenance hardening, Mac scheduler action
+  controls, GitHub release-local runtime compatibility, archive URI validation,
+  release contract wording, evidence-status proof-boundary wording, and current
+  sweep snapshot updates while preserving the same readiness boundary: 17
+  verified repo-owned features, one pending manual `live_voice_loop` feature,
+  and six missing external/manual evidence artifacts.
 - Release evidence structural hardening now treats the final evidence chain as
   cross-bound evidence, not independent files: app zips are rejected unless they
   contain exactly one top-level `Jarvis.app` payload with `Info.plist`, the app
