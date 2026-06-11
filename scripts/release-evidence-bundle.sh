@@ -1981,6 +1981,20 @@ PY
       fail "release evidence --check output must describe the sourceable final-bundle template"
       ;;
   esac
+  case "$check_output" in
+    *"set -a && source target/release-evidence-bundle.env && set +a"* )
+      ;;
+    *)
+      fail "release evidence --check output must include the source command"
+      ;;
+  esac
+  case "$check_output" in
+    *"./scripts/release-evidence-bundle.sh --bundle"* )
+      ;;
+    *)
+      fail "release evidence --check output must include the bundle command"
+      ;;
+  esac
 
   printf 'Jarvis release evidence bundle self-test: ok\n'
   printf 'Proof boundary: fake artifacts and reports validate bundle mechanics only; no production evidence was created.\n'
@@ -2006,9 +2020,11 @@ Required before --bundle:
   host-level egress evidence report exists.
 - Owner sets every JARVIS_EVIDENCE_* validation flag to true and fills the
   owner name, completion timestamp, evidence notes, and reports archive URI.
-- Run --write-template target/release-evidence-bundle.env to generate the
-  sourceable final-bundle environment file, edit it only after the matching
-  external checks complete, source it, then rerun this script with --bundle.
+- After the matching external checks complete, generate and source the
+  sourceable final-bundle environment file, then bundle it:
+  ./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env
+  set -a && source target/release-evidence-bundle.env && set +a
+  ./scripts/release-evidence-bundle.sh --bundle
 - The bundle command can locally verify app signing, app stapling, installer
   signature, installer stapling, and the app zip payload.
 

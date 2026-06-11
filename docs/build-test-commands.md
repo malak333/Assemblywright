@@ -434,7 +434,9 @@ review-source requirement, host-egress evidence fields, final-bundle archive URI
 validation, and final-bundle local signature-validation check.
 `./scripts/release-plugin-trust-qa.sh --check` is the local plugin-trust
 preflight for marketplace review, malware scanning, signed publisher policy,
-OS-level process/network sandbox validation and host-level egress validation. Its `--self-test` mode uses fake
+OS-level process/network sandbox validation and host-level egress validation.
+Its `--check` output prints the exact template, source, and `--assert-complete`
+commands for owner evidence capture. Its `--self-test` mode uses fake
 flags and fake evidence notes to verify report generation only; real release
 evidence must come from `--assert-complete` after the owner validates every
 `JARVIS_PLUGIN_QA_*` flag and populates the owner/timestamp/evidence-note fields.
@@ -455,7 +457,8 @@ validation have actually completed. The release readiness runbook also includes
 assertion path.
 `./scripts/release-evidence-bundle.sh --check` is the final evidence-bundle
 preflight. Its `--self-test` validates bundle manifest generation with fake
-artifacts and fake QA reports only; real release evidence must come from
+artifacts and fake QA reports only, and locks in the exact template, source,
+and `--bundle` commands printed by `--check`; real release evidence must come from
 `--bundle` after signed/notarized distribution artifacts, signed-distribution
 provenance, live-device QA, and plugin-trust QA evidence exist and every
 `JARVIS_EVIDENCE_*` flag is true.

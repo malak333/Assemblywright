@@ -398,9 +398,11 @@ stage or when a PR needs focused evidence for one ownership slice.
   egress policy label plus deny/allow fixture notes.
 - Confirm `./scripts/release-evidence-bundle.sh --check` is included in
   release readiness recommendations and the local release gate, that its
-  preflight output points operators to the fillable final-bundle template, and that
+  preflight output points operators to the fillable final-bundle template, the
+  exact source command, and the exact `--bundle` command, and that
   `./scripts/release-evidence-bundle.sh --self-test` proves only final bundle
-  manifest mechanics with fake artifacts/reports. Confirm
+  manifest mechanics with fake artifacts/reports plus that operator handoff.
+  Confirm
   `./scripts/release-evidence-bundle.sh --write-template
   target/release-evidence-bundle.env` is also included in release readiness
   recommendations and generates a sourceable final-bundle template with every

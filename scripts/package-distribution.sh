@@ -741,7 +741,26 @@ if [[ "$CHECK_ONLY" == true ]]; then
     printf 'warning: notarization credentials are not set; full notarization will fail until configured.\n' >&2
   fi
   printf '\nJarvis distribution packaging preflight: ok\n'
-  printf 'Proof boundary: template/tool check only; no app was signed, notarized, stapled, or manually launched.\n'
+  cat <<'CHECKLIST'
+
+Next release evidence commands:
+  cargo run -p jarvis-cli -- release signed-distribution-runbook
+  JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh
+  ./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env
+  set -a && source target/release-live-device-qa.env && set +a
+  ./scripts/release-live-device-qa.sh --assert-complete
+  ./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env
+  set -a && source target/release-plugin-trust-qa.env && set +a
+  ./scripts/release-plugin-trust-qa.sh --assert-complete
+  ./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env
+  set -a && source target/release-evidence-bundle.env && set +a
+  ./scripts/release-evidence-bundle.sh --bundle
+  ./scripts/release-evidence-doctor.sh --check
+
+Proof boundary: packaging prerequisite check only; no app was signed,
+notarized, stapled, installed, Finder-launched, live-device validated, or
+manually approved.
+CHECKLIST
   exit 0
 fi
 
