@@ -738,8 +738,10 @@ These notes capture durable facts for future agents working on this repository.
   hardened runtime and microphone entitlements; notarizes and staples the app
   zip; then creates, signs, notarizes, and staples a `/Applications` installer
   package. It records and validates Developer ID, notary UUID, stapler success,
-  package signature, and Gatekeeper acceptance evidence before writing signed
-  provenance. `./scripts/release-version-consistency.sh --check` derives the
+  exact Gatekeeper acceptance, and top-level `Jarvis.app` zip payload shape
+  before writing the signed-distribution provenance report. The provenance
+  self-test includes negated Gatekeeper and nested app-zip negative fixtures.
+  `./scripts/release-version-consistency.sh --check` derives the
   release version from Rust package metadata and keeps package, live QA,
   evidence bundle, and evidence doctor defaults aligned with the CLI/core crate
   versions in the default local release gate. The unsigned structure and launch
