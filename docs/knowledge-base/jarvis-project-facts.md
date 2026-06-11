@@ -580,9 +580,10 @@ requires plugin-trust `generated_at`, `review_started_at`,
   auto-submit. The Voice tab also owns a protocol-backed AVFoundation
   speech-output adapter with preview, stop, interrupt, and natural completion
   handling. Swift tests cover both adapter boundaries with fakes, including
-  speech-output completion returning the model to idle and auto-submit
-  availability reasons, and do not require live microphone access or live audio
-  output. The app still must not claim real
+  speech-output completion returning the model to idle, utterance identity
+  protection so stale completion/cancel callbacks cannot mark newer playback
+  idle, and auto-submit availability reasons, and do not require live microphone
+  access or live audio output. The app still must not claim real
   voice parity until entitlements, clean-profile permission prompts, live
   microphone capture, spoken transcript handoff, live audio output,
   owner-recorded manual device validation, and repository-backed command-result
@@ -954,7 +955,7 @@ requires plugin-trust `generated_at`, `review_started_at`,
   Behavior changes still require matching coverage before broader readiness
   language can be used.
 - The June 11, 2026 production-readiness sweep refresh was updated after PR
-  #233 from `main` at `3bc3d78`: readiness still reported
+  #234 from `main` at `744a64b`: readiness still reported
   `production_ready: false`, 17 verified features, and one pending feature
   (`live_voice_loop`). In the main checkout, evidence-status reported 3
   satisfied generated local app/core paths, 6 missing external/manual evidence
@@ -967,6 +968,10 @@ requires plugin-trust `generated_at`, `review_started_at`,
   handoff commands, and PR #233 hardened the Swift voice UI so unavailable
   capture, missing submit handlers, and busy submitters cannot imply live voice
   loop readiness.
+- The Swift speech-output adapter tracks the active AVSpeech utterance by object
+  identity and ignores completion/cancel callbacks for older utterances, so
+  stopping or replacing speech cannot let a stale delegate callback mark newer
+  playback idle. Swift tests cover this without invoking live audio output.
 - Release evidence placeholder hardening now rejects owner-recorded placeholder
   notes in live-device QA reports and final release evidence bundles through
   core IPC/evidence-status validation. The final bundle script rejects the same

@@ -2,6 +2,10 @@ import Foundation
 import Testing
 @testable import JarvisMacCore
 
+#if canImport(AVFoundation)
+import AVFoundation
+#endif
+
 private final class IPCURLProtocol: URLProtocol {
     nonisolated(unsafe) static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
 
@@ -2336,6 +2340,23 @@ struct JarvisMacCoreTests {
         #expect(model.canSpeak)
         #expect(model.statusText.contains("interrupted"))
     }
+
+    #if canImport(AVFoundation)
+    @MainActor
+    @Test("Speech output adapter ignores stale utterance completion")
+    func speechOutputAdapterIgnoresStaleUtteranceCompletion() async {
+        let adapter = MacSpeechOutputAdapter()
+        let staleUtterance = AVSpeechUtterance(string: "old status")
+        let activeUtterance = AVSpeechUtterance(string: "new status")
+
+        adapter.beginSpeechTracking(for: activeUtterance)
+        adapter.markSpeechCompleted(for: staleUtterance)
+
+        #expect(adapter.phase == .speaking)
+        adapter.markSpeechCompleted(for: activeUtterance)
+        #expect(adapter.phase == .idle)
+    }
+    #endif
 
     @MainActor
     @Test("Memory manager model supports create, update, review, and soft delete")

@@ -558,7 +558,8 @@ Clean-profile and manual production gates not proven by this local smoke:
 - The AVFoundation speech-output adapter boundary compiles and has
   deterministic fake-adapter state/error tests, including natural adapter
   completion returning the model to idle so the preview controls do not stay
-  locked in a speaking state after playback finishes.
+  locked in a speaking state after playback finishes, plus utterance identity
+  coverage so stale completion/cancel callbacks cannot mark newer playback idle.
 - Live microphone/Speech capture, spoken transcript handoff into the same
   command path, and live audio-output playback are verified only after the
   packaged app has the required entitlements and owner-recorded manual device

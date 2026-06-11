@@ -341,7 +341,9 @@ Speech/AVFoundation input adapter controls and AVFoundation speech-output
 preview controls, but release claims for real voice still require entitlement
 packaging, live microphone checks, live audio-output checks, and manual device
 validation. Swift approval decision, approved-run, plugin registry, and voice
-controls are covered by the Swift contract/model tests.
+controls are covered by the Swift contract/model tests, including
+speech-output utterance identity so stale AVSpeech completion/cancel callbacks
+cannot make newer playback look idle.
 Local plugin install is metadata-only:
 `jarvis plugins install /absolute/path/to/jarvis-plugin.json` validates and
 stores a disabled registry record with local provenance hashes when repository
