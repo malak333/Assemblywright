@@ -323,14 +323,20 @@ These notes capture durable facts for future agents working on this repository.
   process/network sandbox completeness.
 - Plugin actions that request the existing `network` permission must now
   declare `network_access.mode: declared_hosts` and exact plain-hostname
-  `allowed_hosts`. Invalid host declarations fail manifest validation, and
-  `/permissions/policy-review` emits `network_plugin_action` items for installed
+  `allowed_hosts`. Invalid host declarations, including schemes, wildcards,
+  paths, ports, whitespace, IP literals, and non-ASCII hostnames, fail manifest
+  validation, and `/permissions/policy-review` emits `network_plugin_action` items for installed
   plugins with declared network access. Executable installed plugins with
   network-declaring actions fail closed unless enabled with
   `subprocess_stdio_network`; non-network actions fail closed while the
   installed plugin is enabled under that network grant. This is action-scoped
   runtime grant gating plus manifest governance and review evidence, not
   OS-level network sandboxing or host-level egress filtering.
+- Installed local subprocess plugin run audits include the requested action's
+  manifest-declared `action_network_allowed_hosts` alongside
+  `action_requires_network_grant`, while preserving the explicit
+  `os_sandbox_enforced: false` and host-egress proof boundary. This makes
+  network targets reviewable without claiming repo-local egress enforcement.
 - `./scripts/release-plugin-trust-qa.sh` keeps the plugin trust release gate
   explicit. `--check` validates repo-owned plugin trust prerequisites and
   prints the marketplace review, malware scan, signed publisher policy, OS
@@ -343,7 +349,8 @@ These notes capture durable facts for future agents working on this repository.
   accepted operator reports must also use
   `review_source: owner-asserted-manual-review`. Doctor/status gates reject
   stale, self-test, misidentified, or non-owner-source plugin-trust report
-  shapes. Host-level egress evidence
+  shapes, and they reject placeholder evidence values such as `TODO`, `pending`,
+  `n/a`, or self-test/fixture text in owner-recorded evidence fields. Host-level egress evidence
   must also include the reviewed policy/profile label, ordered UTC egress
   validation timestamp, denied undeclared-host fixture note, and declared-host
   allow fixture note. The review timestamps must be UTC `Z` values, the
@@ -867,10 +874,10 @@ These notes capture durable facts for future agents working on this repository.
   17 verified features, and one pending feature: `live_voice_loop`. That
   pending feature remains a manual external validation gate, not a missing
   repo-local docs-only task.
-- PR #213 refreshed the sweep snapshot after the PR #212 contract/evidence
-  metadata alignment and preserved the same readiness boundary: 17 verified
-  repo-owned features, one pending manual `live_voice_loop` feature, and six
-  missing external/manual evidence artifacts.
+- PR #214 added structural release-evidence hardening after the PR #213 sweep
+  refresh and preserved the same readiness boundary: 17 verified repo-owned
+  features, one pending manual `live_voice_loop` feature, and six missing
+  external/manual evidence artifacts.
 - Release evidence structural hardening now treats the final evidence chain as
   cross-bound evidence, not independent files: app zips are rejected unless they
   contain exactly one top-level `Jarvis.app` payload with `Info.plist`, the app

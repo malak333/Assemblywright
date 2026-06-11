@@ -12,7 +12,7 @@ Command:
 cargo run -p jarvis-cli -- release readiness --json
 ```
 
-Observed on 2026-06-11 from `main` at `9f2d2ed` after PR #213:
+Observed on 2026-06-11 from `main` at `2738779` after PR #214:
 
 - `production_ready: false`
 - `verified_feature_count: 17`
@@ -86,10 +86,10 @@ Jarvis is currently a production-shaped local assistant foundation:
   evidence-status and final-bundle semantics, including repository-backed live
   command evidence, plugin-trust host-egress fields, and child-report semantic
   revalidation.
-- PR #213 refreshed this sweep note after PR #212 and preserved the current
-  conservative readiness boundary: 17 verified repo-owned features, one
-  pending manual live voice validation feature, and six missing external/manual
-  evidence artifacts.
+- PR #214 added structural release-evidence hardening after PR #213 and
+  preserved the current conservative readiness boundary: 17 verified repo-owned
+  features, one pending manual live voice validation feature, and six missing
+  external/manual evidence artifacts.
 
 ## End-Goal Production Phase
 

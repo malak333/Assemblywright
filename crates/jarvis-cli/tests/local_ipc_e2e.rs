@@ -1050,6 +1050,14 @@ fn release_evidence_status_resolves_live_voice_command_result_against_repository
     ]);
     assert_eq!(unrelated_command["accepted"], true, "{unrelated_command}");
     let unrelated_task_id = unrelated_command["task"]["id"].as_str().expect("task id");
+    let unrelated_task_audit_id = unrelated_command["audit_entries"]
+        .as_array()
+        .expect("unrelated audit entries")
+        .iter()
+        .find(|entry| entry["task_id"].as_str() == Some(unrelated_task_id))
+        .and_then(|entry| entry["id"].as_str())
+        .expect("unrelated task audit id")
+        .to_string();
     let mut wrong_task_report = valid_live_device_qa_report();
     wrong_task_report["voice_command_observation"]["command_result_evidence_id"] =
         json!(format!("task:{unrelated_task_id}"));
@@ -1081,6 +1089,41 @@ fn release_evidence_status_resolves_live_voice_command_result_against_repository
     );
     assert_array_contains(
         &wrong_task_readiness["pending_features"],
+        "key",
+        "live_voice_loop",
+    );
+
+    let mut wrong_audit_report = valid_live_device_qa_report();
+    wrong_audit_report["voice_command_observation"]["command_result_evidence_id"] =
+        json!(format!("audit:{unrelated_task_audit_id}"));
+    write_live_device_qa_report(&live_report_path, wrong_audit_report);
+    let wrong_audit_evidence_status = run_cli_json([
+        "release",
+        "evidence-status",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_release_evidence_item_status(
+        &wrong_audit_evidence_status,
+        "live_device_qa_report",
+        "invalid",
+        "wrong audit evidence must not clear live-device QA",
+    );
+    let wrong_audit_item =
+        release_evidence_item(&wrong_audit_evidence_status, "live_device_qa_report");
+    assert!(
+        wrong_audit_item["detail"]
+            .as_str()
+            .expect("live detail")
+            .contains("does not match observed_command_text"),
+        "{wrong_audit_item}"
+    );
+    let wrong_audit_readiness = run_cli_json_with_env(
+        ["release", "readiness", "--endpoint", endpoint.as_str()],
+        &[("JARVIS_RELEASE_READINESS_EVIDENCE_MODE", "external")],
+    );
+    assert_array_contains(
+        &wrong_audit_readiness["pending_features"],
         "key",
         "live_voice_loop",
     );

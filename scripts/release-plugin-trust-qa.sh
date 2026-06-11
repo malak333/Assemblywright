@@ -96,6 +96,26 @@ require_non_empty_env() {
   [[ -n "${value//[[:space:]]/}" ]] || fail "$name must be set after manual validation"
 }
 
+require_meaningful_evidence_env() {
+  local name="$1"
+  local value="${!name:-}"
+  require_non_empty_env "$name"
+  if [[ "${JARVIS_PLUGIN_QA_INTERNAL_SELF_TEST:-false}" == true ]]; then
+    return
+  fi
+  python3 - "$name" "$value" <<'PY'
+import sys
+
+name, value = sys.argv[1:3]
+normalized = " ".join(value.strip().lower().split())
+placeholders = {"fixture", "self-test fixture", "todo", "tbd", "n/a", "na", "pending"}
+if normalized in placeholders:
+    raise SystemExit(
+        f"{name} must contain owner-recorded external evidence, not placeholder or fixture text"
+    )
+PY
+}
+
 require_utc_env_timestamp() {
   local name="$1"
   local value="${!name:-}"
@@ -447,6 +467,32 @@ if [[ "$SELF_TEST" == true ]]; then
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "plugin trust QA self-test expected blank egress deny fixture evidence to be rejected"
   fi
+
+  if JARVIS_PLUGIN_QA_REPORT_PATH="$tmp_dir/placeholder-evidence-report.json" \
+    JARVIS_PLUGIN_QA_REVIEW_SOURCE="owner-asserted-manual-review" \
+    JARVIS_PLUGIN_QA_MARKETPLACE_REVIEW_VALIDATED=true \
+    JARVIS_PLUGIN_QA_MALWARE_SCAN_VALIDATED=true \
+    JARVIS_PLUGIN_QA_OS_SANDBOX_VALIDATED=true \
+    JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED=true \
+    JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_POLICY_VALIDATED=true \
+    JARVIS_PLUGIN_QA_MANUAL_TRUST_REVIEW_VALIDATED=true \
+    JARVIS_PLUGIN_QA_OWNER_NAME="Release Operator" \
+    JARVIS_PLUGIN_QA_REVIEW_STARTED_AT="2026-05-22T16:10:00Z" \
+    JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT="2026-05-22T16:20:00Z" \
+    JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE="TODO" \
+    JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE="Malware scan evidence archived." \
+    JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE="OS sandbox validation evidence archived." \
+    JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE="Host-level egress validation evidence archived." \
+    JARVIS_PLUGIN_QA_EGRESS_POLICY_LABEL="Host egress policy/profile reviewed." \
+    JARVIS_PLUGIN_QA_EGRESS_VALIDATION_COMPLETED_AT="2026-05-22T16:18:00Z" \
+    JARVIS_PLUGIN_QA_EGRESS_DENY_FIXTURE_EVIDENCE_NOTE="Undeclared-host deny evidence archived." \
+    JARVIS_PLUGIN_QA_EGRESS_ALLOW_FIXTURE_EVIDENCE_NOTE="Declared-host allow evidence archived." \
+    JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE="Signed publisher policy evidence archived." \
+    JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE="Manual plugin trust review evidence archived." \
+    "$0" --assert-complete >/dev/null 2>&1; then
+    fail "plugin trust QA self-test expected placeholder owner evidence to be rejected"
+  fi
+
   if JARVIS_PLUGIN_QA_REPORT_PATH="$tmp_dir/wrong-review-source-report.json" \
     JARVIS_PLUGIN_QA_REVIEW_SOURCE="imported-ci-report" \
     JARVIS_PLUGIN_QA_MARKETPLACE_REVIEW_VALIDATED=true \
@@ -566,17 +612,17 @@ require_true JARVIS_PLUGIN_QA_MANUAL_TRUST_REVIEW_VALIDATED
 require_non_empty_env JARVIS_PLUGIN_QA_OWNER_NAME
 require_utc_env_timestamp_order JARVIS_PLUGIN_QA_REVIEW_STARTED_AT JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT
 require_not_future_utc_env_timestamp JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT
-require_non_empty_env JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE
-require_non_empty_env JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE
-require_non_empty_env JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE
-require_non_empty_env JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE
-require_non_empty_env JARVIS_PLUGIN_QA_EGRESS_POLICY_LABEL
+require_meaningful_evidence_env JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE
+require_meaningful_evidence_env JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE
+require_meaningful_evidence_env JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE
+require_meaningful_evidence_env JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE
+require_meaningful_evidence_env JARVIS_PLUGIN_QA_EGRESS_POLICY_LABEL
 require_utc_env_timestamp_order JARVIS_PLUGIN_QA_REVIEW_STARTED_AT JARVIS_PLUGIN_QA_EGRESS_VALIDATION_COMPLETED_AT
 require_utc_env_timestamp_order JARVIS_PLUGIN_QA_EGRESS_VALIDATION_COMPLETED_AT JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT
-require_non_empty_env JARVIS_PLUGIN_QA_EGRESS_DENY_FIXTURE_EVIDENCE_NOTE
-require_non_empty_env JARVIS_PLUGIN_QA_EGRESS_ALLOW_FIXTURE_EVIDENCE_NOTE
-require_non_empty_env JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE
-require_non_empty_env JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE
+require_meaningful_evidence_env JARVIS_PLUGIN_QA_EGRESS_DENY_FIXTURE_EVIDENCE_NOTE
+require_meaningful_evidence_env JARVIS_PLUGIN_QA_EGRESS_ALLOW_FIXTURE_EVIDENCE_NOTE
+require_meaningful_evidence_env JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE
+require_meaningful_evidence_env JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE
 write_report
 
 cat <<EOF
