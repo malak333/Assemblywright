@@ -3116,13 +3116,13 @@ private func releaseReadinessJSON() -> Data {
             {
               "key": "release_evidence_status",
               "status": "implemented",
-              "proof": "`/release/evidence-status` and `jarvis release evidence-status` validate release evidence inventory, repository-backed command-result evidence, host-egress policy fields, and child-report semantic revalidation.",
+              "proof": "`/release/evidence-status` and `jarvis release evidence-status` validate release evidence inventory, repository-backed command-result evidence, host-egress policy fields, archive-URI validation, and child-report semantic revalidation.",
               "boundary": "Read-only file/report inventory plus report semantic validation only."
             },
             {
               "key": "release_evidence_bundle",
               "status": "implemented",
-              "proof": "`release-evidence-bundle.sh --bundle` writes SHA-256-bound evidence manifest entries and child reports are revalidated by doctor/status checks.",
+              "proof": "`release-evidence-bundle.sh --bundle` validates durable reports archive URI evidence, writes SHA-256-bound evidence manifest entries, and child reports are revalidated by doctor/status checks.",
               "boundary": "Evidence-bundle mechanics and local artifact/report validation only."
             }
           ],
@@ -3422,7 +3422,7 @@ private func completeReleaseEvidenceStatusJSON() -> Data {
               "status": "present",
               "required_for_production": true,
               "manual_gate": true,
-              "detail": "JSON report exists, expected release version matches, artifact/report paths and SHA-256 digests match current artifacts and reports, referenced child reports are semantically valid, owner completion is ordered after child report generation and before final bundle generation, and local signature validation is true; signed_distribution and notarization remain owner-recorded external evidence"
+              "detail": "JSON report exists, expected release version matches, artifact/report paths and SHA-256 digests match current artifacts and reports, referenced child reports are semantically valid, owner completion is ordered after child report generation and before final bundle generation, reports archive URI is durable and non-placeholder, and local signature validation is true; signed_distribution and notarization remain owner-recorded external evidence"
             }
           ],
           "proof_boundary": "File/report inventory only; complete means expected paths are present, app bundle metadata matches the expected bundle identifier/version/build, bundled core version-marker metadata matches the expected release version, and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/non-future timestamp semantics, required repository-backed task/audit command-result evidence resolution, plugin-trust non-future timestamp and owner-asserted review-source semantics, and final evidence-bundle path/digest/signature-validation/non-future timestamp semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, execute release artifacts, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."

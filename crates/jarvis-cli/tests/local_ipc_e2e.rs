@@ -89,6 +89,7 @@ fn release_readiness_cli_falls_back_without_running_server() {
     assert!(evidence_status_proof.contains("/release/evidence-status"));
     assert!(evidence_status_proof.contains("repository-backed command-result evidence"));
     assert!(evidence_status_proof.contains("host-egress policy"));
+    assert!(evidence_status_proof.contains("archive-URI validation"));
     assert!(evidence_status_proof.contains("child-report semantic revalidation"));
     assert!(evidence_status_feature["boundary"]
         .as_str()
@@ -100,6 +101,7 @@ fn release_readiness_cli_falls_back_without_running_server() {
         .expect("evidence bundle proof");
     assert!(evidence_bundle_proof.contains("SHA-256-bound evidence manifest"));
     assert!(evidence_bundle_proof.contains("host-egress fields"));
+    assert!(evidence_bundle_proof.contains("durable reports archive URI"));
     assert!(evidence_bundle_proof.contains("child reports are revalidated"));
     assert!(evidence_bundle_feature["boundary"]
         .as_str()
@@ -233,6 +235,7 @@ fn release_help_surfaces_current_evidence_boundaries() {
     assert!(evidence_status_help.contains("semantic report validation"));
     assert!(evidence_status_help.contains("owner-asserted plugin-trust review source"));
     assert!(evidence_status_help.contains("host-egress evidence fields"));
+    assert!(evidence_status_help.contains("final-bundle archive URI validation"));
     assert!(evidence_status_help.contains("final-bundle local signature-validation status"));
     assert!(evidence_status_help.contains("Default output is operator-readable"));
     assert!(evidence_status_help.contains("use --json for the exact structured payload"));
@@ -2716,6 +2719,10 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         "{contract_release_evidence_status}"
     );
     assert!(
+        contract_release_evidence_status_proof.contains("archive-URI validation"),
+        "{contract_release_evidence_status}"
+    );
+    assert!(
         contract_release_evidence_status_proof.contains("child-report semantic revalidation"),
         "{contract_release_evidence_status}"
     );
@@ -2734,6 +2741,10 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     );
     assert!(
         contract_release_evidence_bundle_proof.contains("host-egress fields"),
+        "{contract_release_evidence_bundle}"
+    );
+    assert!(
+        contract_release_evidence_bundle_proof.contains("durable reports archive URI"),
         "{contract_release_evidence_bundle}"
     );
     assert!(

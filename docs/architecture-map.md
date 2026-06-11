@@ -292,7 +292,8 @@ against current artifact files, live-device bundle/version/timestamp evidence,
 repository-backed live command-result task/audit evidence resolution when IPC
 state has a repository,
 non-future plugin-trust review and egress validation timestamps, deny/allow
-egress fixture notes, and final bundle path/digest/local-signature evidence.
+egress fixture notes, and final bundle path/digest/archive-URI/local-signature
+evidence.
 Final bundle inspection also revalidates the signed-provenance, live-device QA,
 and plugin-trust QA child reports referenced by the bundle instead of accepting
 matching report digests alone. This mirrors release-evidence-doctor

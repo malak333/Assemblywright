@@ -244,20 +244,20 @@ These notes capture durable facts for future agents working on this repository.
   `jarvis release evidence-status --help` must describe default
   operator-readable output, `--json` for exact payloads, file/report inventory
   plus semantic validation, owner-asserted plugin-trust review source,
-  host-egress evidence fields, child report validity, and final-bundle local
-  signature-validation status without implying Jarvis performs signing,
-  notarization, live-device QA, marketplace review, malware scanning, OS
-  sandboxing, or host-level egress enforcement. CLI E2E covers this with
+  host-egress evidence fields, child report validity, final-bundle archive URI
+  validation, and final-bundle local signature-validation status without
+  implying Jarvis performs signing, notarization, live-device QA, marketplace
+  review, malware scanning, OS sandboxing, or host-level egress enforcement. CLI E2E covers this with
   `release_help_surfaces_current_evidence_boundaries`.
 - `/contract` feature metadata is also release-boundary evidence. The
   `release_evidence_status` proof should name repository-backed live
   command-result evidence, plugin-trust owner-source and host-egress fields,
-  and final-bundle child-report semantic revalidation. The
-  `release_evidence_bundle` proof should name live-device command observation,
-  plugin-trust review source and host-egress fields, SHA-256-bound manifest
-  entries, and doctor/status revalidation of child reports. CLI E2E asserts
-  those strings so clients do not infer weaker release evidence semantics from
-  `/contract`.
+  final-bundle archive-URI validation, and final-bundle child-report semantic
+  revalidation. The `release_evidence_bundle` proof should name live-device
+  command observation, plugin-trust review source and host-egress fields,
+  durable reports archive URI evidence, SHA-256-bound manifest entries, and
+  doctor/status revalidation of child reports. CLI E2E asserts those strings so
+  clients do not infer weaker release evidence semantics from `/contract`.
 - Provider-envelope coverage includes
   `ollama_http_provider_parses_tool_request_envelope`,
   `chatgpt_http_provider_parses_tool_request_envelope`,
@@ -427,10 +427,10 @@ These notes capture durable facts for future agents working on this repository.
   for app/installer artifacts and JSON reports, including required owner-recorded
   live-device and plugin-trust evidence fields plus app bundle `Info.plist`
   metadata checks, live-device bundle/version and timestamp semantic checks,
-  plugin-trust review timestamp and owner-review-source checks, and final bundle version/SHA/local-signature
-  checks, and repository-backed live command evidence resolution, so the CLI
-  and Swift Release tab can show missing or invalid release evidence without
-  parsing script text.
+  plugin-trust review timestamp and owner-review-source checks, final bundle
+  version/SHA/archive-URI/local-signature checks, and repository-backed live
+  command evidence resolution, so the CLI and Swift Release tab can show
+  missing or invalid release evidence without parsing script text.
 - Release evidence status rejects false live-device validation flags, false
   live voice-loop flags, false plugin-trust validation flags, and false final
   evidence-bundle validation flags; CLI E2E now covers those semantics and
