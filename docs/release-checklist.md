@@ -102,9 +102,10 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   placeholder or self-test path, and rejects a stale packaged
   `jarvis-cli.version` marker beside the bundled core with packaging remediation
   guidance.
-- Confirm `release-evidence-doctor.sh --check` prints the follow-up signing,
-  live-device template/assertion, plugin-trust template/assertion, and final
-  evidence-bundle template/bundle commands whenever evidence is missing.
+- Confirm `release-evidence-doctor.sh --check` prints the follow-up package
+  preflight, signing, live-device template/assertion, plugin-trust
+  template/assertion, and final evidence-bundle template/bundle commands
+  whenever evidence is missing.
 - Confirm `jarvis release --help`, `jarvis release readiness --help`, and
   `jarvis release evidence-status --help` preserve the same read-only,
   IPC-first/local-fallback, evidence-mode, and file/report-inspection
