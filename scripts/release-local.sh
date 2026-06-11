@@ -22,6 +22,7 @@ run cargo build --workspace
 run cargo run -p jarvis-cli -- smoke
 run ./scripts/release-operator-qa-smoke.sh
 run ./scripts/release-cargo-package.sh
+run ./scripts/package-distribution.sh --check
 run ./scripts/package-distribution.sh --version-consistency-self-test
 run ./scripts/package-distribution.sh --provenance-self-test
 run ./scripts/package-distribution.sh --unsigned-launch-check
