@@ -2036,6 +2036,12 @@ fn format_release_evidence_status(response: &str) -> anyhow::Result<String> {
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or(key);
             lines.push(format!("- {key}: {status} ({label})"));
+            if let Some(path) = item.get("path").and_then(serde_json::Value::as_str) {
+                lines.push(format!("  path: {path}"));
+            }
+            if let Some(detail) = item.get("detail").and_then(serde_json::Value::as_str) {
+                lines.push(format!("  detail: {detail}"));
+            }
         }
     }
 

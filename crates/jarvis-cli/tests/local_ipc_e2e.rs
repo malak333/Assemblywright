@@ -2055,6 +2055,22 @@ fn release_evidence_status_rejects_future_dated_release_evidence_reports() {
         let detail = evidence_item["detail"].as_str().expect("evidence detail");
         assert!(detail.contains("generated_at"), "{evidence_item}");
         assert!(detail.contains("current time"), "{evidence_item}");
+
+        if item_key == "live_device_qa_report" {
+            let readable_status = run_cli_text_with_env(
+                [
+                    "release",
+                    "evidence-status",
+                    "--endpoint",
+                    endpoint.as_str(),
+                ],
+                &fixture.env_refs(),
+            );
+            assert!(readable_status.contains("live_device_qa_report"));
+            assert!(readable_status.contains(&format!("path: {}", fixture.live_report_path)));
+            assert!(readable_status.contains("detail: JSON report generated_at"));
+            assert!(readable_status.contains("current time"));
+        }
     }
 }
 
@@ -2130,6 +2146,8 @@ fn release_evidence_status_cli_falls_back_without_running_server() {
     assert!(readable_status.contains("Missing evidence:"));
     assert!(readable_status.contains("Invalid evidence:"));
     assert!(readable_status.contains("signed_app_bundle"));
+    assert!(readable_status.contains("path: target/distribution/Jarvis.app"));
+    assert!(readable_status.contains("detail: expected evidence path is missing"));
     assert!(readable_status.contains("release_evidence_bundle"));
     assert!(readable_status.contains("Raw JSON: rerun with --json"));
     assert!(
@@ -6282,6 +6300,11 @@ fn run_cli_failure_args(args: &[&str]) -> String {
 
 fn run_cli_text<const N: usize>(args: [&str; N]) -> String {
     let output = run_cli(args);
+    String::from_utf8(output.stdout).expect("stdout is UTF-8")
+}
+
+fn run_cli_text_with_env<const N: usize>(args: [&str; N], env: &[(&str, &str)]) -> String {
+    let output = run_cli_with_env(args, env);
     String::from_utf8(output.stdout).expect("stdout is UTF-8")
 }
 

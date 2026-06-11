@@ -148,7 +148,10 @@ These notes capture durable facts for future agents working on this repository.
   and non-voice owner notes for clean-profile, Finder launch, notification,
   restart, and manual QA with an ordered UTC notification timestamp. The
   `release-live-device-qa.sh --assert-complete` path rejects whitespace-only
-  owner evidence values and reserves `JARVIS_QA_SELF_TEST_FIXTURE=true` for the
+  owner evidence values, `/release/evidence-status` rejects placeholder
+  owner-recorded live-device evidence-note values such as `TODO`, `pending`,
+  `n/a`, `fixture`, and `self-test fixture`, and
+  `JARVIS_QA_SELF_TEST_FIXTURE=true` is reserved for the
   script's internal fake-fixture self-test. Invalid or stale hand-written reports stay
   `invalid` and cannot clear `live_voice_loop` in evidence-aware readiness mode.
 - Signed provenance, plugin-trust, and final bundle evidence items are also
@@ -167,9 +170,10 @@ These notes capture durable facts for future agents working on this repository.
   configured files, revalidates the signed-provenance, live-device QA, and
   plugin-trust QA child reports referenced by the final bundle, and requires
   `validation_flags.local_signature_validation=true`. Final bundle owner
-  evidence also requires `reports_archive_uri` to be URI-shaped and durable;
-  blank values, missing schemes, placeholders, examples, fixtures, and
-  self-test archive paths are invalid production evidence.
+  evidence also requires non-placeholder owner evidence notes plus
+  `reports_archive_uri` to be URI-shaped and durable; blank values, missing
+  schemes, placeholders, examples, fixtures, and self-test archive paths are
+  invalid production evidence.
 - `release-evidence-doctor.sh --assert-complete` must stay aligned with that
   final-bundle semantic floor. It should reject minimal or hand-written final
   bundles that omit artifact/report paths, point at stale artifact/report paths,
@@ -398,9 +402,10 @@ These notes capture durable facts for future agents working on this repository.
   every `JARVIS_EVIDENCE_*` flag is true, and local artifact checks validate the
   app signature, app stapling ticket, installer signature, installer stapling
   ticket, and app zip payload through Apple-tool-derived validation. Production bundles must keep local signature
-  validation enabled; the script parses every required live-device and
-  plugin-trust report flag, requires non-empty owner-recorded evidence fields in
-  both QA reports, requires plugin-trust `generated_at`, `review_started_at`,
+validation enabled; the script parses every required live-device and
+plugin-trust report flag, requires non-empty and non-placeholder
+owner-recorded evidence-note fields in both QA reports and the final bundle,
+requires plugin-trust `generated_at`, `review_started_at`,
   and `review_completed_at` to be UTC with
   `review_started_at <= review_completed_at <= generated_at`, requires the
   plugin-trust `review_source` to be `owner-asserted-manual-review`, requires the
@@ -806,8 +811,8 @@ These notes capture durable facts for future agents working on this repository.
   Live macOS notification prompt/delivery validation is part of the manual
   clean-profile release QA runbook and final release evidence boundary; it is
   not currently a separate field in the live-device voice report.
-  `/release/evidence-status` rejects whitespace-only owner evidence fields
-  before this report can clear `live_voice_loop`.
+  `/release/evidence-status` rejects empty or placeholder owner evidence-note
+  fields before this report can clear `live_voice_loop`.
   This standardizes manual evidence only; `--check` does not prove live device
   behavior, and the report remains an owner assertion. When the release operator
   explicitly enables evidence-aware readiness, this report can support the
@@ -949,7 +954,7 @@ These notes capture durable facts for future agents working on this repository.
   Behavior changes still require matching coverage before broader readiness
   language can be used.
 - The June 11, 2026 production-readiness sweep refresh was updated after PR
-  #232 from `main` at `9f54912`: readiness still reported
+  #233 from `main` at `3bc3d78`: readiness still reported
   `production_ready: false`, 17 verified features, and one pending feature
   (`live_voice_loop`). In the main checkout, evidence-status reported 3
   satisfied generated local app/core paths, 6 missing external/manual evidence
@@ -958,8 +963,16 @@ These notes capture durable facts for future agents working on this repository.
   Production readiness still requires signed/notarized artifacts,
   live-device QA, plugin-trust QA, and final evidence bundle reports. PR #231
   made Swift/readiness display fail closed on effective readiness unless
-  evidence status is complete, and PR #232 clarified exact release evidence
-  script handoff commands.
+  evidence status is complete, PR #232 clarified exact release evidence script
+  handoff commands, and PR #233 hardened the Swift voice UI so unavailable
+  capture, missing submit handlers, and busy submitters cannot imply live voice
+  loop readiness.
+- Release evidence placeholder hardening now rejects owner-recorded placeholder
+  notes in live-device QA reports and final release evidence bundles through
+  core IPC/evidence-status validation. The final bundle script rejects the same
+  placeholders before writing a bundle, and readable
+  `jarvis release evidence-status` output includes each evidence item's path and
+  missing/invalid detail so operators do not need `--json` for basic triage.
 - `jarvis-cli serve --db-path <path>` starts IPC with SQLite-backed task,
   audit, memory, and emergency-pause state for manual persistence checks.
 - File-backed `SqliteRepository::open` creates a preflight migration backup

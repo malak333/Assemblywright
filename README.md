@@ -332,11 +332,12 @@ from the live command/audit evidence, owner/device/profile, ordered UTC
 timestamps, non-voice owner evidence notes for clean-profile, Finder launch,
 notification, restart, and manual QA, voice evidence-note fields, and a bundled-core binding for the
 installed `Contents/Resources/bin/jarvis-cli` path, `jarvis <version>` output,
-and SHA-256 digest. Owner-recorded evidence fields must contain non-whitespace
-text; `JARVIS_QA_SELF_TEST_FIXTURE` is reserved for the script's internal
+and SHA-256 digest. Owner-recorded evidence-note fields must contain
+non-placeholder text, not values such as `TODO`, `pending`, `n/a`, `fixture`, or
+`self-test fixture`; `JARVIS_QA_SELF_TEST_FIXTURE` is reserved for the script's internal
 `--self-test` report and is not valid release evidence.
-`/release/evidence-status` applies the same non-empty checks to the generated
-report, so whitespace-only owner evidence cannot clear `live_voice_loop`.
+`/release/evidence-status` applies the same non-empty and non-placeholder checks
+to the generated report, so weak owner evidence cannot clear `live_voice_loop`.
 It writes a JSON report, defaulting to
 `target/release-live-device-qa-report.json`, with installed-app metadata,
 microphone/Speech permission prompt evidence, spoken transcript handoff into
@@ -429,7 +430,9 @@ counts, redacted recent task metadata, recent audit progress, bounded activity
 events, redacted model-route evidence, redacted scheduler attention handoff,
 scheduler trigger policy review, redacted diagnostics,
 operator-readable first-party plugin manifest summaries, disabled installed-plugin registry metadata, and
-structured release evidence file/report presence over IPC. Task, route, and
+structured release evidence file/report presence over IPC. The default readable
+release evidence-status output includes per-item paths and invalid/missing
+details, while `--json` preserves the raw IPC payload. Task, route, and
 activity summary commands plus registered plugin/tool inspection default to
 operator-readable text; use `--json` or `JARVIS_CLI_JSON=1` for exact IPC
 payloads, including stored task input and full plugin schemas.

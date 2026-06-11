@@ -4760,11 +4760,21 @@ fn validate_live_device_qa_report(
         require_json_bool_value(value, field, true)?;
     }
     for field in [
-        "app_bundle.microphone_usage_description",
-        "app_bundle.speech_recognition_usage_description",
         "owner_recorded_live_voice_evidence.owner_name",
         "owner_recorded_live_voice_evidence.device_label",
         "owner_recorded_live_voice_evidence.profile_label",
+        "app_bundle.microphone_usage_description",
+        "app_bundle.speech_recognition_usage_description",
+        "voice_command_observation.test_phrase",
+        "voice_command_observation.observed_transcript",
+        "voice_command_observation.expected_command_text",
+        "voice_command_observation.observed_command_text",
+        "voice_command_observation.audio_output_device_label",
+        "proof_boundary",
+    ] {
+        require_json_nonempty_string_value(value, field)?;
+    }
+    for field in [
         "owner_recorded_live_voice_evidence.microphone_evidence_note",
         "owner_recorded_live_voice_evidence.speech_permission_evidence_note",
         "owner_recorded_live_voice_evidence.transcript_handoff_evidence_note",
@@ -4774,14 +4784,8 @@ fn validate_live_device_qa_report(
         "owner_recorded_non_voice_evidence.notification_evidence_note",
         "owner_recorded_non_voice_evidence.restart_evidence_note",
         "owner_recorded_non_voice_evidence.manual_release_qa_evidence_note",
-        "voice_command_observation.test_phrase",
-        "voice_command_observation.observed_transcript",
-        "voice_command_observation.expected_command_text",
-        "voice_command_observation.observed_command_text",
-        "voice_command_observation.audio_output_device_label",
-        "proof_boundary",
     ] {
-        require_json_nonempty_string_value(value, field)?;
+        require_json_meaningful_owner_evidence(value, field)?;
     }
 
     let started_at = require_utc_report_timestamp(
@@ -4991,7 +4995,7 @@ fn validate_plugin_trust_qa_report(value: &serde_json::Value) -> Result<(), Stri
         "owner_recorded_plugin_trust_evidence.signed_publisher_evidence_note",
         "owner_recorded_plugin_trust_evidence.manual_review_evidence_note",
     ] {
-        require_json_meaningful_plugin_trust_evidence(value, field)?;
+        require_json_meaningful_owner_evidence(value, field)?;
     }
     if completed_at < started_at {
         return Err(
@@ -5020,7 +5024,7 @@ fn validate_plugin_trust_qa_report(value: &serde_json::Value) -> Result<(), Stri
     Ok(())
 }
 
-fn require_json_meaningful_plugin_trust_evidence(
+fn require_json_meaningful_owner_evidence(
     value: &serde_json::Value,
     path: &str,
 ) -> Result<(), String> {
@@ -5230,16 +5234,20 @@ fn validate_release_evidence_bundle(value: &serde_json::Value) -> Result<(), Str
     }
     for field in [
         "owner_recorded_release_evidence.owner_name",
+        "owner_recorded_release_evidence.reports_archive_uri",
+        "proof_boundary",
+    ] {
+        require_json_nonempty_string_value(value, field)?;
+    }
+    for field in [
         "owner_recorded_release_evidence.signed_distribution_note",
         "owner_recorded_release_evidence.notarization_note",
         "owner_recorded_release_evidence.clean_profile_note",
         "owner_recorded_release_evidence.live_device_qa_note",
         "owner_recorded_release_evidence.plugin_trust_qa_note",
         "owner_recorded_release_evidence.reports_archive_note",
-        "owner_recorded_release_evidence.reports_archive_uri",
-        "proof_boundary",
     ] {
-        require_json_nonempty_string_value(value, field)?;
+        require_json_meaningful_owner_evidence(value, field)?;
     }
     require_json_release_reports_archive_uri_value(
         value,
@@ -5638,10 +5646,10 @@ fn json_string_at(value: &serde_json::Value, dotted_path: &str) -> Option<String
 
 fn release_json_present_detail(key: &str) -> String {
     match key {
-        "release_evidence_bundle" => "JSON report exists, schema/evidence identity is valid, expected release version matches, artifact/report paths and SHA-256 digests match current artifacts and reports, reports archive URI is durable and non-placeholder, and local signature validation is true; clean-profile, live-device, and plugin-trust claims remain owner-recorded external evidence".to_string(),
+        "release_evidence_bundle" => "JSON report exists, schema/evidence identity is valid, expected release version matches, artifact/report paths and SHA-256 digests match current artifacts and reports, owner evidence notes are non-placeholder, reports archive URI is durable and non-placeholder, and local signature validation is true; clean-profile, live-device, and plugin-trust claims remain owner-recorded external evidence".to_string(),
         "signed_distribution_provenance_report" => "JSON report exists, expected release version, bundle identifier, bundled core path/version/digest match, Apple-tool-derived signing/notarization/stapling/Gatekeeper evidence is semantically valid, required flags are true, and artifact SHA-256 digests match the current zip/pkg/core files; clean-profile install and live-device QA remain separate manual gates".to_string(),
-        "live_device_qa_report" => "JSON report exists, required owner-recorded fields and proof boundary are non-empty, installed app path, release metadata, bundled core executable path/version/SHA-256 binding, timestamps, observed transcript, observed command text, and task/audit command evidence reference match expected values; live-device claims are still owner-recorded external evidence".to_string(),
-        "plugin_trust_qa_report" => "JSON report exists, schema/evidence identity is valid, self-test fixture identity is false, required owner-recorded fields are present, review and egress validation timestamps are valid and ordered, and deny/allow egress fixture notes are present; marketplace, malware, sandbox, and host-level egress claims remain owner-recorded external evidence".to_string(),
+        "live_device_qa_report" => "JSON report exists, required owner-recorded fields and proof boundary are non-empty, owner evidence notes are non-placeholder, installed app path, release metadata, bundled core executable path/version/SHA-256 binding, timestamps, observed transcript, observed command text, and task/audit command evidence reference match expected values; live-device claims are still owner-recorded external evidence".to_string(),
+        "plugin_trust_qa_report" => "JSON report exists, schema/evidence identity is valid, self-test fixture identity is false, required owner-recorded fields are present, owner evidence notes are non-placeholder, review and egress validation timestamps are valid and ordered, and deny/allow egress fixture notes are present; marketplace, malware, sandbox, and host-level egress claims remain owner-recorded external evidence".to_string(),
         _ => "JSON report exists and required owner-recorded fields are present; external claims are not revalidated by evidence-status".to_string(),
     }
 }
@@ -7135,6 +7143,68 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
     }
 
     #[test]
+    fn live_device_qa_report_rejects_placeholder_owner_evidence_notes() {
+        for (parent, field, dotted_path) in [
+            (
+                "owner_recorded_live_voice_evidence",
+                "microphone_evidence_note",
+                "owner_recorded_live_voice_evidence.microphone_evidence_note",
+            ),
+            (
+                "owner_recorded_live_voice_evidence",
+                "speech_permission_evidence_note",
+                "owner_recorded_live_voice_evidence.speech_permission_evidence_note",
+            ),
+            (
+                "owner_recorded_live_voice_evidence",
+                "transcript_handoff_evidence_note",
+                "owner_recorded_live_voice_evidence.transcript_handoff_evidence_note",
+            ),
+            (
+                "owner_recorded_live_voice_evidence",
+                "audio_output_evidence_note",
+                "owner_recorded_live_voice_evidence.audio_output_evidence_note",
+            ),
+            (
+                "owner_recorded_non_voice_evidence",
+                "clean_profile_evidence_note",
+                "owner_recorded_non_voice_evidence.clean_profile_evidence_note",
+            ),
+            (
+                "owner_recorded_non_voice_evidence",
+                "finder_launch_evidence_note",
+                "owner_recorded_non_voice_evidence.finder_launch_evidence_note",
+            ),
+            (
+                "owner_recorded_non_voice_evidence",
+                "notification_evidence_note",
+                "owner_recorded_non_voice_evidence.notification_evidence_note",
+            ),
+            (
+                "owner_recorded_non_voice_evidence",
+                "restart_evidence_note",
+                "owner_recorded_non_voice_evidence.restart_evidence_note",
+            ),
+            (
+                "owner_recorded_non_voice_evidence",
+                "manual_release_qa_evidence_note",
+                "owner_recorded_non_voice_evidence.manual_release_qa_evidence_note",
+            ),
+        ] {
+            let mut report = valid_live_device_qa_report_json();
+            report[parent][field] = json!("pending");
+            let (status, detail) = inspect_live_device_qa_report_value(report);
+            assert_eq!(status, ReleaseEvidenceItemStatus::Invalid, "{dotted_path}");
+            assert!(detail.contains(dotted_path), "{detail}");
+            assert!(detail.contains("placeholder"), "{detail}");
+            assert!(
+                detail.contains("owner-recorded external evidence"),
+                "{detail}"
+            );
+        }
+    }
+
+    #[test]
     fn live_device_qa_report_rejects_future_generated_timestamp() {
         let mut report = valid_live_device_qa_report_json();
         report["generated_at"] = json!(future_timestamp());
@@ -7626,6 +7696,47 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let (status, detail) = inspect_release_evidence_bundle_value(report);
         assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
         assert!(detail.contains("completed_at"), "{detail}");
+    }
+
+    #[test]
+    fn release_evidence_bundle_rejects_placeholder_owner_evidence_notes() {
+        for (field, dotted_path) in [
+            (
+                "signed_distribution_note",
+                "owner_recorded_release_evidence.signed_distribution_note",
+            ),
+            (
+                "notarization_note",
+                "owner_recorded_release_evidence.notarization_note",
+            ),
+            (
+                "clean_profile_note",
+                "owner_recorded_release_evidence.clean_profile_note",
+            ),
+            (
+                "live_device_qa_note",
+                "owner_recorded_release_evidence.live_device_qa_note",
+            ),
+            (
+                "plugin_trust_qa_note",
+                "owner_recorded_release_evidence.plugin_trust_qa_note",
+            ),
+            (
+                "reports_archive_note",
+                "owner_recorded_release_evidence.reports_archive_note",
+            ),
+        ] {
+            let mut report = valid_release_evidence_bundle_json();
+            report["owner_recorded_release_evidence"][field] = json!("n/a");
+            let (status, detail) = inspect_release_evidence_bundle_value(report);
+            assert_eq!(status, ReleaseEvidenceItemStatus::Invalid, "{dotted_path}");
+            assert!(detail.contains(dotted_path), "{detail}");
+            assert!(detail.contains("placeholder"), "{detail}");
+            assert!(
+                detail.contains("owner-recorded external evidence"),
+                "{detail}"
+            );
+        }
     }
 
     #[test]

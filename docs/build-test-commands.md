@@ -503,8 +503,9 @@ packaging lane, including signing identities, notary submission IDs/log paths,
 staple validation, Gatekeeper assessment, bundled core version, and artifact
 digests that match the current zip/pkg files. It rejects disabled
 local signature validation outside the fake self-test lane, parses every required
-live-device/plugin-trust report flag, requires owner-recorded evidence fields in
-both QA reports, requires live-device QA app bundle metadata to match the
+live-device/plugin-trust report flag, requires non-empty and non-placeholder
+owner-recorded evidence-note fields in both QA reports and the final bundle,
+requires live-device QA app bundle metadata to match the
 expected installed app path plus bundle id/version, requires the observed
 transcript to match the spoken test phrase, and writes SHA-256 digests for
 distribution artifacts, signed provenance, and QA reports before writing
@@ -550,7 +551,8 @@ deny/allow fixture notes. Production plugin-trust reports must carry
 review sources are rejected before they can clear evidence-aware readiness.
 `jarvis release evidence-status` exposes the same standard artifact/report
 inventory through `/release/evidence-status`; the default CLI output is
-operator-readable and `--json` preserves the exact structured payload. It
+operator-readable, includes per-item paths/details for missing or invalid
+evidence, and `--json` preserves the exact structured payload. It
 also rejects signed-provenance zip/pkg digests that no longer match the current
 artifact files, and rejects final evidence bundles with the wrong
 `schema_version: 1` / `evidence_type: release_evidence_bundle` identity. It is
@@ -710,11 +712,12 @@ spoken-command observation fields: `JARVIS_QA_VOICE_TEST_PHRASE`,
 `JARVIS_QA_OBSERVED_TRANSCRIPT`, `JARVIS_QA_EXPECTED_COMMAND_TEXT`,
 `JARVIS_QA_OBSERVED_COMMAND_TEXT`, `JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID`, and
 `JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL`.
-All owner-recorded evidence fields must contain non-whitespace text, and
+All owner-recorded evidence-note fields must contain non-placeholder text, not
+values such as `TODO`, `pending`, `n/a`, `fixture`, or `self-test fixture`, and
 `JARVIS_QA_SELF_TEST_FIXTURE=true` is reserved for the script's internal fake
 fixture self-test rather than release evidence. `jarvis release evidence-status`
-and `/release/evidence-status` enforce the same non-empty live-device QA
-report fields before that evidence can clear `live_voice_loop`.
+and `/release/evidence-status` enforce the same non-empty and non-placeholder
+live-device QA report fields before that evidence can clear `live_voice_loop`.
 The observed transcript must match the spoken test phrase after trimming, the
 expected installed app path must match `JARVIS_QA_INSTALLED_APP_PATH` or
 `/Applications/Jarvis.app`, expected and observed command text must match after
