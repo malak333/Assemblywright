@@ -21,6 +21,15 @@ fn release_readiness_cli_falls_back_without_running_server() {
     let endpoint = format!("http://{}", unused_loopback_addr());
 
     let release_readiness = run_cli_json(["release", "readiness", "--endpoint", endpoint.as_str()]);
+    let format_release_readiness: Value = serde_json::from_str(&run_cli_text([
+        "release",
+        "readiness",
+        "--format",
+        "json",
+        "--endpoint",
+        endpoint.as_str(),
+    ]))
+    .expect("release readiness --format json output");
     let readable_readiness =
         run_cli_text(["release", "readiness", "--endpoint", endpoint.as_str()]);
     let readable_full_runbook = run_cli_text([
@@ -32,6 +41,11 @@ fn release_readiness_cli_falls_back_without_running_server() {
     ]);
 
     assert_eq!(release_readiness["production_ready"], false);
+    assert_eq!(format_release_readiness["production_ready"], false);
+    assert_eq!(
+        format_release_readiness["pending_feature_count"],
+        release_readiness["pending_feature_count"]
+    );
     assert_array_contains(
         &release_readiness["implemented_features"],
         "key",
@@ -472,7 +486,19 @@ fn release_readiness_cli_computes_production_ready_only_from_external_complete_e
         "--endpoint",
         endpoint.as_str(),
     ]);
+    let format_evidence_status_output = run_cli([
+        "release",
+        "evidence-status",
+        "--format",
+        "json",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    let format_evidence_status: Value =
+        serde_json::from_slice(&format_evidence_status_output.stdout)
+            .expect("server-backed evidence-status --format json output");
     assert_eq!(evidence_status["complete"], true);
+    assert_eq!(format_evidence_status["complete"], true);
     assert_eq!(evidence_status["missing_count"], 0);
     assert_eq!(evidence_status["invalid_count"], 0);
     assert_all_evidence_items_present(&evidence_status);
@@ -496,8 +522,24 @@ fn release_readiness_cli_computes_production_ready_only_from_external_complete_e
         ],
         &[],
     );
+    let format_external_readiness_output = run_cli_with_env(
+        [
+            "release",
+            "readiness",
+            "--format",
+            "json",
+            "--endpoint",
+            external_endpoint.as_str(),
+        ],
+        &[("JARVIS_RELEASE_READINESS_EVIDENCE_MODE", "external")],
+    );
+    let format_external_readiness: Value =
+        serde_json::from_slice(&format_external_readiness_output.stdout)
+            .expect("server-backed readiness --format json output");
     assert_eq!(external_readiness["production_ready"], true);
+    assert_eq!(format_external_readiness["production_ready"], true);
     assert_eq!(external_readiness["pending_feature_count"], 0);
+    assert_eq!(format_external_readiness["pending_feature_count"], 0);
     assert!(external_readiness["pending_features"]
         .as_array()
         .expect("pending features")
@@ -2005,6 +2047,15 @@ fn release_evidence_status_cli_falls_back_without_running_server() {
         "--endpoint",
         endpoint.as_str(),
     ]);
+    let format_evidence_status: Value = serde_json::from_str(&run_cli_text([
+        "release",
+        "evidence-status",
+        "--format",
+        "json",
+        "--endpoint",
+        endpoint.as_str(),
+    ]))
+    .expect("release evidence-status --format json output");
     let readable_status = run_cli_text([
         "release",
         "evidence-status",
@@ -2013,6 +2064,11 @@ fn release_evidence_status_cli_falls_back_without_running_server() {
     ]);
 
     assert_eq!(evidence_status["complete"], false);
+    assert_eq!(format_evidence_status["complete"], false);
+    assert_eq!(
+        format_evidence_status["missing_count"],
+        evidence_status["missing_count"]
+    );
     assert!(evidence_status["items"]
         .as_array()
         .expect("evidence items")

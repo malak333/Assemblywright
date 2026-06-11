@@ -899,6 +899,10 @@ These notes capture durable facts for future agents working on this repository.
   sweep snapshot updates while preserving the same readiness boundary: 17
   verified repo-owned features, one pending manual `live_voice_loop` feature,
   and six missing external/manual evidence artifacts.
+- `jarvis release readiness` and `jarvis release evidence-status` preserve
+  operator-readable defaults. Use `--json` for the canonical machine-readable
+  flag, while `--format json` is accepted as a compatibility alias for older
+  release scripts or operator notes that used format-style JSON output.
 - Release evidence structural hardening now treats the final evidence chain as
   cross-bound evidence, not independent files: app zips are rejected unless they
   contain exactly one top-level `Jarvis.app` payload with `Info.plist`, the app
