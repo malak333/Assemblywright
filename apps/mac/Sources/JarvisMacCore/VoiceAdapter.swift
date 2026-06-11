@@ -66,6 +66,24 @@ public struct JarvisVoiceCaptureCallbacks: Sendable {
     }
 }
 
+public enum JarvisVoiceAutoSubmitAvailability: Equatable, Sendable {
+    case available
+    case unavailable(reason: String)
+
+    public var isAvailable: Bool {
+        self == .available
+    }
+
+    public var blockedReason: String? {
+        switch self {
+        case .available:
+            return nil
+        case let .unavailable(reason):
+            return reason
+        }
+    }
+}
+
 @MainActor
 public protocol JarvisVoiceAdapter: AnyObject {
     var phase: JarvisVoiceAdapterPhase { get }
@@ -84,17 +102,20 @@ public final class VoiceAdapterStateModel: ObservableObject {
     private let adapter: any JarvisVoiceAdapter
     private let voiceState: VoiceStateModel
     private let shouldAutoSubmitFinalTranscript: @MainActor () -> Bool
+    private let autoSubmitUnavailableReason: @MainActor () -> String?
     private let submitFinalTranscript: (@MainActor (JarvisVoiceCommandHandoff) async -> Void)?
 
     public init(
         adapter: any JarvisVoiceAdapter,
         voiceState: VoiceStateModel,
         shouldAutoSubmitFinalTranscript: @escaping @MainActor () -> Bool = { true },
+        autoSubmitUnavailableReason: @escaping @MainActor () -> String? = { nil },
         submitFinalTranscript: (@MainActor (JarvisVoiceCommandHandoff) async -> Void)? = nil
     ) {
         self.adapter = adapter
         self.voiceState = voiceState
         self.shouldAutoSubmitFinalTranscript = shouldAutoSubmitFinalTranscript
+        self.autoSubmitUnavailableReason = autoSubmitUnavailableReason
         self.submitFinalTranscript = submitFinalTranscript
         self.phase = adapter.phase
         self.lastError = nil
@@ -118,6 +139,28 @@ public final class VoiceAdapterStateModel: ObservableObject {
         case let .unavailable(reason):
             return "Voice adapter unavailable: \(reason)"
         }
+    }
+
+    public var autoSubmitAvailability: JarvisVoiceAutoSubmitAvailability {
+        guard submitFinalTranscript != nil else {
+            return .unavailable(reason: "Auto-submit is unavailable because no command submit handler is configured.")
+        }
+        switch phase {
+        case .requestingPermission:
+            return .unavailable(reason: "Auto-submit is unavailable while voice permissions are being requested.")
+        case let .unavailable(reason):
+            return .unavailable(reason: "Auto-submit is unavailable while voice capture is unavailable: \(reason)")
+        case .idle, .listening, .transcribing, .interrupted, .degraded:
+            break
+        }
+        if let reason = autoSubmitUnavailableReason() {
+            return .unavailable(reason: reason)
+        }
+        return .available
+    }
+
+    public var isFinalTranscriptAutoSubmitToggleEnabled: Bool {
+        autoSubmitAvailability.isAvailable
     }
 
     public var isCaptureActive: Bool {
@@ -215,7 +258,11 @@ public final class VoiceAdapterStateModel: ObservableObject {
     }
 
     public func setFinalTranscriptAutoSubmitEnabled(_ enabled: Bool) {
-        isFinalTranscriptAutoSubmitEnabled = enabled
+        guard enabled else {
+            isFinalTranscriptAutoSubmitEnabled = false
+            return
+        }
+        isFinalTranscriptAutoSubmitEnabled = isFinalTranscriptAutoSubmitToggleEnabled
     }
 
     private func fail(_ error: JarvisVoiceAdapterError, preserving previousPhase: JarvisVoiceAdapterPhase) {
@@ -224,6 +271,7 @@ public final class VoiceAdapterStateModel: ObservableObject {
             phase = previousPhase
         } else {
             phase = .unavailable(reason: error.description)
+            isFinalTranscriptAutoSubmitEnabled = false
             voiceState.setUnavailable(reason: error.description)
         }
     }
