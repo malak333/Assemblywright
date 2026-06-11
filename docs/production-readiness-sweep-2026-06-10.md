@@ -12,7 +12,7 @@ Command:
 cargo run -p jarvis-cli -- release readiness --json
 ```
 
-Observed on 2026-06-11 from `main` at `2738779` after PR #214:
+Observed on 2026-06-11 from `main` at `d5d3c6f` after PR #221:
 
 - `production_ready: false`
 - `verified_feature_count: 17`
@@ -82,14 +82,13 @@ Jarvis is currently a production-shaped local assistant foundation:
   repository-backed operator smoke, packaged-app smoke, unsigned distribution
   launch proof, release evidence script self-tests, Rust/CLI E2E, and Swift
   package tests.
-- PR #212 aligned `/contract` release-evidence proof metadata with current
-  evidence-status and final-bundle semantics, including repository-backed live
-  command evidence, plugin-trust host-egress fields, and child-report semantic
-  revalidation.
-- PR #214 added structural release-evidence hardening after PR #213 and
-  preserved the current conservative readiness boundary: 17 verified repo-owned
-  features, one pending manual live voice validation feature, and six missing
-  external/manual evidence artifacts.
+- PRs #215 through #221 tightened plugin trust evidence, package provenance,
+  Mac scheduler actions, public GitHub release-local runtime compatibility,
+  release-evidence archive URI validation, `/contract` release-evidence
+  wording, and `/release/evidence-status` proof-boundary wording.
+- The current conservative readiness boundary is unchanged: 17 verified
+  repo-owned features, one pending manual live voice validation feature, and
+  six missing external/manual evidence artifacts.
 
 ## End-Goal Production Phase
 
@@ -104,7 +103,7 @@ same architecture plus validated external release evidence:
 - Plugin trust evidence for marketplace review, malware analysis, OS sandbox
   validation, and host-level egress controls before marketplace claims.
 - Final release evidence bundle generated, checked by the evidence doctor, and
-  archived.
+  archived at a durable reports archive URI.
 - Evidence-aware readiness rerun with
   `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external` only after all required
   reports exist and pass semantic checks.
@@ -144,3 +143,8 @@ live-device QA bundled-core SHA-256 must match the signed-provenance bundled
 core SHA-256; and the owner final-bundle completion time must be no earlier than
 the signed-provenance, live-device QA, and plugin-trust child report generation
 times and no later than the final bundle generation time.
+Final release evidence also requires a durable reports archive URI. Blank
+values, missing schemes, placeholder/example/fixture values, and self-test
+archive locations are invalid for production evidence in
+`release-evidence-bundle.sh`, `release-evidence-doctor.sh`, and
+`/release/evidence-status`.
