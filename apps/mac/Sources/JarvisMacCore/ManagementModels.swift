@@ -206,6 +206,8 @@ public final class SchedulerModel: ObservableObject {
     @Published public private(set) var jobs: [JarvisSchedulerJob]
     @Published public private(set) var attention: JarvisSchedulerAttentionSummary?
     @Published public private(set) var selectedJob: JarvisSchedulerJob?
+    @Published public private(set) var lastRunDue: JarvisSchedulerRunResponse?
+    @Published public private(set) var lastStaleRecovery: JarvisSchedulerStaleRecoveryResponse?
     @Published public private(set) var isLoading: Bool
     @Published public private(set) var lastError: String?
 
@@ -216,6 +218,8 @@ public final class SchedulerModel: ObservableObject {
         self.jobs = []
         self.attention = nil
         self.selectedJob = nil
+        self.lastRunDue = nil
+        self.lastStaleRecovery = nil
         self.isLoading = false
         self.lastError = nil
     }
@@ -268,6 +272,29 @@ public final class SchedulerModel: ObservableObject {
                 self.selectedJob = job
             }
             self.attention = try await self.client.schedulerAttention()
+        }
+    }
+
+    public func runDue(limit: Int) async {
+        await run {
+            self.lastRunDue = try await self.client.runDueSchedulerJobs(limit: limit)
+            async let jobs = self.client.listSchedulerJobs()
+            async let attention = self.client.schedulerAttention()
+            self.jobs = try await jobs
+            self.attention = try await attention
+        }
+    }
+
+    public func recoverStale(olderThanSeconds: UInt64, limit: Int) async {
+        await run {
+            self.lastStaleRecovery = try await self.client.recoverStaleSchedulerJobs(
+                olderThanSeconds: olderThanSeconds,
+                limit: limit
+            )
+            async let jobs = self.client.listSchedulerJobs()
+            async let attention = self.client.schedulerAttention()
+            self.jobs = try await jobs
+            self.attention = try await attention
         }
     }
 

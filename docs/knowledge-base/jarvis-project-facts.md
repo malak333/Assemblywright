@@ -549,8 +549,8 @@ These notes capture durable facts for future agents working on this repository.
   missing process environment values when launching the bundled core; explicit
   environment values still win, and the provider does not auto-enable ChatGPT.
 - The Swift shell exposes production-facing management tabs for approval
-  evidence, runs/audit, scheduler create/inspect/cancel, redacted diagnostics,
-  release readiness, and voice state. Voice supports typed transcript staging,
+  evidence, runs/audit, scheduler create/inspect/cancel/run-due/recover-stale,
+  redacted diagnostics, release readiness, and voice state. Voice supports typed transcript staging,
   manual submit, and opt-in final-transcript auto-submit into the same text
   command path. The voice model handles interruption, resume/cancel,
   unavailable, and degraded typed-fallback states,
@@ -599,12 +599,17 @@ These notes capture durable facts for future agents working on this repository.
   Release-readiness feature metadata describes this as explicit plus opt-in
   startup recovery, with no default background recovery or distributed lease
   claim.
-  The Swift Scheduler tab renders this summary above the job list and now owns
-  a protocol-backed notification model plus macOS `UserNotifications` adapter
-  controls for due, failed, and emergency-pause-blocked attention items. Swift
-  tests use a fake adapter to cover authorization, delivery, duplicate
-  suppression, and denied-permission fail-closed behavior. Broader production
-  trigger policy and live OS notification validation remain target architecture.
+  The Swift Scheduler tab renders this summary above the job list and owns
+  typed controls for bounded `/scheduler/run-due` and
+  `/scheduler/recover-stale`, refreshing jobs and attention after each action
+  and rendering concise last-action state without exposing scheduler command
+  bodies. It also owns a protocol-backed notification model plus macOS
+  `UserNotifications` adapter controls for due, failed, and
+  emergency-pause-blocked attention items. Swift tests use fake IPC and
+  notification adapters to cover run/recovery routing, model refresh,
+  authorization, delivery, duplicate suppression, and denied-permission
+  fail-closed behavior. Broader production trigger policy and live OS
+  notification validation remain target architecture.
 
 ## Proof Boundaries
 
@@ -652,6 +657,10 @@ These notes capture durable facts for future agents working on this repository.
   `serve_can_recover_stale_scheduler_jobs_on_startup`, which starts `jarvis
   serve` with the opt-in recovery flags and asserts the recovered job, redacted
   audit entry, and `automatic_recovery: true` marker.
+  Swift scheduler action coverage is in `apps/mac/Tests/JarvisMacCoreTests`,
+  including typed client paths for `/scheduler/run-due` and
+  `/scheduler/recover-stale` plus `SchedulerModel` run/recovery refresh
+  behavior.
 - Focused provider-failure recovery coverage is
   `cargo test -p jarvis-core model_provider_failure_returns_failed_response_with_route_evidence -- --nocapture`
   plus

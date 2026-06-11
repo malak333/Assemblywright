@@ -578,7 +578,11 @@ struct JarvisMacCoreTests {
 
         IPCURLProtocol.handler = { request in
             let body = decodeRequestBody(request)
-            requests.append((request.httpMethod ?? "", request.url?.path(percentEncoded: false) ?? "", body))
+            let requestPath = request.url?.path(percentEncoded: false) ?? ""
+            let requestPathWithQuery = request.url?.query
+                .map { "\(requestPath)?\($0)" }
+                ?? requestPath
+            requests.append((request.httpMethod ?? "", requestPathWithQuery, body))
 
             let response = HTTPURLResponse(
                 url: request.url!,
@@ -618,6 +622,10 @@ struct JarvisMacCoreTests {
                 return (response, schedulerAttentionJSON(id: jobId))
             case "/scheduler/jobs/\(jobId.uuidString)":
                 return (response, schedulerJobJSON(id: jobId))
+            case "/scheduler/run-due":
+                return (response, schedulerRunDueJSON(id: jobId))
+            case "/scheduler/recover-stale":
+                return (response, schedulerRecoverStaleJSON(id: jobId))
             case "/activity/summary":
                 return (response, activitySummaryJSON(taskId: jobId))
             case "/activity/events":
@@ -667,6 +675,8 @@ struct JarvisMacCoreTests {
             )
         )
         _ = try await client.schedulerJob(id: jobId)
+        _ = try await client.runDueSchedulerJobs(limit: 4)
+        _ = try await client.recoverStaleSchedulerJobs(olderThanSeconds: 120, limit: 2)
         _ = try await client.activitySummary()
         _ = try await client.activityEvents(maxEvents: 2, intervalMilliseconds: 500)
         _ = try await client.pauseStatus()
@@ -688,6 +698,8 @@ struct JarvisMacCoreTests {
             "GET",
             "POST",
             "GET",
+            "POST",
+            "POST",
             "GET",
             "GET",
             "GET"
@@ -696,8 +708,8 @@ struct JarvisMacCoreTests {
             "/contract",
             "/release/readiness",
             "/release/evidence-status",
-            "/memory",
-            "/memory/classification",
+            "/memory?include_deleted=true",
+            "/memory/classification?include_deleted=true",
             "/memory",
             "/memory/\(memoryId.uuidString)",
             "/memory/\(memoryId.uuidString)",
@@ -709,8 +721,10 @@ struct JarvisMacCoreTests {
             "/scheduler/attention",
             "/scheduler/jobs",
             "/scheduler/jobs/\(jobId.uuidString)",
+            "/scheduler/run-due?limit=4",
+            "/scheduler/recover-stale?older_than_seconds=120&limit=2",
             "/activity/summary",
-            "/activity/events",
+            "/activity/events?max_events=2&interval_ms=500",
             "/emergency-pause"
         ])
         #expect(requests[5].body?["key"] as? String == "release-gate")
@@ -995,6 +1009,53 @@ struct JarvisMacCoreTests {
         #expect(item.id == id)
         #expect(item.notificationKind == "due_now")
         #expect(item.notificationReason.contains("scheduler job is due"))
+    }
+
+    @Test("Scheduler action payloads decode run and stale recovery responses")
+    func decodesSchedulerActionResponses() throws {
+        let id = UUID()
+        let runDue = try JSONDecoder().decode(
+            JarvisSchedulerRunResponse.self,
+            from: schedulerRunDueJSON(id: id)
+        )
+        let recovered = try JSONDecoder().decode(
+            JarvisSchedulerStaleRecoveryResponse.self,
+            from: schedulerRecoverStaleJSON(id: id)
+        )
+
+        #expect(!runDue.emergencyPaused)
+        #expect(runDue.limit == 4)
+        #expect(runDue.executions.first?.job.id == id)
+        #expect(runDue.executions.first?.accepted == true)
+        #expect(runDue.executions.first?.auditEntries.first?.eventType == "scheduler_job_completed")
+        #expect(recovered.olderThanSeconds == 120)
+        #expect(recovered.limit == 2)
+        #expect(recovered.recovered.first?.job.id == id)
+        #expect(recovered.recovered.first?.auditEntry.eventType == "scheduler_stale_running_recovered")
+    }
+
+    @Test("Scheduler model runs due jobs and recovers stale jobs through IPC client")
+    @MainActor
+    func schedulerModelRunsDueAndRecoversStaleJobs() async throws {
+        let id = UUID()
+        let client = FakeCoreClient(
+            schedulerJobs: [
+                try JSONDecoder().decode(JarvisSchedulerJob.self, from: schedulerJobJSON(id: id))
+            ]
+        )
+        let model = SchedulerModel(client: client)
+
+        await model.runDue(limit: 4)
+        await model.recoverStale(olderThanSeconds: 120, limit: 2)
+
+        #expect(client.runDueSchedulerLimits == [4])
+        #expect(client.recoverStaleSchedulerRequests.first?.olderThanSeconds == 120)
+        #expect(client.recoverStaleSchedulerRequests.first?.limit == 2)
+        #expect(model.lastRunDue?.executions.first?.job.id == id)
+        #expect(model.lastStaleRecovery?.recovered.first?.job.id == id)
+        #expect(model.jobs.first?.id == id)
+        #expect(model.attention != nil)
+        #expect(model.lastError == nil)
     }
 
     @Test("Scheduler notification model requests authorization and delivers due attention")
@@ -2649,6 +2710,89 @@ struct JarvisMacCoreTests {
         )
     }
 
+    private func schedulerRunDueJSON(id: UUID) -> Data {
+        Data(
+            """
+            {
+              "checked_at": "2026-05-20T12:00:04Z",
+              "limit": 4,
+              "emergency_paused": false,
+              "executions": [
+                {
+                  "job": {
+                    "id": "\(id.uuidString)",
+                    "name": "one shot",
+                    "command": "status check",
+                    "trigger": "manual",
+                    "status": "completed",
+                    "created_at": "2026-05-20T12:00:00Z",
+                    "updated_at": "2026-05-20T12:00:04Z",
+                    "cancelled_at": null,
+                    "cancellation_reason": null
+                  },
+                  "task": {
+                    "id": "\(id.uuidString)",
+                    "session_id": "\(UUID().uuidString)",
+                    "user_input": "status check",
+                    "status": "completed",
+                    "created_at": "2026-05-20T12:00:03Z",
+                    "updated_at": "2026-05-20T12:00:04Z"
+                  },
+                  "accepted": true,
+                  "message": "scheduled command completed",
+                  "audit_entries": [
+                    {
+                      "id": "\(UUID().uuidString)",
+                      "task_id": "\(id.uuidString)",
+                      "event_type": "scheduler_job_completed",
+                      "summary": "scheduler finished due job command",
+                      "payload": { "command_redacted": true },
+                      "created_at": "2026-05-20T12:00:04Z"
+                    }
+                  ]
+                }
+              ]
+            }
+            """.utf8
+        )
+    }
+
+    private func schedulerRecoverStaleJSON(id: UUID) -> Data {
+        Data(
+            """
+            {
+              "checked_at": "2026-05-20T12:00:05Z",
+              "older_than_seconds": 120,
+              "limit": 2,
+              "recovered": [
+                {
+                  "job": {
+                    "id": "\(id.uuidString)",
+                    "name": "stale running job",
+                    "trigger": "manual",
+                    "status": "failed",
+                    "created_at": "2026-05-20T11:00:00Z",
+                    "updated_at": "2026-05-20T12:00:05Z",
+                    "cancelled_at": null,
+                    "cancellation_reason_present": false
+                  },
+                  "stale_since": "2026-05-20T11:55:00Z",
+                  "stale_for_seconds": 300,
+                  "audit_entry": {
+                    "id": "\(UUID().uuidString)",
+                    "task_id": null,
+                    "event_type": "scheduler_stale_running_recovered",
+                    "summary": "scheduler marked a stale running job failed for explicit operator recovery",
+                    "payload": { "command_redacted": true },
+                    "created_at": "2026-05-20T12:00:05Z"
+                  }
+                }
+              ]
+            }
+            """.utf8
+        )
+    }
+
     private func activitySummaryJSON(taskId: UUID) -> Data {
         Data(
             """
@@ -3609,6 +3753,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     private var pluginManifests: [JarvisPluginManifest]
     private var installedPlugins: [JarvisInstalledPluginRecord]
     private var installedPluginsUnavailable: Bool
+    private var schedulerJobs: [JarvisSchedulerJob]
     private var memoryItems: [JarvisMemoryItem]
     private var permissionGrantSummaryResult: JarvisPermissionGrantSummary?
     private(set) var approvalDecisions: [ApprovalDecision]
@@ -3616,6 +3761,8 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     private(set) var includeDeletedMemoryRequests: [Bool]
     private(set) var createdMemoryRequests: [JarvisCreateMemoryItemRequest]
     private(set) var updatedMemoryRequests: [(id: UUID, request: JarvisMemoryMutationRequest)]
+    private(set) var runDueSchedulerLimits: [Int]
+    private(set) var recoverStaleSchedulerRequests: [(olderThanSeconds: UInt64, limit: Int)]
 
     init(
         healthResults: [Result<JarvisHealth, Error>] = [.success(sampleHealth())],
@@ -3630,6 +3777,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         pluginManifests: [JarvisPluginManifest] = [],
         installedPlugins: [JarvisInstalledPluginRecord] = [],
         installedPluginsUnavailable: Bool = false,
+        schedulerJobs: [JarvisSchedulerJob] = [],
         memoryItems: [JarvisMemoryItem] = [],
         permissionGrantSummary: JarvisPermissionGrantSummary? = nil
     ) {
@@ -3646,6 +3794,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         self.pluginManifests = pluginManifests
         self.installedPlugins = installedPlugins
         self.installedPluginsUnavailable = installedPluginsUnavailable
+        self.schedulerJobs = schedulerJobs
         self.memoryItems = memoryItems
         self.permissionGrantSummaryResult = permissionGrantSummary
         self.approvalDecisions = []
@@ -3653,6 +3802,8 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         self.includeDeletedMemoryRequests = []
         self.createdMemoryRequests = []
         self.updatedMemoryRequests = []
+        self.runDueSchedulerLimits = []
+        self.recoverStaleSchedulerRequests = []
     }
 
     func health() async throws -> JarvisHealth {
@@ -3899,7 +4050,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     }
 
     func listSchedulerJobs() async throws -> [JarvisSchedulerJob] {
-        []
+        schedulerJobs
     }
 
     func schedulerAttention() async throws -> JarvisSchedulerAttentionSummary {
@@ -3933,6 +4084,98 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
 
     func cancelSchedulerJob(id: UUID) async throws -> JarvisSchedulerJob {
         throw URLError(.unsupportedURL)
+    }
+
+    func runDueSchedulerJobs(limit: Int) async throws -> JarvisSchedulerRunResponse {
+        runDueSchedulerLimits.append(limit)
+        let id = schedulerJobs.first?.id ?? UUID()
+        return try JSONDecoder().decode(JarvisSchedulerRunResponse.self, from: fakeSchedulerRunDueJSON(id: id))
+    }
+
+    func recoverStaleSchedulerJobs(
+        olderThanSeconds: UInt64,
+        limit: Int
+    ) async throws -> JarvisSchedulerStaleRecoveryResponse {
+        recoverStaleSchedulerRequests.append((olderThanSeconds: olderThanSeconds, limit: limit))
+        let id = schedulerJobs.first?.id ?? UUID()
+        return try JSONDecoder().decode(
+            JarvisSchedulerStaleRecoveryResponse.self,
+            from: fakeSchedulerRecoverStaleJSON(id: id)
+        )
+    }
+
+    private func fakeSchedulerRunDueJSON(id: UUID) -> Data {
+        Data(
+            """
+            {
+              "checked_at": "2026-05-20T12:00:04Z",
+              "limit": 4,
+              "emergency_paused": false,
+              "executions": [
+                {
+                  "job": {
+                    "id": "\(id.uuidString)",
+                    "name": "one shot",
+                    "command": "status check",
+                    "trigger": "manual",
+                    "status": "completed",
+                    "created_at": "2026-05-20T12:00:00Z",
+                    "updated_at": "2026-05-20T12:00:04Z",
+                    "cancelled_at": null,
+                    "cancellation_reason": null
+                  },
+                  "task": {
+                    "id": "\(id.uuidString)",
+                    "session_id": "\(UUID().uuidString)",
+                    "user_input": "status check",
+                    "status": "completed",
+                    "created_at": "2026-05-20T12:00:03Z",
+                    "updated_at": "2026-05-20T12:00:04Z"
+                  },
+                  "accepted": true,
+                  "message": "scheduled command completed",
+                  "audit_entries": []
+                }
+              ]
+            }
+            """.utf8
+        )
+    }
+
+    private func fakeSchedulerRecoverStaleJSON(id: UUID) -> Data {
+        Data(
+            """
+            {
+              "checked_at": "2026-05-20T12:00:05Z",
+              "older_than_seconds": 120,
+              "limit": 2,
+              "recovered": [
+                {
+                  "job": {
+                    "id": "\(id.uuidString)",
+                    "name": "stale running job",
+                    "trigger": "manual",
+                    "status": "failed",
+                    "created_at": "2026-05-20T11:00:00Z",
+                    "updated_at": "2026-05-20T12:00:05Z",
+                    "cancelled_at": null,
+                    "cancellation_reason_present": false
+                  },
+                  "stale_since": "2026-05-20T11:55:00Z",
+                  "stale_for_seconds": 300,
+                  "audit_entry": {
+                    "id": "\(UUID().uuidString)",
+                    "task_id": null,
+                    "event_type": "scheduler_stale_running_recovered",
+                    "summary": "scheduler marked a stale running job failed for explicit operator recovery",
+                    "payload": { "command_redacted": true },
+                    "created_at": "2026-05-20T12:00:05Z"
+                  }
+                }
+              ]
+            }
+            """.utf8
+        )
     }
 
     func diagnosticsExport() async throws -> JarvisDiagnosticsExport {

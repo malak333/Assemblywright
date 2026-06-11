@@ -956,6 +956,64 @@ public struct JarvisCreateSchedulerJobRequest: Encodable, Equatable, Sendable {
     }
 }
 
+public struct JarvisSchedulerRunResponse: Decodable, Equatable, Sendable {
+    public var checkedAt: String
+    public var limit: Int
+    public var emergencyPaused: Bool
+    public var executions: [JarvisSchedulerJobExecution]
+
+    enum CodingKeys: String, CodingKey {
+        case checkedAt = "checked_at"
+        case limit
+        case emergencyPaused = "emergency_paused"
+        case executions
+    }
+}
+
+public struct JarvisSchedulerJobExecution: Decodable, Equatable, Sendable {
+    public var job: JarvisSchedulerJob
+    public var task: JarvisTask
+    public var accepted: Bool
+    public var message: String
+    public var auditEntries: [JarvisAuditEntry]
+
+    enum CodingKeys: String, CodingKey {
+        case job
+        case task
+        case accepted
+        case message
+        case auditEntries = "audit_entries"
+    }
+}
+
+public struct JarvisSchedulerStaleRecoveryResponse: Decodable, Equatable, Sendable {
+    public var checkedAt: String
+    public var olderThanSeconds: UInt64
+    public var limit: Int
+    public var recovered: [JarvisSchedulerStaleRecoveryItem]
+
+    enum CodingKeys: String, CodingKey {
+        case checkedAt = "checked_at"
+        case olderThanSeconds = "older_than_seconds"
+        case limit
+        case recovered
+    }
+}
+
+public struct JarvisSchedulerStaleRecoveryItem: Decodable, Equatable, Sendable {
+    public var job: JarvisDiagnosticSchedulerJob
+    public var staleSince: String
+    public var staleForSeconds: Int
+    public var auditEntry: JarvisAuditEntry
+
+    enum CodingKeys: String, CodingKey {
+        case job
+        case staleSince = "stale_since"
+        case staleForSeconds = "stale_for_seconds"
+        case auditEntry = "audit_entry"
+    }
+}
+
 public struct JarvisCommandResponse: Decodable, Equatable, Sendable {
     public var accepted: Bool
     public var task: JarvisTask
@@ -1497,6 +1555,8 @@ public protocol JarvisCoreClient: Sendable {
     func schedulerJob(id: UUID) async throws -> JarvisSchedulerJob
     func createSchedulerJob(_ request: JarvisCreateSchedulerJobRequest) async throws -> JarvisSchedulerJob
     func cancelSchedulerJob(id: UUID) async throws -> JarvisSchedulerJob
+    func runDueSchedulerJobs(limit: Int) async throws -> JarvisSchedulerRunResponse
+    func recoverStaleSchedulerJobs(olderThanSeconds: UInt64, limit: Int) async throws -> JarvisSchedulerStaleRecoveryResponse
     func diagnosticsExport() async throws -> JarvisDiagnosticsExport
     func permissionGrantSummary() async throws -> JarvisPermissionGrantSummary
     func permissionPolicyReview() async throws -> JarvisPermissionPolicyReview
@@ -1653,6 +1713,28 @@ public final class JarvisIPCClient: JarvisCoreClient {
 
     public func cancelSchedulerJob(id: UUID) async throws -> JarvisSchedulerJob {
         try await send(path: "/scheduler/jobs/\(id.uuidString)", method: "DELETE", body: Optional<Data>.none)
+    }
+
+    public func runDueSchedulerJobs(limit: Int = 8) async throws -> JarvisSchedulerRunResponse {
+        let boundedLimit = max(limit, 1)
+        return try await send(
+            path: "/scheduler/run-due?limit=\(boundedLimit)",
+            method: "POST",
+            body: Optional<Data>.none
+        )
+    }
+
+    public func recoverStaleSchedulerJobs(
+        olderThanSeconds: UInt64 = 3600,
+        limit: Int = 8
+    ) async throws -> JarvisSchedulerStaleRecoveryResponse {
+        let boundedOlderThanSeconds = max(olderThanSeconds, 1)
+        let boundedLimit = max(limit, 1)
+        return try await send(
+            path: "/scheduler/recover-stale?older_than_seconds=\(boundedOlderThanSeconds)&limit=\(boundedLimit)",
+            method: "POST",
+            body: Optional<Data>.none
+        )
     }
 
     public func diagnosticsExport() async throws -> JarvisDiagnosticsExport {
