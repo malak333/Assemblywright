@@ -511,9 +511,10 @@ evidence bundle manifest, then reports present, missing, or invalid evidence
 without failing the local gate. It also validates the packaged app metadata and
 bundled core version marker before counting the local app artifacts as
 present. When evidence is missing it also prints the
-next signing, live-device template/assertion, plugin-trust template/assertion,
-and final-bundle template/bundle commands so operators can move from inventory
-to evidence capture without cross-referencing another checklist. Its
+next package preflight, signing, live-device template/assertion, plugin-trust
+template/assertion, and final-bundle template/bundle commands so operators can
+move from inventory to evidence capture without cross-referencing another
+checklist. Its
 `--assert-complete` is included in the release-readiness runbook as the final
 inventory assertion after `--bundle`. It requires the final bundle manifest to
 include a non-future UTC generation timestamp, expected release version, non-empty

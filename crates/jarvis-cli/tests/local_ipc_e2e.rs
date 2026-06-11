@@ -175,6 +175,11 @@ fn release_readiness_cli_falls_back_without_running_server() {
     );
     assert_string_array_order(
         &release_readiness["recommended_verification_commands"],
+        "./scripts/package-distribution.sh --check",
+        "./scripts/package-distribution.sh --unsigned-launch-check",
+    );
+    assert_string_array_order(
+        &release_readiness["recommended_verification_commands"],
         "./scripts/package-distribution.sh --unsigned-launch-check",
         "cargo run -p jarvis-cli -- release signed-distribution-runbook",
     );

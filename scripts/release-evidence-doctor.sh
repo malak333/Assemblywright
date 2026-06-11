@@ -79,6 +79,7 @@ record_missing() {
 print_next_steps() {
   cat <<'STEPS'
 Recommended next evidence commands:
+  package preflight: ./scripts/package-distribution.sh --check
   signing: JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh
   live-device template: ./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env
   live-device assertion: set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete
@@ -1490,6 +1491,9 @@ JSON
     "$0" --check)"
   if [[ "$stale_marker_output" != *"./scripts/package-distribution.sh --unsigned-launch-check"* ]]; then
     fail "release evidence doctor self-test expected stale bundled core guidance to include package-distribution.sh --unsigned-launch-check"
+  fi
+  if [[ "$stale_marker_output" != *"package preflight: ./scripts/package-distribution.sh --check"* ]]; then
+    fail "release evidence doctor self-test expected next-step guidance to include package-distribution.sh --check"
   fi
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
     JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
