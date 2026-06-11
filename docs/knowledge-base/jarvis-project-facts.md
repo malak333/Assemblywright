@@ -91,7 +91,9 @@ These notes capture durable facts for future agents working on this repository.
   requirement policy, plus a `features` list with stable keys, status, proof,
   and boundary fields so Swift and release docs can distinguish implemented
   repo-owned surfaces from manual or target production claims without scraping
-  prose.
+  prose. `jarvis contract` emits JSON by default and also accepts `--json` so
+  scripts can use the same explicit machine-output flag pattern as other
+  inspection commands.
 - `/release/readiness` and `jarvis release readiness` derive a conservative
   read-only release summary from contract feature metadata, release-checklist
   blockers, and explicitly enabled release evidence status. Default readiness
