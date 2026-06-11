@@ -106,6 +106,22 @@ require_non_empty_env() {
   [[ -n "${value//[[:space:]]/}" ]] || fail "$name must be set to a non-empty owner-recorded evidence value"
 }
 
+require_meaningful_evidence_env() {
+  local name="$1"
+  local value="${!name:-}"
+  require_non_empty_env "$name"
+  require_command python3
+  python3 - "$name" "$value" <<'PY'
+import re
+import sys
+
+name, value = sys.argv[1:3]
+normalized = value.strip().lower()
+if normalized in {"fixture", "self-test fixture", "todo", "tbd", "n/a", "na", "pending"}:
+    raise SystemExit(f"{name} must contain owner-recorded external evidence, not placeholder or fixture text")
+PY
+}
+
 require_reports_archive_uri_env() {
   local name="$1"
   local value="${!name:-}"
@@ -443,6 +459,29 @@ for segment in dotted_key.split("."):
 
 if not isinstance(cursor, str) or not cursor.strip():
     raise SystemExit(f"{label} required evidence field is blank: {dotted_key}")
+PY
+}
+
+require_json_meaningful_evidence_string() {
+  local label="$1"
+  local path="$2"
+  local dotted_key="$3"
+  require_json_nonempty_string "$label" "$path" "$dotted_key"
+  python3 - "$path" "$dotted_key" "$label" <<'PY'
+import json
+import sys
+
+path, dotted_key, label = sys.argv[1:4]
+with open(path, encoding="utf-8") as handle:
+    data = json.load(handle)
+
+cursor = data
+for segment in dotted_key.split("."):
+    cursor = cursor[segment]
+
+normalized = cursor.strip().lower()
+if normalized in {"fixture", "self-test fixture", "todo", "tbd", "n/a", "na", "pending"}:
+    raise SystemExit(f"{label} evidence field {dotted_key} must contain owner-recorded external evidence, not placeholder or fixture text")
 PY
 }
 
@@ -1339,6 +1378,28 @@ PY
   fi
   require_file_contains "placeholder archive URI error" "$tmp_dir/placeholder-archive.err" "durable release evidence archive"
 
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/placeholder-note-bundle.json" \
+    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
+    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_NOTE="pending" \
+    "$0" --bundle >/dev/null 2>"$tmp_dir/placeholder-note.err"; then
+    fail "release evidence self-test expected placeholder owner evidence note to be rejected"
+  fi
+  require_file_contains "placeholder owner evidence note error" "$tmp_dir/placeholder-note.err" "owner-recorded external evidence"
+
   nested_zip="$tmp_dir/dist/nested-Jarvis-$VERSION.zip"
   mkdir -p "$tmp_dir/nested/payload"
   cp -R "$tmp_dir/dist/Jarvis.app" "$tmp_dir/nested/payload/Jarvis.app"
@@ -2141,12 +2202,12 @@ require_true JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED
 require_true JARVIS_EVIDENCE_REPORTS_ARCHIVED
 require_non_empty_env JARVIS_EVIDENCE_OWNER_NAME
 require_not_future_timestamp_env JARVIS_EVIDENCE_COMPLETED_AT
-require_non_empty_env JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_NOTE
-require_non_empty_env JARVIS_EVIDENCE_NOTARIZATION_NOTE
-require_non_empty_env JARVIS_EVIDENCE_CLEAN_PROFILE_NOTE
-require_non_empty_env JARVIS_EVIDENCE_LIVE_DEVICE_QA_NOTE
-require_non_empty_env JARVIS_EVIDENCE_PLUGIN_TRUST_QA_NOTE
-require_non_empty_env JARVIS_EVIDENCE_REPORTS_ARCHIVE_NOTE
+require_meaningful_evidence_env JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_NOTE
+require_meaningful_evidence_env JARVIS_EVIDENCE_NOTARIZATION_NOTE
+require_meaningful_evidence_env JARVIS_EVIDENCE_CLEAN_PROFILE_NOTE
+require_meaningful_evidence_env JARVIS_EVIDENCE_LIVE_DEVICE_QA_NOTE
+require_meaningful_evidence_env JARVIS_EVIDENCE_PLUGIN_TRUST_QA_NOTE
+require_meaningful_evidence_env JARVIS_EVIDENCE_REPORTS_ARCHIVE_NOTE
 if [[ "${JARVIS_EVIDENCE_SELF_TEST_MODE:-}" == "true" ]]; then
   require_non_empty_env JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI
 else
@@ -2155,8 +2216,11 @@ fi
 write_bundle
 require_json_number_equals "release evidence bundle" "$OUTPUT_PATH" "schema_version" "1"
 require_json_string_equals "release evidence bundle" "$OUTPUT_PATH" "evidence_type" "release_evidence_bundle"
-for field in owner_name completed_at signed_distribution_note notarization_note clean_profile_note live_device_qa_note plugin_trust_qa_note reports_archive_note reports_archive_uri; do
+for field in owner_name completed_at reports_archive_uri; do
   require_json_nonempty_string "release evidence bundle" "$OUTPUT_PATH" "owner_recorded_release_evidence.$field"
+done
+for field in signed_distribution_note notarization_note clean_profile_note live_device_qa_note plugin_trust_qa_note reports_archive_note; do
+  require_json_meaningful_evidence_string "release evidence bundle" "$OUTPUT_PATH" "owner_recorded_release_evidence.$field"
 done
 if [[ "${JARVIS_EVIDENCE_SELF_TEST_MODE:-}" != "true" ]]; then
   require_json_reports_archive_uri "release evidence bundle" "$OUTPUT_PATH" "owner_recorded_release_evidence.reports_archive_uri"

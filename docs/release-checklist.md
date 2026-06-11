@@ -577,10 +577,11 @@ Clean-profile and manual production gates not proven by this local smoke:
   All required `JARVIS_QA_*` flags must be set to `true`, including
   `JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true`, plus the required
   owner/device/profile/UTC timestamp, non-voice owner evidence-note, voice evidence-note, and structured
-  spoken-command observation fields. Owner-recorded evidence fields must contain
-  non-whitespace text, and `JARVIS_QA_SELF_TEST_FIXTURE=true` is reserved for
+  spoken-command observation fields. Owner-recorded evidence-note fields must contain
+  non-placeholder text, not values such as `TODO`, `pending`, `n/a`, `fixture`,
+  or `self-test fixture`, and `JARVIS_QA_SELF_TEST_FIXTURE=true` is reserved for
   the script's internal fake-fixture self-test rather than release evidence.
-  `/release/evidence-status` also rejects whitespace-only owner evidence before
+  `/release/evidence-status` also rejects empty or placeholder owner evidence before
   the report can clear `live_voice_loop`. The installed app path must match the
   expected `/Applications/Jarvis.app` path unless explicitly overridden with
   `JARVIS_QA_INSTALLED_APP_PATH`, the observed transcript must match the spoken
@@ -679,8 +680,8 @@ Distribution packaging gate:
   live voice and non-voice evidence notes, structured spoken-command
   observation fields, installed-app metadata, schema identity, and proof boundary.
   Confirm the same report is visible through `jarvis release evidence-status`
-  without missing, whitespace-only, or invalid live voice evidence fields.
-  before using evidence-aware readiness language.
+  without missing, placeholder, or invalid live voice evidence fields before
+  using evidence-aware readiness language.
 
 ## Release Notes
 
