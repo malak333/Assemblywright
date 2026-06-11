@@ -5735,7 +5735,8 @@ fn release_verification_commands() -> Vec<String> {
         "set -a && source target/release-evidence-bundle.env && set +a && ./scripts/release-evidence-bundle.sh --bundle".to_string(),
         "JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true JARVIS_EVIDENCE_REPORTS_ARCHIVED=true JARVIS_EVIDENCE_OWNER_NAME='Release Operator' JARVIS_EVIDENCE_COMPLETED_AT='2026-05-22T17:00:00Z' JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_NOTE='Signed distribution evidence archived' JARVIS_EVIDENCE_NOTARIZATION_NOTE='Notarization evidence archived' JARVIS_EVIDENCE_CLEAN_PROFILE_NOTE='Clean-profile evidence archived' JARVIS_EVIDENCE_LIVE_DEVICE_QA_NOTE='Live-device QA evidence archived' JARVIS_EVIDENCE_PLUGIN_TRUST_QA_NOTE='Plugin-trust QA evidence archived' JARVIS_EVIDENCE_REPORTS_ARCHIVE_NOTE='Release reports archived' JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI='<archive-uri>' ./scripts/release-evidence-bundle.sh --bundle".to_string(),
         "./scripts/release-evidence-doctor.sh --assert-complete".to_string(),
-        "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness".to_string(),
+        "Start or restart the core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external".to_string(),
+        "cargo run -p jarvis-cli -- release readiness".to_string(),
     ]
 }
 
@@ -6385,9 +6386,11 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             commands,
             "./scripts/release-evidence-doctor.sh --assert-complete",
         );
-        let external_readiness_index = command_index(
+        let external_readiness_index =
+            command_index(commands, "cargo run -p jarvis-cli -- release readiness");
+        let external_core_restart_index = command_index(
             commands,
-            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness",
+            "Start or restart the core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external",
         );
         assert!(workflow_smoke_index < operator_qa_index);
         assert!(distribution_check_index < unsigned_distribution_index);
@@ -6400,7 +6403,8 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert!(plugin_trust_assert_index < evidence_bundle_source_index);
         assert!(evidence_bundle_source_index < evidence_doctor_assert_index);
         assert!(evidence_bundle_inline_index < evidence_doctor_assert_index);
-        assert!(evidence_doctor_assert_index < external_readiness_index);
+        assert!(evidence_doctor_assert_index < external_core_restart_index);
+        assert!(external_core_restart_index < external_readiness_index);
         assert!(readiness
             .proof_boundary
             .contains("does not perform signing"));

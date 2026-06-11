@@ -13,7 +13,7 @@ Command:
 cargo run -p jarvis-cli -- release readiness --json
 ```
 
-Observed on 2026-06-11 from `main` at `fb13a7f` after PR #229:
+Observed on 2026-06-11 from `main` at `95dd4a5` after PR #230:
 
 - `production_ready: false`
 - `verified_feature_count: 17`
@@ -116,10 +116,12 @@ Jarvis is currently a production-shaped local assistant foundation:
   launch proof, package-distribution no-sign preflight,
   release-evidence-doctor missing-evidence guidance, release evidence script
   self-tests, Rust/CLI E2E, and Swift package tests.
-- Recent PRs #223 through #229 synchronized architecture/readiness docs, added
+- Recent PRs #223 through #230 synchronized architecture/readiness docs, added
   explicit `--json`/`--format json` release inspection compatibility, added the
   package-distribution preflight to the local release gate, and made the
-  evidence doctor recommend that preflight before credentialed signing.
+  evidence doctor recommend that preflight before credentialed signing. PR #230
+  also added speech-output natural completion coverage so the Swift model
+  returns to idle when AVFoundation playback finishes or cancels.
 - The current conservative readiness boundary is unchanged: 17 verified
   repo-owned features, one pending manual live voice validation feature, and
   missing external/manual release evidence before production-ready language is
@@ -139,7 +141,7 @@ same architecture plus validated external release evidence:
   validation, and host-level egress controls before marketplace claims.
 - Final release evidence bundle generated, checked by the evidence doctor, and
   archived at a durable reports archive URI.
-- Evidence-aware readiness rerun with
+- Evidence-aware readiness rerun against a core started or restarted with
   `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external` only after all required
   reports exist and pass semantic checks.
 

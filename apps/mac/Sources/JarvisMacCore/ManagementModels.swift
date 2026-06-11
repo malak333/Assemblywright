@@ -21,6 +21,20 @@ public final class ReleaseReadinessModel: ObservableObject {
         readiness != nil && lastError != nil
     }
 
+    public var effectiveProductionReady: Bool {
+        guard lastError == nil,
+              readiness?.productionReady == true,
+              evidenceStatus?.complete == true,
+              evidenceStatus?.missingCount == 0,
+              evidenceStatus?.invalidCount == 0 else {
+            return false
+        }
+
+        return evidenceStatus?.items.allSatisfy { item in
+            item.status == "present"
+        } == true
+    }
+
     public func refresh() async {
         isLoading = true
         lastError = nil

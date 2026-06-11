@@ -44,8 +44,9 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   Use `--all-commands` for the complete readable verification runbook, or
   `--json` or `JARVIS_CLI_JSON=1` for the exact structured payload.
   Treat default readiness as conservative inventory only. After owner-recorded
-  evidence exists, rerun readiness with
-  `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external` and confirm
+  evidence exists, start or restart the core with
+  `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external`, rerun readiness against
+  that core, and confirm
   `production_ready: true` only appears when every required
   `/release/evidence-status` item is present, no missing or invalid evidence
   remains, and evidence-cleared features leave no pending readiness features.
@@ -444,6 +445,9 @@ stage or when a PR needs focused evidence for one ownership slice.
   and renders blocking gates, recommended commands, implemented proofs, pending
   features, proof boundary, stale cached-readiness state, and structured
   `/release/evidence-status` inventory without enabling release side effects.
+  Its production-ready display must use the model's evidence-aware effective
+  readiness state, not only the raw readiness payload, so incomplete, invalid,
+  missing, or stale evidence keeps the app UI blocked.
 - Confirm the cross-process CLI E2E still covers command, plugin, audit,
   redacted model-route inspection and restart recovery, memory
   classification summary, create/update/review/delete/restore, scheduler
@@ -472,10 +476,11 @@ stage or when a PR needs focused evidence for one ownership slice.
   `subprocess_stdio` grant.
 - For each new executable feature phase, confirm E2E coverage is either part of
   `local_ipc_e2e`, Swift package tests, a focused integration proof, or the
-  future packaged Mac smoke lane. Docs-only changes should still name the
+  implemented packaged Mac smoke lane. Docs-only changes should still name the
   existing proof boundary they preserve.
-- Confirm the Swift shell remains described as a scaffold until a Developer ID
-  signed and notarized app exists. `./scripts/packaged-supervision-proof.sh`
+- Confirm local packaged-app proof remains separate from signed production app
+  evidence until a Developer ID signed and notarized app exists.
+  `./scripts/packaged-supervision-proof.sh`
   builds the Rust CLI, copies it into a temporary
   `Jarvis.app/Contents/Resources/bin/jarvis-cli` layout, points Swift
   supervisor tests at that executable, and starts the copied binary with a
@@ -596,9 +601,9 @@ Clean-profile and manual production gates not proven by this local smoke:
   `target/release-live-device-qa-report.json`
   artifact, or the `JARVIS_QA_REPORT_PATH` override, with the release notes.
   Then rerun `jarvis release evidence-status` and
-  `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external jarvis release readiness`
-  against that report and confirm the live voice/audio readiness item is
-  cleared only from valid owner-recorded evidence.
+  `jarvis release readiness` against a core started or restarted with
+  `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external` and confirm the live
+  voice/audio readiness item is cleared only from valid owner-recorded evidence.
 - Activity view shows current task state, active/status counts, redacted recent
   task metadata, and recent audit progress through `/activity/summary` without
   exposing recent task command bodies.
