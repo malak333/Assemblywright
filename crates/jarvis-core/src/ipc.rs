@@ -4280,8 +4280,8 @@ fn release_evidence_status_from_env_with_repository(
         invalid_count,
         items,
         proof_boundary:
-            "File/report inventory only; complete means expected paths are present, app bundle metadata matches the expected bundle identifier/version/build, bundled core version-marker metadata matches the expected release version, and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/non-future timestamp semantics, required repository-backed task/audit command-result evidence resolution, plugin-trust non-future timestamp and owner-asserted review-source semantics, and final evidence-bundle path/digest/signature-validation/non-future timestamp semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, execute release artifacts, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
-                .to_string(),
+            "File/report inventory only; complete means expected paths are present, app bundle metadata matches the expected bundle identifier/version/build, bundled core version-marker metadata matches the expected release version, and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/non-future timestamp semantics, required repository-backed task/audit command-result evidence resolution, plugin-trust non-future timestamp and owner-asserted review-source semantics, and final evidence-bundle path/digest/archive-URI/signature-validation/non-future timestamp semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, execute release artifacts, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
+            .to_string(),
     }
 }
 
@@ -6526,6 +6526,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert!(status.proof_boundary.contains("plugin-trust"));
         assert!(status.proof_boundary.contains("does not sign"));
         assert!(status.proof_boundary.contains("app bundle metadata"));
+        assert!(status.proof_boundary.contains("archive-URI"));
         assert!(status.items.iter().any(|item| {
             item.key == "release_evidence_bundle"
                 && item.kind == ReleaseEvidenceKind::JsonReport
