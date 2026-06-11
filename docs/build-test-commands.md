@@ -422,8 +422,8 @@ inspection plus semantic-validation boundary for evidence status. The
 `release_help_surfaces_current_evidence_boundaries` CLI E2E test keeps
 `jarvis release evidence-status --help` aligned with the default
 operator-readable output, `--json` escape hatch, owner-asserted plugin-trust
-review-source requirement, host-egress evidence fields, and final-bundle local
-signature-validation check.
+review-source requirement, host-egress evidence fields, final-bundle archive URI
+validation, and final-bundle local signature-validation check.
 `./scripts/release-plugin-trust-qa.sh --check` is the local plugin-trust
 preflight for marketplace review, malware scanning, signed publisher policy,
 OS-level process/network sandbox validation and host-level egress validation. Its `--self-test` mode uses fake
@@ -481,7 +481,7 @@ The doctor/status paths are read-only inventory plus semantic validation for
 expected paths, app bundle metadata, bundled-core marker metadata, JSON flags,
 non-future report timestamps, signed-distribution provenance, artifact/report
 digest bindings, final-bundle child-report semantic validity, owner-recorded
-release evidence fields, and release metadata;
+release evidence fields including durable archive URI validation, and release metadata;
 they do not perform Developer ID signing, notarization, stapling, installation,
 live-device QA, plugin-trust QA, owner assertions, final bundle creation, or
 host-level egress enforcement. The real `--bundle` path also locally validates

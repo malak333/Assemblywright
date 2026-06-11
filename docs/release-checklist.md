@@ -83,7 +83,8 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   the current artifact files, final-bundle digests against current
   artifacts/reports, semantic validity of the signed-provenance, live-device
   QA, and plugin-trust QA child reports referenced by the final bundle, and
-  local signature-validation status before treating those reports as usable evidence.
+  final-bundle archive URI plus local signature-validation status before
+  treating those reports as usable evidence.
 - Confirm `release-plugin-trust-qa.sh --assert-complete`,
   `release-evidence-bundle.sh --bundle`, and
   `release-evidence-doctor.sh --assert-complete` reject non-UTC plugin-trust

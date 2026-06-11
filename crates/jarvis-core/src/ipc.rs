@@ -5638,7 +5638,7 @@ fn json_string_at(value: &serde_json::Value, dotted_path: &str) -> Option<String
 
 fn release_json_present_detail(key: &str) -> String {
     match key {
-        "release_evidence_bundle" => "JSON report exists, schema/evidence identity is valid, expected release version matches, artifact/report paths and SHA-256 digests match current artifacts and reports, and local signature validation is true; clean-profile, live-device, and plugin-trust claims remain owner-recorded external evidence".to_string(),
+        "release_evidence_bundle" => "JSON report exists, schema/evidence identity is valid, expected release version matches, artifact/report paths and SHA-256 digests match current artifacts and reports, reports archive URI is durable and non-placeholder, and local signature validation is true; clean-profile, live-device, and plugin-trust claims remain owner-recorded external evidence".to_string(),
         "signed_distribution_provenance_report" => "JSON report exists, expected release version, bundle identifier, bundled core path/version/digest match, Apple-tool-derived signing/notarization/stapling/Gatekeeper evidence is semantically valid, required flags are true, and artifact SHA-256 digests match the current zip/pkg/core files; clean-profile install and live-device QA remain separate manual gates".to_string(),
         "live_device_qa_report" => "JSON report exists, required owner-recorded fields and proof boundary are non-empty, installed app path, release metadata, bundled core executable path/version/SHA-256 binding, timestamps, observed transcript, observed command text, and task/audit command evidence reference match expected values; live-device claims are still owner-recorded external evidence".to_string(),
         "plugin_trust_qa_report" => "JSON report exists, schema/evidence identity is valid, self-test fixture identity is false, required owner-recorded fields are present, review and egress validation timestamps are valid and ordered, and deny/allow egress fixture notes are present; marketplace, malware, sandbox, and host-level egress claims remain owner-recorded external evidence".to_string(),
@@ -5833,13 +5833,13 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "release_evidence_status",
             "implemented",
-            "`/release/evidence-status` and `jarvis release evidence-status` expose structured present, missing, or invalid status for standard signed artifacts, QA reports, and final evidence bundle paths, including app bundle metadata matching, bundled core version-marker matching, signed-provenance core path/version/digest binding, signed-provenance artifact digest matching, live-device QA bundle/version/non-future timestamp and repository-backed command-result evidence checks, plugin-trust non-future timestamp, owner-review-source, host-egress policy and deny/allow fixture checks, and final-bundle path/digest/local-signature-validation plus child-report semantic revalidation, with Rust, CLI E2E, and Swift model coverage.",
+            "`/release/evidence-status` and `jarvis release evidence-status` expose structured present, missing, or invalid status for standard signed artifacts, QA reports, and final evidence bundle paths, including app bundle metadata matching, bundled core version-marker matching, signed-provenance core path/version/digest binding, signed-provenance artifact digest matching, live-device QA bundle/version/non-future timestamp and repository-backed command-result evidence checks, plugin-trust non-future timestamp, owner-review-source, host-egress policy and deny/allow fixture checks, and final-bundle path/digest/local-signature/archive-URI validation plus child-report semantic revalidation, with Rust, CLI E2E, and Swift model coverage.",
             "Read-only file/report inventory plus report semantic validation only; it does not sign, notarize, staple, install, Finder-launch, execute release artifacts, run live-device QA, review marketplace trust, scan malware, or enforce OS sandboxing.",
         ),
         feature(
             "release_evidence_bundle",
             "implemented",
-            "`release-evidence-bundle.sh --check`, `--write-template`, `--self-test`, and `release-evidence-doctor.sh --check` are part of the release evidence workflow; `--bundle` validates signed/stapled artifact references, live-device QA bundle metadata and command observation, plugin-trust QA flags, owner evidence, review source, and host-egress fields, then writes SHA-256-bound evidence manifest entries whose child reports are revalidated by doctor/status checks.",
+            "`release-evidence-bundle.sh --check`, `--write-template`, `--self-test`, and `release-evidence-doctor.sh --check` are part of the release evidence workflow; `--bundle` validates signed/stapled artifact references, live-device QA bundle metadata and command observation, plugin-trust QA flags, owner evidence, review source, host-egress fields, and a durable reports archive URI, then writes SHA-256-bound evidence manifest entries whose child reports are revalidated by doctor/status checks.",
             "Evidence-bundle mechanics, local artifact/report validation, and release-evidence inventory only; production readiness still depends on owner-recorded external signing, notarization, live-device QA, plugin-trust QA, and archived evidence.",
         ),
         feature(
@@ -6211,6 +6211,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .any(|feature| feature.key == "release_evidence_bundle"
                 && feature.proof.contains("SHA-256-bound evidence manifest")
                 && feature.proof.contains("host-egress fields")
+                && feature.proof.contains("durable reports archive URI")
                 && feature.proof.contains("child reports are revalidated")
                 && feature.boundary.contains("owner-recorded external")));
         assert!(readiness
@@ -6222,6 +6223,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                     .proof
                     .contains("repository-backed command-result evidence")
                 && feature.proof.contains("host-egress policy")
+                && feature.proof.contains("archive-URI validation")
                 && feature.proof.contains("child-report semantic revalidation")
                 && feature.boundary.contains("file/report inventory")));
         assert!(readiness
