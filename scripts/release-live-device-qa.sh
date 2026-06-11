@@ -970,6 +970,29 @@ PLIST
     fail "live QA self-test expected timestamp order validation to fail"
   fi
 
+  check_output="$("$0" --check)"
+  case "$check_output" in
+    *"./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env"* )
+      ;;
+    *)
+      fail "live QA self-test expected --check output to include the template command"
+      ;;
+  esac
+  case "$check_output" in
+    *"set -a && source target/release-live-device-qa.env && set +a"* )
+      ;;
+    *)
+      fail "live QA self-test expected --check output to include the source command"
+      ;;
+  esac
+  case "$check_output" in
+    *"./scripts/release-live-device-qa.sh --assert-complete"* )
+      ;;
+    *)
+      fail "live QA self-test expected --check output to include the assertion command"
+      ;;
+  esac
+
   printf 'Jarvis live-device QA self-test: ok\n'
   printf 'Proof boundary: fake app fixture validates assertion/report mechanics only; no live device validation was performed.\n'
   exit 0
@@ -988,10 +1011,11 @@ Manual release checks still required before production-ready language:
 - Speak a command and verify transcript handoff reaches the same command path.
 - Play speech output and verify live audio output on the device.
 - Verify scheduler notification permission and at least one visible notification.
-- Record all JARVIS_QA_* flags as true, add owner/device/profile/timestamp and
-  voice and non-voice evidence notes, or run --write-template target/release-live-device-qa.env
-  to generate the complete fillable environment file. Then rerun this script
-  with --assert-complete on the validated release machine.
+- After validating on the release machine, generate and source the fillable
+  environment file, then assert it:
+  ./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env
+  set -a && source target/release-live-device-qa.env && set +a
+  ./scripts/release-live-device-qa.sh --assert-complete
 - Preserve the generated JSON report from --assert-complete as release evidence.
 
 Proof boundary: preflight and runbook only; no live device validation was

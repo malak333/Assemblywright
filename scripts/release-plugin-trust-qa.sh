@@ -565,6 +565,30 @@ if [[ "$SELF_TEST" == true ]]; then
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "plugin trust QA self-test expected reversed review timestamps to be rejected"
   fi
+
+  check_output="$("$0" --check)"
+  case "$check_output" in
+    *"./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env"* )
+      ;;
+    *)
+      fail "plugin trust QA self-test expected --check output to include the template command"
+      ;;
+  esac
+  case "$check_output" in
+    *"set -a && source target/release-plugin-trust-qa.env && set +a"* )
+      ;;
+    *)
+      fail "plugin trust QA self-test expected --check output to include the source command"
+      ;;
+  esac
+  case "$check_output" in
+    *"./scripts/release-plugin-trust-qa.sh --assert-complete"* )
+      ;;
+    *)
+      fail "plugin trust QA self-test expected --check output to include the assertion command"
+      ;;
+  esac
+
   printf 'Jarvis plugin trust QA self-test: ok\n'
   printf 'Proof boundary: fake flags and evidence notes validate assertion/report mechanics only; no marketplace, malware, sandbox, or egress validation was performed.\n'
   exit 0
@@ -590,11 +614,12 @@ Manual plugin trust checks still required before marketplace safety language:
 - Validate the macOS sandbox profile or equivalent OS-level confinement.
 - Validate host-level egress enforcement with a network-deny fixture and a
   declared-host allow fixture.
-- Record all JARVIS_PLUGIN_QA_* flags as true, or run --write-template
-  target/release-plugin-trust-qa.env to generate the complete fillable
-  environment file. Then rerun this script with --assert-complete on the
-  validated release machine with owner, timestamp, and evidence-note fields
-  populated.
+- After validating on the release machine, generate and source the fillable
+  environment file, then assert it with owner, timestamp, and evidence-note
+  fields populated:
+  ./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env
+  set -a && source target/release-plugin-trust-qa.env && set +a
+  ./scripts/release-plugin-trust-qa.sh --assert-complete
 - Preserve the generated JSON report from --assert-complete as release evidence.
 
 Proof boundary: preflight and runbook only; no marketplace review, malware scan,

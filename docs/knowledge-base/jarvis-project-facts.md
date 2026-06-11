@@ -775,7 +775,9 @@ These notes capture durable facts for future agents working on this repository.
   `./scripts/release-local.sh`. It validates repo-owned live QA preconditions
   and prints the manual clean-profile install, Finder/LaunchServices,
   microphone/Speech permission prompts, spoken transcript handoff into the
-  command path, live audio-output, notification, restart, and release-QA runbook.
+  command path, live audio-output, notification, restart, and release-QA
+  runbook, including the exact template, source, and `--assert-complete`
+  commands for owner evidence capture.
   `cargo run -p jarvis-cli -- release live-device-runbook` is the side-effect-free
   CLI companion for operators; it combines conservative readiness with current
   `live_device_qa_report` evidence status and prints the exact template,
@@ -918,7 +920,9 @@ These notes capture durable facts for future agents working on this repository.
   `./scripts/release-local.sh`, the readiness recommended-command list, and the
   signed-distribution runbook before the unsigned launch and credentialed
   signing commands; it remains a no-sign preflight for packaging prerequisites
-  and entitlement templates, not evidence of signing, notarization, stapling,
+  and entitlement templates, then prints the signed-distribution runbook,
+  credentialed packaging, live-device, plugin-trust, final bundle, and evidence
+  doctor commands without proving signing, notarization, stapling,
   installation, or live-device QA.
 - Release evidence structural hardening now treats the final evidence chain as
   cross-bound evidence, not independent files: app zips are rejected unless they
