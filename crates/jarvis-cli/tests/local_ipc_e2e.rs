@@ -340,6 +340,9 @@ fn contract_and_first_party_plugins_fall_back_without_running_server() {
     let endpoint = format!("http://{}", unused_loopback_addr());
 
     let contract = run_cli_json(["contract", "--endpoint", endpoint.as_str()]);
+    let explicit_json_contract =
+        run_cli_json(["contract", "--json", "--endpoint", endpoint.as_str()]);
+    assert_eq!(explicit_json_contract, contract);
     assert_eq!(contract["contract"]["name"], "jarvis.local-ipc");
     assert_eq!(contract["contract"]["version"], 1);
     assert_array_contains(&contract["endpoints"], "path", "/tools/model");
@@ -2654,7 +2657,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert!(health.contains("paused: false"));
     assert!(health.contains("contract: v1"), "{health}");
 
-    let contract = run_cli_json(["contract", "--endpoint", endpoint.as_str()]);
+    let contract = run_cli_json(["contract", "--json", "--endpoint", endpoint.as_str()]);
     assert_eq!(contract["contract"]["name"], "jarvis.local-ipc");
     assert_eq!(contract["contract"]["version"], 1);
     assert_eq!(contract["compatibility"]["minimum_supported_version"], 1);

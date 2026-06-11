@@ -52,6 +52,9 @@ enum CliCommand {
     Contract {
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
+        /// Print the raw JSON contract response. Contract output is JSON by default.
+        #[arg(long)]
+        json: bool,
     },
     /// Summarize release-readiness evidence and remaining production blockers.
     #[command(
@@ -629,7 +632,7 @@ async fn main() -> anyhow::Result<()> {
             let response = server_required_request(&endpoint, "GET", "/health", None)?;
             println!("{}", format_health(&response)?);
         }
-        CliCommand::Contract { endpoint } => {
+        CliCommand::Contract { endpoint, json: _ } => {
             println!("{}", contract(&endpoint)?);
         }
         CliCommand::Release { command } => match command {
