@@ -115,9 +115,9 @@ These notes capture durable facts for future agents working on this repository.
   and the bundled core item validates the packaged `jarvis-cli.version` marker
   without executing the artifact path. This is read-only file/report inventory
   plus semantic validation. It does not perform signing, notarization,
-  installation, Finder launch, executable runtime behavior, live-device QA,
-  marketplace review, malware scanning, OS sandboxing, or host-level egress
-  enforcement.
+  stapling, installation, Finder launch, executable runtime behavior,
+  live-device QA, marketplace review, malware scanning, OS sandboxing, or
+  host-level egress enforcement.
 - The live-device QA evidence item is stricter than generic JSON presence:
   `/release/evidence-status` validates schema/type, rejects `self_test_fixture`,
   checks the installed app path, expected bundle identifier, short/build
@@ -173,8 +173,8 @@ These notes capture durable facts for future agents working on this repository.
   recommended commands, implemented proofs, pending features, the proof
   boundary, stale cached-readiness warning, and `/release/evidence-status`
   inventory. This remains inspection-only and does not perform signing,
-  notarization, installation, Finder/LaunchServices validation, or live-device
-  validation.
+  notarization, stapling, installation, Finder/LaunchServices validation, or
+  live-device validation.
 - `ConversationRuntime` supports bounded fake-model and provider-envelope
   planned first-party tool calls with schema validation, policy checks, approval
   stops, tool-result audit entries, and feedback of tool results into later
@@ -244,6 +244,15 @@ These notes capture durable facts for future agents working on this repository.
   notarization, live-device QA, marketplace review, malware scanning, OS
   sandboxing, or host-level egress enforcement. CLI E2E covers this with
   `release_help_surfaces_current_evidence_boundaries`.
+- `/contract` feature metadata is also release-boundary evidence. The
+  `release_evidence_status` proof should name repository-backed live
+  command-result evidence, plugin-trust owner-source and host-egress fields,
+  and final-bundle child-report semantic revalidation. The
+  `release_evidence_bundle` proof should name live-device command observation,
+  plugin-trust review source and host-egress fields, SHA-256-bound manifest
+  entries, and doctor/status revalidation of child reports. CLI E2E asserts
+  those strings so clients do not infer weaker release evidence semantics from
+  `/contract`.
 - Provider-envelope coverage includes
   `ollama_http_provider_parses_tool_request_envelope`,
   `chatgpt_http_provider_parses_tool_request_envelope`,

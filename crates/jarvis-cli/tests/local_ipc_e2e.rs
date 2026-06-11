@@ -75,8 +75,36 @@ fn release_readiness_cli_falls_back_without_running_server() {
     assert_array_contains(
         &release_readiness["implemented_features"],
         "key",
+        "release_evidence_status",
+    );
+    assert_array_contains(
+        &release_readiness["implemented_features"],
+        "key",
         "release_evidence_bundle",
     );
+    let evidence_status_feature = readiness_feature(&release_readiness, "release_evidence_status");
+    let evidence_status_proof = evidence_status_feature["proof"]
+        .as_str()
+        .expect("evidence status proof");
+    assert!(evidence_status_proof.contains("/release/evidence-status"));
+    assert!(evidence_status_proof.contains("repository-backed command-result evidence"));
+    assert!(evidence_status_proof.contains("host-egress policy"));
+    assert!(evidence_status_proof.contains("child-report semantic revalidation"));
+    assert!(evidence_status_feature["boundary"]
+        .as_str()
+        .expect("evidence status boundary")
+        .contains("file/report inventory"));
+    let evidence_bundle_feature = readiness_feature(&release_readiness, "release_evidence_bundle");
+    let evidence_bundle_proof = evidence_bundle_feature["proof"]
+        .as_str()
+        .expect("evidence bundle proof");
+    assert!(evidence_bundle_proof.contains("SHA-256-bound evidence manifest"));
+    assert!(evidence_bundle_proof.contains("host-egress fields"));
+    assert!(evidence_bundle_proof.contains("child reports are revalidated"));
+    assert!(evidence_bundle_feature["boundary"]
+        .as_str()
+        .expect("evidence bundle boundary")
+        .contains("owner-recorded external"));
     assert_array_contains(
         &release_readiness["pending_features"],
         "key",
@@ -488,6 +516,15 @@ fn release_readiness_cli_computes_production_ready_only_from_external_complete_e
         .expect("live voice external boundary")
         .contains("Owner-recorded live-device QA evidence"));
     let evidence_bundle_feature = readiness_feature(&external_readiness, "release_evidence_bundle");
+    assert_eq!(evidence_bundle_feature["status"], "implemented");
+    assert!(evidence_bundle_feature["proof"]
+        .as_str()
+        .expect("evidence bundle proof")
+        .contains("SHA-256-bound evidence manifest"));
+    assert!(evidence_bundle_feature["proof"]
+        .as_str()
+        .expect("evidence bundle proof")
+        .contains("child reports are revalidated"));
     assert!(evidence_bundle_feature["boundary"]
         .as_str()
         .expect("evidence bundle boundary")
@@ -2379,6 +2416,49 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_array_contains(&contract["features"], "key", "installed_plugin_execution");
     assert_array_contains(&contract["features"], "key", "release_ci_gate");
     assert_array_contains(&contract["features"], "key", "release_evidence_bundle");
+    let contract_release_evidence_status = contract["features"]
+        .as_array()
+        .expect("contract features")
+        .iter()
+        .find(|feature| feature["key"] == "release_evidence_status")
+        .expect("release evidence status feature");
+    let contract_release_evidence_status_proof = contract_release_evidence_status["proof"]
+        .as_str()
+        .expect("release evidence status proof");
+    assert!(
+        contract_release_evidence_status_proof
+            .contains("repository-backed command-result evidence"),
+        "{contract_release_evidence_status}"
+    );
+    assert!(
+        contract_release_evidence_status_proof.contains("host-egress policy"),
+        "{contract_release_evidence_status}"
+    );
+    assert!(
+        contract_release_evidence_status_proof.contains("child-report semantic revalidation"),
+        "{contract_release_evidence_status}"
+    );
+    let contract_release_evidence_bundle = contract["features"]
+        .as_array()
+        .expect("contract features")
+        .iter()
+        .find(|feature| feature["key"] == "release_evidence_bundle")
+        .expect("release evidence bundle feature");
+    let contract_release_evidence_bundle_proof = contract_release_evidence_bundle["proof"]
+        .as_str()
+        .expect("release evidence bundle proof");
+    assert!(
+        contract_release_evidence_bundle_proof.contains("review source"),
+        "{contract_release_evidence_bundle}"
+    );
+    assert!(
+        contract_release_evidence_bundle_proof.contains("host-egress fields"),
+        "{contract_release_evidence_bundle}"
+    );
+    assert!(
+        contract_release_evidence_bundle_proof.contains("child reports are revalidated"),
+        "{contract_release_evidence_bundle}"
+    );
     assert_array_contains(&contract["features"], "key", "live_voice_loop");
     assert_array_contains(&contract["features"], "status", "pending_manual_validation");
     assert_array_contains(&contract["endpoints"], "path", "/diagnostics/export");

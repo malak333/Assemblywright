@@ -61,10 +61,10 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   count as present, and that missing or stale marker details point operators to
   rerun `./scripts/package-distribution.sh --unsigned-launch-check` or the
   signed packaging lane. Treat it as file/report inventory plus report semantic
-  validation only, not proof that signing, notarization, installation, Finder
-  launch, executable runtime behavior, live-device QA, marketplace review,
-  malware scanning, OS sandboxing, or host-level egress enforcement was
-  performed.
+  validation only, not proof that signing, notarization, stapling,
+  installation, Finder launch, executable runtime behavior, live-device QA,
+  marketplace review, malware scanning, OS sandboxing, or host-level egress
+  enforcement was performed.
 - Confirm the live-device QA report is `present`, not `invalid`, before using
   external evidence mode. Evidence-status semantically checks the expected
   installed app path, bundle ID, short/build version, non-self-test identity,
@@ -354,8 +354,8 @@ stage or when a PR needs focused evidence for one ownership slice.
 - Confirm `/release/readiness` and `jarvis release readiness` expose a
   read-only conservative readiness summary derived from contract feature
   metadata and release-checklist blockers, and that it does not perform or
-  claim signing, notarization, installation, Finder/LaunchServices validation,
-  live microphone/Speech validation, spoken transcript handoff, live
+  claim signing, notarization, stapling, installation, Finder/LaunchServices
+  validation, live microphone/Speech validation, spoken transcript handoff, live
   audio-output validation, App Store review, marketplace plugin review, malware
   analysis, or OS sandbox enforcement. The CLI fallback for an unavailable local
   IPC server must keep the same conservative blocker set instead of claiming
@@ -631,7 +631,7 @@ Distribution packaging gate:
 - Run `./scripts/package-distribution.sh --unsigned-structure-check` on
   distribution-layout PRs to build the release app, create an unsigned installer
   package, and inspect the payload without requiring Apple credentials. Treat it
-  as structure evidence only, not signing, notarization, installation,
+  as structure evidence only, not signing, notarization, stapling, installation,
   Finder/LaunchServices, live device, or manual QA proof.
 - Run `./scripts/package-distribution.sh --unsigned-launch-check` when a
   packaging change should prove the release-built `Jarvis.app` executable can

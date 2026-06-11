@@ -293,9 +293,9 @@ Final bundle inspection also revalidates the signed-provenance, live-device QA,
 and plugin-trust QA child reports referenced by the bundle instead of accepting
 matching report digests alone. This mirrors release-evidence-doctor
 inventory plus report inspection only; it does not perform signing,
-notarization, installation, Finder launch, executable runtime validation,
-live-device QA, marketplace review, malware scanning, OS sandboxing, or
-host-level egress enforcement.
+notarization, stapling, installation, Finder launch, executable runtime
+validation, live-device QA, marketplace review, malware scanning, OS
+sandboxing, or host-level egress enforcement.
 Repository-backed IPC state stores approval-required plugin command decisions
 in `pending_approvals`, exposes them through CLI/IPC inspection endpoints, and
 lets a user grant or deny the pending record without executing the side effect.
