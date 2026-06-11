@@ -114,6 +114,7 @@ private final class FakeVoiceAdapter: JarvisVoiceAdapter {
 @MainActor
 private final class FakeSpeechOutputAdapter: JarvisSpeechOutputAdapter {
     var phase: JarvisSpeechOutputPhase
+    var onPhaseChange: (@MainActor (JarvisSpeechOutputPhase) -> Void)?
     var speakResult: Result<Void, JarvisSpeechOutputError>
     var stopResult: Result<Void, JarvisSpeechOutputError>
     var interruptResult: Result<Void, JarvisSpeechOutputError>
@@ -136,9 +137,9 @@ private final class FakeSpeechOutputAdapter: JarvisSpeechOutputAdapter {
         switch speakResult {
         case .success:
             spokenTexts.append(text)
-            phase = .speaking
+            setPhase(.speaking)
         case let .failure(error):
-            phase = .unavailable(reason: error.description)
+            setPhase(.unavailable(reason: error.description))
         }
         return speakResult
     }
@@ -146,9 +147,9 @@ private final class FakeSpeechOutputAdapter: JarvisSpeechOutputAdapter {
     func stop() async -> Result<Void, JarvisSpeechOutputError> {
         switch stopResult {
         case .success:
-            phase = .idle
+            setPhase(.idle)
         case let .failure(error):
-            phase = .unavailable(reason: error.description)
+            setPhase(.unavailable(reason: error.description))
         }
         return stopResult
     }
@@ -156,11 +157,20 @@ private final class FakeSpeechOutputAdapter: JarvisSpeechOutputAdapter {
     func interrupt(reason: String) async -> Result<Void, JarvisSpeechOutputError> {
         switch interruptResult {
         case .success:
-            phase = .interrupted(reason: reason)
+            setPhase(.interrupted(reason: reason))
         case let .failure(error):
-            phase = .unavailable(reason: error.description)
+            setPhase(.unavailable(reason: error.description))
         }
         return interruptResult
+    }
+
+    func finishSpeech() {
+        setPhase(.idle)
+    }
+
+    private func setPhase(_ nextPhase: JarvisSpeechOutputPhase) {
+        phase = nextPhase
+        onPhaseChange?(nextPhase)
     }
 }
 
@@ -357,6 +367,7 @@ struct JarvisMacCoreTests {
         #expect(readiness.recommendedVerificationCommands.contains("./scripts/release-local.sh"))
         #expect(readiness.recommendedVerificationCommands.contains("./scripts/release-ci-workflow-smoke.sh"))
         #expect(readiness.recommendedVerificationCommands.contains("./scripts/release-operator-qa-smoke.sh"))
+        #expect(readiness.recommendedVerificationCommands.contains("./scripts/packaged-app-release-smoke.sh"))
         #expect(readiness.recommendedVerificationCommands.contains("./scripts/release-live-device-qa.sh --check"))
         #expect(readiness.recommendedVerificationCommands.contains { command in
             command.contains("JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true") &&
@@ -383,6 +394,8 @@ struct JarvisMacCoreTests {
         #expect(readiness.recommendedVerificationCommands.contains("./scripts/release-evidence-doctor.sh --assert-complete"))
         #expect(readiness.recommendedVerificationCommands.contains("cargo run -p jarvis-cli -- release live-device-runbook"))
         let commands = readiness.recommendedVerificationCommands
+        let operatorSmokeIndex = try #require(commands.firstIndex(of: "./scripts/release-operator-qa-smoke.sh"))
+        let packagedAppSmokeIndex = try #require(commands.firstIndex(of: "./scripts/packaged-app-release-smoke.sh"))
         let unsignedDistributionIndex = try #require(commands.firstIndex(of: "./scripts/package-distribution.sh --unsigned-launch-check"))
         let signedDistributionIndex = try #require(commands.firstIndex(of: "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh"))
         let liveDeviceRunbookIndex = try #require(commands.firstIndex(of: "cargo run -p jarvis-cli -- release live-device-runbook"))
@@ -395,6 +408,8 @@ struct JarvisMacCoreTests {
         })
         let evidenceDoctorAssertIndex = try #require(commands.firstIndex(of: "./scripts/release-evidence-doctor.sh --assert-complete"))
         let externalReadinessIndex = try #require(commands.firstIndex(of: "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness"))
+        #expect(operatorSmokeIndex < packagedAppSmokeIndex)
+        #expect(packagedAppSmokeIndex < unsignedDistributionIndex)
         #expect(unsignedDistributionIndex < signedDistributionIndex)
         #expect(signedDistributionIndex < liveDeviceRunbookIndex)
         #expect(liveDeviceRunbookIndex < liveDeviceCheckIndex)
@@ -2063,6 +2078,22 @@ struct JarvisMacCoreTests {
         #expect(model.isSpeaking)
         #expect(!model.canSpeak)
         #expect(model.statusText == "Speech output speaking.")
+    }
+
+    @MainActor
+    @Test("Speech output model observes natural adapter completion")
+    func speechOutputModelObservesNaturalAdapterCompletion() async {
+        let adapter = FakeSpeechOutputAdapter()
+        let model = SpeechOutputStateModel(adapter: adapter)
+
+        await model.speak("Jarvis is ready.")
+        adapter.finishSpeech()
+
+        #expect(model.lastSpokenText == "Jarvis is ready.")
+        #expect(model.phase == .idle)
+        #expect(!model.isSpeaking)
+        #expect(model.canSpeak)
+        #expect(model.statusText == "Speech output idle.")
     }
 
     @MainActor

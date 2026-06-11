@@ -13,7 +13,7 @@ Command:
 cargo run -p jarvis-cli -- release readiness --json
 ```
 
-Observed on 2026-06-11 from `main` at `8c9107d` after PR #228:
+Observed on 2026-06-11 from `main` at `fb13a7f` after PR #229:
 
 - `production_ready: false`
 - `verified_feature_count: 17`
@@ -116,7 +116,7 @@ Jarvis is currently a production-shaped local assistant foundation:
   launch proof, package-distribution no-sign preflight,
   release-evidence-doctor missing-evidence guidance, release evidence script
   self-tests, Rust/CLI E2E, and Swift package tests.
-- Recent PRs #223 through #228 synchronized architecture/readiness docs, added
+- Recent PRs #223 through #229 synchronized architecture/readiness docs, added
   explicit `--json`/`--format json` release inspection compatibility, added the
   package-distribution preflight to the local release gate, and made the
   evidence doctor recommend that preflight before credentialed signing.
