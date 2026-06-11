@@ -34,6 +34,7 @@ cargo build --workspace
 cargo run -p jarvis-cli -- smoke
 ./scripts/release-operator-qa-smoke.sh
 ./scripts/release-cargo-package.sh
+./scripts/package-distribution.sh --check
 ./scripts/package-distribution.sh --version-consistency-self-test
 ./scripts/package-distribution.sh --provenance-self-test
 ./scripts/package-distribution.sh --unsigned-launch-check

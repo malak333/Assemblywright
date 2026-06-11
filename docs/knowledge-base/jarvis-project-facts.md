@@ -626,8 +626,8 @@ These notes capture durable facts for future agents working on this repository.
   test --workspace -- --ignored`, `cargo build --workspace`, `cargo run -p
   jarvis-cli -- smoke`, `./scripts/release-operator-qa-smoke.sh`,
   workspace package tarball creation, packaged CLI verification against the
-  freshly packaged core source, package distribution version-consistency and
-  signed-provenance self-tests,
+  freshly packaged core source, package distribution no-sign preflight,
+  version-consistency self-test, signed-provenance self-test,
   `./scripts/package-distribution.sh --unsigned-launch-check`,
   `./scripts/release-live-device-qa.sh --check`,
   `./scripts/release-live-device-qa.sh --self-test`,
@@ -908,6 +908,12 @@ These notes capture durable facts for future agents working on this repository.
   `jarvis release signed-distribution-runbook --format json`, and
   `jarvis release plugin-trust-runbook --format json` are compatibility aliases
   for their structured `--json` summaries.
+- `./scripts/package-distribution.sh --check` is now part of
+  `./scripts/release-local.sh`, the readiness recommended-command list, and the
+  signed-distribution runbook before the unsigned launch and credentialed
+  signing commands; it remains a no-sign preflight for packaging prerequisites
+  and entitlement templates, not evidence of signing, notarization, stapling,
+  installation, or live-device QA.
 - Release evidence structural hardening now treats the final evidence chain as
   cross-bound evidence, not independent files: app zips are rejected unless they
   contain exactly one top-level `Jarvis.app` payload with `Info.plist`, the app

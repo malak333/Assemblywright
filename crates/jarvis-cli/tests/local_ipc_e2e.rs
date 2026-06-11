@@ -2604,6 +2604,7 @@ fn release_signed_distribution_runbook_summarizes_next_operator_steps() {
     assert!(readable_runbook.contains("signed_app_zip:"));
     assert!(readable_runbook.contains("signed_installer_package:"));
     assert!(readable_runbook.contains("signed_distribution_provenance_report:"));
+    assert!(readable_runbook.contains("./scripts/package-distribution.sh --check"));
     assert!(readable_runbook.contains("./scripts/package-distribution.sh --unsigned-launch-check"));
     assert!(readable_runbook.contains("JARVIS_DEVELOPER_ID_APPLICATION="));
     assert!(readable_runbook.contains("./scripts/release-evidence-doctor.sh --check"));
@@ -2623,6 +2624,15 @@ fn release_signed_distribution_runbook_summarizes_next_operator_steps() {
         .any(|item| item.get("key").and_then(Value::as_str) == Some("signed_app_zip")));
     assert_string_array_contains(
         &json_runbook["commands"],
+        "./scripts/package-distribution.sh --check",
+    );
+    assert_string_array_contains(
+        &json_runbook["commands"],
+        "./scripts/package-distribution.sh --unsigned-launch-check",
+    );
+    assert_string_array_order(
+        &json_runbook["commands"],
+        "./scripts/package-distribution.sh --check",
         "./scripts/package-distribution.sh --unsigned-launch-check",
     );
     assert_string_array_contains(

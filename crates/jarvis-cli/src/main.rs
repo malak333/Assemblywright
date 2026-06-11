@@ -2193,6 +2193,7 @@ fn release_signed_distribution_runbook_json(
         "production_ready": readiness.get("production_ready").cloned().unwrap_or(serde_json::Value::Bool(false)),
         "distribution_evidence": distribution_evidence,
         "commands": [
+            "./scripts/package-distribution.sh --check",
             "./scripts/package-distribution.sh --unsigned-launch-check",
             "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh",
             "cargo run -p jarvis-cli -- release evidence-status",
@@ -2260,6 +2261,7 @@ fn format_release_signed_distribution_runbook(
     }
     lines.extend([
         "Run on the release machine:".to_string(),
+        "- ./scripts/package-distribution.sh --check".to_string(),
         "- ./scripts/package-distribution.sh --unsigned-launch-check".to_string(),
         "- JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh".to_string(),
         "- cargo run -p jarvis-cli -- release evidence-status".to_string(),

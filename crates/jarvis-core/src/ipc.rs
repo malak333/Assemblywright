@@ -5715,6 +5715,7 @@ fn release_verification_commands() -> Vec<String> {
         "./scripts/release-ci-workflow-smoke.sh".to_string(),
         "./scripts/release-operator-qa-smoke.sh".to_string(),
         "./scripts/packaged-app-release-smoke.sh".to_string(),
+        "./scripts/package-distribution.sh --check".to_string(),
         "./scripts/package-distribution.sh --unsigned-launch-check".to_string(),
         "cargo run -p jarvis-cli -- release signed-distribution-runbook".to_string(),
         "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh".to_string(),
@@ -6332,6 +6333,10 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert!(readiness
             .recommended_verification_commands
             .iter()
+            .any(|command| command == "./scripts/package-distribution.sh --check"));
+        assert!(readiness
+            .recommended_verification_commands
+            .iter()
             .any(|command| command == "./scripts/release-evidence-doctor.sh --check"));
         assert!(readiness
             .recommended_verification_commands
@@ -6341,6 +6346,8 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             commands,
             "./scripts/package-distribution.sh --unsigned-launch-check",
         );
+        let distribution_check_index =
+            command_index(commands, "./scripts/package-distribution.sh --check");
         let workflow_smoke_index =
             command_index(commands, "./scripts/release-ci-workflow-smoke.sh");
         let operator_qa_index = command_index(commands, "./scripts/release-operator-qa-smoke.sh");
@@ -6383,6 +6390,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness",
         );
         assert!(workflow_smoke_index < operator_qa_index);
+        assert!(distribution_check_index < unsigned_distribution_index);
         assert!(unsigned_distribution_index < signed_distribution_index);
         assert!(signed_distribution_index < live_device_runbook_index);
         assert!(live_device_runbook_index < live_device_check_index);

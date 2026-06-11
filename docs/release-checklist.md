@@ -155,6 +155,7 @@ stage or when a PR needs focused evidence for one ownership slice.
 - `cargo run -p jarvis-cli -- smoke`
 - `./scripts/release-operator-qa-smoke.sh`
 - `./scripts/release-cargo-package.sh`
+- `./scripts/package-distribution.sh --check`
 - `./scripts/package-distribution.sh --version-consistency-self-test`
 - `./scripts/package-distribution.sh --provenance-self-test`
 - `./scripts/package-distribution.sh --unsigned-launch-check`
@@ -631,9 +632,10 @@ Distribution packaging gate:
 - Run `./scripts/release-version-consistency.sh --check` before distribution or
   evidence changes to verify release scripts derive one canonical version from
   Rust package metadata.
-- Run `./scripts/package-distribution.sh --check` on packaging-related PRs to
-  validate local app signing, installer packaging, notarization tool
-  availability, and entitlements templates.
+- Run `./scripts/package-distribution.sh --check` on packaging-related PRs and
+  in the default local release gate to validate release packaging prerequisites
+  and entitlement templates without performing signing, notarization, stapling,
+  installation, or live-device QA.
 - Run `./scripts/package-distribution.sh --unsigned-structure-check` on
   distribution-layout PRs to build the release app, create an unsigned installer
   package, and inspect the payload without requiring Apple credentials. Treat it
