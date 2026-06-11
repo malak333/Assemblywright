@@ -4,7 +4,7 @@ use std::net::ToSocketAddrs;
 use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use jarvis_core::{
     ApprovalDecisionRequest, CommandRequest, CreateMemoryItemRequest, CreateSchedulerJobRequest,
     EmergencyPauseRequest, InstallPluginRequest, InstalledPluginExecutionGrant,
@@ -162,6 +162,9 @@ enum ReleaseCommand {
         /// Print the raw JSON readiness payload.
         #[arg(long)]
         json: bool,
+        /// Compatibility alias for machine-readable output. Only `json` is supported.
+        #[arg(long, value_enum)]
+        format: Option<OutputFormat>,
         /// Print every recommended verification command in readable output.
         #[arg(long)]
         all_commands: bool,
@@ -177,6 +180,9 @@ enum ReleaseCommand {
         /// Print the raw JSON evidence-status payload.
         #[arg(long)]
         json: bool,
+        /// Compatibility alias for machine-readable output. Only `json` is supported.
+        #[arg(long, value_enum)]
+        format: Option<OutputFormat>,
     },
     /// Print the live-device QA runbook and current evidence status.
     #[command(
@@ -214,6 +220,11 @@ enum ReleaseCommand {
         #[arg(long)]
         json: bool,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum OutputFormat {
+    Json,
 }
 
 #[derive(Debug, Subcommand)]
@@ -639,18 +650,23 @@ async fn main() -> anyhow::Result<()> {
             ReleaseCommand::Readiness {
                 endpoint,
                 json,
+                format,
                 all_commands,
             } => {
                 let response = release_readiness(&endpoint)?;
-                if json || cli_json_requested() {
+                if json || format == Some(OutputFormat::Json) || cli_json_requested() {
                     println!("{response}");
                 } else {
                     println!("{}", format_release_readiness(&response, all_commands)?);
                 }
             }
-            ReleaseCommand::EvidenceStatus { endpoint, json } => {
+            ReleaseCommand::EvidenceStatus {
+                endpoint,
+                json,
+                format,
+            } => {
                 let response = release_evidence_status(&endpoint)?;
-                if json || cli_json_requested() {
+                if json || format == Some(OutputFormat::Json) || cli_json_requested() {
                     println!("{response}");
                 } else {
                     println!("{}", format_release_evidence_status(&response)?);

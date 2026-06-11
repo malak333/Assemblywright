@@ -177,8 +177,11 @@ and its `jarvis ask` alias, `jarvis plugins list/get`, `jarvis tools list`,
 `jarvis activity summary`, `jarvis release readiness`, and
 `jarvis release evidence-status`. Use `--json` on those commands when a
 script, test, or debugging session needs the exact IPC payload with full audit,
-route, readiness, or evidence inventory details. `JARVIS_CLI_JSON=1` is
-available for test harnesses that need to keep all CLI calls machine-readable.
+route, readiness, or evidence inventory details. For compatibility with older
+automation, `jarvis release readiness --format json` and
+`jarvis release evidence-status --format json` are accepted as aliases for the
+release inspection JSON payloads. `JARVIS_CLI_JSON=1` is available for test
+harnesses that need to keep all CLI calls machine-readable.
 
 Manual model smoke recipes, run from a second terminal while the server above
 is running:
