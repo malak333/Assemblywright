@@ -40,6 +40,9 @@ struct JarvisMacApp: App {
                 adapter: MacSpeechVoiceAdapter(),
                 voiceState: voice,
                 shouldAutoSubmitFinalTranscript: { !console.isWorking },
+                autoSubmitUnavailableReason: {
+                    console.isWorking ? "Auto-submit is unavailable while a command is already running." : nil
+                },
                 submitFinalTranscript: { handoff in
                     await console.submit(input: handoff.text, dryRun: handoff.dryRun)
                 }
@@ -1497,8 +1500,10 @@ struct VoiceStateView: View {
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
 
-            Toggle("Push to talk", isOn: .constant(model.isPushToTalkEnabled))
-                .disabled(true)
+            Text(model.isPushToTalkEnabled ? "Manual capture ready." : "Manual capture unavailable in the current voice state.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
             Toggle(
                 "Auto-submit final transcript",
                 isOn: Binding(
@@ -1506,6 +1511,13 @@ struct VoiceStateView: View {
                     set: { adapter.setFinalTranscriptAutoSubmitEnabled($0) }
                 )
             )
+            .disabled(!adapter.isFinalTranscriptAutoSubmitToggleEnabled)
+            if let blockedReason = adapter.autoSubmitAvailability.blockedReason {
+                Text(blockedReason)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .textSelection(.enabled)
+            }
             Text("Live capture uses the macOS Speech/AVFoundation adapter and the same transcript handoff path as typed commands. Speech output uses an AVFoundation adapter. Release claims still require entitlements and manual device validation.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -1574,6 +1586,7 @@ struct VoiceStateView: View {
                 Button("Cancel") {
                     model.apply(.cancelTranscript)
                 }
+                #if DEBUG
                 Button("Mark Voice Degraded") {
                     model.markDegraded(reason: "Voice capture or playback is degraded; typed transcript fallback remains available.")
                 }
@@ -1583,6 +1596,7 @@ struct VoiceStateView: View {
                 Button("Reset Text Only") {
                     model.resetTextOnly()
                 }
+                #endif
             }
 
             if let handoff = model.lastHandoff {
@@ -1596,6 +1610,18 @@ struct VoiceStateView: View {
                 Text(lastError)
                     .font(.caption)
                     .foregroundStyle(.red)
+            }
+            if let lastError = adapter.lastError {
+                Text(lastError.description)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .textSelection(.enabled)
+            }
+            if let lastError = speechOutput.lastError {
+                Text(lastError.description)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .textSelection(.enabled)
             }
 
             Spacer()

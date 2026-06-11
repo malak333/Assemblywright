@@ -10,7 +10,7 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   reviewable worktree/branch/PR slice.
 - Confirm `DESIGN.md` still matches the implementation scope.
 - Confirm release notes distinguish implemented Rust foundation and Swift shell
-  scaffold behavior from the implemented opt-in Ollama-compatible local
+  inspection/control behavior from the implemented opt-in Ollama-compatible local
   provider boundary, implemented opt-in ChatGPT/OpenAI-compatible provider
   boundary, metadata-only local plugin installation, explicit installed-plugin
   subprocess execution grant, implemented Swift approval decision surface,

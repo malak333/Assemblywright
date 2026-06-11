@@ -33,6 +33,15 @@ private final class IPCURLProtocol: URLProtocol {
 }
 
 @MainActor
+private final class MutableFlag {
+    var value: Bool
+
+    init(_ value: Bool) {
+        self.value = value
+    }
+}
+
+@MainActor
 private final class FakeVoiceAdapter: JarvisVoiceAdapter {
     var phase: JarvisVoiceAdapterPhase
     var permissionResult: Result<Void, JarvisVoiceAdapterError>
@@ -1913,6 +1922,60 @@ struct JarvisMacCoreTests {
     }
 
     @MainActor
+    @Test("Voice adapter auto-submit requires an explicit submit handler")
+    func voiceAdapterAutoSubmitRequiresSubmitHandler() async {
+        let adapter = FakeVoiceAdapter()
+        let voice = VoiceStateModel()
+        let model = VoiceAdapterStateModel(adapter: adapter, voiceState: voice)
+
+        #expect(!model.isFinalTranscriptAutoSubmitToggleEnabled)
+        #expect(model.autoSubmitAvailability.blockedReason == "Auto-submit is unavailable because no command submit handler is configured.")
+
+        model.setFinalTranscriptAutoSubmitEnabled(true)
+
+        #expect(!model.isFinalTranscriptAutoSubmitEnabled)
+    }
+
+    @MainActor
+    @Test("Voice adapter auto-submit reports busy submitter as unavailable")
+    func voiceAdapterAutoSubmitReportsBusySubmitter() async throws {
+        let adapter = FakeVoiceAdapter()
+        let voice = VoiceStateModel()
+        var submittedHandoffs: [JarvisVoiceCommandHandoff] = []
+        let isSubmitterBusy = MutableFlag(true)
+        let model = VoiceAdapterStateModel(
+            adapter: adapter,
+            voiceState: voice,
+            shouldAutoSubmitFinalTranscript: { !isSubmitterBusy.value },
+            autoSubmitUnavailableReason: {
+                isSubmitterBusy.value ? "Auto-submit is unavailable while a command is already running." : nil
+            },
+            submitFinalTranscript: { handoff in
+                submittedHandoffs.append(handoff)
+            }
+        )
+
+        #expect(!model.isFinalTranscriptAutoSubmitToggleEnabled)
+        #expect(model.autoSubmitAvailability.blockedReason == "Auto-submit is unavailable while a command is already running.")
+
+        model.setFinalTranscriptAutoSubmitEnabled(true)
+        #expect(!model.isFinalTranscriptAutoSubmitEnabled)
+
+        isSubmitterBusy.value = false
+        #expect(model.isFinalTranscriptAutoSubmitToggleEnabled)
+        model.setFinalTranscriptAutoSubmitEnabled(true)
+        await model.startCapture()
+        isSubmitterBusy.value = true
+        adapter.emitFinal("open diagnostics")
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        #expect(model.phase == .idle)
+        #expect(voice.transcriptDraft == "open diagnostics")
+        #expect(voice.lastHandoff == nil)
+        #expect(submittedHandoffs.isEmpty)
+    }
+
+    @MainActor
     @Test("Voice adapter auto-submit uses the console command path")
     func voiceAdapterAutoSubmitFinalTranscriptUsesConsoleCommandPath() async throws {
         let adapter = FakeVoiceAdapter()
@@ -2124,6 +2187,29 @@ struct JarvisMacCoreTests {
         #expect(model.lastError == .recognitionFailed("Recognition task cancelled."))
         #expect(voice.statusText.contains("Voice unavailable"))
         #expect(voice.statusText.contains("Recognition task cancelled"))
+    }
+
+    @MainActor
+    @Test("Voice adapter disables auto-submit when capture becomes unavailable")
+    func voiceAdapterDisablesAutoSubmitWhenUnavailable() async {
+        let adapter = FakeVoiceAdapter(
+            permissionResult: .failure(.permissionDenied("Microphone permission was denied."))
+        )
+        let voice = VoiceStateModel()
+        let model = VoiceAdapterStateModel(
+            adapter: adapter,
+            voiceState: voice,
+            submitFinalTranscript: { _ in }
+        )
+
+        model.setFinalTranscriptAutoSubmitEnabled(true)
+        #expect(model.isFinalTranscriptAutoSubmitEnabled)
+
+        await model.requestPermissions()
+
+        #expect(!model.isFinalTranscriptAutoSubmitEnabled)
+        #expect(!model.isFinalTranscriptAutoSubmitToggleEnabled)
+        #expect(model.autoSubmitAvailability.blockedReason == "Auto-submit is unavailable while voice capture is unavailable: Voice permission denied: Microphone permission was denied.")
     }
 
     @MainActor

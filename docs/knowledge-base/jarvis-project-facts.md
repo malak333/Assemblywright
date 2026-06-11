@@ -568,11 +568,16 @@ These notes capture durable facts for future agents working on this repository.
   unavailable, and degraded typed-fallback states,
   owns a protocol-backed macOS Speech/AVFoundation adapter model from the
   SwiftUI Voice tab, and exposes permission request, start/stop capture, and
-  interrupt controls. The Voice tab also owns a protocol-backed AVFoundation
+  interrupt controls. Production builds of the Voice tab do not expose manual
+  state override buttons that can forge release-visible voice status, and the
+  auto-submit toggle is disabled with an explicit reason when no submit handler,
+  unavailable voice capture, or busy command submission prevents real
+  auto-submit. The Voice tab also owns a protocol-backed AVFoundation
   speech-output adapter with preview, stop, interrupt, and natural completion
   handling. Swift tests cover both adapter boundaries with fakes, including
-  speech-output completion returning the model to idle, and do not require live
-  microphone access or live audio output. The app still must not claim real
+  speech-output completion returning the model to idle and auto-submit
+  availability reasons, and do not require live microphone access or live audio
+  output. The app still must not claim real
   voice parity until entitlements, clean-profile permission prompts, live
   microphone capture, spoken transcript handoff, live audio output,
   owner-recorded manual device validation, and repository-backed command-result
@@ -943,17 +948,18 @@ These notes capture durable facts for future agents working on this repository.
   E2E or focused integration coverage instead of adding artificial tests.
   Behavior changes still require matching coverage before broader readiness
   language can be used.
-- The June 11, 2026 production-readiness sweep refresh was captured after PR
-  #230 from `main` at `95dd4a5`: readiness still reported
+- The June 11, 2026 production-readiness sweep refresh was updated after PR
+  #232 from `main` at `9f54912`: readiness still reported
   `production_ready: false`, 17 verified features, and one pending feature
-  (`live_voice_loop`). In a fresh worktree before generating local distribution
-  artifacts, evidence-status reported 0 satisfied, 9 missing, and 0 invalid
-  items; local unsigned distribution commands can make app
-  bundle/executable/core paths present, but production readiness still requires
-  signed/notarized artifacts, live-device QA, plugin-trust QA, and final
-  evidence bundle reports. PR #230 added Swift speech-output natural completion
-  coverage so playback finish/cancel returns the model to idle without claiming
-  live-device audio-output validation.
+  (`live_voice_loop`). In the main checkout, evidence-status reported 3
+  satisfied generated local app/core paths, 6 missing external/manual evidence
+  items, and 0 invalid items; fresh worktrees can still report the generated
+  local app paths as missing until local distribution commands create them.
+  Production readiness still requires signed/notarized artifacts,
+  live-device QA, plugin-trust QA, and final evidence bundle reports. PR #231
+  made Swift/readiness display fail closed on effective readiness unless
+  evidence status is complete, and PR #232 clarified exact release evidence
+  script handoff commands.
 - `jarvis-cli serve --db-path <path>` starts IPC with SQLite-backed task,
   audit, memory, and emergency-pause state for manual persistence checks.
 - File-backed `SqliteRepository::open` creates a preflight migration backup

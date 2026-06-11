@@ -13,7 +13,7 @@ Command:
 cargo run -p jarvis-cli -- release readiness --json
 ```
 
-Observed on 2026-06-11 from `main` at `95dd4a5` after PR #230:
+Observed on 2026-06-11 from `main` at `9f54912` after PR #232:
 
 - `production_ready: false`
 - `verified_feature_count: 17`
@@ -116,12 +116,14 @@ Jarvis is currently a production-shaped local assistant foundation:
   launch proof, package-distribution no-sign preflight,
   release-evidence-doctor missing-evidence guidance, release evidence script
   self-tests, Rust/CLI E2E, and Swift package tests.
-- Recent PRs #223 through #230 synchronized architecture/readiness docs, added
+- Recent PRs #223 through #232 synchronized architecture/readiness docs, added
   explicit `--json`/`--format json` release inspection compatibility, added the
   package-distribution preflight to the local release gate, and made the
   evidence doctor recommend that preflight before credentialed signing. PR #230
   also added speech-output natural completion coverage so the Swift model
-  returns to idle when AVFoundation playback finishes or cancels.
+  returns to idle when AVFoundation playback finishes or cancels. PR #231 made
+  readiness display evidence-aware and fail-closed in Swift, while PR #232
+  clarified exact release evidence script handoff commands.
 - The current conservative readiness boundary is unchanged: 17 verified
   repo-owned features, one pending manual live voice validation feature, and
   missing external/manual release evidence before production-ready language is
@@ -147,8 +149,10 @@ same architecture plus validated external release evidence:
 
 ## E2E Coverage For This Sweep
 
-No executable behavior changed in this docs-sync phase. The relevant existing
-coverage is:
+After PRs #231 and #232, executable and script-output behavior changed; use
+their focused validation commands plus the current local release gate as
+evidence for those changes. The relevant existing coverage for the broader
+sweep is:
 
 - `cargo test -p jarvis-cli --test local_ipc_e2e release_readiness_cli_falls_back_without_running_server -- --nocapture`
 - `cargo test -p jarvis-cli --test local_ipc_e2e release_signed_distribution_runbook_summarizes_next_operator_steps -- --nocapture`
