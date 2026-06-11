@@ -98,15 +98,18 @@ These notes capture durable facts for future agents working on this repository.
   read-only release summary from contract feature metadata, release-checklist
   blockers, and explicitly enabled release evidence status. Default readiness
   treats standard `target/` evidence files as inventory only; with
-  `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external`, readiness can compute
-  `production_ready: true` only when every required `/release/evidence-status`
-  item is present, no missing or invalid evidence remains, and
-  evidence-cleared features leave no pending readiness features. This remains
-  validated owner-recorded release evidence, not Jarvis-performed signing,
-  notarization, stapling, live-device QA, plugin trust QA, or manual release
-  QA. The CLI command prefers the IPC endpoint when it is running
-  and falls back to the same local `IpcState` readiness summary when the server
-  is unavailable, so operator triage does not require a prestarted core.
+  `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external` on the running core,
+  readiness can compute `production_ready: true` only when every required
+  `/release/evidence-status` item is present, no missing or invalid evidence
+  remains, and evidence-cleared features leave no pending readiness features.
+  This remains validated owner-recorded release evidence, not Jarvis-performed
+  signing, notarization, stapling, live-device QA, plugin trust QA, or manual
+  release QA. The CLI command prefers the IPC endpoint when it is running and
+  falls back to the same local `IpcState` readiness summary when the server is
+  unavailable, so operator triage does not require a prestarted core. When an
+  IPC core is already running, setting the external-mode env var only on the CLI
+  process does not clear readiness; the core must be started or restarted with
+  that env var after owner evidence is complete.
   `operator_release_qa_smoke` is an implemented readiness feature for the local
   repository-backed operator QA lane; it does not clear clean-profile
   installed-app or live-device manual gates.
@@ -179,9 +182,11 @@ These notes capture durable facts for future agents working on this repository.
   `ReleaseReadinessModel` and renders a Release tab with blocking manual gates,
   recommended commands, implemented proofs, pending features, the proof
   boundary, stale cached-readiness warning, and `/release/evidence-status`
-  inventory. This remains inspection-only and does not perform signing,
-  notarization, stapling, installation, Finder/LaunchServices validation, or
-  live-device validation.
+  inventory. Its effective production-ready display must remain fail-closed
+  unless readiness is true, evidence status is complete, every evidence item is
+  present, and the refresh is not stale or failed. This remains inspection-only
+  and does not perform signing, notarization, stapling, installation,
+  Finder/LaunchServices validation, or live-device validation.
 - `ConversationRuntime` supports bounded fake-model and provider-envelope
   planned first-party tool calls with schema validation, policy checks, approval
   stops, tool-result audit entries, and feedback of tool results into later
@@ -935,14 +940,16 @@ These notes capture durable facts for future agents working on this repository.
   Behavior changes still require matching coverage before broader readiness
   language can be used.
 - The June 11, 2026 production-readiness sweep refresh was captured after PR
-  #229 from `main` at `fb13a7f`: readiness still reported
+  #230 from `main` at `95dd4a5`: readiness still reported
   `production_ready: false`, 17 verified features, and one pending feature
   (`live_voice_loop`). In a fresh worktree before generating local distribution
   artifacts, evidence-status reported 0 satisfied, 9 missing, and 0 invalid
   items; local unsigned distribution commands can make app
   bundle/executable/core paths present, but production readiness still requires
   signed/notarized artifacts, live-device QA, plugin-trust QA, and final
-  evidence bundle reports.
+  evidence bundle reports. PR #230 added Swift speech-output natural completion
+  coverage so playback finish/cancel returns the model to idle without claiming
+  live-device audio-output validation.
 - `jarvis-cli serve --db-path <path>` starts IPC with SQLite-backed task,
   audit, memory, and emergency-pause state for manual persistence checks.
 - File-backed `SqliteRepository::open` creates a preflight migration backup

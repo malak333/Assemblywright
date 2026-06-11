@@ -269,9 +269,9 @@ The packaged Mac app launches, starts the Rust core, handles a command, writes a
   the relevant end-to-end coverage, add missing E2E coverage when the feature
   changes executable behavior, and clearly record any skipped or blocked gate.
 
-## Initial Implementation Handoff Outline
+## Historical Initial Implementation Handoff Outline
 
-Implementation should begin with the smallest product-grade foundation:
+The project began with the smallest product-grade foundation:
 
 1. Create a repo structure with `apps/mac` for Swift and `crates/jarvis-core` for Rust.
 2. Define the app/core IPC schema and a health-check command.
@@ -288,7 +288,7 @@ plugin provenance snapshot verification, CLI smoke path, operator-readable CLI
 surfaces for command/ask, plugins, tools, tasks, routes, activity, readiness,
 and evidence status with `--json`/`JARVIS_CLI_JSON=1` preserving exact payloads,
 redacted diagnostics export, repository-backed activity summary, and buildable
-Swift command/activity shell scaffold are implemented. The command runtime can route to fake local,
+Swift command/activity shell are implemented. The command runtime can route to fake local,
 Ollama-compatible local HTTP, or explicitly enabled ChatGPT/OpenAI-compatible
 HTTP providers. The IPC layer exposes bounded activity event streaming for
 current task/audit progress, contract compatibility policy, and contract

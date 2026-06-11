@@ -237,7 +237,12 @@ fn release_readiness_cli_falls_back_without_running_server() {
     assert_string_array_order(
         &release_readiness["recommended_verification_commands"],
         "./scripts/release-evidence-doctor.sh --assert-complete",
-        "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness",
+        "Start or restart the core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external",
+    );
+    assert_string_array_order(
+        &release_readiness["recommended_verification_commands"],
+        "Start or restart the core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external",
+        "cargo run -p jarvis-cli -- release readiness",
     );
     assert!(
         serde_json::from_str::<Value>(&readable_readiness).is_err(),
@@ -517,6 +522,11 @@ fn release_readiness_cli_computes_production_ready_only_from_external_complete_e
     let conservative_readiness =
         run_cli_json(["release", "readiness", "--endpoint", endpoint.as_str()]);
     assert_eq!(conservative_readiness["production_ready"], false);
+    let cli_only_external_env_readiness = run_cli_json_with_env(
+        ["release", "readiness", "--endpoint", endpoint.as_str()],
+        &[("JARVIS_RELEASE_READINESS_EVIDENCE_MODE", "external")],
+    );
+    assert_eq!(cli_only_external_env_readiness["production_ready"], false);
     server.stop();
 
     let mut external_env = evidence_env.clone();
@@ -2505,8 +2515,9 @@ fn release_live_device_runbook_summarizes_next_operator_steps() {
     assert!(readable_runbook.contains("Run on the release machine:"));
     assert!(readable_runbook.contains("cargo run -p jarvis-cli -- release evidence-status"));
     assert!(readable_runbook.contains(
-        "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness"
+        "Start or restart the core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external"
     ));
+    assert!(readable_runbook.contains("cargo run -p jarvis-cli -- release readiness"));
     assert!(readable_runbook.contains("Verify microphone and Speech permission prompts"));
     assert!(readable_runbook.contains("Boundary: runbook and local evidence inspection only"));
     assert!(readable_runbook.contains("Raw JSON: rerun with --json"));
@@ -2552,7 +2563,8 @@ fn release_live_device_runbook_summarizes_next_operator_steps() {
             "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env",
             "set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete",
             "cargo run -p jarvis-cli -- release evidence-status",
-            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness",
+            "Start or restart the core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external",
+            "cargo run -p jarvis-cli -- release readiness",
         ],
     );
     assert_string_array_contains_substring(

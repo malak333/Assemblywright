@@ -1362,7 +1362,12 @@ struct ReleaseReadinessView: View {
                             .font(.caption)
                             .foregroundStyle(.orange)
                     }
-                    LabelValueRow(label: "Production Ready", value: readiness.productionReady ? "yes" : "no")
+                    LabelValueRow(label: "Production Ready", value: model.effectiveProductionReady ? "yes" : "no")
+                    if readiness.productionReady && !model.effectiveProductionReady {
+                        Label("Readiness claim is blocked until current evidence status is complete.", systemImage: "lock.shield")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
                     LabelValueRow(label: "Scope", value: readiness.readinessScope)
                     LabelValueRow(label: "Verified Features", value: String(readiness.verifiedFeatureCount))
                     LabelValueRow(label: "Pending Features", value: String(readiness.pendingFeatureCount))

@@ -2084,7 +2084,8 @@ fn release_live_device_runbook_json(
             "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env",
             "set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete",
             "cargo run -p jarvis-cli -- release evidence-status",
-            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness"
+            "Start or restart the core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external",
+            "cargo run -p jarvis-cli -- release readiness"
         ],
         "manual_checks": [
             "Install the signed, notarized package into /Applications on a clean Mac profile.",
@@ -2144,7 +2145,8 @@ fn format_release_live_device_runbook(
         "- ./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env".to_string(),
         "- set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete".to_string(),
         "- cargo run -p jarvis-cli -- release evidence-status".to_string(),
-        "- JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness".to_string(),
+        "- Start or restart the core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external".to_string(),
+        "- cargo run -p jarvis-cli -- release readiness".to_string(),
         "Manual checks:".to_string(),
         "- Install the signed, notarized package into /Applications on a clean Mac profile.".to_string(),
         "- Launch Jarvis through Finder or LaunchServices.".to_string(),

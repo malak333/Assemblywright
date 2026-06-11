@@ -407,7 +407,8 @@ struct JarvisMacCoreTests {
             command.contains("JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true")
         })
         let evidenceDoctorAssertIndex = try #require(commands.firstIndex(of: "./scripts/release-evidence-doctor.sh --assert-complete"))
-        let externalReadinessIndex = try #require(commands.firstIndex(of: "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness"))
+        let externalCoreRestartIndex = try #require(commands.firstIndex(of: "Start or restart the core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external"))
+        let externalReadinessIndex = try #require(commands.firstIndex(of: "cargo run -p jarvis-cli -- release readiness"))
         #expect(operatorSmokeIndex < packagedAppSmokeIndex)
         #expect(packagedAppSmokeIndex < unsignedDistributionIndex)
         #expect(unsignedDistributionIndex < signedDistributionIndex)
@@ -417,7 +418,8 @@ struct JarvisMacCoreTests {
         #expect(pluginTrustAssertIndex < evidenceBundleSourceIndex)
         #expect(evidenceBundleSourceIndex < evidenceDoctorAssertIndex)
         #expect(evidenceBundleInlineIndex < evidenceDoctorAssertIndex)
-        #expect(evidenceDoctorAssertIndex < externalReadinessIndex)
+        #expect(evidenceDoctorAssertIndex < externalCoreRestartIndex)
+        #expect(externalCoreRestartIndex < externalReadinessIndex)
         #expect(readiness.proofBoundary.contains("does not perform signing"))
     }
 
@@ -434,7 +436,8 @@ struct JarvisMacCoreTests {
         #expect(readiness.pendingFeatures.isEmpty)
         #expect(readiness.implementedFeatures.map(\.key).contains("live_voice_loop"))
         #expect(readiness.blockingManualGates.isEmpty)
-        #expect(readiness.recommendedVerificationCommands.contains("JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness"))
+        #expect(readiness.recommendedVerificationCommands.contains("Start or restart the core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external"))
+        #expect(readiness.recommendedVerificationCommands.contains("cargo run -p jarvis-cli -- release readiness"))
         #expect(readiness.proofBoundary.contains("does not perform signing"))
     }
 
@@ -1280,6 +1283,7 @@ struct JarvisMacCoreTests {
 
         #expect(model.readiness?.productionReady == false)
         #expect(model.evidenceStatus?.complete == false)
+        #expect(!model.effectiveProductionReady)
         #expect(model.evidenceStatus?.items.map(\.key).contains("live_device_qa_report") == true)
         #expect(model.evidenceStatus?.items.first { $0.key == "signed_app_bundle" }?.detail.contains("presence only") == true)
         #expect(model.readiness?.implementedFeatures.map(\.key).contains("repository_state") == true)
@@ -1367,6 +1371,7 @@ struct JarvisMacCoreTests {
         #expect(model.readiness?.pendingFeatures.isEmpty == true)
         #expect(model.readiness?.blockingManualGates.isEmpty == true)
         #expect(model.evidenceStatus?.complete == true)
+        #expect(model.effectiveProductionReady)
         #expect(model.evidenceStatus?.items.first { $0.key == "live_device_qa_report" }?.status == "present")
         #expect(model.evidenceStatus?.items.first { $0.key == "live_device_qa_report" }?.detail.contains("bundled_core.sha256 matches signed-provenance") == true)
         #expect(model.evidenceStatus?.items.first { $0.key == "plugin_trust_qa_report" }?.status == "present")
@@ -1376,6 +1381,59 @@ struct JarvisMacCoreTests {
         #expect(model.evidenceStatus?.items.first { $0.key == "release_evidence_bundle" }?.detail.contains("owner completion is ordered after child report generation") == true)
         #expect(model.lastError == nil)
         #expect(model.isShowingStaleReadiness == false)
+    }
+
+    @MainActor
+    @Test("Release readiness model blocks effective readiness when evidence is incomplete")
+    func releaseReadinessModelBlocksEffectiveReadinessWhenEvidenceIsIncomplete() async throws {
+        let readiness = try JSONDecoder().decode(
+            JarvisReleaseReadiness.self,
+            from: externalProductionReadyReleaseReadinessJSON()
+        )
+        let incompleteEvidence = try JSONDecoder().decode(
+            JarvisReleaseEvidenceStatus.self,
+            from: releaseEvidenceStatusJSON()
+        )
+        let model = ReleaseReadinessModel(
+            client: FakeCoreClient(
+                releaseReadiness: readiness,
+                releaseEvidenceStatus: incompleteEvidence
+            )
+        )
+
+        await model.refresh()
+
+        #expect(model.readiness?.productionReady == true)
+        #expect(model.evidenceStatus?.complete == false)
+        #expect(model.evidenceStatus?.missingCount ?? 0 > 0)
+        #expect(!model.effectiveProductionReady)
+        #expect(model.lastError == nil)
+    }
+
+    @MainActor
+    @Test("Release readiness model blocks effective readiness when evidence is invalid")
+    func releaseReadinessModelBlocksEffectiveReadinessWhenEvidenceIsInvalid() async throws {
+        let readiness = try JSONDecoder().decode(
+            JarvisReleaseReadiness.self,
+            from: externalProductionReadyReleaseReadinessJSON()
+        )
+        let invalidEvidence = try JSONDecoder().decode(
+            JarvisReleaseEvidenceStatus.self,
+            from: invalidLiveDeviceEvidenceStatusJSON()
+        )
+        let model = ReleaseReadinessModel(
+            client: FakeCoreClient(
+                releaseReadiness: readiness,
+                releaseEvidenceStatus: invalidEvidence
+            )
+        )
+
+        await model.refresh()
+
+        #expect(model.readiness?.productionReady == true)
+        #expect(model.evidenceStatus?.invalidCount == 1)
+        #expect(!model.effectiveProductionReady)
+        #expect(model.lastError == nil)
     }
 
     @MainActor
@@ -1395,11 +1453,43 @@ struct JarvisMacCoreTests {
         await model.refresh()
         #expect(model.readiness?.generatedAt == "2026-05-22T08:00:00Z")
         #expect(model.isShowingStaleReadiness == false)
+        #expect(!model.effectiveProductionReady)
 
         await model.refresh()
         #expect(model.readiness?.generatedAt == "2026-05-22T08:00:00Z")
         #expect(model.lastError != nil)
         #expect(model.isShowingStaleReadiness == true)
+        #expect(!model.effectiveProductionReady)
+    }
+
+    @MainActor
+    @Test("Release readiness model blocks stale external production ready evidence")
+    func releaseReadinessModelBlocksStaleExternalProductionReadyEvidence() async throws {
+        let readiness = try JSONDecoder().decode(
+            JarvisReleaseReadiness.self,
+            from: externalProductionReadyReleaseReadinessJSON()
+        )
+        let evidence = try JSONDecoder().decode(
+            JarvisReleaseEvidenceStatus.self,
+            from: completeReleaseEvidenceStatusJSON()
+        )
+        let client = FakeCoreClient(
+            releaseReadinessResults: [
+                .success(readiness),
+                .failure(URLError(.cannotConnectToHost))
+            ],
+            releaseEvidenceStatus: evidence
+        )
+        let model = ReleaseReadinessModel(client: client)
+
+        await model.refresh()
+        #expect(model.effectiveProductionReady)
+
+        await model.refresh()
+        #expect(model.readiness?.productionReady == true)
+        #expect(model.evidenceStatus?.complete == true)
+        #expect(model.isShowingStaleReadiness)
+        #expect(!model.effectiveProductionReady)
     }
 
     @Test("Approval queue remains inspection-only when core has no approval endpoint")
@@ -3192,7 +3282,8 @@ private func releaseReadinessJSON() -> Data {
             "set -a && source target/release-evidence-bundle.env && set +a && ./scripts/release-evidence-bundle.sh --bundle",
             "JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true JARVIS_EVIDENCE_REPORTS_ARCHIVED=true ./scripts/release-evidence-bundle.sh --bundle",
             "./scripts/release-evidence-doctor.sh --assert-complete",
-            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness"
+            "Start or restart the core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external",
+            "cargo run -p jarvis-cli -- release readiness"
           ],
           "proof_boundary": "Read-only summary derived from /contract feature metadata and release checklist blockers; it does not perform signing, notarization, stapling, installation, Finder/LaunchServices validation, live microphone/Speech validation, spoken transcript handoff, live audio-output validation, App Store review, marketplace plugin review, malware analysis, or OS sandbox enforcement."
         }
@@ -3240,7 +3331,8 @@ private func externalProductionReadyReleaseReadinessJSON() -> Data {
           "recommended_verification_commands": [
             "./scripts/release-local.sh",
             "./scripts/release-ci-workflow-smoke.sh",
-            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness"
+            "Start or restart the core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external",
+            "cargo run -p jarvis-cli -- release readiness"
           ],
           "proof_boundary": "Read-only summary derived from /contract feature metadata, release checklist blockers, and explicitly enabled external release evidence status; it does not perform signing, notarization, stapling, installation, Finder/LaunchServices validation, live microphone/Speech validation, spoken transcript handoff, live audio-output validation, App Store review, marketplace plugin review, malware analysis, or OS sandbox enforcement."
         }

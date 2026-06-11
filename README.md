@@ -11,9 +11,9 @@ contracts, metadata-only local plugin installation, local plugin
 provenance snapshots, scheduler state, redacted diagnostics export, a loopback
 IPC surface with compatibility policy plus feature proof/boundary metadata,
 repository-backed activity summary and activity event stream, conservative
-release-readiness inspection, and CLI smoke paths for the Swift shell scaffold
-and future packaged app.
-It also includes the first buildable Swift/SwiftUI Mac shell scaffold under
+release-readiness inspection, and CLI smoke paths for the Swift shell
+and local packaged app proof.
+It also includes the buildable Swift/SwiftUI Mac shell under
 `apps/mac`, with a tested IPC client, command-console state model,
 activity/audit panel with current progress summary, memory
 create/update/review/delete and restore management, memory classification
@@ -21,7 +21,7 @@ summary, memory review counts in diagnostics and permission policy review, prove
 permission/grant inspection, permission policy review items, redacted scheduler
 attention summaries for app handoff, scheduler trigger policy-review items,
 release-readiness blocker inspection,
-adapter-backed scheduler notification controls, degraded-mode handling, and a
+adapter-backed scheduler notification controls, degraded-mode handling,
 Speech/AVFoundation voice input controls, AVFoundation speech-output controls,
 and a core supervisor abstraction.
 Scheduler due execution records a redacted proactive policy audit before
@@ -127,17 +127,18 @@ release triage still works before starting the supervised core.
 Readiness feature metadata includes the repository-backed operator QA smoke as
 implemented local evidence, with clean-profile installed-app and live-device
 QA still listed as manual gates.
-The response keeps `production_ready: false` by default. With
-`JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external`, readiness can compute
+The response keeps `production_ready: false` by default. When the running core
+has `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external`, readiness can compute
 `production_ready: true` only when every required `/release/evidence-status`
 item is present, no missing or invalid evidence remains, and evidence-cleared
 features leave no pending readiness features. That remains owner-recorded
 external evidence: Jarvis does not itself perform Developer ID signing,
 notarization, stapling, clean-profile install/Finder validation, live-device
 QA, plugin trust QA, or manual release QA.
-Only set `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external` after
-owner-recorded external QA reports and signed-distribution evidence have been
-collected.
+Only start or restart the core with
+`JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external` after owner-recorded external
+QA reports and signed-distribution evidence have been collected, then query
+`jarvis release readiness` against that running core.
 In external evidence mode, the live-device QA report must still pass semantic
 validation for the expected installed app path, bundle identifier, short/build
 version, non-self-test identity, ordered non-future UTC voice-check timestamps, and

@@ -85,8 +85,9 @@ Release-readiness triage can run before starting a server. The command prefers
 `/release/readiness` from a running IPC endpoint, then falls back to the same
 conservative local summary when the endpoint is unavailable. By default it
 treats standard release reports as inventory only; release operators can enable
-evidence-aware blocker clearing with `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external`
-after preserving the relevant QA reports:
+evidence-aware blocker clearing by starting or restarting the core with
+`JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external` after preserving the relevant
+QA reports:
 
 ```sh
 cargo run -p jarvis-cli -- release readiness
@@ -414,17 +415,18 @@ falls back to conservative local metadata when loopback IPC is unavailable,
 including restricted environments that deny loopback sockets; use
 `--all-commands` for the complete readable verification runbook, or `--json` or
 `JARVIS_CLI_JSON=1` for the exact structured payload. Evidence-aware mode can
-clear the live voice/audio blocker from a valid live-device QA report. In explicit
-`JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external`, it can compute
-`production_ready: true` only when every required `/release/evidence-status`
-item is present, no missing or invalid evidence remains, and evidence-cleared
-features leave no pending readiness features. That is still owner-recorded
-external evidence, not proof that Jarvis performed signing, notarization,
-stapling, live-device QA, plugin trust QA, or manual release QA.
+clear the live voice/audio blocker from a valid live-device QA report. When the
+running core has `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external`, it can
+compute `production_ready: true` only when every required
+`/release/evidence-status` item is present, no missing or invalid evidence
+remains, and evidence-cleared features leave no pending readiness features.
+That is still owner-recorded external evidence, not proof that Jarvis performed
+signing, notarization, stapling, live-device QA, plugin trust QA, or manual
+release QA.
 The release command `--help` output is part of the operator contract: it should
 preserve the read-only scope, IPC-first/local-fallback behavior, explicit
-`JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external` opt-in, and file/report
-inspection plus semantic-validation boundary for evidence status. The
+external-mode opt-in on the running core, and file/report inspection plus
+semantic-validation boundary for evidence status. The
 `release_help_surfaces_current_evidence_boundaries` CLI E2E test keeps
 `jarvis release evidence-status --help` aligned with the default
 operator-readable output, `--json` escape hatch, owner-asserted plugin-trust
@@ -726,7 +728,8 @@ validation flags, voice-loop evidence fields, owner/device/profile/timestamp
 and live voice/non-voice evidence-note fields, structured command observation
 including `audio_output_device_label`, schema identity, and the proof boundary.
 After generating it, run `cargo run -p jarvis-cli -- release evidence-status`
-and `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness`
+and `cargo run -p jarvis-cli -- release readiness` against a core started or
+restarted with `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external`
 to confirm any live voice/audio blocker changes are backed by the report.
 Preserve that report with release notes when making a production-ready claim.
 `--self-test` uses a fake app fixture to exercise only the assertion/report
@@ -805,7 +808,7 @@ live ChatGPT service execution,
 advanced memory classification policy beyond the current summary surface, live
 microphone capture, or live audio output until those surfaces are manually
 validated. The current Swift gate proves the
-Mac shell scaffold builds, decodes IPC contracts, decodes live CLI fallback JSON
+Mac shell builds, decodes IPC contracts, decodes live CLI fallback JSON
 for release readiness and release evidence-status, exposes management models for
 approval evidence, memory classification summary, memory policy review counts,
 memory create/update/review/delete/restore state, runs/audit,
