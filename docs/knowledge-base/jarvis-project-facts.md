@@ -903,6 +903,11 @@ These notes capture durable facts for future agents working on this repository.
   operator-readable defaults. Use `--json` for the canonical machine-readable
   flag, while `--format json` is accepted as a compatibility alias for older
   release scripts or operator notes that used format-style JSON output.
+- The release runbook commands follow the same convention:
+  `jarvis release live-device-runbook --format json`,
+  `jarvis release signed-distribution-runbook --format json`, and
+  `jarvis release plugin-trust-runbook --format json` are compatibility aliases
+  for their structured `--json` summaries.
 - Release evidence structural hardening now treats the final evidence chain as
   cross-bound evidence, not independent files: app zips are rejected unless they
   contain exactly one top-level `Jarvis.app` payload with `Info.plist`, the app
