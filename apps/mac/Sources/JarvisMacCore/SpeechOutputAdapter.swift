@@ -160,6 +160,7 @@ public final class MacSpeechOutputAdapter: NSObject, JarvisSpeechOutputAdapter, 
     public var onPhaseChange: (@MainActor (JarvisSpeechOutputPhase) -> Void)?
 
     private let synthesizer: AVSpeechSynthesizer
+    private var activeUtteranceID: ObjectIdentifier?
 
     override public init() {
         self.synthesizer = AVSpeechSynthesizer()
@@ -181,8 +182,8 @@ public final class MacSpeechOutputAdapter: NSObject, JarvisSpeechOutputAdapter, 
 
         let utterance = AVSpeechUtterance(string: trimmed)
         utterance.voice = AVSpeechSynthesisVoice(language: Locale.current.identifier)
+        beginSpeechTracking(for: utterance)
         synthesizer.speak(utterance)
-        phase = .speaking
         return .success(())
     }
 
@@ -193,6 +194,7 @@ public final class MacSpeechOutputAdapter: NSObject, JarvisSpeechOutputAdapter, 
         }
 
         synthesizer.stopSpeaking(at: .word)
+        activeUtteranceID = nil
         phase = .idle
         return .success(())
     }
@@ -201,32 +203,45 @@ public final class MacSpeechOutputAdapter: NSObject, JarvisSpeechOutputAdapter, 
         if synthesizer.isSpeaking {
             synthesizer.stopSpeaking(at: .immediate)
         }
+        activeUtteranceID = nil
         phase = .interrupted(reason: reason)
         return .success(())
     }
 
     nonisolated public func speechSynthesizer(
         _: AVSpeechSynthesizer,
-        didFinish _: AVSpeechUtterance
+        didFinish utterance: AVSpeechUtterance
     ) {
+        let utteranceID = ObjectIdentifier(utterance)
         Task { @MainActor [weak self] in
-            self?.markSpeechCompleted()
+            self?.markSpeechCompleted(for: utteranceID)
         }
     }
 
     nonisolated public func speechSynthesizer(
         _: AVSpeechSynthesizer,
-        didCancel _: AVSpeechUtterance
+        didCancel utterance: AVSpeechUtterance
     ) {
+        let utteranceID = ObjectIdentifier(utterance)
         Task { @MainActor [weak self] in
-            self?.markSpeechCompleted()
+            self?.markSpeechCompleted(for: utteranceID)
         }
     }
 
-    private func markSpeechCompleted() {
-        if phase == .speaking {
-            phase = .idle
-        }
+    func beginSpeechTracking(for utterance: AVSpeechUtterance) {
+        activeUtteranceID = ObjectIdentifier(utterance)
+        phase = .speaking
+    }
+
+    func markSpeechCompleted(for utterance: AVSpeechUtterance) {
+        markSpeechCompleted(for: ObjectIdentifier(utterance))
+    }
+
+    private func markSpeechCompleted(for utteranceID: ObjectIdentifier) {
+        guard activeUtteranceID == utteranceID else { return }
+        activeUtteranceID = nil
+        guard phase == .speaking else { return }
+        phase = .idle
     }
 }
 #else
