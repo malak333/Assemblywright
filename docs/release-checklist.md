@@ -136,7 +136,9 @@ evidence.
 Confirm `/contract`, `jarvis release readiness --json`,
 `jarvis release readiness --format json`, and the Swift Release tab expose this
 as `release_ci_gate` with the same proof boundary before using CI-passing
-language in release notes.
+language in release notes. Release runbook commands keep the same JSON
+compatibility convention: `--json` is canonical, and `--format json` is accepted
+for older automation that expects format-style structured output.
 
 The script runs the full local gate below, including the opt-in ignored
 release-proof E2E test. Run individual commands only when diagnosing a failing

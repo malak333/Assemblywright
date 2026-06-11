@@ -195,6 +195,9 @@ enum ReleaseCommand {
         /// Print a structured JSON runbook summary.
         #[arg(long)]
         json: bool,
+        /// Compatibility alias for machine-readable output. Only `json` is supported.
+        #[arg(long, value_enum)]
+        format: Option<OutputFormat>,
     },
     /// Print the signed distribution runbook and current evidence status.
     #[command(
@@ -207,6 +210,9 @@ enum ReleaseCommand {
         /// Print a structured JSON runbook summary.
         #[arg(long)]
         json: bool,
+        /// Compatibility alias for machine-readable output. Only `json` is supported.
+        #[arg(long, value_enum)]
+        format: Option<OutputFormat>,
     },
     /// Print the plugin-trust QA runbook and current evidence status.
     #[command(
@@ -219,6 +225,9 @@ enum ReleaseCommand {
         /// Print a structured JSON runbook summary.
         #[arg(long)]
         json: bool,
+        /// Compatibility alias for machine-readable output. Only `json` is supported.
+        #[arg(long, value_enum)]
+        format: Option<OutputFormat>,
     },
 }
 
@@ -672,10 +681,14 @@ async fn main() -> anyhow::Result<()> {
                     println!("{}", format_release_evidence_status(&response)?);
                 }
             }
-            ReleaseCommand::LiveDeviceRunbook { endpoint, json } => {
+            ReleaseCommand::LiveDeviceRunbook {
+                endpoint,
+                json,
+                format,
+            } => {
                 let readiness = release_readiness(&endpoint)?;
                 let evidence_status = release_evidence_status(&endpoint)?;
-                if json || cli_json_requested() {
+                if json || format == Some(OutputFormat::Json) || cli_json_requested() {
                     println!(
                         "{}",
                         release_live_device_runbook_json(&readiness, &evidence_status)?
@@ -687,10 +700,14 @@ async fn main() -> anyhow::Result<()> {
                     );
                 }
             }
-            ReleaseCommand::SignedDistributionRunbook { endpoint, json } => {
+            ReleaseCommand::SignedDistributionRunbook {
+                endpoint,
+                json,
+                format,
+            } => {
                 let readiness = release_readiness(&endpoint)?;
                 let evidence_status = release_evidence_status(&endpoint)?;
-                if json || cli_json_requested() {
+                if json || format == Some(OutputFormat::Json) || cli_json_requested() {
                     println!(
                         "{}",
                         release_signed_distribution_runbook_json(&readiness, &evidence_status)?
@@ -702,10 +719,14 @@ async fn main() -> anyhow::Result<()> {
                     );
                 }
             }
-            ReleaseCommand::PluginTrustRunbook { endpoint, json } => {
+            ReleaseCommand::PluginTrustRunbook {
+                endpoint,
+                json,
+                format,
+            } => {
                 let readiness = release_readiness(&endpoint)?;
                 let evidence_status = release_evidence_status(&endpoint)?;
-                if json || cli_json_requested() {
+                if json || format == Some(OutputFormat::Json) || cli_json_requested() {
                     println!(
                         "{}",
                         release_plugin_trust_runbook_json(&readiness, &evidence_status)?

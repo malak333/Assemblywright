@@ -2470,6 +2470,15 @@ fn release_live_device_runbook_summarizes_next_operator_steps() {
         "--endpoint",
         endpoint.as_str(),
     ]);
+    let format_json_runbook: Value = serde_json::from_str(&run_cli_text([
+        "release",
+        "live-device-runbook",
+        "--format",
+        "json",
+        "--endpoint",
+        endpoint.as_str(),
+    ]))
+    .expect("live-device runbook --format json output");
 
     assert!(readable_runbook.contains("Jarvis live-device QA runbook:"));
     assert!(readable_runbook.contains("live_voice_loop: pending_manual_validation"));
@@ -2495,8 +2504,17 @@ fn release_live_device_runbook_summarizes_next_operator_steps() {
         json_runbook["generated_from"],
         "release readiness plus evidence-status"
     );
+    assert_eq!(
+        format_json_runbook["generated_from"],
+        "release readiness plus evidence-status"
+    );
     assert_eq!(json_runbook["production_ready"], false);
+    assert_eq!(format_json_runbook["production_ready"], false);
     assert_eq!(json_runbook["live_voice_feature"]["key"], "live_voice_loop");
+    assert_eq!(
+        format_json_runbook["live_voice_feature"]["key"],
+        "live_voice_loop"
+    );
     assert_eq!(
         json_runbook["live_voice_feature"]["status"],
         "pending_manual_validation"
@@ -2571,6 +2589,15 @@ fn release_signed_distribution_runbook_summarizes_next_operator_steps() {
         "--endpoint",
         endpoint.as_str(),
     ]);
+    let format_json_runbook: Value = serde_json::from_str(&run_cli_text([
+        "release",
+        "signed-distribution-runbook",
+        "--format",
+        "json",
+        "--endpoint",
+        endpoint.as_str(),
+    ]))
+    .expect("signed-distribution runbook --format json output");
 
     assert!(readable_runbook.contains("Jarvis signed distribution runbook:"));
     assert!(readable_runbook.contains("signed_app_bundle:"));
@@ -2583,9 +2610,15 @@ fn release_signed_distribution_runbook_summarizes_next_operator_steps() {
     assert!(readable_runbook.contains("Boundary: runbook and local evidence inspection only"));
 
     assert_eq!(json_runbook["production_ready"], false);
+    assert_eq!(format_json_runbook["production_ready"], false);
     assert!(json_runbook["distribution_evidence"]
         .as_array()
         .expect("distribution evidence")
+        .iter()
+        .any(|item| item.get("key").and_then(Value::as_str) == Some("signed_app_zip")));
+    assert!(format_json_runbook["distribution_evidence"]
+        .as_array()
+        .expect("format distribution evidence")
         .iter()
         .any(|item| item.get("key").and_then(Value::as_str) == Some("signed_app_zip")));
     assert_string_array_contains(
@@ -2617,6 +2650,15 @@ fn release_plugin_trust_runbook_summarizes_next_operator_steps() {
         "--endpoint",
         endpoint.as_str(),
     ]);
+    let format_json_runbook: Value = serde_json::from_str(&run_cli_text([
+        "release",
+        "plugin-trust-runbook",
+        "--format",
+        "json",
+        "--endpoint",
+        endpoint.as_str(),
+    ]))
+    .expect("plugin-trust runbook --format json output");
 
     assert!(readable_runbook.contains("Jarvis plugin-trust QA runbook:"));
     assert!(readable_runbook.contains("plugin_trust_qa_report:"));
@@ -2642,9 +2684,18 @@ fn release_plugin_trust_runbook_summarizes_next_operator_steps() {
         json_runbook["generated_from"],
         "release readiness plus evidence-status"
     );
+    assert_eq!(
+        format_json_runbook["generated_from"],
+        "release readiness plus evidence-status"
+    );
     assert_eq!(json_runbook["production_ready"], false);
+    assert_eq!(format_json_runbook["production_ready"], false);
     assert_eq!(
         json_runbook["plugin_trust_evidence"]["key"],
+        "plugin_trust_qa_report"
+    );
+    assert_eq!(
+        format_json_runbook["plugin_trust_evidence"]["key"],
         "plugin_trust_qa_report"
     );
     assert_eq!(json_runbook["plugin_trust_evidence"]["status"], "missing");
