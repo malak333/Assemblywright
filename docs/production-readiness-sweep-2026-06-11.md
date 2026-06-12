@@ -149,6 +149,10 @@ Jarvis is currently a production-shaped local assistant foundation:
   the live-device QA self-test derive its expected bundled-core version from
   the canonical release version instead of a hard-coded string. Docs, KB notes,
   and focused Swift/shell validation were updated in the same branch.
+- This readable evidence-status caveat follow-up keeps presence-only artifact
+  caveats on the same item line as `present` in the default CLI output, while
+  preserving the full detail line and JSON contract. CLI E2E covers both the
+  fallback/no-server and server-backed readable paths.
 - The current conservative readiness boundary is unchanged: 17 verified
   repo-owned features, one pending manual live voice validation feature, and
   missing external/manual release evidence before production-ready language is
@@ -185,6 +189,8 @@ sweep is:
 - `cargo test -p jarvis-cli --test local_ipc_e2e release_readiness_cli_computes_production_ready_only_from_external_complete_evidence_status -- --nocapture`
 - `cargo test -p jarvis-cli --test local_ipc_e2e release_readiness_rejects_semantically_invalid_live_voice_evidence -- --nocapture`
 - `cargo test -p jarvis-cli --test local_ipc_e2e release_evidence_status_rejects_plugin_report_non_owner_review_source -- --nocapture`
+- `cargo test -p jarvis-cli --test local_ipc_e2e release_evidence_status_marks_present_artifacts_as_presence_only -- --nocapture`
+- `cargo test -p jarvis-cli --test local_ipc_e2e release_evidence_status_server_marks_present_artifacts_as_presence_only -- --nocapture`
 - `cargo test -p jarvis-cli --test local_ipc_e2e release_evidence_doctor -- --nocapture`
 - `cargo test -p jarvis-cli --test local_ipc_e2e release_help_surfaces_current_evidence_boundaries -- --nocapture`
 - `cargo test -p jarvis-cli --test local_ipc_e2e serve_exposes_local_ipc_contract_and_persists_state -- --nocapture`

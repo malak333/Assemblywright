@@ -2035,11 +2035,21 @@ fn format_release_evidence_status(response: &str) -> anyhow::Result<String> {
                 .get("label")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or(key);
-            lines.push(format!("- {key}: {status} ({label})"));
+            let detail = item.get("detail").and_then(serde_json::Value::as_str);
+            let status_caveat = if status == "present"
+                && detail
+                    .map(|detail| detail.contains("presence only"))
+                    .unwrap_or(false)
+            {
+                "; presence-only caveat"
+            } else {
+                ""
+            };
+            lines.push(format!("- {key}: {status}{status_caveat} ({label})"));
             if let Some(path) = item.get("path").and_then(serde_json::Value::as_str) {
                 lines.push(format!("  path: {path}"));
             }
-            if let Some(detail) = item.get("detail").and_then(serde_json::Value::as_str) {
+            if let Some(detail) = detail {
                 lines.push(format!("  detail: {detail}"));
             }
         }

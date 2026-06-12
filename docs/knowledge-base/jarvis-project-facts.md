@@ -996,8 +996,8 @@ requires plugin-trust `generated_at`, `review_started_at`,
   core IPC/evidence-status validation. The final bundle script rejects the same
   placeholders before writing a bundle, and readable
   `jarvis release evidence-status` output includes each evidence item's path and
-  detail, including present presence-only caveats, so operators do not need
-  `--json` for basic triage.
+  detail, including present presence-only caveats on the item line, so
+  operators do not need `--json` for basic triage.
 - `jarvis-cli serve --db-path <path>` starts IPC with SQLite-backed task,
   audit, memory, and emergency-pause state for manual persistence checks.
 - File-backed `SqliteRepository::open` creates a preflight migration backup
