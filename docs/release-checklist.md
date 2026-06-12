@@ -656,14 +656,17 @@ Distribution packaging gate:
   handoff commands.
 - Run `./scripts/package-distribution.sh --unsigned-structure-check` on
   distribution-layout PRs to build the release app, create an unsigned installer
-  package, and inspect the payload without requiring Apple credentials. Treat it
-  as structure evidence only, not signing, notarization, stapling, installation,
-  Finder/LaunchServices, live device, or manual QA proof.
+  package, inspect the payload, and validate package identifier, version, and
+  `/Applications` install location metadata without requiring Apple
+  credentials. Treat it as structure evidence only, not signing, notarization,
+  stapling, installation, Finder/LaunchServices, live device, or manual QA
+  proof.
 - Run `./scripts/package-distribution.sh --unsigned-launch-check` when a
   packaging change should prove the release-built `Jarvis.app` executable can
-  supervise its bundled core from an isolated HOME. Treat it as local launch and
-  IPC evidence only; it still does not prove signing, notarization, stapling,
-  installation, Finder/LaunchServices, live device, or manual QA.
+  supervise its bundled core from an isolated HOME. This also validates the
+  unsigned package metadata. Treat it as local launch and IPC evidence only; it
+  still does not prove signing, notarization, stapling, installation,
+  Finder/LaunchServices, live device, or manual QA.
 - Confirm `jarvis --version` reports the canonical release version and that
   `release-evidence-doctor.sh` / `release-evidence-bundle.sh` accept the
   bundled `Contents/Resources/bin/jarvis-cli --version` output for the same

@@ -658,12 +658,14 @@ so release-built app layout regressions are caught by the default gate. Its
 `--check` mode validates local tool availability and the entitlements
 template without Apple credentials, and `--check-guidance-self-test` locks the
 signed-distribution, live-device, plugin-trust, final-bundle, and doctor
-handoff commands printed by that preflight. Its `--unsigned-structure-check` mode
-builds and inspects the release app/pkg structure without Developer ID
-credentials. Its `--unsigned-launch-check` mode also launches the release-built
-app executable with an isolated temporary HOME, verifies the bundled core over
-loopback IPC, and checks command, audit, diagnostics, pause/block/resume, and
-SQLite state through the release app layout. The packaged core is also checked
+handoff commands printed by that preflight. Its `--unsigned-structure-check`
+mode builds and inspects the release app/pkg structure without Developer ID
+credentials, including unsigned package identifier, version, and `/Applications`
+install-location metadata. Its `--unsigned-launch-check` mode also validates
+that package metadata, launches the release-built app executable with an
+isolated temporary HOME, verifies the bundled core over loopback IPC, and checks
+command, audit, diagnostics, pause/block/resume, and SQLite state through the
+release app layout. The packaged core is also checked
 with `jarvis-cli --version`, and release evidence scripts reject bundles whose
 core binary does not report the expected release version. Full mode requires
 `JARVIS_DEVELOPER_ID_APPLICATION`,
