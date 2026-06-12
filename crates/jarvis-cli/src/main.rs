@@ -395,6 +395,11 @@ enum MemoryCommand {
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
+    /// Show redacted memory retention candidates and required operator actions.
+    RetentionPlan {
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
     /// Create a persisted memory item.
     Create {
         category: String,
@@ -992,6 +997,12 @@ async fn main() -> anyhow::Result<()> {
                     "/memory/classification"
                 };
                 println!("{}", server_required_request(&endpoint, "GET", path, None)?);
+            }
+            MemoryCommand::RetentionPlan { endpoint } => {
+                println!(
+                    "{}",
+                    server_required_request(&endpoint, "GET", "/memory/retention-plan", None)?
+                );
             }
             MemoryCommand::Create {
                 category,

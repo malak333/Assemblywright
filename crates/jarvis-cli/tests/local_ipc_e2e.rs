@@ -4912,6 +4912,30 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         serde_json::to_string(&retention_policy_review).expect("retention policy review JSON");
     assert!(!retention_policy_review_encoded.contains("do not expose deleted sensitive memory"));
 
+    let retention_plan =
+        run_cli_json(["memory", "retention-plan", "--endpoint", endpoint.as_str()]);
+    assert_eq!(retention_plan["status"], "operator_review_required");
+    assert_eq!(retention_plan["automation_enabled"], false);
+    assert_eq!(retention_plan["value_redaction_required"], true);
+    assert_array_contains(
+        &retention_plan["candidates"],
+        "status",
+        "deleted_sensitive_retained",
+    );
+    assert_array_contains(
+        &retention_plan["candidates"],
+        "recommended_action",
+        "operator_purge_or_restore",
+    );
+    assert_array_contains(
+        &retention_plan["candidates"],
+        "memory_id",
+        sensitive_memory_id.as_str(),
+    );
+    let retention_plan_encoded =
+        serde_json::to_string(&retention_plan).expect("retention plan JSON");
+    assert!(!retention_plan_encoded.contains("do not expose deleted sensitive memory"));
+
     let scheduled = run_cli_json([
         "scheduler",
         "schedule",

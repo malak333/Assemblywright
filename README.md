@@ -167,7 +167,11 @@ The permission center now surfaces installed-plugin provenance status from
 state. `/permissions/policy-review` turns pending approvals and installed
 plugin provenance/grant/network concerns plus unreviewed memory items and
 deleted sensitive memory retained in local storage into explicit review items
-without exposing memory values, but it still does not grant broader marketplace
+without exposing memory values. `/memory/retention-plan` and
+`jarvis memory retention-plan` now provide the memory-specific, redacted
+operator action list for active unreviewed memory and deleted sensitive memory
+that is still retained locally; the plan is inspection-only and keeps
+automation disabled. These surfaces still do not grant broader marketplace
 trust, malware safety, autonomous memory rewriting, purge automation, or
 OS-level network sandboxing.
 Approval grant/deny decisions remain side-effect-free. Approved first-party
