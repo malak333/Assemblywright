@@ -716,14 +716,17 @@ release app layout. The packaged core is also checked
 with `jarvis-cli --version`, and release evidence scripts reject bundles whose
 core binary does not report the expected release version. Full mode requires
 `JARVIS_DEVELOPER_ID_APPLICATION`,
-`JARVIS_DEVELOPER_ID_INSTALLER`, and notarytool credentials. It signs the
+`JARVIS_DEVELOPER_ID_INSTALLER`, and either a notarytool keychain profile or
+Apple ID/team/app-specific-password notarytool credentials. It signs the
 release bundle with hardened runtime and microphone entitlements, submits the
 app zip for notarization, staples the app, then creates a signed
 `/Applications` installer package at
 `target/distribution/Jarvis-<release-version>.pkg`,
-checks its installer signature, submits it for notarization, and staples the
-package. The signed-provenance report records exact notary `Accepted` statuses,
-notarytool log paths plus SHA-256 digests, not only submission UUIDs. Passing the unsigned structure or launch checks still does not prove
+validates its package identifier, version, and `/Applications` install-location
+metadata, checks its installer signature, submits it for notarization, and
+staples the package. The signed-provenance report records exact notary
+`Accepted` statuses, preserved notarytool log paths plus SHA-256 digests, not
+only submission UUIDs. Passing the unsigned structure or launch checks still does not prove
 signing/notarization, and passing full mode still does not replace
 clean-profile install, Finder launch, live microphone/Speech validation, App
 Store review, spoken transcript handoff, or live audio-output validation.

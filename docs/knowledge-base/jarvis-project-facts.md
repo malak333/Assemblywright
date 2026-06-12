@@ -812,15 +812,17 @@ requires plugin-trust `generated_at`, `review_started_at`,
   packaging/evidence scripts require the bundled `jarvis-cli --version` output
   to match the expected release version before local artifact evidence can pass.
   Full mode requires the owner's Developer ID
-  Application, Developer ID Installer, and notarytool credentials; signs the
+  Application, Developer ID Installer, and either a notarytool keychain profile
+  or Apple ID/team/app-specific-password notarytool credentials; signs the
   app bundle and app executable with hardened-runtime microphone entitlements
   while signing the bundled core with a narrower hardened-runtime entitlement
   template that omits microphone access; notarizes and staples the app zip;
   then creates, signs, notarizes, and staples a `/Applications` installer
   package. It records and validates Developer ID, notary UUID, exact notary
-  `Accepted` status, notarytool log paths plus SHA-256 digests, stapler success,
-  exact Gatekeeper acceptance, and top-level `Jarvis.app` zip payload shape
-  before writing the signed-distribution provenance report. The provenance self-test includes rejected notary status,
+  `Accepted` status, preserved notarytool log paths plus SHA-256 digests, signed
+  installer package identifier/version/`/Applications` metadata, stapler
+  success, exact Gatekeeper acceptance, and top-level `Jarvis.app` zip payload
+  shape before writing the signed-distribution provenance report. The provenance self-test includes rejected notary status,
   negated Gatekeeper, and nested app-zip negative fixtures.
   `./scripts/release-version-consistency.sh --check` derives the
   release version from Rust package metadata and keeps package, live QA,
