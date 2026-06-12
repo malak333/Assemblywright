@@ -1070,11 +1070,12 @@ requires plugin-trust `generated_at`, `review_started_at`,
   memory-management paths, diagnostics redaction, and repository-backed
   scheduler/job state surfaces.
 - The 2026-06-12 production-readiness sweep refresh now records the merged
-  state after PR #247, PR #248, PR #249, PR #253, PR #254, PR #256, and
-  PR #257: no open PRs, `main` at `68e2c5a`, local
+  state after PR #247, PR #248, PR #249, PR #253, PR #254, PR #256, PR #257,
+  PR #258, and PR #259: no open PRs, `main` at `381817c`, local
   `./scripts/release-local.sh` green for the code-changing runbook guidance
   slice, hosted GitHub PR `Release local gate` green for PR #256 run
-  `27412085979` and PR #257 run `27413191322`,
+  `27412085979`, PR #257 run `27413191322`, PR #258 run `27414382320`, and
+  PR #259 run `27415638586`,
   `production_ready: false`, `verified_feature_count: 16`,
   `pending_feature_count: 1`, and, after the primary checkout's local release
   gate generated unsigned app artifacts, six missing external/manual evidence

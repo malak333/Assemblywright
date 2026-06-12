@@ -1,9 +1,9 @@
 # Production Readiness Sweep - 2026-06-12
 
 This note records the autonomous production-readiness sweep state after PR
-#247, PR #248, PR #249, PR #253, PR #254, PR #256, PR #257, and the release
-handoff command-guidance slice merged. It is a release-governance artifact, not
-production evidence by itself. Use the
+#247, PR #248, PR #249, PR #253, PR #254, PR #256, PR #257, PR #258, and PR
+#259 merged. It is a release-governance artifact, not production evidence by
+itself. Use the
 checked-in code, PRs, and command output as proof.
 
 ## Live Readiness Snapshot
@@ -15,7 +15,7 @@ cargo run -p jarvis-cli -- release readiness --format json
 cargo run -p jarvis-cli -- release evidence-status --format json
 ```
 
-Observed on 2026-06-12 UTC from `main` at `68e2c5a` after PR #257. The
+Observed on 2026-06-12 UTC from `main` at `381817c` after PR #259. The
 evidence-status counts below came from the primary checkout after
 `./scripts/release-local.sh` regenerated the local unsigned distribution
 layout; fresh worktrees can report those generated local app paths as missing
@@ -60,17 +60,18 @@ plugin-trust QA, or final evidence bundling.
 - PR #257 mirrors that live-device evidence-capture and endpoint-aware
   external evidence-mode guidance in the CLI fallback runbook and IPC
   `/release/live-device-runbook` payload, with Rust and Swift coverage.
-- The release handoff command-guidance slice mirrors that same live-device
+- PR #258 syncs the production sweep docs after the runbook guidance updates.
+- PR #259 mirrors that same live-device
   evidence-capture and endpoint-aware external evidence-mode sequence in
   `package-distribution.sh --check` and `release-evidence-doctor.sh --check`,
   with shell self-tests pinning the guidance.
 
 These PRs were pushed from isolated worktrees, merged through GitHub, and
-cleaned up after merge. There were no open PRs after PR #257 merged. The final
+cleaned up after merge. There were no open PRs after PR #259 merged. The final
 merged `main` checkout passed `./scripts/release-local.sh` locally for the
 code-changing runbook guidance slice, and the public GitHub PR
-`Release local gate` passed for PR #256 on run `27412085979` and PR #257 on run
-`27413191322`.
+`Release local gate` passed for PR #256 on run `27412085979`, PR #257 on run
+`27413191322`, PR #258 on run `27414382320`, and PR #259 on run `27415638586`.
 
 ## Current Architecture Phase
 
