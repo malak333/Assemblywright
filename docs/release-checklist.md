@@ -158,6 +158,7 @@ stage or when a PR needs focused evidence for one ownership slice.
 - `./scripts/release-operator-qa-smoke.sh`
 - `./scripts/release-cargo-package.sh`
 - `./scripts/package-distribution.sh --check`
+- `./scripts/package-distribution.sh --check-guidance-self-test`
 - `./scripts/package-distribution.sh --version-consistency-self-test`
 - `./scripts/package-distribution.sh --provenance-self-test`
 - `./scripts/package-distribution.sh --unsigned-launch-check`
@@ -649,6 +650,10 @@ Distribution packaging gate:
   in the default local release gate to validate release packaging prerequisites
   and entitlement templates without performing signing, notarization, stapling,
   installation, or live-device QA.
+- `./scripts/package-distribution.sh --check-guidance-self-test` is in the
+  default local gate and verifies the no-sign package preflight still prints the
+  signed-distribution, live-device, plugin-trust, final-bundle, and doctor
+  handoff commands.
 - Run `./scripts/package-distribution.sh --unsigned-structure-check` on
   distribution-layout PRs to build the release app, create an unsigned installer
   package, and inspect the payload without requiring Apple credentials. Treat it

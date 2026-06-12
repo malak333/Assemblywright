@@ -30,6 +30,7 @@ flowchart TB
     LocalGate --> E2E["local_ipc_e2e ignored release proof"]
     LocalGate --> Smoke["jarvis-cli smoke"]
     LocalGate --> OperatorQASmoke["release-operator-qa-smoke.sh"]
+    LocalGate --> PackageCheckGuidance["package-distribution.sh check-guidance-self-test"]
     LocalGate --> PackageVersionSelfTest["package-distribution.sh version-consistency-self-test"]
     LocalGate --> PackageProvenanceSelfTest["package-distribution.sh provenance-self-test"]
     LocalGate --> UnsignedLaunch["package-distribution.sh unsigned-launch-check"]
@@ -840,7 +841,7 @@ That note records the six-agent audit ownership, the live readiness snapshot,
 and the relevant E2E coverage for this docs-sync phase.
 
 The current readiness payload should be refreshed before release claims. In the
-2026-06-11 sweep refresh after PR #235 from `main` at `7833c62`,
+2026-06-11 sweep refresh after PR #236 from `main` at `281a508`,
 `jarvis release readiness --json`
 reported `production_ready: false`, `verified_feature_count: 17`, and
 `pending_feature_count: 1`, with `live_voice_loop` still

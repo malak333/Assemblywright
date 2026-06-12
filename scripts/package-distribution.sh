@@ -20,12 +20,13 @@ PROVENANCE_PATH="${JARVIS_SIGNED_PROVENANCE_PATH:-$DIST_DIR/$APP_NAME-$VERSION-s
 CHECK_ONLY=false
 UNSIGNED_STRUCTURE_CHECK=false
 UNSIGNED_LAUNCH_CHECK=false
+CHECK_GUIDANCE_SELF_TEST=false
 VERSION_CONSISTENCY_SELF_TEST=false
 PROVENANCE_SELF_TEST=false
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/package-distribution.sh [--check] [--unsigned-structure-check] [--unsigned-launch-check] [--version-consistency-self-test] [--provenance-self-test]
+Usage: scripts/package-distribution.sh [--check] [--unsigned-structure-check] [--unsigned-launch-check] [--check-guidance-self-test] [--version-consistency-self-test] [--provenance-self-test]
 
 Build a distribution-shaped Jarvis.app bundle, sign it with Developer ID, zip it,
 submit it for notarization, staple the ticket, then build, sign, notarize, and
@@ -55,6 +56,9 @@ validation.
 isolated HOME and exercises the supervised core over loopback IPC. It still does
 not prove Developer ID signing, notarization, stapling, Finder launch, or live
 device validation.
+--check-guidance-self-test verifies the credential-free package preflight still
+prints the required downstream signed-distribution, QA, evidence-bundle, and
+doctor handoff commands.
 --version-consistency-self-test verifies package/crate version drift is rejected
 without signing, notarizing, or building distribution artifacts.
 --provenance-self-test verifies signed-provenance schema and semantic Apple
@@ -401,6 +405,10 @@ while [[ $# -gt 0 ]]; do
       UNSIGNED_LAUNCH_CHECK=true
       shift
       ;;
+    --check-guidance-self-test)
+      CHECK_GUIDANCE_SELF_TEST=true
+      shift
+      ;;
     --version-consistency-self-test)
       VERSION_CONSISTENCY_SELF_TEST=true
       shift
@@ -420,13 +428,40 @@ while [[ $# -gt 0 ]]; do
 done
 
 selected_mode_count=0
-for selected_mode in "$CHECK_ONLY" "$UNSIGNED_STRUCTURE_CHECK" "$UNSIGNED_LAUNCH_CHECK" "$VERSION_CONSISTENCY_SELF_TEST" "$PROVENANCE_SELF_TEST"; do
+for selected_mode in "$CHECK_ONLY" "$UNSIGNED_STRUCTURE_CHECK" "$UNSIGNED_LAUNCH_CHECK" "$CHECK_GUIDANCE_SELF_TEST" "$VERSION_CONSISTENCY_SELF_TEST" "$PROVENANCE_SELF_TEST"; do
   if [[ "$selected_mode" == true ]]; then
     selected_mode_count=$((selected_mode_count + 1))
   fi
 done
 if [[ "$selected_mode_count" -gt 1 ]]; then
-  fail "--check, --unsigned-structure-check, --unsigned-launch-check, --version-consistency-self-test, and --provenance-self-test are mutually exclusive"
+  fail "--check, --unsigned-structure-check, --unsigned-launch-check, --check-guidance-self-test, --version-consistency-self-test, and --provenance-self-test are mutually exclusive"
+fi
+
+if [[ "$CHECK_GUIDANCE_SELF_TEST" == true ]]; then
+  CHECK_OUTPUT=""
+  if ! CHECK_OUTPUT="$("$0" --check 2>&1)"; then
+    printf '%s\n' "$CHECK_OUTPUT" >&2
+    fail "package check guidance self-test expected --check to pass"
+  fi
+  require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "Jarvis distribution packaging preflight: ok"
+  require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "Next release evidence commands:"
+  require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "cargo run -p jarvis-cli -- release signed-distribution-runbook"
+  require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh"
+  require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env"
+  require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "set -a && source target/release-live-device-qa.env && set +a"
+  require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "./scripts/release-live-device-qa.sh --assert-complete"
+  require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env"
+  require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "set -a && source target/release-plugin-trust-qa.env && set +a"
+  require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "./scripts/release-plugin-trust-qa.sh --assert-complete"
+  require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env"
+  require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "set -a && source target/release-evidence-bundle.env && set +a"
+  require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "./scripts/release-evidence-bundle.sh --bundle"
+  require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "./scripts/release-evidence-doctor.sh --check"
+  require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "Proof boundary: packaging prerequisite check only"
+  require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "no app was signed"
+  printf '\nJarvis package check guidance self-test: ok\n'
+  printf 'Proof boundary: package --check guidance only; no app was built, signed, notarized, stapled, installed, launched, or manually validated.\n'
+  exit 0
 fi
 
 if [[ "$VERSION_CONSISTENCY_SELF_TEST" == true ]]; then
