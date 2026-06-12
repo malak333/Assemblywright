@@ -135,11 +135,11 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
 - `./scripts/release-local.sh`
 
 The public GitHub workflow `.github/workflows/release-local.yml` runs this
-same gate on `macos-latest` for pull requests, pushes to `main`, and manual
-dispatch. Treat a passing workflow as public PR evidence for the repo-owned
-local gate only; it is not external signing, notarization, clean-profile
-installation, Finder launch, live-device QA, or plugin marketplace trust
-evidence.
+same gate on `macos-15` with SHA-pinned checkout/toolchain actions and Rust
+`1.95.0` for pull requests, pushes to `main`, and manual dispatch. Treat a
+passing workflow as public PR evidence for the repo-owned local gate only; it
+is not external signing, notarization, clean-profile installation, Finder
+launch, live-device QA, or plugin marketplace trust evidence.
 Confirm `/contract`, `jarvis release readiness --json`,
 `jarvis release readiness --format json`, and the Swift Release tab expose this
 as `release_ci_gate` with the same proof boundary before using CI-passing
