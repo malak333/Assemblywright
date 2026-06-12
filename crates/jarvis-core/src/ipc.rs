@@ -967,6 +967,7 @@ impl IpcState {
                 "/model-routes".to_string(),
                 "/model-routes/:id".to_string(),
                 "/memory/classification".to_string(),
+                "/memory/retention-plan".to_string(),
                 "/permissions/grants".to_string(),
                 "/permissions/policy-review".to_string(),
                 "/approvals".to_string(),
@@ -5912,8 +5913,8 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "memory_policy_review",
             "implemented",
-            "Unreviewed memory items and deleted sensitive retained memory appear in `/permissions/policy-review` with redacted values, and diagnostics export exposes only aggregate memory review counts.",
-            "Review visibility and retention-risk surfacing only; no autonomous memory rewrite, purge automation, or vector-index governance claim.",
+            "Unreviewed memory items and deleted sensitive retained memory appear in `/permissions/policy-review` with redacted values; `/memory/retention-plan` exposes the memory-specific redacted operator action queue; diagnostics export exposes only aggregate memory review counts.",
+            "Review visibility and retention-action planning only; no autonomous memory rewrite, purge automation, or vector-index governance claim.",
         ),
         feature(
             "approval_execution",
@@ -6217,6 +6218,9 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert!(contract
             .safe_inspection_paths
             .contains(&"/memory/classification".to_string()));
+        assert!(contract
+            .safe_inspection_paths
+            .contains(&"/memory/retention-plan".to_string()));
         assert!(!contract
             .safe_inspection_paths
             .contains(&"/memory".to_string()));
@@ -6252,6 +6256,13 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .iter()
             .any(|endpoint| endpoint.method == "GET"
                 && endpoint.path == "/memory/classification"
+                && endpoint.repository_required
+                && endpoint.redacted));
+        assert!(contract
+            .endpoints
+            .iter()
+            .any(|endpoint| endpoint.method == "GET"
+                && endpoint.path == "/memory/retention-plan"
                 && endpoint.repository_required
                 && endpoint.redacted));
         assert!(contract
