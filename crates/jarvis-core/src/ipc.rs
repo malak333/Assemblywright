@@ -6143,6 +6143,8 @@ fn release_verification_commands() -> Vec<String> {
         "./scripts/package-distribution.sh --unsigned-launch-check".to_string(),
         "cargo run -p jarvis-cli -- release signed-distribution-runbook".to_string(),
         "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh".to_string(),
+        "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_APPLE_ID='apple-id@example.com' JARVIS_NOTARYTOOL_TEAM_ID='TEAMID1234' JARVIS_NOTARYTOOL_PASSWORD='app-specific-password' ./scripts/package-distribution.sh".to_string(),
+        "./scripts/release-external-handoff.sh --write target/release-external-handoff".to_string(),
         "cargo run -p jarvis-cli -- release live-device-runbook".to_string(),
         "./scripts/release-live-device-qa.sh --check".to_string(),
         "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env".to_string(),
@@ -6806,6 +6808,14 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             commands,
             "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh",
         );
+        let signed_distribution_alt_index = command_index(
+            commands,
+            "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_APPLE_ID='apple-id@example.com' JARVIS_NOTARYTOOL_TEAM_ID='TEAMID1234' JARVIS_NOTARYTOOL_PASSWORD='app-specific-password' ./scripts/package-distribution.sh",
+        );
+        let external_handoff_index = command_index(
+            commands,
+            "./scripts/release-external-handoff.sh --write target/release-external-handoff",
+        );
         let live_device_runbook_index = command_index(
             commands,
             "cargo run -p jarvis-cli -- release live-device-runbook",
@@ -6845,7 +6855,9 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert!(workflow_smoke_index < operator_qa_index);
         assert!(distribution_check_index < unsigned_distribution_index);
         assert!(unsigned_distribution_index < signed_distribution_index);
-        assert!(signed_distribution_index < live_device_runbook_index);
+        assert!(signed_distribution_index < signed_distribution_alt_index);
+        assert!(signed_distribution_alt_index < external_handoff_index);
+        assert!(external_handoff_index < live_device_runbook_index);
         assert!(live_device_runbook_index < live_device_check_index);
         assert!(live_device_check_index < live_device_template_index);
         assert!(live_device_template_index < plugin_trust_runbook_index);

@@ -83,6 +83,8 @@ print_next_steps() {
 Recommended next evidence commands:
   package preflight: ./scripts/package-distribution.sh --check
   signing: JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh
+  signing alternative: JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_APPLE_ID='apple-id@example.com' JARVIS_NOTARYTOOL_TEAM_ID='TEAMID1234' JARVIS_NOTARYTOOL_PASSWORD='app-specific-password' ./scripts/package-distribution.sh
+  external handoff directory: ./scripts/release-external-handoff.sh --write target/release-external-handoff
   live-device template: ./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env
   live-device command evidence: cargo run -p jarvis-cli -- command "status check" --endpoint <release-core-endpoint> --json
   live-device evidence ID: record the returned task ID as JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid>' or a task-associated audit ID as 'audit:<uuid>'
@@ -1808,7 +1810,9 @@ PY
     "source target/release-plugin-trust-qa.env" \
     "./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env" \
     "source target/release-evidence-bundle.env" \
-    "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...'"; do
+    "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...'" \
+    "JARVIS_NOTARYTOOL_APPLE_ID='apple-id@example.com'" \
+    "./scripts/release-external-handoff.sh --write target/release-external-handoff"; do
     if [[ "$check_output" != *"$expected"* ]]; then
       fail "release evidence doctor self-test expected --check output to include: $expected"
     fi

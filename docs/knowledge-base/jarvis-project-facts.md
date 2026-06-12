@@ -1011,10 +1011,12 @@ requires plugin-trust `generated_at`, `review_started_at`,
 - `release-evidence-doctor.sh --check` remains a read-only inventory and report
   semantics check: it validates the bundled-core version marker and report/file
   bindings without executing the bundled core. Its missing-evidence next-step
-  guidance starts with `./scripts/package-distribution.sh --check` before the
-  credentialed signing command. `--assert-complete` keeps the stronger
-  executable bundled-core `--version` check for final local inventory assertion
-  after owner evidence exists.
+  guidance starts with `./scripts/package-distribution.sh --check`, lists both
+  supported signing credential forms, and points operators at
+  `./scripts/release-external-handoff.sh --write target/release-external-handoff`
+  before live-device, plugin-trust, and final bundle capture.
+  `--assert-complete` keeps the stronger executable bundled-core `--version`
+  check for final local inventory assertion after owner evidence exists.
 - For docs-only readiness synchronization phases, record the relevant existing
   E2E or focused integration coverage instead of adding artificial tests.
   Behavior changes still require matching coverage before broader readiness
