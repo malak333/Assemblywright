@@ -380,6 +380,7 @@ impl PluginActionManifest {
                         self.name
                     )));
                 }
+                let mut normalized_hosts = HashSet::new();
                 for host in &self.network_access.allowed_hosts {
                     validate_network_host(host).map_err(|err| {
                         JarvisError::Validation(format!(
@@ -387,6 +388,13 @@ impl PluginActionManifest {
                             self.name
                         ))
                     })?;
+                    let normalized_host = host.to_ascii_lowercase();
+                    if !normalized_hosts.insert(normalized_host) {
+                        return Err(JarvisError::Validation(format!(
+                            "{plugin_id}.{} network host {host:?} duplicates another allowed_host after case folding",
+                            self.name
+                        )));
+                    }
                 }
             }
         }
@@ -1563,6 +1571,9 @@ fn validate_network_host(host: &str) -> Result<(), &'static str> {
     {
         return Err("host must use ascii letters, digits, dots, or hyphens");
     }
+    if host != host.to_ascii_lowercase() {
+        return Err("host must be lowercase");
+    }
     if host.starts_with('.') || host.ends_with('.') {
         return Err("host cannot start or end with a dot");
     }
@@ -2152,6 +2163,34 @@ mod tests {
             .validate()
             .expect_err("network host must reject IP literals");
         assert!(error.to_string().contains("network host"));
+
+        let mut uppercase_network_host = EchoPlugin.manifest();
+        uppercase_network_host.actions[0]
+            .permissions
+            .push(PluginPermission::Network);
+        uppercase_network_host.actions[0].network_access = PluginNetworkAccess {
+            mode: PluginNetworkAccessMode::DeclaredHosts,
+            allowed_hosts: vec!["API.example.com".to_string()],
+        };
+        let error = uppercase_network_host
+            .validate()
+            .expect_err("network host must be lowercase");
+        assert!(error.to_string().contains("host must be lowercase"));
+
+        let mut duplicate_network_host = EchoPlugin.manifest();
+        duplicate_network_host.actions[0]
+            .permissions
+            .push(PluginPermission::Network);
+        duplicate_network_host.actions[0].network_access = PluginNetworkAccess {
+            mode: PluginNetworkAccessMode::DeclaredHosts,
+            allowed_hosts: vec!["api.example.com".to_string(), "api.example.com".to_string()],
+        };
+        let error = duplicate_network_host
+            .validate()
+            .expect_err("network hosts must be unique");
+        assert!(error
+            .to_string()
+            .contains("duplicates another allowed_host"));
 
         let mut blocked = EchoPlugin.manifest();
         blocked.actions[0].risk_tier = RiskTier::Block;
