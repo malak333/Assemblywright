@@ -832,6 +832,52 @@ check_json_sha256_matches_file() {
   fi
 }
 
+check_json_sha256_matches_json_path() {
+  local label="$1"
+  local path="$2"
+  local digest_key="$3"
+  local artifact_label="$4"
+  local path_key="$5"
+
+  if python3 - "$path" "$digest_key" "$path_key" <<'PY'
+import hashlib
+import json
+import sys
+
+path, digest_key, path_key = sys.argv[1:4]
+try:
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+except Exception:
+    raise SystemExit(1)
+
+def get(dotted_key):
+    cursor = data
+    for segment in dotted_key.split("."):
+        if not isinstance(cursor, dict) or segment not in cursor:
+            raise SystemExit(1)
+        cursor = cursor[segment]
+    if not isinstance(cursor, str) or not cursor.strip():
+        raise SystemExit(1)
+    return cursor.strip()
+
+artifact_path = get(path_key)
+expected_sha = get(digest_key)
+try:
+    with open(artifact_path, "rb") as handle:
+        actual_sha = hashlib.sha256(handle.read()).hexdigest()
+except OSError:
+    raise SystemExit(1)
+
+raise SystemExit(0 if actual_sha == expected_sha else 1)
+PY
+  then
+    record_satisfied "$label: $digest_key matches current $artifact_label"
+  else
+    record_missing "$label digest mismatch or unreadable $artifact_label: $digest_key must match $path_key in $path"
+  fi
+}
+
 check_json_utc_timestamp() {
   local label="$1"
   local path="$2"
@@ -986,6 +1032,11 @@ check_release_evidence() {
     for field in notarization.app_zip_notary_log notarization.installer_pkg_notary_log; do
       check_json_nonempty_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "$field"
     done
+    for field in notarization.app_zip_notary_log_sha256 notarization.installer_pkg_notary_log_sha256; do
+      check_json_sha256 "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "$field"
+    done
+    check_json_sha256_matches_json_path "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "notarization.app_zip_notary_log_sha256" "app zip notary log" "notarization.app_zip_notary_log"
+    check_json_sha256_matches_json_path "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "notarization.installer_pkg_notary_log_sha256" "installer package notary log" "notarization.installer_pkg_notary_log"
     check_json_string_prefix "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "signing.developer_id_application_identity" "Developer ID Application: "
     check_json_string_prefix "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "signing.developer_id_installer_identity" "Developer ID Installer: "
     for field in signing.app_bundle_codesign signing.app_executable_codesign signing.bundled_core_codesign; do
@@ -1493,6 +1544,16 @@ if [[ "$SELF_TEST" == true ]]; then
   self_test_zip_sha="$(file_sha256 "$self_test_zip")"
   self_test_pkg_sha="$(file_sha256 "$self_test_pkg")"
   self_test_core_sha="$(file_sha256 "$tmp_dir/dist/Jarvis.app/Contents/Resources/bin/jarvis-cli")"
+  cat >"$tmp_dir/app-zip-notarytool.log" <<'LOG'
+id: 00000000-0000-4000-8000-000000000001
+status: Accepted
+LOG
+  cat >"$tmp_dir/installer-pkg-notarytool.log" <<'LOG'
+id: 00000000-0000-4000-8000-000000000002
+status: Accepted
+LOG
+  self_test_app_notary_log_sha="$(file_sha256 "$tmp_dir/app-zip-notarytool.log")"
+  self_test_pkg_notary_log_sha="$(file_sha256 "$tmp_dir/installer-pkg-notarytool.log")"
   write_fixture_reports "$tmp_dir/live.json" "$tmp_dir/plugin.json"
   cat >"$tmp_dir/dist/Jarvis-$VERSION-signed-provenance.json" <<JSON
 {
@@ -1525,7 +1586,9 @@ if [[ "$SELF_TEST" == true ]]; then
     "app_zip_status": "Accepted",
     "installer_pkg_status": "Accepted",
     "app_zip_notary_log": "$tmp_dir/app-zip-notarytool.log",
-    "installer_pkg_notary_log": "$tmp_dir/installer-pkg-notarytool.log"
+    "installer_pkg_notary_log": "$tmp_dir/installer-pkg-notarytool.log",
+    "app_zip_notary_log_sha256": "$self_test_app_notary_log_sha",
+    "installer_pkg_notary_log_sha256": "$self_test_pkg_notary_log_sha"
   },
   "stapling": {
     "app_bundle_validation": "The validate action worked!",
@@ -1630,7 +1693,30 @@ PY
     JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
-    fail "release evidence doctor self-test expected stale signed provenance digest to fail"
+	    fail "release evidence doctor self-test expected stale signed provenance digest to fail"
+	  fi
+
+  python3 - "$tmp_dir/dist/Jarvis-$VERSION-signed-provenance.json" "$tmp_dir/dist/stale-notary-log-signed-provenance.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+with open(source, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["notarization"]["app_zip_notary_log_sha256"] = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+PY
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/dist/stale-notary-log-signed-provenance.json" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+    "$0" --assert-complete >/dev/null 2>&1; then
+    fail "release evidence doctor self-test expected stale signed provenance notary log digest to fail"
   fi
 
   python3 - "$tmp_dir/dist/Jarvis-$VERSION-signed-provenance.json" "$tmp_dir/dist/bad-apple-tool-signed-provenance.json" <<'PY'

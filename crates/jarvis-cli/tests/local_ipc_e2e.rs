@@ -6881,6 +6881,14 @@ fn valid_signed_distribution_provenance_report(
 ) -> Value {
     let bundled_core_path = Path::new(app_path).join("Contents/Resources/bin/jarvis-cli");
     let bundled_core_sha256 = file_sha256(&bundled_core_path);
+    let notary_log_dir = Path::new(zip_path)
+        .parent()
+        .expect("zip parent")
+        .join("notary-logs");
+    let app_zip_notary_log = notary_log_dir.join("app.log");
+    let installer_pkg_notary_log = notary_log_dir.join("pkg.log");
+    let app_zip_notary_log_sha256 = file_sha256(&app_zip_notary_log);
+    let installer_pkg_notary_log_sha256 = file_sha256(&installer_pkg_notary_log);
     json!({
         "schema_version": 1,
         "evidence_type": "signed_distribution_provenance",
@@ -6910,8 +6918,10 @@ fn valid_signed_distribution_provenance_report(
             "installer_pkg_submission_id": "00000000-0000-4000-8000-000000000002",
             "app_zip_status": "Accepted",
             "installer_pkg_status": "Accepted",
-            "app_zip_notary_log": "target/distribution/notary-logs/app.log",
-            "installer_pkg_notary_log": "target/distribution/notary-logs/pkg.log"
+            "app_zip_notary_log": app_zip_notary_log.to_str().expect("app notary log path utf8"),
+            "installer_pkg_notary_log": installer_pkg_notary_log.to_str().expect("pkg notary log path utf8"),
+            "app_zip_notary_log_sha256": app_zip_notary_log_sha256,
+            "installer_pkg_notary_log_sha256": installer_pkg_notary_log_sha256
         },
         "stapling": {
             "app_bundle_validation": "The validate action worked!",
@@ -7004,6 +7014,18 @@ fn write_complete_release_evidence_fixture(root: &Path) -> CompleteReleaseEviden
     write_json_report(&plugin_report_path, valid_plugin_trust_qa_report());
     let zip_path = dist_dir.join("Jarvis-0.1.4.zip");
     let pkg_path = dist_dir.join("Jarvis-0.1.4.pkg");
+    let notary_log_dir = dist_dir.join("notary-logs");
+    fs::create_dir_all(&notary_log_dir).expect("create notary log dir");
+    fs::write(
+        notary_log_dir.join("app.log"),
+        "id: 00000000-0000-4000-8000-000000000001\nstatus: Accepted\n",
+    )
+    .expect("write app notary log");
+    fs::write(
+        notary_log_dir.join("pkg.log"),
+        "id: 00000000-0000-4000-8000-000000000002\nstatus: Accepted\n",
+    )
+    .expect("write package notary log");
     let zip_sha256 = file_sha256(&zip_path);
     let pkg_sha256 = file_sha256(&pkg_path);
     write_json_report(

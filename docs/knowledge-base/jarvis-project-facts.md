@@ -163,14 +163,14 @@ These notes capture durable facts for future agents working on this repository.
   stricter than generic JSON presence: `/release/evidence-status` validates
   signed provenance version/bundle metadata, bundled core path/version/SHA-256
   binding, Apple-tool-derived signing/notary/staple/Gatekeeper evidence fields
-  from `codesign`, `pkgutil --check-signature`, `xcrun notarytool`,
+  plus notary log SHA-256 bindings from `codesign`, `pkgutil --check-signature`, `xcrun notarytool`,
   `xcrun stapler`, and `spctl`, required signed-distribution flags,
   plugin-trust release-version binding, plugin-trust UTC review timestamp
   ordering, rejects future-dated generated reports and any plugin-trust
   `review_source` other than `owner-asserted-manual-review`, validates final
   bundle version, requires SHA-256-shaped
   artifact/report digests including the signed provenance digest, verifies
-  signed-provenance zip/pkg/core digests against the current artifact files in
+  signed-provenance zip/pkg/core/notary-log digests against the current artifact files in
   evidence-status, bundle, and doctor assertions, verifies final-bundle
   schema/type identity, artifact/report paths, and digests against the current
   configured files, revalidates the signed-provenance, live-device QA, and
@@ -818,9 +818,9 @@ requires plugin-trust `generated_at`, `review_started_at`,
   template that omits microphone access; notarizes and staples the app zip;
   then creates, signs, notarizes, and staples a `/Applications` installer
   package. It records and validates Developer ID, notary UUID, exact notary
-  `Accepted` status, stapler success, exact Gatekeeper acceptance, and top-level
-  `Jarvis.app` zip payload shape before writing the signed-distribution
-  provenance report. The provenance self-test includes rejected notary status,
+  `Accepted` status, notarytool log paths plus SHA-256 digests, stapler success,
+  exact Gatekeeper acceptance, and top-level `Jarvis.app` zip payload shape
+  before writing the signed-distribution provenance report. The provenance self-test includes rejected notary status,
   negated Gatekeeper, and nested app-zip negative fixtures.
   `./scripts/release-version-consistency.sh --check` derives the
   release version from Rust package metadata and keeps package, live QA,
