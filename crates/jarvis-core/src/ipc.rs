@@ -151,6 +151,8 @@ const SIGNED_DISTRIBUTION_PROVENANCE_REQUIRED_FIELDS: &[&str] = &[
     "notarization.installer_pkg_status",
     "notarization.app_zip_notary_log",
     "notarization.installer_pkg_notary_log",
+    "notarization.app_zip_notary_log_sha256",
+    "notarization.installer_pkg_notary_log_sha256",
     "stapling.app_bundle_validation",
     "stapling.installer_pkg_validation",
     "gatekeeper.app_bundle_assessment",
@@ -5442,6 +5444,8 @@ fn validate_signed_distribution_provenance(value: &serde_json::Value) -> Result<
         "artifacts.zip_sha256",
         "artifacts.pkg_sha256",
         "artifacts.bundled_core_sha256",
+        "notarization.app_zip_notary_log_sha256",
+        "notarization.installer_pkg_notary_log_sha256",
     ] {
         require_json_sha256_value(value, field)?;
     }
@@ -5475,6 +5479,12 @@ fn validate_signed_distribution_provenance(value: &serde_json::Value) -> Result<
     }
     require_json_string_value(value, "notarization.app_zip_status", "Accepted")?;
     require_json_string_value(value, "notarization.installer_pkg_status", "Accepted")?;
+    for field in [
+        "notarization.app_zip_notary_log",
+        "notarization.installer_pkg_notary_log",
+    ] {
+        require_json_nonempty_string_value(value, field)?;
+    }
     for field in [
         "stapling.app_bundle_validation",
         "stapling.installer_pkg_validation",
@@ -5522,7 +5532,40 @@ fn validate_signed_distribution_artifact_digests(
         "bundled core executable",
         &app_path.join("Contents/Resources/bin/jarvis-cli"),
     )?;
+    require_json_sha256_matches_json_path(
+        value,
+        "notarization.app_zip_notary_log_sha256",
+        "app zip notary log",
+        "notarization.app_zip_notary_log",
+    )?;
+    require_json_sha256_matches_json_path(
+        value,
+        "notarization.installer_pkg_notary_log_sha256",
+        "installer package notary log",
+        "notarization.installer_pkg_notary_log",
+    )?;
     Ok(())
+}
+
+fn require_json_sha256_matches_json_path(
+    value: &serde_json::Value,
+    digest_path: &str,
+    artifact_label: &str,
+    artifact_path_field: &str,
+) -> Result<(), String> {
+    let artifact_path = json_string_at(value, artifact_path_field)
+        .ok_or_else(|| format!("JSON report is missing required field: {artifact_path_field}"))?;
+    if artifact_path.trim().is_empty() {
+        return Err(format!(
+            "JSON report {artifact_path_field} must be non-empty"
+        ));
+    }
+    require_json_sha256_matches_file(
+        value,
+        digest_path,
+        artifact_label,
+        FsPath::new(&artifact_path),
+    )
 }
 
 fn require_json_sha256_matches_file(
@@ -8229,8 +8272,20 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let signed_file = temp_dir.path().join("Jarvis-0.1.4-signed-provenance.json");
         let live_file = temp_dir.path().join("release-live-device-qa-report.json");
         let plugin_file = temp_dir.path().join("release-plugin-trust-qa-report.json");
+        let app_notary_log = temp_dir.path().join("app-notarytool.log");
+        let pkg_notary_log = temp_dir.path().join("pkg-notarytool.log");
         std::fs::write(&zip_file, "current zip").expect("write zip artifact");
         std::fs::write(&pkg_file, "current package").expect("write package artifact");
+        std::fs::write(
+            &app_notary_log,
+            "id: 00000000-0000-4000-8000-000000000001\nstatus: Accepted\n",
+        )
+        .expect("write app notary log");
+        std::fs::write(
+            &pkg_notary_log,
+            "id: 00000000-0000-4000-8000-000000000002\nstatus: Accepted\n",
+        )
+        .expect("write package notary log");
         let mut signed_report = valid_signed_distribution_provenance_json();
         signed_report["artifacts"]["app_path"] = json!(app_path.display().to_string());
         signed_report["artifacts"]["zip_path"] = json!(zip_file.display().to_string());
@@ -8243,6 +8298,14 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             json!(file_sha256(&pkg_file).expect("package digest"));
         signed_report["artifacts"]["bundled_core_sha256"] =
             json!(file_sha256(&bundled_core_path).expect("bundled core digest"));
+        signed_report["notarization"]["app_zip_notary_log"] =
+            json!(app_notary_log.display().to_string());
+        signed_report["notarization"]["installer_pkg_notary_log"] =
+            json!(pkg_notary_log.display().to_string());
+        signed_report["notarization"]["app_zip_notary_log_sha256"] =
+            json!(file_sha256(&app_notary_log).expect("app notary digest"));
+        signed_report["notarization"]["installer_pkg_notary_log_sha256"] =
+            json!(file_sha256(&pkg_notary_log).expect("package notary digest"));
         std::fs::write(
             &signed_file,
             serde_json::to_vec(&signed_report).expect("encode signed report"),
@@ -8311,8 +8374,20 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let signed_file = temp_dir.path().join("Jarvis-0.1.4-signed-provenance.json");
         let live_file = temp_dir.path().join("release-live-device-qa-report.json");
         let plugin_file = temp_dir.path().join("release-plugin-trust-qa-report.json");
+        let app_notary_log = temp_dir.path().join("app-notarytool.log");
+        let pkg_notary_log = temp_dir.path().join("pkg-notarytool.log");
         std::fs::write(&zip_file, "current zip").expect("write zip artifact");
         std::fs::write(&pkg_file, "current package").expect("write package artifact");
+        std::fs::write(
+            &app_notary_log,
+            "id: 00000000-0000-4000-8000-000000000001\nstatus: Accepted\n",
+        )
+        .expect("write app notary log");
+        std::fs::write(
+            &pkg_notary_log,
+            "id: 00000000-0000-4000-8000-000000000002\nstatus: Accepted\n",
+        )
+        .expect("write package notary log");
         let mut signed_report = valid_signed_distribution_provenance_json();
         signed_report["artifacts"]["app_path"] = json!(app_path.display().to_string());
         signed_report["artifacts"]["zip_path"] = json!(zip_file.display().to_string());
@@ -8325,6 +8400,14 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             json!(file_sha256(&pkg_file).expect("package digest"));
         signed_report["artifacts"]["bundled_core_sha256"] =
             json!(file_sha256(&bundled_core_path).expect("bundled core digest"));
+        signed_report["notarization"]["app_zip_notary_log"] =
+            json!(app_notary_log.display().to_string());
+        signed_report["notarization"]["installer_pkg_notary_log"] =
+            json!(pkg_notary_log.display().to_string());
+        signed_report["notarization"]["app_zip_notary_log_sha256"] =
+            json!(file_sha256(&app_notary_log).expect("app notary digest"));
+        signed_report["notarization"]["installer_pkg_notary_log_sha256"] =
+            json!(file_sha256(&pkg_notary_log).expect("package notary digest"));
         std::fs::write(
             &signed_file,
             serde_json::to_vec(&signed_report).expect("encode signed report"),
@@ -8412,7 +8495,9 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 "app_zip_status": "Accepted",
                 "installer_pkg_status": "Accepted",
                 "app_zip_notary_log": "target/distribution/notary-logs/app.log",
-                "installer_pkg_notary_log": "target/distribution/notary-logs/pkg.log"
+                "installer_pkg_notary_log": "target/distribution/notary-logs/pkg.log",
+                "app_zip_notary_log_sha256": digest,
+                "installer_pkg_notary_log_sha256": digest
             },
             "stapling": {
                 "app_bundle_validation": "The validate action worked!",
@@ -8663,6 +8748,53 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let (status, detail) = inspect_signed_distribution_provenance_value(report);
         assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
         assert!(detail.contains("app_zip_submission_id"), "{detail}");
+    }
+
+    #[test]
+    fn signed_distribution_provenance_rejects_stale_notary_log_digest() {
+        let app_dir = tempfile::tempdir().expect("temp app bundle");
+        let zip_file = tempfile::NamedTempFile::new().expect("temp zip artifact");
+        let pkg_file = tempfile::NamedTempFile::new().expect("temp package artifact");
+        let zip_notary_log = tempfile::NamedTempFile::new().expect("temp zip notary log");
+        let pkg_notary_log = tempfile::NamedTempFile::new().expect("temp package notary log");
+        let core_path = app_dir.path().join("Contents/Resources/bin/jarvis-cli");
+        std::fs::create_dir_all(core_path.parent().expect("core parent"))
+            .expect("create core parent");
+        std::fs::write(&core_path, "current core").expect("write core artifact");
+        std::fs::write(zip_file.path(), "current zip").expect("write zip artifact");
+        std::fs::write(pkg_file.path(), "current package").expect("write package artifact");
+        std::fs::write(zip_notary_log.path(), "stale notary log").expect("write zip notary log");
+        std::fs::write(pkg_notary_log.path(), "current package notary log")
+            .expect("write package notary log");
+
+        let mut report = valid_signed_distribution_provenance_json();
+        report["artifacts"]["zip_sha256"] =
+            json!(file_sha256(zip_file.path()).expect("zip digest"));
+        report["artifacts"]["pkg_sha256"] =
+            json!(file_sha256(pkg_file.path()).expect("package digest"));
+        report["artifacts"]["bundled_core_path"] = json!(core_path.display().to_string());
+        report["artifacts"]["bundled_core_sha256"] =
+            json!(file_sha256(&core_path).expect("core digest"));
+        report["notarization"]["app_zip_notary_log"] =
+            json!(zip_notary_log.path().display().to_string());
+        report["notarization"]["installer_pkg_notary_log"] =
+            json!(pkg_notary_log.path().display().to_string());
+        report["notarization"]["installer_pkg_notary_log_sha256"] =
+            json!(file_sha256(pkg_notary_log.path()).expect("package notary digest"));
+
+        let error = validate_signed_distribution_artifact_digests(
+            &report,
+            app_dir.path(),
+            zip_file.path(),
+            pkg_file.path(),
+        )
+        .expect_err("stale notary log digest should fail");
+
+        assert!(
+            error.contains("notarization.app_zip_notary_log_sha256"),
+            "{error}"
+        );
+        assert!(error.contains("app zip notary log"), "{error}");
     }
 
     fn release_evidence_status_fixture(

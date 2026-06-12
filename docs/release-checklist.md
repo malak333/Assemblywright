@@ -78,10 +78,10 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   Apple-tool-derived signing/notary/staple/Gatekeeper evidence fields from
   `codesign`, `pkgutil --check-signature`, `xcrun notarytool`,
   `xcrun stapler`, and `spctl`, exact notary `Accepted` statuses,
-  required flags, non-future
+  notary log paths plus SHA-256 digests, required flags, non-future
   plugin-trust review timestamps, owner-asserted plugin-trust review source,
   final bundle version, artifact/report path matching, SHA-256 digest shape,
-  signed-provenance zip/pkg/core digests against
+  signed-provenance zip/pkg/core/notary-log digests against
   the current artifact files, final-bundle digests against current
   artifacts/reports, semantic validity of the signed-provenance, live-device
   QA, and plugin-trust QA child reports referenced by the final bundle, and
@@ -444,8 +444,8 @@ stage or when a PR needs focused evidence for one ownership slice.
   fields in both QA reports, confirm the live-device QA report matches the
   expected app bundle `Info.plist` bundle id/version/build, reject future-dated
   report timestamps, require plugin-trust
-  `review_source: owner-asserted-manual-review`, verify signed-provenance zip/pkg/core digests
-  against the current artifact files, and write SHA-256 digests for the signed
+  `review_source: owner-asserted-manual-review`, verify signed-provenance zip/pkg/core/notary-log digests
+  against the current artifact files and preserved notarytool logs, and write SHA-256 digests for the signed
   distribution artifacts, signed provenance, plus QA reports before writing evidence. The
   disabled-signature path is reserved for the fake self-test fixture.
 - Confirm `/release/evidence-status` and `jarvis release evidence-status` expose
@@ -693,9 +693,9 @@ Distribution packaging gate:
   `./scripts/package-distribution.sh`.
 - Confirm the resulting app zip and installer package are Developer ID signed,
   notarized, and stapled. The script also verifies the app signature, installer
-  package signature, app staple, package staple, notary submission IDs, and
-  Gatekeeper acceptance from the Apple tool output recorded in signed
-  provenance.
+  package signature, app staple, package staple, notary submission IDs, notary
+  log SHA-256 bindings, and Gatekeeper acceptance from the Apple tool output
+  recorded in signed provenance.
 - Still perform clean-profile installer run, Finder launch, microphone/Speech
   permission prompts, spoken transcript handoff into the command path, live
   audio-output, and manual QA before any broader production distribution claim.

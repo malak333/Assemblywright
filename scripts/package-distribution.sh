@@ -273,6 +273,8 @@ write_signed_distribution_provenance() {
   local pkg_submission_id
   local zip_notary_status
   local pkg_notary_status
+  local zip_notary_log_sha
+  local pkg_notary_log_sha
   local proof_boundary
 
   require_command python3
@@ -300,6 +302,8 @@ write_signed_distribution_provenance() {
   pkg_submission_id="$(extract_notary_submission_id <"$PKG_NOTARY_LOG")"
   zip_notary_status="$(extract_notary_accepted_status <"$ZIP_NOTARY_LOG")"
   pkg_notary_status="$(extract_notary_accepted_status <"$PKG_NOTARY_LOG")"
+  zip_notary_log_sha="$(file_sha256 "$ZIP_NOTARY_LOG")"
+  pkg_notary_log_sha="$(file_sha256 "$PKG_NOTARY_LOG")"
   require_output_contains "Developer ID Application identity" "$JARVIS_DEVELOPER_ID_APPLICATION" "Developer ID Application: "
   require_output_contains "Developer ID Installer identity" "$JARVIS_DEVELOPER_ID_INSTALLER" "Developer ID Installer: "
   require_output_contains "app bundle codesign evidence" "$app_codesign" "Authority=Developer ID Application: "
@@ -340,6 +344,8 @@ write_signed_distribution_provenance() {
     PROVENANCE_PKG_NOTARY_STATUS="$pkg_notary_status" \
     PROVENANCE_ZIP_NOTARY_LOG="$ZIP_NOTARY_LOG" \
     PROVENANCE_PKG_NOTARY_LOG="$PKG_NOTARY_LOG" \
+    PROVENANCE_ZIP_NOTARY_LOG_SHA="$zip_notary_log_sha" \
+    PROVENANCE_PKG_NOTARY_LOG_SHA="$pkg_notary_log_sha" \
     PROVENANCE_APP_STAPLE="$app_staple" \
     PROVENANCE_PKG_STAPLE="$pkg_staple" \
     PROVENANCE_APP_GATEKEEPER="$app_gatekeeper" \
@@ -382,6 +388,8 @@ report = {
         "installer_pkg_status": os.environ["PROVENANCE_PKG_NOTARY_STATUS"],
         "app_zip_notary_log": os.environ["PROVENANCE_ZIP_NOTARY_LOG"],
         "installer_pkg_notary_log": os.environ["PROVENANCE_PKG_NOTARY_LOG"],
+        "app_zip_notary_log_sha256": os.environ["PROVENANCE_ZIP_NOTARY_LOG_SHA"],
+        "installer_pkg_notary_log_sha256": os.environ["PROVENANCE_PKG_NOTARY_LOG_SHA"],
     },
     "stapling": {
         "app_bundle_validation": os.environ["PROVENANCE_APP_STAPLE"],
@@ -660,6 +668,7 @@ SH
     write_signed_distribution_provenance
 
   python3 - "$PROVENANCE_PATH" "$VERSION" "$APP_PATH" "$ZIP_PATH" "$PKG_PATH" <<'PY'
+import hashlib
 import json
 import sys
 import uuid
@@ -684,6 +693,12 @@ uuid.UUID(data["notarization"]["app_zip_submission_id"])
 uuid.UUID(data["notarization"]["installer_pkg_submission_id"])
 assert data["notarization"]["app_zip_status"] == "Accepted"
 assert data["notarization"]["installer_pkg_status"] == "Accepted"
+for path_key, digest_key in (
+    ("app_zip_notary_log", "app_zip_notary_log_sha256"),
+    ("installer_pkg_notary_log", "installer_pkg_notary_log_sha256"),
+):
+    with open(data["notarization"][path_key], "rb") as handle:
+        assert data["notarization"][digest_key] == hashlib.sha256(handle.read()).hexdigest()
 assert "The validate action worked!" in data["stapling"]["app_bundle_validation"]
 assert "The validate action worked!" in data["stapling"]["installer_pkg_validation"]
 assert data["gatekeeper"]["app_bundle_assessment"].strip().endswith(": accepted")
