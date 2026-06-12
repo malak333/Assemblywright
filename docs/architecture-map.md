@@ -1026,3 +1026,9 @@ refresh tests. That coverage proves read-only operator guidance visibility in
 the app and keeps the current-state diagram aligned with implementation; it does
 not perform signing, notarization, live-device QA, plugin-trust review, or final
 evidence bundling.
+The live-device QA template-guidance slice keeps the current release-proof lane
+repo-owned by embedding the release-core command evidence capture, sourceable
+assertion command, and post-report external evidence-mode status/readiness
+checks in the generated `release-live-device-qa.env` template. Script self-test
+coverage verifies those comments stay present without claiming any live-device
+validation was performed.

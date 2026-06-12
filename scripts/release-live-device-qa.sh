@@ -441,14 +441,27 @@ write_env_template() {
   mkdir -p "$(dirname "$template_path")"
   cat >"$template_path" <<EOF
 # Jarvis live-device QA evidence template.
-# Edit this file on the validated release machine, then run:
+# Edit this file on the validated release machine after the signed, notarized
+# app has been installed into a clean macOS profile and launched through Finder
+# or LaunchServices.
+#
+# Capture the command evidence ID from the running release core:
+#   cargo run -p jarvis-cli -- command "status check" --endpoint <release-core-endpoint> --json
+# Use the returned task ID as JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:<uuid>",
+# or use an audit ID from task-associated command/audit evidence as "audit:<uuid>".
+#
+# After filling every field below, run:
 #   set -a
 #   source ./target/release-live-device-qa.env
 #   set +a
 #   ./scripts/release-live-device-qa.sh --assert-complete
+#   JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint <release-core-endpoint>
+#   JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint <release-core-endpoint>
 #
 # Keep all validation flags false until that check has actually been observed
 # on the signed, notarized app installed in a clean macOS profile.
+# Do not set JARVIS_QA_SELF_TEST_FIXTURE in release evidence; it is reserved for
+# this script's internal fake-fixture self-test.
 
 JARVIS_QA_INSTALLED_APP_PATH="/Applications/Jarvis.app"
 JARVIS_QA_REPORT_PATH="target/release-live-device-qa-report.json"
@@ -595,6 +608,11 @@ PLIST
   require_file_contains "live QA env template" "$fixture_template" 'JARVIS_QA_EXPECTED_COMMAND_TEXT=""'
   require_file_contains "live QA env template" "$fixture_template" 'JARVIS_QA_OBSERVED_COMMAND_TEXT=""'
   require_file_contains "live QA env template" "$fixture_template" './scripts/release-live-device-qa.sh --assert-complete'
+  require_file_contains "live QA env template" "$fixture_template" 'cargo run -p jarvis-cli -- command "status check" --endpoint <release-core-endpoint> --json'
+  require_file_contains "live QA env template" "$fixture_template" 'JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:<uuid>"'
+  require_file_contains "live QA env template" "$fixture_template" 'JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint <release-core-endpoint>'
+  require_file_contains "live QA env template" "$fixture_template" 'JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint <release-core-endpoint>'
+  require_file_contains "live QA env template" "$fixture_template" 'Do not set JARVIS_QA_SELF_TEST_FIXTURE in release evidence'
   if grep -F 'JARVIS_QA_CLEAN_PROFILE_VALIDATED=true' "$fixture_template" >/dev/null 2>&1; then
     fail "live QA self-test expected env template validation flags to default false"
   fi
