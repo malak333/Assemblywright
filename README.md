@@ -11,7 +11,7 @@ contracts, metadata-only local plugin installation, local plugin
 provenance snapshots, scheduler state, redacted diagnostics export, a loopback
 IPC surface with compatibility policy plus feature proof/boundary metadata,
 repository-backed activity summary and activity event stream, conservative
-release-readiness inspection, and CLI smoke paths for the Swift shell
+release-readiness inspection, read-only release runbook IPC surfaces, and CLI smoke paths for the Swift shell
 and local packaged app proof.
 It also includes the buildable Swift/SwiftUI Mac shell under
 `apps/mac`, with a tested IPC client, command-console state model,
@@ -21,6 +21,7 @@ summary, redacted memory retention-plan review, memory review counts in diagnost
 permission/grant inspection, permission policy review items, redacted scheduler
 attention summaries for app handoff, scheduler trigger policy-review items,
 release-readiness blocker inspection,
+read-only signed-distribution/live-device/plugin-trust runbook rendering,
 adapter-backed scheduler notification controls, degraded-mode handling,
 Speech/AVFoundation voice input controls, AVFoundation speech-output controls,
 and a core supervisor abstraction.
@@ -118,6 +119,12 @@ claim; it is not proof of a finished packaged assistant.
 `/release/readiness`, `jarvis release readiness`, and the Swift Release tab
 summarize implemented feature proofs, pending feature boundaries, recommended
 verification commands, and manual production blockers in read-only surfaces.
+`/release/live-device-runbook`, `/release/signed-distribution-runbook`, and
+`/release/plugin-trust-runbook` expose the same runbook families as structured
+read-only IPC payloads, and the Swift Release tab renders them when the running
+core supports those endpoints. These runbooks summarize current evidence and
+next operator commands only; they do not sign, notarize, install, launch,
+validate live devices, review plugins, or generate final evidence.
 The CLI command defaults to operator-readable text, supports `--json` for the
 exact structured payload, and supports `--all-commands` when operators need the
 complete readable verification runbook instead of the compact first commands.

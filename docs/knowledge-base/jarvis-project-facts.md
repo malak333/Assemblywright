@@ -551,11 +551,18 @@ requires plugin-trust `generated_at`, `review_started_at`,
   sweep structure, but that workflow context must remain separate from
   readiness proof.
 - The Swift shell has a core supervisor abstraction, management tabs,
-  release/evidence-status inspection, scheduler notification controls, Keychain
+  release/evidence-status/runbook inspection, scheduler notification controls, Keychain
   launch credential injection, adapter-backed voice input/output controls, and
   unsigned distribution launch evidence. It is not a Developer ID signed or
   notarized packaged app, and it still needs clean-profile Finder/LaunchServices
   and live-device validation before production app claims.
+- Release runbooks are no longer CLI-only. IPC exposes
+  `/release/live-device-runbook`, `/release/signed-distribution-runbook`, and
+  `/release/plugin-trust-runbook` as redacted safe-inspection endpoints derived
+  from readiness plus evidence-status, and the Swift Release tab renders them
+  when available. These surfaces are operator guidance only; they do not
+  perform signing, notarization, installation, live-device QA, plugin-trust
+  review, or final evidence bundling.
 - The Swift Memory tab now uses the Rust IPC memory contract for list,
   include-deleted refresh, create, load, update of mutable fields, review,
   soft-delete, restore, and redacted retention-plan rendering. Category and key
@@ -720,6 +727,13 @@ requires plugin-trust `generated_at`, `review_started_at`,
   `swift test --disable-sandbox --package-path apps/mac --filter "Memory retention plan decodes redacted operator actions"`
   plus the package-wide `JarvisMacCoreTests` memory manager and IPC-client
   request tests.
+- Focused release runbook IPC/App coverage is
+  `cargo test -p jarvis-core release_runbooks_expose_current_evidence_without_side_effects -- --nocapture`
+  plus
+  `cargo test -p jarvis-core contract_endpoint_documents_safe_inspection_paths -- --nocapture`.
+  Swift coverage is in the runbook decode test, the management IPC request
+  path test, and `ReleaseReadinessModel` refresh assertions in
+  `apps/mac/Tests/JarvisMacCoreTests`.
 - The focused repository-state test for progress visibility is
   `cargo test -p jarvis-core repository_backed_state_endpoints_expose_tasks_and_audit -- --nocapture`.
   Contract coverage for the activity stream is in

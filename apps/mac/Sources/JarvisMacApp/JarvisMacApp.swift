@@ -1451,6 +1451,14 @@ struct ReleaseReadinessView: View {
                         }
                     }
 
+                    if !model.releaseRunbooks.isEmpty {
+                        Section("Release Runbooks") {
+                            ForEach(model.releaseRunbooks) { runbook in
+                                ReleaseRunbookRow(runbook: runbook)
+                            }
+                        }
+                    }
+
                     Section("Blocking Gates") {
                         ForEach(readiness.blockingManualGates, id: \.self) { gate in
                             Label(gate, systemImage: "exclamationmark.triangle")
@@ -1484,6 +1492,67 @@ struct ReleaseReadinessView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+        }
+    }
+}
+
+struct ReleaseRunbookRow: View {
+    let runbook: JarvisReleaseRunbook
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(title)
+                    .font(.subheadline)
+                Spacer()
+                Text(runbook.productionReady ? "ready" : "not ready")
+                    .font(.caption)
+                    .foregroundStyle(runbook.productionReady ? .green : .orange)
+            }
+            if let liveVoiceFeature = runbook.liveVoiceFeature {
+                Text("\(liveVoiceFeature.key): \(liveVoiceFeature.status)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+            ForEach(runbook.evidenceItems) { item in
+                HStack {
+                    Text(item.label)
+                    Spacer()
+                    Text(item.status)
+                        .foregroundStyle(item.status == "present" ? .green : .orange)
+                }
+                .font(.caption)
+            }
+            if let command = runbook.commands.first {
+                Text(command)
+                    .font(.caption.monospaced())
+                    .textSelection(.enabled)
+            }
+            if let manualCheck = runbook.manualChecks.first {
+                Text(manualCheck)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+            Text(runbook.proofBoundary)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var title: String {
+        switch runbook.runbook {
+        case "signed_distribution":
+            return "Signed Distribution"
+        case "live_device":
+            return "Live Device"
+        case "plugin_trust":
+            return "Plugin Trust"
+        default:
+            return runbook.runbook
         }
     }
 }

@@ -42,6 +42,10 @@ cargo run -p jarvis-cli -- smoke
 cargo run -p jarvis-cli -- release signed-distribution-runbook
 cargo run -p jarvis-cli -- release live-device-runbook
 cargo run -p jarvis-cli -- release plugin-trust-runbook
+# Equivalent read-only IPC surfaces for app clients:
+# GET /release/signed-distribution-runbook
+# GET /release/live-device-runbook
+# GET /release/plugin-trust-runbook
 ./scripts/release-live-device-qa.sh --check
 ./scripts/release-live-device-qa.sh --self-test
 ./scripts/release-plugin-trust-qa.sh --check
@@ -491,6 +495,10 @@ evidence-status, evidence-doctor, and live-device follow-up commands without
 performing signing, notarization, stapling, Gatekeeper assessment, installation,
 or QA. CLI E2E pins the exact signed-distribution evidence key set, command
 sequence, manual checks, and `--json`/`--format json` parity for this runbook.
+The same runbook families are also exposed through redacted IPC endpoints for
+the Swift Release tab; Rust contract/runbook tests and Swift IPC/model tests
+cover that app-facing surface without treating it as completed release
+evidence.
 `cargo run -p jarvis-cli -- release plugin-trust-runbook` is read-only;
 it summarizes the current `plugin_trust_qa_report` evidence item and prints the
 exact plugin-trust template, assertion, evidence-status, evidence-doctor, and
@@ -822,7 +830,9 @@ advanced memory classification policy beyond the current summary surface, live
 microphone capture, or live audio output until those surfaces are manually
 validated. The current Swift gate proves the
 Mac shell builds, decodes IPC contracts, decodes live CLI fallback JSON
-for release readiness and release evidence-status, exposes management models for
+for release readiness and release evidence-status, decodes release runbook
+payloads, requests the three runbook IPC endpoints, refreshes Release tab
+runbook state, exposes management models for
 approval evidence, memory classification summary, memory policy review counts,
 memory create/update/review/delete/restore state, runs/audit,
 activity summary, permission policy review, scheduler attention summaries,

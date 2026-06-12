@@ -297,6 +297,19 @@ pub struct ReleaseEvidenceStatusItem {
     pub detail: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReleaseRunbookResponse {
+    pub generated_at: DateTime<Utc>,
+    pub generated_from: String,
+    pub runbook: String,
+    pub production_ready: bool,
+    pub live_voice_feature: Option<ReleaseReadinessFeature>,
+    pub evidence_items: Vec<ReleaseEvidenceStatusItem>,
+    pub commands: Vec<String>,
+    pub manual_checks: Vec<String>,
+    pub proof_boundary: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReleaseEvidenceKind {
@@ -953,6 +966,9 @@ impl IpcState {
                 "/contract".to_string(),
                 "/release/readiness".to_string(),
                 "/release/evidence-status".to_string(),
+                "/release/live-device-runbook".to_string(),
+                "/release/signed-distribution-runbook".to_string(),
+                "/release/plugin-trust-runbook".to_string(),
                 "/diagnostics/export".to_string(),
                 "/tools/model".to_string(),
                 "/plugins/manifests".to_string(),
@@ -1046,6 +1062,24 @@ impl IpcState {
             }
             None => release_evidence_status_from_env(),
         }
+    }
+
+    pub fn release_live_device_runbook(&self) -> ReleaseRunbookResponse {
+        let evidence_status = self.release_evidence_status();
+        let readiness = self.release_readiness();
+        release_live_device_runbook_from(&readiness, &evidence_status)
+    }
+
+    pub fn release_signed_distribution_runbook(&self) -> ReleaseRunbookResponse {
+        let evidence_status = self.release_evidence_status();
+        let readiness = self.release_readiness();
+        release_signed_distribution_runbook_from(&readiness, &evidence_status)
+    }
+
+    pub fn release_plugin_trust_runbook(&self) -> ReleaseRunbookResponse {
+        let evidence_status = self.release_evidence_status();
+        let readiness = self.release_readiness();
+        release_plugin_trust_runbook_from(&readiness, &evidence_status)
     }
 
     fn command_runtime_label(&self) -> String {
@@ -3403,6 +3437,18 @@ pub fn router(state: IpcState) -> Router {
         .route("/contract", get(contract))
         .route("/release/readiness", get(release_readiness))
         .route("/release/evidence-status", get(release_evidence_status))
+        .route(
+            "/release/live-device-runbook",
+            get(release_live_device_runbook),
+        )
+        .route(
+            "/release/signed-distribution-runbook",
+            get(release_signed_distribution_runbook),
+        )
+        .route(
+            "/release/plugin-trust-runbook",
+            get(release_plugin_trust_runbook),
+        )
         .route("/diagnostics/export", get(diagnostics_export))
         .route("/tools/model", get(model_tool_catalog))
         .route("/commands", post(command))
@@ -3504,6 +3550,24 @@ async fn release_evidence_status(
     State(state): State<IpcState>,
 ) -> Json<ReleaseEvidenceStatusResponse> {
     Json(state.release_evidence_status())
+}
+
+async fn release_live_device_runbook(
+    State(state): State<IpcState>,
+) -> Json<ReleaseRunbookResponse> {
+    Json(state.release_live_device_runbook())
+}
+
+async fn release_signed_distribution_runbook(
+    State(state): State<IpcState>,
+) -> Json<ReleaseRunbookResponse> {
+    Json(state.release_signed_distribution_runbook())
+}
+
+async fn release_plugin_trust_runbook(
+    State(state): State<IpcState>,
+) -> Json<ReleaseRunbookResponse> {
+    Json(state.release_plugin_trust_runbook())
 }
 
 async fn model_tool_catalog(
@@ -4135,6 +4199,9 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
         endpoint("GET", "/contract", false, true),
         endpoint("GET", "/release/readiness", false, true),
         endpoint("GET", "/release/evidence-status", false, true),
+        endpoint("GET", "/release/live-device-runbook", false, true),
+        endpoint("GET", "/release/signed-distribution-runbook", false, true),
+        endpoint("GET", "/release/plugin-trust-runbook", false, true),
         endpoint("GET", "/diagnostics/export", false, true),
         endpoint("GET", "/tools/model", false, true),
         endpoint("POST", "/commands", false, false),
@@ -4271,6 +4338,158 @@ fn release_required_evidence_complete(evidence_status: &ReleaseEvidenceStatusRes
         && REQUIRED_RELEASE_EVIDENCE_KEYS
             .iter()
             .all(|key| release_evidence_item_present(evidence_status, key))
+}
+
+fn release_live_device_runbook_from(
+    readiness: &ReleaseReadinessResponse,
+    evidence_status: &ReleaseEvidenceStatusResponse,
+) -> ReleaseRunbookResponse {
+    ReleaseRunbookResponse {
+        generated_at: Utc::now(),
+        generated_from: "release readiness plus evidence-status".to_string(),
+        runbook: "live_device".to_string(),
+        production_ready: readiness.production_ready,
+        live_voice_feature: readiness
+            .pending_features
+            .iter()
+            .chain(readiness.implemented_features.iter())
+            .find(|feature| feature.key == "live_voice_loop")
+            .cloned(),
+        evidence_items: release_evidence_items_by_key(evidence_status, &["live_device_qa_report"]),
+        commands: vec![
+            "./scripts/release-live-device-qa.sh --check".to_string(),
+            "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env"
+                .to_string(),
+            "set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete"
+                .to_string(),
+            "cargo run -p jarvis-cli -- release evidence-status".to_string(),
+            "Start or restart the core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external"
+                .to_string(),
+            "cargo run -p jarvis-cli -- release readiness".to_string(),
+        ],
+        manual_checks: vec![
+            "Install the signed, notarized package into /Applications on a clean Mac profile."
+                .to_string(),
+            "Launch Jarvis through Finder or LaunchServices.".to_string(),
+            "Verify microphone and Speech permission prompts during live voice capture.".to_string(),
+            "Speak the test phrase and confirm the observed transcript reaches the command path."
+                .to_string(),
+            "Verify live speech output, notification delivery, restart behavior, and manual release QA."
+                .to_string(),
+            "Preserve target/release-live-device-qa-report.json for final release evidence bundling."
+                .to_string(),
+        ],
+        proof_boundary:
+            "Runbook and local evidence inspection only; this endpoint does not perform live-device validation."
+                .to_string(),
+    }
+}
+
+fn release_signed_distribution_runbook_from(
+    readiness: &ReleaseReadinessResponse,
+    evidence_status: &ReleaseEvidenceStatusResponse,
+) -> ReleaseRunbookResponse {
+    ReleaseRunbookResponse {
+        generated_at: Utc::now(),
+        generated_from: "release readiness plus evidence-status".to_string(),
+        runbook: "signed_distribution".to_string(),
+        production_ready: readiness.production_ready,
+        live_voice_feature: None,
+        evidence_items: release_evidence_items_by_key(
+            evidence_status,
+            &[
+                "signed_app_bundle",
+                "app_executable",
+                "bundled_core_executable",
+                "signed_app_zip",
+                "signed_installer_package",
+                "signed_distribution_provenance_report",
+            ],
+        ),
+        commands: vec![
+            "./scripts/package-distribution.sh --check".to_string(),
+            "./scripts/package-distribution.sh --unsigned-launch-check".to_string(),
+            "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh"
+                .to_string(),
+            "cargo run -p jarvis-cli -- release evidence-status".to_string(),
+            "./scripts/release-evidence-doctor.sh --check".to_string(),
+            "cargo run -p jarvis-cli -- release live-device-runbook".to_string(),
+        ],
+        manual_checks: vec![
+            "Configure Developer ID Application and Installer identities plus the notarytool profile on the release Mac."
+                .to_string(),
+            "Run the full package-distribution lane and preserve the signed zip, signed installer package, and signed provenance report."
+                .to_string(),
+            "Confirm the signed app zip and installer package are notarized and stapled before clean-profile installation."
+                .to_string(),
+            "Rerun evidence-status and evidence-doctor so missing or invalid signed artifact paths are visible before final bundling."
+                .to_string(),
+            "Continue with live-device QA, plugin-trust QA, final evidence bundle generation, and external evidence-mode readiness."
+                .to_string(),
+        ],
+        proof_boundary:
+            "Runbook and local evidence inspection only; this endpoint does not perform signing, notarization, stapling, Gatekeeper assessment, installation, live-device QA, or plugin-trust QA."
+                .to_string(),
+    }
+}
+
+fn release_plugin_trust_runbook_from(
+    readiness: &ReleaseReadinessResponse,
+    evidence_status: &ReleaseEvidenceStatusResponse,
+) -> ReleaseRunbookResponse {
+    ReleaseRunbookResponse {
+        generated_at: Utc::now(),
+        generated_from: "release readiness plus evidence-status".to_string(),
+        runbook: "plugin_trust".to_string(),
+        production_ready: readiness.production_ready,
+        live_voice_feature: None,
+        evidence_items: release_evidence_items_by_key(evidence_status, &["plugin_trust_qa_report"]),
+        commands: vec![
+            "./scripts/release-plugin-trust-qa.sh --check".to_string(),
+            "./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env"
+                .to_string(),
+            "set -a && source target/release-plugin-trust-qa.env && set +a && ./scripts/release-plugin-trust-qa.sh --assert-complete"
+                .to_string(),
+            "cargo run -p jarvis-cli -- release evidence-status".to_string(),
+            "./scripts/release-evidence-doctor.sh --check".to_string(),
+            "./scripts/release-evidence-bundle.sh --check".to_string(),
+            "./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env"
+                .to_string(),
+            "set -a && source target/release-evidence-bundle.env && set +a && ./scripts/release-evidence-bundle.sh --bundle"
+                .to_string(),
+            "./scripts/release-evidence-doctor.sh --assert-complete".to_string(),
+        ],
+        manual_checks: vec![
+            "Run the marketplace review workflow for every public plugin listing.".to_string(),
+            "Preserve malware scan evidence for distributed plugin archives and updates."
+                .to_string(),
+            "Validate signed publisher policy for trusted publisher keys and revocation."
+                .to_string(),
+            "Validate the macOS sandbox profile or equivalent OS-level confinement."
+                .to_string(),
+            "Validate host-level egress enforcement with deny and declared-host allow fixtures."
+                .to_string(),
+            "Preserve target/release-plugin-trust-qa-report.json for final release evidence bundling."
+                .to_string(),
+            "Generate the final release evidence bundle only after signed distribution, live-device QA, and plugin-trust QA evidence all exist."
+                .to_string(),
+        ],
+        proof_boundary:
+            "Runbook and local evidence inspection only; this endpoint does not perform marketplace review, malware scanning, sandbox deployment, host-level egress enforcement, signing, notarization, live-device QA, or final evidence bundling."
+                .to_string(),
+    }
+}
+
+fn release_evidence_items_by_key(
+    evidence_status: &ReleaseEvidenceStatusResponse,
+    keys: &[&str],
+) -> Vec<ReleaseEvidenceStatusItem> {
+    evidence_status
+        .items
+        .iter()
+        .filter(|item| keys.contains(&item.key.as_str()))
+        .cloned()
+        .collect()
 }
 
 fn release_evidence_status_from_env() -> ReleaseEvidenceStatusResponse {
@@ -6205,6 +6424,15 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .contains(&"/release/evidence-status".to_string()));
         assert!(contract
             .safe_inspection_paths
+            .contains(&"/release/live-device-runbook".to_string()));
+        assert!(contract
+            .safe_inspection_paths
+            .contains(&"/release/signed-distribution-runbook".to_string()));
+        assert!(contract
+            .safe_inspection_paths
+            .contains(&"/release/plugin-trust-runbook".to_string()));
+        assert!(contract
+            .safe_inspection_paths
             .contains(&"/diagnostics/export".to_string()));
         assert!(contract
             .safe_inspection_paths
@@ -6244,6 +6472,19 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 && endpoint.path == "/release/evidence-status"
                 && !endpoint.repository_required
                 && endpoint.redacted));
+        for path in [
+            "/release/live-device-runbook",
+            "/release/signed-distribution-runbook",
+            "/release/plugin-trust-runbook",
+        ] {
+            assert!(contract
+                .endpoints
+                .iter()
+                .any(|endpoint| endpoint.method == "GET"
+                    && endpoint.path == path
+                    && !endpoint.repository_required
+                    && endpoint.redacted));
+        }
         assert!(contract
             .endpoints
             .iter()
@@ -6550,6 +6791,66 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert!(readiness
             .proof_boundary
             .contains("does not perform signing"));
+    }
+
+    #[test]
+    fn release_runbooks_expose_current_evidence_without_side_effects() {
+        let state = IpcState::new();
+
+        let live = state.release_live_device_runbook();
+        assert_eq!(
+            live.generated_from,
+            "release readiness plus evidence-status"
+        );
+        assert_eq!(live.runbook, "live_device");
+        assert!(!live.production_ready);
+        assert_eq!(
+            live.live_voice_feature
+                .as_ref()
+                .map(|feature| feature.key.as_str()),
+            Some("live_voice_loop")
+        );
+        assert_eq!(live.evidence_items.len(), 1);
+        assert_eq!(live.evidence_items[0].key, "live_device_qa_report");
+        assert_eq!(
+            live.evidence_items[0].status,
+            ReleaseEvidenceItemStatus::Missing
+        );
+        assert!(live
+            .commands
+            .contains(&"./scripts/release-live-device-qa.sh --check".to_string()));
+        assert!(live
+            .manual_checks
+            .iter()
+            .any(|check| check.contains("microphone and Speech")));
+        assert!(live
+            .proof_boundary
+            .contains("does not perform live-device validation"));
+
+        let signed = state.release_signed_distribution_runbook();
+        assert_eq!(signed.runbook, "signed_distribution");
+        assert_eq!(signed.evidence_items.len(), 6);
+        assert!(signed
+            .evidence_items
+            .iter()
+            .any(|item| item.key == "signed_distribution_provenance_report"));
+        assert!(signed
+            .commands
+            .iter()
+            .any(|command| command.contains("JARVIS_DEVELOPER_ID_APPLICATION")));
+        assert!(signed.proof_boundary.contains("does not perform signing"));
+
+        let plugin = state.release_plugin_trust_runbook();
+        assert_eq!(plugin.runbook, "plugin_trust");
+        assert_eq!(plugin.evidence_items.len(), 1);
+        assert_eq!(plugin.evidence_items[0].key, "plugin_trust_qa_report");
+        assert!(plugin
+            .manual_checks
+            .iter()
+            .any(|check| check.contains("malware scan")));
+        assert!(plugin
+            .proof_boundary
+            .contains("does not perform marketplace review"));
     }
 
     #[test]

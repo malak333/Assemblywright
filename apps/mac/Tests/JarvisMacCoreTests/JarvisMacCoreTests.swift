@@ -306,10 +306,13 @@ struct JarvisMacCoreTests {
                 { "method": "GET", "path": "/activity/summary", "repository_required": true, "redacted": true },
                 { "method": "GET", "path": "/release/readiness", "repository_required": false, "redacted": true },
                 { "method": "GET", "path": "/memory/retention-plan", "repository_required": true, "redacted": true },
+                { "method": "GET", "path": "/release/live-device-runbook", "repository_required": false, "redacted": true },
+                { "method": "GET", "path": "/release/signed-distribution-runbook", "repository_required": false, "redacted": true },
+                { "method": "GET", "path": "/release/plugin-trust-runbook", "repository_required": false, "redacted": true },
                 { "method": "GET", "path": "/permissions/grants", "repository_required": true, "redacted": false },
                 { "method": "GET", "path": "/permissions/policy-review", "repository_required": true, "redacted": false }
               ],
-              "safe_inspection_paths": ["/health", "/release/readiness", "/diagnostics/export", "/memory/retention-plan"],
+              "safe_inspection_paths": ["/health", "/release/readiness", "/diagnostics/export", "/memory/retention-plan", "/release/live-device-runbook", "/release/signed-distribution-runbook", "/release/plugin-trust-runbook"],
               "features": [
                 {
                   "key": "scheduler_trigger_policy_review",
@@ -356,6 +359,7 @@ struct JarvisMacCoreTests {
         #expect(contract.exposesPermissionGrantSummary)
         #expect(contract.exposesPermissionPolicyReview)
         #expect(contract.exposesMemoryRetentionPlan)
+        #expect(contract.exposesReleaseRunbooks)
         #expect(contract.exposesReleaseReadiness)
     }
 
@@ -459,6 +463,24 @@ struct JarvisMacCoreTests {
         #expect(readiness.recommendedVerificationCommands.contains("Start or restart the core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external"))
         #expect(readiness.recommendedVerificationCommands.contains("cargo run -p jarvis-cli -- release readiness"))
         #expect(readiness.proofBoundary.contains("does not perform signing"))
+    }
+
+    @Test("Release runbook payload decodes operator evidence path")
+    func decodesReleaseRunbook() throws {
+        let runbook = try JSONDecoder().decode(
+            JarvisReleaseRunbook.self,
+            from: releaseRunbookJSON(runbook: "live_device")
+        )
+
+        #expect(runbook.generatedFrom == "release readiness plus evidence-status")
+        #expect(runbook.runbook == "live_device")
+        #expect(!runbook.productionReady)
+        #expect(runbook.liveVoiceFeature?.key == "live_voice_loop")
+        #expect(runbook.evidenceItems.first?.key == "live_device_qa_report")
+        #expect(runbook.evidenceItems.first?.status == "missing")
+        #expect(runbook.commands.contains("./scripts/release-live-device-qa.sh --check"))
+        #expect(runbook.manualChecks.contains { $0.contains("microphone and Speech") })
+        #expect(runbook.proofBoundary.contains("does not perform live-device validation"))
     }
 
     @Test("Command response decodes task, route, steps, and message")
@@ -636,6 +658,12 @@ struct JarvisMacCoreTests {
                 return (response, releaseReadinessJSON())
             case "/release/evidence-status":
                 return (response, releaseEvidenceStatusJSON())
+            case "/release/live-device-runbook":
+                return (response, releaseRunbookJSON(runbook: "live_device"))
+            case "/release/signed-distribution-runbook":
+                return (response, releaseRunbookJSON(runbook: "signed_distribution"))
+            case "/release/plugin-trust-runbook":
+                return (response, releaseRunbookJSON(runbook: "plugin_trust"))
             case "/memory":
                 if request.httpMethod == "GET" {
                     return (response, Data("[]".utf8))
@@ -681,6 +709,9 @@ struct JarvisMacCoreTests {
         _ = try await client.contract()
         _ = try await client.releaseReadiness()
         _ = try await client.releaseEvidenceStatus()
+        _ = try await client.releaseLiveDeviceRunbook()
+        _ = try await client.releaseSignedDistributionRunbook()
+        _ = try await client.releasePluginTrustRunbook()
         _ = try await client.listMemoryItems(includeDeleted: true)
         _ = try await client.memoryClassification(includeDeleted: true)
         _ = try await client.memoryRetentionPlan()
@@ -729,6 +760,9 @@ struct JarvisMacCoreTests {
             "GET",
             "GET",
             "GET",
+            "GET",
+            "GET",
+            "GET",
             "POST",
             "GET",
             "PATCH",
@@ -750,6 +784,9 @@ struct JarvisMacCoreTests {
             "/contract",
             "/release/readiness",
             "/release/evidence-status",
+            "/release/live-device-runbook",
+            "/release/signed-distribution-runbook",
+            "/release/plugin-trust-runbook",
             "/memory?include_deleted=true",
             "/memory/classification?include_deleted=true",
             "/memory/retention-plan",
@@ -770,9 +807,9 @@ struct JarvisMacCoreTests {
             "/activity/events?max_events=2&interval_ms=500",
             "/emergency-pause"
         ])
-        #expect(requests[6].body?["key"] as? String == "release-gate")
-        #expect(requests[8].body?["value"] as? String == "preview then sync")
-        #expect(requests[15].body?["command"] as? String == "status check")
+        #expect(requests[9].body?["key"] as? String == "release-gate")
+        #expect(requests[11].body?["value"] as? String == "preview then sync")
+        #expect(requests[18].body?["command"] as? String == "status check")
     }
 
     @Test("Management payloads decode tasks and audit list")
@@ -1331,6 +1368,7 @@ struct JarvisMacCoreTests {
 
         #expect(model.readiness?.productionReady == false)
         #expect(model.evidenceStatus?.complete == false)
+        #expect(model.releaseRunbooks.map(\.runbook) == ["signed_distribution", "live_device", "plugin_trust"])
         #expect(!model.effectiveProductionReady)
         #expect(model.evidenceStatus?.items.map(\.key).contains("live_device_qa_report") == true)
         #expect(model.evidenceStatus?.items.first { $0.key == "signed_app_bundle" }?.detail.contains("Info.plist bundle identifier") == true)
@@ -3800,6 +3838,82 @@ private func completeReleaseEvidenceStatusJSON() -> Data {
     )
 }
 
+private func releaseRunbookJSON(runbook: String) -> Data {
+    let evidenceKey: String
+    let evidenceLabel: String
+    let evidencePath: String
+    let boundary: String
+    let firstCommand: String
+    let firstManualCheck: String
+    let liveVoiceFeature: String
+
+    switch runbook {
+    case "signed_distribution":
+        evidenceKey = "signed_distribution_provenance_report"
+        evidenceLabel = "Signed-distribution provenance report"
+        evidencePath = "target/distribution/Jarvis-0.1.4-signed-provenance.json"
+        boundary = "Runbook and local evidence inspection only; this endpoint does not perform signing."
+        firstCommand = "./scripts/package-distribution.sh --check"
+        firstManualCheck = "Configure Developer ID Application and Installer identities plus the notarytool profile on the release Mac."
+        liveVoiceFeature = "null"
+    case "plugin_trust":
+        evidenceKey = "plugin_trust_qa_report"
+        evidenceLabel = "Plugin-trust QA report"
+        evidencePath = "target/release-plugin-trust-qa-report.json"
+        boundary = "Runbook and local evidence inspection only; this endpoint does not perform marketplace review."
+        firstCommand = "./scripts/release-plugin-trust-qa.sh --check"
+        firstManualCheck = "Preserve malware scan evidence for distributed plugin archives and updates."
+        liveVoiceFeature = "null"
+    default:
+        evidenceKey = "live_device_qa_report"
+        evidenceLabel = "Live-device QA report"
+        evidencePath = "target/release-live-device-qa-report.json"
+        boundary = "Runbook and local evidence inspection only; this endpoint does not perform live-device validation."
+        firstCommand = "./scripts/release-live-device-qa.sh --check"
+        firstManualCheck = "Verify microphone and Speech permission prompts during live voice capture."
+        liveVoiceFeature = """
+        {
+          "key": "live_voice_loop",
+          "status": "pending_manual_validation",
+          "proof": "Swift adapters have deterministic fake-adapter tests.",
+          "boundary": "Live-device validation is not proven by automated tests."
+        }
+        """
+    }
+
+    return Data(
+        """
+        {
+          "generated_at": "2026-05-22T08:10:00Z",
+          "generated_from": "release readiness plus evidence-status",
+          "runbook": "\(runbook)",
+          "production_ready": false,
+          "live_voice_feature": \(liveVoiceFeature),
+          "evidence_items": [
+            {
+              "key": "\(evidenceKey)",
+              "label": "\(evidenceLabel)",
+              "path": "\(evidencePath)",
+              "kind": "json_report",
+              "status": "missing",
+              "required_for_production": true,
+              "manual_gate": true,
+              "detail": "expected JSON report is missing"
+            }
+          ],
+          "commands": [
+            "\(firstCommand)",
+            "cargo run -p jarvis-cli -- release evidence-status"
+          ],
+          "manual_checks": [
+            "\(firstManualCheck)"
+          ],
+          "proof_boundary": "\(boundary)"
+        }
+        """.utf8
+    )
+}
+
 private func invalidLiveDeviceEvidenceStatusJSON() -> Data {
     Data(
         """
@@ -4230,6 +4344,18 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         }
 
         return try JSONDecoder().decode(JarvisReleaseEvidenceStatus.self, from: releaseEvidenceStatusJSON())
+    }
+
+    func releaseLiveDeviceRunbook() async throws -> JarvisReleaseRunbook {
+        try JSONDecoder().decode(JarvisReleaseRunbook.self, from: releaseRunbookJSON(runbook: "live_device"))
+    }
+
+    func releaseSignedDistributionRunbook() async throws -> JarvisReleaseRunbook {
+        try JSONDecoder().decode(JarvisReleaseRunbook.self, from: releaseRunbookJSON(runbook: "signed_distribution"))
+    }
+
+    func releasePluginTrustRunbook() async throws -> JarvisReleaseRunbook {
+        try JSONDecoder().decode(JarvisReleaseRunbook.self, from: releaseRunbookJSON(runbook: "plugin_trust"))
     }
 
     func submit(_ command: JarvisCommandRequest) async throws -> JarvisCommandResponse {

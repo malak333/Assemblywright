@@ -376,6 +376,13 @@ stage or when a PR needs focused evidence for one ownership slice.
   launch check, signed/notarized packaging, live-device QA, plugin-trust QA,
   final evidence bundle generation, evidence-doctor assertion, then external
   evidence-mode readiness.
+- Confirm `/release/live-device-runbook`,
+  `/release/signed-distribution-runbook`, and
+  `/release/plugin-trust-runbook` are present in `/contract` as redacted safe
+  inspection endpoints, and that the Swift Release tab can render those
+  runbooks without treating them as evidence completion. These endpoints are
+  operator guidance only and must not perform signing, notarization,
+  installation, live-device QA, plugin-trust review, or final evidence bundling.
 - Confirm `./scripts/release-plugin-trust-qa.sh --check` is included in release
   readiness recommendations and the local release gate, and that
   `./scripts/release-plugin-trust-qa.sh --write-template
