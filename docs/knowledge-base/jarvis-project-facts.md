@@ -759,12 +759,14 @@ requires plugin-trust `generated_at`, `review_started_at`,
   entitlements. Its `--unsigned-structure-check` mode builds release Rust/Swift
   artifacts, assembles `target/distribution/Jarvis.app`, optionally ad-hoc signs
   when `codesign` is available, creates an unsigned `/Applications` installer
-  package, and inspects the package payload for the app executable, bundled
-  core, and `Info.plist`. Its `--unsigned-launch-check` mode is part of
-  `./scripts/release-local.sh`, launches the release-built app executable with
-  an isolated temporary HOME, verifies the bundled core over loopback IPC, and
-  checks command, audit, diagnostics, pause/block/resume, and SQLite state
-  through the release app layout. The CLI exposes `jarvis --version`, and the
+  package, inspects the package payload for the app executable, bundled core,
+  and `Info.plist`, and validates package identifier, version, and
+  `/Applications` install location metadata. Its `--unsigned-launch-check` mode
+  is part of `./scripts/release-local.sh`, validates the same package metadata,
+  launches the release-built app executable with an isolated temporary HOME,
+  verifies the bundled core over loopback IPC, and checks command, audit,
+  diagnostics, pause/block/resume, and SQLite state through the release app
+  layout. The CLI exposes `jarvis --version`, and the
   packaging/evidence scripts require the bundled `jarvis-cli --version` output
   to match the expected release version before local artifact evidence can pass.
   Full mode requires the owner's Developer ID
