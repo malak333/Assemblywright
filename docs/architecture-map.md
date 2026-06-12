@@ -856,14 +856,14 @@ and the relevant E2E coverage for this docs-sync phase.
 
 The 2026-06-12 refresh is documented in
 [Production readiness sweep - 2026-06-12](production-readiness-sweep-2026-06-12.md).
-That note records the post-PR #248 readiness snapshot, the merged #247/#248/#249
-PR state, the final local and hosted release-gate evidence, and the current
-production evidence boundary.
+That note records the post-PR #254 readiness snapshot, the merged
+#247/#248/#249/#253/#254 PR state, the final local and hosted release-gate
+evidence, and the current production evidence boundary.
 
 Current readiness should always be refreshed before release claims. The
-historical 2026-06-12 UTC sweep refresh after PR #238 from `main` at `4a4661e`,
+current 2026-06-12 UTC sweep refresh after PR #254 from `main` at `8aa0446`,
 `jarvis release readiness --json`
-reported `production_ready: false`, `verified_feature_count: 17`, and
+reported `production_ready: false`, `verified_feature_count: 16`, and
 `pending_feature_count: 1`, with `live_voice_loop` still
 `pending_manual_validation`; `jarvis release evidence-status --json` in the
 main checkout reported `complete: false`, `satisfied_count: 3`,
@@ -1020,8 +1020,9 @@ The Swift memory retention-plan slice is covered by typed JSON decode tests,
 IPC request tests, and `MemoryManagerModel` refresh tests. That coverage proves
 redacted operator-plan visibility in the app, not purge automation, memory
 rewriting, or vector-index governance.
-The release runbook IPC/App slice is covered by Rust contract and runbook
-payload tests plus Swift runbook decode, IPC request, and Release model refresh
-tests. That coverage proves read-only operator guidance visibility in the app;
-it does not perform signing, notarization, live-device QA, plugin-trust review,
-or final evidence bundling.
+The release runbook IPC/App slice from PR #254 is covered by Rust contract and
+runbook payload tests plus Swift runbook decode, IPC request, and Release model
+refresh tests. That coverage proves read-only operator guidance visibility in
+the app and keeps the current-state diagram aligned with implementation; it does
+not perform signing, notarization, live-device QA, plugin-trust review, or final
+evidence bundling.
