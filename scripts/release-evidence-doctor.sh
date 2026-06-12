@@ -1061,6 +1061,7 @@ check_release_evidence() {
     local missing_before_plugin="${#MISSING_ITEMS[@]}"
     check_json_number "plugin-trust QA report" "$PLUGIN_QA_REPORT" "schema_version" "1"
     check_json_string "plugin-trust QA report" "$PLUGIN_QA_REPORT" "evidence_type" "owner_recorded_plugin_trust_qa"
+    check_json_string "plugin-trust QA report" "$PLUGIN_QA_REPORT" "version" "$EXPECTED_VERSION"
     check_json_false_flag "plugin-trust QA report" "$PLUGIN_QA_REPORT" "self_test_fixture"
     check_json_string "plugin-trust QA report" "$PLUGIN_QA_REPORT" "review_source" "owner-asserted-manual-review"
     for flag in marketplace_review malware_scan os_sandbox egress_enforcement signed_publisher_policy manual_trust_review; do
@@ -1338,10 +1339,11 @@ write_fixture_reports() {
   "proof_boundary": "self-test fixture"
 }
 JSON
-  cat >"$plugin_path" <<'JSON'
+  cat >"$plugin_path" <<JSON
 {
   "schema_version": 1,
   "evidence_type": "owner_recorded_plugin_trust_qa",
+  "version": "$VERSION",
   "self_test_fixture": false,
   "generated_at": "2026-05-22T16:30:00Z",
   "review_source": "owner-asserted-manual-review",
@@ -2071,6 +2073,28 @@ PY
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/post-child-completion-bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected final bundle completed before child reports to fail"
+  fi
+
+  python3 - "$tmp_dir/plugin.json" "$tmp_dir/stale-version-plugin.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+with open(source, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["version"] = "0.0.0"
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+PY
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/stale-version-plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+    "$0" --assert-complete >/dev/null 2>&1; then
+    fail "release evidence doctor self-test expected stale plugin trust version to fail"
   fi
 
   python3 - "$tmp_dir/live.json" "$tmp_dir/invalid-bundle-child-live.json" <<'PY'

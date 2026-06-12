@@ -1200,10 +1200,11 @@ EOF
   "proof_boundary": "self-test fixture"
 }
 JSON
-  cat >"$tmp_dir/plugin.json" <<'JSON'
+  cat >"$tmp_dir/plugin.json" <<JSON
 {
   "schema_version": 1,
   "evidence_type": "owner_recorded_plugin_trust_qa",
+  "version": "$VERSION",
   "self_test_fixture": false,
   "generated_at": "2026-05-22T16:30:00Z",
   "review_source": "owner-asserted-manual-review",
@@ -1784,6 +1785,36 @@ JSON
     fail "release evidence self-test expected incomplete plugin-trust report to be rejected"
   fi
 
+  python3 - "$tmp_dir/plugin.json" "$tmp_dir/stale-version-plugin.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+with open(source, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["version"] = "0.0.0"
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+PY
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/stale-version-plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/stale-plugin-version-bundle.json" \
+    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
+    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+    "$0" --bundle >/dev/null 2>&1; then
+    fail "release evidence self-test expected stale plugin trust version to be rejected"
+  fi
+
   python3 - "$tmp_dir/plugin.json" "$tmp_dir/missing-observation-plugin.json" <<'PY'
 import json
 import sys
@@ -2216,6 +2247,7 @@ for flag in marketplace_review malware_scan os_sandbox egress_enforcement signed
 done
 require_json_number_equals "plugin trust QA report" "$PLUGIN_QA_REPORT" "schema_version" "1"
 require_json_string_equals "plugin trust QA report" "$PLUGIN_QA_REPORT" "evidence_type" "owner_recorded_plugin_trust_qa"
+require_json_string_equals "plugin trust QA report" "$PLUGIN_QA_REPORT" "version" "$EXPECTED_VERSION"
 require_json_bool_false "plugin trust QA report" "$PLUGIN_QA_REPORT" "self_test_fixture"
 require_json_string_equals "plugin trust QA report" "$PLUGIN_QA_REPORT" "review_source" "owner-asserted-manual-review"
 for field in owner_name review_started_at review_completed_at marketplace_evidence_note malware_scan_evidence_note os_sandbox_evidence_note egress_evidence_note egress_policy_label egress_deny_fixture_evidence_note egress_allow_fixture_evidence_note signed_publisher_evidence_note manual_review_evidence_note; do
