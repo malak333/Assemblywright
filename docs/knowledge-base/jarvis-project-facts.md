@@ -1067,9 +1067,11 @@ requires plugin-trust `generated_at`, `review_started_at`,
   memory-management paths, diagnostics redaction, and repository-backed
   scheduler/job state surfaces.
 - The 2026-06-12 production-readiness sweep refresh now records the merged
-  state after PR #247, PR #248, PR #249, PR #253, and PR #254: no open PRs,
-  `main` at `8aa0446`, local `./scripts/release-local.sh` green, hosted GitHub
-  PR `Release local gate` green for PR #254 run `27410145709`,
+  state after PR #247, PR #248, PR #249, PR #253, PR #254, PR #256, and
+  PR #257: no open PRs, `main` at `68e2c5a`, local
+  `./scripts/release-local.sh` green for the code-changing runbook guidance
+  slice, hosted GitHub PR `Release local gate` green for PR #256 run
+  `27412085979` and PR #257 run `27413191322`,
   `production_ready: false`, `verified_feature_count: 16`,
   `pending_feature_count: 1`, and, after the primary checkout's local release
   gate generated unsigned app artifacts, six missing external/manual evidence
@@ -1079,6 +1081,16 @@ requires plugin-trust `generated_at`, `review_started_at`,
   `/release/signed-distribution-runbook`, and `/release/plugin-trust-runbook`
   are read-only IPC endpoints, and the Swift Release tab renders those payloads
   when available. This is app guidance visibility only, not evidence completion.
+- PR #256 and PR #257 aligned live-device QA operator guidance across the
+  generated `target/release-live-device-qa.env` template, CLI fallback
+  `jarvis release live-device-runbook`, and IPC `/release/live-device-runbook`:
+  the command path now tells operators to capture a release-core
+  `jarvis command "status check" --json` result, record the returned
+  `task:<uuid>` or task-associated `audit:<uuid>`, then rerun
+  evidence-status/readiness against the release endpoint with
+  `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external`. Rust E2E, core unit tests,
+  Swift decode tests, and the live-device shell self-test cover this guidance
+  without claiming live-device QA was performed.
 
 ## Safety Guardrails
 
