@@ -558,10 +558,13 @@ requires plugin-trust `generated_at`, `review_started_at`,
   and live-device validation before production app claims.
 - The Swift Memory tab now uses the Rust IPC memory contract for list,
   include-deleted refresh, create, load, update of mutable fields, review,
-  soft-delete, and restore. Category and key remain creation-time fields in
-  the current IPC contract; the Swift edit path updates value, provenance, and
-  sensitivity. Restore clears `deleted_at` through `/memory/:id/restore` and
-  stays subject to the active `(category, key)` uniqueness guard.
+  soft-delete, restore, and redacted retention-plan rendering. Category and key
+  remain creation-time fields in the current IPC contract; the Swift edit path
+  updates value, provenance, and sensitivity. Restore clears `deleted_at`
+  through `/memory/:id/restore` and stays subject to the active
+  `(category, key)` uniqueness guard. `/memory/retention-plan` is rendered as
+  an operator review queue only; Swift does not perform autonomous purge,
+  rewrite, or vector-index governance actions.
 - Repository-backed IPC exposes `/memory/classification`, and the CLI exposes
   `jarvis memory classification`, as a read-only memory corpus summary. It
   groups memory by sensitivity and category, reports active/deleted/reviewed
@@ -713,6 +716,10 @@ requires plugin-trust `generated_at`, `review_started_at`,
   `cargo test -p jarvis-core diagnostics_export_is_redacted_and_counts_repository_state -- --nocapture`.
   Cross-process CLI coverage for `jarvis memory retention-plan` is in
   `cargo test -p jarvis-cli --test local_ipc_e2e serve_exposes_local_ipc_contract_and_persists_state -- --nocapture`.
+  Swift coverage for the Memory tab retention-plan surface is in
+  `swift test --disable-sandbox --package-path apps/mac --filter "Memory retention plan decodes redacted operator actions"`
+  plus the package-wide `JarvisMacCoreTests` memory manager and IPC-client
+  request tests.
 - The focused repository-state test for progress visibility is
   `cargo test -p jarvis-core repository_backed_state_endpoints_expose_tasks_and_audit -- --nocapture`.
   Contract coverage for the activity stream is in

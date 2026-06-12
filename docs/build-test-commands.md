@@ -399,6 +399,7 @@ cargo run -p jarvis-cli -- plugins verify-publisher <plugin-id> --trusted-origin
 cargo run -p jarvis-cli -- plugins verify-publisher-signature <plugin-id> --trusted-public-key "<base64 ed25519 public key>" --decided-by cli
 cargo run -p jarvis-cli -- memory list
 cargo run -p jarvis-cli -- memory classification --include-deleted
+cargo run -p jarvis-cli -- memory retention-plan
 cargo run -p jarvis-cli -- memory create workflow release-gate "run local gate before PR" --provenance "manual note" --sensitivity workspace
 cargo run -p jarvis-cli -- memory restore <memory-id>
 cargo run -p jarvis-cli -- scheduler attention
@@ -407,7 +408,10 @@ cargo run -p jarvis-cli -- diagnostics export
 
 `jarvis permissions review` includes pending approvals, plugin review items,
 active scheduler triggers, unreviewed memory items, and deleted sensitive
-memory retained in local storage. Memory review items include category/key and
+memory retained in local storage. `jarvis memory retention-plan` and the Swift
+Memory tab expose the memory-specific redacted operator queue for those
+retention actions while keeping purge/rewrite automation out of scope. Memory
+review items include category/key and
 sensitivity only; memory values stay out of policy review and diagnostics
 export. `jarvis diagnostics export` exposes aggregate active, unreviewed, and
 sensitive memory counts when repository backing is enabled.
@@ -780,6 +784,7 @@ health, runtime-backed command execution, deterministic first-party plugin
 execution, route/policy/plugin audit evidence, approval-required persistence and
 grant/deny decisions, scheduler schedule/cancel and persistence, redacted
 diagnostics export, memory classification summary fields,
+redacted memory retention-plan fields,
 memory create/update/review/delete/restore and persistence, plugin
 manifests, installed-plugin source-tree provenance verification, permission-grant
 provenance summary fields, operator-pinned publisher-origin verification,

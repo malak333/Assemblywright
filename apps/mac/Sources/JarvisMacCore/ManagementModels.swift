@@ -53,6 +53,7 @@ public final class ReleaseReadinessModel: ObservableObject {
 public final class MemoryManagerModel: ObservableObject {
     @Published public private(set) var items: [JarvisMemoryItem]
     @Published public private(set) var classification: JarvisMemoryClassificationSummary?
+    @Published public private(set) var retentionPlan: JarvisMemoryRetentionPlan?
     @Published public private(set) var selectedItem: JarvisMemoryItem?
     @Published public private(set) var includeDeleted: Bool
     @Published public private(set) var isLoading: Bool
@@ -64,6 +65,7 @@ public final class MemoryManagerModel: ObservableObject {
         self.client = client
         self.items = []
         self.classification = nil
+        self.retentionPlan = nil
         self.selectedItem = nil
         self.includeDeleted = false
         self.isLoading = false
@@ -75,8 +77,10 @@ public final class MemoryManagerModel: ObservableObject {
         await run {
             async let items = self.client.listMemoryItems(includeDeleted: includeDeleted)
             async let classification = self.client.memoryClassification(includeDeleted: includeDeleted)
+            async let retentionPlan = self.client.memoryRetentionPlan()
             self.items = try await items
             self.classification = try await classification
+            self.retentionPlan = try await retentionPlan
             if let selectedItem = self.selectedItem,
                let refreshed = self.items.first(where: { $0.id == selectedItem.id }) {
                 self.selectedItem = refreshed
@@ -99,7 +103,7 @@ public final class MemoryManagerModel: ObservableObject {
             )
             self.items.insert(item, at: 0)
             self.selectedItem = item
-            self.classification = try await self.client.memoryClassification(includeDeleted: self.includeDeleted)
+            try await self.refreshMemorySummaries()
         }
     }
 
@@ -158,8 +162,15 @@ public final class MemoryManagerModel: ObservableObject {
             } else if self.selectedItem?.id == id {
                 self.selectedItem = nil
             }
-            self.classification = try await self.client.memoryClassification(includeDeleted: self.includeDeleted)
+            try await self.refreshMemorySummaries()
         }
+    }
+
+    private func refreshMemorySummaries() async throws {
+        async let classification = client.memoryClassification(includeDeleted: includeDeleted)
+        async let retentionPlan = client.memoryRetentionPlan()
+        self.classification = try await classification
+        self.retentionPlan = try await retentionPlan
     }
 
     private func run(_ operation: @escaping () async throws -> Void) async {
