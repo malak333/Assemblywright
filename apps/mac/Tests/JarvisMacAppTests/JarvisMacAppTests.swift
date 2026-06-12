@@ -40,4 +40,35 @@ struct JarvisMacAppTests {
 
         #expect(presentation.statusLine == "missing")
     }
+
+    @Test("Release runbook presentation preserves every command and manual check")
+    func releaseRunbookPresentationPreservesAllOperatorSteps() {
+        let runbook = JarvisReleaseRunbook(
+            generatedAt: "2026-06-12T12:00:00Z",
+            generatedFrom: "release readiness plus evidence-status",
+            runbook: "live_device",
+            productionReady: false,
+            liveVoiceFeature: nil,
+            evidenceItems: [],
+            commands: [
+                "./scripts/release-live-device-qa.sh --check",
+                "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env",
+                "cargo run -p jarvis-cli -- command \"status check\" --endpoint <release-core-endpoint> --json",
+                "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint <release-core-endpoint>"
+            ],
+            manualChecks: [
+                "Install the signed package into /Applications on a clean Mac profile.",
+                "Verify microphone and Speech permission prompts.",
+                "Preserve target/release-live-device-qa-report.json for final release evidence bundling."
+            ],
+            proofBoundary: "Runbook only."
+        )
+
+        let presentation = ReleaseRunbookPresentation(runbook: runbook)
+
+        #expect(presentation.commands == runbook.commands)
+        #expect(presentation.manualChecks == runbook.manualChecks)
+        #expect(presentation.commands.count == 4)
+        #expect(presentation.manualChecks.count == 3)
+    }
 }
