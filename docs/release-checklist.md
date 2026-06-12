@@ -443,7 +443,10 @@ stage or when a PR needs focused evidence for one ownership slice.
   items with `present`, `missing`, or `invalid` state, including signed
   provenance JSON-report validation plus JSON-report
   required-field and semantic validation for owner-recorded live-device,
-  plugin-trust, and final bundle evidence.
+  plugin-trust, and final bundle evidence. The default readable CLI output
+  should include per-item paths and details for present, missing, and invalid
+  evidence items when those fields are available, while `--json` preserves the
+  exact structured inventory.
 - Confirm the Swift Release tab decodes the same `/release/readiness` contract
   and renders blocking gates, recommended commands, implemented proofs, pending
   features, proof boundary, stale cached-readiness state, and structured

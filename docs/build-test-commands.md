@@ -554,8 +554,9 @@ deny/allow fixture notes. Production plugin-trust reports must carry
 review sources are rejected before they can clear evidence-aware readiness.
 `jarvis release evidence-status` exposes the same standard artifact/report
 inventory through `/release/evidence-status`; the default CLI output is
-operator-readable, includes per-item paths/details for missing or invalid
-evidence, and `--json` preserves the exact structured payload. It
+operator-readable, includes per-item paths and details for present, missing,
+or invalid evidence items when the structured payload provides them, and
+`--json` preserves the exact structured payload. It
 also rejects signed-provenance zip/pkg digests that no longer match the current
 artifact files, and rejects final evidence bundles with the wrong
 `schema_version: 1` / `evidence_type: release_evidence_bundle` identity. It is
