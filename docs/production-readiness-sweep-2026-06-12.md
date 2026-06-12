@@ -1,9 +1,9 @@
 # Production Readiness Sweep - 2026-06-12
 
 This note records the autonomous production-readiness sweep state after PR
-#247, PR #248, and PR #249 merged. It is a release-governance artifact, not
-production evidence by itself. Use the checked-in code, PRs, and command output
-as proof.
+#247, PR #248, PR #249, PR #253, and PR #254 merged. It is a release-governance
+artifact, not production evidence by itself. Use the checked-in code, PRs, and
+command output as proof.
 
 ## Live Readiness Snapshot
 
@@ -14,7 +14,7 @@ cargo run -p jarvis-cli -- release readiness --format json
 cargo run -p jarvis-cli -- release evidence-status --format json
 ```
 
-Observed on 2026-06-12 UTC from `main` at `e0dbada` after PR #248. The
+Observed on 2026-06-12 UTC from `main` at `8aa0446` after PR #254. The
 evidence-status counts below came from the primary checkout after
 `./scripts/release-local.sh` regenerated the local unsigned distribution
 layout; fresh worktrees can report those generated local app paths as missing
@@ -47,12 +47,17 @@ plugin-trust QA, or final evidence bundling.
 - PR #249 hardens the signed-distribution runbook E2E contract by pinning JSON
   parity, the exact signed-artifact evidence key set, operator commands, and
   manual-check handoff text.
+- PR #253 exposes the redacted memory retention plan in the Swift Memory tab
+  without adding autonomous purge/rewrite behavior.
+- PR #254 exposes the signed-distribution, live-device, and plugin-trust
+  runbooks through read-only IPC endpoints and renders them in the Swift Release
+  tab.
 
-All three PRs were pushed from isolated worktrees, merged through GitHub, and
-cleaned up after merge. There were no open PRs after PR #248 merged. The final
+These PRs were pushed from isolated worktrees, merged through GitHub, and
+cleaned up after merge. There were no open PRs after PR #254 merged. The final
 merged `main` checkout passed `./scripts/release-local.sh` locally, and the
-public GitHub `Jarvis Release Local Gate` passed on `main` for run
-`27403510173`.
+public GitHub PR `Release local gate` passed for PR #254 on run
+`27410145709`.
 
 ## Current Architecture Phase
 
@@ -62,6 +67,10 @@ release boundaries:
 - Repo-owned gates cover Rust/CLI/Swift tests, local operator QA, unsigned
   distribution layout launch, release evidence inventory, evidence script
   self-tests, and release runbook rendering.
+- The Swift Release tab now shows read-only signed-distribution, live-device,
+  and plugin-trust runbooks from IPC when the running core exposes them.
+- The Swift Memory tab now shows the redacted memory retention-plan action queue
+  without performing deletion, rewrite, or autonomous retention actions.
 - Swift release readiness now fails closed when evidence-status refresh fails
   after a readiness payload would otherwise look production-ready.
 - Plugin-trust QA evidence is now release-version bound, and stale or missing

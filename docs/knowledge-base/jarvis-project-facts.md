@@ -1062,12 +1062,18 @@ requires plugin-trust `generated_at`, `review_started_at`,
   memory-management paths, diagnostics redaction, and repository-backed
   scheduler/job state surfaces.
 - The 2026-06-12 production-readiness sweep refresh now records the merged
-  state after PR #247, PR #248, and PR #249: no open PRs, `main` at `e0dbada`,
-  local `./scripts/release-local.sh` green, hosted GitHub `Jarvis Release Local
-  Gate` green for run `27403510173`, `production_ready: false`,
-  `verified_feature_count: 16`, `pending_feature_count: 1`, and, after the
-  primary checkout's local release gate generated unsigned app artifacts, six
-  missing external/manual evidence artifacts.
+  state after PR #247, PR #248, PR #249, PR #253, and PR #254: no open PRs,
+  `main` at `8aa0446`, local `./scripts/release-local.sh` green, hosted GitHub
+  PR `Release local gate` green for PR #254 run `27410145709`,
+  `production_ready: false`, `verified_feature_count: 16`,
+  `pending_feature_count: 1`, and, after the primary checkout's local release
+  gate generated unsigned app artifacts, six missing external/manual evidence
+  artifacts.
+- PR #254 made release runbooks a current implementation surface rather than a
+  CLI-only operator path: `/release/live-device-runbook`,
+  `/release/signed-distribution-runbook`, and `/release/plugin-trust-runbook`
+  are read-only IPC endpoints, and the Swift Release tab renders those payloads
+  when available. This is app guidance visibility only, not evidence completion.
 
 ## Safety Guardrails
 
