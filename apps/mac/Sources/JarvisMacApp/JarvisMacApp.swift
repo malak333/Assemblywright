@@ -327,6 +327,11 @@ struct MemoryManagerView: View {
                         .padding(.horizontal)
                 }
 
+                if let retentionPlan = model.retentionPlan {
+                    MemoryRetentionPlanView(plan: retentionPlan)
+                        .padding(.horizontal)
+                }
+
                 HStack {
                     Toggle("Include deleted", isOn: $includeDeleted)
                         .onChange(of: includeDeleted) { _, newValue in
@@ -525,6 +530,62 @@ struct MemoryClassificationSummaryView: View {
             .map { "\($0.label) \($0.activeCount)/\($0.count)" }
             .joined(separator: ", ")
         return "sensitivity: \(sensitivity.isEmpty ? "none" : sensitivity) | categories: \(categories.isEmpty ? "none" : categories)"
+    }
+}
+
+struct MemoryRetentionPlanView: View {
+    let plan: JarvisMemoryRetentionPlan
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 12) {
+                Label("\(plan.candidateCount) retention action\(plan.candidateCount == 1 ? "" : "s")", systemImage: "checklist")
+                Label("\(plan.unreviewedActiveCount) unreviewed", systemImage: "exclamationmark.circle")
+                Label("\(plan.deletedSensitiveRetainedCount) retained sensitive", systemImage: "lock.shield")
+                Text(plan.automationEnabled ? "automation enabled" : "operator review")
+                    .font(.caption2)
+                    .foregroundStyle(plan.automationEnabled ? .orange : .secondary)
+            }
+            .font(.caption)
+
+            if plan.candidates.isEmpty {
+                Text("No memory retention actions are pending.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(plan.candidates.prefix(4)) { candidate in
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Text("\(candidate.category) / \(candidate.key)")
+                                .font(.caption)
+                            Spacer()
+                            Text(candidate.severity)
+                                .font(.caption2)
+                                .foregroundStyle(candidate.severity == "high" ? .red : .secondary)
+                        }
+                        Text("\(candidate.status) | \(candidate.sensitivity) | \(candidate.recommendedAction)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Text(candidate.reason)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                    .padding(.vertical, 2)
+                }
+                if plan.candidates.count > 4 {
+                    Text("+\(plan.candidates.count - 4) more retention action\(plan.candidates.count - 4 == 1 ? "" : "s")")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if plan.valueRedactionRequired {
+                Text("Memory values and provenance are redacted from this plan.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 }
 

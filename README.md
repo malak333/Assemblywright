@@ -17,7 +17,7 @@ It also includes the buildable Swift/SwiftUI Mac shell under
 `apps/mac`, with a tested IPC client, command-console state model,
 activity/audit panel with current progress summary, memory
 create/update/review/delete and restore management, memory classification
-summary, memory review counts in diagnostics and permission policy review, provenance-aware
+summary, redacted memory retention-plan review, memory review counts in diagnostics and permission policy review, provenance-aware
 permission/grant inspection, permission policy review items, redacted scheduler
 attention summaries for app handoff, scheduler trigger policy-review items,
 release-readiness blocker inspection,
@@ -171,7 +171,8 @@ without exposing memory values. `/memory/retention-plan` and
 `jarvis memory retention-plan` now provide the memory-specific, redacted
 operator action list for active unreviewed memory and deleted sensitive memory
 that is still retained locally; the plan is inspection-only and keeps
-automation disabled. These surfaces still do not grant broader marketplace
+automation disabled. The Swift Memory tab renders the same redacted plan above
+the item list. These surfaces still do not grant broader marketplace
 trust, malware safety, autonomous memory rewriting, purge automation, or
 OS-level network sandboxing.
 Approval grant/deny decisions remain side-effect-free. Approved first-party

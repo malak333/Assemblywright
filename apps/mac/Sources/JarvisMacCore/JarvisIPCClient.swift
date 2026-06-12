@@ -170,6 +170,12 @@ public struct JarvisContractResponse: Decodable, Equatable, Sendable {
         }
     }
 
+    public var exposesMemoryRetentionPlan: Bool {
+        endpoints.contains { endpoint in
+            endpoint.method.uppercased() == "GET" && endpoint.path == "/memory/retention-plan"
+        }
+    }
+
     public var exposesReleaseReadiness: Bool {
         endpoints.contains { endpoint in
             endpoint.method.uppercased() == "GET" && endpoint.path == "/release/readiness"
@@ -718,6 +724,58 @@ public struct JarvisMemoryClassificationCount: Decodable, Equatable, Identifiabl
         case activeCount = "active_count"
         case deletedCount = "deleted_count"
         case unreviewedActiveCount = "unreviewed_active_count"
+    }
+}
+
+public struct JarvisMemoryRetentionPlan: Decodable, Equatable, Sendable {
+    public var generatedAt: String
+    public var status: String
+    public var candidateCount: Int
+    public var unreviewedActiveCount: Int
+    public var deletedSensitiveRetainedCount: Int
+    public var nextRequiredAction: String
+    public var automationEnabled: Bool
+    public var valueRedactionRequired: Bool
+    public var candidates: [JarvisMemoryRetentionCandidate]
+
+    enum CodingKeys: String, CodingKey {
+        case generatedAt = "generated_at"
+        case status
+        case candidateCount = "candidate_count"
+        case unreviewedActiveCount = "unreviewed_active_count"
+        case deletedSensitiveRetainedCount = "deleted_sensitive_retained_count"
+        case nextRequiredAction = "next_required_action"
+        case automationEnabled = "automation_enabled"
+        case valueRedactionRequired = "value_redaction_required"
+        case candidates
+    }
+}
+
+public struct JarvisMemoryRetentionCandidate: Decodable, Equatable, Identifiable, Sendable {
+    public var memoryId: UUID
+    public var category: String
+    public var key: String
+    public var sensitivity: String
+    public var status: String
+    public var severity: String
+    public var reason: String
+    public var recommendedAction: String
+    public var reviewedAt: String?
+    public var deletedAt: String?
+
+    public var id: UUID { memoryId }
+
+    enum CodingKeys: String, CodingKey {
+        case memoryId = "memory_id"
+        case category
+        case key
+        case sensitivity
+        case status
+        case severity
+        case reason
+        case recommendedAction = "recommended_action"
+        case reviewedAt = "reviewed_at"
+        case deletedAt = "deleted_at"
     }
 }
 
@@ -1542,6 +1600,7 @@ public protocol JarvisCoreClient: Sendable {
     func activityEvents(maxEvents: Int, intervalMilliseconds: Int) async throws -> [JarvisActivityEvent]
     func listMemoryItems(includeDeleted: Bool) async throws -> [JarvisMemoryItem]
     func memoryClassification(includeDeleted: Bool) async throws -> JarvisMemoryClassificationSummary
+    func memoryRetentionPlan() async throws -> JarvisMemoryRetentionPlan
     func createMemoryItem(_ request: JarvisCreateMemoryItemRequest) async throws -> JarvisMemoryItem
     func memoryItem(id: UUID) async throws -> JarvisMemoryItem
     func updateMemoryItem(id: UUID, request: JarvisMemoryMutationRequest) async throws -> JarvisMemoryItem
@@ -1661,6 +1720,10 @@ public final class JarvisIPCClient: JarvisCoreClient {
     public func memoryClassification(includeDeleted: Bool = false) async throws -> JarvisMemoryClassificationSummary {
         let path = includeDeleted ? "/memory/classification?include_deleted=true" : "/memory/classification"
         return try await send(path: path, method: "GET", body: Optional<Data>.none)
+    }
+
+    public func memoryRetentionPlan() async throws -> JarvisMemoryRetentionPlan {
+        try await send(path: "/memory/retention-plan", method: "GET", body: Optional<Data>.none)
     }
 
     public func createMemoryItem(_ request: JarvisCreateMemoryItemRequest) async throws -> JarvisMemoryItem {

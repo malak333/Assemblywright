@@ -305,10 +305,11 @@ struct JarvisMacCoreTests {
                 { "method": "GET", "path": "/scheduler/jobs/:id", "repository_required": false, "redacted": false },
                 { "method": "GET", "path": "/activity/summary", "repository_required": true, "redacted": true },
                 { "method": "GET", "path": "/release/readiness", "repository_required": false, "redacted": true },
+                { "method": "GET", "path": "/memory/retention-plan", "repository_required": true, "redacted": true },
                 { "method": "GET", "path": "/permissions/grants", "repository_required": true, "redacted": false },
                 { "method": "GET", "path": "/permissions/policy-review", "repository_required": true, "redacted": false }
               ],
-              "safe_inspection_paths": ["/health", "/release/readiness", "/diagnostics/export"],
+              "safe_inspection_paths": ["/health", "/release/readiness", "/diagnostics/export", "/memory/retention-plan"],
               "features": [
                 {
                   "key": "scheduler_trigger_policy_review",
@@ -354,6 +355,7 @@ struct JarvisMacCoreTests {
         #expect(!contract.exposesApprovalActions)
         #expect(contract.exposesPermissionGrantSummary)
         #expect(contract.exposesPermissionPolicyReview)
+        #expect(contract.exposesMemoryRetentionPlan)
         #expect(contract.exposesReleaseReadiness)
     }
 
@@ -641,6 +643,8 @@ struct JarvisMacCoreTests {
                 return (response, memoryItemJSON(id: memoryId))
             case "/memory/classification":
                 return (response, memoryClassificationJSON())
+            case "/memory/retention-plan":
+                return (response, memoryRetentionPlanJSON(id: memoryId))
             case "/memory/\(memoryId.uuidString)":
                 return (response, memoryItemJSON(id: memoryId))
             case "/memory/\(memoryId.uuidString)/review":
@@ -679,6 +683,7 @@ struct JarvisMacCoreTests {
         _ = try await client.releaseEvidenceStatus()
         _ = try await client.listMemoryItems(includeDeleted: true)
         _ = try await client.memoryClassification(includeDeleted: true)
+        _ = try await client.memoryRetentionPlan()
         _ = try await client.createMemoryItem(
             JarvisCreateMemoryItemRequest(
                 category: "release",
@@ -723,6 +728,7 @@ struct JarvisMacCoreTests {
             "GET",
             "GET",
             "GET",
+            "GET",
             "POST",
             "GET",
             "PATCH",
@@ -746,6 +752,7 @@ struct JarvisMacCoreTests {
             "/release/evidence-status",
             "/memory?include_deleted=true",
             "/memory/classification?include_deleted=true",
+            "/memory/retention-plan",
             "/memory",
             "/memory/\(memoryId.uuidString)",
             "/memory/\(memoryId.uuidString)",
@@ -763,9 +770,9 @@ struct JarvisMacCoreTests {
             "/activity/events?max_events=2&interval_ms=500",
             "/emergency-pause"
         ])
-        #expect(requests[5].body?["key"] as? String == "release-gate")
-        #expect(requests[7].body?["value"] as? String == "preview then sync")
-        #expect(requests[14].body?["command"] as? String == "status check")
+        #expect(requests[6].body?["key"] as? String == "release-gate")
+        #expect(requests[8].body?["value"] as? String == "preview then sync")
+        #expect(requests[15].body?["command"] as? String == "status check")
     }
 
     @Test("Management payloads decode tasks and audit list")
@@ -897,6 +904,29 @@ struct JarvisMacCoreTests {
         #expect(summary.sensitiveActiveCount == 1)
         #expect(summary.bySensitivity.first?.label == "private")
         #expect(summary.byCategory.first?.label == "release")
+    }
+
+    @Test("Memory retention plan decodes redacted operator actions")
+    func decodesMemoryRetentionPlan() throws {
+        let memoryId = UUID()
+        let plan = try JSONDecoder().decode(
+            JarvisMemoryRetentionPlan.self,
+            from: memoryRetentionPlanJSON(id: memoryId)
+        )
+
+        #expect(plan.status == "operator_review_required")
+        #expect(plan.candidateCount == 1)
+        #expect(plan.unreviewedActiveCount == 0)
+        #expect(plan.deletedSensitiveRetainedCount == 1)
+        #expect(!plan.automationEnabled)
+        #expect(plan.valueRedactionRequired)
+        let candidate = try #require(plan.candidates.first)
+        #expect(candidate.memoryId == memoryId)
+        #expect(candidate.category == "retention")
+        #expect(candidate.key == "deleted-secret")
+        #expect(candidate.sensitivity == "private")
+        #expect(candidate.status == "deleted_sensitive_retained")
+        #expect(candidate.recommendedAction == "operator_purge_or_restore")
     }
 
     @Test("Memory mutation requests encode Rust IPC names")
@@ -2415,6 +2445,9 @@ struct JarvisMacCoreTests {
         #expect(client.includeDeletedMemoryRequests == [false])
         #expect(model.classification?.activeCount == 1)
         #expect(model.classification?.sensitiveActiveCount == 1)
+        #expect(model.retentionPlan?.candidateCount == 1)
+        #expect(model.retentionPlan?.automationEnabled == false)
+        #expect(model.retentionPlan?.candidates.first?.recommendedAction == "operator_purge_or_restore")
 
         await model.refresh(includeDeleted: true)
         #expect(model.includeDeleted)
@@ -2930,6 +2963,37 @@ struct JarvisMacCoreTests {
         )
     }
 
+    private func memoryRetentionPlanJSON(id: UUID) -> Data {
+        Data(
+            """
+            {
+              "generated_at": "2026-05-20T12:00:03Z",
+              "status": "operator_review_required",
+              "candidate_count": 1,
+              "unreviewed_active_count": 0,
+              "deleted_sensitive_retained_count": 1,
+              "next_required_action": "review candidates, then mark reviewed, restore, or purge outside Jarvis storage with operator approval",
+              "automation_enabled": false,
+              "value_redaction_required": true,
+              "candidates": [
+                {
+                  "memory_id": "\(id.uuidString)",
+                  "category": "retention",
+                  "key": "deleted-secret",
+                  "sensitivity": "private",
+                  "status": "deleted_sensitive_retained",
+                  "severity": "high",
+                  "reason": "Deleted sensitive memory is still retained in local storage",
+                  "recommended_action": "operator_purge_or_restore",
+                  "reviewed_at": null,
+                  "deleted_at": "2026-05-20T12:00:02Z"
+                }
+              ]
+            }
+            """.utf8
+        )
+    }
+
     private func schedulerJobJSON(id: UUID) -> Data {
         Data(
             """
@@ -3151,6 +3215,37 @@ struct JarvisMacCoreTests {
             """.utf8
         )
     }
+}
+
+private func fakeMemoryRetentionPlanJSON(id: UUID) -> Data {
+    Data(
+        """
+        {
+          "generated_at": "2026-05-20T12:00:03Z",
+          "status": "operator_review_required",
+          "candidate_count": 1,
+          "unreviewed_active_count": 0,
+          "deleted_sensitive_retained_count": 1,
+          "next_required_action": "review candidates, then mark reviewed, restore, or purge outside Jarvis storage with operator approval",
+          "automation_enabled": false,
+          "value_redaction_required": true,
+          "candidates": [
+            {
+              "memory_id": "\(id.uuidString)",
+              "category": "retention",
+              "key": "deleted-secret",
+              "sensitivity": "private",
+              "status": "deleted_sensitive_retained",
+              "severity": "high",
+              "reason": "Deleted sensitive memory is still retained in local storage",
+              "recommended_action": "operator_purge_or_restore",
+              "reviewed_at": null,
+              "deleted_at": "2026-05-20T12:00:02Z"
+            }
+          ]
+        }
+        """.utf8
+    )
 }
 
 private func temporaryDirectory(name: String) throws -> URL {
@@ -4030,6 +4125,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     private var installedPluginsUnavailable: Bool
     private var schedulerJobs: [JarvisSchedulerJob]
     private var memoryItems: [JarvisMemoryItem]
+    private var memoryRetentionPlanResult: JarvisMemoryRetentionPlan?
     private var permissionGrantSummaryResult: JarvisPermissionGrantSummary?
     private(set) var approvalDecisions: [ApprovalDecision]
     private(set) var approvalExecutions: [UUID]
@@ -4055,6 +4151,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         installedPluginsUnavailable: Bool = false,
         schedulerJobs: [JarvisSchedulerJob] = [],
         memoryItems: [JarvisMemoryItem] = [],
+        memoryRetentionPlan: JarvisMemoryRetentionPlan? = nil,
         permissionGrantSummary: JarvisPermissionGrantSummary? = nil
     ) {
         self.healthResults = healthResults
@@ -4073,6 +4170,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         self.installedPluginsUnavailable = installedPluginsUnavailable
         self.schedulerJobs = schedulerJobs
         self.memoryItems = memoryItems
+        self.memoryRetentionPlanResult = memoryRetentionPlan
         self.permissionGrantSummaryResult = permissionGrantSummary
         self.approvalDecisions = []
         self.approvalExecutions = []
@@ -4248,6 +4346,17 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
                 }
                 """.utf8
             )
+        )
+    }
+
+    func memoryRetentionPlan() async throws -> JarvisMemoryRetentionPlan {
+        if let memoryRetentionPlanResult {
+            return memoryRetentionPlanResult
+        }
+
+        return try JSONDecoder().decode(
+            JarvisMemoryRetentionPlan.self,
+            from: fakeMemoryRetentionPlanJSON(id: memoryItems.last?.id ?? UUID())
         )
     }
 
