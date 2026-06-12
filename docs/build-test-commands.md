@@ -35,6 +35,7 @@ cargo run -p jarvis-cli -- smoke
 ./scripts/release-operator-qa-smoke.sh
 ./scripts/release-cargo-package.sh
 ./scripts/package-distribution.sh --check
+./scripts/package-distribution.sh --check-guidance-self-test
 ./scripts/package-distribution.sh --version-consistency-self-test
 ./scripts/package-distribution.sh --provenance-self-test
 ./scripts/package-distribution.sh --unsigned-launch-check
@@ -668,7 +669,9 @@ through a fake adapter.
 lane, and `--unsigned-launch-check` is now part of `./scripts/release-local.sh`
 so release-built app layout regressions are caught by the default gate. Its
 `--check` mode validates local tool availability and the entitlements
-template without Apple credentials. Its `--unsigned-structure-check` mode
+template without Apple credentials, and `--check-guidance-self-test` locks the
+signed-distribution, live-device, plugin-trust, final-bundle, and doctor
+handoff commands printed by that preflight. Its `--unsigned-structure-check` mode
 builds and inspects the release app/pkg structure without Developer ID
 credentials. Its `--unsigned-launch-check` mode also launches the release-built
 app executable with an isolated temporary HOME, verifies the bundled core over

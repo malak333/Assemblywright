@@ -645,7 +645,8 @@ requires plugin-trust `generated_at`, `review_started_at`,
   jarvis-cli -- smoke`, `./scripts/release-operator-qa-smoke.sh`,
   workspace package tarball creation, packaged CLI verification against the
   freshly packaged core source, package distribution no-sign preflight,
-  version-consistency self-test, signed-provenance self-test,
+  package preflight handoff guidance self-test, version-consistency self-test,
+  signed-provenance self-test,
   `./scripts/package-distribution.sh --unsigned-launch-check`,
   `./scripts/release-live-device-qa.sh --check`,
   `./scripts/release-live-device-qa.sh --self-test`,
@@ -936,6 +937,9 @@ requires plugin-trust `generated_at`, `review_started_at`,
   and entitlement templates, then prints the signed-distribution runbook,
   credentialed packaging, live-device, plugin-trust, final bundle, and evidence
   doctor commands without proving signing, notarization, stapling,
+  installation, or live-device QA. `--check-guidance-self-test` is also part of
+  `./scripts/release-local.sh` and fails if those handoff commands drift out of
+  the package preflight output.
   installation, or live-device QA.
 - Release evidence structural hardening now treats the final evidence chain as
   cross-bound evidence, not independent files: app zips are rejected unless they
