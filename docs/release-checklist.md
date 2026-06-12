@@ -164,6 +164,7 @@ stage or when a PR needs focused evidence for one ownership slice.
 - `./scripts/release-cargo-package.sh`
 - `./scripts/package-distribution.sh --check`
 - `./scripts/package-distribution.sh --check-guidance-self-test`
+- `./scripts/package-distribution.sh --entitlements-policy-self-test`
 - `./scripts/package-distribution.sh --version-consistency-self-test`
 - `./scripts/package-distribution.sh --provenance-self-test`
 - `./scripts/package-distribution.sh --unsigned-launch-check`

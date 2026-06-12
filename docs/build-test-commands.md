@@ -36,6 +36,7 @@ cargo run -p jarvis-cli -- smoke
 ./scripts/release-cargo-package.sh
 ./scripts/package-distribution.sh --check
 ./scripts/package-distribution.sh --check-guidance-self-test
+./scripts/package-distribution.sh --entitlements-policy-self-test
 ./scripts/package-distribution.sh --version-consistency-self-test
 ./scripts/package-distribution.sh --provenance-self-test
 ./scripts/package-distribution.sh --unsigned-launch-check
@@ -669,10 +670,12 @@ through a fake adapter.
 `./scripts/package-distribution.sh` is the stricter distribution packaging
 lane, and `--unsigned-launch-check` is now part of `./scripts/release-local.sh`
 so release-built app layout regressions are caught by the default gate. Its
-`--check` mode validates local tool availability and the entitlements
-template without Apple credentials, and `--check-guidance-self-test` locks the
-signed-distribution, live-device, plugin-trust, final-bundle, and doctor
-handoff commands printed by that preflight. The live-device handoff in that
+`--check` mode validates local tool availability plus app and bundled-core
+entitlement templates without Apple credentials, `--check-guidance-self-test`
+locks the signed-distribution, live-device, plugin-trust, final-bundle, and
+doctor handoff commands printed by that preflight, and
+`--entitlements-policy-self-test` proves microphone access stays on the app
+entitlement template while the bundled core template omits it. The live-device handoff in that
 preflight includes the release-core command evidence capture, the
 `task:<uuid>`/`audit:<uuid>` evidence-ID recording rule, and endpoint-aware
 external evidence-mode evidence-status/readiness checks before plugin-trust and
