@@ -1029,6 +1029,13 @@ requires plugin-trust `generated_at`, `review_started_at`,
   plugin manifest listing, and repository-backed task, model-route, explicit
   memory-management paths, diagnostics redaction, and repository-backed
   scheduler/job state surfaces.
+- The 2026-06-12 production-readiness sweep refresh now records the merged
+  state after PR #247, PR #248, and PR #249: no open PRs, `main` at `e0dbada`,
+  local `./scripts/release-local.sh` green, hosted GitHub `Jarvis Release Local
+  Gate` green for run `27403510173`, `production_ready: false`,
+  `verified_feature_count: 16`, `pending_feature_count: 1`, and, after the
+  primary checkout's local release gate generated unsigned app artifacts, six
+  missing external/manual evidence artifacts.
 
 ## Safety Guardrails
 

@@ -856,11 +856,12 @@ and the relevant E2E coverage for this docs-sync phase.
 
 The 2026-06-12 refresh is documented in
 [Production readiness sweep - 2026-06-12](production-readiness-sweep-2026-06-12.md).
-That note records the post-PR #247 readiness snapshot, the still-open #248/#249
-PR gate state, and the current production evidence boundary.
+That note records the post-PR #248 readiness snapshot, the merged #247/#248/#249
+PR state, the final local and hosted release-gate evidence, and the current
+production evidence boundary.
 
-The current readiness payload should be refreshed before release claims. In the
-2026-06-12 UTC sweep refresh after PR #238 from `main` at `4a4661e`,
+Current readiness should always be refreshed before release claims. The
+historical 2026-06-12 UTC sweep refresh after PR #238 from `main` at `4a4661e`,
 `jarvis release readiness --json`
 reported `production_ready: false`, `verified_feature_count: 17`, and
 `pending_feature_count: 1`, with `live_voice_loop` still
