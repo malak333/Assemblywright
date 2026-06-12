@@ -785,9 +785,11 @@ requires plugin-trust `generated_at`, `review_started_at`,
 - Swift scheduler notification controls are repo-owned adapter evidence: the
   core model can request authorization, build due, failed, and
   emergency-pause-blocked notification requests, suppress duplicate deliveries
-  for the same attention item, and fail closed when permission is denied. This
-  is not a substitute for manual clean-profile
-  macOS notification prompt and delivery validation.
+  for the same attention item, and fail closed when permission is denied. The
+  app-level macOS notification adapter has a test seam that verifies the real
+  `UNNotificationRequest` title, body, sound, thread identifier, scheduler job
+  ID, and notification-kind payload before delivery. This is not a substitute
+  for manual clean-profile macOS notification prompt and delivery validation.
 - `./scripts/package-distribution.sh` is the repo-owned distribution packaging
   lane. Its `--check` mode is credential-free and validates local tools plus
   app and bundled-core entitlement templates. Its

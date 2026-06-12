@@ -1,4 +1,5 @@
 import Testing
+import UserNotifications
 @testable import JarvisMacApp
 @testable import JarvisMacCore
 
@@ -70,5 +71,64 @@ struct JarvisMacAppTests {
         #expect(presentation.manualChecks == runbook.manualChecks)
         #expect(presentation.commands.count == 4)
         #expect(presentation.manualChecks.count == 3)
+    }
+
+    @Test("Mac scheduler notification adapter requests alert and sound authorization")
+    func macSchedulerNotificationAdapterRequestsExpectedAuthorizationOptions() async throws {
+        let notificationCenter = CapturingUserNotificationCenter(authorizationResult: true)
+        let adapter = MacSchedulerNotificationAdapter(notificationCenter: notificationCenter)
+
+        let authorized = try await adapter.requestAuthorization()
+
+        #expect(authorized)
+        #expect(notificationCenter.requestedAuthorizationOptions?.contains(.alert) == true)
+        #expect(notificationCenter.requestedAuthorizationOptions?.contains(.sound) == true)
+    }
+
+    @Test("Mac scheduler notification adapter preserves scheduler payload")
+    func macSchedulerNotificationAdapterPreservesSchedulerPayload() async throws {
+        let notificationCenter = CapturingUserNotificationCenter(authorizationResult: true)
+        let adapter = MacSchedulerNotificationAdapter(notificationCenter: notificationCenter)
+        let schedulerJobId = UUID(uuidString: "00000000-0000-4000-8000-000000000123")!
+        let request = JarvisSchedulerNotificationRequest(
+            id: "scheduler-\(schedulerJobId.uuidString)-due_now",
+            schedulerJobId: schedulerJobId,
+            title: "Jarvis scheduler job due",
+            body: "A scheduler job is due and ready for the app to surface.",
+            notificationKind: "due_now",
+            threadIdentifier: "jarvis.scheduler"
+        )
+
+        try await adapter.deliver(request)
+
+        let deliveredRequest = try #require(notificationCenter.deliveredRequests.first)
+        #expect(deliveredRequest.identifier == request.id)
+        #expect(deliveredRequest.trigger == nil)
+        #expect(deliveredRequest.content.title == request.title)
+        #expect(deliveredRequest.content.body == request.body)
+        #expect(deliveredRequest.content.threadIdentifier == request.threadIdentifier)
+        #expect(deliveredRequest.content.sound != nil)
+        #expect(deliveredRequest.content.userInfo["scheduler_job_id"] as? String == schedulerJobId.uuidString)
+        #expect(deliveredRequest.content.userInfo["notification_kind"] as? String == request.notificationKind)
+    }
+}
+
+private final class CapturingUserNotificationCenter: JarvisUserNotificationCenter, @unchecked Sendable {
+    let authorizationResult: Bool
+    var requestedAuthorizationOptions: UNAuthorizationOptions?
+    var deliveredRequests: [UNNotificationRequest]
+
+    init(authorizationResult: Bool) {
+        self.authorizationResult = authorizationResult
+        self.deliveredRequests = []
+    }
+
+    func requestAuthorization(options: UNAuthorizationOptions) async throws -> Bool {
+        requestedAuthorizationOptions = options
+        return authorizationResult
+    }
+
+    func add(_ request: UNNotificationRequest) async throws {
+        deliveredRequests.append(request)
     }
 }
