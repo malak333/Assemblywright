@@ -1002,6 +1002,14 @@ requires plugin-trust `generated_at`, `review_started_at`,
 - `JarvisMacAppTests` covers app-level Release tab presentation for
   presence-only evidence rows, while `JarvisMacCoreTests` continues to cover
   the release-readiness model and evidence-status decoding.
+- `jarvis release evidence-status --help` documents that the default readable
+  output includes per-item paths/details and same-line presence-only caveats;
+  keep this help text, CLI E2E assertions, and `docs/release-checklist.md`
+  aligned when the readable release-evidence format changes.
+- `jarvis release plugin-trust-runbook` is the handoff from plugin-trust QA
+  into final evidence bundling: after `release-evidence-doctor.sh --check`, it
+  should list `release-evidence-bundle.sh --check`, template writing, source
+  plus `--bundle`, and `release-evidence-doctor.sh --assert-complete`.
 - `jarvis-cli serve --db-path <path>` starts IPC with SQLite-backed task,
   audit, memory, and emergency-pause state for manual persistence checks.
 - File-backed `SqliteRepository::open` creates a preflight migration backup

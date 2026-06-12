@@ -107,6 +107,10 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   preflight, signing, live-device template/assertion, plugin-trust
   template/assertion, and final evidence-bundle template/bundle commands
   whenever evidence is missing.
+- Confirm `jarvis release plugin-trust-runbook` hands off from completed
+  plugin-trust QA into final evidence bundling and
+  `release-evidence-doctor.sh --assert-complete`, not back to the signed
+  distribution runbook.
 - Confirm `jarvis release --help`, `jarvis release readiness --help`, and
   `jarvis release evidence-status --help` preserve the same read-only,
   IPC-first/local-fallback, evidence-mode, and file/report-inspection
@@ -445,8 +449,9 @@ stage or when a PR needs focused evidence for one ownership slice.
   required-field and semantic validation for owner-recorded live-device,
   plugin-trust, and final bundle evidence. The default readable CLI output
   should include per-item paths and details for present, missing, and invalid
-  evidence items when those fields are available, while `--json` preserves the
-  exact structured inventory.
+  evidence items when those fields are available, and should mark present
+  presence-only artifacts on the same status line, while `--json` preserves
+  the exact structured inventory.
 - Confirm the Swift Release tab decodes the same `/release/readiness` contract
   and renders blocking gates, recommended commands, implemented proofs, pending
   features, proof boundary, stale cached-readiness state, and structured

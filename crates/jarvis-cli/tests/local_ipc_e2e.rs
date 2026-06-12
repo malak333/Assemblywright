@@ -2549,6 +2549,8 @@ fn release_help_documents_operator_boundaries() {
     assert!(evidence_help.contains("owner-asserted plugin-trust review source"));
     assert!(evidence_help.contains("host-egress evidence fields"));
     assert!(evidence_help.contains("Default output is operator-readable"));
+    assert!(evidence_help.contains("per-item paths/details"));
+    assert!(evidence_help.contains("same-line presence-only caveats"));
     assert!(evidence_help.contains("use --json for the exact structured payload"));
     assert!(evidence_help.contains("does not prove Developer ID signing"));
     assert!(evidence_help.contains("live-device QA"));
@@ -2734,35 +2736,62 @@ fn release_signed_distribution_runbook_summarizes_next_operator_steps() {
     assert!(readable_runbook.contains("JARVIS_DEVELOPER_ID_APPLICATION="));
     assert!(readable_runbook.contains("./scripts/release-evidence-doctor.sh --check"));
     assert!(readable_runbook.contains("Boundary: runbook and local evidence inspection only"));
+    assert!(readable_runbook.contains("Raw JSON: rerun with --json"));
 
+    assert_eq!(
+        json_runbook["generated_from"],
+        "release readiness plus evidence-status"
+    );
+    assert_eq!(
+        format_json_runbook["generated_from"],
+        "release readiness plus evidence-status"
+    );
     assert_eq!(json_runbook["production_ready"], false);
     assert_eq!(format_json_runbook["production_ready"], false);
-    assert!(json_runbook["distribution_evidence"]
+    let distribution_evidence = json_runbook["distribution_evidence"]
         .as_array()
-        .expect("distribution evidence")
+        .expect("distribution evidence");
+    assert!(distribution_evidence
         .iter()
         .any(|item| item.get("key").and_then(Value::as_str) == Some("signed_app_zip")));
+    assert!(distribution_evidence.iter().any(|item| {
+        item.get("key").and_then(Value::as_str) == Some("signed_distribution_provenance_report")
+            && item.get("status").and_then(Value::as_str) == Some("missing")
+            && item.get("path").and_then(Value::as_str)
+                == Some("target/distribution/Jarvis-0.1.4-signed-provenance.json")
+    }));
     assert!(format_json_runbook["distribution_evidence"]
         .as_array()
         .expect("format distribution evidence")
         .iter()
         .any(|item| item.get("key").and_then(Value::as_str) == Some("signed_app_zip")));
-    assert_string_array_contains(
+    assert_string_array_exact(
         &json_runbook["commands"],
-        "./scripts/package-distribution.sh --check",
+        &[
+            "./scripts/package-distribution.sh --check",
+            "./scripts/package-distribution.sh --unsigned-launch-check",
+            "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh",
+            "cargo run -p jarvis-cli -- release evidence-status",
+            "./scripts/release-evidence-doctor.sh --check",
+            "cargo run -p jarvis-cli -- release live-device-runbook",
+        ],
     );
-    assert_string_array_contains(
-        &json_runbook["commands"],
-        "./scripts/package-distribution.sh --unsigned-launch-check",
+    assert_string_array_contains_substring(
+        &json_runbook["manual_checks"],
+        "Developer ID Application and Installer identities",
     );
-    assert_string_array_order(
-        &json_runbook["commands"],
-        "./scripts/package-distribution.sh --check",
-        "./scripts/package-distribution.sh --unsigned-launch-check",
+    assert_string_array_contains_substring(
+        &json_runbook["manual_checks"],
+        "signed zip, signed installer package, and signed provenance report",
     );
-    assert_string_array_contains(
+    assert_string_array_contains_substring(&json_runbook["manual_checks"], "notarized and stapled");
+    assert_string_array_contains_substring(
+        &json_runbook["manual_checks"],
+        "evidence-status and evidence-doctor",
+    );
+    assert_string_array_contains_substring(
         &json_runbook["commands"],
-        "./scripts/release-evidence-doctor.sh --check",
+        "cargo run -p jarvis-cli -- release live-device-runbook",
     );
     assert!(json_runbook["proof_boundary"]
         .as_str()
@@ -2807,10 +2836,16 @@ fn release_plugin_trust_runbook_summarizes_next_operator_steps() {
     assert!(readable_runbook.contains("Evidence detail: expected JSON report is missing"));
     assert!(readable_runbook.contains("Run on the release machine:"));
     assert!(readable_runbook.contains("cargo run -p jarvis-cli -- release evidence-status"));
-    assert!(
-        readable_runbook.contains("cargo run -p jarvis-cli -- release signed-distribution-runbook")
-    );
+    assert!(readable_runbook.contains("./scripts/release-evidence-bundle.sh --check"));
+    assert!(readable_runbook.contains(
+        "./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env"
+    ));
+    assert!(readable_runbook.contains(
+        "set -a && source target/release-evidence-bundle.env && set +a && ./scripts/release-evidence-bundle.sh --bundle"
+    ));
+    assert!(readable_runbook.contains("./scripts/release-evidence-doctor.sh --assert-complete"));
     assert!(readable_runbook.contains("Validate host-level egress enforcement"));
+    assert!(readable_runbook.contains("final release evidence bundle"));
     assert!(readable_runbook.contains("Boundary: runbook and local evidence inspection only"));
     assert!(readable_runbook.contains("host-level egress enforcement"));
     assert!(readable_runbook.contains("Raw JSON: rerun with --json"));
@@ -2852,7 +2887,10 @@ fn release_plugin_trust_runbook_summarizes_next_operator_steps() {
             "set -a && source target/release-plugin-trust-qa.env && set +a && ./scripts/release-plugin-trust-qa.sh --assert-complete",
             "cargo run -p jarvis-cli -- release evidence-status",
             "./scripts/release-evidence-doctor.sh --check",
-            "cargo run -p jarvis-cli -- release signed-distribution-runbook",
+            "./scripts/release-evidence-bundle.sh --check",
+            "./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env",
+            "set -a && source target/release-evidence-bundle.env && set +a && ./scripts/release-evidence-bundle.sh --bundle",
+            "./scripts/release-evidence-doctor.sh --assert-complete",
         ],
     );
     assert_string_array_contains_substring(
@@ -2872,6 +2910,10 @@ fn release_plugin_trust_runbook_summarizes_next_operator_steps() {
     assert_string_array_contains_substring(
         &json_runbook["manual_checks"],
         "release-plugin-trust-qa-report.json",
+    );
+    assert_string_array_contains_substring(
+        &json_runbook["manual_checks"],
+        "signed distribution, live-device QA, and plugin-trust QA evidence all exist",
     );
     assert!(json_runbook["proof_boundary"]
         .as_str()
