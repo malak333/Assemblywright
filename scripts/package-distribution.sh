@@ -469,8 +469,12 @@ if [[ "$CHECK_GUIDANCE_SELF_TEST" == true ]]; then
   require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "cargo run -p jarvis-cli -- release signed-distribution-runbook"
   require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh"
   require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env"
+  require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "cargo run -p jarvis-cli -- command \"status check\" --endpoint <release-core-endpoint> --json"
+  require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid>'"
   require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "set -a && source target/release-live-device-qa.env && set +a"
   require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "./scripts/release-live-device-qa.sh --assert-complete"
+  require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint <release-core-endpoint>"
+  require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint <release-core-endpoint>"
   require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env"
   require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "set -a && source target/release-plugin-trust-qa.env && set +a"
   require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "./scripts/release-plugin-trust-qa.sh --assert-complete"
@@ -858,8 +862,12 @@ Next release evidence commands:
   cargo run -p jarvis-cli -- release signed-distribution-runbook
   JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh
   ./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env
+  cargo run -p jarvis-cli -- command "status check" --endpoint <release-core-endpoint> --json
+  record the returned task ID as JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid>' or a task-associated audit ID as 'audit:<uuid>'
   set -a && source target/release-live-device-qa.env && set +a
   ./scripts/release-live-device-qa.sh --assert-complete
+  JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint <release-core-endpoint>
+  JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint <release-core-endpoint>
   ./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env
   set -a && source target/release-plugin-trust-qa.env && set +a
   ./scripts/release-plugin-trust-qa.sh --assert-complete

@@ -664,7 +664,10 @@ Distribution packaging gate:
 - `./scripts/package-distribution.sh --check-guidance-self-test` is in the
   default local gate and verifies the no-sign package preflight still prints the
   signed-distribution, live-device, plugin-trust, final-bundle, and doctor
-  handoff commands.
+  handoff commands. Its live-device handoff must include the release-core
+  command evidence capture, `task:<uuid>`/`audit:<uuid>` evidence-ID recording
+  guidance, and endpoint-aware external evidence-mode evidence-status/readiness
+  checks before plugin-trust and final bundle handoff.
 - Run `./scripts/package-distribution.sh --unsigned-structure-check` on
   distribution-layout PRs to build the release app, create an unsigned installer
   package, inspect the payload, and validate package identifier, version, and

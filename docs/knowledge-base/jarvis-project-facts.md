@@ -981,9 +981,12 @@ requires plugin-trust `generated_at`, `review_started_at`,
   and entitlement templates, then prints the signed-distribution runbook,
   credentialed packaging, live-device, plugin-trust, final bundle, and evidence
   doctor commands without proving signing, notarization, stapling,
-  installation, or live-device QA. `--check-guidance-self-test` is also part of
-  `./scripts/release-local.sh` and fails if those handoff commands drift out of
-  the package preflight output.
+  installation, or live-device QA. The live-device handoff in that output now
+  includes release-core command evidence capture, the `task:<uuid>`/`audit:<uuid>`
+  evidence-ID recording rule, and endpoint-aware external evidence-mode
+  evidence-status/readiness commands. `--check-guidance-self-test` is also part
+  of `./scripts/release-local.sh` and fails if those handoff commands drift out
+  of the package preflight output.
 - Release evidence structural hardening now treats the final evidence chain as
   cross-bound evidence, not independent files: app zips are rejected unless they
   contain exactly one top-level `Jarvis.app` payload with `Info.plist`, the app
@@ -1091,6 +1094,12 @@ requires plugin-trust `generated_at`, `review_started_at`,
   `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external`. Rust E2E, core unit tests,
   Swift decode tests, and the live-device shell self-test cover this guidance
   without claiming live-device QA was performed.
+- The release-evidence doctor missing-evidence next-step guidance now mirrors
+  the same live-device release-core command capture and endpoint-aware external
+  evidence-mode handoff as package preflight, the generated live-device
+  template, and the live-device runbook. Its shell self-test pins those strings
+  as guidance only; it still does not perform live-device QA or create release
+  evidence.
 
 ## Safety Guardrails
 

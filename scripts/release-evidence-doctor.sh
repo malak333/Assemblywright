@@ -84,7 +84,11 @@ Recommended next evidence commands:
   package preflight: ./scripts/package-distribution.sh --check
   signing: JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh
   live-device template: ./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env
+  live-device command evidence: cargo run -p jarvis-cli -- command "status check" --endpoint <release-core-endpoint> --json
+  live-device evidence ID: record the returned task ID as JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid>' or a task-associated audit ID as 'audit:<uuid>'
   live-device assertion: set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete
+  live-device evidence status: JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint <release-core-endpoint>
+  live-device readiness: JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint <release-core-endpoint>
   plugin-trust template: ./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env
   plugin-trust assertion: set -a && source target/release-plugin-trust-qa.env && set +a && ./scripts/release-plugin-trust-qa.sh --assert-complete
   final bundle template: ./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env
@@ -1709,7 +1713,11 @@ PY
     "$0" --check)"
   for expected in \
     "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env" \
+    "cargo run -p jarvis-cli -- command \"status check\" --endpoint <release-core-endpoint> --json" \
+    "JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid>'" \
     "source target/release-live-device-qa.env" \
+    "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint <release-core-endpoint>" \
+    "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint <release-core-endpoint>" \
     "./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env" \
     "source target/release-plugin-trust-qa.env" \
     "./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env" \

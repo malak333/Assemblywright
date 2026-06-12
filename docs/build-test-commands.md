@@ -672,7 +672,11 @@ so release-built app layout regressions are caught by the default gate. Its
 `--check` mode validates local tool availability and the entitlements
 template without Apple credentials, and `--check-guidance-self-test` locks the
 signed-distribution, live-device, plugin-trust, final-bundle, and doctor
-handoff commands printed by that preflight. Its `--unsigned-structure-check`
+handoff commands printed by that preflight. The live-device handoff in that
+preflight includes the release-core command evidence capture, the
+`task:<uuid>`/`audit:<uuid>` evidence-ID recording rule, and endpoint-aware
+external evidence-mode evidence-status/readiness checks before plugin-trust and
+final bundle handoff. Its `--unsigned-structure-check`
 mode builds and inspects the release app/pkg structure without Developer ID
 credentials, including unsigned package identifier, version, and `/Applications`
 install-location metadata. Its `--unsigned-launch-check` mode also validates
