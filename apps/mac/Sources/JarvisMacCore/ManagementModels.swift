@@ -4,6 +4,7 @@ import Foundation
 public final class ReleaseReadinessModel: ObservableObject {
     @Published public private(set) var readiness: JarvisReleaseReadiness?
     @Published public private(set) var evidenceStatus: JarvisReleaseEvidenceStatus?
+    @Published public private(set) var releaseRunbooks: [JarvisReleaseRunbook]
     @Published public private(set) var isLoading: Bool
     @Published public private(set) var lastError: String?
 
@@ -13,6 +14,7 @@ public final class ReleaseReadinessModel: ObservableObject {
         self.client = client
         self.readiness = nil
         self.evidenceStatus = nil
+        self.releaseRunbooks = []
         self.isLoading = false
         self.lastError = nil
     }
@@ -41,8 +43,24 @@ public final class ReleaseReadinessModel: ObservableObject {
         defer { isLoading = false }
 
         do {
-            readiness = try await client.releaseReadiness()
-            evidenceStatus = try await client.releaseEvidenceStatus()
+            async let readiness = client.releaseReadiness()
+            async let evidenceStatus = client.releaseEvidenceStatus()
+
+            self.readiness = try await readiness
+            self.evidenceStatus = try await evidenceStatus
+
+            do {
+                async let signedDistributionRunbook = client.releaseSignedDistributionRunbook()
+                async let liveDeviceRunbook = client.releaseLiveDeviceRunbook()
+                async let pluginTrustRunbook = client.releasePluginTrustRunbook()
+                self.releaseRunbooks = try await [
+                    signedDistributionRunbook,
+                    liveDeviceRunbook,
+                    pluginTrustRunbook,
+                ]
+            } catch {
+                self.releaseRunbooks = []
+            }
         } catch {
             lastError = String(describing: error)
         }

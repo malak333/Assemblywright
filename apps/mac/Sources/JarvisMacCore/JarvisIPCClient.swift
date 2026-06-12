@@ -188,6 +188,13 @@ public struct JarvisContractResponse: Decodable, Equatable, Sendable {
         }
     }
 
+    public var exposesReleaseRunbooks: Bool {
+        let paths = Set(endpoints.filter { $0.method.uppercased() == "GET" }.map(\.path))
+        return paths.contains("/release/live-device-runbook")
+            && paths.contains("/release/signed-distribution-runbook")
+            && paths.contains("/release/plugin-trust-runbook")
+    }
+
     public var exposesApprovalApproveAction: Bool {
         endpoints.contains { endpoint in
             endpoint.method.uppercased() == "POST" && endpoint.path == "/approvals/:id/approve"
@@ -285,6 +292,32 @@ public struct JarvisReleaseEvidenceStatusItem: Decodable, Equatable, Identifiabl
         case requiredForProduction = "required_for_production"
         case manualGate = "manual_gate"
         case detail
+    }
+}
+
+public struct JarvisReleaseRunbook: Decodable, Equatable, Identifiable, Sendable {
+    public var generatedAt: String
+    public var generatedFrom: String
+    public var runbook: String
+    public var productionReady: Bool
+    public var liveVoiceFeature: JarvisReleaseReadinessFeature?
+    public var evidenceItems: [JarvisReleaseEvidenceStatusItem]
+    public var commands: [String]
+    public var manualChecks: [String]
+    public var proofBoundary: String
+
+    public var id: String { runbook }
+
+    enum CodingKeys: String, CodingKey {
+        case generatedAt = "generated_at"
+        case generatedFrom = "generated_from"
+        case runbook
+        case productionReady = "production_ready"
+        case liveVoiceFeature = "live_voice_feature"
+        case evidenceItems = "evidence_items"
+        case commands
+        case manualChecks = "manual_checks"
+        case proofBoundary = "proof_boundary"
     }
 }
 
@@ -1589,6 +1622,9 @@ public protocol JarvisCoreClient: Sendable {
     func contract() async throws -> JarvisContractResponse
     func releaseReadiness() async throws -> JarvisReleaseReadiness
     func releaseEvidenceStatus() async throws -> JarvisReleaseEvidenceStatus
+    func releaseLiveDeviceRunbook() async throws -> JarvisReleaseRunbook
+    func releaseSignedDistributionRunbook() async throws -> JarvisReleaseRunbook
+    func releasePluginTrustRunbook() async throws -> JarvisReleaseRunbook
     func submit(_ command: JarvisCommandRequest) async throws -> JarvisCommandResponse
     func pause(reason: String) async throws -> JarvisPauseResponse
     func resume() async throws -> JarvisPauseResponse
@@ -1653,6 +1689,18 @@ public final class JarvisIPCClient: JarvisCoreClient {
 
     public func releaseEvidenceStatus() async throws -> JarvisReleaseEvidenceStatus {
         try await send(path: "/release/evidence-status", method: "GET", body: Optional<Data>.none)
+    }
+
+    public func releaseLiveDeviceRunbook() async throws -> JarvisReleaseRunbook {
+        try await send(path: "/release/live-device-runbook", method: "GET", body: Optional<Data>.none)
+    }
+
+    public func releaseSignedDistributionRunbook() async throws -> JarvisReleaseRunbook {
+        try await send(path: "/release/signed-distribution-runbook", method: "GET", body: Optional<Data>.none)
+    }
+
+    public func releasePluginTrustRunbook() async throws -> JarvisReleaseRunbook {
+        try await send(path: "/release/plugin-trust-runbook", method: "GET", body: Optional<Data>.none)
     }
 
     public func submit(_ command: JarvisCommandRequest) async throws -> JarvisCommandResponse {
