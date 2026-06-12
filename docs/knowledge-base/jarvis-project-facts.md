@@ -381,7 +381,9 @@ These notes capture durable facts for future agents working on this repository.
   `n/a`, or self-test/fixture text in owner-recorded evidence fields. Host-level egress evidence
   must also include the reviewed policy/profile label, ordered UTC egress
   validation timestamp, denied undeclared-host fixture note, and declared-host
-  allow fixture note. The review timestamps must be UTC `Z` values, the
+  allow fixture note. Each plugin-trust category also requires an archived
+  manual evidence artifact URI and SHA-256 digest before evidence-status or the
+  final bundle gate can accept the report. The review timestamps must be UTC `Z` values, the
   completed timestamp must be greater than or equal to the started timestamp,
   and the completed timestamp must not be later than report generation.
   `--write-template

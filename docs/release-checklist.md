@@ -418,9 +418,10 @@ stage or when a PR needs focused evidence for one ownership slice.
   by the doctor/status gates. Treat `--assert-complete` output as
   owner-recorded external evidence for marketplace review, malware
   scanning, signed publisher policy, OS-level process/network sandbox
-  validation, and host-level egress validation only after
-  owner/timestamp/evidence-note fields are present, including the structured
-  egress policy label plus deny/allow fixture notes.
+  validation, host-level egress enforcement, and manual trust review only after
+  owner/timestamp/evidence-note fields are present. Every category must also
+  include the matching archived artifact URI and SHA-256 digest; structured
+  egress evidence must include the policy label plus deny/allow fixture notes.
 - Confirm `./scripts/release-evidence-bundle.sh --check` is included in
   release readiness recommendations and the local release gate, that its
   preflight output points operators to the fillable final-bundle template, the

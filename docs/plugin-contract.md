@@ -184,16 +184,17 @@ to explain what happened:
   `JARVIS_PLUGIN_QA_*` checklist with validation flags defaulting to `false`.
   `--self-test` proves only the assertion/report mechanics with fake evidence
   notes; `--assert-complete` writes owner-recorded evidence after external
-  validation flags and non-empty owner/timestamp/evidence fields are present.
+  validation flags, non-empty owner/timestamp/evidence fields, and per-category
+  archived artifact URI/SHA-256 bindings are present.
   Host-level egress evidence must include the reviewed policy/profile label,
   ordered UTC egress validation timestamp, denied undeclared-host fixture note,
   and declared-host allow fixture note.
 - `./scripts/release-evidence-bundle.sh --bundle` references the plugin-trust
   QA report alongside signed distribution artifacts and live-device QA evidence
-  for final release review. It records evidence paths, owner flags, and
-  owner-recorded plugin trust notes only; it does not turn plugin marketplace,
-  malware, OS-level process/network sandbox, or host-level egress checks into
-  repo-local proof.
+  for final release review. It records evidence paths, owner flags,
+  owner-recorded plugin trust notes, and archived artifact URI/SHA-256 bindings
+  only; it does not turn plugin marketplace, malware, OS-level process/network
+  sandbox, or host-level egress checks into repo-local proof.
 - Installed plugin dry runs are contract-only. `dry_run: true` validates the
   stored manifest, action name, and input schema, then returns `dry_run` with
   `contract_validated: true` and `side_effect_executed: false`; it never loads

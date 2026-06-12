@@ -123,6 +123,18 @@ const PLUGIN_TRUST_QA_REQUIRED_FIELDS: &[&str] = &[
     "owner_recorded_plugin_trust_evidence.egress_allow_fixture_evidence_note",
     "owner_recorded_plugin_trust_evidence.signed_publisher_evidence_note",
     "owner_recorded_plugin_trust_evidence.manual_review_evidence_note",
+    "evidence_artifacts.marketplace_review.uri",
+    "evidence_artifacts.marketplace_review.sha256",
+    "evidence_artifacts.malware_scan.uri",
+    "evidence_artifacts.malware_scan.sha256",
+    "evidence_artifacts.os_sandbox.uri",
+    "evidence_artifacts.os_sandbox.sha256",
+    "evidence_artifacts.egress_enforcement.uri",
+    "evidence_artifacts.egress_enforcement.sha256",
+    "evidence_artifacts.signed_publisher_policy.uri",
+    "evidence_artifacts.signed_publisher_policy.sha256",
+    "evidence_artifacts.manual_trust_review.uri",
+    "evidence_artifacts.manual_trust_review.sha256",
     "proof_boundary",
 ];
 const SIGNED_DISTRIBUTION_PROVENANCE_REQUIRED_FIELDS: &[&str] = &[
@@ -4483,6 +4495,8 @@ fn release_plugin_trust_runbook_from(
                 .to_string(),
             "Validate host-level egress enforcement with deny and declared-host allow fixtures."
                 .to_string(),
+            "Record archived artifact URIs and SHA-256 digests for every plugin-trust evidence category before assertion."
+                .to_string(),
             "Preserve target/release-plugin-trust-qa-report.json for final release evidence bundling."
                 .to_string(),
             "Generate the final release evidence bundle only after signed distribution, live-device QA, and plugin-trust QA evidence all exist."
@@ -5358,6 +5372,20 @@ fn validate_plugin_trust_qa_report(value: &serde_json::Value) -> Result<(), Stri
         "owner_recorded_plugin_trust_evidence.manual_review_evidence_note",
     ] {
         require_json_meaningful_owner_evidence(value, field)?;
+    }
+    for artifact in [
+        "marketplace_review",
+        "malware_scan",
+        "os_sandbox",
+        "egress_enforcement",
+        "signed_publisher_policy",
+        "manual_trust_review",
+    ] {
+        require_json_meaningful_owner_evidence(
+            value,
+            &format!("evidence_artifacts.{artifact}.uri"),
+        )?;
+        require_json_sha256_value(value, &format!("evidence_artifacts.{artifact}.sha256"))?;
     }
     if completed_at < started_at {
         return Err(
@@ -7371,6 +7399,32 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 "signed_publisher_evidence_note": "Signed publisher policy evidence archived.",
                 "manual_review_evidence_note": "Manual plugin trust review evidence archived."
             },
+            "evidence_artifacts": {
+                "marketplace_review": {
+                    "uri": "archive://jarvis/plugin-trust/marketplace-review.json",
+                    "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+                },
+                "malware_scan": {
+                    "uri": "archive://jarvis/plugin-trust/malware-scan.json",
+                    "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+                },
+                "os_sandbox": {
+                    "uri": "archive://jarvis/plugin-trust/os-sandbox.json",
+                    "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+                },
+                "egress_enforcement": {
+                    "uri": "archive://jarvis/plugin-trust/egress.json",
+                    "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+                },
+                "signed_publisher_policy": {
+                    "uri": "archive://jarvis/plugin-trust/signed-publisher.json",
+                    "sha256": "5555555555555555555555555555555555555555555555555555555555555555"
+                },
+                "manual_trust_review": {
+                    "uri": "archive://jarvis/plugin-trust/manual-review.json",
+                    "sha256": "6666666666666666666666666666666666666666666666666666666666666666"
+                }
+            },
             "proof_boundary": "Owner-recorded plugin trust evidence."
         })
     }
@@ -8074,6 +8128,28 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             assert!(detail.contains(path), "{detail}");
             assert!(detail.contains("placeholder"), "{detail}");
         }
+    }
+
+    #[test]
+    fn plugin_trust_qa_report_rejects_missing_or_invalid_artifact_binding() {
+        let mut report = valid_plugin_trust_qa_report_json();
+        report["evidence_artifacts"]["marketplace_review"]["uri"] = json!("   ");
+        let (status, detail) = inspect_plugin_trust_qa_report_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(
+            detail.contains("evidence_artifacts.marketplace_review.uri"),
+            "{detail}"
+        );
+
+        let mut report = valid_plugin_trust_qa_report_json();
+        report["evidence_artifacts"]["malware_scan"]["sha256"] = json!("not-a-sha");
+        let (status, detail) = inspect_plugin_trust_qa_report_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(
+            detail.contains("evidence_artifacts.malware_scan.sha256"),
+            "{detail}"
+        );
+        assert!(detail.contains("SHA-256"), "{detail}");
     }
 
     #[test]
