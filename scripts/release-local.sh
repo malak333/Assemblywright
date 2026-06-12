@@ -13,6 +13,7 @@ run() {
 
 run ./scripts/release-version-consistency.sh --check
 run ./scripts/release-ci-workflow-smoke.sh
+run ./scripts/release-docs-drift-smoke.sh
 run cargo fmt --check
 run cargo clippy --workspace --all-targets -- -D warnings
 run cargo test --workspace
@@ -39,6 +40,8 @@ run ./scripts/release-evidence-bundle.sh --check
 run ./scripts/release-evidence-bundle.sh --self-test
 run ./scripts/release-evidence-doctor.sh --check
 run ./scripts/release-evidence-doctor.sh --self-test
+run ./scripts/release-external-handoff.sh --check
+run ./scripts/release-external-handoff.sh --self-test
 
 if ! command -v swift >/dev/null 2>&1; then
   printf '\nerror: swift is required for the local release gate because apps/mac exists\n' >&2

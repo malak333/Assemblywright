@@ -5387,11 +5387,25 @@ fn require_json_meaningful_owner_evidence(
     require_json_nonempty_string_value(value, path)?;
     let evidence = json_string_at(value, path)
         .ok_or_else(|| format!("JSON report is missing required field: {path}"))?;
-    let normalized = evidence.trim().to_ascii_lowercase();
-    let placeholder = matches!(
-        normalized.as_str(),
-        "fixture" | "self-test fixture" | "todo" | "tbd" | "n/a" | "na" | "pending"
-    );
+    let normalized = evidence
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase();
+    let placeholder = matches!(normalized.as_str(), "n/a" | "na")
+        || [
+            "self-test",
+            "placeholder",
+            "example",
+            "fixture",
+            "todo",
+            "tbd",
+            "replace-me",
+            "changeme",
+            "pending",
+        ]
+        .iter()
+        .any(|marker| normalized.contains(marker));
     if placeholder {
         return Err(format!(
             "JSON report {path} must contain owner-recorded external evidence, not placeholder or fixture text"
@@ -7330,12 +7344,12 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 "egress_evidence_note": "Host-level egress validation evidence archived.",
                 "egress_policy_label": "Host egress policy/profile reviewed.",
                 "egress_validation_completed_at": "2026-05-22T16:18:00Z",
-                "egress_deny_fixture_evidence_note": "Undeclared-host deny fixture evidence archived.",
-                "egress_allow_fixture_evidence_note": "Declared-host allow fixture evidence archived.",
+                "egress_deny_fixture_evidence_note": "Undeclared-host deny evidence archived.",
+                "egress_allow_fixture_evidence_note": "Declared-host allow evidence archived.",
                 "signed_publisher_evidence_note": "Signed publisher policy evidence archived.",
                 "manual_review_evidence_note": "Manual plugin trust review evidence archived."
             },
-            "proof_boundary": "Owner-recorded plugin trust fixture."
+            "proof_boundary": "Owner-recorded plugin trust evidence."
         })
     }
 
@@ -7693,7 +7707,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             ),
         ] {
             let mut report = valid_live_device_qa_report_json();
-            report[parent][field] = json!("pending");
+            report[parent][field] = json!("pending release evidence note");
             let (status, detail) = inspect_live_device_qa_report_value(report);
             assert_eq!(status, ReleaseEvidenceItemStatus::Invalid, "{dotted_path}");
             assert!(detail.contains(dotted_path), "{detail}");
@@ -8031,7 +8045,8 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             ),
         ] {
             let mut report = valid_plugin_trust_qa_report_json();
-            report["owner_recorded_plugin_trust_evidence"][field] = json!("TODO");
+            report["owner_recorded_plugin_trust_evidence"][field] =
+                json!("Owner will replace this fixture note after review");
             let (status, detail) = inspect_plugin_trust_qa_report_value(report);
             assert_eq!(status, ReleaseEvidenceItemStatus::Invalid, "{path}");
             assert!(detail.contains(path), "{detail}");
@@ -8246,7 +8261,8 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             ),
         ] {
             let mut report = valid_release_evidence_bundle_json();
-            report["owner_recorded_release_evidence"][field] = json!("n/a");
+            report["owner_recorded_release_evidence"][field] =
+                json!("pending release archive evidence");
             let (status, detail) = inspect_release_evidence_bundle_value(report);
             assert_eq!(status, ReleaseEvidenceItemStatus::Invalid, "{dotted_path}");
             assert!(detail.contains(dotted_path), "{detail}");

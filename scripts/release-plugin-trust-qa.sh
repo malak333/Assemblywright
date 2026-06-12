@@ -111,8 +111,19 @@ import sys
 
 name, value = sys.argv[1:3]
 normalized = " ".join(value.strip().lower().split())
-placeholders = {"fixture", "self-test fixture", "todo", "tbd", "n/a", "na", "pending"}
-if normalized in placeholders:
+exact_placeholders = {"n/a", "na"}
+embedded_placeholders = (
+    "self-test",
+    "placeholder",
+    "example",
+    "fixture",
+    "todo",
+    "tbd",
+    "replace-me",
+    "changeme",
+    "pending",
+)
+if normalized in exact_placeholders or any(marker in normalized for marker in embedded_placeholders):
     raise SystemExit(
         f"{name} must contain owner-recorded external evidence, not placeholder or fixture text"
     )
@@ -406,15 +417,15 @@ if [[ "$SELF_TEST" == true ]]; then
     JARVIS_PLUGIN_QA_REVIEW_STARTED_AT="2026-05-22T16:10:00Z" \
     JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT="2026-05-22T16:20:00Z" \
     JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE="Marketplace review fixture was observed." \
-    JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE="Malware scan fixture was observed." \
-    JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE="OS sandbox fixture was observed." \
-    JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE="Egress fixture was observed." \
-    JARVIS_PLUGIN_QA_EGRESS_POLICY_LABEL="Self-test host egress policy fixture" \
+    JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE="Malware scan evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE="OS sandbox evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE="Egress evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_EGRESS_POLICY_LABEL="Host egress policy reviewed in the controlled release lane" \
     JARVIS_PLUGIN_QA_EGRESS_VALIDATION_COMPLETED_AT="2026-05-22T16:18:00Z" \
-    JARVIS_PLUGIN_QA_EGRESS_DENY_FIXTURE_EVIDENCE_NOTE="Deny fixture blocked undeclared outbound traffic." \
-    JARVIS_PLUGIN_QA_EGRESS_ALLOW_FIXTURE_EVIDENCE_NOTE="Allow fixture reached the declared host only." \
-    JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE="Signed publisher policy fixture was observed." \
-    JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE="Manual trust review fixture was observed." \
+    JARVIS_PLUGIN_QA_EGRESS_DENY_FIXTURE_EVIDENCE_NOTE="Undeclared-host deny evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_EGRESS_ALLOW_FIXTURE_EVIDENCE_NOTE="Declared-host allow evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE="Signed publisher policy evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE="Manual trust review evidence archived in the controlled release lane." \
     "$0" --assert-complete >/dev/null
   require_file_contains "plugin trust QA self-test report" "$fixture_report" '"marketplace_review": true'
   require_file_contains "plugin trust QA self-test report" "$fixture_report" '"schema_version": 1'
@@ -423,10 +434,10 @@ if [[ "$SELF_TEST" == true ]]; then
   require_file_contains "plugin trust QA self-test report" "$fixture_report" '"self_test_fixture": true'
   require_file_contains "plugin trust QA self-test report" "$fixture_report" '"review_source": "self-test-fixture"'
   require_file_contains "plugin trust QA self-test report" "$fixture_report" '"owner_recorded_plugin_trust_evidence"'
-  require_file_contains "plugin trust QA self-test report" "$fixture_report" '"egress_evidence_note": "Egress fixture was observed."'
-  require_file_contains "plugin trust QA self-test report" "$fixture_report" '"egress_policy_label": "Self-test host egress policy fixture"'
-  require_file_contains "plugin trust QA self-test report" "$fixture_report" '"egress_deny_fixture_evidence_note": "Deny fixture blocked undeclared outbound traffic."'
-  require_file_contains "plugin trust QA self-test report" "$fixture_report" '"egress_allow_fixture_evidence_note": "Allow fixture reached the declared host only."'
+  require_file_contains "plugin trust QA self-test report" "$fixture_report" '"egress_evidence_note": "Egress evidence archived in the controlled release lane."'
+  require_file_contains "plugin trust QA self-test report" "$fixture_report" '"egress_policy_label": "Host egress policy reviewed in the controlled release lane"'
+  require_file_contains "plugin trust QA self-test report" "$fixture_report" '"egress_deny_fixture_evidence_note": "Undeclared-host deny evidence archived in the controlled release lane."'
+  require_file_contains "plugin trust QA self-test report" "$fixture_report" '"egress_allow_fixture_evidence_note": "Declared-host allow evidence archived in the controlled release lane."'
   require_file_contains "plugin trust QA self-test report" "$fixture_report" '"proof_boundary"'
 
   if JARVIS_PLUGIN_QA_REPORT_PATH="$tmp_dir/operator-self-test-identity-report.json" \
@@ -442,15 +453,15 @@ if [[ "$SELF_TEST" == true ]]; then
     JARVIS_PLUGIN_QA_REVIEW_STARTED_AT="2026-05-22T16:10:00Z" \
     JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT="2026-05-22T16:20:00Z" \
     JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE="Marketplace review fixture was observed." \
-    JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE="Malware scan fixture was observed." \
-    JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE="OS sandbox fixture was observed." \
-    JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE="Egress fixture was observed." \
-    JARVIS_PLUGIN_QA_EGRESS_POLICY_LABEL="Self-test host egress policy fixture" \
+    JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE="Malware scan evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE="OS sandbox evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE="Egress evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_EGRESS_POLICY_LABEL="Host egress policy reviewed in the controlled release lane" \
     JARVIS_PLUGIN_QA_EGRESS_VALIDATION_COMPLETED_AT="2026-05-22T16:18:00Z" \
-    JARVIS_PLUGIN_QA_EGRESS_DENY_FIXTURE_EVIDENCE_NOTE="Deny fixture blocked undeclared outbound traffic." \
-    JARVIS_PLUGIN_QA_EGRESS_ALLOW_FIXTURE_EVIDENCE_NOTE="Allow fixture reached the declared host only." \
-    JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE="Signed publisher policy fixture was observed." \
-    JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE="Manual trust review fixture was observed." \
+    JARVIS_PLUGIN_QA_EGRESS_DENY_FIXTURE_EVIDENCE_NOTE="Undeclared-host deny evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_EGRESS_ALLOW_FIXTURE_EVIDENCE_NOTE="Declared-host allow evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE="Signed publisher policy evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE="Manual trust review evidence archived in the controlled release lane." \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "plugin trust QA self-test expected operator self-test fixture identity to be rejected"
   fi
@@ -493,16 +504,16 @@ if [[ "$SELF_TEST" == true ]]; then
     JARVIS_PLUGIN_QA_OWNER_NAME="Jarvis Plugin QA Self-Test" \
     JARVIS_PLUGIN_QA_REVIEW_STARTED_AT="2026-05-22T16:10:00Z" \
     JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT="2026-05-22T16:20:00Z" \
-    JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE="Marketplace review fixture was observed." \
-    JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE="Malware scan fixture was observed." \
-    JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE="OS sandbox fixture was observed." \
-    JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE="Egress fixture was observed." \
-    JARVIS_PLUGIN_QA_EGRESS_POLICY_LABEL="Self-test host egress policy fixture" \
+    JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE="Marketplace review evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE="Malware scan evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE="OS sandbox evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE="Egress evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_EGRESS_POLICY_LABEL="Host egress policy reviewed in the controlled release lane" \
     JARVIS_PLUGIN_QA_EGRESS_VALIDATION_COMPLETED_AT="2026-05-22T16:18:00Z" \
     JARVIS_PLUGIN_QA_EGRESS_DENY_FIXTURE_EVIDENCE_NOTE="" \
-    JARVIS_PLUGIN_QA_EGRESS_ALLOW_FIXTURE_EVIDENCE_NOTE="Allow fixture reached the declared host only." \
-    JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE="Signed publisher policy fixture was observed." \
-    JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE="Manual trust review fixture was observed." \
+    JARVIS_PLUGIN_QA_EGRESS_ALLOW_FIXTURE_EVIDENCE_NOTE="Declared-host allow evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE="Signed publisher policy evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE="Manual trust review evidence archived in the controlled release lane." \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "plugin trust QA self-test expected blank egress deny fixture evidence to be rejected"
   fi
@@ -518,7 +529,7 @@ if [[ "$SELF_TEST" == true ]]; then
     JARVIS_PLUGIN_QA_OWNER_NAME="Release Operator" \
     JARVIS_PLUGIN_QA_REVIEW_STARTED_AT="2026-05-22T16:10:00Z" \
     JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT="2026-05-22T16:20:00Z" \
-    JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE="TODO" \
+    JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE="TODO before release" \
     JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE="Malware scan evidence archived." \
     JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE="OS sandbox validation evidence archived." \
     JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE="Host-level egress validation evidence archived." \
@@ -532,6 +543,32 @@ if [[ "$SELF_TEST" == true ]]; then
     fail "plugin trust QA self-test expected placeholder owner evidence to be rejected"
   fi
 
+  if env -u JARVIS_PLUGIN_QA_INTERNAL_SELF_TEST \
+    JARVIS_PLUGIN_QA_REPORT_PATH="$tmp_dir/embedded-fixture-evidence-report.json" \
+    JARVIS_PLUGIN_QA_REVIEW_SOURCE="owner-asserted-manual-review" \
+    JARVIS_PLUGIN_QA_MARKETPLACE_REVIEW_VALIDATED=true \
+    JARVIS_PLUGIN_QA_MALWARE_SCAN_VALIDATED=true \
+    JARVIS_PLUGIN_QA_OS_SANDBOX_VALIDATED=true \
+    JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED=true \
+    JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_POLICY_VALIDATED=true \
+    JARVIS_PLUGIN_QA_MANUAL_TRUST_REVIEW_VALIDATED=true \
+    JARVIS_PLUGIN_QA_OWNER_NAME="Release Operator" \
+    JARVIS_PLUGIN_QA_REVIEW_STARTED_AT="2026-05-22T16:10:00Z" \
+    JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT="2026-05-22T16:20:00Z" \
+    JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE="Marketplace review fixture was observed." \
+    JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE="Malware scan evidence archived." \
+    JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE="OS sandbox validation evidence archived." \
+    JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE="Host-level egress validation evidence archived." \
+    JARVIS_PLUGIN_QA_EGRESS_POLICY_LABEL="Host egress policy/profile reviewed." \
+    JARVIS_PLUGIN_QA_EGRESS_VALIDATION_COMPLETED_AT="2026-05-22T16:18:00Z" \
+    JARVIS_PLUGIN_QA_EGRESS_DENY_FIXTURE_EVIDENCE_NOTE="Undeclared-host deny evidence archived." \
+    JARVIS_PLUGIN_QA_EGRESS_ALLOW_FIXTURE_EVIDENCE_NOTE="Declared-host allow evidence archived." \
+    JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE="Signed publisher policy evidence archived." \
+    JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE="Manual plugin trust review evidence archived." \
+    "$0" --assert-complete >/dev/null 2>&1; then
+    fail "plugin trust QA self-test expected embedded fixture evidence to be rejected"
+  fi
+
   if JARVIS_PLUGIN_QA_REPORT_PATH="$tmp_dir/wrong-review-source-report.json" \
     JARVIS_PLUGIN_QA_REVIEW_SOURCE="imported-ci-report" \
     JARVIS_PLUGIN_QA_MARKETPLACE_REVIEW_VALIDATED=true \
@@ -543,16 +580,16 @@ if [[ "$SELF_TEST" == true ]]; then
     JARVIS_PLUGIN_QA_OWNER_NAME="Jarvis Plugin QA Self-Test" \
     JARVIS_PLUGIN_QA_REVIEW_STARTED_AT="2026-05-22T16:10:00Z" \
     JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT="2026-05-22T16:20:00Z" \
-    JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE="Marketplace review fixture was observed." \
-    JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE="Malware scan fixture was observed." \
-    JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE="OS sandbox fixture was observed." \
-    JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE="Egress fixture was observed." \
-    JARVIS_PLUGIN_QA_EGRESS_POLICY_LABEL="Self-test host egress policy fixture" \
+    JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE="Marketplace review evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE="Malware scan evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE="OS sandbox evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE="Egress evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_EGRESS_POLICY_LABEL="Host egress policy reviewed in the controlled release lane" \
     JARVIS_PLUGIN_QA_EGRESS_VALIDATION_COMPLETED_AT="2026-05-22T16:18:00Z" \
-    JARVIS_PLUGIN_QA_EGRESS_DENY_FIXTURE_EVIDENCE_NOTE="Deny fixture blocked undeclared outbound traffic." \
-    JARVIS_PLUGIN_QA_EGRESS_ALLOW_FIXTURE_EVIDENCE_NOTE="Allow fixture reached the declared host only." \
-    JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE="Signed publisher policy fixture was observed." \
-    JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE="Manual trust review fixture was observed." \
+    JARVIS_PLUGIN_QA_EGRESS_DENY_FIXTURE_EVIDENCE_NOTE="Undeclared-host deny evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_EGRESS_ALLOW_FIXTURE_EVIDENCE_NOTE="Declared-host allow evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE="Signed publisher policy evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE="Manual trust review evidence archived in the controlled release lane." \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "plugin trust QA self-test expected non-owner review source to be rejected"
   fi
@@ -567,16 +604,16 @@ if [[ "$SELF_TEST" == true ]]; then
     JARVIS_PLUGIN_QA_OWNER_NAME="Jarvis Plugin QA Self-Test" \
     JARVIS_PLUGIN_QA_REVIEW_STARTED_AT="2026-05-22T16:10:00-04:00" \
     JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT="2026-05-22T16:20:00Z" \
-    JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE="Marketplace review fixture was observed." \
-    JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE="Malware scan fixture was observed." \
-    JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE="OS sandbox fixture was observed." \
-    JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE="Egress fixture was observed." \
-    JARVIS_PLUGIN_QA_EGRESS_POLICY_LABEL="Self-test host egress policy fixture" \
+    JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE="Marketplace review evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE="Malware scan evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE="OS sandbox evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE="Egress evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_EGRESS_POLICY_LABEL="Host egress policy reviewed in the controlled release lane" \
     JARVIS_PLUGIN_QA_EGRESS_VALIDATION_COMPLETED_AT="2026-05-22T16:18:00Z" \
-    JARVIS_PLUGIN_QA_EGRESS_DENY_FIXTURE_EVIDENCE_NOTE="Deny fixture blocked undeclared outbound traffic." \
-    JARVIS_PLUGIN_QA_EGRESS_ALLOW_FIXTURE_EVIDENCE_NOTE="Allow fixture reached the declared host only." \
-    JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE="Signed publisher policy fixture was observed." \
-    JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE="Manual trust review fixture was observed." \
+    JARVIS_PLUGIN_QA_EGRESS_DENY_FIXTURE_EVIDENCE_NOTE="Undeclared-host deny evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_EGRESS_ALLOW_FIXTURE_EVIDENCE_NOTE="Declared-host allow evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE="Signed publisher policy evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE="Manual trust review evidence archived in the controlled release lane." \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "plugin trust QA self-test expected non-UTC review timestamp to be rejected"
   fi
@@ -591,16 +628,16 @@ if [[ "$SELF_TEST" == true ]]; then
     JARVIS_PLUGIN_QA_OWNER_NAME="Jarvis Plugin QA Self-Test" \
     JARVIS_PLUGIN_QA_REVIEW_STARTED_AT="2026-05-22T16:20:00Z" \
     JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT="2026-05-22T16:10:00Z" \
-    JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE="Marketplace review fixture was observed." \
-    JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE="Malware scan fixture was observed." \
-    JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE="OS sandbox fixture was observed." \
-    JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE="Egress fixture was observed." \
-    JARVIS_PLUGIN_QA_EGRESS_POLICY_LABEL="Self-test host egress policy fixture" \
+    JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE="Marketplace review evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE="Malware scan evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE="OS sandbox evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE="Egress evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_EGRESS_POLICY_LABEL="Host egress policy reviewed in the controlled release lane" \
     JARVIS_PLUGIN_QA_EGRESS_VALIDATION_COMPLETED_AT="2026-05-22T16:18:00Z" \
-    JARVIS_PLUGIN_QA_EGRESS_DENY_FIXTURE_EVIDENCE_NOTE="Deny fixture blocked undeclared outbound traffic." \
-    JARVIS_PLUGIN_QA_EGRESS_ALLOW_FIXTURE_EVIDENCE_NOTE="Allow fixture reached the declared host only." \
-    JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE="Signed publisher policy fixture was observed." \
-    JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE="Manual trust review fixture was observed." \
+    JARVIS_PLUGIN_QA_EGRESS_DENY_FIXTURE_EVIDENCE_NOTE="Undeclared-host deny evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_EGRESS_ALLOW_FIXTURE_EVIDENCE_NOTE="Declared-host allow evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE="Signed publisher policy evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE="Manual trust review evidence archived in the controlled release lane." \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "plugin trust QA self-test expected reversed review timestamps to be rejected"
   fi

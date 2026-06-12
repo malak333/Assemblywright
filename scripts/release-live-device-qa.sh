@@ -135,16 +135,19 @@ import sys
 
 name, value = sys.argv[1:3]
 normalized = " ".join(value.strip().lower().split())
-placeholders = {
+exact_placeholders = {"n/a", "na"}
+embedded_placeholders = (
+    "self-test",
+    "placeholder",
+    "example",
     "fixture",
-    "self-test fixture",
     "todo",
     "tbd",
-    "n/a",
-    "na",
+    "replace-me",
+    "changeme",
     "pending",
-}
-if normalized in placeholders:
+)
+if normalized in exact_placeholders or any(marker in normalized for marker in embedded_placeholders):
     raise SystemExit(
         f"{name} must contain owner-recorded external evidence, not placeholder or fixture text"
     )
@@ -635,16 +638,16 @@ PLIST
     JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
     JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
     JARVIS_QA_VOICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
-    JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE="Clean profile install observed in the fake fixture." \
-    JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE="Finder launch observed in the fake fixture." \
-    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the fake fixture." \
-    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the fake fixture." \
-    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the fake fixture." \
-    JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the fake fixture." \
-    JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE="Visible scheduler notification observed in the fake fixture." \
+    JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE="Clean profile install observed in the controlled release QA lane." \
+    JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE="Finder launch observed in the controlled release QA lane." \
+    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the controlled release QA lane." \
+    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the controlled release QA lane." \
+    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the controlled release QA lane." \
+    JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the controlled release QA lane." \
+    JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE="Visible scheduler notification observed in the controlled release QA lane." \
     JARVIS_QA_NOTIFICATION_OBSERVED_AT="2026-05-22T16:04:00Z" \
-    JARVIS_QA_RESTART_EVIDENCE_NOTE="Restart recovery observed in the fake fixture." \
-    JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE="Manual release QA surfaces observed in the fake fixture." \
+    JARVIS_QA_RESTART_EVIDENCE_NOTE="Restart recovery observed in the controlled release QA lane." \
+    JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE="Manual release QA surfaces observed in the controlled release QA lane." \
     JARVIS_QA_VOICE_TEST_PHRASE="Jarvis status check." \
     JARVIS_QA_OBSERVED_TRANSCRIPT="Jarvis status check." \
     JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
@@ -667,13 +670,13 @@ PLIST
   require_file_contains "live QA self-test report" "$fixture_report" '"same_command_path": true'
   require_file_contains "live QA self-test report" "$fixture_report" '"owner_recorded_live_voice_evidence"'
   require_file_contains "live QA self-test report" "$fixture_report" '"owner_recorded_non_voice_evidence"'
-  require_file_contains "live QA self-test report" "$fixture_report" '"clean_profile_evidence_note": "Clean profile install observed in the fake fixture."'
+  require_file_contains "live QA self-test report" "$fixture_report" '"clean_profile_evidence_note": "Clean profile install observed in the controlled release QA lane."'
   require_file_contains "live QA self-test report" "$fixture_report" '"notification_observed_at": "2026-05-22T16:04:00Z"'
   require_file_contains "live QA self-test report" "$fixture_report" '"owner_name": "Jarvis QA Self-Test"'
   require_file_contains "live QA self-test report" "$fixture_report" '"voice_command_observation"'
   require_file_contains "live QA self-test report" "$fixture_report" '"expected_command_text": "status check"'
   require_file_contains "live QA self-test report" "$fixture_report" '"observed_command_text": "status check"'
-  require_file_contains "live QA self-test report" "$fixture_report" '"audio_output_evidence_note": "Observed speech output playback in the fake fixture."'
+  require_file_contains "live QA self-test report" "$fixture_report" '"audio_output_evidence_note": "Observed speech output playback in the controlled release QA lane."'
   require_file_contains "live QA self-test report" "$fixture_report" '"proof_boundary"'
 
   run_fixture_assertion() {
@@ -698,16 +701,16 @@ PLIST
       JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
       JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
       JARVIS_QA_VOICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
-      JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE="Clean profile install observed in the fake fixture." \
-      JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE="Finder launch observed in the fake fixture." \
-      JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the fake fixture." \
-      JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the fake fixture." \
-      JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the fake fixture." \
-      JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the fake fixture." \
-      JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE="Visible scheduler notification observed in the fake fixture." \
+      JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE="Clean profile install observed in the controlled release QA lane." \
+      JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE="Finder launch observed in the controlled release QA lane." \
+      JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the controlled release QA lane." \
+      JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the controlled release QA lane." \
+      JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the controlled release QA lane." \
+      JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the controlled release QA lane." \
+      JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE="Visible scheduler notification observed in the controlled release QA lane." \
       JARVIS_QA_NOTIFICATION_OBSERVED_AT="2026-05-22T16:04:00Z" \
-      JARVIS_QA_RESTART_EVIDENCE_NOTE="Restart recovery observed in the fake fixture." \
-      JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE="Manual release QA surfaces observed in the fake fixture." \
+      JARVIS_QA_RESTART_EVIDENCE_NOTE="Restart recovery observed in the controlled release QA lane." \
+      JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE="Manual release QA surfaces observed in the controlled release QA lane." \
       JARVIS_QA_VOICE_TEST_PHRASE="Jarvis status check." \
       JARVIS_QA_OBSERVED_TRANSCRIPT="Jarvis status check." \
       JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
@@ -720,7 +723,7 @@ PLIST
   }
 
   if run_fixture_assertion "$tmp_dir/placeholder-live-voice-evidence.json" \
-    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="TODO" >/dev/null 2>"$tmp_dir/placeholder-live-voice-evidence.err"; then
+    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="TODO before release" >/dev/null 2>"$tmp_dir/placeholder-live-voice-evidence.err"; then
     fail "live QA self-test expected placeholder live voice evidence note to fail"
   fi
   require_file_contains "live QA self-test placeholder live voice error" \
@@ -732,6 +735,13 @@ PLIST
   fi
   require_file_contains "live QA self-test placeholder non-voice error" \
     "$tmp_dir/placeholder-non-voice-evidence.err" "owner-recorded external evidence"
+
+  if run_fixture_assertion "$tmp_dir/embedded-fixture-evidence.json" \
+    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the fake fixture." >/dev/null 2>"$tmp_dir/embedded-fixture-evidence.err"; then
+    fail "live QA self-test expected embedded fixture evidence note to fail"
+  fi
+  require_file_contains "live QA self-test embedded fixture evidence error" \
+    "$tmp_dir/embedded-fixture-evidence.err" "owner-recorded external evidence"
 
   if env -u JARVIS_QA_INTERNAL_SELF_TEST \
     JARVIS_QA_INSTALLED_APP_PATH="$fixture_app" \
@@ -752,16 +762,16 @@ PLIST
     JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
     JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
     JARVIS_QA_VOICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
-    JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE="Clean profile install observed in the fake fixture." \
-    JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE="Finder launch observed in the fake fixture." \
-    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the fake fixture." \
-    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the fake fixture." \
-    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the fake fixture." \
-    JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the fake fixture." \
-    JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE="Visible scheduler notification observed in the fake fixture." \
+    JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE="Clean profile install observed in the controlled release QA lane." \
+    JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE="Finder launch observed in the controlled release QA lane." \
+    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the controlled release QA lane." \
+    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the controlled release QA lane." \
+    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the controlled release QA lane." \
+    JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the controlled release QA lane." \
+    JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE="Visible scheduler notification observed in the controlled release QA lane." \
     JARVIS_QA_NOTIFICATION_OBSERVED_AT="2026-05-22T16:04:00Z" \
-    JARVIS_QA_RESTART_EVIDENCE_NOTE="Restart recovery observed in the fake fixture." \
-    JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE="Manual release QA surfaces observed in the fake fixture." \
+    JARVIS_QA_RESTART_EVIDENCE_NOTE="Restart recovery observed in the controlled release QA lane." \
+    JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE="Manual release QA surfaces observed in the controlled release QA lane." \
     JARVIS_QA_VOICE_TEST_PHRASE="Jarvis status check." \
     JARVIS_QA_OBSERVED_TRANSCRIPT="Jarvis status check." \
     JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
@@ -792,15 +802,15 @@ PLIST
     JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
     JARVIS_QA_VOICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
     JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE="   " \
-    JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE="Finder launch observed in the fake fixture." \
-    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the fake fixture." \
-    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the fake fixture." \
-    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the fake fixture." \
-    JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the fake fixture." \
-    JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE="Visible scheduler notification observed in the fake fixture." \
+    JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE="Finder launch observed in the controlled release QA lane." \
+    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the controlled release QA lane." \
+    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the controlled release QA lane." \
+    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the controlled release QA lane." \
+    JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the controlled release QA lane." \
+    JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE="Visible scheduler notification observed in the controlled release QA lane." \
     JARVIS_QA_NOTIFICATION_OBSERVED_AT="2026-05-22T16:04:00Z" \
-    JARVIS_QA_RESTART_EVIDENCE_NOTE="Restart recovery observed in the fake fixture." \
-    JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE="Manual release QA surfaces observed in the fake fixture." \
+    JARVIS_QA_RESTART_EVIDENCE_NOTE="Restart recovery observed in the controlled release QA lane." \
+    JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE="Manual release QA surfaces observed in the controlled release QA lane." \
     JARVIS_QA_VOICE_TEST_PHRASE="Jarvis status check." \
     JARVIS_QA_OBSERVED_TRANSCRIPT="Jarvis status check." \
     JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
@@ -830,9 +840,9 @@ PLIST
     JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
     JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
     JARVIS_QA_VOICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
-    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the fake fixture." \
-    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the fake fixture." \
-    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the fake fixture." \
+    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the controlled release QA lane." \
+    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the controlled release QA lane." \
+    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the controlled release QA lane." \
     JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="   " \
     JARVIS_QA_VOICE_TEST_PHRASE="Jarvis status check." \
     JARVIS_QA_OBSERVED_TRANSCRIPT="Jarvis status check." \
@@ -862,10 +872,10 @@ PLIST
     JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
     JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
     JARVIS_QA_VOICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
-    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the fake fixture." \
-    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the fake fixture." \
-    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the fake fixture." \
-    JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the fake fixture." \
+    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the controlled release QA lane." \
+    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the controlled release QA lane." \
+    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the controlled release QA lane." \
+    JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the controlled release QA lane." \
     JARVIS_QA_VOICE_TEST_PHRASE="Jarvis status check." \
     JARVIS_QA_OBSERVED_TRANSCRIPT="Jarvis status check." \
     JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
@@ -895,9 +905,9 @@ PLIST
     JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
     JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
     JARVIS_QA_VOICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
-    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the fake fixture." \
-    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the fake fixture." \
-    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the fake fixture." \
+    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the controlled release QA lane." \
+    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the controlled release QA lane." \
+    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the controlled release QA lane." \
     JARVIS_QA_VOICE_TEST_PHRASE="Jarvis status check." \
     JARVIS_QA_OBSERVED_TRANSCRIPT="Jarvis status check." \
     JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
@@ -927,10 +937,10 @@ PLIST
     JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
     JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
     JARVIS_QA_VOICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
-    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the fake fixture." \
-    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the fake fixture." \
-    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the fake fixture." \
-    JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the fake fixture." \
+    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the controlled release QA lane." \
+    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the controlled release QA lane." \
+    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the controlled release QA lane." \
+    JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the controlled release QA lane." \
     JARVIS_QA_VOICE_TEST_PHRASE="Jarvis status check." \
     JARVIS_QA_OBSERVED_TRANSCRIPT="Jarvis status check." \
     JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
@@ -959,10 +969,10 @@ PLIST
     JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
     JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
     JARVIS_QA_VOICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
-    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the fake fixture." \
-    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the fake fixture." \
-    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the fake fixture." \
-    JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the fake fixture." \
+    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the controlled release QA lane." \
+    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the controlled release QA lane." \
+    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the controlled release QA lane." \
+    JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the controlled release QA lane." \
     JARVIS_QA_VOICE_TEST_PHRASE="Jarvis status check." \
     JARVIS_QA_OBSERVED_TRANSCRIPT="Jarvis stats check." \
     JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
@@ -992,10 +1002,10 @@ PLIST
     JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
     JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
     JARVIS_QA_VOICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
-    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the fake fixture." \
-    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the fake fixture." \
-    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the fake fixture." \
-    JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the fake fixture." \
+    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the controlled release QA lane." \
+    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the controlled release QA lane." \
+    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the controlled release QA lane." \
+    JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the controlled release QA lane." \
     JARVIS_QA_VOICE_TEST_PHRASE="Jarvis status check." \
     JARVIS_QA_OBSERVED_TRANSCRIPT="Jarvis status check." \
     JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
@@ -1025,10 +1035,10 @@ PLIST
     JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
     JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
     JARVIS_QA_VOICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
-    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the fake fixture." \
-    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the fake fixture." \
-    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the fake fixture." \
-    JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the fake fixture." \
+    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the controlled release QA lane." \
+    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the controlled release QA lane." \
+    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the controlled release QA lane." \
+    JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the controlled release QA lane." \
     JARVIS_QA_VOICE_TEST_PHRASE="Jarvis status check." \
     JARVIS_QA_OBSERVED_TRANSCRIPT="Jarvis status check." \
     JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
@@ -1058,10 +1068,10 @@ PLIST
     JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
     JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:05:00Z" \
     JARVIS_QA_VOICE_CHECK_COMPLETED_AT="2026-05-22T16:00:00Z" \
-    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the fake fixture." \
-    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the fake fixture." \
-    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the fake fixture." \
-    JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the fake fixture." \
+    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the controlled release QA lane." \
+    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the controlled release QA lane." \
+    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the controlled release QA lane." \
+    JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the controlled release QA lane." \
     JARVIS_QA_VOICE_TEST_PHRASE="Jarvis status check." \
     JARVIS_QA_OBSERVED_TRANSCRIPT="Jarvis status check." \
     JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \

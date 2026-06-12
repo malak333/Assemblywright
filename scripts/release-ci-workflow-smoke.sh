@@ -42,6 +42,7 @@ require_text "run: ./scripts/release-local.sh" "$WORKFLOW"
 expected_local_gate_commands=(
   "run ./scripts/release-version-consistency.sh --check"
   "run ./scripts/release-ci-workflow-smoke.sh"
+  "run ./scripts/release-docs-drift-smoke.sh"
   "run cargo fmt --check"
   "run cargo clippy --workspace --all-targets -- -D warnings"
   "run cargo test --workspace"
@@ -68,6 +69,8 @@ expected_local_gate_commands=(
   "run ./scripts/release-evidence-bundle.sh --self-test"
   "run ./scripts/release-evidence-doctor.sh --check"
   "run ./scripts/release-evidence-doctor.sh --self-test"
+  "run ./scripts/release-external-handoff.sh --check"
+  "run ./scripts/release-external-handoff.sh --self-test"
   "run swift test --disable-sandbox --package-path apps/mac"
   "run swift build --disable-sandbox --package-path apps/mac"
 )
