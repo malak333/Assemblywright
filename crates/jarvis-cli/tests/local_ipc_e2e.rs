@@ -770,10 +770,12 @@ fn release_evidence_doctor_assert_complete_matches_cli_evidence_status_fixture()
     assert_eq!(evidence_status["invalid_count"], 0);
     assert_all_evidence_items_present(&evidence_status);
 
+    let mut doctor_env = evidence_env;
+    doctor_env.push(("JARVIS_EVIDENCE_STATUS_ENDPOINT", endpoint.as_str()));
     let doctor_output = run_repo_script_with_env(
         "scripts/release-evidence-doctor.sh",
         &["--assert-complete"],
-        &evidence_env,
+        &doctor_env,
     );
     let doctor_text = String::from_utf8(doctor_output.stdout).expect("doctor stdout is utf8");
     assert!(
@@ -787,6 +789,51 @@ fn release_evidence_doctor_assert_complete_matches_cli_evidence_status_fixture()
     assert!(
         doctor_text.contains("host-level egress enforcement"),
         "{doctor_text}"
+    );
+    server.stop();
+}
+
+#[test]
+#[cfg(unix)]
+fn release_evidence_doctor_assert_complete_rejects_unresolved_command_evidence() {
+    let temp_dir = tempfile::tempdir().expect("temp complete release evidence");
+    let fixture = write_complete_release_evidence_fixture(temp_dir.path());
+    let evidence_env = fixture.env_refs();
+    let db_path = temp_dir
+        .path()
+        .join("jarvis-doctor-unresolved-command-evidence.sqlite");
+    let mut server = JarvisServer::start_with_env(&db_path, &evidence_env);
+    let endpoint = server.endpoint();
+
+    let evidence_status = run_cli_json([
+        "release",
+        "evidence-status",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    let live_item = release_evidence_item(&evidence_status, "live_device_qa_report");
+    assert_eq!(live_item["status"], "invalid", "{live_item}");
+    assert!(live_item["detail"]
+        .as_str()
+        .expect("live detail")
+        .contains("does not resolve to repository evidence"));
+
+    let mut doctor_env = fixture.env_refs();
+    doctor_env.push(("JARVIS_EVIDENCE_STATUS_ENDPOINT", endpoint.as_str()));
+    let doctor_output = run_repo_script_failure_with_env(
+        "scripts/release-evidence-doctor.sh",
+        &["--assert-complete"],
+        &doctor_env,
+    );
+    assert!(
+        doctor_output.contains(
+            "release evidence doctor --assert-complete requires jarvis release evidence-status --json"
+        ),
+        "{doctor_output}"
+    );
+    assert!(
+        doctor_output.contains("live_device_qa_report=invalid"),
+        "{doctor_output}"
     );
     server.stop();
 }
@@ -6372,6 +6419,32 @@ fn run_repo_script_with_env(script: &str, args: &[&str], env: &[(&str, &str)]) -
         String::from_utf8_lossy(&output.stderr)
     );
     output
+}
+
+#[cfg(unix)]
+fn run_repo_script_failure_with_env(script: &str, args: &[&str], env: &[(&str, &str)]) -> String {
+    let mut command = Command::new(workspace_root().join(script));
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .current_dir(workspace_root());
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    let output = command.output().expect("run repository script");
+
+    assert!(
+        !output.status.success(),
+        "repository script unexpectedly succeeded: {:?}\nstdout:\n{}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
 }
 
 #[cfg(unix)]

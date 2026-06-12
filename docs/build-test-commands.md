@@ -744,6 +744,10 @@ After generating it, run `cargo run -p jarvis-cli -- release evidence-status`
 and `cargo run -p jarvis-cli -- release readiness` against a core started or
 restarted with `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external`
 to confirm any live voice/audio blocker changes are backed by the report.
+The final `./scripts/release-evidence-doctor.sh --assert-complete` assertion
+also calls `jarvis release evidence-status --json`; set
+`JARVIS_EVIDENCE_STATUS_ENDPOINT` to the release core endpoint when proving
+repository-backed task/audit evidence during final release evidence review.
 Preserve that report with release notes when making a production-ready claim.
 `--self-test` uses a fake app fixture to exercise only the assertion/report
 mechanics and is included in `./scripts/release-local.sh`.

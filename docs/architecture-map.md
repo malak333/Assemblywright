@@ -264,7 +264,10 @@ transcript matching the spoken test phrase after trimming, observed command text
 matching the expected command text after trimming, and
 `command_result_evidence_id` shaped as a `task:<uuid>` or `audit:<uuid>`
 reference and, when readiness/evidence-status is served by repository-backed
-IPC state, resolved against existing task or task-associated audit evidence. It still keeps
+IPC state, resolved against existing task or task-associated audit evidence.
+The final `release-evidence-doctor.sh --assert-complete` path performs the same
+CLI evidence-status parity check, with `JARVIS_EVIDENCE_STATUS_ENDPOINT`
+available for repository-backed command-result evidence lookup. It still keeps
 `production_ready: false` unless every required evidence-status item is present,
 no missing or invalid evidence remains, and evidence-cleared features leave no
 pending readiness features. Even then, the true state means validated
@@ -841,7 +844,7 @@ That note records the six-agent audit ownership, the live readiness snapshot,
 and the relevant E2E coverage for this docs-sync phase.
 
 The current readiness payload should be refreshed before release claims. In the
-2026-06-11 sweep refresh after PR #236 from `main` at `281a508`,
+2026-06-12 UTC sweep refresh after PR #238 from `main` at `4a4661e`,
 `jarvis release readiness --json`
 reported `production_ready: false`, `verified_feature_count: 17`, and
 `pending_feature_count: 1`, with `live_voice_loop` still
