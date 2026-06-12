@@ -854,6 +854,11 @@ The active sweep state is documented in
 That note records the six-agent audit ownership, the live readiness snapshot,
 and the relevant E2E coverage for this docs-sync phase.
 
+The 2026-06-12 refresh is documented in
+[Production readiness sweep - 2026-06-12](production-readiness-sweep-2026-06-12.md).
+That note records the post-PR #247 readiness snapshot, the still-open #248/#249
+PR gate state, and the current production evidence boundary.
+
 The current readiness payload should be refreshed before release claims. In the
 2026-06-12 UTC sweep refresh after PR #238 from `main` at `4a4661e`,
 `jarvis release readiness --json`
