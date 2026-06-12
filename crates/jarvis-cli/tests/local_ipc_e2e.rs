@@ -1650,6 +1650,38 @@ fn release_evidence_status_rejects_plugin_report_non_owner_review_source() {
 }
 
 #[test]
+fn release_evidence_status_rejects_plugin_report_wrong_version() {
+    let endpoint = format!("http://{}", unused_loopback_addr());
+
+    let temp_dir = tempfile::tempdir().expect("temp release evidence reports");
+    let plugin_report_path = temp_dir.path().join("release-plugin-trust-qa-report.json");
+
+    let mut plugin_report = valid_plugin_trust_qa_report();
+    plugin_report["version"] = json!("9.9.9");
+    write_json_report(&plugin_report_path, plugin_report);
+
+    let plugin_path = plugin_report_path.to_str().expect("plugin report utf8");
+    let evidence_status = run_cli_json_with_env(
+        [
+            "release",
+            "evidence-status",
+            "--endpoint",
+            endpoint.as_str(),
+        ],
+        &[("JARVIS_EVIDENCE_PLUGIN_QA_REPORT", plugin_path)],
+    );
+    let plugin_item = release_evidence_item(&evidence_status, "plugin_trust_qa_report");
+    assert_eq!(plugin_item["status"], "invalid", "{plugin_item}");
+    assert!(
+        plugin_item["detail"]
+            .as_str()
+            .expect("plugin detail")
+            .contains("version"),
+        "{plugin_item}"
+    );
+}
+
+#[test]
 #[cfg(unix)]
 fn release_evidence_status_accepts_semantically_valid_plugin_and_bundle_evidence() {
     let temp_dir = tempfile::tempdir().expect("temp release evidence reports");
@@ -6650,6 +6682,7 @@ fn valid_plugin_trust_qa_report() -> Value {
     json!({
         "schema_version": 1,
         "evidence_type": "owner_recorded_plugin_trust_qa",
+        "version": "0.1.4",
         "self_test_fixture": false,
         "generated_at": "2026-05-22T16:21:00Z",
         "review_source": "owner-asserted-manual-review",
