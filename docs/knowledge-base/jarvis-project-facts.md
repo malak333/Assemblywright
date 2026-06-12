@@ -194,8 +194,10 @@ These notes capture durable facts for future agents working on this repository.
   inventory. Present presence-only evidence rows show the caveat on the status
   line. Its effective production-ready display must remain fail-closed unless
   readiness is true, evidence status is complete, every evidence item is
-  present, and the refresh is not stale or failed. This remains inspection-only
-  and does not perform signing, notarization, stapling, installation,
+  present, and the refresh is not stale or failed. Swift model tests cover
+  stale readiness failures and evidence-status refresh failures after a
+  production-ready readiness response. This remains inspection-only and does
+  not perform signing, notarization, stapling, installation,
   Finder/LaunchServices validation, or live-device validation.
 - `ConversationRuntime` supports bounded fake-model and provider-envelope
   planned first-party tool calls with schema validation, policy checks, approval
