@@ -537,10 +537,11 @@ manifest paths so operators can see present, missing, or invalid evidence before
 version marker before counting those local artifacts as present, and it rejects
 final bundles that reference semantically invalid signed-provenance,
 live-device QA, or plugin-trust QA child reports even when the recorded child
-digests match. When evidence is missing it prints the signing, live-device
-template/assertion, plugin-trust template/assertion, and final evidence-bundle
-template/bundle commands. It is a diagnostic inventory, not release proof or
-signing/notary validation by itself.
+digests match. When evidence is missing it prints the package preflight, both
+supported signing credential forms, external handoff directory generator,
+live-device template/assertion, plugin-trust template/assertion, and final
+evidence-bundle template/bundle commands. It is a diagnostic inventory, not
+release proof or signing/notary validation by itself.
 
 The production-readiness sweep is coordinated through isolated worktrees and
 topic branches against the public repository

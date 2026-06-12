@@ -201,6 +201,16 @@ fn release_readiness_cli_falls_back_without_running_server() {
     assert_string_array_order(
         &release_readiness["recommended_verification_commands"],
         "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh",
+        "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_APPLE_ID='apple-id@example.com' JARVIS_NOTARYTOOL_TEAM_ID='TEAMID1234' JARVIS_NOTARYTOOL_PASSWORD='app-specific-password' ./scripts/package-distribution.sh",
+    );
+    assert_string_array_order(
+        &release_readiness["recommended_verification_commands"],
+        "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_APPLE_ID='apple-id@example.com' JARVIS_NOTARYTOOL_TEAM_ID='TEAMID1234' JARVIS_NOTARYTOOL_PASSWORD='app-specific-password' ./scripts/package-distribution.sh",
+        "./scripts/release-external-handoff.sh --write target/release-external-handoff",
+    );
+    assert_string_array_order(
+        &release_readiness["recommended_verification_commands"],
+        "./scripts/release-external-handoff.sh --write target/release-external-handoff",
         "cargo run -p jarvis-cli -- release live-device-runbook",
     );
     assert_string_array_order(
@@ -3293,6 +3303,14 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_string_array_contains(
         &release_readiness["recommended_verification_commands"],
         "cargo run -p jarvis-cli -- release signed-distribution-runbook",
+    );
+    assert_string_array_contains(
+        &release_readiness["recommended_verification_commands"],
+        "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_APPLE_ID='apple-id@example.com' JARVIS_NOTARYTOOL_TEAM_ID='TEAMID1234' JARVIS_NOTARYTOOL_PASSWORD='app-specific-password' ./scripts/package-distribution.sh",
+    );
+    assert_string_array_contains(
+        &release_readiness["recommended_verification_commands"],
+        "./scripts/release-external-handoff.sh --write target/release-external-handoff",
     );
     assert_string_array_contains(
         &release_readiness["recommended_verification_commands"],

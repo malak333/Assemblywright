@@ -109,7 +109,8 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   `jarvis-cli.version` marker beside the bundled core with packaging remediation
   guidance.
 - Confirm `release-evidence-doctor.sh --check` prints the follow-up package
-  preflight, signing, live-device template/assertion, plugin-trust
+  preflight, both supported signing credential forms, external handoff
+  directory generator, live-device template/assertion, plugin-trust
   template/assertion, and final evidence-bundle template/bundle commands
   whenever evidence is missing.
 - Confirm `release-external-handoff.sh --write target/release-external-handoff`
