@@ -1498,6 +1498,9 @@ struct ReleaseReadinessView: View {
 
 struct ReleaseRunbookRow: View {
     let runbook: JarvisReleaseRunbook
+    private var presentation: ReleaseRunbookPresentation {
+        ReleaseRunbookPresentation(runbook: runbook)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -1524,16 +1527,26 @@ struct ReleaseRunbookRow: View {
                 }
                 .font(.caption)
             }
-            if let command = runbook.commands.first {
-                Text(command)
-                    .font(.caption.monospaced())
-                    .textSelection(.enabled)
-            }
-            if let manualCheck = runbook.manualChecks.first {
-                Text(manualCheck)
+            if !presentation.commands.isEmpty {
+                Text("Commands")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
+                ForEach(Array(presentation.commands.enumerated()), id: \.offset) { _, command in
+                    Text(command)
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                }
+            }
+            if !presentation.manualChecks.isEmpty {
+                Text("Manual Checks")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                ForEach(Array(presentation.manualChecks.enumerated()), id: \.offset) { _, manualCheck in
+                    Text(manualCheck)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
             }
             Text(runbook.proofBoundary)
                 .font(.caption2)
@@ -1554,6 +1567,16 @@ struct ReleaseRunbookRow: View {
         default:
             return runbook.runbook
         }
+    }
+}
+
+struct ReleaseRunbookPresentation: Equatable {
+    let commands: [String]
+    let manualChecks: [String]
+
+    init(runbook: JarvisReleaseRunbook) {
+        commands = runbook.commands
+        manualChecks = runbook.manualChecks
     }
 }
 
