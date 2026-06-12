@@ -1038,10 +1038,13 @@ requires plugin-trust `generated_at`, `review_started_at`,
   report`, and `Release evidence bundle`. The live-device QA shell self-test
   should compare bundled-core version output against `EXPECTED_VERSION`, not a
   hard-coded release string, so version bumps do not create false QA failures.
-- The Swift speech-output adapter tracks the active AVSpeech utterance by object
-  identity and ignores completion/cancel callbacks for older utterances, so
-  stopping or replacing speech cannot let a stale delegate callback mark newer
-  playback idle. Swift tests cover this without invoking live audio output.
+- The Swift speech-output adapter wraps `AVSpeechSynthesizer` behind an internal
+  test seam, trims utterance text before playback, stops existing playback with
+  the immediate boundary before replacement utterances, uses the word boundary
+  for normal stop and the immediate boundary for operator interruption, tracks
+  the active AVSpeech utterance by object identity, and ignores completion/cancel
+  callbacks for older utterances. Swift tests cover these concrete adapter
+  branches without invoking live audio output.
 - Release evidence placeholder hardening now rejects owner-recorded placeholder
   notes in live-device QA reports and final release evidence bundles through
   core IPC/evidence-status validation. The final bundle script rejects the same

@@ -187,6 +187,54 @@ private final class FakeSpeechOutputAdapter: JarvisSpeechOutputAdapter {
     }
 }
 
+private func speechOutputSucceeded(_ result: Result<Void, JarvisSpeechOutputError>) -> Bool {
+    if case .success = result {
+        return true
+    }
+    return false
+}
+
+private func speechOutputFailed(
+    _ result: Result<Void, JarvisSpeechOutputError>,
+    with expected: JarvisSpeechOutputError
+) -> Bool {
+    if case let .failure(error) = result {
+        return error == expected
+    }
+    return false
+}
+
+#if canImport(AVFoundation)
+@MainActor
+private final class CapturingSpeechSynthesizer: JarvisSpeechSynthesizing {
+    var isSpeaking: Bool
+    private(set) weak var delegate: (any AVSpeechSynthesizerDelegate)?
+    private(set) var spokenUtterances: [AVSpeechUtterance]
+    private(set) var stopBoundaries: [AVSpeechBoundary]
+
+    init(isSpeaking: Bool = false) {
+        self.isSpeaking = isSpeaking
+        self.spokenUtterances = []
+        self.stopBoundaries = []
+    }
+
+    func setDelegate(_ delegate: (any AVSpeechSynthesizerDelegate)?) {
+        self.delegate = delegate
+    }
+
+    func speak(_ utterance: AVSpeechUtterance) {
+        spokenUtterances.append(utterance)
+        isSpeaking = true
+    }
+
+    func stopSpeaking(at boundary: AVSpeechBoundary) -> Bool {
+        stopBoundaries.append(boundary)
+        isSpeaking = false
+        return true
+    }
+}
+#endif
+
 @MainActor
 private final class FakeSchedulerNotificationAdapter: JarvisSchedulerNotificationAdapter {
     var authorizationResult: Result<Bool, Error>
@@ -2458,6 +2506,72 @@ struct JarvisMacCoreTests {
     }
 
     #if canImport(AVFoundation)
+    @MainActor
+    @Test("Speech output adapter trims text and delegates synthesized utterance")
+    func speechOutputAdapterTrimsTextAndDelegatesSynthesizedUtterance() async {
+        let synthesizer = CapturingSpeechSynthesizer()
+        let adapter = MacSpeechOutputAdapter(synthesizer: synthesizer)
+        var phases: [JarvisSpeechOutputPhase] = []
+        adapter.onPhaseChange = { phase in
+            phases.append(phase)
+        }
+
+        let result = await adapter.speak("  Jarvis status ready.  ")
+
+        #expect(speechOutputSucceeded(result))
+        #expect(synthesizer.delegate === adapter)
+        #expect(synthesizer.spokenUtterances.map(\.speechString) == ["Jarvis status ready."])
+        #expect(synthesizer.stopBoundaries.isEmpty)
+        #expect(adapter.phase == .speaking)
+        #expect(phases == [.speaking])
+    }
+
+    @MainActor
+    @Test("Speech output adapter stops existing playback before replacement utterance")
+    func speechOutputAdapterStopsExistingPlaybackBeforeReplacementUtterance() async {
+        let synthesizer = CapturingSpeechSynthesizer(isSpeaking: true)
+        let adapter = MacSpeechOutputAdapter(synthesizer: synthesizer)
+
+        let result = await adapter.speak("replacement status")
+
+        #expect(speechOutputSucceeded(result))
+        #expect(synthesizer.stopBoundaries == [.immediate])
+        #expect(synthesizer.spokenUtterances.map(\.speechString) == ["replacement status"])
+        #expect(adapter.phase == .speaking)
+    }
+
+    @MainActor
+    @Test("Speech output adapter stop and interrupt use distinct synthesizer boundaries")
+    func speechOutputAdapterStopAndInterruptUseDistinctSynthesizerBoundaries() async {
+        let synthesizer = CapturingSpeechSynthesizer()
+        let adapter = MacSpeechOutputAdapter(synthesizer: synthesizer)
+
+        _ = await adapter.speak("first status")
+        let stopResult = await adapter.stop()
+        _ = await adapter.speak("second status")
+        let interruptResult = await adapter.interrupt(reason: "Operator interrupted speech output.")
+
+        #expect(speechOutputSucceeded(stopResult))
+        #expect(speechOutputSucceeded(interruptResult))
+        #expect(synthesizer.stopBoundaries == [.word, .immediate])
+        #expect(synthesizer.spokenUtterances.map(\.speechString) == ["first status", "second status"])
+        #expect(adapter.phase == .interrupted(reason: "Operator interrupted speech output."))
+    }
+
+    @MainActor
+    @Test("Speech output adapter rejects empty utterances before synthesizer playback")
+    func speechOutputAdapterRejectsEmptyUtterancesBeforeSynthesizerPlayback() async {
+        let synthesizer = CapturingSpeechSynthesizer()
+        let adapter = MacSpeechOutputAdapter(synthesizer: synthesizer)
+
+        let result = await adapter.speak("   ")
+
+        #expect(speechOutputFailed(result, with: .emptyUtterance))
+        #expect(synthesizer.spokenUtterances.isEmpty)
+        #expect(synthesizer.stopBoundaries.isEmpty)
+        #expect(adapter.phase == .idle)
+    }
+
     @MainActor
     @Test("Speech output adapter ignores stale utterance completion")
     func speechOutputAdapterIgnoresStaleUtteranceCompletion() async {
