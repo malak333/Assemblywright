@@ -149,7 +149,11 @@ fn release_readiness_cli_falls_back_without_running_server() {
     assert!(readable_readiness.contains("Raw JSON: rerun with --json"));
     assert!(readable_full_runbook.contains("Recommended verification commands:"));
     assert!(readable_full_runbook.contains("./scripts/release-ci-workflow-smoke.sh"));
-    assert!(readable_full_runbook.contains("./scripts/packaged-app-release-smoke.sh"));
+    assert!(!readable_full_runbook.contains("./scripts/packaged-app-release-smoke.sh"));
+    assert!(readable_full_runbook.contains("./scripts/package-distribution.sh --check"));
+    assert!(
+        readable_full_runbook.contains("./scripts/package-distribution.sh --unsigned-launch-check")
+    );
     assert!(
         readable_full_runbook.contains("cargo run -p jarvis-cli -- release live-device-runbook")
     );
@@ -177,7 +181,7 @@ fn release_readiness_cli_falls_back_without_running_server() {
     assert_string_array_order(
         &release_readiness["recommended_verification_commands"],
         "./scripts/release-operator-qa-smoke.sh",
-        "./scripts/packaged-app-release-smoke.sh",
+        "./scripts/package-distribution.sh --check",
     );
     assert_string_array_order(
         &release_readiness["recommended_verification_commands"],
@@ -3212,9 +3216,13 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         &release_readiness["recommended_verification_commands"],
         "./scripts/release-operator-qa-smoke.sh",
     );
-    assert_string_array_contains(
+    assert_string_array_missing(
         &release_readiness["recommended_verification_commands"],
         "./scripts/packaged-app-release-smoke.sh",
+    );
+    assert_string_array_contains(
+        &release_readiness["recommended_verification_commands"],
+        "./scripts/package-distribution.sh --unsigned-launch-check",
     );
     assert_string_array_contains(
         &release_readiness["recommended_verification_commands"],
@@ -7288,6 +7296,16 @@ fn assert_string_array_contains(value: &Value, expected: &str) {
     assert!(
         array.iter().any(|item| item.as_str() == Some(expected)),
         "expected array to contain {expected}, got {value}"
+    );
+}
+
+fn assert_string_array_missing(value: &Value, unexpected: &str) {
+    let array = value.as_array().unwrap_or_else(|| {
+        panic!("expected array, got {}", json!(value));
+    });
+    assert!(
+        array.iter().all(|item| item.as_str() != Some(unexpected)),
+        "expected array to omit {unexpected}, got {value}"
     );
 }
 

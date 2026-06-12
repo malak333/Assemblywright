@@ -182,9 +182,6 @@ stage or when a PR needs focused evidence for one ownership slice.
 - `swift build --disable-sandbox --package-path apps/mac`
 - Focused supervision proof for branches that touch Swift core launch or bundle
   discovery: `./scripts/packaged-supervision-proof.sh`
-- Focused packaged app release smoke for branches that touch packaging,
-  app-supervised core launch, or Mac release evidence:
-  `./scripts/packaged-app-release-smoke.sh`
 - Distribution packaging preflight for branches that touch release packaging,
   signing, entitlements, or notarization:
   `./scripts/package-distribution.sh --check`
@@ -470,9 +467,9 @@ stage or when a PR needs focused evidence for one ownership slice.
   scheduler fail-closed pause on non-accepted due
   jobs, diagnostics redaction, persistence restart, and emergency-pause
   blocking/resume behavior. Treat this as the minimum E2E expectation for the
-  current Rust/CLI foundation; packaged Mac release smoke is now covered by
-  `./scripts/packaged-app-release-smoke.sh` for the local assembled app
-  boundary.
+  current Rust/CLI foundation; local packaged Mac launch proof is now covered
+  by `./scripts/package-distribution.sh --unsigned-launch-check` for the
+  release distribution layout boundary.
 - Confirm `./scripts/release-operator-qa-smoke.sh` passes when CLI/operator
   release surfaces change, proving command, audit, routes, memory mutation,
   scheduler attention/run-due, activity, permission review, diagnostics,
@@ -498,17 +495,6 @@ stage or when a PR needs focused evidence for one ownership slice.
   supervisor tests at that executable, and starts the copied binary with a
   repository-backed database to verify health, command, audit, diagnostics,
   emergency pause, blocked command, pause status, and resume surfaces.
-  `./scripts/packaged-app-release-smoke.sh` goes further by assembling a
-  deterministic SwiftPM-built `Jarvis.app`, writing release-smoke `Info.plist`
-  metadata, bundling `jarvis-cli`, ad-hoc signing with `codesign -` when
-  available using `packaging/Jarvis.entitlements`, verifying microphone/Speech
-  usage strings plus the packaged app audio-input entitlement, launching the app
-  executable under a temporary HOME/profile, and verifying app-supervised core
-  health, command, audit, diagnostics, emergency pause, blocked command, pause
-  status, resume, and clean-profile SQLite state. This is local packaged app
-  evidence only; it is not Developer ID signing, notarization, installer
-  validation, live microphone/Speech/audio-output validation, or App Store
-  release evidence.
   `./scripts/package-distribution.sh --unsigned-launch-check` is the release
   distribution counterpart: it builds release Rust/Swift artifacts, assembles
   `target/distribution/Jarvis.app`, creates an unsigned installer payload,
@@ -540,14 +526,15 @@ stage or when a PR needs focused evidence for one ownership slice.
 
 Current local gate:
 
-- Run `./scripts/packaged-app-release-smoke.sh`.
-- The script builds `jarvis-cli` and `JarvisMacApp`, assembles a deterministic
-  `Jarvis.app` bundle, writes `Info.plist`, bundles the core at
-  `Contents/Resources/bin/jarvis-cli`, ad-hoc signs the bundle when
-  `codesign` is available, launches the app executable with isolated endpoint
-  and database environment, and verifies health, command, audit, diagnostics,
-  emergency pause, blocked command, pause status, resume, and temp-profile
-  SQLite state.
+- Run `./scripts/package-distribution.sh --unsigned-launch-check`.
+- The command builds release Rust/Swift artifacts, assembles the
+  distribution-shaped `Jarvis.app`, creates an unsigned installer payload,
+  launches the app executable with isolated endpoint and database environment,
+  and verifies health, command, audit, diagnostics, emergency pause, blocked
+  command, pause status, resume, bundled-core version alignment, and
+  temp-profile SQLite state.
+- `./scripts/packaged-app-release-smoke.sh` is a deprecated compatibility
+  wrapper that delegates to the unsigned distribution launch check.
 
 Clean-profile and manual production gates not proven by this local smoke:
 

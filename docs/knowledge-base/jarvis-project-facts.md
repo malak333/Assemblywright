@@ -518,7 +518,7 @@ requires plugin-trust `generated_at`, `review_started_at`,
   `plugins run-installed` for disabled-by-default local manifests, auditable
   publisher-origin review, trusted-key signature verification, and explicit
   subprocess execution.
-- A local packaged app release smoke exists, and installed plugin execution now
+- A local unsigned distribution launch proof exists, and installed plugin execution now
   has a constrained local subprocess proof. Developer ID signing,
   notarization, installer validation, App Store distribution, owner-recorded
   live-device voice-loop validation, broader plugin marketplace/WASM isolation,
@@ -543,7 +543,7 @@ requires plugin-trust `generated_at`, `review_started_at`,
 - The Swift shell has a core supervisor abstraction, management tabs,
   release/evidence-status inspection, scheduler notification controls, Keychain
   launch credential injection, adapter-backed voice input/output controls, and
-  local packaged-app smoke evidence. It is not a Developer ID signed or
+  unsigned distribution launch evidence. It is not a Developer ID signed or
   notarized packaged app, and it still needs clean-profile Finder/LaunchServices
   and live-device validation before production app claims.
 - The Swift Memory tab now uses the Rust IPC memory contract for list,
@@ -713,7 +713,7 @@ requires plugin-trust `generated_at`, `review_started_at`,
   phases should at least preserve the architecture diagrams, release checklist,
   build/test commands, and KB proof-boundary notes.
 - Do not describe Jarvis as a finished desktop assistant based on the local
-  packaged app smoke alone. Broader readiness still needs Developer ID
+  unsigned distribution launch proof alone. Broader readiness still needs Developer ID
   signing/notarization/stapling evidence, clean-profile install and Finder
   validation, owner-recorded live voice/audio validation, marketplace/plugin
   trust QA, malware analysis, OS-level sandbox/egress evidence where
@@ -741,18 +741,11 @@ requires plugin-trust `generated_at`, `review_started_at`,
   microphone/Speech validation, spoken transcript handoff, live audio-output
   validation, live OS notification validation, or Developer ID
   signing/notarization evidence.
-- `./scripts/packaged-app-release-smoke.sh` is stronger local packaged app
-  evidence: it builds `jarvis-cli` and the Swift app executable, assembles a
-  deterministic `Jarvis.app`, writes release-smoke `Info.plist` metadata,
-  bundles `jarvis-cli` at `Contents/Resources/bin/jarvis-cli`, ad-hoc signs
-  with `codesign -` and `packaging/Jarvis.entitlements` when available,
-  verifies microphone/Speech usage strings and the packaged app audio-input
-  entitlement, launches the app executable with a temporary HOME/profile and
-  explicit temp database path, and verifies app-supervised health, command,
-  audit, diagnostics, emergency pause, blocked command, pause status, resume,
-  and SQLite state. It is not Developer ID signing, notarization, installer
-  validation, Finder/LaunchServices validation, App Store distribution, or real
-  microphone/Speech/live audio-output coverage.
+- `./scripts/packaged-app-release-smoke.sh` is deprecated compatibility only:
+  it delegates to `./scripts/package-distribution.sh --unsigned-launch-check`.
+  Current local packaged app evidence should cite the unsigned distribution
+  launch check because it uses the release-built app layout, bundled core,
+  version marker, and unsigned installer payload path.
 - Swift scheduler notification controls are repo-owned adapter evidence: the
   core model can request authorization, build due, failed, and
   emergency-pause-blocked notification requests, suppress duplicate deliveries
@@ -878,8 +871,8 @@ requires plugin-trust `generated_at`, `review_started_at`,
   names as historical coordination context unless the branch is verified active
   in the current checkout.
 - Historical phase-3 slices included model-route persistence, plugin-subprocess
-  execution, voice adapter controls, packaged app smoke, permission grants UX,
-  and docs architecture alignment. Verify current status from
+  execution, voice adapter controls, packaged app launch proof, permission
+  grants UX, and docs architecture alignment. Verify current status from
   `/release/readiness` and the checkout before treating any old worktree name
   as active.
 - Older scheduler notification, activity summary, and activity event-stream

@@ -27,7 +27,6 @@ The first release-readiness recommended commands are now:
 ./scripts/release-local.sh
 ./scripts/release-ci-workflow-smoke.sh
 ./scripts/release-operator-qa-smoke.sh
-./scripts/packaged-app-release-smoke.sh
 ./scripts/package-distribution.sh --check
 ./scripts/package-distribution.sh --unsigned-launch-check
 cargo run -p jarvis-cli -- release signed-distribution-runbook
@@ -113,8 +112,8 @@ Jarvis is currently a production-shaped local assistant foundation:
   scheduler, diagnostics, release inspection, voice adapter controls, speech
   output controls, Keychain launch credential injection, and core supervision.
 - Local release proof includes the canonical `./scripts/release-local.sh` gate,
-  repository-backed operator smoke, packaged-app smoke, unsigned distribution
-  launch proof, package-distribution no-sign preflight,
+  repository-backed operator smoke, unsigned distribution launch proof,
+  package-distribution no-sign preflight,
   release-evidence-doctor missing-evidence guidance, release evidence script
   self-tests, Rust/CLI E2E, and Swift package tests.
 - Recent PRs #223 through #238 synchronized architecture/readiness docs, added
@@ -164,7 +163,7 @@ Jarvis is currently a production-shaped local assistant foundation:
   final evidence-bundle generation and `release-evidence-doctor.sh
   --assert-complete` after plugin-trust QA, with stronger CLI E2E assertions
   for signed-distribution and plugin-trust runbook shape.
-- The current conservative readiness boundary is unchanged: 17 verified
+- The current conservative readiness boundary is unchanged: 16 verified
   repo-owned features, one pending manual live voice validation feature, and
   missing external/manual release evidence before production-ready language is
   allowed.
