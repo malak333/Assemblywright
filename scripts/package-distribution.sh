@@ -773,6 +773,46 @@ PLIST
   require_output_contains "Info.plist" "$INFO_PLIST_CONTENTS" "NSSpeechRecognitionUsageDescription"
 }
 
+validate_unsigned_package_metadata() {
+  local pkg_path="$1"
+  local expected_identifier="$2"
+  local tmp_dir
+  local expanded_dir
+  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/jarvis-pkg-metadata.XXXXXX")"
+  expanded_dir="$tmp_dir/expanded"
+
+  if ! pkgutil --expand "$pkg_path" "$expanded_dir" >/dev/null; then
+    rm -rf "$tmp_dir"
+    fail "failed to expand unsigned package for metadata validation: $pkg_path"
+  fi
+
+  if ! python3 - "$expanded_dir/PackageInfo" "$expected_identifier" "$VERSION" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+
+package_info, expected_identifier, expected_version = sys.argv[1:4]
+root = ET.parse(package_info).getroot()
+
+checks = {
+    "identifier": expected_identifier,
+    "version": expected_version,
+    "install-location": "/Applications",
+}
+for key, expected in checks.items():
+    actual = root.attrib.get(key)
+    if actual != expected:
+        raise SystemExit(
+            f"unsigned package metadata {key} mismatch: expected {expected!r}, got {actual!r}"
+        )
+PY
+  then
+    rm -rf "$tmp_dir"
+    fail "unsigned package metadata validation failed: $pkg_path"
+  fi
+
+  rm -rf "$tmp_dir"
+}
+
 notary_args=()
 if [[ -n "${JARVIS_NOTARYTOOL_PROFILE:-}" ]]; then
   notary_args=(--keychain-profile "$JARVIS_NOTARYTOOL_PROFILE")
@@ -857,6 +897,7 @@ run_unsigned_structure_check() {
     --version "$VERSION" \
     "$PKG_PATH"
 
+  validate_unsigned_package_metadata "$PKG_PATH" "$BUNDLE_ID.unsigned-structure.pkg"
   PAYLOAD_OUTPUT="$(pkgutil --payload-files "$PKG_PATH")"
   require_output_contains "unsigned package payload" "$PAYLOAD_OUTPUT" "Jarvis.app/Contents/MacOS/$APP_EXECUTABLE_NAME"
   require_output_contains "unsigned package payload" "$PAYLOAD_OUTPUT" "Jarvis.app/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
@@ -891,6 +932,7 @@ run_unsigned_launch_check() {
     --version "$VERSION" \
     "$PKG_PATH"
 
+  validate_unsigned_package_metadata "$PKG_PATH" "$BUNDLE_ID.unsigned-launch.pkg"
   PAYLOAD_OUTPUT="$(pkgutil --payload-files "$PKG_PATH")"
   require_output_contains "unsigned package payload" "$PAYLOAD_OUTPUT" "Jarvis.app/Contents/MacOS/$APP_EXECUTABLE_NAME"
   require_output_contains "unsigned package payload" "$PAYLOAD_OUTPUT" "Jarvis.app/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
