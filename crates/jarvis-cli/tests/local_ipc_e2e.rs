@@ -2721,17 +2721,20 @@ fn release_live_device_runbook_summarizes_next_operator_steps() {
     assert!(readable_runbook.contains("Evidence detail: expected JSON report is missing"));
     assert!(readable_runbook.contains("Run on the release machine:"));
     assert!(readable_runbook.contains(
-        "cargo run -p jarvis-cli -- command \"status check\" --endpoint <release-core-endpoint> --json"
+        "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' in target/release-live-device-qa.env before collecting command evidence"
+    ));
+    assert!(readable_runbook.contains(
+        "cargo run -p jarvis-cli -- command \"status check\" --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\" --json"
     ));
     assert!(readable_runbook.contains("JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid>'"));
     assert!(readable_runbook.contains(
-        "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint <release-core-endpoint>"
+        "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
     ));
     assert!(readable_runbook.contains(
         "Start or restart the core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external"
     ));
     assert!(readable_runbook.contains(
-        "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint <release-core-endpoint>"
+        "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
     ));
     assert!(readable_runbook.contains("Verify microphone and Speech permission prompts"));
     assert!(readable_runbook.contains("Boundary: runbook and local evidence inspection only"));
@@ -2776,12 +2779,13 @@ fn release_live_device_runbook_summarizes_next_operator_steps() {
         &[
             "./scripts/release-live-device-qa.sh --check",
             "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env",
-            "cargo run -p jarvis-cli -- command \"status check\" --endpoint <release-core-endpoint> --json",
+            "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' in target/release-live-device-qa.env before collecting command evidence",
+            "cargo run -p jarvis-cli -- command \"status check\" --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\" --json",
             "Record the returned task ID as JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid>' or a task-associated audit ID as 'audit:<uuid>' in target/release-live-device-qa.env",
             "set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete",
-            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint <release-core-endpoint>",
+            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"",
             "Start or restart the core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external",
-            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint <release-core-endpoint>",
+            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"",
         ],
     );
     assert_string_array_contains_substring(
