@@ -863,7 +863,9 @@ requires plugin-trust `generated_at`, `review_started_at`,
   to generate a sourceable checklist for all required `JARVIS_QA_*` fields. The
   generated template materializes `JARVIS_QA_EXPECTED_VERSION` from the
   canonical Rust package release version so sourced operator evidence stays
-  aligned with the app/core version under validation.
+  aligned with the app/core version under validation, and it now includes the
+  release-core command evidence capture plus post-report external evidence-mode
+  readiness/evidence-status commands.
   `--self-test` uses a fake app fixture to validate assertion/report mechanics
   in the local release gate without claiming live device validation.
 - `cargo run -p jarvis-cli -- release signed-distribution-runbook` is part of

@@ -705,7 +705,11 @@ microphone/Speech, spoken transcript handoff, live audio-output, notification,
 restart, and manual QA steps. `--write-template target/release-live-device-qa.env`
 writes a sourceable checklist for the release operator to fill on the validated
 machine, with `JARVIS_QA_EXPECTED_VERSION` materialized from the canonical
-Rust package release version at generation time. `--assert-complete` is for the release machine after those checks are
+Rust package release version at generation time. The template also includes the
+release-core `jarvis command ... --json` evidence capture, the
+`JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:<uuid>"`/`"audit:<uuid>"` rule, and
+the external evidence-mode `release evidence-status` and `release readiness`
+checks to run after report generation. `--assert-complete` is for the release machine after those checks are
 actually performed and all required `JARVIS_QA_*` flags are explicitly set to
 `true`, including
 `JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true` for the spoken

@@ -324,8 +324,12 @@ operator path together with the current `live_voice_loop` and
 and is now covered by the default local release gate.
 `./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env`
 writes a sourceable checklist of every required `JARVIS_QA_*` flag and evidence
-field. After the owner validates a signed installed app on a real Mac profile,
-fill that template, source it, and rerun the script with `--assert-complete`.
+field. The generated template also carries the command to run against the
+release core, the `task:<uuid>`/`audit:<uuid>` evidence-ID rule, and the
+evidence-mode readiness/evidence-status verification commands to run after the
+report is generated. After the owner validates a signed installed app on a real
+Mac profile, fill that template, source it, and rerun the script with
+`--assert-complete`.
 The assertion requires explicit transcript handoff validation, structured
 spoken-command observation fields with the installed app path matching the
 expected `/Applications/Jarvis.app` path, unless explicitly overridden with
