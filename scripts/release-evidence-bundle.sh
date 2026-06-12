@@ -1261,6 +1261,8 @@ JSON
   "notarization": {
     "app_zip_submission_id": "00000000-0000-4000-8000-000000000001",
     "installer_pkg_submission_id": "00000000-0000-4000-8000-000000000002",
+    "app_zip_status": "Accepted",
+    "installer_pkg_status": "Accepted",
     "app_zip_notary_log": "$tmp_dir/app-zip-notarytool.log",
     "installer_pkg_notary_log": "$tmp_dir/installer-pkg-notarytool.log"
   },
@@ -1453,6 +1455,37 @@ PY
     JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>&1; then
     fail "release evidence self-test expected negated Gatekeeper acceptance to be rejected"
+  fi
+
+  python3 - "$tmp_dir/signed-provenance.json" "$tmp_dir/pending-notary-signed-provenance.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+with open(source, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["notarization"]["installer_pkg_status"] = "In Progress"
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+PY
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/pending-notary-signed-provenance.json" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/pending-notary-bundle.json" \
+    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
+    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+    "$0" --bundle >/dev/null 2>&1; then
+    fail "release evidence self-test expected pending notary status to be rejected"
   fi
 
   printf 'jarvis 0.0.0\n' >"$tmp_dir/dist/Jarvis.app/Contents/Resources/bin/jarvis-cli.version"
@@ -2130,6 +2163,8 @@ done
 require_json_string_contains "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "signing.installer_pkg_signature" "Developer ID Installer: "
 require_json_uuid "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "notarization.app_zip_submission_id"
 require_json_uuid "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "notarization.installer_pkg_submission_id"
+require_json_string_equals "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "notarization.app_zip_status" "Accepted"
+require_json_string_equals "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "notarization.installer_pkg_status" "Accepted"
 require_json_string_contains "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "stapling.app_bundle_validation" "The validate action worked!"
 require_json_string_contains "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "stapling.installer_pkg_validation" "The validate action worked!"
 require_json_gatekeeper_accepted "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "gatekeeper.app_bundle_assessment"

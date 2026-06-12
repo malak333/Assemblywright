@@ -687,7 +687,8 @@ app zip for notarization, staples the app, then creates a signed
 `/Applications` installer package at
 `target/distribution/Jarvis-<release-version>.pkg`,
 checks its installer signature, submits it for notarization, and staples the
-package. Passing the unsigned structure or launch checks still does not prove
+package. The signed-provenance report records exact notary `Accepted` statuses,
+not only submission UUIDs. Passing the unsigned structure or launch checks still does not prove
 signing/notarization, and passing full mode still does not replace
 clean-profile install, Finder launch, live microphone/Speech validation, App
 Store review, spoken transcript handoff, or live audio-output validation.

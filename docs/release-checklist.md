@@ -77,7 +77,8 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   version/bundle metadata, bundled core path/version/SHA-256 binding,
   Apple-tool-derived signing/notary/staple/Gatekeeper evidence fields from
   `codesign`, `pkgutil --check-signature`, `xcrun notarytool`,
-  `xcrun stapler`, and `spctl`, required flags, non-future
+  `xcrun stapler`, and `spctl`, exact notary `Accepted` statuses,
+  required flags, non-future
   plugin-trust review timestamps, owner-asserted plugin-trust review source,
   final bundle version, artifact/report path matching, SHA-256 digest shape,
   signed-provenance zip/pkg/core digests against

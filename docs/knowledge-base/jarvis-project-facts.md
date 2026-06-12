@@ -776,10 +776,11 @@ requires plugin-trust `generated_at`, `review_started_at`,
   Application, Developer ID Installer, and notarytool credentials; signs with
   hardened runtime and microphone entitlements; notarizes and staples the app
   zip; then creates, signs, notarizes, and staples a `/Applications` installer
-  package. It records and validates Developer ID, notary UUID, stapler success,
-  exact Gatekeeper acceptance, and top-level `Jarvis.app` zip payload shape
-  before writing the signed-distribution provenance report. The provenance
-  self-test includes negated Gatekeeper and nested app-zip negative fixtures.
+  package. It records and validates Developer ID, notary UUID, exact notary
+  `Accepted` status, stapler success, exact Gatekeeper acceptance, and top-level
+  `Jarvis.app` zip payload shape before writing the signed-distribution
+  provenance report. The provenance self-test includes rejected notary status,
+  negated Gatekeeper, and nested app-zip negative fixtures.
   `./scripts/release-version-consistency.sh --check` derives the
   release version from Rust package metadata and keeps package, live QA,
   evidence bundle, and evidence doctor defaults aligned with the CLI/core crate

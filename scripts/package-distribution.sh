@@ -164,6 +164,17 @@ print("")
 '
 }
 
+extract_notary_accepted_status() {
+  python3 -c '
+import re
+import sys
+text = sys.stdin.read()
+match = re.search(r"(?im)^\s*status\s*:\s*(\S+)\s*$", text)
+if match and match.group(1) == "Accepted":
+    print("Accepted")
+'
+}
+
 require_uuid() {
   local label="$1"
   local value="$2"
@@ -245,6 +256,8 @@ write_signed_distribution_provenance() {
   local pkg_gatekeeper
   local zip_submission_id
   local pkg_submission_id
+  local zip_notary_status
+  local pkg_notary_status
   local proof_boundary
 
   require_command python3
@@ -270,6 +283,8 @@ write_signed_distribution_provenance() {
   pkg_gatekeeper="$(spctl --assess --type install --verbose "$PKG_PATH" 2>&1)"
   zip_submission_id="$(extract_notary_submission_id <"$ZIP_NOTARY_LOG")"
   pkg_submission_id="$(extract_notary_submission_id <"$PKG_NOTARY_LOG")"
+  zip_notary_status="$(extract_notary_accepted_status <"$ZIP_NOTARY_LOG")"
+  pkg_notary_status="$(extract_notary_accepted_status <"$PKG_NOTARY_LOG")"
   require_output_contains "Developer ID Application identity" "$JARVIS_DEVELOPER_ID_APPLICATION" "Developer ID Application: "
   require_output_contains "Developer ID Installer identity" "$JARVIS_DEVELOPER_ID_INSTALLER" "Developer ID Installer: "
   require_output_contains "app bundle codesign evidence" "$app_codesign" "Authority=Developer ID Application: "
@@ -278,6 +293,8 @@ write_signed_distribution_provenance() {
   require_output_contains "installer package signature evidence" "$pkg_signature" "Developer ID Installer: "
   require_uuid "app zip notary submission id" "$zip_submission_id"
   require_uuid "installer package notary submission id" "$pkg_submission_id"
+  require_output_contains "app zip notary status" "$zip_notary_status" "Accepted"
+  require_output_contains "installer package notary status" "$pkg_notary_status" "Accepted"
   require_output_contains "app bundle stapler validation" "$app_staple" "The validate action worked!"
   require_output_contains "installer package stapler validation" "$pkg_staple" "The validate action worked!"
   require_gatekeeper_accepted "app bundle Gatekeeper assessment" "$app_gatekeeper"
@@ -304,6 +321,8 @@ write_signed_distribution_provenance() {
     PROVENANCE_PKG_SIGNATURE="$pkg_signature" \
     PROVENANCE_ZIP_SUBMISSION_ID="$zip_submission_id" \
     PROVENANCE_PKG_SUBMISSION_ID="$pkg_submission_id" \
+    PROVENANCE_ZIP_NOTARY_STATUS="$zip_notary_status" \
+    PROVENANCE_PKG_NOTARY_STATUS="$pkg_notary_status" \
     PROVENANCE_ZIP_NOTARY_LOG="$ZIP_NOTARY_LOG" \
     PROVENANCE_PKG_NOTARY_LOG="$PKG_NOTARY_LOG" \
     PROVENANCE_APP_STAPLE="$app_staple" \
@@ -344,6 +363,8 @@ report = {
     "notarization": {
         "app_zip_submission_id": os.environ["PROVENANCE_ZIP_SUBMISSION_ID"],
         "installer_pkg_submission_id": os.environ["PROVENANCE_PKG_SUBMISSION_ID"],
+        "app_zip_status": os.environ["PROVENANCE_ZIP_NOTARY_STATUS"],
+        "installer_pkg_status": os.environ["PROVENANCE_PKG_NOTARY_STATUS"],
         "app_zip_notary_log": os.environ["PROVENANCE_ZIP_NOTARY_LOG"],
         "installer_pkg_notary_log": os.environ["PROVENANCE_PKG_NOTARY_LOG"],
     },
@@ -604,6 +625,8 @@ for key in ("app_bundle_codesign", "app_executable_codesign", "bundled_core_code
 assert "Developer ID Installer: " in data["signing"]["installer_pkg_signature"]
 uuid.UUID(data["notarization"]["app_zip_submission_id"])
 uuid.UUID(data["notarization"]["installer_pkg_submission_id"])
+assert data["notarization"]["app_zip_status"] == "Accepted"
+assert data["notarization"]["installer_pkg_status"] == "Accepted"
 assert "The validate action worked!" in data["stapling"]["app_bundle_validation"]
 assert "The validate action worked!" in data["stapling"]["installer_pkg_validation"]
 assert data["gatekeeper"]["app_bundle_assessment"].strip().endswith(": accepted")
@@ -665,6 +688,19 @@ LOG
     JARVIS_DEVELOPER_ID_INSTALLER="Developer ID Installer: Jarvis QA Fixture" \
     write_signed_distribution_provenance 2>&1 || true)"
   require_output_contains "signed provenance bad-notary self-test" "$output" "app zip notary submission id must be a UUID"
+
+  cat >"$ZIP_NOTARY_LOG" <<'LOG'
+id: 00000000-0000-4000-8000-000000000011
+status: Rejected
+LOG
+  set +e
+  output="$(PATH="$stub_dir:$PATH" \
+    JARVIS_PACKAGE_STUB_VERSION="$VERSION" \
+    JARVIS_DEVELOPER_ID_APPLICATION="Developer ID Application: Jarvis QA Fixture" \
+    JARVIS_DEVELOPER_ID_INSTALLER="Developer ID Installer: Jarvis QA Fixture" \
+    write_signed_distribution_provenance 2>&1)"
+  set -e
+  require_output_contains "signed provenance rejected-notary self-test" "$output" "app zip notary status"
 
   trap - EXIT
   PATH="$real_path"

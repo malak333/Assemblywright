@@ -239,12 +239,14 @@ the command contract: the runtime marks the task failed, appends
 evidence instead of letting IPC translate the failure into a transport error.
 `package-distribution.sh` now writes a signed-distribution provenance report
 during the full Developer ID lane after app/pkg signing, notarization, stapling,
-Gatekeeper assessment, notary log capture, and SHA-256 digest capture. Its
+Gatekeeper assessment, exact notary `Accepted` status capture, notary log
+capture, and SHA-256 digest capture. Its
 Apple-tool evidence is generated and semantically checked from `codesign`,
 `pkgutil --check-signature`, `xcrun notarytool`, `xcrun stapler`, and `spctl`
 output before broader release evidence can use it; the writer also rejects
-negated Gatekeeper text such as `not accepted` and app zips that do not contain
-exactly one top-level `Jarvis.app` payload. The report is required by
+rejected or pending notary statuses, negated Gatekeeper text such as
+`not accepted`, and app zips that do not contain exactly one top-level
+`Jarvis.app` payload. The report is required by
 `release-evidence-bundle.sh`, `release-evidence-doctor.sh`, and
 `/release/evidence-status`, but it still does not replace clean-profile install,
 Finder launch, live-device QA, or plugin-trust QA evidence.
