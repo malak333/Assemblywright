@@ -551,7 +551,9 @@ requires live-device QA app bundle metadata to match the
 expected installed app path plus bundle id/version, requires the observed
 transcript to match the spoken test phrase, and writes SHA-256 digests for
 distribution artifacts, signed provenance, and QA reports before writing
-production evidence. Owner evidence-note validation rejects both exact
+production evidence through a structured JSON writer so owner-recorded notes
+with quotes, backslashes, or line breaks remain valid JSON. Owner evidence-note
+validation rejects both exact
 placeholders and embedded placeholder wording such as `TODO before release`,
 `pending release evidence`, or fixture/example/self-test language.
 `./scripts/release-evidence-doctor.sh --check` inventories the expected signed

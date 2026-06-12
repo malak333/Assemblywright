@@ -1007,7 +1007,9 @@ requires plugin-trust `generated_at`, `review_started_at`,
   match signed-provenance `artifacts.bundled_core_sha256`; and final bundle
   owner completion must occur after signed-provenance, live-device QA, and
   plugin-trust child reports are generated but no later than the final bundle
-  generation timestamp.
+  generation timestamp. Final bundle JSON is written through Python `json.dump`
+  rather than heredoc escaping, and the self-test covers multiline, quoted, and
+  backslash-bearing owner evidence-note text.
 - `release-evidence-doctor.sh --check` remains a read-only inventory and report
   semantics check: it validates the bundled-core version marker and report/file
   bindings without executing the bundled core. Its missing-evidence next-step
