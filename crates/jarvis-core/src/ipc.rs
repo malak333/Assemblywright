@@ -4962,6 +4962,7 @@ fn validate_plugin_trust_qa_report(value: &serde_json::Value) -> Result<(), Stri
     {
         return Err("JSON report evidence_type must be owner_recorded_plugin_trust_qa".to_string());
     }
+    require_json_string_value(value, "version", &expected_release_evidence_version())?;
     require_json_bool_value(value, "self_test_fixture", false)?;
     require_json_string_value(value, "review_source", "owner-asserted-manual-review")?;
     for field in [
@@ -5653,7 +5654,7 @@ fn release_json_present_detail(key: &str) -> String {
         "release_evidence_bundle" => "JSON report exists, schema/evidence identity is valid, expected release version matches, artifact/report paths and SHA-256 digests match current artifacts and reports, owner evidence notes are non-placeholder, reports archive URI is durable and non-placeholder, and local signature validation is true; clean-profile, live-device, and plugin-trust claims remain owner-recorded external evidence".to_string(),
         "signed_distribution_provenance_report" => "JSON report exists, expected release version, bundle identifier, bundled core path/version/digest match, Apple-tool-derived signing/notarization/stapling/Gatekeeper evidence is semantically valid, required flags are true, and artifact SHA-256 digests match the current zip/pkg/core files; clean-profile install and live-device QA remain separate manual gates".to_string(),
         "live_device_qa_report" => "JSON report exists, required owner-recorded fields and proof boundary are non-empty, owner evidence notes are non-placeholder, installed app path, release metadata, bundled core executable path/version/SHA-256 binding, timestamps, observed transcript, observed command text, and task/audit command evidence reference match expected values; live-device claims are still owner-recorded external evidence".to_string(),
-        "plugin_trust_qa_report" => "JSON report exists, schema/evidence identity is valid, self-test fixture identity is false, required owner-recorded fields are present, owner evidence notes are non-placeholder, review and egress validation timestamps are valid and ordered, and deny/allow egress fixture notes are present; marketplace, malware, sandbox, and host-level egress claims remain owner-recorded external evidence".to_string(),
+        "plugin_trust_qa_report" => "JSON report exists, schema/evidence identity is valid, expected release version matches, self-test fixture identity is false, required owner-recorded fields are present, owner evidence notes are non-placeholder, review and egress validation timestamps are valid and ordered, and deny/allow egress fixture notes are present; marketplace, malware, sandbox, and host-level egress claims remain owner-recorded external evidence".to_string(),
         _ => "JSON report exists and required owner-recorded fields are present; external claims are not revalidated by evidence-status".to_string(),
     }
 }
@@ -5840,7 +5841,7 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "release_evidence_status",
             "implemented",
-            "`/release/evidence-status` and `jarvis release evidence-status` expose structured present, missing, or invalid status for standard signed artifacts, QA reports, and final evidence bundle paths, including app bundle metadata matching, bundled core version-marker matching, signed-provenance core path/version/digest binding, signed-provenance artifact digest matching, live-device QA bundle/version/non-future timestamp and repository-backed command-result evidence checks, plugin-trust non-future timestamp, owner-review-source, host-egress policy and deny/allow fixture checks, and final-bundle path/digest/local-signature/archive-URI validation plus child-report semantic revalidation, with Rust, CLI E2E, and Swift model coverage.",
+            "`/release/evidence-status` and `jarvis release evidence-status` expose structured present, missing, or invalid status for standard signed artifacts, QA reports, and final evidence bundle paths, including app bundle metadata matching, bundled core version-marker matching, signed-provenance core path/version/digest binding, signed-provenance artifact digest matching, live-device QA bundle/version/non-future timestamp and repository-backed command-result evidence checks, plugin-trust release-version, non-future timestamp, owner-review-source, host-egress policy and deny/allow fixture checks, and final-bundle path/digest/local-signature/archive-URI validation plus child-report semantic revalidation, with Rust, CLI E2E, and Swift model coverage.",
             "Read-only file/report inventory plus report semantic validation only; it does not sign, notarize, staple, install, Finder-launch, execute release artifacts, run live-device QA, review marketplace trust, scan malware, or enforce OS sandboxing.",
         ),
         feature(
@@ -6805,6 +6806,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         json!({
             "schema_version": 1,
             "evidence_type": "owner_recorded_plugin_trust_qa",
+            "version": "0.1.4",
             "self_test_fixture": false,
             "generated_at": "2026-05-22T16:21:00Z",
             "review_source": "owner-asserted-manual-review",
@@ -7453,6 +7455,24 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let (status, detail) = inspect_plugin_trust_qa_report_value(report);
         assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
         assert!(detail.contains("evidence_type"), "{detail}");
+    }
+
+    #[test]
+    fn plugin_trust_qa_report_rejects_wrong_or_missing_version() {
+        let mut report = valid_plugin_trust_qa_report_json();
+        report["version"] = json!("9.9.9");
+        let (status, detail) = inspect_plugin_trust_qa_report_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("version"), "{detail}");
+
+        let mut report = valid_plugin_trust_qa_report_json();
+        report
+            .as_object_mut()
+            .expect("plugin fixture object")
+            .remove("version");
+        let (status, detail) = inspect_plugin_trust_qa_report_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("version"), "{detail}");
     }
 
     #[test]

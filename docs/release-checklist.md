@@ -388,13 +388,13 @@ stage or when a PR needs focused evidence for one ownership slice.
 - Confirm
   `./scripts/release-plugin-trust-qa.sh --self-test` proves only JSON report
   mechanics with fake validation flags and fake evidence notes. The report must
-  include `schema_version: 1` and
-  `evidence_type: owner_recorded_plugin_trust_qa`, while final operator evidence
-  must keep `review_source: owner-asserted-manual-review`; self-test or imported
-  review sources are reserved for negative fixtures and cannot clear readiness.
-  must keep `self_test_fixture: false`; stale, self-test, or misidentified
-  report shapes are rejected by the doctor/status gates. Treat `--assert-complete`
-  output as owner-recorded external evidence for marketplace review, malware
+  include `schema_version: 1`, `evidence_type:
+  owner_recorded_plugin_trust_qa`, and the current release `version`, while
+  final operator evidence must keep `self_test_fixture: false` and
+  `review_source: owner-asserted-manual-review`; self-test/imported review
+  sources, wrong-version reports, and misidentified report shapes are rejected
+  by the doctor/status gates. Treat `--assert-complete` output as
+  owner-recorded external evidence for marketplace review, malware
   scanning, signed publisher policy, OS-level process/network sandbox
   validation, and host-level egress validation only after
   owner/timestamp/evidence-note fields are present, including the structured

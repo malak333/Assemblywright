@@ -101,12 +101,13 @@ to explain what happened:
   and owner-recorded evidence notes that are not placeholders such as `TODO`,
   `pending`, `n/a`, or self-test/fixture text.
   and must keep `review_source: owner-asserted-manual-review` for operator
-  evidence. Imported reports, self-test review sources, and stale or
-  future-dated plugin-trust reports cannot clear readiness.
+  evidence. Imported reports, self-test review sources, wrong-version
+  plugin-trust reports, and future-dated plugin-trust reports cannot clear
+  readiness.
   `/release/evidence-status`, `jarvis release evidence-status`,
   `release-evidence-doctor.sh`, and `release-evidence-bundle.sh` all reject
-  non-owner review sources and future-dated plugin trust evidence instead of
-  treating report presence as sufficient proof.
+  wrong-version reports, non-owner review sources, and future-dated plugin
+  trust evidence instead of treating report presence as sufficient proof.
 - Local plugin installation stays metadata-only by default. Validated installed
   manifests are stored as `execution_enabled: false` with
   `execution_grant: metadata_only`, including `local_subprocess` manifests.

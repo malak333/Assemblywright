@@ -163,10 +163,11 @@ These notes capture durable facts for future agents working on this repository.
   signed provenance version/bundle metadata, bundled core path/version/SHA-256
   binding, Apple-tool-derived signing/notary/staple/Gatekeeper evidence fields
   from `codesign`, `pkgutil --check-signature`, `xcrun notarytool`,
-  `xcrun stapler`, and `spctl`, required signed-distribution flags, plugin-trust UTC review
-  timestamp ordering, rejects future-dated generated reports and any
-  plugin-trust `review_source` other than `owner-asserted-manual-review`,
-  validates final bundle version, requires SHA-256-shaped
+  `xcrun stapler`, and `spctl`, required signed-distribution flags,
+  plugin-trust release-version binding, plugin-trust UTC review timestamp
+  ordering, rejects future-dated generated reports and any plugin-trust
+  `review_source` other than `owner-asserted-manual-review`, validates final
+  bundle version, requires SHA-256-shaped
   artifact/report digests including the signed provenance digest, verifies
   signed-provenance zip/pkg/core digests against the current artifact files in
   evidence-status, bundle, and doctor assertions, verifies final-bundle
@@ -366,11 +367,11 @@ These notes capture durable facts for future agents working on this repository.
   `--assert-complete` writes an owner-recorded JSON report after every
   `JARVIS_PLUGIN_QA_*` flag is true and the owner/timestamp/evidence-note fields
   are populated. The accepted report identity is `schema_version: 1` with
-  `evidence_type: owner_recorded_plugin_trust_qa` and `self_test_fixture: false`;
-  accepted operator reports must also use
-  `review_source: owner-asserted-manual-review`. Doctor/status gates reject
-  stale, self-test, misidentified, or non-owner-source plugin-trust report
-  shapes, and they reject placeholder evidence values such as `TODO`, `pending`,
+  `evidence_type: owner_recorded_plugin_trust_qa`, the current release
+  `version`, and `self_test_fixture: false`; accepted operator reports must also
+  use `review_source: owner-asserted-manual-review`. Doctor/status gates reject
+  wrong-version, self-test, misidentified, or non-owner-source plugin-trust
+  report shapes, and they reject placeholder evidence values such as `TODO`, `pending`,
   `n/a`, or self-test/fixture text in owner-recorded evidence fields. Host-level egress evidence
   must also include the reviewed policy/profile label, ordered UTC egress
   validation timestamp, denied undeclared-host fixture note, and declared-host
