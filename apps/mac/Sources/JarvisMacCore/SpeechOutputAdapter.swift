@@ -150,6 +150,39 @@ private extension JarvisSpeechOutputError {
 
 #if canImport(AVFoundation)
 @MainActor
+protocol JarvisSpeechSynthesizing: AnyObject {
+    var isSpeaking: Bool { get }
+    func setDelegate(_ delegate: (any AVSpeechSynthesizerDelegate)?)
+    func speak(_ utterance: AVSpeechUtterance)
+    @discardableResult
+    func stopSpeaking(at boundary: AVSpeechBoundary) -> Bool
+}
+
+private final class SystemSpeechSynthesizer: JarvisSpeechSynthesizing {
+    private let synthesizer: AVSpeechSynthesizer
+
+    init(synthesizer: AVSpeechSynthesizer = AVSpeechSynthesizer()) {
+        self.synthesizer = synthesizer
+    }
+
+    var isSpeaking: Bool {
+        synthesizer.isSpeaking
+    }
+
+    func setDelegate(_ delegate: (any AVSpeechSynthesizerDelegate)?) {
+        synthesizer.delegate = delegate
+    }
+
+    func speak(_ utterance: AVSpeechUtterance) {
+        synthesizer.speak(utterance)
+    }
+
+    func stopSpeaking(at boundary: AVSpeechBoundary) -> Bool {
+        synthesizer.stopSpeaking(at: boundary)
+    }
+}
+
+@MainActor
 public final class MacSpeechOutputAdapter: NSObject, JarvisSpeechOutputAdapter, AVSpeechSynthesizerDelegate {
     public private(set) var phase: JarvisSpeechOutputPhase {
         didSet {
@@ -159,15 +192,23 @@ public final class MacSpeechOutputAdapter: NSObject, JarvisSpeechOutputAdapter, 
 
     public var onPhaseChange: (@MainActor (JarvisSpeechOutputPhase) -> Void)?
 
-    private let synthesizer: AVSpeechSynthesizer
+    private let synthesizer: any JarvisSpeechSynthesizing
     private var activeUtteranceID: ObjectIdentifier?
 
     override public init() {
-        self.synthesizer = AVSpeechSynthesizer()
+        self.synthesizer = SystemSpeechSynthesizer()
         self.phase = .idle
         self.onPhaseChange = nil
         super.init()
-        self.synthesizer.delegate = self
+        self.synthesizer.setDelegate(self)
+    }
+
+    init(synthesizer: any JarvisSpeechSynthesizing) {
+        self.synthesizer = synthesizer
+        self.phase = .idle
+        self.onPhaseChange = nil
+        super.init()
+        self.synthesizer.setDelegate(self)
     }
 
     public func speak(_ text: String) async -> Result<Void, JarvisSpeechOutputError> {
