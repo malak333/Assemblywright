@@ -2336,8 +2336,10 @@ fn release_evidence_status_marks_present_artifacts_as_presence_only() {
         "path: {dist_dir}/Jarvis.app/Contents/Resources/bin/jarvis-cli"
     )));
     assert!(readable_status.contains("version marker matches expected release version"));
-    assert!(readable_status.contains("signed_app_zip: present"));
+    assert!(readable_status.contains("app_executable: present; presence-only caveat"));
+    assert!(readable_status.contains("signed_app_zip: present; presence-only caveat"));
     assert!(readable_status.contains(&format!("path: {dist_dir}/Jarvis-0.1.4.zip")));
+    assert!(readable_status.contains("signed_installer_package: present; presence-only caveat"));
     assert!(readable_status.contains("presence only"));
 
     assert!(evidence_status["proof_boundary"]
@@ -2425,6 +2427,19 @@ fn release_evidence_status_server_marks_present_artifacts_as_presence_only() {
         .as_str()
         .expect("proof boundary")
         .contains("does not sign"));
+
+    let readable_status = run_cli_text([
+        "release",
+        "evidence-status",
+        "--endpoint",
+        server.endpoint().as_str(),
+    ]);
+    assert!(readable_status.contains("signed_app_bundle: present"));
+    assert!(readable_status.contains("app_executable: present; presence-only caveat"));
+    assert!(readable_status.contains("signed_app_zip: present; presence-only caveat"));
+    assert!(readable_status.contains("signed_installer_package: present; presence-only caveat"));
+    assert!(readable_status.contains("  detail: "));
+    assert!(readable_status.contains("not validated by evidence-status"));
     server.stop();
 }
 
