@@ -479,6 +479,10 @@ struct JarvisMacCoreTests {
         #expect(runbook.evidenceItems.first?.key == "live_device_qa_report")
         #expect(runbook.evidenceItems.first?.status == "missing")
         #expect(runbook.commands.contains("./scripts/release-live-device-qa.sh --check"))
+        #expect(runbook.commands.contains("cargo run -p jarvis-cli -- command \"status check\" --endpoint <release-core-endpoint> --json"))
+        #expect(runbook.commands.contains { $0.contains("JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid>'") })
+        #expect(runbook.commands.contains("JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint <release-core-endpoint>"))
+        #expect(runbook.commands.contains("JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint <release-core-endpoint>"))
         #expect(runbook.manualChecks.contains { $0.contains("microphone and Speech") })
         #expect(runbook.proofBoundary.contains("does not perform live-device validation"))
     }
@@ -3843,7 +3847,7 @@ private func releaseRunbookJSON(runbook: String) -> Data {
     let evidenceLabel: String
     let evidencePath: String
     let boundary: String
-    let firstCommand: String
+    let commands: String
     let firstManualCheck: String
     let liveVoiceFeature: String
 
@@ -3853,7 +3857,10 @@ private func releaseRunbookJSON(runbook: String) -> Data {
         evidenceLabel = "Signed-distribution provenance report"
         evidencePath = "target/distribution/Jarvis-0.1.4-signed-provenance.json"
         boundary = "Runbook and local evidence inspection only; this endpoint does not perform signing."
-        firstCommand = "./scripts/package-distribution.sh --check"
+        commands = """
+            "./scripts/package-distribution.sh --check",
+            "cargo run -p jarvis-cli -- release evidence-status"
+        """
         firstManualCheck = "Configure Developer ID Application and Installer identities plus the notarytool profile on the release Mac."
         liveVoiceFeature = "null"
     case "plugin_trust":
@@ -3861,7 +3868,10 @@ private func releaseRunbookJSON(runbook: String) -> Data {
         evidenceLabel = "Plugin-trust QA report"
         evidencePath = "target/release-plugin-trust-qa-report.json"
         boundary = "Runbook and local evidence inspection only; this endpoint does not perform marketplace review."
-        firstCommand = "./scripts/release-plugin-trust-qa.sh --check"
+        commands = """
+            "./scripts/release-plugin-trust-qa.sh --check",
+            "cargo run -p jarvis-cli -- release evidence-status"
+        """
         firstManualCheck = "Preserve malware scan evidence for distributed plugin archives and updates."
         liveVoiceFeature = "null"
     default:
@@ -3869,7 +3879,16 @@ private func releaseRunbookJSON(runbook: String) -> Data {
         evidenceLabel = "Live-device QA report"
         evidencePath = "target/release-live-device-qa-report.json"
         boundary = "Runbook and local evidence inspection only; this endpoint does not perform live-device validation."
-        firstCommand = "./scripts/release-live-device-qa.sh --check"
+        commands = """
+            "./scripts/release-live-device-qa.sh --check",
+            "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env",
+            "cargo run -p jarvis-cli -- command \\"status check\\" --endpoint <release-core-endpoint> --json",
+            "Record the returned task ID as JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid>' or a task-associated audit ID as 'audit:<uuid>' in target/release-live-device-qa.env",
+            "set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete",
+            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint <release-core-endpoint>",
+            "Start or restart the core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external",
+            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint <release-core-endpoint>"
+        """
         firstManualCheck = "Verify microphone and Speech permission prompts during live voice capture."
         liveVoiceFeature = """
         {
@@ -3902,8 +3921,7 @@ private func releaseRunbookJSON(runbook: String) -> Data {
             }
           ],
           "commands": [
-            "\(firstCommand)",
-            "cargo run -p jarvis-cli -- release evidence-status"
+            \(commands)
           ],
           "manual_checks": [
             "\(firstManualCheck)"

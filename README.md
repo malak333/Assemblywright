@@ -321,7 +321,10 @@ or QA.
 `cargo run -p jarvis-cli -- release live-device-runbook` prints the same
 operator path together with the current `live_voice_loop` and
 `live_device_qa_report` evidence status, without performing live validation,
-and is now covered by the default local release gate.
+and is now covered by the default local release gate. The runbook commands also
+include the release-core command evidence capture, the `task:<uuid>`/`audit:<uuid>`
+recording rule, and the external evidence-mode readiness/evidence-status
+commands with the release endpoint placeholder.
 `./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env`
 writes a sourceable checklist of every required `JARVIS_QA_*` flag and evidence
 field. The generated template also carries the command to run against the
