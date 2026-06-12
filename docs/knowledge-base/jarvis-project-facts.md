@@ -490,6 +490,13 @@ requires plugin-trust `generated_at`, `review_started_at`,
   Approval Center renders this summary alongside grant history. It is
   inspection-only and does not execute, enable plugin side effects, or
   autonomously rewrite/delete memory.
+- Repository-backed IPC exposes `/memory/retention-plan`, and the CLI exposes
+  `jarvis memory retention-plan`, as the memory-specific operator queue behind
+  policy review. It lists active unreviewed memory and deleted sensitive memory
+  retained in local storage with category/key, sensitivity, severity, status,
+  reason, and recommended action only. Memory values and provenance strings are
+  intentionally omitted, `automation_enabled` is false, and the surface does not
+  purge, restore, rewrite, or otherwise mutate memory.
 - Approved first-party approval records can be explicitly executed once through
   `/approvals/:id/execute` or `jarvis approvals execute <approval-id>`.
   Approve/deny remains side-effect-free; execution replays only the original
@@ -698,10 +705,14 @@ requires plugin-trust `generated_at`, `review_started_at`,
   `cargo test -p jarvis-core model_provider_failure_returns_failed_response_with_route_evidence -- --nocapture`
   plus
   `cargo test -p jarvis-core command_schema_returns_failed_runtime_response_for_model_provider_error -- --nocapture`.
-- Focused memory policy review coverage is
+- Focused memory policy review and retention-plan coverage is
   `cargo test -p jarvis-core permission_policy_review_summarizes_unreviewed_memory_without_values -- --nocapture`
   plus
+  `cargo test -p jarvis-core memory_retention_plan_lists_redacted_operator_actions -- --nocapture`
+  plus
   `cargo test -p jarvis-core diagnostics_export_is_redacted_and_counts_repository_state -- --nocapture`.
+  Cross-process CLI coverage for `jarvis memory retention-plan` is in
+  `cargo test -p jarvis-cli --test local_ipc_e2e serve_exposes_local_ipc_contract_and_persists_state -- --nocapture`.
 - The focused repository-state test for progress visibility is
   `cargo test -p jarvis-core repository_backed_state_endpoints_expose_tasks_and_audit -- --nocapture`.
   Contract coverage for the activity stream is in

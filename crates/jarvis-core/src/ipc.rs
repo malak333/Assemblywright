@@ -756,6 +756,35 @@ pub struct PermissionPolicyReviewItem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryRetentionPlan {
+    pub generated_at: DateTime<Utc>,
+    pub status: String,
+    pub candidate_count: usize,
+    pub unreviewed_active_count: usize,
+    pub deleted_sensitive_retained_count: usize,
+    pub next_required_action: String,
+    pub automation_enabled: bool,
+    pub value_redaction_required: bool,
+    pub candidates: Vec<MemoryRetentionCandidate>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryRetentionCandidate {
+    pub memory_id: Uuid,
+    pub category: String,
+    pub key: String,
+    pub sensitivity: Sensitivity,
+    pub status: String,
+    pub severity: String,
+    pub reason: String,
+    pub recommended_action: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reviewed_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deleted_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApprovalStatusCount {
     pub status: ApprovalStatus,
     pub count: usize,
@@ -1476,6 +1505,55 @@ impl IpcState {
                 sensitive_memory_item_count: memory_summary.sensitive_active_count,
                 side_effects_require_approval: true,
                 items,
+            })
+        })
+    }
+
+    pub fn memory_retention_plan(&self) -> JarvisResult<MemoryRetentionPlan> {
+        self.using_repository(|repository| {
+            let mut candidates = repository
+                .list_memory_items(true)?
+                .into_iter()
+                .filter_map(memory_retention_candidate)
+                .collect::<Vec<_>>();
+
+            candidates.sort_by_key(|candidate| {
+                (
+                    permission_review_severity_rank(&candidate.severity),
+                    candidate.status.clone(),
+                    candidate.category.clone(),
+                    candidate.key.clone(),
+                    candidate.memory_id,
+                )
+            });
+
+            let unreviewed_active_count = candidates
+                .iter()
+                .filter(|candidate| candidate.status == "active_unreviewed")
+                .count();
+            let deleted_sensitive_retained_count = candidates
+                .iter()
+                .filter(|candidate| candidate.status == "deleted_sensitive_retained")
+                .count();
+
+            Ok(MemoryRetentionPlan {
+                generated_at: Utc::now(),
+                status: if candidates.is_empty() {
+                    "clear".to_string()
+                } else {
+                    "operator_review_required".to_string()
+                },
+                candidate_count: candidates.len(),
+                unreviewed_active_count,
+                deleted_sensitive_retained_count,
+                next_required_action: if candidates.is_empty() {
+                    "none".to_string()
+                } else {
+                    "review candidates, then mark reviewed, restore, or purge outside Jarvis storage with operator approval".to_string()
+                },
+                automation_enabled: false,
+                value_redaction_required: true,
+                candidates,
             })
         })
     }
@@ -3175,6 +3253,42 @@ fn memory_sensitivity_requires_retention_review(sensitivity: Sensitivity) -> boo
     )
 }
 
+fn memory_retention_candidate(memory: crate::MemoryItem) -> Option<MemoryRetentionCandidate> {
+    if memory.deleted_at.is_none() && memory.reviewed_at.is_none() {
+        return Some(MemoryRetentionCandidate {
+            memory_id: memory.id,
+            category: memory.category,
+            key: memory.key,
+            sensitivity: memory.sensitivity,
+            status: "active_unreviewed".to_string(),
+            severity: memory_review_severity(memory.sensitivity).to_string(),
+            reason: "Active memory has not been reviewed by an operator".to_string(),
+            recommended_action: "review_or_update".to_string(),
+            reviewed_at: memory.reviewed_at,
+            deleted_at: memory.deleted_at,
+        });
+    }
+
+    if memory.deleted_at.is_some()
+        && memory_sensitivity_requires_retention_review(memory.sensitivity)
+    {
+        return Some(MemoryRetentionCandidate {
+            memory_id: memory.id,
+            category: memory.category,
+            key: memory.key,
+            sensitivity: memory.sensitivity,
+            status: "deleted_sensitive_retained".to_string(),
+            severity: memory_review_severity(memory.sensitivity).to_string(),
+            reason: "Deleted sensitive memory is still retained in local storage".to_string(),
+            recommended_action: "operator_purge_or_restore".to_string(),
+            reviewed_at: memory.reviewed_at,
+            deleted_at: memory.deleted_at,
+        });
+    }
+
+    None
+}
+
 fn sensitivity_from_context(context: &serde_json::Value) -> Option<Sensitivity> {
     let value = context.get("sensitivity")?.as_str()?;
     match value {
@@ -3301,6 +3415,7 @@ pub fn router(state: IpcState) -> Router {
         .route("/model-routes/:id", get(get_model_route))
         .route("/memory", get(list_memory_items).post(create_memory_item))
         .route("/memory/classification", get(memory_classification_summary))
+        .route("/memory/retention-plan", get(memory_retention_plan))
         .route(
             "/memory/:id",
             get(get_memory_item)
@@ -3625,6 +3740,15 @@ async fn memory_classification_summary(
         .is_some_and(|value| value == "true" || value == "1");
     state
         .using_repository(|repository| repository.memory_classification_summary(include_deleted))
+        .map(Json)
+        .map_err(error_response)
+}
+
+async fn memory_retention_plan(
+    State(state): State<IpcState>,
+) -> Result<Json<MemoryRetentionPlan>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .memory_retention_plan()
         .map(Json)
         .map_err(error_response)
 }
@@ -4023,6 +4147,7 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
         endpoint("GET", "/model-routes/:id", true, true),
         endpoint("GET", "/memory", true, false),
         endpoint("GET", "/memory/classification", true, true),
+        endpoint("GET", "/memory/retention-plan", true, true),
         endpoint("POST", "/memory", true, false),
         endpoint("GET", "/memory/:id", true, false),
         endpoint("PATCH", "/memory/:id", true, false),
@@ -9469,6 +9594,77 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let encoded = serde_json::to_string(&review).expect("review JSON");
         assert!(!encoded.contains("never expose deleted sensitive memory"));
         assert!(!encoded.contains("deleted workspace memory value"));
+    }
+
+    #[tokio::test]
+    async fn memory_retention_plan_lists_redacted_operator_actions() {
+        let repository = SqliteRepository::in_memory().unwrap();
+        let active_unreviewed = repository
+            .create_memory_item(NewMemoryItem {
+                category: "preference".to_string(),
+                key: "voice".to_string(),
+                value: "never expose active memory value".to_string(),
+                provenance: "test active".to_string(),
+                sensitivity: Sensitivity::Private,
+            })
+            .expect("active unreviewed memory");
+        let deleted_sensitive = repository
+            .create_memory_item(NewMemoryItem {
+                category: "credential-adjacent".to_string(),
+                key: "token-location".to_string(),
+                value: "never expose retained deleted memory".to_string(),
+                provenance: "test deleted".to_string(),
+                sensitivity: Sensitivity::CredentialAdjacent,
+            })
+            .and_then(|item| repository.delete_memory_item(item.id))
+            .expect("deleted sensitive memory");
+        repository
+            .create_memory_item(NewMemoryItem {
+                category: "workspace".to_string(),
+                key: "reviewed".to_string(),
+                value: "reviewed memory value".to_string(),
+                provenance: "test reviewed".to_string(),
+                sensitivity: Sensitivity::Workspace,
+            })
+            .and_then(|item| repository.mark_memory_reviewed(item.id))
+            .expect("reviewed memory");
+        repository
+            .create_memory_item(NewMemoryItem {
+                category: "workspace".to_string(),
+                key: "deleted".to_string(),
+                value: "deleted workspace memory value".to_string(),
+                provenance: "test deleted workspace".to_string(),
+                sensitivity: Sensitivity::Workspace,
+            })
+            .and_then(|item| repository.delete_memory_item(item.id))
+            .expect("deleted workspace memory");
+        let state = IpcState::with_repository(repository).expect("state");
+
+        let plan = state.memory_retention_plan().expect("retention plan");
+
+        assert_eq!(plan.status, "operator_review_required");
+        assert_eq!(plan.candidate_count, 2);
+        assert_eq!(plan.unreviewed_active_count, 1);
+        assert_eq!(plan.deleted_sensitive_retained_count, 1);
+        assert!(!plan.automation_enabled);
+        assert!(plan.value_redaction_required);
+        assert!(plan.candidates.iter().any(|candidate| {
+            candidate.memory_id == active_unreviewed.id
+                && candidate.status == "active_unreviewed"
+                && candidate.recommended_action == "review_or_update"
+        }));
+        assert!(plan.candidates.iter().any(|candidate| {
+            candidate.memory_id == deleted_sensitive.id
+                && candidate.status == "deleted_sensitive_retained"
+                && candidate.recommended_action == "operator_purge_or_restore"
+        }));
+        let encoded = serde_json::to_string(&plan).expect("retention plan JSON");
+        assert!(!encoded.contains("never expose active memory value"));
+        assert!(!encoded.contains("never expose retained deleted memory"));
+        assert!(!encoded.contains("reviewed memory value"));
+        assert!(!encoded.contains("deleted workspace memory value"));
+        assert!(!encoded.contains("test active"));
+        assert!(!encoded.contains("test deleted"));
     }
 
     #[tokio::test]
