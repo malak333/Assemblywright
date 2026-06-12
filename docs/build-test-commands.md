@@ -15,10 +15,11 @@ intentionally stays local-only. Use this gate as the default PR evidence for
 current foundation work unless a narrower docs-only change justifies a focused
 documentation check.
 On GitHub, `.github/workflows/release-local.yml` runs the same gate on
-`macos-latest` for pull requests, pushes to `main`, and manual dispatch. The
-workflow is configuration evidence only; it still does not perform Developer ID
-signing, notarization, clean-profile installation, Finder launch validation,
-live-device QA, or plugin marketplace trust review.
+`macos-15` with SHA-pinned checkout/toolchain actions and Rust `1.95.0` for
+pull requests, pushes to `main`, and manual dispatch. The workflow is
+configuration evidence only; it still does not perform Developer ID signing,
+notarization, clean-profile installation, Finder launch validation, live-device
+QA, or plugin marketplace trust review.
 `/contract` and release readiness expose this lane as `release_ci_gate` with
 the same boundary.
 

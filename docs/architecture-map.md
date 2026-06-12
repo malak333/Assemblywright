@@ -449,8 +449,9 @@ formatting, linting, tests, ignored release-proof tests, build/package, CLI
 smoke, repository-backed operator QA smoke, unsigned distribution launch proof,
 live-device QA preflight/self-test, plugin-trust QA preflight/template/self-test,
 release-evidence bundle preflight/self-test, and Swift package build/test.
-The public GitHub Actions workflow runs that same local gate on `macos-latest`
-for pull requests, pushes to `main`, and manual dispatch.
+The public GitHub Actions workflow runs that same local gate on pinned `macos-15`
+with SHA-pinned checkout/toolchain actions and Rust `1.95.0` for pull requests,
+pushes to `main`, and manual dispatch.
 `release-ci-workflow-smoke.sh` is part of the gate so workflow drift away from
 `./scripts/release-local.sh` fails locally before PR evidence is claimed.
 This lane is also exposed through `/contract` and release readiness as

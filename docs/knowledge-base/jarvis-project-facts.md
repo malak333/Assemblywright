@@ -12,11 +12,12 @@ These notes capture durable facts for future agents working on this repository.
   which runs `./scripts/release-local.sh` on macOS for pull requests, pushes to
   `main`, and manual dispatch. `./scripts/release-ci-workflow-smoke.sh` is part
   of the local gate and validates that the workflow still points at the
-  canonical release-local script. The workflow uses `actions/checkout@v5`, whose
-  official action metadata runs on Node 24, to avoid Node 20 deprecation drift
-  in the public release gate. This is CI evidence for repo-owned local
-  verification only, not Developer ID signing, notarization, clean-profile
-  install, Finder launch, live-device QA, or plugin marketplace trust evidence.
+  canonical release-local script. The workflow pins the runner to `macos-15`,
+  pins `actions/checkout` and `dtolnay/rust-toolchain` by commit SHA, and
+  installs Rust `1.95.0` with `clippy` and `rustfmt`; `rust-toolchain.toml`
+  carries the same Rust pin for local `rustup` users. This is CI evidence for
+  repo-owned local verification only, not Developer ID signing, notarization,
+  clean-profile install, Finder launch, live-device QA, or plugin marketplace trust evidence.
   The same boundary is exposed as the `release_ci_gate` feature in `/contract`
   and release readiness.
 - The product direction is a local-first macOS assistant foundation, legally
