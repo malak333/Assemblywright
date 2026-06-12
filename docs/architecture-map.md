@@ -473,11 +473,13 @@ live-device QA runbook executable in the default gate;
 writes a JSON evidence report with installed-app metadata, voice-loop evidence
 fields, owner/device/profile/timestamp/evidence notes, structured
 spoken-command observation fields, validation flags, schema identity, and proof
-boundary, not an automated proof. Owner-recorded evidence fields must contain
+boundary, not an automated proof. Owner-recorded evidence-note fields must contain
 non-placeholder text, not values such as `TODO`, `pending`, `n/a`, `fixture`, or
 `self-test fixture`, and self-test fixture identity is reserved for the script's
-internal fake-fixture self-test. The `--self-test` mode uses that fake app
-fixture to cover the assertion/report mechanics in the local gate.
+internal fake-fixture self-test. The `--assert-complete` path rejects those
+placeholder notes before writing release evidence, and `--self-test` uses the
+fake app fixture to cover valid assertion/report mechanics plus placeholder
+live-voice and non-voice evidence-note rejection in the local gate.
 The `./scripts/release-plugin-trust-qa.sh --check` command similarly keeps
 marketplace, malware-analysis, signed-publisher-policy, OS sandbox, and
 host-level egress checks on the release path; `--write-template` writes a
@@ -838,7 +840,7 @@ That note records the six-agent audit ownership, the live readiness snapshot,
 and the relevant E2E coverage for this docs-sync phase.
 
 The current readiness payload should be refreshed before release claims. In the
-2026-06-11 sweep refresh after PR #234 from `main` at `744a64b`,
+2026-06-11 sweep refresh after PR #235 from `main` at `7833c62`,
 `jarvis release readiness --json`
 reported `production_ready: false`, `verified_feature_count: 17`, and
 `pending_feature_count: 1`, with `live_voice_loop` still
