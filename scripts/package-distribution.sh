@@ -495,6 +495,7 @@ if [[ "$CHECK_GUIDANCE_SELF_TEST" == true ]]; then
   require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "Next release evidence commands:"
   require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "cargo run -p jarvis-cli -- release signed-distribution-runbook"
   require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh"
+  require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "JARVIS_NOTARYTOOL_APPLE_ID='apple-id@example.com' JARVIS_NOTARYTOOL_TEAM_ID='TEAMID1234' JARVIS_NOTARYTOOL_PASSWORD='app-specific-password'"
   require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env"
   require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "cargo run -p jarvis-cli -- command \"status check\" --endpoint <release-core-endpoint> --json"
   require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid>'"
@@ -845,9 +846,10 @@ PLIST
   require_output_contains "Info.plist" "$INFO_PLIST_CONTENTS" "NSSpeechRecognitionUsageDescription"
 }
 
-validate_unsigned_package_metadata() {
+validate_package_metadata() {
   local pkg_path="$1"
   local expected_identifier="$2"
+  local label="${3:-package}"
   local tmp_dir
   local expanded_dir
   tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/jarvis-pkg-metadata.XXXXXX")"
@@ -855,7 +857,7 @@ validate_unsigned_package_metadata() {
 
   if ! pkgutil --expand "$pkg_path" "$expanded_dir" >/dev/null; then
     rm -rf "$tmp_dir"
-    fail "failed to expand unsigned package for metadata validation: $pkg_path"
+    fail "failed to expand $label for metadata validation: $pkg_path"
   fi
 
   if ! python3 - "$expanded_dir/PackageInfo" "$expected_identifier" "$VERSION" <<'PY'
@@ -874,12 +876,12 @@ for key, expected in checks.items():
     actual = root.attrib.get(key)
     if actual != expected:
         raise SystemExit(
-            f"unsigned package metadata {key} mismatch: expected {expected!r}, got {actual!r}"
+            f"package metadata {key} mismatch: expected {expected!r}, got {actual!r}"
         )
 PY
   then
     rm -rf "$tmp_dir"
-    fail "unsigned package metadata validation failed: $pkg_path"
+    fail "$label metadata validation failed: $pkg_path"
   fi
 
   rm -rf "$tmp_dir"
@@ -931,6 +933,8 @@ if [[ "$CHECK_ONLY" == true ]]; then
 Next release evidence commands:
   cargo run -p jarvis-cli -- release signed-distribution-runbook
   JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh
+  # Alternative notarization auth:
+  JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_APPLE_ID='apple-id@example.com' JARVIS_NOTARYTOOL_TEAM_ID='TEAMID1234' JARVIS_NOTARYTOOL_PASSWORD='app-specific-password' ./scripts/package-distribution.sh
   ./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env
   cargo run -p jarvis-cli -- command "status check" --endpoint <release-core-endpoint> --json
   record the returned task ID as JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid>' or a task-associated audit ID as 'audit:<uuid>'
@@ -976,7 +980,7 @@ run_unsigned_structure_check() {
     --version "$VERSION" \
     "$PKG_PATH"
 
-  validate_unsigned_package_metadata "$PKG_PATH" "$BUNDLE_ID.unsigned-structure.pkg"
+  validate_package_metadata "$PKG_PATH" "$BUNDLE_ID.unsigned-structure.pkg" "unsigned structure package"
   PAYLOAD_OUTPUT="$(pkgutil --payload-files "$PKG_PATH")"
   require_output_contains "unsigned package payload" "$PAYLOAD_OUTPUT" "Jarvis.app/Contents/MacOS/$APP_EXECUTABLE_NAME"
   require_output_contains "unsigned package payload" "$PAYLOAD_OUTPUT" "Jarvis.app/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
@@ -1012,7 +1016,7 @@ run_unsigned_launch_check() {
     --version "$VERSION" \
     "$PKG_PATH"
 
-  validate_unsigned_package_metadata "$PKG_PATH" "$BUNDLE_ID.unsigned-launch.pkg"
+  validate_package_metadata "$PKG_PATH" "$BUNDLE_ID.unsigned-launch.pkg" "unsigned launch package"
   PAYLOAD_OUTPUT="$(pkgutil --payload-files "$PKG_PATH")"
   require_output_contains "unsigned package payload" "$PAYLOAD_OUTPUT" "Jarvis.app/Contents/MacOS/$APP_EXECUTABLE_NAME"
   require_output_contains "unsigned package payload" "$PAYLOAD_OUTPUT" "Jarvis.app/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
@@ -1173,6 +1177,7 @@ run pkgbuild \
   --version "$VERSION" \
   --sign "$JARVIS_DEVELOPER_ID_INSTALLER" \
   "$PKG_PATH"
+validate_package_metadata "$PKG_PATH" "$BUNDLE_ID.pkg" "signed installer package"
 run pkgutil --check-signature "$PKG_PATH"
 capture_command "installer package notarization" "$PKG_NOTARY_LOG" xcrun notarytool submit "$PKG_PATH" "${notary_args[@]}" --wait
 run xcrun stapler staple "$PKG_PATH"

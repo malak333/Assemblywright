@@ -131,6 +131,8 @@ claim.
 
 1. Run the signed distribution lane with Developer ID and notarytool credentials:
    \`JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh\`
+   Or use Apple ID credentials instead of a stored profile:
+   \`JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_APPLE_ID='apple-id@example.com' JARVIS_NOTARYTOOL_TEAM_ID='TEAMID1234' JARVIS_NOTARYTOOL_PASSWORD='app-specific-password' ./scripts/package-distribution.sh\`
 2. Install the signed, notarized package into \`/Applications\` on a clean Mac
    profile and complete the live-device checks. Then source
    \`release-live-device-qa.env\` and run

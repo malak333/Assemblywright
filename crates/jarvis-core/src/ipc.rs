@@ -4419,14 +4419,18 @@ fn release_signed_distribution_runbook_from(
             "./scripts/package-distribution.sh --unsigned-launch-check".to_string(),
             "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh"
                 .to_string(),
+            "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_APPLE_ID='apple-id@example.com' JARVIS_NOTARYTOOL_TEAM_ID='TEAMID1234' JARVIS_NOTARYTOOL_PASSWORD='app-specific-password' ./scripts/package-distribution.sh"
+                .to_string(),
             "cargo run -p jarvis-cli -- release evidence-status".to_string(),
             "./scripts/release-evidence-doctor.sh --check".to_string(),
             "cargo run -p jarvis-cli -- release live-device-runbook".to_string(),
         ],
         manual_checks: vec![
-            "Configure Developer ID Application and Installer identities plus the notarytool profile on the release Mac."
+            "Configure Developer ID Application and Installer identities plus either a notarytool keychain profile or Apple ID/team/app-specific password credentials on the release Mac."
                 .to_string(),
-            "Run the full package-distribution lane and preserve the signed zip, signed installer package, and signed provenance report."
+            "Run the full package-distribution lane and preserve the signed zip, signed installer package, signed provenance report, and notarytool logs referenced by that report."
+                .to_string(),
+            "Confirm the signed installer package metadata still targets the Jarvis package identifier, release version, and /Applications install location."
                 .to_string(),
             "Confirm the signed app zip and installer package are notarized and stapled before clean-profile installation."
                 .to_string(),

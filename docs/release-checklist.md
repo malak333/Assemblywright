@@ -705,8 +705,9 @@ Distribution packaging gate:
   the Apple ID/team/password notarytool variables, then run
   `./scripts/package-distribution.sh`.
 - Confirm the resulting app zip and installer package are Developer ID signed,
-  notarized, and stapled. The script also verifies the app signature, installer
-  package signature, app staple, package staple, notary submission IDs, notary
+  notarized, and stapled. The script also verifies signed installer package
+  identifier/version/`/Applications` metadata, app signature, installer package
+  signature, app staple, package staple, notary submission IDs, preserved notary
   log SHA-256 bindings, and Gatekeeper acceptance from the Apple tool output
   recorded in signed provenance.
 - Still perform clean-profile installer run, Finder launch, microphone/Speech
