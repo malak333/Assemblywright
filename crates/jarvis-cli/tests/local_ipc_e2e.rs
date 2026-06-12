@@ -2271,6 +2271,28 @@ fn release_evidence_status_marks_present_artifacts_as_presence_only() {
         );
     }
 
+    let readable_status = run_cli_text_with_env(
+        [
+            "release",
+            "evidence-status",
+            "--endpoint",
+            endpoint.as_str(),
+        ],
+        &[("JARVIS_EVIDENCE_DIST_DIR", dist_dir)],
+    );
+    assert!(readable_status.contains("signed_app_bundle: present"));
+    assert!(readable_status.contains(&format!("path: {dist_dir}/Jarvis.app")));
+    assert!(readable_status.contains("  detail: "));
+    assert!(readable_status.contains("Info.plist bundle identifier"));
+    assert!(readable_status.contains("bundled_core_executable: present"));
+    assert!(readable_status.contains(&format!(
+        "path: {dist_dir}/Jarvis.app/Contents/Resources/bin/jarvis-cli"
+    )));
+    assert!(readable_status.contains("version marker matches expected release version"));
+    assert!(readable_status.contains("signed_app_zip: present"));
+    assert!(readable_status.contains(&format!("path: {dist_dir}/Jarvis-0.1.4.zip")));
+    assert!(readable_status.contains("presence only"));
+
     assert!(evidence_status["proof_boundary"]
         .as_str()
         .expect("proof boundary")

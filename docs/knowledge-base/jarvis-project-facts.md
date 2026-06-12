@@ -443,7 +443,7 @@ requires plugin-trust `generated_at`, `review_started_at`,
   plugin-trust review timestamp and owner-review-source checks, final bundle
   version/SHA/archive-URI/local-signature checks, and repository-backed live
   command evidence resolution, so the CLI and Swift Release tab can show
-  missing or invalid release evidence without parsing script text.
+  present, missing, or invalid release evidence without parsing script text.
 - Release evidence status rejects false live-device validation flags, false
   live voice-loop flags, false plugin-trust validation flags, and false final
   evidence-bundle validation flags; CLI E2E now covers those semantics and
@@ -983,7 +983,8 @@ requires plugin-trust `generated_at`, `review_started_at`,
   core IPC/evidence-status validation. The final bundle script rejects the same
   placeholders before writing a bundle, and readable
   `jarvis release evidence-status` output includes each evidence item's path and
-  missing/invalid detail so operators do not need `--json` for basic triage.
+  detail, including present presence-only caveats, so operators do not need
+  `--json` for basic triage.
 - `jarvis-cli serve --db-path <path>` starts IPC with SQLite-backed task,
   audit, memory, and emergency-pause state for manual persistence checks.
 - File-backed `SqliteRepository::open` creates a preflight migration backup

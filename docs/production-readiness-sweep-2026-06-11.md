@@ -116,7 +116,7 @@ Jarvis is currently a production-shaped local assistant foundation:
   launch proof, package-distribution no-sign preflight,
   release-evidence-doctor missing-evidence guidance, release evidence script
   self-tests, Rust/CLI E2E, and Swift package tests.
-- Recent PRs #223 through #236 synchronized architecture/readiness docs, added
+- Recent PRs #223 through #237 synchronized architecture/readiness docs, added
   explicit `--json`/`--format json` release inspection compatibility, added the
   package-distribution preflight to the local release gate, and made the
   evidence doctor recommend that preflight before credentialed signing. PR #230
@@ -128,7 +128,11 @@ Jarvis is currently a production-shaped local assistant foundation:
   notes in release evidence-status/final-bundle paths, PR #235 ignored stale
   AVSpeech completion/cancel callbacks after a newer utterance starts, and PR
   #236 made `release-live-device-qa.sh --assert-complete` reject placeholder
-  live-device evidence notes before writing release evidence.
+  live-device evidence notes before writing release evidence. PR #237 added a
+  package `--check` guidance self-test to keep the release handoff commands
+  executable. The readable evidence-status follow-up locks present-item
+  path/detail coverage in CLI E2E and updates docs so operators see present
+  presence-only caveats without switching to JSON.
 - The current conservative readiness boundary is unchanged: 17 verified
   repo-owned features, one pending manual live voice validation feature, and
   missing external/manual release evidence before production-ready language is
