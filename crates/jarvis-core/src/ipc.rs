@@ -4360,12 +4360,18 @@ fn release_live_device_runbook_from(
             "./scripts/release-live-device-qa.sh --check".to_string(),
             "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env"
                 .to_string(),
+            "cargo run -p jarvis-cli -- command \"status check\" --endpoint <release-core-endpoint> --json"
+                .to_string(),
+            "Record the returned task ID as JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid>' or a task-associated audit ID as 'audit:<uuid>' in target/release-live-device-qa.env"
+                .to_string(),
             "set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete"
                 .to_string(),
-            "cargo run -p jarvis-cli -- release evidence-status".to_string(),
+            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint <release-core-endpoint>"
+                .to_string(),
             "Start or restart the core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external"
                 .to_string(),
-            "cargo run -p jarvis-cli -- release readiness".to_string(),
+            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint <release-core-endpoint>"
+                .to_string(),
         ],
         manual_checks: vec![
             "Install the signed, notarized package into /Applications on a clean Mac profile."
@@ -6819,6 +6825,22 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert!(live
             .commands
             .contains(&"./scripts/release-live-device-qa.sh --check".to_string()));
+        assert!(live.commands.contains(
+            &"cargo run -p jarvis-cli -- command \"status check\" --endpoint <release-core-endpoint> --json"
+                .to_string()
+        ));
+        assert!(live.commands.contains(
+            &"Record the returned task ID as JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid>' or a task-associated audit ID as 'audit:<uuid>' in target/release-live-device-qa.env"
+                .to_string()
+        ));
+        assert!(live.commands.contains(
+            &"JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint <release-core-endpoint>"
+                .to_string()
+        ));
+        assert!(live.commands.contains(
+            &"JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint <release-core-endpoint>"
+                .to_string()
+        ));
         assert!(live
             .manual_checks
             .iter()

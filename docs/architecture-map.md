@@ -1032,3 +1032,10 @@ assertion command, and post-report external evidence-mode status/readiness
 checks in the generated `release-live-device-qa.env` template. Script self-test
 coverage verifies those comments stay present without claiming any live-device
 validation was performed.
+The live-device runbook endpoint-guidance slice mirrors that release-core
+command evidence capture and external evidence-mode endpoint guidance in both
+the CLI fallback runbook and the IPC `/release/live-device-runbook` payload, with
+Rust E2E and Swift decode coverage. It improves operator command ordering only;
+it still does not perform signing, notarization, clean-profile install,
+Finder/LaunchServices launch, live-device QA, plugin-trust QA, or final evidence
+bundling.
