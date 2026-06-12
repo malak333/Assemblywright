@@ -841,7 +841,10 @@ requires plugin-trust `generated_at`, `review_started_at`,
   report, then prints the package-distribution, evidence-status,
   evidence-doctor, and live-device runbook follow-up commands. It does not
   perform signing, notarization, stapling, Gatekeeper assessment, installation,
-  live-device QA, or plugin-trust QA.
+  live-device QA, or plugin-trust QA. CLI E2E pins the full signed
+  distribution evidence key set, the exact operator command sequence, exact
+  manual-check handoff text, and parity between `--json` and `--format json` so
+  the runbook cannot silently drop a signed artifact or final handoff.
 - `cargo run -p jarvis-cli -- release plugin-trust-runbook` is part of
   `./scripts/release-local.sh` as a read-only operator companion for plugin
   trust QA. It combines conservative readiness with current
