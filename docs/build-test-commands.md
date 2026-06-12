@@ -717,9 +717,10 @@ spoken-command observation fields: `JARVIS_QA_VOICE_TEST_PHRASE`,
 All owner-recorded evidence-note fields must contain non-placeholder text, not
 values such as `TODO`, `pending`, `n/a`, `fixture`, or `self-test fixture`, and
 `JARVIS_QA_SELF_TEST_FIXTURE=true` is reserved for the script's internal fake
-fixture self-test rather than release evidence. `jarvis release evidence-status`
-and `/release/evidence-status` enforce the same non-empty and non-placeholder
-live-device QA report fields before that evidence can clear `live_voice_loop`.
+fixture self-test rather than release evidence. `--assert-complete`,
+`jarvis release evidence-status`, and `/release/evidence-status` enforce the
+same non-empty and non-placeholder live-device QA report fields before that
+evidence can clear `live_voice_loop`.
 The observed transcript must match the spoken test phrase after trimming, the
 expected installed app path must match `JARVIS_QA_INSTALLED_APP_PATH` or
 `/Applications/Jarvis.app`, expected and observed command text must match after

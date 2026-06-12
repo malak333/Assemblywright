@@ -148,9 +148,10 @@ These notes capture durable facts for future agents working on this repository.
   and non-voice owner notes for clean-profile, Finder launch, notification,
   restart, and manual QA with an ordered UTC notification timestamp. The
   `release-live-device-qa.sh --assert-complete` path rejects whitespace-only
-  owner evidence values, `/release/evidence-status` rejects placeholder
-  owner-recorded live-device evidence-note values such as `TODO`, `pending`,
-  `n/a`, `fixture`, and `self-test fixture`, and
+  and placeholder owner evidence-note values such as `TODO`, `pending`, `n/a`,
+  `fixture`, and `self-test fixture`; `/release/evidence-status` enforces the
+  same non-placeholder live-device evidence-note checks before that report can
+  clear readiness, and
   `JARVIS_QA_SELF_TEST_FIXTURE=true` is reserved for the
   script's internal fake-fixture self-test. Invalid or stale hand-written reports stay
   `invalid` and cannot clear `live_voice_loop` in evidence-aware readiness mode.
@@ -812,8 +813,9 @@ requires plugin-trust `generated_at`, `review_started_at`,
   Live macOS notification prompt/delivery validation is part of the manual
   clean-profile release QA runbook and final release evidence boundary; it is
   not currently a separate field in the live-device voice report.
-  `/release/evidence-status` rejects empty or placeholder owner evidence-note
-  fields before this report can clear `live_voice_loop`.
+  `release-live-device-qa.sh --assert-complete` and `/release/evidence-status`
+  both reject empty or placeholder owner evidence-note fields before this
+  report can clear `live_voice_loop`.
   This standardizes manual evidence only; `--check` does not prove live device
   behavior, and the report remains an owner assertion. When the release operator
   explicitly enables evidence-aware readiness, this report can support the
