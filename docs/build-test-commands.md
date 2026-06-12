@@ -363,9 +363,9 @@ with network-declaring actions must use
 only after provenance matches to mark the manifest author claim as
 operator-reviewed. For signed manifests, use
 `jarvis plugins verify-publisher-signature <id> --trusted-public-key "<base64 ed25519 public key>"`
-after provenance matches; this verifies the manifest signature against the
-explicit trusted key, but still does not prove marketplace approval or malware
-safety.
+after provenance matches; this verifies the portable manifest identity
+signature against the explicit trusted key with local `source_path` omitted,
+but still does not prove marketplace approval or malware safety.
 Network-capable plugin actions must request `network` and declare
 `network_access.mode: declared_hosts` with exact plain-hostname
 `allowed_hosts`; policy review surfaces them as `network_plugin_action` items,

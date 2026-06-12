@@ -30,8 +30,8 @@ Each plugin manifest must declare:
   until an operator pins the author claim or verifies a manifest signature
   against an explicit trusted public key.
 - Optional `publisher_signature` with `scheme: ed25519-v1`, a base64 Ed25519
-  public key, and a base64 signature over the manifest payload with
-  `publisher_signature` omitted. Signature verification requires local
+  public key, and a base64 signature over the portable manifest payload with
+  `publisher_signature` and local `source_path` omitted. Signature verification requires local
   provenance to match first and a trusted public key supplied by the operator;
   an embedded public key cannot self-authorize.
 - Optional per-action `network_access`. Actions that request the `network`
@@ -167,9 +167,11 @@ to explain what happened:
   `/plugins/installed/:id/publisher/signature/verify` or
   `jarvis plugins verify-publisher-signature`. It fails closed until local
   provenance matches, requires the trusted key to match the manifest key,
-  verifies the Ed25519 signature, stores `origin_claim_verified: true`, and
-  appends `installed_plugin_publisher_signature_verified` audit evidence.
-  This proves the manifest was signed by the trusted key; it does not prove
+  verifies the Ed25519 signature over the portable manifest identity with local
+  `source_path` omitted, stores `origin_claim_verified: true`, and appends
+  `installed_plugin_publisher_signature_verified` audit evidence. This proves
+  the manifest identity was signed by the trusted key; local source files and
+  install paths remain covered by provenance matching. It does not prove
   marketplace approval, malware safety, OS-level process/network sandboxing, or
   host-level egress enforcement.
 - Policy review emits `network_plugin_action` items for installed plugin
