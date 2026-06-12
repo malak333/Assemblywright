@@ -1083,17 +1083,13 @@ requires plugin-trust `generated_at`, `review_started_at`,
   plugin manifest listing, and repository-backed task, model-route, explicit
   memory-management paths, diagnostics redaction, and repository-backed
   scheduler/job state surfaces.
-- The 2026-06-12 production-readiness sweep refresh now records the merged
-  state after PR #247, PR #248, PR #249, PR #253, PR #254, PR #256, PR #257,
-  PR #258, and PR #259: no open PRs, `main` at `381817c`, local
-  `./scripts/release-local.sh` green for the code-changing runbook guidance
-  slice, hosted GitHub PR `Release local gate` green for PR #256 run
-  `27412085979`, PR #257 run `27413191322`, PR #258 run `27414382320`, and
-  PR #259 run `27415638586`,
-  `production_ready: false`, `verified_feature_count: 16`,
-  `pending_feature_count: 1`, and, after the primary checkout's local release
-  gate generated unsigned app artifacts, six missing external/manual evidence
-  artifacts.
+- The 2026-06-12 production-readiness sweep refresh originally recorded the
+  merged state through PR #259, and the current baseline now includes follow-on
+  release hardening through PR #268: `main` at `8cccb5b`, hosted GitHub
+  `Release local gate` green for PR #268 run `27428860335` / job
+  `81073692261`, `production_ready: false`, `verified_feature_count: 16`,
+  `pending_feature_count: 1`, and, after local generated app presence artifacts
+  exist, six missing external/manual evidence artifacts.
 - PR #254 made release runbooks a current implementation surface rather than a
   CLI-only operator path: `/release/live-device-runbook`,
   `/release/signed-distribution-runbook`, and `/release/plugin-trust-runbook`
@@ -1115,6 +1111,26 @@ requires plugin-trust `generated_at`, `review_started_at`,
   template, and the live-device runbook. Its shell self-test pins those strings
   as guidance only; it still does not perform live-device QA or create release
   evidence.
+- `./scripts/release-external-handoff.sh` is the single operator handoff
+  generator for the remaining external production gates. `--write` creates
+  `release-live-device-qa.env`, `release-plugin-trust-qa.env`,
+  `release-evidence-bundle.env`, read-only readiness/evidence-status/runbook
+  JSON snapshots, and a README with the ordered release sequence. `--check` and
+  `--self-test` are part of the local release gate and prove only template plus
+  snapshot generation with validation flags defaulted false; they do not sign,
+  notarize, install, Finder-launch, validate live device behavior, review plugin
+  trust, enforce egress, or archive final evidence.
+- Owner evidence-note validation now rejects embedded placeholder wording, not
+  only exact placeholder values. Shell assertions and Rust evidence-status
+  reject operator notes containing terms such as `TODO`, `pending`, `fixture`,
+  `example`, `self-test`, `replace-me`, or `changeme` in live-device,
+  plugin-trust, and final-bundle evidence reports.
+- `./scripts/release-docs-drift-smoke.sh` is part of `release-local.sh` and
+  keeps the canonical release command matrix plus external evidence-mode,
+  `task:<uuid>`/`audit:<uuid>`, owner-recorded external evidence, and
+  `release-external-handoff.sh` boundary phrases represented in
+  `docs/build-test-commands.md`, `docs/release-checklist.md`,
+  `docs/architecture-map.md`, and this KB.
 
 ## Safety Guardrails
 

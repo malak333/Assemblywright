@@ -117,7 +117,19 @@ import sys
 
 name, value = sys.argv[1:3]
 normalized = value.strip().lower()
-if normalized in {"fixture", "self-test fixture", "todo", "tbd", "n/a", "na", "pending"}:
+exact_placeholders = {"n/a", "na"}
+embedded_placeholders = (
+    "self-test",
+    "placeholder",
+    "example",
+    "fixture",
+    "todo",
+    "tbd",
+    "replace-me",
+    "changeme",
+    "pending",
+)
+if normalized in exact_placeholders or any(marker in normalized for marker in embedded_placeholders):
     raise SystemExit(f"{name} must contain owner-recorded external evidence, not placeholder or fixture text")
 PY
 }
@@ -480,7 +492,19 @@ for segment in dotted_key.split("."):
     cursor = cursor[segment]
 
 normalized = cursor.strip().lower()
-if normalized in {"fixture", "self-test fixture", "todo", "tbd", "n/a", "na", "pending"}:
+exact_placeholders = {"n/a", "na"}
+embedded_placeholders = (
+    "self-test",
+    "placeholder",
+    "example",
+    "fixture",
+    "todo",
+    "tbd",
+    "replace-me",
+    "changeme",
+    "pending",
+)
+if normalized in exact_placeholders or any(marker in normalized for marker in embedded_placeholders):
     raise SystemExit(f"{label} evidence field {dotted_key} must contain owner-recorded external evidence, not placeholder or fixture text")
 PY
 }
@@ -1213,18 +1237,18 @@ LOG
     "profile_label": "self-test clean profile",
     "voice_check_started_at": "2026-05-22T16:00:00Z",
     "voice_check_completed_at": "2026-05-22T16:05:00Z",
-    "microphone_evidence_note": "Observed microphone permission prompt in the fake fixture.",
-    "speech_permission_evidence_note": "Observed Speech permission prompt in the fake fixture.",
-    "transcript_handoff_evidence_note": "Observed transcript handoff reach the command path in the fake fixture.",
-    "audio_output_evidence_note": "Observed speech output playback in the fake fixture."
+    "microphone_evidence_note": "Observed microphone permission prompt in the controlled release lane.",
+    "speech_permission_evidence_note": "Observed Speech permission prompt in the controlled release lane.",
+    "transcript_handoff_evidence_note": "Observed transcript handoff reach the command path in the controlled release lane.",
+    "audio_output_evidence_note": "Observed speech output playback in the controlled release lane."
   },
   "owner_recorded_non_voice_evidence": {
-    "clean_profile_evidence_note": "Clean profile install observed in the fake fixture.",
-    "finder_launch_evidence_note": "Finder launch observed in the fake fixture.",
-    "notification_evidence_note": "Visible scheduler notification observed in the fake fixture.",
+    "clean_profile_evidence_note": "Clean profile install observed in the controlled release lane.",
+    "finder_launch_evidence_note": "Finder launch observed in the controlled release lane.",
+    "notification_evidence_note": "Visible scheduler notification observed in the controlled release lane.",
     "notification_observed_at": "2026-05-22T16:04:00Z",
-    "restart_evidence_note": "Restart recovery observed in the fake fixture.",
-    "manual_release_qa_evidence_note": "Manual release QA surfaces observed in the fake fixture."
+    "restart_evidence_note": "Restart recovery observed in the controlled release lane.",
+    "manual_release_qa_evidence_note": "Manual release QA surfaces observed in the controlled release lane."
   },
   "voice_command_observation": {
     "test_phrase": "Jarvis status check.",
@@ -1269,16 +1293,16 @@ JSON
     "owner_name": "Jarvis Plugin QA Self-Test",
     "review_started_at": "2026-05-22T16:10:00Z",
     "review_completed_at": "2026-05-22T16:20:00Z",
-    "marketplace_evidence_note": "Marketplace review fixture was observed.",
-    "malware_scan_evidence_note": "Malware scan fixture was observed.",
-    "os_sandbox_evidence_note": "OS sandbox fixture was observed.",
-    "egress_evidence_note": "Egress fixture was observed.",
-    "egress_policy_label": "Self-test host egress policy fixture",
+    "marketplace_evidence_note": "Marketplace review evidence archived in the controlled release lane.",
+    "malware_scan_evidence_note": "Malware scan evidence archived in the controlled release lane.",
+    "os_sandbox_evidence_note": "OS sandbox evidence archived in the controlled release lane.",
+    "egress_evidence_note": "Egress evidence archived in the controlled release lane.",
+    "egress_policy_label": "Host egress policy reviewed in the controlled release lane",
     "egress_validation_completed_at": "2026-05-22T16:18:00Z",
-    "egress_deny_fixture_evidence_note": "Deny fixture blocked undeclared outbound traffic.",
-    "egress_allow_fixture_evidence_note": "Allow fixture reached the declared host only.",
-    "signed_publisher_evidence_note": "Signed publisher policy fixture was observed.",
-    "manual_review_evidence_note": "Manual trust review fixture was observed."
+    "egress_deny_fixture_evidence_note": "Undeclared-host deny evidence archived in the controlled release lane.",
+    "egress_allow_fixture_evidence_note": "Declared-host allow evidence archived in the controlled release lane.",
+    "signed_publisher_evidence_note": "Signed publisher policy evidence archived in the controlled release lane.",
+    "manual_review_evidence_note": "Manual trust review evidence archived in the controlled release lane."
   },
   "proof_boundary": "self-test fixture"
 }
@@ -1379,12 +1403,12 @@ JSON
   done
   export JARVIS_EVIDENCE_OWNER_NAME="Jarvis Release Self-Test"
   export JARVIS_EVIDENCE_COMPLETED_AT="2026-05-22T16:45:00Z"
-  export JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_NOTE="Signed distribution provenance fixture reviewed."
-  export JARVIS_EVIDENCE_NOTARIZATION_NOTE="Notarization fixture reviewed."
-  export JARVIS_EVIDENCE_CLEAN_PROFILE_NOTE="Clean profile fixture reviewed."
-  export JARVIS_EVIDENCE_LIVE_DEVICE_QA_NOTE="Live-device QA fixture reviewed."
-  export JARVIS_EVIDENCE_PLUGIN_TRUST_QA_NOTE="Plugin-trust QA fixture reviewed."
-  export JARVIS_EVIDENCE_REPORTS_ARCHIVE_NOTE="Release evidence reports archived in the fixture."
+  export JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_NOTE="Signed distribution provenance reviewed in the controlled release lane."
+  export JARVIS_EVIDENCE_NOTARIZATION_NOTE="Notarization evidence reviewed in the controlled release lane."
+  export JARVIS_EVIDENCE_CLEAN_PROFILE_NOTE="Clean profile evidence reviewed in the controlled release lane."
+  export JARVIS_EVIDENCE_LIVE_DEVICE_QA_NOTE="Live-device QA evidence reviewed in the controlled release lane."
+  export JARVIS_EVIDENCE_PLUGIN_TRUST_QA_NOTE="Plugin-trust QA evidence reviewed in the controlled release lane."
+  export JARVIS_EVIDENCE_REPORTS_ARCHIVE_NOTE="Release evidence reports archived in the controlled release lane."
   export JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI="file://self-test/release-evidence"
 
   JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
@@ -1448,11 +1472,33 @@ PY
     JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
     JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
     JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_NOTE="pending" \
+    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_NOTE="pending external archive" \
     "$0" --bundle >/dev/null 2>"$tmp_dir/placeholder-note.err"; then
     fail "release evidence self-test expected placeholder owner evidence note to be rejected"
   fi
   require_file_contains "placeholder owner evidence note error" "$tmp_dir/placeholder-note.err" "owner-recorded external evidence"
+
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/embedded-fixture-note-bundle.json" \
+    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
+    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_NOTE="Signed distribution fixture was archived." \
+    "$0" --bundle >/dev/null 2>"$tmp_dir/embedded-fixture-note.err"; then
+    fail "release evidence self-test expected embedded fixture owner evidence note to be rejected"
+  fi
+  require_file_contains "embedded fixture owner evidence note error" "$tmp_dir/embedded-fixture-note.err" "owner-recorded external evidence"
 
   nested_zip="$tmp_dir/dist/nested-Jarvis-$VERSION.zip"
   mkdir -p "$tmp_dir/nested/payload"

@@ -6759,8 +6759,8 @@ fn valid_plugin_trust_qa_report() -> Value {
             "egress_evidence_note": "Host-level egress validation evidence archived.",
             "egress_policy_label": "Host egress policy/profile reviewed.",
             "egress_validation_completed_at": "2026-05-22T16:18:00Z",
-            "egress_deny_fixture_evidence_note": "Undeclared-host deny fixture evidence archived.",
-            "egress_allow_fixture_evidence_note": "Declared-host allow fixture evidence archived.",
+            "egress_deny_fixture_evidence_note": "Undeclared-host deny evidence archived.",
+            "egress_allow_fixture_evidence_note": "Declared-host allow evidence archived.",
             "signed_publisher_evidence_note": "Signed publisher policy evidence archived.",
             "manual_review_evidence_note": "Manual plugin trust review evidence archived."
         },

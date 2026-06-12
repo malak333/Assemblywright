@@ -87,6 +87,10 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   QA, and plugin-trust QA child reports referenced by the final bundle, and
   final-bundle archive URI plus local signature-validation status before
   treating those reports as usable evidence.
+- Confirm owner evidence-note validation rejects exact placeholders and
+  embedded placeholder wording in live-device, plugin-trust, and final-bundle
+  reports; sentences containing `TODO`, `pending`, `fixture`, `example`, or
+  `self-test` must not clear external evidence gates.
 - Confirm `release-plugin-trust-qa.sh --assert-complete`,
   `release-evidence-bundle.sh --bundle`, and
   `release-evidence-doctor.sh --assert-complete` reject non-UTC plugin-trust
@@ -108,6 +112,12 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   preflight, signing, live-device template/assertion, plugin-trust
   template/assertion, and final evidence-bundle template/bundle commands
   whenever evidence is missing.
+- Confirm `release-external-handoff.sh --write target/release-external-handoff`
+  creates the sourceable live-device, plugin-trust, and final-bundle env
+  templates plus read-only readiness/evidence/runbook JSON snapshots with all
+  external validation flags still defaulted false. Treat this as operator
+  handoff scaffolding only, not evidence that the external checks were
+  completed.
 - Confirm `jarvis release plugin-trust-runbook` hands off from completed
   plugin-trust QA into final evidence bundling and
   `release-evidence-doctor.sh --assert-complete`, not back to the signed
@@ -153,6 +163,7 @@ stage or when a PR needs focused evidence for one ownership slice.
 
 - `./scripts/release-version-consistency.sh --check`
 - `./scripts/release-ci-workflow-smoke.sh`
+- `./scripts/release-docs-drift-smoke.sh`
 - `cargo fmt --check`
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - `cargo test --workspace`
@@ -179,6 +190,8 @@ stage or when a PR needs focused evidence for one ownership slice.
 - `./scripts/release-evidence-bundle.sh --self-test`
 - `./scripts/release-evidence-doctor.sh --check`
 - `./scripts/release-evidence-doctor.sh --self-test`
+- `./scripts/release-external-handoff.sh --check`
+- `./scripts/release-external-handoff.sh --self-test`
 - `swift test --disable-sandbox --package-path apps/mac`
 - `swift build --disable-sandbox --package-path apps/mac`
 - Focused supervision proof for branches that touch Swift core launch or bundle

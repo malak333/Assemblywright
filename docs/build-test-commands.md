@@ -26,6 +26,7 @@ the same boundary.
 ```sh
 ./scripts/release-version-consistency.sh --check
 ./scripts/release-ci-workflow-smoke.sh
+./scripts/release-docs-drift-smoke.sh
 cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
@@ -56,6 +57,8 @@ cargo run -p jarvis-cli -- release plugin-trust-runbook
 ./scripts/release-evidence-bundle.sh --self-test
 ./scripts/release-evidence-doctor.sh --check
 ./scripts/release-evidence-doctor.sh --self-test
+./scripts/release-external-handoff.sh --check
+./scripts/release-external-handoff.sh --self-test
 swift test --disable-sandbox --package-path apps/mac
 swift build --disable-sandbox --package-path apps/mac
 ```
@@ -65,6 +68,18 @@ Focused workflow-shape check:
 ```sh
 ./scripts/release-ci-workflow-smoke.sh
 ```
+
+Focused release-doc drift check:
+
+```sh
+./scripts/release-docs-drift-smoke.sh
+```
+
+This smoke parses `scripts/release-local.sh`, verifies the release command
+matrix is represented in `docs/build-test-commands.md` and
+`docs/release-checklist.md`, and checks the architecture map plus KB for the
+external evidence-mode, command-evidence, owner-evidence, and handoff-script
+boundary phrases. It is documentation contract coverage only.
 
 ## Current Health Check
 
@@ -489,6 +504,14 @@ runbook: local gates, unsigned distribution launch check, signed-distribution
 runbook triage, signed/notarized packaging, live-device QA, plugin-trust
 runbook triage, plugin-trust QA, final evidence bundle generation,
 evidence-doctor assertion, then the external evidence-mode readiness check.
+`./scripts/release-external-handoff.sh --write target/release-external-handoff`
+generates a single operator handoff directory with sourceable live-device,
+plugin-trust, and final-bundle env templates plus read-only JSON snapshots for
+readiness, evidence-status, and the three release runbooks. Its `--check` and
+`--self-test` modes are part of the local release gate and prove only handoff
+generation mechanics; they do not perform signing, notarization, stapling,
+installation, Finder launch, live-device QA, plugin-trust QA, host-level egress
+enforcement, or final evidence archival.
 `cargo run -p jarvis-cli -- release
 signed-distribution-runbook` is read-only; it summarizes the current
 signed-app-bundle, app executable, bundled core, signed zip, signed installer,
@@ -528,7 +551,9 @@ requires live-device QA app bundle metadata to match the
 expected installed app path plus bundle id/version, requires the observed
 transcript to match the spoken test phrase, and writes SHA-256 digests for
 distribution artifacts, signed provenance, and QA reports before writing
-production evidence.
+production evidence. Owner evidence-note validation rejects both exact
+placeholders and embedded placeholder wording such as `TODO before release`,
+`pending release evidence`, or fixture/example/self-test language.
 `./scripts/release-evidence-doctor.sh --check` inventories the expected signed
 artifact paths, signed-distribution provenance report, live-device QA report,
 plugin-trust QA report, and final
