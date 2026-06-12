@@ -959,105 +959,127 @@ validate_local_distribution_evidence() {
   xcrun stapler validate "$PKG_PATH" >/dev/null
 }
 
-json_escape() {
-  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
-}
-
 write_bundle() {
   local generated_at
-  local escaped_app
-  local escaped_zip
-  local escaped_pkg
-  local escaped_live
-  local escaped_plugin
-  local escaped_signed_provenance
-  local escaped_owner_name
-  local escaped_completed_at
-  local escaped_signed_distribution_note
-  local escaped_notarization_note
-  local escaped_clean_profile_note
-  local escaped_live_device_qa_note
-  local escaped_plugin_trust_qa_note
-  local escaped_reports_archive_note
-  local escaped_reports_archive_uri
   local zip_sha
   local pkg_sha
   local live_sha
   local plugin_sha
   local signed_provenance_sha
-  local escaped_boundary
   local local_signature_validation
   require_command shasum
   require_command python3
   generated_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-  escaped_app="$(json_escape "$APP_PATH")"
-  escaped_zip="$(json_escape "$ZIP_PATH")"
-  escaped_pkg="$(json_escape "$PKG_PATH")"
-  escaped_live="$(json_escape "$LIVE_QA_REPORT")"
-  escaped_plugin="$(json_escape "$PLUGIN_QA_REPORT")"
-  escaped_signed_provenance="$(json_escape "$SIGNED_PROVENANCE_REPORT")"
-  escaped_owner_name="$(json_escape "$JARVIS_EVIDENCE_OWNER_NAME")"
-  escaped_completed_at="$(json_escape "$JARVIS_EVIDENCE_COMPLETED_AT")"
-  escaped_signed_distribution_note="$(json_escape "$JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_NOTE")"
-  escaped_notarization_note="$(json_escape "$JARVIS_EVIDENCE_NOTARIZATION_NOTE")"
-  escaped_clean_profile_note="$(json_escape "$JARVIS_EVIDENCE_CLEAN_PROFILE_NOTE")"
-  escaped_live_device_qa_note="$(json_escape "$JARVIS_EVIDENCE_LIVE_DEVICE_QA_NOTE")"
-  escaped_plugin_trust_qa_note="$(json_escape "$JARVIS_EVIDENCE_PLUGIN_TRUST_QA_NOTE")"
-  escaped_reports_archive_note="$(json_escape "$JARVIS_EVIDENCE_REPORTS_ARCHIVE_NOTE")"
-  escaped_reports_archive_uri="$(json_escape "$JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI")"
   zip_sha="$(file_sha256 "$ZIP_PATH")"
   pkg_sha="$(file_sha256 "$PKG_PATH")"
   live_sha="$(file_sha256 "$LIVE_QA_REPORT")"
   plugin_sha="$(file_sha256 "$PLUGIN_QA_REPORT")"
   signed_provenance_sha="$(file_sha256 "$SIGNED_PROVENANCE_REPORT")"
-  escaped_boundary="$(json_escape "Evidence bundle manifest only; records artifact paths, signed-distribution provenance report path, local signature/stapling validation status, owner-recorded signing/notarization validation flags, and QA reports.")"
   local_signature_validation="$VALIDATE_LOCAL_SIGNATURES"
 
   mkdir -p "$(dirname "$OUTPUT_PATH")"
-  cat >"$OUTPUT_PATH" <<EOF
-{
-  "schema_version": 1,
-  "evidence_type": "release_evidence_bundle",
-  "generated_at": "$generated_at",
-  "version": "$VERSION",
-  "artifacts": {
-    "app_path": "$escaped_app",
-    "zip_path": "$escaped_zip",
-    "pkg_path": "$escaped_pkg",
-    "zip_sha256": "$zip_sha",
-    "pkg_sha256": "$pkg_sha"
-  },
-  "reports": {
-    "signed_distribution_provenance_report": "$escaped_signed_provenance",
-    "live_device_qa_report": "$escaped_live",
-    "plugin_trust_qa_report": "$escaped_plugin",
-    "signed_distribution_provenance_sha256": "$signed_provenance_sha",
-    "live_device_qa_sha256": "$live_sha",
-    "plugin_trust_qa_sha256": "$plugin_sha"
-  },
-  "validation_flags": {
-    "signed_distribution": true,
-    "notarization": true,
-    "clean_profile": true,
-    "live_device_qa": true,
-    "plugin_trust_qa": true,
-    "reports_archived": true,
-    "local_signature_validation": $local_signature_validation
-  },
-  "owner_recorded_release_evidence": {
-    "owner_name": "$escaped_owner_name",
-    "completed_at": "$escaped_completed_at",
-    "signed_distribution_note": "$escaped_signed_distribution_note",
-    "notarization_note": "$escaped_notarization_note",
-    "clean_profile_note": "$escaped_clean_profile_note",
-    "live_device_qa_note": "$escaped_live_device_qa_note",
-    "plugin_trust_qa_note": "$escaped_plugin_trust_qa_note",
-    "reports_archive_note": "$escaped_reports_archive_note",
-    "reports_archive_uri": "$escaped_reports_archive_uri"
-  },
-  "proof_boundary": "$escaped_boundary"
+  python3 - \
+    "$OUTPUT_PATH" \
+    "$generated_at" \
+    "$VERSION" \
+    "$APP_PATH" \
+    "$ZIP_PATH" \
+    "$PKG_PATH" \
+    "$SIGNED_PROVENANCE_REPORT" \
+    "$LIVE_QA_REPORT" \
+    "$PLUGIN_QA_REPORT" \
+    "$zip_sha" \
+    "$pkg_sha" \
+    "$signed_provenance_sha" \
+    "$live_sha" \
+    "$plugin_sha" \
+    "$local_signature_validation" \
+    "$JARVIS_EVIDENCE_OWNER_NAME" \
+    "$JARVIS_EVIDENCE_COMPLETED_AT" \
+    "$JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_NOTE" \
+    "$JARVIS_EVIDENCE_NOTARIZATION_NOTE" \
+    "$JARVIS_EVIDENCE_CLEAN_PROFILE_NOTE" \
+    "$JARVIS_EVIDENCE_LIVE_DEVICE_QA_NOTE" \
+    "$JARVIS_EVIDENCE_PLUGIN_TRUST_QA_NOTE" \
+    "$JARVIS_EVIDENCE_REPORTS_ARCHIVE_NOTE" \
+    "$JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI" <<'PY'
+import json
+import sys
+
+(
+    output_path,
+    generated_at,
+    version,
+    app_path,
+    zip_path,
+    pkg_path,
+    signed_provenance_report,
+    live_qa_report,
+    plugin_qa_report,
+    zip_sha,
+    pkg_sha,
+    signed_provenance_sha,
+    live_sha,
+    plugin_sha,
+    local_signature_validation,
+    owner_name,
+    completed_at,
+    signed_distribution_note,
+    notarization_note,
+    clean_profile_note,
+    live_device_qa_note,
+    plugin_trust_qa_note,
+    reports_archive_note,
+    reports_archive_uri,
+) = sys.argv[1:25]
+
+data = {
+    "schema_version": 1,
+    "evidence_type": "release_evidence_bundle",
+    "generated_at": generated_at,
+    "version": version,
+    "artifacts": {
+        "app_path": app_path,
+        "zip_path": zip_path,
+        "pkg_path": pkg_path,
+        "zip_sha256": zip_sha,
+        "pkg_sha256": pkg_sha,
+    },
+    "reports": {
+        "signed_distribution_provenance_report": signed_provenance_report,
+        "live_device_qa_report": live_qa_report,
+        "plugin_trust_qa_report": plugin_qa_report,
+        "signed_distribution_provenance_sha256": signed_provenance_sha,
+        "live_device_qa_sha256": live_sha,
+        "plugin_trust_qa_sha256": plugin_sha,
+    },
+    "validation_flags": {
+        "signed_distribution": True,
+        "notarization": True,
+        "clean_profile": True,
+        "live_device_qa": True,
+        "plugin_trust_qa": True,
+        "reports_archived": True,
+        "local_signature_validation": local_signature_validation == "true",
+    },
+    "owner_recorded_release_evidence": {
+        "owner_name": owner_name,
+        "completed_at": completed_at,
+        "signed_distribution_note": signed_distribution_note,
+        "notarization_note": notarization_note,
+        "clean_profile_note": clean_profile_note,
+        "live_device_qa_note": live_device_qa_note,
+        "plugin_trust_qa_note": plugin_trust_qa_note,
+        "reports_archive_note": reports_archive_note,
+        "reports_archive_uri": reports_archive_uri,
+    },
+    "proof_boundary": "Evidence bundle manifest only; records artifact paths, signed-distribution provenance report path, local signature/stapling validation status, owner-recorded signing/notarization validation flags, and QA reports.",
 }
-EOF
+
+with open(output_path, "w", encoding="utf-8") as handle:
+    json.dump(data, handle, indent=2)
+    handle.write("\n")
+PY
   python3 -m json.tool "$OUTPUT_PATH" >/dev/null
 }
 
@@ -1408,7 +1430,7 @@ JSON
   export JARVIS_EVIDENCE_CLEAN_PROFILE_NOTE="Clean profile evidence reviewed in the controlled release lane."
   export JARVIS_EVIDENCE_LIVE_DEVICE_QA_NOTE="Live-device QA evidence reviewed in the controlled release lane."
   export JARVIS_EVIDENCE_PLUGIN_TRUST_QA_NOTE="Plugin-trust QA evidence reviewed in the controlled release lane."
-  export JARVIS_EVIDENCE_REPORTS_ARCHIVE_NOTE="Release evidence reports archived in the controlled release lane."
+  export JARVIS_EVIDENCE_REPORTS_ARCHIVE_NOTE=$'Release evidence reports archived in the controlled release lane.\nArchive reviewer noted "release archive index" and preserved backslash \\ marker.'
   export JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI="file://self-test/release-evidence"
 
   JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
@@ -1439,6 +1461,16 @@ JSON
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"plugin_trust_qa_report"'
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"owner_recorded_release_evidence"'
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"owner_name": "Jarvis Release Self-Test"'
+  python3 - "$tmp_dir/bundle.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    data = json.load(handle)
+note = data["owner_recorded_release_evidence"]["reports_archive_note"]
+if "\n" not in note or '"release archive index"' not in note or "\\ marker" not in note:
+    raise SystemExit("release evidence self-test expected structured JSON writer to preserve multiline reports archive note")
+PY
 
   python3 - "$tmp_dir/bundle.json" "$tmp_dir/placeholder-archive-bundle.json" <<'PY'
 import json
