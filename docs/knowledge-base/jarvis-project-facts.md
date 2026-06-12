@@ -790,7 +790,10 @@ requires plugin-trust `generated_at`, `review_started_at`,
   macOS notification prompt and delivery validation.
 - `./scripts/package-distribution.sh` is the repo-owned distribution packaging
   lane. Its `--check` mode is credential-free and validates local tools plus
-  entitlements. Its `--unsigned-structure-check` mode builds release Rust/Swift
+  app and bundled-core entitlement templates. Its
+  `--entitlements-policy-self-test` is part of `./scripts/release-local.sh` and
+  proves the app entitlement template keeps microphone access while the bundled
+  core template does not. Its `--unsigned-structure-check` mode builds release Rust/Swift
   artifacts, assembles `target/distribution/Jarvis.app`, optionally ad-hoc signs
   when `codesign` is available, creates an unsigned `/Applications` installer
   package, inspects the package payload for the app executable, bundled core,
@@ -804,9 +807,11 @@ requires plugin-trust `generated_at`, `review_started_at`,
   packaging/evidence scripts require the bundled `jarvis-cli --version` output
   to match the expected release version before local artifact evidence can pass.
   Full mode requires the owner's Developer ID
-  Application, Developer ID Installer, and notarytool credentials; signs with
-  hardened runtime and microphone entitlements; notarizes and staples the app
-  zip; then creates, signs, notarizes, and staples a `/Applications` installer
+  Application, Developer ID Installer, and notarytool credentials; signs the
+  app bundle and app executable with hardened-runtime microphone entitlements
+  while signing the bundled core with a narrower hardened-runtime entitlement
+  template that omits microphone access; notarizes and staples the app zip;
+  then creates, signs, notarizes, and staples a `/Applications` installer
   package. It records and validates Developer ID, notary UUID, exact notary
   `Accepted` status, stapler success, exact Gatekeeper acceptance, and top-level
   `Jarvis.app` zip payload shape before writing the signed-distribution

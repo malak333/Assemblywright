@@ -12,6 +12,7 @@ APP_NAME="Jarvis"
 APP_EXECUTABLE_NAME="JarvisMacApp"
 CORE_EXECUTABLE_NAME="jarvis-cli"
 ENTITLEMENTS="$ROOT_DIR/packaging/Jarvis.entitlements"
+CORE_ENTITLEMENTS="$ROOT_DIR/packaging/JarvisCore.entitlements"
 DIST_DIR="${JARVIS_DISTRIBUTION_DIR:-$ROOT_DIR/target/distribution}"
 APP_PATH="$DIST_DIR/$APP_NAME.app"
 ZIP_PATH="$DIST_DIR/$APP_NAME-$VERSION.zip"
@@ -21,12 +22,13 @@ CHECK_ONLY=false
 UNSIGNED_STRUCTURE_CHECK=false
 UNSIGNED_LAUNCH_CHECK=false
 CHECK_GUIDANCE_SELF_TEST=false
+ENTITLEMENTS_POLICY_SELF_TEST=false
 VERSION_CONSISTENCY_SELF_TEST=false
 PROVENANCE_SELF_TEST=false
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/package-distribution.sh [--check] [--unsigned-structure-check] [--unsigned-launch-check] [--check-guidance-self-test] [--version-consistency-self-test] [--provenance-self-test]
+Usage: scripts/package-distribution.sh [--check] [--unsigned-structure-check] [--unsigned-launch-check] [--check-guidance-self-test] [--entitlements-policy-self-test] [--version-consistency-self-test] [--provenance-self-test]
 
 Build a distribution-shaped Jarvis.app bundle, sign it with Developer ID, zip it,
 submit it for notarization, staple the ticket, then build, sign, notarize, and
@@ -59,6 +61,8 @@ device validation.
 --check-guidance-self-test verifies the credential-free package preflight still
 prints the required downstream signed-distribution, QA, evidence-bundle, and
 doctor handoff commands.
+--entitlements-policy-self-test verifies the app entitlement template keeps
+microphone access while the bundled core entitlement template does not.
 --version-consistency-self-test verifies package/crate version drift is rejected
 without signing, notarizing, or building distribution artifacts.
 --provenance-self-test verifies signed-provenance schema and semantic Apple
@@ -234,6 +238,17 @@ assert_app_audio_input_entitlement() {
   output="$(codesign -d --entitlements :- "$APP_PATH" 2>/dev/null)"
   if [[ "$output" != *"com.apple.security.device.audio-input"* ]]; then
     printf 'error: %s entitlements do not include microphone access\n' "$label" >&2
+    printf '%s\n' "$output" >&2
+    exit 1
+  fi
+}
+
+assert_bundled_core_no_audio_input_entitlement() {
+  local label="$1"
+  local output
+  output="$(codesign -d --entitlements :- "$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" 2>/dev/null)"
+  if [[ "$output" == *"com.apple.security.device.audio-input"* ]]; then
+    printf 'error: %s entitlements unexpectedly include microphone access\n' "$label" >&2
     printf '%s\n' "$output" >&2
     exit 1
   fi
@@ -430,6 +445,10 @@ while [[ $# -gt 0 ]]; do
       CHECK_GUIDANCE_SELF_TEST=true
       shift
       ;;
+    --entitlements-policy-self-test)
+      ENTITLEMENTS_POLICY_SELF_TEST=true
+      shift
+      ;;
     --version-consistency-self-test)
       VERSION_CONSISTENCY_SELF_TEST=true
       shift
@@ -449,13 +468,13 @@ while [[ $# -gt 0 ]]; do
 done
 
 selected_mode_count=0
-for selected_mode in "$CHECK_ONLY" "$UNSIGNED_STRUCTURE_CHECK" "$UNSIGNED_LAUNCH_CHECK" "$CHECK_GUIDANCE_SELF_TEST" "$VERSION_CONSISTENCY_SELF_TEST" "$PROVENANCE_SELF_TEST"; do
+for selected_mode in "$CHECK_ONLY" "$UNSIGNED_STRUCTURE_CHECK" "$UNSIGNED_LAUNCH_CHECK" "$CHECK_GUIDANCE_SELF_TEST" "$ENTITLEMENTS_POLICY_SELF_TEST" "$VERSION_CONSISTENCY_SELF_TEST" "$PROVENANCE_SELF_TEST"; do
   if [[ "$selected_mode" == true ]]; then
     selected_mode_count=$((selected_mode_count + 1))
   fi
 done
 if [[ "$selected_mode_count" -gt 1 ]]; then
-  fail "--check, --unsigned-structure-check, --unsigned-launch-check, --check-guidance-self-test, --version-consistency-self-test, and --provenance-self-test are mutually exclusive"
+  fail "--check, --unsigned-structure-check, --unsigned-launch-check, --check-guidance-self-test, --entitlements-policy-self-test, --version-consistency-self-test, and --provenance-self-test are mutually exclusive"
 fi
 
 if [[ "$CHECK_GUIDANCE_SELF_TEST" == true ]]; then
@@ -486,6 +505,40 @@ if [[ "$CHECK_GUIDANCE_SELF_TEST" == true ]]; then
   require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "no app was signed"
   printf '\nJarvis package check guidance self-test: ok\n'
   printf 'Proof boundary: package --check guidance only; no app was built, signed, notarized, stapled, installed, launched, or manually validated.\n'
+  exit 0
+fi
+
+if [[ "$ENTITLEMENTS_POLICY_SELF_TEST" == true ]]; then
+  run plutil -lint "$ENTITLEMENTS"
+  run plutil -lint "$CORE_ENTITLEMENTS"
+  python3 - "$ENTITLEMENTS" "$CORE_ENTITLEMENTS" <<'PY'
+import plistlib
+import sys
+
+app_entitlements_path, core_entitlements_path = sys.argv[1:3]
+with open(app_entitlements_path, "rb") as handle:
+    app_entitlements = plistlib.load(handle)
+with open(core_entitlements_path, "rb") as handle:
+    core_entitlements = plistlib.load(handle)
+
+microphone_key = "com.apple.security.device.audio-input"
+if app_entitlements.get(microphone_key) is not True:
+    raise SystemExit("app entitlements must include microphone access")
+if microphone_key in core_entitlements:
+    raise SystemExit("bundled core entitlements must not include microphone access")
+
+for key in (
+    "com.apple.security.cs.allow-jit",
+    "com.apple.security.cs.allow-unsigned-executable-memory",
+    "com.apple.security.cs.disable-library-validation",
+):
+    if app_entitlements.get(key) is not False:
+        raise SystemExit(f"app entitlement {key} must be false")
+    if core_entitlements.get(key) is not False:
+        raise SystemExit(f"core entitlement {key} must be false")
+PY
+  printf '\nJarvis package entitlements policy self-test: ok\n'
+  printf 'Proof boundary: entitlement template policy only; no app was built, signed, notarized, stapled, installed, launched, or manually validated.\n'
   exit 0
 fi
 
@@ -843,7 +896,9 @@ if [[ "$UNSIGNED_STRUCTURE_CHECK" != true && "$UNSIGNED_LAUNCH_CHECK" != true ]]
 fi
 
 [[ -f "$ENTITLEMENTS" ]] || fail "missing entitlements file: $ENTITLEMENTS"
+[[ -f "$CORE_ENTITLEMENTS" ]] || fail "missing bundled core entitlements file: $CORE_ENTITLEMENTS"
 run plutil -lint "$ENTITLEMENTS"
+run plutil -lint "$CORE_ENTITLEMENTS"
 
 if [[ "$CHECK_ONLY" == true ]]; then
   if [[ -z "${JARVIS_DEVELOPER_ID_APPLICATION:-}" ]]; then
@@ -888,11 +943,12 @@ run_unsigned_structure_check() {
 
   SIGNING_STATUS="not attempted"
   if command -v codesign >/dev/null 2>&1; then
-    run codesign --force --sign - --entitlements "$ENTITLEMENTS" "$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
+    run codesign --force --sign - --entitlements "$CORE_ENTITLEMENTS" "$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
     run codesign --force --sign - --entitlements "$ENTITLEMENTS" "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME"
     run codesign --force --sign - --entitlements "$ENTITLEMENTS" "$APP_PATH"
     run codesign --verify --deep --strict "$APP_PATH"
     assert_app_audio_input_entitlement "unsigned structure app"
+    assert_bundled_core_no_audio_input_entitlement "unsigned structure bundled core"
     SIGNING_STATUS="ad-hoc signed with codesign -"
   fi
 
@@ -923,11 +979,12 @@ run_unsigned_launch_check() {
 
   SIGNING_STATUS="not attempted"
   if command -v codesign >/dev/null 2>&1; then
-    run codesign --force --sign - --entitlements "$ENTITLEMENTS" "$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
+    run codesign --force --sign - --entitlements "$CORE_ENTITLEMENTS" "$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
     run codesign --force --sign - --entitlements "$ENTITLEMENTS" "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME"
     run codesign --force --sign - --entitlements "$ENTITLEMENTS" "$APP_PATH"
     run codesign --verify --deep --strict "$APP_PATH"
     assert_app_audio_input_entitlement "unsigned launch app"
+    assert_bundled_core_no_audio_input_entitlement "unsigned launch bundled core"
     SIGNING_STATUS="ad-hoc signed with codesign -"
   fi
 
@@ -1071,7 +1128,7 @@ PKG_NOTARY_LOG="$NOTARY_LOG_DIR/$APP_NAME-$VERSION-installer-pkg-notarytool.log"
 mkdir -p "$NOTARY_LOG_DIR"
 
 run codesign --force --timestamp --options runtime \
-  --entitlements "$ENTITLEMENTS" \
+  --entitlements "$CORE_ENTITLEMENTS" \
   --sign "$JARVIS_DEVELOPER_ID_APPLICATION" \
   "$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
 run codesign --force --timestamp --options runtime \
@@ -1084,6 +1141,7 @@ run codesign --force --timestamp --options runtime \
   "$APP_PATH"
 run codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 assert_app_audio_input_entitlement "signed app"
+assert_bundled_core_no_audio_input_entitlement "signed bundled core"
 
 rm -f "$ZIP_PATH"
 run ditto -c -k --keepParent "$APP_PATH" "$ZIP_PATH"
