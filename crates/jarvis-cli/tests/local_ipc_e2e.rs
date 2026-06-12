@@ -2809,9 +2809,33 @@ fn release_signed_distribution_runbook_summarizes_next_operator_steps() {
     );
     assert_eq!(json_runbook["production_ready"], false);
     assert_eq!(format_json_runbook["production_ready"], false);
+    assert_eq!(
+        format_json_runbook, json_runbook,
+        "signed-distribution --json and --format json must stay equivalent"
+    );
     let distribution_evidence = json_runbook["distribution_evidence"]
         .as_array()
         .expect("distribution evidence");
+    let distribution_keys = distribution_evidence
+        .iter()
+        .map(|item| {
+            item.get("key")
+                .and_then(Value::as_str)
+                .expect("distribution evidence key")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        distribution_keys,
+        [
+            "signed_app_bundle",
+            "app_executable",
+            "bundled_core_executable",
+            "signed_app_zip",
+            "signed_installer_package",
+            "signed_distribution_provenance_report",
+        ],
+        "signed-distribution runbook must preserve the full evidence handoff"
+    );
     assert!(distribution_evidence
         .iter()
         .any(|item| item.get("key").and_then(Value::as_str) == Some("signed_app_zip")));
@@ -2837,18 +2861,15 @@ fn release_signed_distribution_runbook_summarizes_next_operator_steps() {
             "cargo run -p jarvis-cli -- release live-device-runbook",
         ],
     );
-    assert_string_array_contains_substring(
+    assert_string_array_exact(
         &json_runbook["manual_checks"],
-        "Developer ID Application and Installer identities",
-    );
-    assert_string_array_contains_substring(
-        &json_runbook["manual_checks"],
-        "signed zip, signed installer package, and signed provenance report",
-    );
-    assert_string_array_contains_substring(&json_runbook["manual_checks"], "notarized and stapled");
-    assert_string_array_contains_substring(
-        &json_runbook["manual_checks"],
-        "evidence-status and evidence-doctor",
+        &[
+            "Configure Developer ID Application and Installer identities plus the notarytool profile on the release Mac.",
+            "Run the full package-distribution lane and preserve the signed zip, signed installer package, and signed provenance report.",
+            "Confirm the signed app zip and installer package are notarized and stapled before clean-profile installation.",
+            "Rerun evidence-status and evidence-doctor so missing or invalid signed artifact paths are visible before final bundling.",
+            "Continue with live-device QA, plugin-trust QA, final evidence bundle generation, and external evidence-mode readiness.",
+        ],
     );
     assert_string_array_contains_substring(
         &json_runbook["commands"],

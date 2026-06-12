@@ -485,7 +485,9 @@ signed-app-bundle, app executable, bundled core, signed zip, signed installer,
 and signed-provenance evidence items and prints the exact package-distribution,
 evidence-status, evidence-doctor, and live-device follow-up commands without
 performing signing, notarization, stapling, Gatekeeper assessment, installation,
-or QA. `cargo run -p jarvis-cli -- release plugin-trust-runbook` is read-only;
+or QA. CLI E2E pins the exact signed-distribution evidence key set, command
+sequence, manual checks, and `--json`/`--format json` parity for this runbook.
+`cargo run -p jarvis-cli -- release plugin-trust-runbook` is read-only;
 it summarizes the current `plugin_trust_qa_report` evidence item and prints the
 exact plugin-trust template, assertion, evidence-status, evidence-doctor, and
 signed-distribution follow-up commands without performing marketplace review,
