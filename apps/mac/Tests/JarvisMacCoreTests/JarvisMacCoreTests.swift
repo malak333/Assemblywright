@@ -385,7 +385,10 @@ struct JarvisMacCoreTests {
         #expect(readiness.recommendedVerificationCommands.contains { command in
             command.contains("JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true") &&
                 command.contains("JARVIS_QA_OWNER_NAME=") &&
+                command.contains("JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE=") &&
                 command.contains("JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE=") &&
+                command.contains("JARVIS_QA_NOTIFICATION_OBSERVED_AT=") &&
+                command.contains("JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE=") &&
                 command.contains("./scripts/release-live-device-qa.sh --assert-complete")
         })
         #expect(readiness.recommendedVerificationCommands.contains("./scripts/release-plugin-trust-qa.sh --check"))
@@ -1298,7 +1301,8 @@ struct JarvisMacCoreTests {
         #expect(model.evidenceStatus?.complete == false)
         #expect(!model.effectiveProductionReady)
         #expect(model.evidenceStatus?.items.map(\.key).contains("live_device_qa_report") == true)
-        #expect(model.evidenceStatus?.items.first { $0.key == "signed_app_bundle" }?.detail.contains("presence only") == true)
+        #expect(model.evidenceStatus?.items.first { $0.key == "signed_app_bundle" }?.detail.contains("Info.plist bundle identifier") == true)
+        #expect(model.evidenceStatus?.items.first { $0.key == "app_executable" }?.detail.contains("presence only") == true)
         #expect(model.readiness?.implementedFeatures.map(\.key).contains("repository_state") == true)
         #expect(model.readiness?.implementedFeatures.map(\.key).contains("release_evidence_status") == true)
         #expect(model.readiness?.implementedFeatures.map(\.key).contains("release_evidence_bundle") == true)
@@ -3378,7 +3382,7 @@ private func releaseReadinessJSON() -> Data {
             "./scripts/release-live-device-qa.sh --check",
             "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env",
             "set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete",
-            "JARVIS_QA_CLEAN_PROFILE_VALIDATED=true JARVIS_QA_FINDER_LAUNCH_VALIDATED=true JARVIS_QA_MICROPHONE_VALIDATED=true JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true JARVIS_QA_NOTIFICATION_VALIDATED=true JARVIS_QA_RESTART_VALIDATED=true JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true JARVIS_QA_OWNER_NAME='Release Operator' JARVIS_QA_DEVICE_LABEL='Clean-profile release Mac' JARVIS_QA_PROFILE_LABEL='Clean macOS QA profile' JARVIS_QA_VOICE_CHECK_STARTED_AT='2026-05-22T16:00:00Z' JARVIS_QA_VOICE_CHECK_COMPLETED_AT='2026-05-22T16:05:00Z' JARVIS_QA_MICROPHONE_EVIDENCE_NOTE='Microphone prompt and capture observed' JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE='Speech prompt and recognition observed' JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE='Spoken transcript reached the command path' JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE='Speech output playback observed' JARVIS_QA_VOICE_TEST_PHRASE='Jarvis status check' JARVIS_QA_OBSERVED_TRANSCRIPT='Jarvis status check' JARVIS_QA_EXPECTED_COMMAND_TEXT='status check' JARVIS_QA_OBSERVED_COMMAND_TEXT='status check' JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid-from-live-command>' JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL='Built-in speakers' ./scripts/release-live-device-qa.sh --assert-complete",
+            "JARVIS_QA_CLEAN_PROFILE_VALIDATED=true JARVIS_QA_FINDER_LAUNCH_VALIDATED=true JARVIS_QA_MICROPHONE_VALIDATED=true JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true JARVIS_QA_NOTIFICATION_VALIDATED=true JARVIS_QA_RESTART_VALIDATED=true JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true JARVIS_QA_OWNER_NAME='Release Operator' JARVIS_QA_DEVICE_LABEL='Clean-profile release Mac' JARVIS_QA_PROFILE_LABEL='Clean macOS QA profile' JARVIS_QA_VOICE_CHECK_STARTED_AT='2026-05-22T16:00:00Z' JARVIS_QA_VOICE_CHECK_COMPLETED_AT='2026-05-22T16:05:00Z' JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE='Clean profile install observed' JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE='Finder launch observed' JARVIS_QA_MICROPHONE_EVIDENCE_NOTE='Microphone prompt and capture observed' JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE='Speech prompt and recognition observed' JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE='Spoken transcript reached the command path' JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE='Speech output playback observed' JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE='Scheduler notification observed' JARVIS_QA_NOTIFICATION_OBSERVED_AT='2026-05-22T16:04:00Z' JARVIS_QA_RESTART_EVIDENCE_NOTE='Restart recovery observed' JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE='Manual release QA surfaces observed' JARVIS_QA_VOICE_TEST_PHRASE='Jarvis status check' JARVIS_QA_OBSERVED_TRANSCRIPT='Jarvis status check' JARVIS_QA_EXPECTED_COMMAND_TEXT='status check' JARVIS_QA_OBSERVED_COMMAND_TEXT='status check' JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid-from-live-command>' JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL='Built-in speakers' ./scripts/release-live-device-qa.sh --assert-complete",
             "./scripts/release-plugin-trust-qa.sh --check",
             "./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env",
             "set -a && source target/release-plugin-trust-qa.env && set +a && ./scripts/release-plugin-trust-qa.sh --assert-complete",
@@ -3465,7 +3469,7 @@ private func releaseEvidenceStatusJSON() -> Data {
               "status": "present",
               "required_for_production": true,
               "manual_gate": true,
-              "detail": "directory exists; presence only; signing, notarization, and stapling are not validated by evidence-status"
+              "detail": "directory exists; Info.plist bundle identifier, short version, and build version match expected release metadata; signing, notarization, and stapling are not validated by evidence-status"
             },
             {
               "key": "app_executable",
@@ -3475,7 +3479,7 @@ private func releaseEvidenceStatusJSON() -> Data {
               "status": "present",
               "required_for_production": true,
               "manual_gate": true,
-              "detail": "executable file exists; runtime behavior is covered by separate smoke checks"
+              "detail": "executable file exists; presence only; signing, notarization, and stapling are not validated by evidence-status"
             },
             {
               "key": "bundled_core_executable",
@@ -3495,7 +3499,7 @@ private func releaseEvidenceStatusJSON() -> Data {
               "status": "missing",
               "required_for_production": true,
               "manual_gate": true,
-              "detail": "expected file is missing"
+              "detail": "expected evidence path is missing"
             },
             {
               "key": "signed_installer_package",
@@ -3505,7 +3509,7 @@ private func releaseEvidenceStatusJSON() -> Data {
               "status": "missing",
               "required_for_production": true,
               "manual_gate": true,
-              "detail": "expected file is missing"
+              "detail": "expected evidence path is missing"
             },
             {
               "key": "live_device_qa_report",
@@ -3519,7 +3523,7 @@ private func releaseEvidenceStatusJSON() -> Data {
             },
             {
               "key": "plugin_trust_qa_report",
-              "label": "Plugin trust QA report",
+              "label": "Plugin-trust QA report",
               "path": "target/release-plugin-trust-qa-report.json",
               "kind": "json_report",
               "status": "missing",
@@ -3539,7 +3543,7 @@ private func releaseEvidenceStatusJSON() -> Data {
             },
             {
               "key": "release_evidence_bundle",
-              "label": "Final release evidence bundle",
+              "label": "Release evidence bundle",
               "path": "target/release-evidence-bundle.json",
               "kind": "json_report",
               "status": "missing",
@@ -3582,7 +3586,7 @@ private func completeReleaseEvidenceStatusJSON() -> Data {
               "status": "present",
               "required_for_production": true,
               "manual_gate": true,
-              "detail": "executable file exists; runtime behavior is covered by separate smoke checks"
+              "detail": "executable file exists; presence only; signing, notarization, and stapling are not validated by evidence-status"
             },
             {
               "key": "bundled_core_executable",
@@ -3636,7 +3640,7 @@ private func completeReleaseEvidenceStatusJSON() -> Data {
             },
             {
               "key": "plugin_trust_qa_report",
-              "label": "Plugin trust QA report",
+              "label": "Plugin-trust QA report",
               "path": "target/release-plugin-trust-qa-report.json",
               "kind": "json_report",
               "status": "present",
@@ -3646,7 +3650,7 @@ private func completeReleaseEvidenceStatusJSON() -> Data {
             },
             {
               "key": "release_evidence_bundle",
-              "label": "Final release evidence bundle",
+              "label": "Release evidence bundle",
               "path": "target/release-evidence-bundle.json",
               "kind": "json_report",
               "status": "present",
