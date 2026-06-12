@@ -171,7 +171,7 @@ enum ReleaseCommand {
     },
     /// Print release evidence file/report status.
     #[command(
-        long_about = "Print release evidence file/report status.\n\nThis is file/report inventory plus semantic report validation only. It can report whether expected artifact paths and JSON reports are present, missing, or invalid, and checks app bundle metadata, bundled-core version markers, signed-provenance digests, live-device command evidence, owner-asserted plugin-trust review source, host-egress evidence fields, child-report validity, final-bundle archive URI validation, and final-bundle local signature-validation status. It does not prove Developer ID signing, notarization, stapling, installation, Finder launch, live-device QA, marketplace review, malware scanning, OS sandboxing, or host-level egress enforcement. Default output is operator-readable; use --json for the exact structured payload."
+        long_about = "Print release evidence file/report status.\n\nThis is file/report inventory plus semantic report validation only. It can report whether expected artifact paths and JSON reports are present, missing, or invalid, and checks app bundle metadata, bundled-core version markers, signed-provenance digests, live-device command evidence, owner-asserted plugin-trust review source, host-egress evidence fields, child-report validity, final-bundle archive URI validation, and final-bundle local signature-validation status. It does not prove Developer ID signing, notarization, stapling, installation, Finder launch, live-device QA, marketplace review, malware scanning, OS sandboxing, or host-level egress enforcement. Default output is operator-readable with per-item paths/details and same-line presence-only caveats; use --json for the exact structured payload."
     )]
     EvidenceStatus {
         /// HTTP IPC endpoint. Falls back to local read-only evidence inspection when unavailable.
@@ -2322,7 +2322,10 @@ fn release_plugin_trust_runbook_json(
             "set -a && source target/release-plugin-trust-qa.env && set +a && ./scripts/release-plugin-trust-qa.sh --assert-complete",
             "cargo run -p jarvis-cli -- release evidence-status",
             "./scripts/release-evidence-doctor.sh --check",
-            "cargo run -p jarvis-cli -- release signed-distribution-runbook"
+            "./scripts/release-evidence-bundle.sh --check",
+            "./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env",
+            "set -a && source target/release-evidence-bundle.env && set +a && ./scripts/release-evidence-bundle.sh --bundle",
+            "./scripts/release-evidence-doctor.sh --assert-complete"
         ],
         "manual_checks": [
             "Run the marketplace review workflow for every public plugin listing.",
@@ -2330,7 +2333,8 @@ fn release_plugin_trust_runbook_json(
             "Validate signed publisher policy for trusted publisher keys and revocation.",
             "Validate the macOS sandbox profile or equivalent OS-level confinement.",
             "Validate host-level egress enforcement with deny and declared-host allow fixtures.",
-            "Preserve target/release-plugin-trust-qa-report.json for final release evidence bundling."
+            "Preserve target/release-plugin-trust-qa-report.json for final release evidence bundling.",
+            "Generate the final release evidence bundle only after signed distribution, live-device QA, and plugin-trust QA evidence all exist."
         ],
         "proof_boundary": "Runbook and local evidence inspection only; this command does not perform marketplace review, malware scanning, sandbox deployment, host-level egress enforcement, signing, notarization, live-device QA, or final evidence bundling."
     });
@@ -2378,7 +2382,10 @@ fn format_release_plugin_trust_runbook(
         "- set -a && source target/release-plugin-trust-qa.env && set +a && ./scripts/release-plugin-trust-qa.sh --assert-complete".to_string(),
         "- cargo run -p jarvis-cli -- release evidence-status".to_string(),
         "- ./scripts/release-evidence-doctor.sh --check".to_string(),
-        "- cargo run -p jarvis-cli -- release signed-distribution-runbook".to_string(),
+        "- ./scripts/release-evidence-bundle.sh --check".to_string(),
+        "- ./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env".to_string(),
+        "- set -a && source target/release-evidence-bundle.env && set +a && ./scripts/release-evidence-bundle.sh --bundle".to_string(),
+        "- ./scripts/release-evidence-doctor.sh --assert-complete".to_string(),
         "Manual checks:".to_string(),
         "- Run the marketplace review workflow for every public plugin listing.".to_string(),
         "- Preserve malware scan evidence for distributed plugin archives and updates.".to_string(),
@@ -2386,6 +2393,7 @@ fn format_release_plugin_trust_runbook(
         "- Validate the macOS sandbox profile or equivalent OS-level confinement.".to_string(),
         "- Validate host-level egress enforcement with deny and declared-host allow fixtures.".to_string(),
         "- Preserve target/release-plugin-trust-qa-report.json for final release evidence bundling.".to_string(),
+        "- Generate the final release evidence bundle only after signed distribution, live-device QA, and plugin-trust QA evidence all exist.".to_string(),
         "Boundary: runbook and local evidence inspection only; no marketplace review, malware scanning, sandbox deployment, host-level egress enforcement, signing, notarization, live-device QA, or final evidence bundling was performed.".to_string(),
         "Raw JSON: rerun with --json for a structured runbook summary.".to_string(),
     ]

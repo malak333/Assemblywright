@@ -157,6 +157,13 @@ Jarvis is currently a production-shaped local assistant foundation:
   presence-only cue in the app row status and adds `JarvisMacAppTests`, so the
   app target now has direct release presentation coverage in addition to core
   model tests.
+- This evidence-status help/checklist follow-up aligns the operator help and
+  release checklist with the same-line presence-only readable output and pins
+  the wording in CLI E2E coverage.
+- This plugin-trust runbook handoff follow-up sends operators forward into
+  final evidence-bundle generation and `release-evidence-doctor.sh
+  --assert-complete` after plugin-trust QA, with stronger CLI E2E assertions
+  for signed-distribution and plugin-trust runbook shape.
 - The current conservative readiness boundary is unchanged: 17 verified
   repo-owned features, one pending manual live voice validation feature, and
   missing external/manual release evidence before production-ready language is
@@ -197,6 +204,9 @@ sweep is:
 - `cargo test -p jarvis-cli --test local_ipc_e2e release_evidence_status_server_marks_present_artifacts_as_presence_only -- --nocapture`
 - `cargo test -p jarvis-cli --test local_ipc_e2e release_evidence_doctor -- --nocapture`
 - `cargo test -p jarvis-cli --test local_ipc_e2e release_help_surfaces_current_evidence_boundaries -- --nocapture`
+- `cargo test -p jarvis-cli --test local_ipc_e2e release_help_documents_operator_boundaries -- --nocapture`
+- `cargo test -p jarvis-cli --test local_ipc_e2e release_signed_distribution_runbook_summarizes_next_operator_steps -- --nocapture`
+- `cargo test -p jarvis-cli --test local_ipc_e2e release_plugin_trust_runbook_summarizes_next_operator_steps -- --nocapture`
 - `cargo test -p jarvis-cli --test local_ipc_e2e serve_exposes_local_ipc_contract_and_persists_state -- --nocapture`
 - `./scripts/release-evidence-doctor.sh --self-test`
 - `./scripts/release-live-device-qa.sh --self-test`
