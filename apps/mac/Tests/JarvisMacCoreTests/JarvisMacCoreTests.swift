@@ -1511,6 +1511,44 @@ struct JarvisMacCoreTests {
         #expect(!model.effectiveProductionReady)
     }
 
+    @MainActor
+    @Test("Release readiness model blocks production ready when evidence status refresh fails")
+    func releaseReadinessModelBlocksProductionReadyWhenEvidenceStatusRefreshFails() async throws {
+        let readiness = try JSONDecoder().decode(
+            JarvisReleaseReadiness.self,
+            from: externalProductionReadyReleaseReadinessJSON()
+        )
+        let evidence = try JSONDecoder().decode(
+            JarvisReleaseEvidenceStatus.self,
+            from: completeReleaseEvidenceStatusJSON()
+        )
+        let client = FakeCoreClient(
+            releaseReadinessResults: [
+                .success(readiness),
+                .success(readiness)
+            ],
+            releaseEvidenceStatusResults: [
+                .success(evidence),
+                .failure(URLError(.cannotConnectToHost))
+            ]
+        )
+        let model = ReleaseReadinessModel(client: client)
+
+        await model.refresh()
+        #expect(model.readiness?.productionReady == true)
+        #expect(model.evidenceStatus?.complete == true)
+        #expect(model.lastError == nil)
+        #expect(model.isShowingStaleReadiness == false)
+        #expect(model.effectiveProductionReady)
+
+        await model.refresh()
+        #expect(model.readiness?.productionReady == true)
+        #expect(model.evidenceStatus?.complete == true)
+        #expect(model.lastError != nil)
+        #expect(model.isShowingStaleReadiness)
+        #expect(!model.effectiveProductionReady)
+    }
+
     @Test("Approval queue remains inspection-only when core has no approval endpoint")
     func approvalQueueReflectsCoreContract() throws {
         let taskId = UUID()
@@ -3985,6 +4023,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     private var releaseReadinessResponse: JarvisReleaseReadiness?
     private var releaseReadinessResults: [Result<JarvisReleaseReadiness, Error>]
     private var releaseEvidenceStatusResponse: JarvisReleaseEvidenceStatus?
+    private var releaseEvidenceStatusResults: [Result<JarvisReleaseEvidenceStatus, Error>]
     private var approvals: [JarvisPendingApproval]
     private var pluginManifests: [JarvisPluginManifest]
     private var installedPlugins: [JarvisInstalledPluginRecord]
@@ -4009,6 +4048,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         releaseReadiness: JarvisReleaseReadiness? = nil,
         releaseReadinessResults: [Result<JarvisReleaseReadiness, Error>] = [],
         releaseEvidenceStatus: JarvisReleaseEvidenceStatus? = nil,
+        releaseEvidenceStatusResults: [Result<JarvisReleaseEvidenceStatus, Error>] = [],
         approvals: [JarvisPendingApproval] = [],
         pluginManifests: [JarvisPluginManifest] = [],
         installedPlugins: [JarvisInstalledPluginRecord] = [],
@@ -4026,6 +4066,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         self.releaseReadinessResponse = releaseReadiness
         self.releaseReadinessResults = releaseReadinessResults
         self.releaseEvidenceStatusResponse = releaseEvidenceStatus
+        self.releaseEvidenceStatusResults = releaseEvidenceStatusResults
         self.approvals = approvals
         self.pluginManifests = pluginManifests
         self.installedPlugins = installedPlugins
@@ -4083,6 +4124,9 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     }
 
     func releaseEvidenceStatus() async throws -> JarvisReleaseEvidenceStatus {
+        if !releaseEvidenceStatusResults.isEmpty {
+            return try releaseEvidenceStatusResults.removeFirst().get()
+        }
         if let releaseEvidenceStatusResponse {
             return releaseEvidenceStatusResponse
         }
