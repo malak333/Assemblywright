@@ -16,6 +16,7 @@ BUNDLE_PATH="${JARVIS_EVIDENCE_OUTPUT_PATH:-$ROOT_DIR/target/release-evidence-bu
 EXPECTED_BUNDLE_ID="${JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID:-com.nobiletechnology.jarvis}"
 EXPECTED_VERSION="${JARVIS_EVIDENCE_EXPECTED_VERSION:-$VERSION}"
 EXPECTED_INSTALLED_APP_PATH="${JARVIS_QA_INSTALLED_APP_PATH:-/Applications/Jarvis.app}"
+EVIDENCE_STATUS_ENDPOINT="${JARVIS_EVIDENCE_STATUS_ENDPOINT:-}"
 
 CHECK_ONLY=false
 ASSERT_COMPLETE=false
@@ -56,6 +57,7 @@ Optional paths match scripts/release-evidence-bundle.sh:
   JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID
   JARVIS_EVIDENCE_EXPECTED_VERSION
   JARVIS_QA_INSTALLED_APP_PATH        Defaults to /Applications/Jarvis.app and must match the live QA report
+  JARVIS_EVIDENCE_STATUS_ENDPOINT     Optional jarvis serve endpoint for repository-backed --assert-complete parity
 
 Proof boundary: this script inspects evidence files only. It does not sign,
 notarize, install, launch Finder, validate live microphone/Speech/audio, run a
@@ -1158,6 +1160,80 @@ print_status() {
   printf 'Proof boundary: file/report inventory plus semantic report validation only; present artifact paths do not prove Developer ID signing, notarization, stapling, installation, Finder launch, live device QA, marketplace review, malware scan, OS sandbox, or host-level egress enforcement.\n'
 }
 
+assert_cli_evidence_status_complete() {
+  if [[ "${JARVIS_EVIDENCE_DOCTOR_SELF_TEST_SHAPE_ONLY:-}" == "true" ]]; then
+    return
+  fi
+
+  local endpoint_args=()
+  if [[ -n "$EVIDENCE_STATUS_ENDPOINT" ]]; then
+    endpoint_args=(--endpoint "$EVIDENCE_STATUS_ENDPOINT")
+  fi
+
+  local status_output
+  if ! status_output="$(JARVIS_EVIDENCE_VERSION="$VERSION" \
+    JARVIS_EVIDENCE_DIST_DIR="$DIST_DIR" \
+    JARVIS_EVIDENCE_APP_PATH="$APP_PATH" \
+    JARVIS_EVIDENCE_ZIP_PATH="$ZIP_PATH" \
+    JARVIS_EVIDENCE_PKG_PATH="$PKG_PATH" \
+    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$SIGNED_PROVENANCE_REPORT" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$LIVE_QA_REPORT" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$PLUGIN_QA_REPORT" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$BUNDLE_PATH" \
+    JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID="$EXPECTED_BUNDLE_ID" \
+    JARVIS_EVIDENCE_EXPECTED_VERSION="$EXPECTED_VERSION" \
+    JARVIS_QA_INSTALLED_APP_PATH="$EXPECTED_INSTALLED_APP_PATH" \
+    cargo run -q -p jarvis-cli -- release evidence-status --json "${endpoint_args[@]}" 2>&1)"; then
+    fail "release evidence doctor --assert-complete requires jarvis release evidence-status --json to pass; output: $status_output"
+  fi
+
+  STATUS_JSON="$status_output" python3 - <<'PY'
+import json
+import os
+import sys
+
+try:
+    status = json.loads(os.environ["STATUS_JSON"])
+except Exception as exc:
+    print(f"release evidence-status returned non-JSON output: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+
+complete = status.get("complete")
+missing_count = status.get("missing_count")
+invalid_count = status.get("invalid_count")
+items = status.get("items")
+if complete is True and missing_count == 0 and invalid_count == 0:
+    if isinstance(items, list) and all(item.get("status") == "present" for item in items if isinstance(item, dict)):
+        raise SystemExit(0)
+
+problems = []
+if complete is not True:
+    problems.append(f"complete={complete!r}")
+if missing_count != 0:
+    problems.append(f"missing_count={missing_count!r}")
+if invalid_count != 0:
+    problems.append(f"invalid_count={invalid_count!r}")
+if isinstance(items, list):
+    bad_items = [
+        f"{item.get('key', '<unknown>')}={item.get('status', '<missing status>')}"
+        for item in items
+        if isinstance(item, dict) and item.get("status") != "present"
+    ]
+    if bad_items:
+        problems.append("items: " + ", ".join(bad_items))
+else:
+    problems.append("items=<not a list>")
+
+print(
+    "release evidence doctor --assert-complete requires jarvis release evidence-status --json "
+    "to report complete=true with zero missing/invalid evidence and all items present; "
+    + "; ".join(problems),
+    file=sys.stderr,
+)
+raise SystemExit(1)
+PY
+}
+
 write_fixture_app() {
   local app_path="$1"
   mkdir -p "$app_path/Contents/MacOS" "$app_path/Contents/Resources/bin"
@@ -1397,6 +1473,7 @@ fi
 require_command python3
 
 if [[ "$SELF_TEST" == true ]]; then
+  export JARVIS_EVIDENCE_DOCTOR_SELF_TEST_SHAPE_ONLY=true
   tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/jarvis-release-evidence-doctor.XXXXXX")"
   trap 'rm -rf "$tmp_dir"' EXIT
   self_test_zip="$tmp_dir/dist/Jarvis-$VERSION.zip"
@@ -2054,4 +2131,8 @@ print_status
 
 if [[ "$ASSERT_COMPLETE" == true && "${#MISSING_ITEMS[@]}" -gt 0 ]]; then
   exit 1
+fi
+
+if [[ "$ASSERT_COMPLETE" == true ]]; then
+  assert_cli_evidence_status_complete
 fi

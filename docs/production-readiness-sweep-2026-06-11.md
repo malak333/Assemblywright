@@ -13,7 +13,7 @@ Command:
 cargo run -p jarvis-cli -- release readiness --json
 ```
 
-Observed on 2026-06-11 from `main` at `281a508` after PR #236:
+Observed on 2026-06-12 UTC from `main` at `4a4661e` after PR #238:
 
 - `production_ready: false`
 - `verified_feature_count: 17`
@@ -41,17 +41,16 @@ Companion command:
 cargo run -p jarvis-cli -- release evidence-status --json
 ```
 
-Observed evidence inventory in a fresh worktree before generating local
-distribution artifacts:
+Observed evidence inventory in the main checkout after the local release gate
+generated the unsigned distribution layout:
 
 - `complete: false`
-- `satisfied_count: 0`
-- `missing_count: 9`
+- `satisfied_count: 3`
+- `missing_count: 6`
 - `invalid_count: 0`
-- Missing evidence: signed app bundle, app executable, bundled core executable,
-  signed app zip, signed installer package, signed-distribution provenance
-  report, live-device QA report, plugin-trust QA report, and final release
-  evidence bundle.
+- Missing evidence: signed app zip, signed installer package,
+  signed-distribution provenance report, live-device QA report,
+  plugin-trust QA report, and final release evidence bundle.
 
 After `./scripts/release-local.sh` or
 `./scripts/package-distribution.sh --unsigned-launch-check` creates the local
@@ -59,6 +58,8 @@ unsigned distribution layout, the app bundle, app executable, and bundled core
 can become present local evidence. That still does not prove Developer ID
 signing, notarization, stapling, clean-profile install, Finder launch, live
 device QA, plugin trust QA, or final evidence bundling.
+Fresh worktrees can still report those local generated app paths as missing
+until a local distribution command recreates them.
 
 `./scripts/release-evidence-doctor.sh --check` now starts missing-evidence
 guidance with the no-sign preflight before credentialed signing:
@@ -116,7 +117,7 @@ Jarvis is currently a production-shaped local assistant foundation:
   launch proof, package-distribution no-sign preflight,
   release-evidence-doctor missing-evidence guidance, release evidence script
   self-tests, Rust/CLI E2E, and Swift package tests.
-- Recent PRs #223 through #237 synchronized architecture/readiness docs, added
+- Recent PRs #223 through #238 synchronized architecture/readiness docs, added
   explicit `--json`/`--format json` release inspection compatibility, added the
   package-distribution preflight to the local release gate, and made the
   evidence doctor recommend that preflight before credentialed signing. PR #230
@@ -132,7 +133,17 @@ Jarvis is currently a production-shaped local assistant foundation:
   package `--check` guidance self-test to keep the release handoff commands
   executable. The readable evidence-status follow-up locks present-item
   path/detail coverage in CLI E2E and updates docs so operators see present
-  presence-only caveats without switching to JSON.
+  presence-only caveats without switching to JSON. PR #238 merged that
+  readable evidence-status follow-up and its GitHub release-local gate passed
+  on `main`.
+- This doctor-parity follow-up hardens the final
+  `release-evidence-doctor.sh --assert-complete` path so a complete file
+  inventory must also pass `jarvis release evidence-status --json`. Operators
+  can set `JARVIS_EVIDENCE_STATUS_ENDPOINT` to the release core endpoint for
+  repository-backed task/audit lookup, which prevents a syntactically valid but
+  unresolved live-device `command_result_evidence_id` from passing the final
+  doctor assertion. Docs, KB notes, and CLI E2E coverage were updated in the
+  same branch.
 - The current conservative readiness boundary is unchanged: 17 verified
   repo-owned features, one pending manual live voice validation feature, and
   missing external/manual release evidence before production-ready language is
@@ -169,6 +180,7 @@ sweep is:
 - `cargo test -p jarvis-cli --test local_ipc_e2e release_readiness_cli_computes_production_ready_only_from_external_complete_evidence_status -- --nocapture`
 - `cargo test -p jarvis-cli --test local_ipc_e2e release_readiness_rejects_semantically_invalid_live_voice_evidence -- --nocapture`
 - `cargo test -p jarvis-cli --test local_ipc_e2e release_evidence_status_rejects_plugin_report_non_owner_review_source -- --nocapture`
+- `cargo test -p jarvis-cli --test local_ipc_e2e release_evidence_doctor -- --nocapture`
 - `cargo test -p jarvis-cli --test local_ipc_e2e release_help_surfaces_current_evidence_boundaries -- --nocapture`
 - `cargo test -p jarvis-cli --test local_ipc_e2e serve_exposes_local_ipc_contract_and_persists_state -- --nocapture`
 - `./scripts/release-evidence-doctor.sh --self-test`

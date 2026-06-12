@@ -597,8 +597,12 @@ Clean-profile and manual production gates not proven by this local smoke:
   `/release/evidence-status` must run against repository-backed IPC state and
   resolve it to an existing task or task-associated audit row before it can
   clear readiness. Fallback/no-server CLI evidence-status treats shape-only
-  command evidence as invalid; the shell scripts only preflight the ID shape
-  because they cannot inspect the SQLite repository. The
+  command evidence as invalid; the live-device and bundle scripts preflight the
+  ID shape before repository-backed evidence-status performs the durable lookup.
+  The final `release-evidence-doctor.sh --assert-complete` check delegates to
+  `jarvis release evidence-status --json`, and `JARVIS_EVIDENCE_STATUS_ENDPOINT`
+  can point that assertion at the release core so syntactically valid but
+  unresolved task/audit evidence cannot pass. The
   report must bind the installed bundled core path, `jarvis <version>` output,
   and SHA-256 digest. The report generation timestamp must be UTC, no earlier
   than the completed voice check, and not future-dated. Confirm the generated

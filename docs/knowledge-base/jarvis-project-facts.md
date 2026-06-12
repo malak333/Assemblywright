@@ -138,8 +138,11 @@ These notes capture durable facts for future agents working on this repository.
   check runs through CLI/IPC evidence-status, that ID must resolve through
   repository-backed IPC state to an existing task row or a task-associated audit
   row; fallback/no-server CLI evidence-status fails closed instead of accepting
-  shape-only IDs. Offline shell scripts keep shape-only fixture validation
-  because they do not own the SQLite repository. It now
+  shape-only IDs. The live-device and bundle scripts keep shape preflights, and
+  `release-evidence-doctor.sh --assert-complete` then delegates to
+  `jarvis release evidence-status --json`, optionally through
+  `JARVIS_EVIDENCE_STATUS_ENDPOINT`, so final doctor completion cannot accept
+  unresolved task/audit evidence. It now
   also requires a `bundled_core` block that binds the installed
   `Contents/Resources/bin/jarvis-cli` path, `jarvis <version>` output, and
   SHA-256 digest to the same live-device report, all live-device
@@ -800,10 +803,11 @@ requires plugin-trust `generated_at`, `review_started_at`,
   `JARVIS_QA_*` owner flags, including
   `JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true`, then writes a JSON evidence
   report with `voice_command_observation.command_result_evidence_id`. The
-  script validates the ID shape offline, while `/release/evidence-status` and
-  evidence-aware `/release/readiness` require the ID to resolve against
-  task/audit records through repository-backed IPC state before the report can
-  clear readiness. The script writes the report
+  script validates the ID shape offline, while `/release/evidence-status`,
+  `release-evidence-doctor.sh --assert-complete`, and evidence-aware
+  `/release/readiness` require the ID to resolve against task/audit records
+  through repository-backed IPC state before the report can clear readiness.
+  The script writes the report
   to `JARVIS_QA_REPORT_PATH` or
   `target/release-live-device-qa-report.json`. The report records installed-app
   metadata, voice-loop evidence fields, owner-recorded live voice evidence
@@ -940,7 +944,6 @@ requires plugin-trust `generated_at`, `review_started_at`,
   installation, or live-device QA. `--check-guidance-self-test` is also part of
   `./scripts/release-local.sh` and fails if those handoff commands drift out of
   the package preflight output.
-  installation, or live-device QA.
 - Release evidence structural hardening now treats the final evidence chain as
   cross-bound evidence, not independent files: app zips are rejected unless they
   contain exactly one top-level `Jarvis.app` payload with `Info.plist`, the app
@@ -960,8 +963,8 @@ requires plugin-trust `generated_at`, `review_started_at`,
   E2E or focused integration coverage instead of adding artificial tests.
   Behavior changes still require matching coverage before broader readiness
   language can be used.
-- The June 11, 2026 production-readiness sweep refresh was updated after PR
-  #234 from `main` at `744a64b`: readiness still reported
+- The June 11, 2026 production-readiness sweep refresh was updated again after
+  PR #238 from `main` at `4a4661e`: readiness still reported
   `production_ready: false`, 17 verified features, and one pending feature
   (`live_voice_loop`). In the main checkout, evidence-status reported 3
   satisfied generated local app/core paths, 6 missing external/manual evidence
@@ -973,7 +976,11 @@ requires plugin-trust `generated_at`, `review_started_at`,
   evidence status is complete, PR #232 clarified exact release evidence script
   handoff commands, and PR #233 hardened the Swift voice UI so unavailable
   capture, missing submit handlers, and busy submitters cannot imply live voice
-  loop readiness.
+  loop readiness. PR #234 rejected placeholder owner evidence notes in core
+  evidence-status/final-bundle paths, PR #235 ignored stale AVSpeech callbacks,
+  PR #236 rejected placeholder live-device QA notes in the shell assertion path,
+  PR #237 added a package-check guidance self-test, and PR #238 locked readable
+  evidence-status present-item path/detail coverage in CLI E2E plus docs.
 - The Swift speech-output adapter tracks the active AVSpeech utterance by object
   identity and ignores completion/cancel callbacks for older utterances, so
   stopping or replacing speech cannot let a stale delegate callback mark newer
