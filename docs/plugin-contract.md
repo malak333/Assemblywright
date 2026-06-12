@@ -36,8 +36,9 @@ Each plugin manifest must declare:
   an embedded public key cannot self-authorize.
 - Optional per-action `network_access`. Actions that request the `network`
   permission must set `network_access.mode: declared_hosts` and provide
-  non-empty `allowed_hosts` with plain hostnames only. Wildcards, schemes,
-  paths, ports, whitespace, IP literals, and non-ASCII hostnames fail manifest
+  non-empty, unique `allowed_hosts` with lowercase plain hostnames only.
+  Wildcards, schemes, paths, ports, whitespace, IP literals, mixed-case
+  hostnames, duplicate hostnames, and non-ASCII hostnames fail manifest
   validation. This is manifest governance and review evidence, not an OS
   network sandbox.
 - `local_subprocess` manifests must declare a `subprocess` block with a command

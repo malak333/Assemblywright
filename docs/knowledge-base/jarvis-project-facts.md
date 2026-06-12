@@ -348,8 +348,9 @@ These notes capture durable facts for future agents working on this repository.
 - Plugin actions that request the existing `network` permission must now
   declare `network_access.mode: declared_hosts` and exact plain-hostname
   `allowed_hosts`. Invalid host declarations, including schemes, wildcards,
-  paths, ports, whitespace, IP literals, and non-ASCII hostnames, fail manifest
-  validation, and `/permissions/policy-review` emits `network_plugin_action` items for installed
+  paths, ports, whitespace, IP literals, mixed-case hostnames, duplicate
+  hostnames, and non-ASCII hostnames, fail manifest validation, and
+  `/permissions/policy-review` emits `network_plugin_action` items for installed
   plugins with declared network access. Executable installed plugins with
   network-declaring actions fail closed unless enabled with
   `subprocess_stdio_network`; non-network actions fail closed while the
