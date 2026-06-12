@@ -79,14 +79,13 @@ Jarvis is currently a production-shaped local assistant foundation:
   scheduler, diagnostics, release inspection, voice adapter controls, speech
   output controls, Keychain launch credential injection, and core supervision.
 - Local release proof includes the canonical `./scripts/release-local.sh` gate,
-  repository-backed operator smoke, packaged-app smoke, unsigned distribution
-  launch proof, release evidence script self-tests, Rust/CLI E2E, and Swift
-  package tests.
+  repository-backed operator smoke, unsigned distribution launch proof, release
+  evidence script self-tests, Rust/CLI E2E, and Swift package tests.
 - PRs #215 through #221 tightened plugin trust evidence, package provenance,
   Mac scheduler actions, public GitHub release-local runtime compatibility,
   release-evidence archive URI validation, `/contract` release-evidence
   wording, and `/release/evidence-status` proof-boundary wording.
-- The current conservative readiness boundary is unchanged: 17 verified
+- The current conservative readiness boundary is unchanged: 16 verified
   repo-owned features, one pending manual live voice validation feature, and
   six missing external/manual evidence artifacts.
 

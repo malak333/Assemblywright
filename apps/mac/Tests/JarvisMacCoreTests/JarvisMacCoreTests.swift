@@ -380,7 +380,9 @@ struct JarvisMacCoreTests {
         #expect(readiness.recommendedVerificationCommands.contains("./scripts/release-local.sh"))
         #expect(readiness.recommendedVerificationCommands.contains("./scripts/release-ci-workflow-smoke.sh"))
         #expect(readiness.recommendedVerificationCommands.contains("./scripts/release-operator-qa-smoke.sh"))
-        #expect(readiness.recommendedVerificationCommands.contains("./scripts/packaged-app-release-smoke.sh"))
+        #expect(!readiness.recommendedVerificationCommands.contains("./scripts/packaged-app-release-smoke.sh"))
+        #expect(readiness.recommendedVerificationCommands.contains("./scripts/package-distribution.sh --check"))
+        #expect(readiness.recommendedVerificationCommands.contains("./scripts/package-distribution.sh --unsigned-launch-check"))
         #expect(readiness.recommendedVerificationCommands.contains("./scripts/release-live-device-qa.sh --check"))
         #expect(readiness.recommendedVerificationCommands.contains { command in
             command.contains("JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true") &&
@@ -411,7 +413,7 @@ struct JarvisMacCoreTests {
         #expect(readiness.recommendedVerificationCommands.contains("cargo run -p jarvis-cli -- release live-device-runbook"))
         let commands = readiness.recommendedVerificationCommands
         let operatorSmokeIndex = try #require(commands.firstIndex(of: "./scripts/release-operator-qa-smoke.sh"))
-        let packagedAppSmokeIndex = try #require(commands.firstIndex(of: "./scripts/packaged-app-release-smoke.sh"))
+        let packagePreflightIndex = try #require(commands.firstIndex(of: "./scripts/package-distribution.sh --check"))
         let unsignedDistributionIndex = try #require(commands.firstIndex(of: "./scripts/package-distribution.sh --unsigned-launch-check"))
         let signedDistributionIndex = try #require(commands.firstIndex(of: "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh"))
         let liveDeviceRunbookIndex = try #require(commands.firstIndex(of: "cargo run -p jarvis-cli -- release live-device-runbook"))
@@ -425,8 +427,8 @@ struct JarvisMacCoreTests {
         let evidenceDoctorAssertIndex = try #require(commands.firstIndex(of: "./scripts/release-evidence-doctor.sh --assert-complete"))
         let externalCoreRestartIndex = try #require(commands.firstIndex(of: "Start or restart the core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external"))
         let externalReadinessIndex = try #require(commands.firstIndex(of: "cargo run -p jarvis-cli -- release readiness"))
-        #expect(operatorSmokeIndex < packagedAppSmokeIndex)
-        #expect(packagedAppSmokeIndex < unsignedDistributionIndex)
+        #expect(operatorSmokeIndex < packagePreflightIndex)
+        #expect(packagePreflightIndex < unsignedDistributionIndex)
         #expect(unsignedDistributionIndex < signedDistributionIndex)
         #expect(signedDistributionIndex < liveDeviceRunbookIndex)
         #expect(liveDeviceRunbookIndex < liveDeviceCheckIndex)
@@ -3375,7 +3377,7 @@ private func releaseReadinessJSON() -> Data {
             "./scripts/release-local.sh",
             "./scripts/release-ci-workflow-smoke.sh",
             "./scripts/release-operator-qa-smoke.sh",
-            "./scripts/packaged-app-release-smoke.sh",
+            "./scripts/package-distribution.sh --check",
             "./scripts/package-distribution.sh --unsigned-launch-check",
             "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh",
             "cargo run -p jarvis-cli -- release live-device-runbook",

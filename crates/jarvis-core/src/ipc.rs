@@ -5726,7 +5726,6 @@ fn release_verification_commands() -> Vec<String> {
         "./scripts/release-local.sh".to_string(),
         "./scripts/release-ci-workflow-smoke.sh".to_string(),
         "./scripts/release-operator-qa-smoke.sh".to_string(),
-        "./scripts/packaged-app-release-smoke.sh".to_string(),
         "./scripts/package-distribution.sh --check".to_string(),
         "./scripts/package-distribution.sh --unsigned-launch-check".to_string(),
         "cargo run -p jarvis-cli -- release signed-distribution-runbook".to_string(),
@@ -5819,12 +5818,6 @@ fn contract_features() -> Vec<ContractFeature> {
             "implemented",
             "Network-capable plugin actions must declare exact allowed hosts, appear in permission policy review, and require the explicit subprocess_stdio_network execution grant.",
             "Runtime grant gate plus manifest governance only; not OS-level network sandbox enforcement or host-level egress filtering.",
-        ),
-        feature(
-            "packaged_app_smoke",
-            "implemented",
-            "Local packaged-app smoke assembles and ad-hoc signs Jarvis.app, launches it with a temp profile, and verifies supervised core health and recovery paths.",
-            "Local ad-hoc proof only; Developer ID signing, notarization, installer, Finder, App Store, and entitlement validation remain manual/distribution gates.",
         ),
         feature(
             "operator_release_qa_smoke",

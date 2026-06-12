@@ -150,7 +150,7 @@ Opt-in final-transcript auto-submit is text-path parity only; it does not clear
 live microphone/Speech/audio-output validation or manual release QA.
 
 Phase 3 landed through separate worktrees for model route persistence, plugin
-subprocess grant gating, voice input controls, packaged app release smoke,
+subprocess grant gating, voice input controls, local packaged app launch proof,
 permission grants UX, docs architecture alignment, distribution packaging, and
 Keychain launch credential injection. Follow-on slices have added Swift memory
 CRUD, local plugin provenance verification, scheduler attention handoff, and
@@ -253,18 +253,6 @@ the configured packaged-style executable, and runs `jarvis smoke`.
 It is branch evidence for app-supervised core discovery, not a signed packaged
 app release smoke.
 
-For local packaged app smoke evidence, run:
-
-```sh
-./scripts/packaged-app-release-smoke.sh
-```
-
-That script assembles a temporary `Jarvis.app`, verifies microphone/Speech usage
-strings, ad-hoc signs with the packaged audio-input entitlement when `codesign`
-is available, and launches the app against an isolated temp profile. It is
-still not Developer ID signing, notarization, installer validation, or live
-voice-device validation.
-
 For distribution packaging work, run:
 
 ```sh
@@ -274,6 +262,10 @@ For distribution packaging work, run:
 ./scripts/package-distribution.sh --unsigned-launch-check
 ```
 
+`./scripts/packaged-app-release-smoke.sh` remains only as a deprecated
+compatibility wrapper that delegates to
+`./scripts/package-distribution.sh --unsigned-launch-check`; new release
+evidence and readiness recommendations should cite the distribution command.
 The release version is derived from the Rust package metadata and checked
 against the CLI/core crate versions before packaging or evidence scripts build
 versioned artifact names. The CLI also exposes `jarvis --version`, and the
