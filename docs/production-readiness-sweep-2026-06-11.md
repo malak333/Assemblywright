@@ -153,6 +153,10 @@ Jarvis is currently a production-shaped local assistant foundation:
   caveats on the same item line as `present` in the default CLI output, while
   preserving the full detail line and JSON contract. CLI E2E covers both the
   fallback/no-server and server-backed readable paths.
+- This Swift Release tab presentation follow-up mirrors that same-line
+  presence-only cue in the app row status and adds `JarvisMacAppTests`, so the
+  app target now has direct release presentation coverage in addition to core
+  model tests.
 - The current conservative readiness boundary is unchanged: 17 verified
   repo-owned features, one pending manual live voice validation feature, and
   missing external/manual release evidence before production-ready language is
@@ -196,6 +200,7 @@ sweep is:
 - `cargo test -p jarvis-cli --test local_ipc_e2e serve_exposes_local_ipc_contract_and_persists_state -- --nocapture`
 - `./scripts/release-evidence-doctor.sh --self-test`
 - `./scripts/release-live-device-qa.sh --self-test`
+- `swift test --disable-sandbox --package-path apps/mac --filter JarvisMacAppTests`
 - `swift test --disable-sandbox --package-path apps/mac --filter JarvisMacCoreTests`
 - `./scripts/release-local.sh` before merging executable or release-boundary
   changes.

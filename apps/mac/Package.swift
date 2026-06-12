@@ -20,6 +20,10 @@ let package = Package(
         .testTarget(
             name: "JarvisMacCoreTests",
             dependencies: ["JarvisMacCore"]
+        ),
+        .testTarget(
+            name: "JarvisMacAppTests",
+            dependencies: ["JarvisMacApp", "JarvisMacCore"]
         )
     ]
 )

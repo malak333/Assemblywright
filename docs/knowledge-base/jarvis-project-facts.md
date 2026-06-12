@@ -190,8 +190,9 @@ These notes capture durable facts for future agents working on this repository.
   `ReleaseReadinessModel` and renders a Release tab with blocking manual gates,
   recommended commands, implemented proofs, pending features, the proof
   boundary, stale cached-readiness warning, and `/release/evidence-status`
-  inventory. Its effective production-ready display must remain fail-closed
-  unless readiness is true, evidence status is complete, every evidence item is
+  inventory. Present presence-only evidence rows show the caveat on the status
+  line. Its effective production-ready display must remain fail-closed unless
+  readiness is true, evidence status is complete, every evidence item is
   present, and the refresh is not stale or failed. This remains inspection-only
   and does not perform signing, notarization, stapling, installation,
   Finder/LaunchServices validation, or live-device validation.
@@ -998,6 +999,9 @@ requires plugin-trust `generated_at`, `review_started_at`,
   `jarvis release evidence-status` output includes each evidence item's path and
   detail, including present presence-only caveats on the item line, so
   operators do not need `--json` for basic triage.
+- `JarvisMacAppTests` covers app-level Release tab presentation for
+  presence-only evidence rows, while `JarvisMacCoreTests` continues to cover
+  the release-readiness model and evidence-status decoding.
 - `jarvis-cli serve --db-path <path>` starts IPC with SQLite-backed task,
   audit, memory, and emergency-pause state for manual persistence checks.
 - File-backed `SqliteRepository::open` creates a preflight migration backup

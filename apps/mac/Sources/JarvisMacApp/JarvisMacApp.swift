@@ -1429,6 +1429,9 @@ struct ReleaseReadinessView: View {
 
 struct ReleaseEvidenceStatusRow: View {
     let item: JarvisReleaseEvidenceStatusItem
+    private var presentation: ReleaseEvidenceStatusPresentation {
+        ReleaseEvidenceStatusPresentation(item: item)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -1436,7 +1439,7 @@ struct ReleaseEvidenceStatusRow: View {
                 Text(item.label)
                     .font(.subheadline)
                 Spacer()
-                Text(item.status)
+                Text(presentation.statusLine)
                     .font(.caption)
                     .foregroundStyle(item.status == "present" ? .green : .orange)
             }
@@ -1450,6 +1453,18 @@ struct ReleaseEvidenceStatusRow: View {
                 .textSelection(.enabled)
         }
         .padding(.vertical, 4)
+    }
+}
+
+struct ReleaseEvidenceStatusPresentation: Equatable {
+    let statusLine: String
+
+    init(item: JarvisReleaseEvidenceStatusItem) {
+        if item.status == "present", item.detail.contains("presence only") {
+            statusLine = "\(item.status); presence-only caveat"
+        } else {
+            statusLine = item.status
+        }
     }
 }
 
