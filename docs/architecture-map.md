@@ -1040,25 +1040,27 @@ the app and keeps the current-state diagram aligned with implementation; it does
 not perform signing, notarization, live-device QA, plugin-trust review, or final
 evidence bundling.
 The live-device QA template-guidance slice keeps the current release-proof lane
-repo-owned by embedding the release-core command evidence capture, sourceable
-assertion command, and post-report external evidence-mode status/readiness
-checks in the generated `release-live-device-qa.env` template. Script self-test
-coverage verifies those comments stay present without claiming any live-device
-validation was performed.
+repo-owned by embedding one sourceable `JARVIS_RELEASE_CORE_ENDPOINT`, the
+release-core command evidence capture that reuses it, the sourceable assertion
+command, and post-report external evidence-mode status/readiness checks against
+that same endpoint in the generated `release-live-device-qa.env` template.
+Script self-test coverage verifies those comments stay present without claiming
+any live-device validation was performed.
 The live-device runbook endpoint-guidance slice mirrors that release-core
-command evidence capture and external evidence-mode endpoint guidance in both
-the CLI fallback runbook and the IPC `/release/live-device-runbook` payload, with
-Rust E2E and Swift decode coverage. It improves operator command ordering only;
-it still does not perform signing, notarization, clean-profile install,
-Finder/LaunchServices launch, live-device QA, plugin-trust QA, or final evidence
-bundling.
+command evidence capture, one-time endpoint variable, and external
+evidence-mode endpoint guidance in both the CLI fallback runbook and the IPC
+`/release/live-device-runbook` payload, with Rust E2E and Swift decode coverage.
+It improves operator command ordering only; it still does not perform signing,
+notarization, clean-profile install, Finder/LaunchServices launch, live-device
+QA, plugin-trust QA, or final evidence bundling.
 The release handoff command-guidance slice carries the same live-device
 release-core command evidence capture, `task:<uuid>`/`audit:<uuid>` recording
-rule, and endpoint-aware external evidence-mode status/readiness commands into
-the package preflight and evidence-doctor missing-evidence next-step guidance.
-The package guidance self-test and evidence-doctor self-test pin those operator
-commands as read-only handoff text; no signing, notarization, live-device QA,
-plugin-trust QA, or final evidence bundle is created.
+rule, `JARVIS_RELEASE_CORE_ENDPOINT` handoff, and endpoint-aware external
+evidence-mode status/readiness commands into the package preflight and
+evidence-doctor missing-evidence next-step guidance. The package guidance
+self-test and evidence-doctor self-test pin those operator commands as read-only
+handoff text; no signing, notarization, live-device QA, plugin-trust QA, or
+final evidence bundle is created.
 The external release handoff slice adds
 `./scripts/release-external-handoff.sh --write target/release-external-handoff`
 as a single operator handoff generator. It writes the live-device,

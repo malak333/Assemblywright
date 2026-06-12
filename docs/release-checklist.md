@@ -594,9 +594,10 @@ Clean-profile and manual production gates not proven by this local smoke:
   fill the generated template, source it, and rerun with `--assert-complete`.
   The generated template materializes `JARVIS_QA_EXPECTED_VERSION` from the
   canonical Rust package release version instead of leaving a shell placeholder,
-  and embeds the release-core command evidence capture plus the post-report
-  external evidence-mode `release evidence-status` and `release readiness`
-  checks.
+  includes one sourceable `JARVIS_RELEASE_CORE_ENDPOINT`, and embeds the
+  release-core command evidence capture plus the post-report external
+  evidence-mode `release evidence-status` and `release readiness` checks
+  against that same endpoint.
   All required `JARVIS_QA_*` flags must be set to `true`, including
   `JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true`, plus the required
   owner/device/profile/UTC timestamp, non-voice owner evidence-note, voice
@@ -683,7 +684,9 @@ Distribution packaging gate:
   handoff commands. Its live-device handoff must include the release-core
   command evidence capture, `task:<uuid>`/`audit:<uuid>` evidence-ID recording
   guidance, and endpoint-aware external evidence-mode evidence-status/readiness
-  checks before plugin-trust and final bundle handoff.
+  checks before plugin-trust and final bundle handoff. The live-device template
+  and runbook use `JARVIS_RELEASE_CORE_ENDPOINT` as the single endpoint value
+  for command evidence and post-report readiness checks.
 - Run `./scripts/package-distribution.sh --unsigned-structure-check` on
   distribution-layout PRs to build the release app, create an unsigned installer
   package, inspect the payload, and validate package identifier, version, and

@@ -1111,12 +1111,20 @@ requires plugin-trust `generated_at`, `review_started_at`,
   `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external`. Rust E2E, core unit tests,
   Swift decode tests, and the live-device shell self-test cover this guidance
   without claiming live-device QA was performed.
+- The live-device QA env template now carries one
+  `JARVIS_RELEASE_CORE_ENDPOINT` value that the command-evidence capture and
+  post-report external evidence-status/readiness checks reuse. CLI fallback and
+  IPC live-device runbooks pin the same sourceable endpoint handoff so
+  operators do not collect `task:<uuid>`/`audit:<uuid>` evidence from one core
+  and verify readiness against another endpoint.
 - The release-evidence doctor missing-evidence next-step guidance now mirrors
   the same live-device release-core command capture and endpoint-aware external
   evidence-mode handoff as package preflight, the generated live-device
-  template, and the live-device runbook. Its shell self-test pins those strings
-  as guidance only; it still does not perform live-device QA or create release
-  evidence.
+  template, and the live-device runbook. Package preflight and evidence doctor
+  now also tell operators to set `JARVIS_RELEASE_CORE_ENDPOINT` once and reuse
+  it for command evidence plus external evidence-status/readiness checks. Their
+  shell self-tests pin those strings as guidance only; they still do not perform
+  live-device QA or create release evidence.
 - `./scripts/release-external-handoff.sh` is the single operator handoff
   generator for the remaining external production gates. `--write` creates
   `release-live-device-qa.env`, `release-plugin-trust-qa.env`,
