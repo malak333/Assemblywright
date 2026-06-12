@@ -144,6 +144,11 @@ Jarvis is currently a production-shaped local assistant foundation:
   unresolved live-device `command_result_evidence_id` from passing the final
   doctor assertion. Docs, KB notes, and CLI E2E coverage were updated in the
   same branch.
+- This Swift/live-device fixture drift follow-up keeps the Swift release
+  fixtures synchronized with current evidence-status labels/details and makes
+  the live-device QA self-test derive its expected bundled-core version from
+  the canonical release version instead of a hard-coded string. Docs, KB notes,
+  and focused Swift/shell validation were updated in the same branch.
 - The current conservative readiness boundary is unchanged: 17 verified
   repo-owned features, one pending manual live voice validation feature, and
   missing external/manual release evidence before production-ready language is
@@ -184,6 +189,7 @@ sweep is:
 - `cargo test -p jarvis-cli --test local_ipc_e2e release_help_surfaces_current_evidence_boundaries -- --nocapture`
 - `cargo test -p jarvis-cli --test local_ipc_e2e serve_exposes_local_ipc_contract_and_persists_state -- --nocapture`
 - `./scripts/release-evidence-doctor.sh --self-test`
+- `./scripts/release-live-device-qa.sh --self-test`
 - `swift test --disable-sandbox --package-path apps/mac --filter JarvisMacCoreTests`
 - `./scripts/release-local.sh` before merging executable or release-boundary
   changes.

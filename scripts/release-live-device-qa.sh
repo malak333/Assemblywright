@@ -643,7 +643,7 @@ PLIST
   require_file_contains "live QA self-test report" "$fixture_report" '"microphone_usage_description"'
   require_file_contains "live QA self-test report" "$fixture_report" '"bundled_core"'
   require_file_contains "live QA self-test report" "$fixture_report" '"executable_path"'
-  require_file_contains "live QA self-test report" "$fixture_report" '"version": "jarvis 0.1.4"'
+  require_file_contains "live QA self-test report" "$fixture_report" "\"version\": \"jarvis $EXPECTED_VERSION\""
   require_file_contains "live QA self-test report" "$fixture_report" '"sha256"'
   require_file_contains "live QA self-test report" "$fixture_report" '"transcript_handoff": true'
   require_file_contains "live QA self-test report" "$fixture_report" '"same_command_path": true'

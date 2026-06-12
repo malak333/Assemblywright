@@ -981,6 +981,12 @@ requires plugin-trust `generated_at`, `review_started_at`,
   PR #236 rejected placeholder live-device QA notes in the shell assertion path,
   PR #237 added a package-check guidance self-test, and PR #238 locked readable
   evidence-status present-item path/detail coverage in CLI E2E plus docs.
+- Swift release-readiness fixtures should stay aligned with live
+  `jarvis release evidence-status --json` wording, including presence-only
+  executable details, `expected evidence path is missing`, `Plugin-trust QA
+  report`, and `Release evidence bundle`. The live-device QA shell self-test
+  should compare bundled-core version output against `EXPECTED_VERSION`, not a
+  hard-coded release string, so version bumps do not create false QA failures.
 - The Swift speech-output adapter tracks the active AVSpeech utterance by object
   identity and ignores completion/cancel callbacks for older utterances, so
   stopping or replacing speech cannot let a stale delegate callback mark newer
