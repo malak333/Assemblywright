@@ -1039,3 +1039,10 @@ Rust E2E and Swift decode coverage. It improves operator command ordering only;
 it still does not perform signing, notarization, clean-profile install,
 Finder/LaunchServices launch, live-device QA, plugin-trust QA, or final evidence
 bundling.
+The release handoff command-guidance slice carries the same live-device
+release-core command evidence capture, `task:<uuid>`/`audit:<uuid>` recording
+rule, and endpoint-aware external evidence-mode status/readiness commands into
+the package preflight and evidence-doctor missing-evidence next-step guidance.
+The package guidance self-test and evidence-doctor self-test pin those operator
+commands as read-only handoff text; no signing, notarization, live-device QA,
+plugin-trust QA, or final evidence bundle is created.
