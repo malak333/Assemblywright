@@ -839,12 +839,25 @@ external action, or broader production operation.
 | Production workflow | Phase 3 and follow-on release-hardening work were split into isolated branches/worktrees for model route persistence, plugin subprocess execution, voice adapter production, packaged app launch proof, permission grants UX, docs architecture alignment, distribution launch proof, live-device QA evidence-capture mechanics, and plugin trust QA evidence-capture mechanics. | Public repo release train with PR evidence, reproducible local gates, owner-reviewed release notes, and no hidden readiness claims. | Isolated PR workflow documented; release governance still manual. |
 | Docs, KB, and E2E discipline | Docs and knowledge-base files record implementation boundaries, the current/end-goal diagrams, and local proof commands. Current E2E evidence is Rust/CLI cross-process, Swift package contract/model coverage including scheduler run/recovery IPC client and model actions, packaged-layout supervision proof, distribution-layout launch proof, and local release-gate preflight/self-tests for live-device, plugin-trust, and final evidence-bundle capture. | Every feature phase updates docs and durable KB facts, adds or names the relevant E2E coverage, and blocks broader readiness claims when coverage is missing. | Phase discipline documented; broader signed distribution and external manual evidence pending. |
 
+Signed-distribution runbook E2E now pins the full release-handoff contract:
+the signed artifact evidence key set, exact operator command sequence, exact
+manual-check text, and parity between `--json` and `--format json`. This keeps
+the current implementation diagram honest: the repository can prove the
+runbook and local evidence inspection contract, while actual Developer ID
+signing, notarization, stapling, installation, and manual QA remain target-state
+operator evidence.
+
 ## 2026-06-11 Autonomous Sweep Status
 
 The active sweep state is documented in
 [Production readiness sweep - 2026-06-11](production-readiness-sweep-2026-06-11.md).
 That note records the six-agent audit ownership, the live readiness snapshot,
 and the relevant E2E coverage for this docs-sync phase.
+
+The 2026-06-12 refresh is documented in
+[Production readiness sweep - 2026-06-12](production-readiness-sweep-2026-06-12.md).
+That note records the post-PR #247 readiness snapshot, the still-open #248/#249
+PR gate state, and the current production evidence boundary.
 
 The current readiness payload should be refreshed before release claims. In the
 2026-06-12 UTC sweep refresh after PR #238 from `main` at `4a4661e`,
