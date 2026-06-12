@@ -566,12 +566,17 @@ impl PluginManifest {
                 self.id
             ))
         })?;
-        signature.verify(&self.id, trusted_public_key, &self.signature_payload()?)
+        signature.verify(
+            &self.id,
+            trusted_public_key,
+            &self.publisher_signature_payload()?,
+        )
     }
 
-    fn signature_payload(&self) -> JarvisResult<Vec<u8>> {
+    fn publisher_signature_payload(&self) -> JarvisResult<Vec<u8>> {
         let mut unsigned = self.clone();
         unsigned.publisher_signature = None;
+        unsigned.source_path = None;
         serde_json::to_vec(&unsigned).map_err(|err| {
             JarvisError::Validation(format!("{} publisher signature payload: {err}", self.id))
         })
@@ -2068,6 +2073,7 @@ impl InProcessPlugin for StatusPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use std::{fs, thread, time::Duration};
@@ -2203,6 +2209,36 @@ mod tests {
             .validate()
             .expect_err("excessive timeout must fail");
         assert!(error.to_string().contains("timeout cannot exceed"));
+    }
+
+    #[test]
+    fn publisher_signature_payload_omits_local_source_path() {
+        let signing_key = SigningKey::from_bytes(&[7_u8; 32]);
+        let trusted_public_key = BASE64_STANDARD.encode(signing_key.verifying_key().as_bytes());
+        let mut manifest = EchoPlugin.manifest();
+        manifest.source = PluginSource::LocalDevelopment;
+        manifest.source_path = Some("/tmp/jarvis-plugin-install-a".to_string());
+        manifest.publisher_signature =
+            Some(publisher_signature_for_manifest(&manifest, &signing_key));
+
+        manifest
+            .verify_publisher_signature(&trusted_public_key)
+            .expect("original manifest signature should verify");
+
+        let mut moved_manifest = manifest.clone();
+        moved_manifest.source_path = Some("/tmp/jarvis-plugin-install-b".to_string());
+        moved_manifest
+            .verify_publisher_signature(&trusted_public_key)
+            .expect("local source path should not be part of publisher signature identity");
+
+        let mut tampered_manifest = moved_manifest;
+        tampered_manifest.version = "0.2.0".to_string();
+        let error = tampered_manifest
+            .verify_publisher_signature(&trusted_public_key)
+            .expect_err("signed manifest identity changes must fail verification");
+        assert!(error
+            .to_string()
+            .contains("publisher signature verification failed"));
     }
 
     #[test]
@@ -2789,6 +2825,21 @@ PY
                 },
                 cancellation: CancellationBehavior::Cooperative,
             }],
+        }
+    }
+
+    fn publisher_signature_for_manifest(
+        manifest: &PluginManifest,
+        signing_key: &SigningKey,
+    ) -> PluginPublisherSignature {
+        let payload = manifest
+            .publisher_signature_payload()
+            .expect("publisher signature payload");
+        let signature = signing_key.sign(&payload);
+        PluginPublisherSignature {
+            scheme: PluginPublisherSignature::ED25519_V1.to_string(),
+            public_key: BASE64_STANDARD.encode(signing_key.verifying_key().as_bytes()),
+            signature: BASE64_STANDARD.encode(signature.to_bytes()),
         }
     }
 

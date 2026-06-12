@@ -7193,8 +7193,9 @@ fn write_fixture_bundled_core_executable(path: &Path) {
 }
 
 fn signed_manifest(mut manifest: Value, signing_key: &SigningKey) -> Value {
-    let typed_manifest: jarvis_core::PluginManifest =
+    let mut typed_manifest: jarvis_core::PluginManifest =
         serde_json::from_value(manifest.clone()).expect("decode unsigned plugin manifest");
+    typed_manifest.source_path = None;
     let payload = serde_json::to_vec(&typed_manifest).expect("serialize unsigned plugin manifest");
     let signature = signing_key.sign(&payload);
     manifest["publisher_signature"] = json!({

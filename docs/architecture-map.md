@@ -390,10 +390,11 @@ the manifest author claim as verified only after local provenance matches the
 install snapshot and the supplied trusted origin exactly matches the stored
 claim. This clears the unverified-origin policy review item and records audit
 evidence. Signed manifests can also be verified after local provenance matches:
-Jarvis verifies an Ed25519 signature over the unsigned manifest only when the
-operator supplies a trusted public key that exactly matches the manifest key.
-This records signature verification audit evidence, but it is not marketplace
-trust or malware analysis.
+Jarvis verifies an Ed25519 signature over the portable unsigned manifest
+identity with local `source_path` omitted only when the operator supplies a
+trusted public key that exactly matches the manifest key. This records signature
+verification audit evidence while keeping local file/path trust in provenance,
+but it is not marketplace trust or malware analysis.
 Network-capable actions must request the `network` permission and declare exact
 plain-hostname allowlists; invalid declarations fail manifest validation and
 policy review surfaces network-capable installed actions. This is manifest

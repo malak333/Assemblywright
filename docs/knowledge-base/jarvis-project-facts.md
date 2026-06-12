@@ -337,12 +337,14 @@ These notes capture durable facts for future agents working on this repository.
   analysis.
 - Installed plugin manifests can also include `publisher_signature` with
   `scheme: ed25519-v1`, a base64 Ed25519 public key, and a base64 signature
-  over the unsigned manifest payload. `/plugins/installed/:id/publisher/signature/verify`
+  over the portable unsigned manifest payload with `publisher_signature` and
+  local `source_path` omitted. `/plugins/installed/:id/publisher/signature/verify`
   and `plugins verify-publisher-signature` require local provenance to match
   first, require an explicit `trusted_public_key` that matches the manifest
   public key, verify the signature, set `origin_claim_verified: true`, and
   append `installed_plugin_publisher_signature_verified` with a hashed trusted
-  key reference. This proves the manifest was signed by the trusted key; it
+  key reference. This proves the portable manifest identity was signed by the
+  trusted key while local install paths/files remain covered by provenance; it
   still does not prove marketplace approval, malware safety, or OS-level
   process/network sandbox completeness.
 - Plugin actions that request the existing `network` permission must now
