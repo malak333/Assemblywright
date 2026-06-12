@@ -990,6 +990,8 @@ check_release_evidence() {
     check_json_string_contains "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "signing.installer_pkg_signature" "Developer ID Installer: "
     check_json_uuid "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "notarization.app_zip_submission_id"
     check_json_uuid "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "notarization.installer_pkg_submission_id"
+    check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "notarization.app_zip_status" "Accepted"
+    check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "notarization.installer_pkg_status" "Accepted"
     check_json_string_contains "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "stapling.app_bundle_validation" "The validate action worked!"
     check_json_string_contains "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "stapling.installer_pkg_validation" "The validate action worked!"
     check_json_gatekeeper_accepted "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "gatekeeper.app_bundle_assessment"
@@ -1514,6 +1516,8 @@ if [[ "$SELF_TEST" == true ]]; then
   "notarization": {
     "app_zip_submission_id": "00000000-0000-4000-8000-000000000001",
     "installer_pkg_submission_id": "00000000-0000-4000-8000-000000000002",
+    "app_zip_status": "Accepted",
+    "installer_pkg_status": "Accepted",
     "app_zip_notary_log": "$tmp_dir/app-zip-notarytool.log",
     "installer_pkg_notary_log": "$tmp_dir/installer-pkg-notarytool.log"
   },
@@ -1667,6 +1671,29 @@ PY
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected negated Gatekeeper acceptance to fail"
+  fi
+
+  python3 - "$tmp_dir/dist/Jarvis-$VERSION-signed-provenance.json" "$tmp_dir/dist/rejected-notary-signed-provenance.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+with open(source, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["notarization"]["app_zip_status"] = "Rejected"
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+PY
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/dist/rejected-notary-signed-provenance.json" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+    "$0" --assert-complete >/dev/null 2>&1; then
+    fail "release evidence doctor self-test expected rejected notary status to fail"
   fi
 
   check_output="$(JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/missing-dist" \

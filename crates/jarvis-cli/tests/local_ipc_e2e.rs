@@ -1751,6 +1751,63 @@ fn release_evidence_status_rejects_stale_signed_provenance_artifact_digests() {
 
 #[test]
 #[cfg(unix)]
+fn release_evidence_status_rejects_rejected_signed_provenance_notary_status() {
+    let temp_dir = tempfile::tempdir().expect("temp release evidence reports");
+    let fixture = write_complete_release_evidence_fixture(temp_dir.path());
+    let endpoint = format!("http://{}", unused_loopback_addr());
+
+    let mut rejected_report = valid_signed_distribution_provenance_report(
+        temp_dir
+            .path()
+            .join("dist/Jarvis.app")
+            .to_str()
+            .expect("app path utf8"),
+        temp_dir
+            .path()
+            .join("dist/Jarvis-0.1.4.zip")
+            .to_str()
+            .expect("zip path utf8"),
+        temp_dir
+            .path()
+            .join("dist/Jarvis-0.1.4.pkg")
+            .to_str()
+            .expect("pkg path utf8"),
+        &file_sha256(&temp_dir.path().join("dist/Jarvis-0.1.4.zip")),
+        &file_sha256(&temp_dir.path().join("dist/Jarvis-0.1.4.pkg")),
+    );
+    rejected_report["notarization"]["app_zip_status"] = json!("Rejected");
+    write_json_report(Path::new(&fixture.signed_provenance_path), rejected_report);
+
+    let evidence_status = run_cli_json_with_env(
+        [
+            "release",
+            "evidence-status",
+            "--endpoint",
+            endpoint.as_str(),
+        ],
+        &fixture.env_refs(),
+    );
+    let signed_provenance_item = evidence_status["items"]
+        .as_array()
+        .expect("evidence items")
+        .iter()
+        .find(|item| item["key"] == "signed_distribution_provenance_report")
+        .expect("signed provenance item");
+    assert_eq!(
+        signed_provenance_item["status"], "invalid",
+        "{signed_provenance_item}"
+    );
+    assert!(
+        signed_provenance_item["detail"]
+            .as_str()
+            .expect("signed provenance detail")
+            .contains("notarization.app_zip_status"),
+        "{signed_provenance_item}"
+    );
+}
+
+#[test]
+#[cfg(unix)]
 fn release_evidence_status_rejects_stale_signed_provenance_core_version() {
     let temp_dir = tempfile::tempdir().expect("temp release evidence reports");
     let fixture = write_complete_release_evidence_fixture(temp_dir.path());
@@ -6755,6 +6812,8 @@ fn valid_signed_distribution_provenance_report(
         "notarization": {
             "app_zip_submission_id": "00000000-0000-4000-8000-000000000001",
             "installer_pkg_submission_id": "00000000-0000-4000-8000-000000000002",
+            "app_zip_status": "Accepted",
+            "installer_pkg_status": "Accepted",
             "app_zip_notary_log": "target/distribution/notary-logs/app.log",
             "installer_pkg_notary_log": "target/distribution/notary-logs/pkg.log"
         },

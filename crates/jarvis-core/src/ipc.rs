@@ -147,6 +147,8 @@ const SIGNED_DISTRIBUTION_PROVENANCE_REQUIRED_FIELDS: &[&str] = &[
     "signing.installer_pkg_signature",
     "notarization.app_zip_submission_id",
     "notarization.installer_pkg_submission_id",
+    "notarization.app_zip_status",
+    "notarization.installer_pkg_status",
     "notarization.app_zip_notary_log",
     "notarization.installer_pkg_notary_log",
     "stapling.app_bundle_validation",
@@ -5119,6 +5121,8 @@ fn validate_signed_distribution_provenance(value: &serde_json::Value) -> Result<
     ] {
         require_json_uuid_value(value, field)?;
     }
+    require_json_string_value(value, "notarization.app_zip_status", "Accepted")?;
+    require_json_string_value(value, "notarization.installer_pkg_status", "Accepted")?;
     for field in [
         "stapling.app_bundle_validation",
         "stapling.installer_pkg_validation",
@@ -7933,6 +7937,8 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             "notarization": {
                 "app_zip_submission_id": "00000000-0000-4000-8000-000000000001",
                 "installer_pkg_submission_id": "00000000-0000-4000-8000-000000000002",
+                "app_zip_status": "Accepted",
+                "installer_pkg_status": "Accepted",
                 "app_zip_notary_log": "target/distribution/notary-logs/app.log",
                 "installer_pkg_notary_log": "target/distribution/notary-logs/pkg.log"
             },
@@ -8068,6 +8074,27 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
         assert!(
             detail.contains("notarization.app_zip_submission_id"),
+            "{detail}"
+        );
+    }
+
+    #[test]
+    fn signed_distribution_provenance_rejects_rejected_notary_status() {
+        let mut report = valid_signed_distribution_provenance_json();
+        report["notarization"]["app_zip_status"] = json!("Rejected");
+        let (status, detail) = inspect_signed_distribution_provenance_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("notarization.app_zip_status"), "{detail}");
+    }
+
+    #[test]
+    fn signed_distribution_provenance_rejects_pending_notary_status() {
+        let mut report = valid_signed_distribution_provenance_json();
+        report["notarization"]["installer_pkg_status"] = json!("In Progress");
+        let (status, detail) = inspect_signed_distribution_provenance_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(
+            detail.contains("notarization.installer_pkg_status"),
             "{detail}"
         );
     }
