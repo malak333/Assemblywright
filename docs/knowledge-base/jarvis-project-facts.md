@@ -1142,6 +1142,11 @@ requires plugin-trust `generated_at`, `review_started_at`,
   checks or final bundling. CLI E2E, IPC unit coverage, and Swift runbook
   fixtures pin the command text so copied operator commands fail fast instead of
   silently inspecting a different running core.
+- Release readiness recommended verification commands now include the same
+  structured scheduler notification fields required by live-device QA plus the
+  per-category plugin artifact URI/SHA-256 fields required by plugin-trust QA.
+  Core unit tests and CLI local IPC E2E pin those fields so the readiness
+  examples cannot drift behind the assertion scripts.
 - `./scripts/release-external-handoff.sh` is the single operator handoff
   generator for the remaining external production gates. `--write` creates
   `release-live-device-qa.env`, `release-plugin-trust-qa.env`,
