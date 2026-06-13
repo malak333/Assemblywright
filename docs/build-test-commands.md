@@ -721,7 +721,11 @@ entitlement template while the bundled core template omits it. The live-device h
 preflight includes the release-core command evidence capture, the
 `task:<uuid>`/`audit:<uuid>` evidence-ID recording rule, and endpoint-aware
 external evidence-mode evidence-status/readiness checks before plugin-trust and
-final bundle handoff. Its `--unsigned-structure-check`
+final bundle handoff. The final bundle handoff printed by `--check` ends with
+`./scripts/release-evidence-doctor.sh --assert-complete` after the read-only
+doctor inventory check, so the package preflight guidance carries the same
+final assertion as the release evidence bundle and doctor lanes. Its
+`--unsigned-structure-check`
 mode builds and inspects the release app/pkg structure without Developer ID
 credentials, including unsigned package identifier, version, and `/Applications`
 install-location metadata. Its `--unsigned-launch-check` mode also validates
