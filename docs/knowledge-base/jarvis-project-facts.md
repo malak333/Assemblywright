@@ -569,9 +569,11 @@ requires plugin-trust `generated_at`, `review_started_at`,
   `/release/live-device-runbook`, `/release/signed-distribution-runbook`, and
   `/release/plugin-trust-runbook` as redacted safe-inspection endpoints derived
   from readiness plus evidence-status, and the Swift Release tab renders them
-  when available. These surfaces are operator guidance only; they do not
-  perform signing, notarization, installation, live-device QA, plugin-trust
-  review, or final evidence bundling.
+  when available. Swift tests decode the live CLI `--json` payloads for all
+  three runbooks through the no-server fallback path to catch CLI/Swift drift.
+  These surfaces are operator guidance only; they do not perform signing,
+  notarization, installation, live-device QA, plugin-trust review, or final
+  evidence bundling.
 - The Swift Memory tab now uses the Rust IPC memory contract for list,
   include-deleted refresh, create, load, update of mutable fields, review,
   soft-delete, restore, and redacted retention-plan rendering. Category and key
@@ -740,8 +742,9 @@ requires plugin-trust `generated_at`, `review_started_at`,
   `cargo test -p jarvis-core release_runbooks_expose_current_evidence_without_side_effects -- --nocapture`
   plus
   `cargo test -p jarvis-core contract_endpoint_documents_safe_inspection_paths -- --nocapture`.
-  Swift coverage is in the runbook decode test, the management IPC request
-  path test, and `ReleaseReadinessModel` refresh assertions in
+  Swift coverage is in the fixture-backed runbook decode test, the live CLI
+  runbook JSON fallback decoder test, the management IPC request path test,
+  and `ReleaseReadinessModel` refresh assertions in
   `apps/mac/Tests/JarvisMacCoreTests`.
 - The focused repository-state test for progress visibility is
   `cargo test -p jarvis-core repository_backed_state_endpoints_expose_tasks_and_audit -- --nocapture`.
@@ -1121,9 +1124,14 @@ requires plugin-trust `generated_at`, `review_started_at`,
   #268 run `27428860335` / job `81073692261`, `production_ready: false`,
   `verified_feature_count: 16`, `pending_feature_count: 1`, and, after local
   generated app presence artifacts exist, six missing external/manual evidence
-  artifacts. The current post-PR #278 baseline remains conservative with
-  `production_ready: false`, `verified_feature_count: 16`, and one pending
-  manual `live_voice_loop` feature.
+  artifacts. The current post-PR #288 baseline at `69c9fef` remains
+  conservative with `production_ready: false`, `verified_feature_count: 16`,
+  and one pending manual `live_voice_loop` feature. PRs #283-#288 added
+  repo-owned clarity for voice permission gating, external handoff guidance,
+  architecture documentation, plugin-trust artifact SHA guidance, final doctor
+  assertion guidance, and Release tab runbook-load warnings, but they do not
+  satisfy signing, notarization, installation, live-device QA, plugin-trust QA,
+  or final evidence-bundle requirements.
 - PR #254 made release runbooks a current implementation surface rather than a
   CLI-only operator path: `/release/live-device-runbook`,
   `/release/signed-distribution-runbook`, and `/release/plugin-trust-runbook`

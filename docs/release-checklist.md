@@ -484,6 +484,9 @@ stage or when a PR needs focused evidence for one ownership slice.
   Its production-ready display must use the model's evidence-aware effective
   readiness state, not only the raw readiness payload, so incomplete, invalid,
   missing, or stale evidence keeps the app UI blocked.
+- Confirm read-only Release tab runbook load failures surface as warnings while
+  readiness and evidence-status remain visible and production-ready stays
+  fail-closed.
 - Confirm the cross-process CLI E2E still covers command, plugin, audit,
   redacted model-route inspection and restart recovery, memory
   classification summary, create/update/review/delete/restore, scheduler
@@ -650,6 +653,8 @@ Clean-profile and manual production gates not proven by this local smoke:
   identity, and proof boundary, then preserve the
   `target/release-live-device-qa-report.json`
   artifact, or the `JARVIS_QA_REPORT_PATH` override, with the release notes.
+  Preserve `scheduler_notification_observation` fields for kind, title, body,
+  thread identifier, timestamp, and pending-action notes in the same report.
   Then rerun `jarvis release evidence-status` and
   `jarvis release readiness` against a core started or restarted with
   `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external` and confirm the live
