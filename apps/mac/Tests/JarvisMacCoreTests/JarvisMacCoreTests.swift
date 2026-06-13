@@ -6,6 +6,10 @@ import Testing
 import AVFoundation
 #endif
 
+#if canImport(Speech)
+import Speech
+#endif
+
 private final class IPCURLProtocol: URLProtocol {
     nonisolated(unsafe) static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
 
@@ -2407,6 +2411,58 @@ struct JarvisMacCoreTests {
         #expect(adapter.callbacks == nil)
         #expect(voice.statusText.contains("Text-only voice scaffold"))
     }
+
+    #if canImport(AVFoundation) && canImport(Speech)
+    @MainActor
+    @available(macOS 14.0, *)
+    @Test("Mac speech adapter preflights current permissions before capture")
+    func macSpeechAdapterPreflightsCurrentPermissionsBeforeCapture() async {
+        let deniedSpeech = MacSpeechVoiceAdapter(
+            currentSpeechAuthorization: { .denied },
+            currentMicrophoneAuthorization: { .authorized }
+        )
+        let restrictedSpeech = MacSpeechVoiceAdapter(
+            currentSpeechAuthorization: { .restricted },
+            currentMicrophoneAuthorization: { .authorized }
+        )
+        let pendingSpeech = MacSpeechVoiceAdapter(
+            currentSpeechAuthorization: { .notDetermined },
+            currentMicrophoneAuthorization: { .authorized }
+        )
+        let deniedMicrophone = MacSpeechVoiceAdapter(
+            currentSpeechAuthorization: { .authorized },
+            currentMicrophoneAuthorization: { .denied }
+        )
+        let restrictedMicrophone = MacSpeechVoiceAdapter(
+            currentSpeechAuthorization: { .authorized },
+            currentMicrophoneAuthorization: { .restricted }
+        )
+        let pendingMicrophone = MacSpeechVoiceAdapter(
+            currentSpeechAuthorization: { .authorized },
+            currentMicrophoneAuthorization: { .notDetermined }
+        )
+
+        let cases: [(adapter: MacSpeechVoiceAdapter, expected: JarvisVoiceAdapterError)] = [
+            (deniedSpeech, .permissionDenied("Speech recognition permission was denied.")),
+            (restrictedSpeech, .permissionRestricted("Speech recognition is restricted on this Mac.")),
+            (pendingSpeech, .permissionNotRequested("Speech recognition permission has not been requested.")),
+            (deniedMicrophone, .permissionDenied("Microphone permission was denied.")),
+            (restrictedMicrophone, .permissionRestricted("Microphone access is restricted on this Mac.")),
+            (pendingMicrophone, .permissionNotRequested("Microphone permission has not been requested.")),
+        ]
+
+        for testCase in cases {
+            let result = await testCase.adapter.startCapture(callbacks: noopVoiceCaptureCallbacks())
+
+            if case let .failure(error) = result {
+                #expect(error == testCase.expected)
+            } else {
+                Issue.record("Expected startCapture to fail before installing the audio tap")
+            }
+            #expect(testCase.adapter.phase == .unavailable(reason: testCase.expected.description))
+        }
+    }
+    #endif
 
     @MainActor
     @Test("Voice adapter model preserves interruption as an explicit state")
@@ -5113,6 +5169,14 @@ private func runJarvisCLIJSON(_ args: [String]) throws -> Data {
         )
     }
     return output
+}
+
+private func noopVoiceCaptureCallbacks() -> JarvisVoiceCaptureCallbacks {
+    JarvisVoiceCaptureCallbacks(
+        onPartialTranscript: { _ in },
+        onFinalTranscript: { _ in },
+        onError: { _ in }
+    )
 }
 
 private func jarvisRepositoryRoot() -> URL {

@@ -797,9 +797,11 @@ requires plugin-trust `generated_at`, `review_started_at`,
   `VoiceAdapterStateModel` tracks microphone/Speech permission state, disables
   capture until permissions are granted, and rejects direct start attempts
   before permission without marking the voice path permanently unavailable.
-  Swift model tests pin the permission-before-capture invariant. This is not a
-  substitute for manual clean-profile microphone/Speech prompt validation or
-  spoken transcript handoff evidence.
+  `MacSpeechVoiceAdapter` also preflights current Speech and microphone
+  authorization before installing an audio tap, with deterministic Swift tests
+  for denied, restricted, and not-yet-requested states. This is not a substitute
+  for manual clean-profile microphone/Speech prompt validation or spoken
+  transcript handoff evidence.
 - Swift Release tab runbook loading is a separate warning surface from
   readiness/evidence loading: `ReleaseReadinessModel` keeps current readiness
   and evidence status visible when one of the read-only runbook calls fails,
