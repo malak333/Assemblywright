@@ -603,6 +603,10 @@ Clean-profile and manual production gates not proven by this local smoke:
   release-core command evidence capture plus the post-report external
   evidence-mode `release evidence-status` and `release readiness` checks
   against that same endpoint.
+  Signed-distribution and plugin-trust runbook evidence-status commands must
+  also use the guarded `JARVIS_RELEASE_CORE_ENDPOINT` form before doctor checks
+  or final bundling, so endpoint drift is caught by the shell rather than
+  hidden in readiness output.
   All required `JARVIS_QA_*` flags must be set to `true`, including
   `JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true`, plus the required
   owner/device/profile/UTC timestamp, non-voice owner evidence-note, voice

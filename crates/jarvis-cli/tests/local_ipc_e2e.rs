@@ -2926,6 +2926,12 @@ fn release_signed_distribution_runbook_summarizes_next_operator_steps() {
     assert!(readable_runbook.contains("./scripts/package-distribution.sh --unsigned-launch-check"));
     assert!(readable_runbook.contains("JARVIS_DEVELOPER_ID_APPLICATION="));
     assert!(readable_runbook.contains("JARVIS_NOTARYTOOL_APPLE_ID="));
+    assert!(readable_runbook.contains(
+        "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks"
+    ));
+    assert!(readable_runbook.contains(
+        "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
+    ));
     assert!(readable_runbook.contains("./scripts/release-evidence-doctor.sh --check"));
     assert!(readable_runbook.contains("Boundary: runbook and local evidence inspection only"));
     assert!(readable_runbook.contains("Raw JSON: rerun with --json"));
@@ -2988,7 +2994,8 @@ fn release_signed_distribution_runbook_summarizes_next_operator_steps() {
             "./scripts/package-distribution.sh --unsigned-launch-check",
             "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh",
             "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_APPLE_ID='apple-id@example.com' JARVIS_NOTARYTOOL_TEAM_ID='TEAMID1234' JARVIS_NOTARYTOOL_PASSWORD='app-specific-password' ./scripts/package-distribution.sh",
-            "cargo run -p jarvis-cli -- release evidence-status",
+            "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks",
+            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"",
             "./scripts/release-evidence-doctor.sh --check",
             "cargo run -p jarvis-cli -- release live-device-runbook",
         ],
@@ -3050,7 +3057,12 @@ fn release_plugin_trust_runbook_summarizes_next_operator_steps() {
     ));
     assert!(readable_runbook.contains("Evidence detail: expected JSON report is missing"));
     assert!(readable_runbook.contains("Run on the release machine:"));
-    assert!(readable_runbook.contains("cargo run -p jarvis-cli -- release evidence-status"));
+    assert!(readable_runbook.contains(
+        "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks"
+    ));
+    assert!(readable_runbook.contains(
+        "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
+    ));
     assert!(readable_runbook.contains("./scripts/release-evidence-bundle.sh --check"));
     assert!(readable_runbook.contains(
         "./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env"
@@ -3101,7 +3113,8 @@ fn release_plugin_trust_runbook_summarizes_next_operator_steps() {
             "./scripts/release-plugin-trust-qa.sh --check",
             "./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env",
             "set -a && source target/release-plugin-trust-qa.env && set +a && ./scripts/release-plugin-trust-qa.sh --assert-complete",
-            "cargo run -p jarvis-cli -- release evidence-status",
+            "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks",
+            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"",
             "./scripts/release-evidence-doctor.sh --check",
             "./scripts/release-evidence-bundle.sh --check",
             "./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env",

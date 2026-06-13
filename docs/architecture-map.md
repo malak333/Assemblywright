@@ -1063,6 +1063,11 @@ evidence-doctor missing-evidence next-step guidance. The package guidance
 self-test and evidence-doctor self-test pin those operator commands as read-only
 handoff text; no signing, notarization, live-device QA, plugin-trust QA, or
 final evidence bundle is created.
+The signed-distribution and plugin-trust runbook endpoint-guard slice reuses
+that same `JARVIS_RELEASE_CORE_ENDPOINT` handoff for their evidence-status
+commands before doctor checks or final bundling, with CLI E2E, IPC unit, and
+Swift fixture coverage. It improves copied-command safety only; no external
+validation is performed by the runbooks.
 The external release handoff slice adds
 `./scripts/release-external-handoff.sh --write target/release-external-handoff`
 as a single operator handoff generator. It writes the live-device,

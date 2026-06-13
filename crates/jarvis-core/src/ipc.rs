@@ -4440,7 +4440,10 @@ fn release_signed_distribution_runbook_from(
                 .to_string(),
             "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_APPLE_ID='apple-id@example.com' JARVIS_NOTARYTOOL_TEAM_ID='TEAMID1234' JARVIS_NOTARYTOOL_PASSWORD='app-specific-password' ./scripts/package-distribution.sh"
                 .to_string(),
-            "cargo run -p jarvis-cli -- release evidence-status".to_string(),
+            "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks"
+                .to_string(),
+            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
+                .to_string(),
             "./scripts/release-evidence-doctor.sh --check".to_string(),
             "cargo run -p jarvis-cli -- release live-device-runbook".to_string(),
         ],
@@ -4481,7 +4484,10 @@ fn release_plugin_trust_runbook_from(
                 .to_string(),
             "set -a && source target/release-plugin-trust-qa.env && set +a && ./scripts/release-plugin-trust-qa.sh --assert-complete"
                 .to_string(),
-            "cargo run -p jarvis-cli -- release evidence-status".to_string(),
+            "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks"
+                .to_string(),
+            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
+                .to_string(),
             "./scripts/release-evidence-doctor.sh --check".to_string(),
             "./scripts/release-evidence-bundle.sh --check".to_string(),
             "./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env"
@@ -6994,6 +7000,14 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .commands
             .iter()
             .any(|command| command.contains("JARVIS_DEVELOPER_ID_APPLICATION")));
+        assert!(signed.commands.contains(
+            &"Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks"
+                .to_string()
+        ));
+        assert!(signed.commands.contains(
+            &"JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
+                .to_string()
+        ));
         assert!(signed.proof_boundary.contains("does not perform signing"));
 
         let plugin = state.release_plugin_trust_runbook();
@@ -7004,6 +7018,14 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .manual_checks
             .iter()
             .any(|check| check.contains("malware scan")));
+        assert!(plugin.commands.contains(
+            &"Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks"
+                .to_string()
+        ));
+        assert!(plugin.commands.contains(
+            &"JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
+                .to_string()
+        ));
         assert!(plugin
             .proof_boundary
             .contains("does not perform marketplace review"));
