@@ -18,8 +18,16 @@ public enum JarvisVoiceAdapterPhase: Equatable, Sendable {
     case unavailable(reason: String)
 }
 
+public enum JarvisVoicePermissionState: Equatable, Sendable {
+    case notRequested
+    case requesting
+    case granted
+    case denied(reason: String)
+}
+
 public enum JarvisVoiceAdapterError: Error, Equatable, Sendable, CustomStringConvertible {
     case frameworkUnavailable(String)
+    case permissionNotRequested(String)
     case permissionDenied(String)
     case permissionRestricted(String)
     case speechRecognizerUnavailable
@@ -32,6 +40,8 @@ public enum JarvisVoiceAdapterError: Error, Equatable, Sendable, CustomStringCon
         switch self {
         case let .frameworkUnavailable(reason):
             return "Voice framework unavailable: \(reason)"
+        case let .permissionNotRequested(reason):
+            return "Voice permission not requested: \(reason)"
         case let .permissionDenied(reason):
             return "Voice permission denied: \(reason)"
         case let .permissionRestricted(reason):
@@ -96,6 +106,7 @@ public protocol JarvisVoiceAdapter: AnyObject {
 @MainActor
 public final class VoiceAdapterStateModel: ObservableObject {
     @Published public private(set) var phase: JarvisVoiceAdapterPhase
+    @Published public private(set) var permissionState: JarvisVoicePermissionState
     @Published public private(set) var lastError: JarvisVoiceAdapterError?
     @Published public private(set) var isFinalTranscriptAutoSubmitEnabled: Bool
 
@@ -118,6 +129,14 @@ public final class VoiceAdapterStateModel: ObservableObject {
         self.autoSubmitUnavailableReason = autoSubmitUnavailableReason
         self.submitFinalTranscript = submitFinalTranscript
         self.phase = adapter.phase
+        switch adapter.phase {
+        case .listening, .transcribing:
+            self.permissionState = .granted
+        case let .unavailable(reason):
+            self.permissionState = .denied(reason: reason)
+        case .idle, .requestingPermission, .interrupted, .degraded:
+            self.permissionState = .notRequested
+        }
         self.lastError = nil
         self.isFinalTranscriptAutoSubmitEnabled = false
     }
@@ -153,6 +172,9 @@ public final class VoiceAdapterStateModel: ObservableObject {
         case .idle, .listening, .transcribing, .interrupted, .degraded:
             break
         }
+        guard permissionState == .granted else {
+            return .unavailable(reason: "Auto-submit is unavailable until microphone and speech permissions are granted.")
+        }
         if let reason = autoSubmitUnavailableReason() {
             return .unavailable(reason: reason)
         }
@@ -172,7 +194,32 @@ public final class VoiceAdapterStateModel: ObservableObject {
         }
     }
 
+    public var permissionStatusText: String {
+        switch permissionState {
+        case .notRequested:
+            return "Voice permissions not requested."
+        case .requesting:
+            return "Voice permissions request in progress."
+        case .granted:
+            return "Voice permissions granted."
+        case let .denied(reason):
+            return "Voice permissions unavailable: \(reason)"
+        }
+    }
+
+    public var canRequestPermissions: Bool {
+        switch phase {
+        case .listening, .transcribing, .requestingPermission:
+            return false
+        case .idle, .interrupted, .degraded, .unavailable:
+            return true
+        }
+    }
+
     public var canStartCapture: Bool {
+        guard permissionState == .granted else {
+            return false
+        }
         switch phase {
         case .idle, .degraded:
             return true
@@ -183,18 +230,28 @@ public final class VoiceAdapterStateModel: ObservableObject {
 
     public func requestPermissions() async {
         phase = .requestingPermission
-        let previousPhase = phase
+        permissionState = .requesting
+        let previousPhase: JarvisVoiceAdapterPhase = .idle
         switch await adapter.requestPermissions() {
         case .success:
             lastError = nil
+            permissionState = .granted
             phase = adapter.phase
         case let .failure(error):
+            permissionState = .denied(reason: error.description)
             fail(error, preserving: previousPhase)
         }
     }
 
     public func startCapture() async {
         let previousPhase = phase
+        guard permissionState == .granted else {
+            fail(
+                .permissionNotRequested("Request microphone and speech permissions before starting capture."),
+                preserving: previousPhase
+            )
+            return
+        }
         let callbacks = JarvisVoiceCaptureCallbacks(
             onPartialTranscript: { [weak self, weak voiceState] transcript in
                 self?.phase = .transcribing
@@ -280,7 +337,7 @@ public final class VoiceAdapterStateModel: ObservableObject {
 private extension JarvisVoiceAdapterError {
     var isRecoverableCommandState: Bool {
         switch self {
-        case .alreadyCapturing, .noActiveCapture:
+        case .permissionNotRequested, .alreadyCapturing, .noActiveCapture:
             return true
         case .frameworkUnavailable,
              .permissionDenied,

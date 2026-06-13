@@ -1697,6 +1697,9 @@ struct VoiceStateView: View {
             Text(adapter.statusText)
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
+            Text(adapter.permissionStatusText)
+                .foregroundStyle(adapter.permissionState == .granted ? Color.secondary : Color.orange)
+                .textSelection(.enabled)
             Text(speechOutput.statusText)
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
@@ -1737,6 +1740,7 @@ struct VoiceStateView: View {
                 Button("Request Permissions") {
                     Task { await adapter.requestPermissions() }
                 }
+                .disabled(!adapter.canRequestPermissions)
                 Button(adapter.isCaptureActive ? "Listening" : "Start Capture") {
                     Task { await adapter.startCapture() }
                 }
