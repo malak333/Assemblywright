@@ -1503,6 +1503,67 @@ struct JarvisMacCoreTests {
         #expect(evidenceStatus.proofBoundary.contains("execute release artifacts"))
     }
 
+    @Test("Release decoders accept live CLI runbook JSON")
+    func releaseDecodersAcceptLiveCLIRunbookJSON() throws {
+        let endpoint = "http://127.0.0.1:9"
+        let signedDistribution = try JSONDecoder().decode(
+            JarvisCLISignedDistributionRunbook.self,
+            from: runJarvisCLIJSON([
+                "release",
+                "signed-distribution-runbook",
+                "--json",
+                "--endpoint",
+                endpoint,
+            ])
+        )
+        let liveDevice = try JSONDecoder().decode(
+            JarvisCLILiveDeviceRunbook.self,
+            from: runJarvisCLIJSON([
+                "release",
+                "live-device-runbook",
+                "--json",
+                "--endpoint",
+                endpoint,
+            ])
+        )
+        let pluginTrust = try JSONDecoder().decode(
+            JarvisCLIPluginTrustRunbook.self,
+            from: runJarvisCLIJSON([
+                "release",
+                "plugin-trust-runbook",
+                "--json",
+                "--endpoint",
+                endpoint,
+            ])
+        )
+
+        #expect(signedDistribution.generatedFrom == "release readiness plus evidence-status")
+        #expect(signedDistribution.productionReady == false)
+        #expect(signedDistribution.distributionEvidence.map(\.key).contains("signed_app_bundle"))
+        #expect(signedDistribution.distributionEvidence.map(\.key).contains("signed_distribution_provenance_report"))
+        #expect(signedDistribution.commands.contains("./scripts/package-distribution.sh --check"))
+        #expect(!signedDistribution.manualChecks.isEmpty)
+        #expect(signedDistribution.proofBoundary.contains("Runbook"))
+        #expect(signedDistribution.proofBoundary.contains("only"))
+
+        #expect(liveDevice.generatedFrom == "release readiness plus evidence-status")
+        #expect(liveDevice.productionReady == false)
+        #expect(liveDevice.liveDeviceEvidence.key == "live_device_qa_report")
+        #expect(liveDevice.liveVoiceFeature.key == "live_voice_loop")
+        #expect(liveDevice.commands.contains("./scripts/release-live-device-qa.sh --check"))
+        #expect(!liveDevice.manualChecks.isEmpty)
+        #expect(liveDevice.proofBoundary.contains("Runbook"))
+        #expect(liveDevice.proofBoundary.contains("only"))
+
+        #expect(pluginTrust.generatedFrom == "release readiness plus evidence-status")
+        #expect(pluginTrust.productionReady == false)
+        #expect(pluginTrust.pluginTrustEvidence.key == "plugin_trust_qa_report")
+        #expect(pluginTrust.commands.contains("./scripts/release-plugin-trust-qa.sh --check"))
+        #expect(!pluginTrust.manualChecks.isEmpty)
+        #expect(pluginTrust.proofBoundary.contains("Runbook"))
+        #expect(pluginTrust.proofBoundary.contains("only"))
+    }
+
     @MainActor
     @Test("Release readiness model surfaces invalid live-device evidence details")
     func releaseReadinessModelSurfacesInvalidLiveDeviceEvidenceDetails() async throws {
@@ -5060,6 +5121,85 @@ private func jarvisRepositoryRoot() -> URL {
         url.deleteLastPathComponent()
     }
     return url
+}
+
+private struct JarvisCLIRunbookEvidenceItem: Decodable {
+    var key: String
+    var status: String
+    var kind: String
+    var path: String
+    var manualGate: Bool
+    var requiredForProduction: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case key
+        case status
+        case kind
+        case path
+        case manualGate = "manual_gate"
+        case requiredForProduction = "required_for_production"
+    }
+}
+
+private struct JarvisCLIRunbookFeature: Decodable {
+    var key: String
+    var status: String
+}
+
+private struct JarvisCLILiveDeviceRunbook: Decodable {
+    var generatedFrom: String
+    var productionReady: Bool
+    var liveDeviceEvidence: JarvisCLIRunbookEvidenceItem
+    var liveVoiceFeature: JarvisCLIRunbookFeature
+    var commands: [String]
+    var manualChecks: [String]
+    var proofBoundary: String
+
+    enum CodingKeys: String, CodingKey {
+        case generatedFrom = "generated_from"
+        case productionReady = "production_ready"
+        case liveDeviceEvidence = "live_device_evidence"
+        case liveVoiceFeature = "live_voice_feature"
+        case commands
+        case manualChecks = "manual_checks"
+        case proofBoundary = "proof_boundary"
+    }
+}
+
+private struct JarvisCLISignedDistributionRunbook: Decodable {
+    var generatedFrom: String
+    var productionReady: Bool
+    var distributionEvidence: [JarvisCLIRunbookEvidenceItem]
+    var commands: [String]
+    var manualChecks: [String]
+    var proofBoundary: String
+
+    enum CodingKeys: String, CodingKey {
+        case generatedFrom = "generated_from"
+        case productionReady = "production_ready"
+        case distributionEvidence = "distribution_evidence"
+        case commands
+        case manualChecks = "manual_checks"
+        case proofBoundary = "proof_boundary"
+    }
+}
+
+private struct JarvisCLIPluginTrustRunbook: Decodable {
+    var generatedFrom: String
+    var productionReady: Bool
+    var pluginTrustEvidence: JarvisCLIRunbookEvidenceItem
+    var commands: [String]
+    var manualChecks: [String]
+    var proofBoundary: String
+
+    enum CodingKeys: String, CodingKey {
+        case generatedFrom = "generated_from"
+        case productionReady = "production_ready"
+        case pluginTrustEvidence = "plugin_trust_evidence"
+        case commands
+        case manualChecks = "manual_checks"
+        case proofBoundary = "proof_boundary"
+    }
 }
 
 private struct JarvisCLISmokeError: Error, CustomStringConvertible {

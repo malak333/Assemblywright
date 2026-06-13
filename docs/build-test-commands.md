@@ -908,9 +908,9 @@ advanced memory classification policy beyond the current summary surface, live
 microphone capture, or live audio output until those surfaces are manually
 validated. The current Swift gate proves the
 Mac shell builds, decodes IPC contracts, decodes live CLI fallback JSON
-for release readiness and release evidence-status, decodes release runbook
-payloads, requests the three runbook IPC endpoints, refreshes Release tab
-runbook state including runbook-load warnings, exposes management models for
+for release readiness, release evidence-status, and all three release runbooks,
+decodes release runbook payloads, requests the three runbook IPC endpoints,
+refreshes Release tab runbook state including runbook-load warnings, exposes management models for
 approval evidence, memory classification summary, memory policy review counts,
 memory create/update/review/delete/restore state, runs/audit,
 activity summary, permission policy review, scheduler attention summaries,
