@@ -9,6 +9,7 @@ BUILD_DOCS="docs/build-test-commands.md"
 CHECKLIST="docs/release-checklist.md"
 ARCHITECTURE="docs/architecture-map.md"
 KB="docs/knowledge-base/jarvis-project-facts.md"
+README="README.md"
 
 fail() {
   printf 'error: %s\n' "$1" >&2
@@ -33,18 +34,23 @@ require_file "$BUILD_DOCS"
 require_file "$CHECKLIST"
 require_file "$ARCHITECTURE"
 require_file "$KB"
+require_file "$README"
 
 while IFS= read -r command; do
   require_text "build/test command docs" "$BUILD_DOCS" "$command"
   require_text "release checklist" "$CHECKLIST" "$command"
 done < <(grep -E '^[[:space:]]*run ' "$LOCAL_GATE" | sed -E 's/^[[:space:]]*run //')
 
-for file in "$BUILD_DOCS" "$CHECKLIST" "$ARCHITECTURE" "$KB"; do
+for file in "$BUILD_DOCS" "$CHECKLIST" "$ARCHITECTURE" "$KB" "$README"; do
   require_text "release evidence-mode boundary" "$file" "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external"
   require_text "release command evidence reference" "$file" "task:<uuid>"
   require_text "release command evidence reference" "$file" "audit:<uuid>"
   require_text "owner evidence boundary" "$file" "owner-recorded external evidence"
   require_text "external handoff script" "$file" "release-external-handoff.sh"
+done
+
+for file in "$BUILD_DOCS" "$CHECKLIST" "$ARCHITECTURE" "$KB" "$README"; do
+  require_text "external handoff checklist" "$file" "release-evidence-checklist.md"
 done
 
 require_text "architecture current diagram" "$ARCHITECTURE" "Current Implementation And Evidence Boundary Diagram"
