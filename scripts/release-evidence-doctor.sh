@@ -96,6 +96,7 @@ Recommended next evidence commands:
   plugin-trust assertion: set -a && source target/release-plugin-trust-qa.env && set +a && ./scripts/release-plugin-trust-qa.sh --assert-complete
   final bundle template: ./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env
   final bundle: set -a && source target/release-evidence-bundle.env && set +a && ./scripts/release-evidence-bundle.sh --bundle
+  final doctor assertion: ./scripts/release-evidence-doctor.sh --assert-complete
 STEPS
 }
 
@@ -1812,6 +1813,7 @@ PY
     "source target/release-plugin-trust-qa.env" \
     "./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env" \
     "source target/release-evidence-bundle.env" \
+    "./scripts/release-evidence-doctor.sh --assert-complete" \
     "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...'" \
     "JARVIS_NOTARYTOOL_APPLE_ID='apple-id@example.com'" \
     "./scripts/release-external-handoff.sh --write target/release-external-handoff"; do

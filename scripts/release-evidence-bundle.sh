@@ -2341,6 +2341,13 @@ PY
       fail "release evidence --check output must include the bundle command"
       ;;
   esac
+  case "$check_output" in
+    *"./scripts/release-evidence-doctor.sh --assert-complete"* )
+      ;;
+    *)
+      fail "release evidence --check output must include the final doctor assertion command"
+      ;;
+  esac
 
   printf 'Jarvis release evidence bundle self-test: ok\n'
   printf 'Proof boundary: fake artifacts and reports validate bundle mechanics only; no production evidence was created.\n'
@@ -2371,6 +2378,8 @@ Required before --bundle:
   ./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env
   set -a && source target/release-evidence-bundle.env && set +a
   ./scripts/release-evidence-bundle.sh --bundle
+- Run the final evidence doctor assertion after bundle generation:
+  ./scripts/release-evidence-doctor.sh --assert-complete
 - The bundle command can locally verify app signing, app stapling, installer
   signature, installer stapling, and the app zip payload.
 
