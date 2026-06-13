@@ -2354,6 +2354,7 @@ fn release_plugin_trust_runbook_json(
             "Validate signed publisher policy for trusted publisher keys and revocation.",
             "Validate the macOS sandbox profile or equivalent OS-level confinement.",
             "Validate host-level egress enforcement with deny and declared-host allow fixtures.",
+            "Record archived artifact URIs and SHA-256 digests for every plugin-trust evidence category before assertion.",
             "Preserve target/release-plugin-trust-qa-report.json for final release evidence bundling.",
             "Generate the final release evidence bundle only after signed distribution, live-device QA, and plugin-trust QA evidence all exist."
         ],
@@ -2413,6 +2414,7 @@ fn format_release_plugin_trust_runbook(
         "- Validate signed publisher policy for trusted publisher keys and revocation.".to_string(),
         "- Validate the macOS sandbox profile or equivalent OS-level confinement.".to_string(),
         "- Validate host-level egress enforcement with deny and declared-host allow fixtures.".to_string(),
+        "- Record archived artifact URIs and SHA-256 digests for every plugin-trust evidence category before assertion.".to_string(),
         "- Preserve target/release-plugin-trust-qa-report.json for final release evidence bundling.".to_string(),
         "- Generate the final release evidence bundle only after signed distribution, live-device QA, and plugin-trust QA evidence all exist.".to_string(),
         "Boundary: runbook and local evidence inspection only; no marketplace review, malware scanning, sandbox deployment, host-level egress enforcement, signing, notarization, live-device QA, or final evidence bundling was performed.".to_string(),

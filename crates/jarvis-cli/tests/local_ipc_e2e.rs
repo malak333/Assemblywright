@@ -1358,6 +1358,56 @@ fn release_evidence_status_rejects_semantically_invalid_plugin_and_bundle_eviden
 }
 
 #[test]
+fn release_evidence_status_rejects_invalid_plugin_artifact_bindings() {
+    let endpoint = format!("http://{}", unused_loopback_addr());
+    let temp_dir = tempfile::tempdir().expect("temp release plugin report");
+    let plugin_report_path = temp_dir.path().join("release-plugin-trust-qa-report.json");
+
+    fn blank_marketplace_artifact_uri(report: &mut Value) {
+        report["evidence_artifacts"]["marketplace_review"]["uri"] = json!("   ");
+    }
+    fn invalid_malware_scan_artifact_digest(report: &mut Value) {
+        report["evidence_artifacts"]["malware_scan"]["sha256"] = json!("not-a-sha");
+    }
+
+    for (name, mutate, detail_fragment) in [
+        (
+            "blank marketplace artifact URI",
+            blank_marketplace_artifact_uri as fn(&mut Value),
+            "evidence_artifacts.marketplace_review.uri",
+        ),
+        (
+            "invalid malware scan artifact digest",
+            invalid_malware_scan_artifact_digest as fn(&mut Value),
+            "evidence_artifacts.malware_scan.sha256",
+        ),
+    ] {
+        let mut plugin_report = valid_plugin_trust_qa_report();
+        mutate(&mut plugin_report);
+        write_json_report(&plugin_report_path, plugin_report);
+        let plugin_path = plugin_report_path.to_str().expect("plugin report utf8");
+        let evidence_status = run_cli_json_with_env(
+            [
+                "release",
+                "evidence-status",
+                "--endpoint",
+                endpoint.as_str(),
+            ],
+            &[("JARVIS_EVIDENCE_PLUGIN_QA_REPORT", plugin_path)],
+        );
+        let plugin_item = release_evidence_item(&evidence_status, "plugin_trust_qa_report");
+        assert_eq!(plugin_item["status"], "invalid", "{name}: {plugin_item}");
+        assert!(
+            plugin_item["detail"]
+                .as_str()
+                .expect("plugin detail")
+                .contains(detail_fragment),
+            "{name}: {plugin_item}"
+        );
+    }
+}
+
+#[test]
 fn release_evidence_status_rejects_invalid_final_bundle_owner_evidence() {
     let endpoint = format!("http://{}", unused_loopback_addr());
     let temp_dir = tempfile::tempdir().expect("temp release evidence bundle");
@@ -2986,6 +3036,7 @@ fn release_plugin_trust_runbook_summarizes_next_operator_steps() {
     ));
     assert!(readable_runbook.contains("./scripts/release-evidence-doctor.sh --assert-complete"));
     assert!(readable_runbook.contains("Validate host-level egress enforcement"));
+    assert!(readable_runbook.contains("archived artifact URIs and SHA-256 digests"));
     assert!(readable_runbook.contains("final release evidence bundle"));
     assert!(readable_runbook.contains("Boundary: runbook and local evidence inspection only"));
     assert!(readable_runbook.contains("host-level egress enforcement"));
@@ -3047,6 +3098,10 @@ fn release_plugin_trust_runbook_summarizes_next_operator_steps() {
     assert_string_array_contains_substring(
         &json_runbook["manual_checks"],
         "host-level egress enforcement with deny and declared-host allow fixtures",
+    );
+    assert_string_array_contains_substring(
+        &json_runbook["manual_checks"],
+        "archived artifact URIs and SHA-256 digests",
     );
     assert_string_array_contains_substring(
         &json_runbook["manual_checks"],
@@ -6788,6 +6843,32 @@ fn valid_plugin_trust_qa_report() -> Value {
             "egress_allow_fixture_evidence_note": "Declared-host allow evidence archived.",
             "signed_publisher_evidence_note": "Signed publisher policy evidence archived.",
             "manual_review_evidence_note": "Manual plugin trust review evidence archived."
+        },
+        "evidence_artifacts": {
+            "marketplace_review": {
+                "uri": "archive://jarvis/plugin-trust/marketplace-review.json",
+                "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+            },
+            "malware_scan": {
+                "uri": "archive://jarvis/plugin-trust/malware-scan.json",
+                "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+            },
+            "os_sandbox": {
+                "uri": "archive://jarvis/plugin-trust/os-sandbox.json",
+                "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+            },
+            "egress_enforcement": {
+                "uri": "archive://jarvis/plugin-trust/egress.json",
+                "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+            },
+            "signed_publisher_policy": {
+                "uri": "archive://jarvis/plugin-trust/signed-publisher.json",
+                "sha256": "5555555555555555555555555555555555555555555555555555555555555555"
+            },
+            "manual_trust_review": {
+                "uri": "archive://jarvis/plugin-trust/manual-review.json",
+                "sha256": "6666666666666666666666666666666666666666666666666666666666666666"
+            }
         },
         "proof_boundary": "Owner-recorded plugin trust fixture for CLI E2E."
     })

@@ -1326,6 +1326,32 @@ JSON
     "signed_publisher_evidence_note": "Signed publisher policy evidence archived in the controlled release lane.",
     "manual_review_evidence_note": "Manual trust review evidence archived in the controlled release lane."
   },
+  "evidence_artifacts": {
+    "marketplace_review": {
+      "uri": "archive://jarvis/plugin-trust/marketplace-review.json",
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "malware_scan": {
+      "uri": "archive://jarvis/plugin-trust/malware-scan.json",
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+    },
+    "os_sandbox": {
+      "uri": "archive://jarvis/plugin-trust/os-sandbox.json",
+      "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+    },
+    "egress_enforcement": {
+      "uri": "archive://jarvis/plugin-trust/egress.json",
+      "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+    },
+    "signed_publisher_policy": {
+      "uri": "archive://jarvis/plugin-trust/signed-publisher.json",
+      "sha256": "5555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "manual_trust_review": {
+      "uri": "archive://jarvis/plugin-trust/manual-review.json",
+      "sha256": "6666666666666666666666666666666666666666666666666666666666666666"
+    }
+  },
   "proof_boundary": "self-test fixture"
 }
 JSON
@@ -2417,6 +2443,10 @@ require_json_bool_false "plugin trust QA report" "$PLUGIN_QA_REPORT" "self_test_
 require_json_string_equals "plugin trust QA report" "$PLUGIN_QA_REPORT" "review_source" "owner-asserted-manual-review"
 for field in owner_name review_started_at review_completed_at marketplace_evidence_note malware_scan_evidence_note os_sandbox_evidence_note egress_evidence_note egress_policy_label egress_deny_fixture_evidence_note egress_allow_fixture_evidence_note signed_publisher_evidence_note manual_review_evidence_note; do
   require_json_nonempty_string "plugin trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.$field"
+done
+for artifact in marketplace_review malware_scan os_sandbox egress_enforcement signed_publisher_policy manual_trust_review; do
+  require_json_meaningful_evidence_string "plugin trust QA report" "$PLUGIN_QA_REPORT" "evidence_artifacts.$artifact.uri"
+  require_json_sha256 "plugin trust QA report" "$PLUGIN_QA_REPORT" "evidence_artifacts.$artifact.sha256"
 done
 require_json_utc_timestamp "plugin trust QA report" "$PLUGIN_QA_REPORT" "generated_at"
 require_json_utc_timestamp "plugin trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.review_started_at"
