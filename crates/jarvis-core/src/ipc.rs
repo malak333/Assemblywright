@@ -6838,10 +6838,15 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 && command.contains("JARVIS_PLUGIN_QA_MARKETPLACE_ARTIFACT_URI=")
                 && command.contains("JARVIS_PLUGIN_QA_MARKETPLACE_ARTIFACT_SHA256=")
                 && command.contains("JARVIS_PLUGIN_QA_MALWARE_SCAN_ARTIFACT_URI=")
+                && command.contains("JARVIS_PLUGIN_QA_MALWARE_SCAN_ARTIFACT_SHA256=")
                 && command.contains("JARVIS_PLUGIN_QA_OS_SANDBOX_ARTIFACT_URI=")
+                && command.contains("JARVIS_PLUGIN_QA_OS_SANDBOX_ARTIFACT_SHA256=")
                 && command.contains("JARVIS_PLUGIN_QA_EGRESS_ARTIFACT_URI=")
+                && command.contains("JARVIS_PLUGIN_QA_EGRESS_ARTIFACT_SHA256=")
                 && command.contains("JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_ARTIFACT_URI=")
+                && command.contains("JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_ARTIFACT_SHA256=")
                 && command.contains("JARVIS_PLUGIN_QA_MANUAL_REVIEW_ARTIFACT_URI=")
+                && command.contains("JARVIS_PLUGIN_QA_MANUAL_REVIEW_ARTIFACT_SHA256=")
                 && command.contains("./scripts/release-plugin-trust-qa.sh --assert-complete")));
         assert!(readiness
             .recommended_verification_commands

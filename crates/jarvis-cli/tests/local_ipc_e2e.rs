@@ -3490,7 +3490,15 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     );
     assert_string_array_contains_substring(
         &release_readiness["recommended_verification_commands"],
+        "JARVIS_PLUGIN_QA_MALWARE_SCAN_ARTIFACT_SHA256=",
+    );
+    assert_string_array_contains_substring(
+        &release_readiness["recommended_verification_commands"],
         "JARVIS_PLUGIN_QA_OS_SANDBOX_ARTIFACT_URI=",
+    );
+    assert_string_array_contains_substring(
+        &release_readiness["recommended_verification_commands"],
+        "JARVIS_PLUGIN_QA_OS_SANDBOX_ARTIFACT_SHA256=",
     );
     assert_string_array_contains_substring(
         &release_readiness["recommended_verification_commands"],
@@ -3498,11 +3506,23 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     );
     assert_string_array_contains_substring(
         &release_readiness["recommended_verification_commands"],
+        "JARVIS_PLUGIN_QA_EGRESS_ARTIFACT_SHA256=",
+    );
+    assert_string_array_contains_substring(
+        &release_readiness["recommended_verification_commands"],
         "JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_ARTIFACT_URI=",
     );
     assert_string_array_contains_substring(
         &release_readiness["recommended_verification_commands"],
+        "JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_ARTIFACT_SHA256=",
+    );
+    assert_string_array_contains_substring(
+        &release_readiness["recommended_verification_commands"],
         "JARVIS_PLUGIN_QA_MANUAL_REVIEW_ARTIFACT_URI=",
+    );
+    assert_string_array_contains_substring(
+        &release_readiness["recommended_verification_commands"],
+        "JARVIS_PLUGIN_QA_MANUAL_REVIEW_ARTIFACT_SHA256=",
     );
     assert_string_array_contains(
         &release_readiness["recommended_verification_commands"],
