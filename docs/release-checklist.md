@@ -607,6 +607,10 @@ Clean-profile and manual production gates not proven by this local smoke:
   also use the guarded `JARVIS_RELEASE_CORE_ENDPOINT` form before doctor checks
   or final bundling, so endpoint drift is caught by the shell rather than
   hidden in readiness output.
+  The generated `release-external-handoff.sh --write` README must use the same
+  guarded `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external` and
+  `JARVIS_RELEASE_CORE_ENDPOINT` commands for final evidence-status/readiness
+  checks rather than placeholder endpoint text.
   All required `JARVIS_QA_*` flags must be set to `true`, including
   `JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true`, plus the required
   owner/device/profile/UTC timestamp, non-voice owner evidence-note, voice

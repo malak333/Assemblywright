@@ -767,6 +767,11 @@ The signed-distribution and plugin-trust runbooks reuse the same guarded
 `JARVIS_RELEASE_CORE_ENDPOINT` evidence-status command before handoff continues
 to doctor checks or final bundling, so copied operator commands do not silently
 inspect a different running core.
+The generated external handoff README uses the same guarded
+`JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external` plus
+`JARVIS_RELEASE_CORE_ENDPOINT` commands for the final evidence-status and
+readiness queries, so the one-shot operator handoff cannot fall back to a
+placeholder endpoint during the final proof step.
 `--assert-complete` is for the release machine after those checks are
 actually performed and all required `JARVIS_QA_*` flags are explicitly set to
 `true`, including

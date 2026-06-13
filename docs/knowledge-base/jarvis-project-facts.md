@@ -1150,11 +1150,15 @@ requires plugin-trust `generated_at`, `review_started_at`,
   ordered release sequence. The checklist names exact signed-distribution
   artifact paths, live-device command/result and scheduler notification fields,
   per-category plugin artifact URI/SHA-256 bindings, and the final reports
-  archive URI. `--check` and `--self-test` are part of the local release gate
-  and prove only template plus snapshot/checklist generation with validation
-  flags defaulted false; they do not sign, notarize, install, Finder-launch,
-  validate live device behavior, review plugin trust, enforce egress, or archive
-  final evidence.
+  archive URI. The generated README's final evidence-status/readiness commands
+  use `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external` plus guarded
+  `JARVIS_RELEASE_CORE_ENDPOINT` expansion, matching the live-device,
+  signed-distribution, plugin-trust, package-preflight, and evidence-doctor
+  handoff guidance. `--check` and `--self-test` are part of the local release
+  gate and prove only template plus snapshot/checklist generation with
+  validation flags defaulted false; they do not sign, notarize, install,
+  Finder-launch, validate live device behavior, review plugin trust, enforce
+  egress, or archive final evidence.
 - Owner evidence-note validation now rejects embedded placeholder wording, not
   only exact placeholder values. Shell assertions and Rust evidence-status
   reject operator notes containing terms such as `TODO`, `pending`, `fixture`,

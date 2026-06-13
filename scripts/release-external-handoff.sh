@@ -150,9 +150,10 @@ claim.
    \`./scripts/release-evidence-bundle.sh --bundle\`.
 5. Run \`./scripts/release-evidence-doctor.sh --assert-complete\`.
 6. Start or restart the release core with
-   \`JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external\`, then run
-   \`cargo run -p jarvis-cli -- release evidence-status --endpoint <release-core-endpoint>\`
-   and \`cargo run -p jarvis-cli -- release readiness --endpoint <release-core-endpoint>\`.
+   \`JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external\`, export
+   \`JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>'\`, then run
+   \`JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint "\${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"\`
+   and \`JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint "\${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"\`.
 
 Proof boundary: these files are handoff scaffolding only. They do not prove that
 signing, notarization, stapling, installation, Finder launch, live-device QA,
@@ -320,6 +321,9 @@ self_test() {
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "./scripts/release-plugin-trust-qa.sh --assert-complete"
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "./scripts/release-evidence-bundle.sh --bundle"
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "./scripts/release-evidence-doctor.sh --assert-complete"
+  require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>'"
+  require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" 'JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"'
+  require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" 'JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"'
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "Proof boundary"
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "release-evidence-checklist.md"
   require_file_contains "handoff checklist" "$tmp_dir/handoff/release-evidence-checklist.md" "JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER"
