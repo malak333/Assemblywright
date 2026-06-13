@@ -797,6 +797,11 @@ requires plugin-trust `generated_at`, `review_started_at`,
   Swift model tests pin the permission-before-capture invariant. This is not a
   substitute for manual clean-profile microphone/Speech prompt validation or
   spoken transcript handoff evidence.
+- Swift Release tab runbook loading is a separate warning surface from
+  readiness/evidence loading: `ReleaseReadinessModel` keeps current readiness
+  and evidence status visible when one of the read-only runbook calls fails,
+  clears the runbook list, and exposes a warning without treating cached
+  readiness as stale or allowing production readiness to become true.
 - Swift scheduler notification controls are repo-owned adapter evidence: the
   core model can request authorization, build due, failed, and
   emergency-pause-blocked notification requests, suppress duplicate deliveries

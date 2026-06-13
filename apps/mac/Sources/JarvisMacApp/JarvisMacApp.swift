@@ -1484,6 +1484,13 @@ struct ReleaseReadinessView: View {
                         }
                     }
 
+                    if let releaseRunbookWarning = model.releaseRunbookWarning {
+                        Label(releaseRunbookWarning, systemImage: "book.closed")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .textSelection(.enabled)
+                    }
+
                     if !model.releaseRunbooks.isEmpty {
                         Section("Release Runbooks") {
                             ForEach(model.releaseRunbooks) { runbook in

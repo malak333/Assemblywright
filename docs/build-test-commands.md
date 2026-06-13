@@ -707,7 +707,8 @@ notification authorization, due/failed/emergency-pause-blocked request
 creation, duplicate suppression, and denied-permission fail-closed behavior
 through a fake adapter, plus voice permission-state sequencing that blocks
 capture until microphone/Speech permissions are granted without claiming live
-prompt or device validation.
+prompt or device validation, and Release tab runbook-load warning behavior
+that keeps readiness/evidence visible when read-only runbook fetches fail.
 `./scripts/package-distribution.sh` is the stricter distribution packaging
 lane, and `--unsigned-launch-check` is now part of `./scripts/release-local.sh`
 so release-built app layout regressions are caught by the default gate. Its
@@ -909,7 +910,7 @@ validated. The current Swift gate proves the
 Mac shell builds, decodes IPC contracts, decodes live CLI fallback JSON
 for release readiness and release evidence-status, decodes release runbook
 payloads, requests the three runbook IPC endpoints, refreshes Release tab
-runbook state, exposes management models for
+runbook state including runbook-load warnings, exposes management models for
 approval evidence, memory classification summary, memory policy review counts,
 memory create/update/review/delete/restore state, runs/audit,
 activity summary, permission policy review, scheduler attention summaries,
