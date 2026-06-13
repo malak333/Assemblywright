@@ -1100,12 +1100,14 @@ requires plugin-trust `generated_at`, `review_started_at`,
   memory-management paths, diagnostics redaction, and repository-backed
   scheduler/job state surfaces.
 - The 2026-06-12 production-readiness sweep refresh originally recorded the
-  merged state through PR #259, and the current baseline now includes follow-on
-  release hardening through PR #268: `main` at `8cccb5b`, hosted GitHub
-  `Release local gate` green for PR #268 run `27428860335` / job
-  `81073692261`, `production_ready: false`, `verified_feature_count: 16`,
-  `pending_feature_count: 1`, and, after local generated app presence artifacts
-  exist, six missing external/manual evidence artifacts.
+  merged state through PR #259. A historical follow-on baseline through PR #268
+  used `main` at `8cccb5b`, hosted GitHub `Release local gate` green for PR
+  #268 run `27428860335` / job `81073692261`, `production_ready: false`,
+  `verified_feature_count: 16`, `pending_feature_count: 1`, and, after local
+  generated app presence artifacts exist, six missing external/manual evidence
+  artifacts. The current post-PR #278 baseline remains conservative with
+  `production_ready: false`, `verified_feature_count: 16`, and one pending
+  manual `live_voice_loop` feature.
 - PR #254 made release runbooks a current implementation surface rather than a
   CLI-only operator path: `/release/live-device-runbook`,
   `/release/signed-distribution-runbook`, and `/release/plugin-trust-runbook`

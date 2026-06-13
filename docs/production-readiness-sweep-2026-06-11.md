@@ -1,9 +1,9 @@
 # Production Readiness Sweep - 2026-06-11
 
-This note records the current autonomous production-readiness sweep state for
-Jarvis after the release-format, package-preflight, and evidence-doctor guidance
-PRs merged. It is a release-governance artifact, not release evidence by itself.
-Use the checked-in code, PRs, and command output as proof.
+This note records a historical autonomous production-readiness sweep checkpoint
+for Jarvis after the release-format, package-preflight, and evidence-doctor
+guidance PRs merged. It is a release-governance artifact, not release evidence
+by itself. Use the checked-in code, PRs, and command output as proof.
 
 ## Live Readiness Snapshot
 
@@ -13,7 +13,9 @@ Command:
 cargo run -p jarvis-cli -- release readiness --json
 ```
 
-Observed on 2026-06-12 UTC from `main` at `4a4661e` after PR #238:
+Observed on 2026-06-12 UTC from `main` at `4a4661e` after PR #238. These counts
+are historical for that checkpoint; later sweep refreshes record the current
+readiness baseline.
 
 - `production_ready: false`
 - `verified_feature_count: 17`
@@ -101,7 +103,7 @@ flowchart TB
     ManualProof --> EvidenceBundle["Archived final release evidence bundle"]
 ```
 
-## Current Architecture Phase
+## Historical Architecture Phase
 
 Jarvis is currently a production-shaped local assistant foundation:
 
@@ -163,7 +165,7 @@ Jarvis is currently a production-shaped local assistant foundation:
   final evidence-bundle generation and `release-evidence-doctor.sh
   --assert-complete` after plugin-trust QA, with stronger CLI E2E assertions
   for signed-distribution and plugin-trust runbook shape.
-- The current conservative readiness boundary is unchanged: 16 verified
+- The later conservative readiness boundary is unchanged: 16 verified
   repo-owned features, one pending manual live voice validation feature, and
   missing external/manual release evidence before production-ready language is
   allowed.

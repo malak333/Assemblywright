@@ -875,13 +875,13 @@ That note records the original post-PR #259 readiness snapshot, the merged
 hosted release-gate evidence for that sweep, and the production evidence
 boundary that remained in force.
 
-Current readiness should always be refreshed before release claims. The current
-2026-06-12 UTC baseline after PR #268 starts from `main` at `8cccb5b`, with the
-hosted `Release local gate` green for PR #268 run `27428860335` / job
-`81073692261`; `jarvis release readiness --json` remains expected to report
-`production_ready: false`, `verified_feature_count: 16`, and
-`pending_feature_count: 1`, with `live_voice_loop` still
-`pending_manual_validation`; `jarvis release evidence-status --json` remains
+Current readiness should always be refreshed before release claims. The
+historical 2026-06-12 UTC baseline after PR #268 started from `main` at
+`8cccb5b`, with the hosted `Release local gate` green for PR #268 run
+`27428860335` / job `81073692261`; after PR #278, `main` at `57ae832`
+continues to report `production_ready: false`, `verified_feature_count: 16`,
+and `pending_feature_count: 1`, with `live_voice_loop` still
+`pending_manual_validation`. `jarvis release evidence-status --json` remains
 expected to report `complete: false` with six missing external/manual evidence
 artifacts after the local generated app presence artifacts exist. Fresh
 worktrees can still report local paths as missing until `release-local.sh` or
