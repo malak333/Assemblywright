@@ -811,7 +811,9 @@ requires plugin-trust `generated_at`, `review_started_at`,
   core model can request authorization, build due, failed, and
   emergency-pause-blocked notification requests, suppress duplicate deliveries
   for the same attention item, and fail closed when permission is denied. The
-  app-level macOS notification adapter has a test seam that verifies the real
+  Swift model tests also prove the reset path permits the same attention item to
+  be redelivered for QA recapture after duplicate suppression. The app-level
+  macOS notification adapter has a test seam that verifies the real
   `UNNotificationRequest` title, body, sound, thread identifier, scheduler job
   ID, and notification-kind payload before delivery. The scheduler attention UI
   surfaces delivered notification title/body/kind/thread evidence using the

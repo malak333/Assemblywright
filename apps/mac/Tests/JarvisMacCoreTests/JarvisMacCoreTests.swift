@@ -1286,6 +1286,29 @@ struct JarvisMacCoreTests {
         #expect(model.status == .delivered(0))
     }
 
+    @Test("Scheduler notification reset allows recapturing the same attention item")
+    @MainActor
+    func schedulerNotificationsResetAllowsRecapture() async throws {
+        let attention = try JSONDecoder().decode(
+            JarvisSchedulerAttentionSummary.self,
+            from: schedulerAttentionJSON(id: UUID())
+        )
+        let adapter = FakeSchedulerNotificationAdapter()
+        let model = SchedulerNotificationModel(adapter: adapter)
+
+        let firstCount = await model.notify(attention: attention)
+        let duplicateCount = await model.notify(attention: attention)
+        model.resetDeliveredHistory()
+        let recapturedCount = await model.notify(attention: attention)
+
+        #expect(firstCount == 1)
+        #expect(duplicateCount == 0)
+        #expect(recapturedCount == 1)
+        #expect(adapter.deliveredRequests.count == 2)
+        #expect(model.lastDeliveredRequests.count == 1)
+        #expect(model.status == .delivered(1))
+    }
+
     @Test("Scheduler notification model fails closed when notification authorization is denied")
     @MainActor
     func schedulerNotificationsFailClosedWhenDenied() async throws {
