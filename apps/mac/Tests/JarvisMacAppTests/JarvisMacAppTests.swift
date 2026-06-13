@@ -111,6 +111,26 @@ struct JarvisMacAppTests {
         #expect(deliveredRequest.content.userInfo["scheduler_job_id"] as? String == schedulerJobId.uuidString)
         #expect(deliveredRequest.content.userInfo["notification_kind"] as? String == request.notificationKind)
     }
+
+    @Test("Scheduler notification evidence presentation exposes release QA fields")
+    func schedulerNotificationEvidencePresentationExposesReleaseQAFields() {
+        let schedulerJobId = UUID(uuidString: "00000000-0000-4000-8000-000000000124")!
+        let request = JarvisSchedulerNotificationRequest(
+            id: "scheduler-\(schedulerJobId.uuidString)-failed",
+            schedulerJobId: schedulerJobId,
+            title: "Scheduler job failed: nightly sync",
+            body: "Nightly sync failed after retry exhaustion.",
+            notificationKind: "failed",
+            threadIdentifier: "jarvis.scheduler"
+        )
+
+        let presentation = SchedulerNotificationEvidencePresentation(request: request)
+
+        #expect(presentation.summary.contains("JARVIS_QA_NOTIFICATION_KIND=failed"))
+        #expect(presentation.summary.contains("JARVIS_QA_NOTIFICATION_TITLE=Scheduler job failed: nightly sync"))
+        #expect(presentation.summary.contains("JARVIS_QA_NOTIFICATION_BODY=Nightly sync failed after retry exhaustion."))
+        #expect(presentation.summary.contains("JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER=jarvis.scheduler"))
+    }
 }
 
 private final class CapturingUserNotificationCenter: JarvisUserNotificationCenter, @unchecked Sendable {

@@ -905,10 +905,43 @@ struct SchedulerAttentionSummaryView: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+
+                Button {
+                    notifications.resetDeliveredHistory()
+                } label: {
+                    Label("Reset", systemImage: "arrow.counterclockwise")
+                }
+                .disabled(notifications.lastDeliveredRequests.isEmpty)
             }
             .buttonStyle(.bordered)
+
+            if !notifications.lastDeliveredRequests.isEmpty {
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(notifications.lastDeliveredRequests.prefix(3)) { request in
+                        let evidence = SchedulerNotificationEvidencePresentation(request: request)
+                        Text(evidence.summary)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .textSelection(.enabled)
+                    }
+                }
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct SchedulerNotificationEvidencePresentation: Equatable {
+    let summary: String
+
+    init(request: JarvisSchedulerNotificationRequest) {
+        summary = [
+            "JARVIS_QA_NOTIFICATION_KIND=\(request.notificationKind)",
+            "JARVIS_QA_NOTIFICATION_TITLE=\(request.title)",
+            "JARVIS_QA_NOTIFICATION_BODY=\(request.body)",
+            "JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER=\(request.threadIdentifier)",
+        ].joined(separator: " | ")
     }
 }
 

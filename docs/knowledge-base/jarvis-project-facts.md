@@ -796,8 +796,12 @@ requires plugin-trust `generated_at`, `review_started_at`,
   for the same attention item, and fail closed when permission is denied. The
   app-level macOS notification adapter has a test seam that verifies the real
   `UNNotificationRequest` title, body, sound, thread identifier, scheduler job
-  ID, and notification-kind payload before delivery. This is not a substitute
-  for manual clean-profile macOS notification prompt and delivery validation.
+  ID, and notification-kind payload before delivery. The scheduler attention UI
+  surfaces delivered notification title/body/kind/thread evidence using the
+  `JARVIS_QA_NOTIFICATION_*` field names and exposes the model reset path so
+  release operators can recapture notification evidence after a duplicate
+  suppression check. This is not a substitute for manual clean-profile macOS
+  notification prompt and delivery validation.
 - `./scripts/package-distribution.sh` is the repo-owned distribution packaging
   lane. Its `--check` mode is credential-free and validates local tools plus
   app and bundled-core entitlement templates. Its
