@@ -125,6 +125,15 @@ read-only IPC payloads, and the Swift Release tab renders them when the running
 core supports those endpoints. These runbooks summarize current evidence and
 next operator commands only; they do not sign, notarize, install, launch,
 validate live devices, review plugins, or generate final evidence.
+`./scripts/release-external-handoff.sh --write target/release-external-handoff`
+prepares the public release-operator handoff directory with sourceable
+live-device, plugin-trust, and final-bundle env templates, read-only
+readiness/evidence/runbook JSON snapshots, and `release-evidence-checklist.md`.
+That checklist names the exact signed-distribution paths, live-device
+command/notification fields, plugin artifact URI/SHA-256 bindings, and final
+archive URI still required before the final doctor assertion. It is handoff
+scaffolding only, not owner-recorded external evidence that those checks were
+completed.
 The CLI command defaults to operator-readable text, supports `--json` for the
 exact structured payload, and supports `--all-commands` when operators need the
 complete readable verification runbook instead of the compact first commands.
@@ -200,7 +209,8 @@ For executable PR evidence, run the canonical local release gate:
 It wraps Rust fmt/clippy/tests, ignored release-proof tests, smoke scripts,
 cargo package verification, signed-provenance self-tests, unsigned
 release-layout launch checks, release evidence preflights/self-tests, the
-GitHub workflow smoke check, and Swift build/test. Focused commands below are for local iteration or
+GitHub workflow smoke check, external handoff checklist generation, and Swift
+build/test. Focused commands below are for local iteration or
 ownership-specific proof; they do not replace the full gate for executable
 changes.
 

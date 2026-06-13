@@ -867,10 +867,12 @@ requires plugin-trust `generated_at`, `review_started_at`,
   fields for owner/device/profile/non-future timestamps/notes, structured
   spoken-command observation fields with observed transcript matching the spoken
   test phrase, expected command text matching observed command text, validation
-  flags, schema identity, UTC report generation timestamp, and proof boundary.
-  Live macOS notification prompt/delivery validation is part of the manual
-  clean-profile release QA runbook and final release evidence boundary; it is
-  not currently a separate field in the live-device voice report.
+  flags, schema identity, UTC report generation timestamp, structured scheduler
+  notification observation fields for kind/title/body/thread/timestamp, and
+  proof boundary. Live macOS notification prompt/delivery validation is still
+  manual clean-profile release QA, but the owner-recorded report now binds the
+  notification observation to allowed scheduler kinds, `jarvis.scheduler`, and
+  the owner-recorded notification timestamp.
   `release-live-device-qa.sh --assert-complete` and `/release/evidence-status`
   both reject empty or placeholder owner evidence-note fields before this
   report can clear `live_voice_loop`.
@@ -1134,11 +1136,15 @@ requires plugin-trust `generated_at`, `review_started_at`,
   generator for the remaining external production gates. `--write` creates
   `release-live-device-qa.env`, `release-plugin-trust-qa.env`,
   `release-evidence-bundle.env`, read-only readiness/evidence-status/runbook
-  JSON snapshots, and a README with the ordered release sequence. `--check` and
-  `--self-test` are part of the local release gate and prove only template plus
-  snapshot generation with validation flags defaulted false; they do not sign,
-  notarize, install, Finder-launch, validate live device behavior, review plugin
-  trust, enforce egress, or archive final evidence.
+  JSON snapshots, `release-evidence-checklist.md`, and a README with the
+  ordered release sequence. The checklist names exact signed-distribution
+  artifact paths, live-device command/result and scheduler notification fields,
+  per-category plugin artifact URI/SHA-256 bindings, and the final reports
+  archive URI. `--check` and `--self-test` are part of the local release gate
+  and prove only template plus snapshot/checklist generation with validation
+  flags defaulted false; they do not sign, notarize, install, Finder-launch,
+  validate live device behavior, review plugin trust, enforce egress, or archive
+  final evidence.
 - Owner evidence-note validation now rejects embedded placeholder wording, not
   only exact placeholder values. Shell assertions and Rust evidence-status
   reject operator notes containing terms such as `TODO`, `pending`, `fixture`,

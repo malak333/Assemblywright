@@ -125,12 +125,14 @@ by rerunning `./scripts/package-distribution.sh --unsigned-launch-check` for
 local evidence, or the signed packaging lane for final release evidence.
 Live-device QA checks schema/type,
 `self_test_fixture=false`, expected bundle ID, matching short/build version,
-repository-backed command-result evidence, and ordered non-future UTC
-voice-check timestamps. Plugin-trust checks ordered non-future UTC review and
-egress validation timestamps, `review_source=owner-asserted-manual-review`,
-and non-empty owner-recorded marketplace, malware, signed-publisher, OS
-sandbox, host-egress, deny-fixture, allow-fixture, and manual-review evidence
-fields. The final evidence bundle checks the expected release version,
+bundled-core path/version/SHA-256 binding, repository-backed command-result
+evidence, ordered non-future UTC voice-check timestamps, and structured
+scheduler notification observation. Plugin-trust checks ordered non-future UTC
+review and egress validation timestamps,
+`review_source=owner-asserted-manual-review`, non-empty owner-recorded
+marketplace, malware, signed-publisher, OS sandbox, host-egress, deny-fixture,
+allow-fixture, and manual-review evidence fields, plus per-category archived
+artifact URI/SHA-256 bindings. The final evidence bundle checks the expected release version,
 signed-distribution provenance report, SHA-256 digest shape, semantic validity
 of the signed-provenance, live-device QA, and plugin-trust QA child reports
 referenced by the bundle, and `local_signature_validation=true`. Wrong
@@ -509,11 +511,15 @@ evidence-doctor assertion, then the external evidence-mode readiness check.
 `./scripts/release-external-handoff.sh --write target/release-external-handoff`
 generates a single operator handoff directory with sourceable live-device,
 plugin-trust, and final-bundle env templates plus read-only JSON snapshots for
-readiness, evidence-status, and the three release runbooks. Its `--check` and
-`--self-test` modes are part of the local release gate and prove only handoff
-generation mechanics; they do not perform signing, notarization, stapling,
-installation, Finder launch, live-device QA, plugin-trust QA, host-level egress
-enforcement, or final evidence archival.
+readiness, evidence-status, and the three release runbooks. It also writes
+`release-evidence-checklist.md`, which names the exact signed-distribution
+artifact paths, live-device command and scheduler notification fields,
+plugin-trust artifact URI/SHA-256 bindings, and final reports archive URI that
+the release operator must fill before the final doctor assertion. Its `--check`
+and `--self-test` modes are part of the local release gate and prove only
+handoff generation mechanics; they do not perform signing, notarization,
+stapling, installation, Finder launch, live-device QA, plugin-trust QA,
+host-level egress enforcement, or final evidence archival.
 `cargo run -p jarvis-cli -- release
 signed-distribution-runbook` is read-only; it summarizes the current
 signed-app-bundle, app executable, bundled core, signed zip, signed installer,

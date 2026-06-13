@@ -68,10 +68,11 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   enforcement was performed.
 - Confirm the live-device QA report is `present`, not `invalid`, before using
   external evidence mode. Evidence-status semantically checks the expected
-  installed app path, bundle ID, short/build version, non-self-test identity,
-  ordered non-future UTC voice-check timestamps, observed transcript, and command
-  observation; weak or stale hand-written reports must keep
-  `live_voice_loop` pending.
+  installed app path, bundle ID, short/build version, bundled-core path/version
+  and SHA-256 binding, non-self-test identity, ordered non-future UTC voice-check
+  timestamps, observed transcript, command observation, repository-backed
+  command-result evidence, and structured scheduler notification observation;
+  weak or stale hand-written reports must keep `live_voice_loop` pending.
 - Confirm signed-distribution provenance, plugin-trust, and final bundle reports
   are `present`, not `invalid`. Evidence-status checks signed provenance
   version/bundle metadata, bundled core path/version/SHA-256 binding,
@@ -115,10 +116,11 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   whenever evidence is missing.
 - Confirm `release-external-handoff.sh --write target/release-external-handoff`
   creates the sourceable live-device, plugin-trust, and final-bundle env
-  templates plus read-only readiness/evidence/runbook JSON snapshots with all
-  external validation flags still defaulted false. Treat this as operator
-  handoff scaffolding only, not evidence that the external checks were
-  completed.
+  templates plus read-only readiness/evidence/runbook JSON snapshots and
+  `release-evidence-checklist.md` with the remaining signed-distribution,
+  live-device notification, plugin artifact, and archive URI fields. All
+  external validation flags must still default false. Treat this as operator
+  handoff scaffolding only, not evidence that the external checks were completed.
 - Confirm `jarvis release plugin-trust-runbook` hands off from completed
   plugin-trust QA into final evidence bundling and
   `release-evidence-doctor.sh --assert-complete`, not back to the signed

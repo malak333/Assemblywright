@@ -305,11 +305,12 @@ reports receive semantic validation for signed provenance version/bundle
 metadata, bundled core path/version/SHA-256 binding, Apple-tool-derived
 signing/notary/staple/Gatekeeper fields,
 required flags, SHA-256 digests, signed-provenance zip/pkg/core/notary-log digest
-matches against current artifact files, live-device bundle/version/timestamp evidence,
-repository-backed live command-result task/audit evidence resolution when IPC
-state has a repository,
-non-future plugin-trust review and egress validation timestamps, deny/allow
-egress fixture notes, and final bundle path/digest/archive-URI/local-signature
+matches against current artifact files, live-device bundle/version/timestamp
+evidence, structured scheduler notification observation fields, repository-backed
+live command-result task/audit evidence resolution when IPC state has a
+repository, non-future plugin-trust review and egress validation timestamps,
+deny/allow egress fixture notes, per-category plugin evidence artifact
+URI/SHA-256 bindings, and final bundle path/digest/archive-URI/local-signature
 evidence.
 Final bundle inspection also revalidates the signed-provenance, live-device QA,
 and plugin-trust QA child reports referenced by the bundle instead of accepting
@@ -410,8 +411,8 @@ generates the sourceable `JARVIS_PLUGIN_QA_*` checklist with validation flags
 defaulted to `false`; `--check` is a runbook and `--self-test` proves JSON
 report mechanics only; `--assert-complete` records owner validation flags plus
 owner/timestamp/evidence-note fields, including a host egress policy label plus
-deny/allow fixture notes, and does not turn those external checks
-into repo-local proof.
+deny/allow fixture notes and per-category archived evidence artifact URI/SHA-256
+bindings, and does not turn those external checks into repo-local proof.
 The command runtime supports opt-in ChatGPT/OpenAI-compatible execution only
 after route policy allows it. Installed-plugin execution still does not provide
 broader WASM isolation, OS-level process/network sandboxing, host-level egress
@@ -500,9 +501,10 @@ host-level egress checks on the release path; `--write-template` writes a
 sourceable plugin-trust QA env file, and `--assert-complete` writes a manual
 JSON evidence report only after owner validation flags are true and
 owner/timestamp/evidence-note fields are populated, including structured host
-egress policy, deny-fixture, and allow-fixture evidence. The report now carries
-`schema_version: 1`, `evidence_type: owner_recorded_plugin_trust_qa`, current
-release `version`, and `self_test_fixture: false`, must use
+egress policy, deny-fixture, allow-fixture evidence, and per-category archived
+artifact URI/SHA-256 bindings. The report now carries `schema_version: 1`,
+`evidence_type: owner_recorded_plugin_trust_qa`, current release `version`, and
+`self_test_fixture: false`, must use
 `review_source: owner-asserted-manual-review` for operator evidence, and the
 evidence doctor/status validators reject wrong-version, self-test,
 misidentified, or non-owner-source plugin-trust report shapes.
@@ -1065,12 +1067,15 @@ The external release handoff slice adds
 `./scripts/release-external-handoff.sh --write target/release-external-handoff`
 as a single operator handoff generator. It writes the live-device,
 plugin-trust, and final-bundle sourceable env templates plus read-only
-readiness, evidence-status, and release-runbook JSON snapshots with all
-external validation flags still defaulted false. Its `--check` and `--self-test`
-paths are part of the local release gate as handoff mechanics only; no signing,
-notarization, clean-profile install, Finder/LaunchServices launch, live-device
-QA, plugin-trust QA, host-level egress enforcement, or final evidence archival
-is performed.
+readiness, evidence-status, and release-runbook JSON snapshots plus a generated
+`release-evidence-checklist.md` naming exact signed-distribution artifacts,
+live-device command and scheduler notification fields, plugin artifact
+URI/SHA-256 bindings, and final archive URI with all external validation flags
+still defaulted false. Its `--check` and `--self-test` paths are part of the
+local release gate as handoff mechanics only; no signing, notarization,
+clean-profile install, Finder/LaunchServices launch, live-device QA,
+plugin-trust QA, host-level egress enforcement, or final evidence archival is
+performed.
 The same slice hardens owner evidence-note validation so live-device,
 plugin-trust, and final-bundle reports reject embedded placeholder wording such
 as `TODO`, `pending`, `fixture`, `example`, or `self-test`, not only exact
