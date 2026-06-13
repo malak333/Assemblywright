@@ -2031,12 +2031,17 @@ struct JarvisMacCoreTests {
         let model = VoiceAdapterStateModel(adapter: adapter, voiceState: voice)
 
         #expect(model.statusText == "Voice adapter idle.")
-        #expect(model.canStartCapture)
+        #expect(model.permissionState == .notRequested)
+        #expect(model.permissionStatusText == "Voice permissions not requested.")
+        #expect(!model.canStartCapture)
         #expect(!model.isCaptureActive)
 
         await model.requestPermissions()
         #expect(model.phase == .idle)
+        #expect(model.permissionState == .granted)
+        #expect(model.permissionStatusText == "Voice permissions granted.")
         #expect(model.lastError == nil)
+        #expect(model.canStartCapture)
 
         await model.startCapture()
         #expect(model.phase == .listening)
@@ -2076,6 +2081,7 @@ struct JarvisMacCoreTests {
             }
         )
 
+        await model.requestPermissions()
         model.setFinalTranscriptAutoSubmitEnabled(true)
         await model.startCapture()
         adapter.emitFinal("  open diagnostics  ")
@@ -2124,8 +2130,9 @@ struct JarvisMacCoreTests {
         )
 
         #expect(!model.isFinalTranscriptAutoSubmitToggleEnabled)
-        #expect(model.autoSubmitAvailability.blockedReason == "Auto-submit is unavailable while a command is already running.")
+        #expect(model.autoSubmitAvailability.blockedReason == "Auto-submit is unavailable until microphone and speech permissions are granted.")
 
+        await model.requestPermissions()
         model.setFinalTranscriptAutoSubmitEnabled(true)
         #expect(!model.isFinalTranscriptAutoSubmitEnabled)
 
@@ -2158,6 +2165,7 @@ struct JarvisMacCoreTests {
             }
         )
 
+        await model.requestPermissions()
         model.setFinalTranscriptAutoSubmitEnabled(true)
         await model.startCapture()
         adapter.emitFinal("  status check  ")
@@ -2213,6 +2221,7 @@ struct JarvisMacCoreTests {
             }
         )
 
+        await model.requestPermissions()
         model.setFinalTranscriptAutoSubmitEnabled(true)
         await model.startCapture()
         adapter.emitFinal("  status check  ")
@@ -2246,6 +2255,7 @@ struct JarvisMacCoreTests {
             }
         )
 
+        await model.requestPermissions()
         model.setFinalTranscriptAutoSubmitEnabled(true)
         await model.startCapture()
         adapter.emitFinal("open diagnostics")
@@ -2285,6 +2295,7 @@ struct JarvisMacCoreTests {
         let voice = VoiceStateModel()
         let model = VoiceAdapterStateModel(adapter: adapter, voiceState: voice)
 
+        await model.requestPermissions()
         await model.startCapture()
 
         #expect(model.phase == .unavailable(reason: "Voice capture failed to start: No input device selected."))
@@ -2294,12 +2305,32 @@ struct JarvisMacCoreTests {
     }
 
     @MainActor
+    @Test("Voice adapter blocks capture before permissions are granted")
+    func voiceAdapterBlocksCaptureBeforePermissionsAreGranted() async {
+        let adapter = FakeVoiceAdapter()
+        let voice = VoiceStateModel()
+        let model = VoiceAdapterStateModel(adapter: adapter, voiceState: voice)
+
+        #expect(model.permissionState == .notRequested)
+        #expect(!model.canStartCapture)
+
+        await model.startCapture()
+
+        #expect(model.phase == .idle)
+        #expect(model.permissionState == .notRequested)
+        #expect(model.lastError == .permissionNotRequested("Request microphone and speech permissions before starting capture."))
+        #expect(adapter.callbacks == nil)
+        #expect(voice.statusText.contains("Text-only voice scaffold"))
+    }
+
+    @MainActor
     @Test("Voice adapter model preserves interruption as an explicit state")
     func voiceAdapterModelInterruptsActiveCaptureExplicitly() async {
         let adapter = FakeVoiceAdapter()
         let voice = VoiceStateModel()
         let model = VoiceAdapterStateModel(adapter: adapter, voiceState: voice)
 
+        await model.requestPermissions()
         await model.startCapture()
         adapter.emitPartial("status check")
         await model.interrupt(reason: "User stopped push-to-talk.")
@@ -2326,6 +2357,7 @@ struct JarvisMacCoreTests {
             }
         )
 
+        await model.requestPermissions()
         model.setFinalTranscriptAutoSubmitEnabled(true)
         await model.startCapture()
         adapter.emitPartial("status")
@@ -2348,6 +2380,7 @@ struct JarvisMacCoreTests {
         let voice = VoiceStateModel()
         let model = VoiceAdapterStateModel(adapter: adapter, voiceState: voice)
 
+        await model.requestPermissions()
         await model.startCapture()
         adapter.emitError(.recognitionFailed("Recognition task cancelled."))
 
@@ -2371,7 +2404,8 @@ struct JarvisMacCoreTests {
         )
 
         model.setFinalTranscriptAutoSubmitEnabled(true)
-        #expect(model.isFinalTranscriptAutoSubmitEnabled)
+        #expect(!model.isFinalTranscriptAutoSubmitEnabled)
+        #expect(model.autoSubmitAvailability.blockedReason == "Auto-submit is unavailable until microphone and speech permissions are granted.")
 
         await model.requestPermissions()
 
@@ -2404,7 +2438,8 @@ struct JarvisMacCoreTests {
 
         #expect(idleModel.phase == .idle)
         #expect(idleModel.lastError == .noActiveCapture)
-        #expect(idleModel.canStartCapture)
+        #expect(idleModel.permissionState == .notRequested)
+        #expect(!idleModel.canStartCapture)
         #expect(idleVoice.statusText.contains("Text-only voice scaffold"))
     }
 

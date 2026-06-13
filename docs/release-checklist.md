@@ -572,6 +572,10 @@ Clean-profile and manual production gates not proven by this local smoke:
 - Typed transcript staging and fake-adapter final-transcript handoff are
   verified locally, but spoken transcript handoff still needs manual
   live-device validation.
+- Swift voice capture controls must keep start capture disabled until
+  microphone/Speech permissions have been granted; model tests cover the
+  permission-before-capture invariant, but live permission prompts and capture
+  still require clean-profile device validation.
 - Scheduler attention produces OS-level user notifications with user-visible
   permission handling for due, failed, and emergency-pause-blocked attention.
   The Swift adapter boundary is implemented and tested with fakes; live

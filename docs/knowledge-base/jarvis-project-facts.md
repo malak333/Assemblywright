@@ -790,6 +790,13 @@ requires plugin-trust `generated_at`, `review_started_at`,
   Current local packaged app evidence should cite the unsigned distribution
   launch check because it uses the release-built app layout, bundled core,
   version marker, and unsigned installer payload path.
+- Swift voice permission sequencing is repo-owned adapter evidence: the
+  `VoiceAdapterStateModel` tracks microphone/Speech permission state, disables
+  capture until permissions are granted, and rejects direct start attempts
+  before permission without marking the voice path permanently unavailable.
+  Swift model tests pin the permission-before-capture invariant. This is not a
+  substitute for manual clean-profile microphone/Speech prompt validation or
+  spoken transcript handoff evidence.
 - Swift scheduler notification controls are repo-owned adapter evidence: the
   core model can request authorization, build due, failed, and
   emergency-pause-blocked notification requests, suppress duplicate deliveries

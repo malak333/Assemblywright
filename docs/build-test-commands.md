@@ -705,7 +705,9 @@ surfaces, and then runs the CLI smoke command.
 Swift contract/model proof for Mac app model changes, including scheduler
 notification authorization, due/failed/emergency-pause-blocked request
 creation, duplicate suppression, and denied-permission fail-closed behavior
-through a fake adapter.
+through a fake adapter, plus voice permission-state sequencing that blocks
+capture until microphone/Speech permissions are granted without claiming live
+prompt or device validation.
 `./scripts/package-distribution.sh` is the stricter distribution packaging
 lane, and `--unsigned-launch-check` is now part of `./scripts/release-local.sh`
 so release-built app layout regressions are caught by the default gate. Its
