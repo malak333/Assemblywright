@@ -389,6 +389,34 @@ if cursor != expected:
 PY
 }
 
+require_json_string_one_of() {
+  local label="$1"
+  local path="$2"
+  local dotted_key="$3"
+  shift 3
+  require_file "$label" "$path"
+  python3 - "$path" "$dotted_key" "$label" "$@" <<'PY'
+import json
+import sys
+
+path, dotted_key, label, *allowed = sys.argv[1:]
+with open(path, encoding="utf-8") as handle:
+    data = json.load(handle)
+
+cursor = data
+for segment in dotted_key.split("."):
+    if not isinstance(cursor, dict) or segment not in cursor:
+        raise SystemExit(f"{label} is missing required evidence field: {dotted_key}")
+    cursor = cursor[segment]
+
+if cursor not in allowed:
+    expected = ", ".join(allowed)
+    raise SystemExit(
+        f"{label} evidence field {dotted_key} must be one of {expected}; got {cursor!r}"
+    )
+PY
+}
+
 require_json_string_fields_equal() {
   local label="$1"
   local path="$2"
@@ -1271,6 +1299,13 @@ LOG
     "notification_observed_at": "2026-05-22T16:04:00Z",
     "restart_evidence_note": "Restart recovery observed in the controlled release lane.",
     "manual_release_qa_evidence_note": "Manual release QA surfaces observed in the controlled release lane."
+  },
+  "notification_observation": {
+    "kind": "due_now",
+    "title": "Scheduler job ready: self-test release reminder",
+    "body": "A scheduled Jarvis job is due now.",
+    "thread_identifier": "jarvis.scheduler",
+    "observed_at": "2026-05-22T16:04:00Z"
   },
   "voice_command_observation": {
     "test_phrase": "Jarvis status check.",
@@ -2421,6 +2456,13 @@ require_json_timestamp_order "live-device QA report" "$LIVE_QA_REPORT" "owner_re
 for field in test_phrase observed_transcript expected_command_text observed_command_text command_result_evidence_id audio_output_device_label; do
   require_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "voice_command_observation.$field"
 done
+for field in kind title body thread_identifier observed_at; do
+  require_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "notification_observation.$field"
+done
+require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "notification_observation.thread_identifier" "jarvis.scheduler"
+require_json_string_one_of "live-device QA report" "$LIVE_QA_REPORT" "notification_observation.kind" due_now failed blocked_by_emergency_pause
+require_json_utc_timestamp "live-device QA report" "$LIVE_QA_REPORT" "notification_observation.observed_at"
+require_json_string_fields_equal "live-device notification observation" "$LIVE_QA_REPORT" "notification_observation.observed_at" "owner_recorded_non_voice_evidence.notification_observed_at"
 require_json_string_fields_equal "live-device QA report" "$LIVE_QA_REPORT" "voice_command_observation.test_phrase" "voice_command_observation.observed_transcript"
 require_json_string_fields_equal "live-device QA report" "$LIVE_QA_REPORT" "voice_command_observation.expected_command_text" "voice_command_observation.observed_command_text"
 require_json_command_result_evidence_id "live-device QA report" "$LIVE_QA_REPORT" "voice_command_observation.command_result_evidence_id"

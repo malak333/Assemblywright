@@ -57,6 +57,10 @@ The owner must also record non-empty live QA evidence notes:
   JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE
   JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE
   JARVIS_QA_NOTIFICATION_OBSERVED_AT
+  JARVIS_QA_NOTIFICATION_KIND
+  JARVIS_QA_NOTIFICATION_TITLE
+  JARVIS_QA_NOTIFICATION_BODY
+  JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER
   JARVIS_QA_RESTART_EVIDENCE_NOTE
   JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE
   JARVIS_QA_VOICE_TEST_PHRASE
@@ -123,6 +127,27 @@ require_non_empty_env() {
   local name="$1"
   local value="${!name:-}"
   [[ -n "${value//[[:space:]]/}" ]] || fail "$name must be set to a non-empty owner-recorded evidence value"
+}
+
+require_notification_kind_env() {
+  local name="$1"
+  local value="${!name:-}"
+  require_non_empty_env "$name"
+  case "$value" in
+    due_now|failed|blocked_by_emergency_pause)
+      ;;
+    *)
+      fail "$name must be one of due_now, failed, or blocked_by_emergency_pause"
+      ;;
+  esac
+}
+
+require_env_equals() {
+  local name="$1"
+  local expected="$2"
+  local value="${!name:-}"
+  require_non_empty_env "$name"
+  [[ "$value" == "$expected" ]] || fail "$name must be $expected"
 }
 
 require_owner_evidence_note_env() {
@@ -316,6 +341,10 @@ write_report() {
   local escaped_finder_launch_note
   local escaped_notification_note
   local escaped_notification_observed_at
+  local escaped_notification_kind
+  local escaped_notification_title
+  local escaped_notification_body
+  local escaped_notification_thread_identifier
   local escaped_restart_note
   local escaped_manual_release_qa_note
   local escaped_voice_test_phrase
@@ -358,6 +387,10 @@ write_report() {
   escaped_finder_launch_note="$(json_escape "$JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE")"
   escaped_notification_note="$(json_escape "$JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE")"
   escaped_notification_observed_at="$(json_escape "$JARVIS_QA_NOTIFICATION_OBSERVED_AT")"
+  escaped_notification_kind="$(json_escape "$JARVIS_QA_NOTIFICATION_KIND")"
+  escaped_notification_title="$(json_escape "$JARVIS_QA_NOTIFICATION_TITLE")"
+  escaped_notification_body="$(json_escape "$JARVIS_QA_NOTIFICATION_BODY")"
+  escaped_notification_thread_identifier="$(json_escape "$JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER")"
   escaped_restart_note="$(json_escape "$JARVIS_QA_RESTART_EVIDENCE_NOTE")"
   escaped_manual_release_qa_note="$(json_escape "$JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE")"
   escaped_voice_test_phrase="$(json_escape "$JARVIS_QA_VOICE_TEST_PHRASE")"
@@ -424,6 +457,13 @@ write_report() {
     "notification_observed_at": "$escaped_notification_observed_at",
     "restart_evidence_note": "$escaped_restart_note",
     "manual_release_qa_evidence_note": "$escaped_manual_release_qa_note"
+  },
+  "notification_observation": {
+    "kind": "$escaped_notification_kind",
+    "title": "$escaped_notification_title",
+    "body": "$escaped_notification_body",
+    "thread_identifier": "$escaped_notification_thread_identifier",
+    "observed_at": "$escaped_notification_observed_at"
   },
   "voice_command_observation": {
     "test_phrase": "$escaped_voice_test_phrase",
@@ -496,6 +536,10 @@ JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE=""
 JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE=""
 JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE=""
 JARVIS_QA_NOTIFICATION_OBSERVED_AT=""
+JARVIS_QA_NOTIFICATION_KIND=""
+JARVIS_QA_NOTIFICATION_TITLE=""
+JARVIS_QA_NOTIFICATION_BODY=""
+JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER="jarvis.scheduler"
 JARVIS_QA_RESTART_EVIDENCE_NOTE=""
 JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE=""
 JARVIS_QA_VOICE_TEST_PHRASE=""
@@ -609,6 +653,8 @@ PLIST
   require_file_contains "live QA env template" "$fixture_template" 'JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=false'
   require_file_contains "live QA env template" "$fixture_template" 'JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE=""'
   require_file_contains "live QA env template" "$fixture_template" 'JARVIS_QA_NOTIFICATION_OBSERVED_AT=""'
+  require_file_contains "live QA env template" "$fixture_template" 'JARVIS_QA_NOTIFICATION_KIND=""'
+  require_file_contains "live QA env template" "$fixture_template" 'JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER="jarvis.scheduler"'
   require_file_contains "live QA env template" "$fixture_template" 'JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE=""'
   require_file_contains "live QA env template" "$fixture_template" 'JARVIS_QA_EXPECTED_COMMAND_TEXT=""'
   require_file_contains "live QA env template" "$fixture_template" 'JARVIS_QA_OBSERVED_COMMAND_TEXT=""'
@@ -622,6 +668,11 @@ PLIST
   if grep -F 'JARVIS_QA_CLEAN_PROFILE_VALIDATED=true' "$fixture_template" >/dev/null 2>&1; then
     fail "live QA self-test expected env template validation flags to default false"
   fi
+
+  export JARVIS_QA_NOTIFICATION_KIND="due_now"
+  export JARVIS_QA_NOTIFICATION_TITLE="Scheduler job ready: self-test release reminder"
+  export JARVIS_QA_NOTIFICATION_BODY="A scheduled Jarvis job is due now."
+  export JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER="jarvis.scheduler"
 
   JARVIS_QA_INSTALLED_APP_PATH="$fixture_app" \
     JARVIS_QA_REPORT_PATH="$fixture_report" \
@@ -649,6 +700,10 @@ PLIST
     JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the controlled release QA lane." \
     JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE="Visible scheduler notification observed in the controlled release QA lane." \
     JARVIS_QA_NOTIFICATION_OBSERVED_AT="2026-05-22T16:04:00Z" \
+    JARVIS_QA_NOTIFICATION_KIND="due_now" \
+    JARVIS_QA_NOTIFICATION_TITLE="Scheduler job ready: self-test release reminder" \
+    JARVIS_QA_NOTIFICATION_BODY="A scheduled Jarvis job is due now." \
+    JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER="jarvis.scheduler" \
     JARVIS_QA_RESTART_EVIDENCE_NOTE="Restart recovery observed in the controlled release QA lane." \
     JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE="Manual release QA surfaces observed in the controlled release QA lane." \
     JARVIS_QA_VOICE_TEST_PHRASE="Jarvis status check." \
@@ -675,6 +730,11 @@ PLIST
   require_file_contains "live QA self-test report" "$fixture_report" '"owner_recorded_non_voice_evidence"'
   require_file_contains "live QA self-test report" "$fixture_report" '"clean_profile_evidence_note": "Clean profile install observed in the controlled release QA lane."'
   require_file_contains "live QA self-test report" "$fixture_report" '"notification_observed_at": "2026-05-22T16:04:00Z"'
+  require_file_contains "live QA self-test report" "$fixture_report" '"notification_observation"'
+  require_file_contains "live QA self-test report" "$fixture_report" '"kind": "due_now"'
+  require_file_contains "live QA self-test report" "$fixture_report" '"title": "Scheduler job ready: self-test release reminder"'
+  require_file_contains "live QA self-test report" "$fixture_report" '"body": "A scheduled Jarvis job is due now."'
+  require_file_contains "live QA self-test report" "$fixture_report" '"thread_identifier": "jarvis.scheduler"'
   require_file_contains "live QA self-test report" "$fixture_report" '"owner_name": "Jarvis QA Self-Test"'
   require_file_contains "live QA self-test report" "$fixture_report" '"voice_command_observation"'
   require_file_contains "live QA self-test report" "$fixture_report" '"expected_command_text": "status check"'
@@ -712,6 +772,10 @@ PLIST
       JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the controlled release QA lane." \
       JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE="Visible scheduler notification observed in the controlled release QA lane." \
       JARVIS_QA_NOTIFICATION_OBSERVED_AT="2026-05-22T16:04:00Z" \
+      JARVIS_QA_NOTIFICATION_KIND="due_now" \
+      JARVIS_QA_NOTIFICATION_TITLE="Scheduler job ready: self-test release reminder" \
+      JARVIS_QA_NOTIFICATION_BODY="A scheduled Jarvis job is due now." \
+      JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER="jarvis.scheduler" \
       JARVIS_QA_RESTART_EVIDENCE_NOTE="Restart recovery observed in the controlled release QA lane." \
       JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE="Manual release QA surfaces observed in the controlled release QA lane." \
       JARVIS_QA_VOICE_TEST_PHRASE="Jarvis status check." \
@@ -1126,7 +1190,8 @@ Manual release checks still required before production-ready language:
 - Start voice capture and verify microphone and Speech permission prompts.
 - Speak a command and verify transcript handoff reaches the same command path.
 - Play speech output and verify live audio output on the device.
-- Verify scheduler notification permission and at least one visible notification.
+- Verify scheduler notification permission and at least one visible notification,
+  then record its kind, title, body, thread identifier, and observed timestamp.
 - After validating on the release machine, generate and source the fillable
   environment file, then assert it:
   ./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env
@@ -1171,6 +1236,10 @@ require_owner_evidence_note_env JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE
 require_utc_timestamp_env JARVIS_QA_NOTIFICATION_OBSERVED_AT
 require_timestamp_order JARVIS_QA_VOICE_CHECK_STARTED_AT JARVIS_QA_NOTIFICATION_OBSERVED_AT
 require_not_future_timestamp_env JARVIS_QA_NOTIFICATION_OBSERVED_AT
+require_notification_kind_env JARVIS_QA_NOTIFICATION_KIND
+require_non_empty_env JARVIS_QA_NOTIFICATION_TITLE
+require_non_empty_env JARVIS_QA_NOTIFICATION_BODY
+require_env_equals JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER "jarvis.scheduler"
 require_owner_evidence_note_env JARVIS_QA_RESTART_EVIDENCE_NOTE
 require_owner_evidence_note_env JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE
 require_non_empty_env JARVIS_QA_VOICE_TEST_PHRASE
@@ -1189,7 +1258,7 @@ Bundle: $APP_BUNDLE_ID $APP_SHORT_VERSION ($APP_BUILD_VERSION)
 Report: $REPORT_PATH
 Proof boundary: owner-recorded clean-profile install, Finder launch,
 microphone/Speech permission prompts, spoken transcript handoff into the command
-path, live audio output, notification, restart, and manual release QA flags
+path, live audio output, structured scheduler notification observation, restart, and manual release QA flags
 only; this still does not prove App Store review, marketplace trust, malware
 analysis, or OS-level sandbox/egress enforcement.
 EOF

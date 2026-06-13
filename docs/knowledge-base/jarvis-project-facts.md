@@ -149,8 +149,11 @@ These notes capture durable facts for future agents working on this repository.
   SHA-256 digest to the same live-device report, all live-device
   `validation_flags` and `voice_loop` flags set to true, non-empty
   microphone/Speech usage descriptions, non-empty audio output device label,
-  and non-voice owner notes for clean-profile, Finder launch, notification,
-  restart, and manual QA with an ordered UTC notification timestamp. The
+  structured notification observation for kind/title/body/thread/timestamp where
+  kind is `due_now`, `failed`, or `blocked_by_emergency_pause` and the thread is
+  `jarvis.scheduler`, plus non-voice owner notes for clean-profile, Finder
+  launch, notification, restart, and manual QA with an ordered UTC notification
+  timestamp. The
   `release-live-device-qa.sh --assert-complete` path rejects whitespace-only
   and placeholder owner evidence-note values such as `TODO`, `pending`, `n/a`,
   `fixture`, and `self-test fixture`; `/release/evidence-status` enforces the

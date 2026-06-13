@@ -947,6 +947,15 @@ fn release_readiness_rejects_semantically_invalid_live_voice_evidence() {
         report["owner_recorded_non_voice_evidence"]["notification_observed_at"] =
             json!("2026-05-22T16:04:00-04:00");
     }
+    fn mismatched_notification_observation_timestamp(report: &mut Value) {
+        report["notification_observation"]["observed_at"] = json!("2026-05-22T16:03:00Z");
+    }
+    fn wrong_notification_thread_identifier(report: &mut Value) {
+        report["notification_observation"]["thread_identifier"] = json!("jarvis.other");
+    }
+    fn invalid_notification_kind(report: &mut Value) {
+        report["notification_observation"]["kind"] = json!("visible");
+    }
     fn blank_audio_output_device_label(report: &mut Value) {
         report["voice_command_observation"]["audio_output_device_label"] = json!("   ");
     }
@@ -1034,6 +1043,21 @@ fn release_readiness_rejects_semantically_invalid_live_voice_evidence() {
             "malformed notification timestamp",
             malformed_notification_timestamp as fn(&mut Value),
             "notification_observed_at",
+        ),
+        (
+            "mismatched notification observation timestamp",
+            mismatched_notification_observation_timestamp as fn(&mut Value),
+            "notification_observation.observed_at",
+        ),
+        (
+            "wrong notification thread identifier",
+            wrong_notification_thread_identifier as fn(&mut Value),
+            "notification_observation.thread_identifier",
+        ),
+        (
+            "invalid notification kind",
+            invalid_notification_kind as fn(&mut Value),
+            "notification_observation.kind",
         ),
         (
             "blank audio output device label",
@@ -2856,7 +2880,7 @@ fn release_live_device_runbook_summarizes_next_operator_steps() {
     );
     assert_string_array_contains_substring(
         &json_runbook["manual_checks"],
-        "live speech output, notification delivery, restart behavior, and manual release QA",
+        "live speech output, structured scheduler notification kind/title/body/thread evidence",
     );
     assert_string_array_contains_substring(
         &json_runbook["manual_checks"],
@@ -6800,6 +6824,13 @@ fn valid_live_device_qa_report() -> Value {
             "notification_observed_at": "2026-05-22T16:04:00Z",
             "restart_evidence_note": "Restart recovery observed.",
             "manual_release_qa_evidence_note": "Manual release QA surfaces observed."
+        },
+        "notification_observation": {
+            "kind": "due_now",
+            "title": "Scheduler job ready: Release reminder",
+            "body": "A scheduled Jarvis job is due now.",
+            "thread_identifier": "jarvis.scheduler",
+            "observed_at": "2026-05-22T16:04:00Z"
         },
         "voice_command_observation": {
             "test_phrase": "Jarvis status check.",
