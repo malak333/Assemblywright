@@ -1436,6 +1436,30 @@ struct JarvisMacCoreTests {
         #expect(model.isShowingStaleReadiness == false)
     }
 
+    @MainActor
+    @Test("Release readiness model surfaces runbook load warning")
+    func releaseReadinessModelSurfacesRunbookLoadWarning() async throws {
+        let readiness = try JSONDecoder().decode(JarvisReleaseReadiness.self, from: releaseReadinessJSON())
+        let evidence = try JSONDecoder().decode(JarvisReleaseEvidenceStatus.self, from: releaseEvidenceStatusJSON())
+        let model = ReleaseReadinessModel(
+            client: FakeCoreClient(
+                releaseReadiness: readiness,
+                releaseEvidenceStatus: evidence,
+                releaseSignedDistributionRunbookResults: [.failure(URLError(.cannotLoadFromNetwork))]
+            )
+        )
+
+        await model.refresh()
+
+        #expect(model.readiness?.productionReady == false)
+        #expect(model.evidenceStatus?.complete == false)
+        #expect(model.releaseRunbooks.isEmpty)
+        #expect(model.releaseRunbookWarning?.contains("Release runbooks could not be loaded") == true)
+        #expect(model.lastError == nil)
+        #expect(model.isShowingStaleReadiness == false)
+        #expect(!model.effectiveProductionReady)
+    }
+
     @Test("Release decoders accept live CLI fallback JSON")
     func releaseDecodersAcceptLiveCLIFallbackJSON() throws {
         let endpoint = "http://127.0.0.1:9"
@@ -4402,6 +4426,9 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     private var releaseReadinessResults: [Result<JarvisReleaseReadiness, Error>]
     private var releaseEvidenceStatusResponse: JarvisReleaseEvidenceStatus?
     private var releaseEvidenceStatusResults: [Result<JarvisReleaseEvidenceStatus, Error>]
+    private var releaseLiveDeviceRunbookResults: [Result<JarvisReleaseRunbook, Error>]
+    private var releaseSignedDistributionRunbookResults: [Result<JarvisReleaseRunbook, Error>]
+    private var releasePluginTrustRunbookResults: [Result<JarvisReleaseRunbook, Error>]
     private var approvals: [JarvisPendingApproval]
     private var pluginManifests: [JarvisPluginManifest]
     private var installedPlugins: [JarvisInstalledPluginRecord]
@@ -4428,6 +4455,9 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         releaseReadinessResults: [Result<JarvisReleaseReadiness, Error>] = [],
         releaseEvidenceStatus: JarvisReleaseEvidenceStatus? = nil,
         releaseEvidenceStatusResults: [Result<JarvisReleaseEvidenceStatus, Error>] = [],
+        releaseLiveDeviceRunbookResults: [Result<JarvisReleaseRunbook, Error>] = [],
+        releaseSignedDistributionRunbookResults: [Result<JarvisReleaseRunbook, Error>] = [],
+        releasePluginTrustRunbookResults: [Result<JarvisReleaseRunbook, Error>] = [],
         approvals: [JarvisPendingApproval] = [],
         pluginManifests: [JarvisPluginManifest] = [],
         installedPlugins: [JarvisInstalledPluginRecord] = [],
@@ -4447,6 +4477,9 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         self.releaseReadinessResults = releaseReadinessResults
         self.releaseEvidenceStatusResponse = releaseEvidenceStatus
         self.releaseEvidenceStatusResults = releaseEvidenceStatusResults
+        self.releaseLiveDeviceRunbookResults = releaseLiveDeviceRunbookResults
+        self.releaseSignedDistributionRunbookResults = releaseSignedDistributionRunbookResults
+        self.releasePluginTrustRunbookResults = releasePluginTrustRunbookResults
         self.approvals = approvals
         self.pluginManifests = pluginManifests
         self.installedPlugins = installedPlugins
@@ -4516,15 +4549,27 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     }
 
     func releaseLiveDeviceRunbook() async throws -> JarvisReleaseRunbook {
-        try JSONDecoder().decode(JarvisReleaseRunbook.self, from: releaseRunbookJSON(runbook: "live_device"))
+        if !releaseLiveDeviceRunbookResults.isEmpty {
+            return try releaseLiveDeviceRunbookResults.removeFirst().get()
+        }
+
+        return try JSONDecoder().decode(JarvisReleaseRunbook.self, from: releaseRunbookJSON(runbook: "live_device"))
     }
 
     func releaseSignedDistributionRunbook() async throws -> JarvisReleaseRunbook {
-        try JSONDecoder().decode(JarvisReleaseRunbook.self, from: releaseRunbookJSON(runbook: "signed_distribution"))
+        if !releaseSignedDistributionRunbookResults.isEmpty {
+            return try releaseSignedDistributionRunbookResults.removeFirst().get()
+        }
+
+        return try JSONDecoder().decode(JarvisReleaseRunbook.self, from: releaseRunbookJSON(runbook: "signed_distribution"))
     }
 
     func releasePluginTrustRunbook() async throws -> JarvisReleaseRunbook {
-        try JSONDecoder().decode(JarvisReleaseRunbook.self, from: releaseRunbookJSON(runbook: "plugin_trust"))
+        if !releasePluginTrustRunbookResults.isEmpty {
+            return try releasePluginTrustRunbookResults.removeFirst().get()
+        }
+
+        return try JSONDecoder().decode(JarvisReleaseRunbook.self, from: releaseRunbookJSON(runbook: "plugin_trust"))
     }
 
     func submit(_ command: JarvisCommandRequest) async throws -> JarvisCommandResponse {

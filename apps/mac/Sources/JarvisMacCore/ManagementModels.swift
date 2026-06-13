@@ -5,6 +5,7 @@ public final class ReleaseReadinessModel: ObservableObject {
     @Published public private(set) var readiness: JarvisReleaseReadiness?
     @Published public private(set) var evidenceStatus: JarvisReleaseEvidenceStatus?
     @Published public private(set) var releaseRunbooks: [JarvisReleaseRunbook]
+    @Published public private(set) var releaseRunbookWarning: String?
     @Published public private(set) var isLoading: Bool
     @Published public private(set) var lastError: String?
 
@@ -15,6 +16,7 @@ public final class ReleaseReadinessModel: ObservableObject {
         self.readiness = nil
         self.evidenceStatus = nil
         self.releaseRunbooks = []
+        self.releaseRunbookWarning = nil
         self.isLoading = false
         self.lastError = nil
     }
@@ -40,6 +42,7 @@ public final class ReleaseReadinessModel: ObservableObject {
     public func refresh() async {
         isLoading = true
         lastError = nil
+        releaseRunbookWarning = nil
         defer { isLoading = false }
 
         do {
@@ -60,6 +63,7 @@ public final class ReleaseReadinessModel: ObservableObject {
                 ]
             } catch {
                 self.releaseRunbooks = []
+                self.releaseRunbookWarning = "Release runbooks could not be loaded: \(String(describing: error))"
             }
         } catch {
             lastError = String(describing: error)
