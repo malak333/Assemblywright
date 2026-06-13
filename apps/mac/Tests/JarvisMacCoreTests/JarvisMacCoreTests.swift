@@ -3973,7 +3973,8 @@ private func releaseRunbookJSON(runbook: String) -> Data {
         boundary = "Runbook and local evidence inspection only; this endpoint does not perform signing."
         commands = """
             "./scripts/package-distribution.sh --check",
-            "cargo run -p jarvis-cli -- release evidence-status"
+            "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks",
+            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \\"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\\""
         """
         firstManualCheck = "Configure Developer ID Application and Installer identities plus the notarytool profile on the release Mac."
         liveVoiceFeature = "null"
@@ -3984,7 +3985,8 @@ private func releaseRunbookJSON(runbook: String) -> Data {
         boundary = "Runbook and local evidence inspection only; this endpoint does not perform marketplace review."
         commands = """
             "./scripts/release-plugin-trust-qa.sh --check",
-            "cargo run -p jarvis-cli -- release evidence-status"
+            "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks",
+            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \\"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\\""
         """
         firstManualCheck = "Preserve malware scan evidence for distributed plugin archives and updates."
         liveVoiceFeature = "null"

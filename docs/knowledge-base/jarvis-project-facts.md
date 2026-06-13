@@ -1132,6 +1132,11 @@ requires plugin-trust `generated_at`, `review_started_at`,
   it for command evidence plus external evidence-status/readiness checks. Their
   shell self-tests pin those strings as guidance only; they still do not perform
   live-device QA or create release evidence.
+- The signed-distribution and plugin-trust runbooks now reuse the same guarded
+  `JARVIS_RELEASE_CORE_ENDPOINT` external evidence-status command before doctor
+  checks or final bundling. CLI E2E, IPC unit coverage, and Swift runbook
+  fixtures pin the command text so copied operator commands fail fast instead of
+  silently inspecting a different running core.
 - `./scripts/release-external-handoff.sh` is the single operator handoff
   generator for the remaining external production gates. `--write` creates
   `release-live-device-qa.env`, `release-plugin-trust-qa.env`,

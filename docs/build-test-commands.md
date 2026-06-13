@@ -763,6 +763,10 @@ checks to run against the same endpoint after report generation. The CLI/IPC
 live-device runbook, package preflight, and evidence-doctor next-step guidance
 mirror that handoff so operators see the release-core command capture and
 endpoint-aware external evidence-mode commands before report generation.
+The signed-distribution and plugin-trust runbooks reuse the same guarded
+`JARVIS_RELEASE_CORE_ENDPOINT` evidence-status command before handoff continues
+to doctor checks or final bundling, so copied operator commands do not silently
+inspect a different running core.
 `--assert-complete` is for the release machine after those checks are
 actually performed and all required `JARVIS_QA_*` flags are explicitly set to
 `true`, including
