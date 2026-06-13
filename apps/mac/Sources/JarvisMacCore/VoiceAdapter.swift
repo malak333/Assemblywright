@@ -358,20 +358,51 @@ public final class MacSpeechVoiceAdapter: JarvisVoiceAdapter {
 
     private let recognizer: SFSpeechRecognizer?
     private let audioEngine: AVAudioEngine
+    private let currentSpeechAuthorization: @MainActor () -> SFSpeechRecognizerAuthorizationStatus
+    private let currentMicrophoneAuthorization: @MainActor () -> AVAuthorizationStatus
+    private let speechAuthorizationRequest: @MainActor () async -> SFSpeechRecognizerAuthorizationStatus
+    private let microphoneAuthorizationRequest: @MainActor () async -> AVAuthorizationStatus
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private var callbacks: JarvisVoiceCaptureCallbacks?
 
-    public init(locale: Locale = Locale(identifier: "en_US")) {
+    public init(
+        locale: Locale = Locale(identifier: "en_US"),
+        currentSpeechAuthorization: @escaping @MainActor () -> SFSpeechRecognizerAuthorizationStatus = {
+            SFSpeechRecognizer.authorizationStatus()
+        },
+        currentMicrophoneAuthorization: @escaping @MainActor () -> AVAuthorizationStatus = {
+            AVCaptureDevice.authorizationStatus(for: .audio)
+        },
+        speechAuthorizationRequest: @escaping @MainActor () async -> SFSpeechRecognizerAuthorizationStatus = {
+            await withCheckedContinuation { continuation in
+                SFSpeechRecognizer.requestAuthorization { status in
+                    continuation.resume(returning: status)
+                }
+            }
+        },
+        microphoneAuthorizationRequest: @escaping @MainActor () async -> AVAuthorizationStatus = {
+            let current = AVCaptureDevice.authorizationStatus(for: .audio)
+            guard current == .notDetermined else {
+                return current
+            }
+            let granted = await AVCaptureDevice.requestAccess(for: .audio)
+            return granted ? .authorized : .denied
+        }
+    ) {
         self.recognizer = SFSpeechRecognizer(locale: locale)
         self.audioEngine = AVAudioEngine()
+        self.currentSpeechAuthorization = currentSpeechAuthorization
+        self.currentMicrophoneAuthorization = currentMicrophoneAuthorization
+        self.speechAuthorizationRequest = speechAuthorizationRequest
+        self.microphoneAuthorizationRequest = microphoneAuthorizationRequest
         self.phase = .idle
     }
 
     public func requestPermissions() async -> Result<Void, JarvisVoiceAdapterError> {
         phase = .requestingPermission
 
-        let speechStatus = await requestSpeechAuthorization()
+        let speechStatus = await speechAuthorizationRequest()
         switch speechStatus {
         case .authorized:
             break
@@ -389,7 +420,7 @@ public final class MacSpeechVoiceAdapter: JarvisVoiceAdapter {
             return .failure(.permissionDenied("Unknown speech authorization status."))
         }
 
-        let microphoneStatus = await requestMicrophoneAuthorization()
+        let microphoneStatus = await microphoneAuthorizationRequest()
         switch microphoneStatus {
         case .authorized:
             phase = .idle
@@ -412,6 +443,10 @@ public final class MacSpeechVoiceAdapter: JarvisVoiceAdapter {
     public func startCapture(callbacks: JarvisVoiceCaptureCallbacks) async -> Result<Void, JarvisVoiceAdapterError> {
         guard recognitionTask == nil else {
             return .failure(.alreadyCapturing)
+        }
+        if let error = currentPermissionError() {
+            phase = .unavailable(reason: error.description)
+            return .failure(error)
         }
         guard let recognizer, recognizer.isAvailable else {
             phase = .unavailable(reason: JarvisVoiceAdapterError.speechRecognizerUnavailable.description)
@@ -467,23 +502,6 @@ public final class MacSpeechVoiceAdapter: JarvisVoiceAdapter {
         return .success(())
     }
 
-    private func requestSpeechAuthorization() async -> SFSpeechRecognizerAuthorizationStatus {
-        await withCheckedContinuation { continuation in
-            SFSpeechRecognizer.requestAuthorization { status in
-                continuation.resume(returning: status)
-            }
-        }
-    }
-
-    private func requestMicrophoneAuthorization() async -> AVAuthorizationStatus {
-        let current = AVCaptureDevice.authorizationStatus(for: .audio)
-        guard current == .notDetermined else {
-            return current
-        }
-        let granted = await AVCaptureDevice.requestAccess(for: .audio)
-        return granted ? .authorized : .denied
-    }
-
     private func handleRecognition(result: SFSpeechRecognitionResult?, error: Error?) {
         if let result {
             let transcript = result.bestTranscription.formattedString
@@ -514,6 +532,34 @@ public final class MacSpeechVoiceAdapter: JarvisVoiceAdapter {
         recognitionRequest = nil
         recognitionTask = nil
         callbacks = nil
+    }
+
+    private func currentPermissionError() -> JarvisVoiceAdapterError? {
+        switch currentSpeechAuthorization() {
+        case .authorized:
+            break
+        case .denied:
+            return .permissionDenied("Speech recognition permission was denied.")
+        case .restricted:
+            return .permissionRestricted("Speech recognition is restricted on this Mac.")
+        case .notDetermined:
+            return .permissionNotRequested("Speech recognition permission has not been requested.")
+        @unknown default:
+            return .permissionDenied("Unknown speech authorization status.")
+        }
+
+        switch currentMicrophoneAuthorization() {
+        case .authorized:
+            return nil
+        case .denied:
+            return .permissionDenied("Microphone permission was denied.")
+        case .restricted:
+            return .permissionRestricted("Microphone access is restricted on this Mac.")
+        case .notDetermined:
+            return .permissionNotRequested("Microphone permission has not been requested.")
+        @unknown default:
+            return .permissionDenied("Unknown microphone authorization status.")
+        }
     }
 }
 #else
