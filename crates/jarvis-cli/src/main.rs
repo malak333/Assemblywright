@@ -2122,7 +2122,7 @@ fn release_live_device_runbook_json(
             "Launch Jarvis through Finder or LaunchServices.",
             "Verify microphone and Speech permission prompts during live voice capture.",
             "Speak the test phrase and confirm the observed transcript reaches the command path.",
-            "Verify live speech output, notification delivery, restart behavior, and manual release QA.",
+            "Verify live speech output, structured scheduler notification kind/title/body/thread evidence, restart behavior, and manual release QA.",
             "Preserve target/release-live-device-qa-report.json for final release evidence bundling."
         ],
         "proof_boundary": "Runbook and local evidence inspection only; this command does not perform live-device validation."
@@ -2185,7 +2185,7 @@ fn format_release_live_device_runbook(
         "- Launch Jarvis through Finder or LaunchServices.".to_string(),
         "- Verify microphone and Speech permission prompts during live voice capture.".to_string(),
         "- Speak the test phrase and confirm the observed transcript reaches the command path.".to_string(),
-        "- Verify live speech output, notification delivery, restart behavior, and manual release QA.".to_string(),
+        "- Verify live speech output, structured scheduler notification kind/title/body/thread evidence, restart behavior, and manual release QA.".to_string(),
         "- Preserve target/release-live-device-qa-report.json for final release evidence bundling.".to_string(),
         "Boundary: runbook and local evidence inspection only; no live-device validation was performed.".to_string(),
         "Raw JSON: rerun with --json for a structured runbook summary.".to_string(),

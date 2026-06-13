@@ -771,8 +771,12 @@ requires ordered UTC timestamps plus non-empty owner-recorded evidence fields:
 `JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE`. It also requires structured
 spoken-command observation fields: `JARVIS_QA_VOICE_TEST_PHRASE`,
 `JARVIS_QA_OBSERVED_TRANSCRIPT`, `JARVIS_QA_EXPECTED_COMMAND_TEXT`,
-`JARVIS_QA_OBSERVED_COMMAND_TEXT`, `JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID`, and
-`JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL`.
+`JARVIS_QA_OBSERVED_COMMAND_TEXT`, `JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID`,
+`JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL`, and structured notification observation
+fields: `JARVIS_QA_NOTIFICATION_KIND` (`due_now`, `failed`, or
+`blocked_by_emergency_pause`), `JARVIS_QA_NOTIFICATION_TITLE`,
+`JARVIS_QA_NOTIFICATION_BODY`, and
+`JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER=jarvis.scheduler`.
 All owner-recorded evidence-note fields must contain non-placeholder text, not
 values such as `TODO`, `pending`, `n/a`, `fixture`, or `self-test fixture`, and
 `JARVIS_QA_SELF_TEST_FIXTURE=true` is reserved for the script's internal fake
@@ -788,13 +792,17 @@ trimming, `JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID` must be `task:<uuid>` or
 `/release/evidence-status` must resolve it to an existing task or
 task-associated audit row before it can clear readiness. `generated_at` must be
 UTC and no earlier than the completed voice check, but not future-dated.
+The notification observation timestamp must match
+`JARVIS_QA_NOTIFICATION_OBSERVED_AT`, and final bundle validation rejects any
+notification thread identifier other than `jarvis.scheduler`.
 On success, `--assert-complete` writes a JSON evidence report to
 `JARVIS_QA_REPORT_PATH` or `target/release-live-device-qa-report.json` by
 default. The report includes installed-app metadata, app microphone/Speech usage
 descriptions, bundled-core path/version/digest evidence, all required
 validation flags, voice-loop evidence fields, owner/device/profile/timestamp
 and live voice/non-voice evidence-note fields, structured command observation
-including `audio_output_device_label`, schema identity, and the proof boundary.
+including `audio_output_device_label`, structured notification observation,
+schema identity, and the proof boundary.
 After generating it, run `cargo run -p jarvis-cli -- release evidence-status`
 and `cargo run -p jarvis-cli -- release readiness` against a core started or
 restarted with `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external`

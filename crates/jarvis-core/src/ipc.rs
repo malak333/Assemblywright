@@ -91,6 +91,11 @@ const LIVE_DEVICE_QA_REQUIRED_FIELDS: &[&str] = &[
     "owner_recorded_non_voice_evidence.notification_observed_at",
     "owner_recorded_non_voice_evidence.restart_evidence_note",
     "owner_recorded_non_voice_evidence.manual_release_qa_evidence_note",
+    "notification_observation.kind",
+    "notification_observation.title",
+    "notification_observation.body",
+    "notification_observation.thread_identifier",
+    "notification_observation.observed_at",
     "voice_command_observation.test_phrase",
     "voice_command_observation.observed_transcript",
     "voice_command_observation.expected_command_text",
@@ -4396,7 +4401,7 @@ fn release_live_device_runbook_from(
             "Verify microphone and Speech permission prompts during live voice capture.".to_string(),
             "Speak the test phrase and confirm the observed transcript reaches the command path."
                 .to_string(),
-            "Verify live speech output, notification delivery, restart behavior, and manual release QA."
+            "Verify live speech output, structured scheduler notification kind/title/body/thread evidence, restart behavior, and manual release QA."
                 .to_string(),
             "Preserve target/release-live-device-qa-report.json for final release evidence bundling."
                 .to_string(),
@@ -5145,9 +5150,26 @@ fn validate_live_device_qa_report(
         "voice_command_observation.expected_command_text",
         "voice_command_observation.observed_command_text",
         "voice_command_observation.audio_output_device_label",
+        "notification_observation.title",
+        "notification_observation.body",
         "proof_boundary",
     ] {
         require_json_nonempty_string_value(value, field)?;
+    }
+    require_json_string_value(
+        value,
+        "notification_observation.thread_identifier",
+        "jarvis.scheduler",
+    )?;
+    let notification_kind =
+        json_string_at(value, "notification_observation.kind").ok_or_else(|| {
+            "JSON report is missing required field: notification_observation.kind".to_string()
+        })?;
+    if !matches!(
+        notification_kind.as_str(),
+        "due_now" | "failed" | "blocked_by_emergency_pause"
+    ) {
+        return Err("JSON report notification_observation.kind must be due_now, failed, or blocked_by_emergency_pause".to_string());
     }
     for field in [
         "owner_recorded_live_voice_evidence.microphone_evidence_note",
@@ -5178,6 +5200,11 @@ fn validate_live_device_qa_report(
         value,
         "owner_recorded_non_voice_evidence.notification_observed_at",
     )?;
+    let notification_payload_observed_at =
+        require_utc_report_timestamp(value, "notification_observation.observed_at")?;
+    if notification_payload_observed_at != notification_observed_at {
+        return Err("JSON report notification_observation.observed_at must match owner_recorded_non_voice_evidence.notification_observed_at".to_string());
+    }
     if notification_observed_at < started_at {
         return Err("JSON report notification_observed_at must be greater than or equal to voice_check_started_at".to_string());
     }
@@ -7331,6 +7358,13 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 "restart_evidence_note": "Restart recovery observed.",
                 "manual_release_qa_evidence_note": "Manual release QA surfaces observed."
             },
+            "notification_observation": {
+                "kind": "due_now",
+                "title": "Scheduler job ready: Release reminder",
+                "body": "A scheduled Jarvis job is due now.",
+                "thread_identifier": "jarvis.scheduler",
+                "observed_at": "2026-05-22T16:04:00Z"
+            },
             "voice_command_observation": {
                 "test_phrase": "Jarvis status check.",
                 "observed_transcript": "Jarvis status check.",
@@ -7731,6 +7765,33 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let (status, detail) = inspect_live_device_qa_report_value(report);
         assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
         assert!(detail.contains("notification_observed_at"), "{detail}");
+    }
+
+    #[test]
+    fn live_device_qa_report_rejects_invalid_notification_observation() {
+        let mut report = valid_live_device_qa_report_json();
+        report["notification_observation"]["kind"] = json!("reminder");
+        let (status, detail) = inspect_live_device_qa_report_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(detail.contains("notification_observation.kind"), "{detail}");
+
+        let mut report = valid_live_device_qa_report_json();
+        report["notification_observation"]["thread_identifier"] = json!("other.thread");
+        let (status, detail) = inspect_live_device_qa_report_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(
+            detail.contains("notification_observation.thread_identifier"),
+            "{detail}"
+        );
+
+        let mut report = valid_live_device_qa_report_json();
+        report["notification_observation"]["observed_at"] = json!("2026-05-22T16:03:00Z");
+        let (status, detail) = inspect_live_device_qa_report_value(report);
+        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(
+            detail.contains("notification_observation.observed_at"),
+            "{detail}"
+        );
     }
 
     #[test]
