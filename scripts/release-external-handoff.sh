@@ -138,15 +138,16 @@ claim.
    Or use Apple ID credentials instead of a stored profile:
    \`JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_APPLE_ID='apple-id@example.com' JARVIS_NOTARYTOOL_TEAM_ID='TEAMID1234' JARVIS_NOTARYTOOL_PASSWORD='app-specific-password' ./scripts/package-distribution.sh\`
 2. Install the signed, notarized package into \`/Applications\` on a clean Mac
-   profile and complete the live-device checks. Then source
-   \`release-live-device-qa.env\` and run
+   profile and complete the live-device checks. Then run
+   \`set -a && source release-live-device-qa.env && set +a\` followed by
    \`./scripts/release-live-device-qa.sh --assert-complete\`.
-3. Complete the plugin trust review checks. Then source
-   \`release-plugin-trust-qa.env\` and run
+3. Complete the plugin trust review checks. Then run
+   \`set -a && source release-plugin-trust-qa.env && set +a\` followed by
    \`./scripts/release-plugin-trust-qa.sh --assert-complete\`.
 4. Archive the signed distribution, signed provenance, live-device QA report,
    plugin-trust QA report, and supporting external evidence in a durable
-   release location. Then source \`release-evidence-bundle.env\` and run
+   release location. Then run
+   \`set -a && source release-evidence-bundle.env && set +a\` followed by
    \`./scripts/release-evidence-bundle.sh --bundle\`.
 5. Run \`./scripts/release-evidence-doctor.sh --assert-complete\`.
 6. Start or restart the release core with
@@ -317,8 +318,11 @@ self_test() {
   require_file_contains "evidence-bundle template" "$tmp_dir/handoff/release-evidence-bundle.env" "JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=false"
   require_file_contains "evidence-bundle template" "$tmp_dir/handoff/release-evidence-bundle.env" 'JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI=""'
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "JARVIS_DEVELOPER_ID_APPLICATION"
+  require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "set -a && source release-live-device-qa.env && set +a"
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "./scripts/release-live-device-qa.sh --assert-complete"
+  require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "set -a && source release-plugin-trust-qa.env && set +a"
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "./scripts/release-plugin-trust-qa.sh --assert-complete"
+  require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "set -a && source release-evidence-bundle.env && set +a"
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "./scripts/release-evidence-bundle.sh --bundle"
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "./scripts/release-evidence-doctor.sh --assert-complete"
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>'"
