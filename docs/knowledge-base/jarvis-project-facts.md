@@ -975,16 +975,18 @@ requires plugin-trust `generated_at`, `review_started_at`,
   audit lanes for release readiness, architecture/KB consistency, E2E coverage,
   Swift voice coverage, release evidence scripts, and GitHub/PR state. The
   live readiness snapshot at sweep start reported `production_ready: false`,
-  17 verified features, and one pending feature: `live_voice_loop`. That
+  17 verified features, and one pending feature: `live_voice_loop`. That was a
+  historical count from that sweep; the current readiness baseline is tracked by
+  the later `verified_feature_count: 16` entries below. The
   pending feature remains a manual external validation gate, not a missing
   repo-local docs-only task.
 - PRs #214 through #222 added structural release-evidence hardening, plugin
   trust evidence hardening, package provenance hardening, Mac scheduler action
   controls, GitHub release-local runtime compatibility, archive URI validation,
   release contract wording, evidence-status proof-boundary wording, and current
-  sweep snapshot updates while preserving the same readiness boundary: 17
-  verified repo-owned features, one pending manual `live_voice_loop` feature,
-  and six missing external/manual evidence artifacts.
+  sweep snapshot updates while preserving the same readiness boundary from that
+  point in the sweep: verified repo-owned features, one pending manual
+  `live_voice_loop` feature, and six missing external/manual evidence artifacts.
 - `jarvis release readiness` and `jarvis release evidence-status` preserve
   operator-readable defaults. Use `--json` for the canonical machine-readable
   flag, while `--format json` is accepted as a compatibility alias for older
@@ -1031,12 +1033,13 @@ requires plugin-trust `generated_at`, `review_started_at`,
   Behavior changes still require matching coverage before broader readiness
   language can be used.
 - The June 11, 2026 production-readiness sweep refresh was updated again after
-  PR #238 from `main` at `4a4661e`: readiness still reported
+  PR #238 from `main` at `4a4661e`: readiness reported
   `production_ready: false`, 17 verified features, and one pending feature
-  (`live_voice_loop`). In the main checkout, evidence-status reported 3
-  satisfied generated local app/core paths, 6 missing external/manual evidence
-  items, and 0 invalid items; fresh worktrees can still report the generated
-  local app paths as missing until local distribution commands create them.
+  (`live_voice_loop`) at that historical checkpoint. In the main checkout,
+  evidence-status reported 3 satisfied generated local app/core paths, 6
+  missing external/manual evidence items, and 0 invalid items; fresh worktrees
+  can still report the generated local app paths as missing until local
+  distribution commands create them.
   Production readiness still requires signed/notarized artifacts,
   live-device QA, plugin-trust QA, and final evidence bundle reports. PR #231
   made Swift/readiness display fail closed on effective readiness unless
