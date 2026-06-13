@@ -511,6 +511,7 @@ if [[ "$CHECK_GUIDANCE_SELF_TEST" == true ]]; then
   require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "set -a && source target/release-evidence-bundle.env && set +a"
   require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "./scripts/release-evidence-bundle.sh --bundle"
   require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "./scripts/release-evidence-doctor.sh --check"
+  require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "./scripts/release-evidence-doctor.sh --assert-complete"
   require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "Proof boundary: packaging prerequisite check only"
   require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "no app was signed"
   printf '\nJarvis package check guidance self-test: ok\n'
@@ -951,6 +952,7 @@ Next release evidence commands:
   set -a && source target/release-evidence-bundle.env && set +a
   ./scripts/release-evidence-bundle.sh --bundle
   ./scripts/release-evidence-doctor.sh --check
+  ./scripts/release-evidence-doctor.sh --assert-complete
 
 Proof boundary: packaging prerequisite check only; no app was signed,
 notarized, stapled, installed, Finder-launched, live-device validated, or

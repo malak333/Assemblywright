@@ -1025,9 +1025,13 @@ requires plugin-trust `generated_at`, `review_started_at`,
   installation, or live-device QA. The live-device handoff in that output now
   includes release-core command evidence capture, the `task:<uuid>`/`audit:<uuid>`
   evidence-ID recording rule, and endpoint-aware external evidence-mode
-  evidence-status/readiness commands. `--check-guidance-self-test` is also part
-  of `./scripts/release-local.sh` and fails if those handoff commands drift out
-  of the package preflight output.
+  evidence-status/readiness commands. The final bundle handoff now ends with
+  both the read-only doctor inventory check and
+  `./scripts/release-evidence-doctor.sh --assert-complete`, so copied package
+  preflight guidance does not stop before the stronger final inventory
+  assertion. `--check-guidance-self-test` is also part of
+  `./scripts/release-local.sh` and fails if those handoff commands drift out of
+  the package preflight output.
 - Release evidence structural hardening now treats the final evidence chain as
   cross-bound evidence, not independent files: app zips are rejected unless they
   contain exactly one top-level `Jarvis.app` payload with `Info.plist`, the app
