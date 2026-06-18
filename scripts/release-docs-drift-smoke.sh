@@ -66,10 +66,12 @@ require_text "architecture local gate boundary" "$ARCHITECTURE" "does not perfor
 require_text "architecture local gate boundary" "$ARCHITECTURE" "notarization, clean-profile install, Finder/LaunchServices launch, live-device"
 require_text "architecture local gate boundary" "$ARCHITECTURE" "QA, plugin-trust QA, or final evidence bundling"
 require_text "architecture post-merge cleanup audit" "$ARCHITECTURE" "post-merge cleanup audit: open PRs, main workflow runs, worktrees, merged/unmerged codex branches, clean checkout"
-require_text "architecture current readiness baseline" "$ARCHITECTURE" 'After PR #296, `main` at `faae9ba`'
+require_text "architecture current readiness baseline" "$ARCHITECTURE" 'current post-PR #298 baseline at'
+require_text "architecture current readiness commit" "$ARCHITECTURE" '`main` commit `3f10761`'
 require_text "architecture model-step progress boundary" "$ARCHITECTURE" "model-step progress frames"
-require_text "knowledge base current readiness baseline" "$KB" 'current post-PR #296 baseline at `faae9ba`'
+require_text "knowledge base current readiness baseline" "$KB" 'current post-PR #298 baseline at `3f10761`'
 require_text "knowledge base model-step progress boundary" "$KB" "model-step completion/failure audit evidence"
+require_text "knowledge base model-step progress proof" "$KB" "installed-plugin plus model-step activity-progress"
 require_text "build docs model-step progress command" "$BUILD_DOCS" "repository_backed_state_endpoints_expose_tasks_and_audit"
 require_text "build docs external handoff snapshot command" "$BUILD_DOCS" "release_external_handoff_snapshots_match_live_runbook_commands"
 for file in "$BUILD_DOCS" "$CHECKLIST" "$KB"; do
