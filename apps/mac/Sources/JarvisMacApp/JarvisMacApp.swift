@@ -1403,6 +1403,11 @@ struct RunActivityEventView: View {
         let stage = progress.stage ?? "progress"
         let message = progress.message ?? "progress event"
         let sequence = progress.sequence.map { " #\($0)" } ?? ""
+        if progress.kind == "model_output" {
+            let byteCount = progress.byteCount.map { ", \($0) bytes" } ?? ""
+            let redacted = progress.contentRedacted == true ? ", redacted" : ""
+            return "\(source)\(sequence) output chunk\(byteCount)\(redacted)"
+        }
         return "\(source)\(sequence) \(stage): \(message)"
     }
 }

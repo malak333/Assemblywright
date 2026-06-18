@@ -68,11 +68,16 @@ require_text "architecture local gate boundary" "$ARCHITECTURE" "QA, plugin-trus
 require_text "architecture post-merge cleanup audit" "$ARCHITECTURE" "post-merge cleanup audit: open PRs, main workflow runs, worktrees, merged/unmerged codex branches, clean checkout"
 require_text "architecture current readiness baseline" "$ARCHITECTURE" 'current post-PR #298 baseline at'
 require_text "architecture current readiness commit" "$ARCHITECTURE" '`main` commit `3f10761`'
-require_text "architecture model-step progress boundary" "$ARCHITECTURE" "model-step progress frames"
+require_text "architecture model-step progress boundary" "$ARCHITECTURE" "model-step, and redacted model-output chunk progress frames"
+require_text "architecture model-output progress boundary" "$ARCHITECTURE" "redacted model-output chunk progress frames"
 require_text "knowledge base current readiness baseline" "$KB" 'current post-PR #298 baseline at `3f10761`'
 require_text "knowledge base model-step progress boundary" "$KB" "model-step completion/failure audit evidence"
-require_text "knowledge base model-step progress proof" "$KB" "installed-plugin plus model-step activity-progress"
+require_text "knowledge base model-output progress boundary" "$KB" "content_redacted: true"
+require_text "knowledge base model-step progress proof" "$KB" "installed-plugin plus model-step/model-output"
+require_text "knowledge base model-output progress proof" "$KB" "model-step/model-output"
 require_text "build docs model-step progress command" "$BUILD_DOCS" "repository_backed_state_endpoints_expose_tasks_and_audit"
+require_text "release checklist model-output chunk boundary" "$CHECKLIST" "model_output_chunk"
+require_text "release checklist model-output redaction boundary" "$CHECKLIST" "content_redacted: true"
 require_text "build docs external handoff snapshot command" "$BUILD_DOCS" "release_external_handoff_snapshots_match_live_runbook_commands"
 for file in "$BUILD_DOCS" "$CHECKLIST" "$KB"; do
   require_text "runbook payload contract boundary" "$file" "operator/snapshot JSON"

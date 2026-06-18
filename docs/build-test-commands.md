@@ -393,9 +393,10 @@ governance, not OS-level network sandboxing or host-level egress filtering.
 Installed subprocess plugins can also emit bounded `jarvis_progress` stderr
 JSON frames. Jarvis exposes only parsed sequence/stage/message progress events
 and `installed_plugin_progress` audit entries. Model execution also emits
-model-step completion/failure audit evidence. `/activity/events` projects both
-as redacted `activity_progress` frames; raw stderr remains redacted and these
-frames are not per-token model streaming.
+model-step completion/failure audit evidence, and model-output chunk metadata.
+`/activity/events` projects these as redacted `activity_progress` frames; raw
+stderr and raw model chunk text remain redacted, and these frames are not
+provider-native raw token streaming.
 
 Focused checks for the activity-progress and external handoff snapshot surface:
 

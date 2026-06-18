@@ -544,6 +544,14 @@ pub struct ActivityProgressEvent {
     pub stage: Option<String>,
     #[serde(default)]
     pub message: Option<String>,
+    #[serde(default)]
+    pub byte_count: Option<usize>,
+    #[serde(default)]
+    pub char_count: Option<usize>,
+    #[serde(default)]
+    pub final_chunk: Option<bool>,
+    #[serde(default)]
+    pub content_redacted: Option<bool>,
     pub stderr_redacted: bool,
 }
 
@@ -3743,7 +3751,18 @@ fn activity_progress_event_from_audit(entry: &AuditEntry) -> Option<ActivityProg
         .get("session_id")
         .and_then(serde_json::Value::as_str)
         .and_then(|value| Uuid::parse_str(value).ok());
-    let (kind, stage, message, provider, model, sequence) = match entry.event_type.as_str() {
+    let (
+        kind,
+        stage,
+        message,
+        provider,
+        model,
+        sequence,
+        byte_count,
+        char_count,
+        final_chunk,
+        content_redacted,
+    ) = match entry.event_type.as_str() {
         "installed_plugin_progress" => (
             "installed_plugin".to_string(),
             payload
@@ -3757,6 +3776,10 @@ fn activity_progress_event_from_audit(entry: &AuditEntry) -> Option<ActivityProg
             None,
             None,
             payload.get("sequence").and_then(serde_json::Value::as_u64),
+            None,
+            None,
+            None,
+            None,
         ),
         "model_step_completed" => {
             let step_index = payload
@@ -3778,6 +3801,10 @@ fn activity_progress_event_from_audit(entry: &AuditEntry) -> Option<ActivityProg
                     .and_then(serde_json::Value::as_str)
                     .map(ToOwned::to_owned),
                 step_index,
+                None,
+                None,
+                None,
+                None,
             )
         }
         "model_step_failed" => {
@@ -3797,6 +3824,53 @@ fn activity_progress_event_from_audit(entry: &AuditEntry) -> Option<ActivityProg
                     .map(ToOwned::to_owned),
                 None,
                 step_index,
+                None,
+                None,
+                None,
+                None,
+            )
+        }
+        "model_output_chunk" => {
+            let step_index = payload
+                .get("step_index")
+                .and_then(serde_json::Value::as_u64);
+            let sequence = payload.get("sequence").and_then(serde_json::Value::as_u64);
+            (
+                "model_output".to_string(),
+                Some(match step_index {
+                    Some(index) => format!("step_{index}"),
+                    None => "step_unknown".to_string(),
+                }),
+                Some(match (step_index, sequence) {
+                    (Some(step), Some(sequence)) => {
+                        format!("model step {step} output chunk {sequence}")
+                    }
+                    (_, Some(sequence)) => format!("model output chunk {sequence}"),
+                    _ => "model output chunk".to_string(),
+                }),
+                payload
+                    .get("provider")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned),
+                payload
+                    .get("model")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned),
+                sequence,
+                payload
+                    .get("byte_count")
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|value| usize::try_from(value).ok()),
+                payload
+                    .get("char_count")
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|value| usize::try_from(value).ok()),
+                payload
+                    .get("final_chunk")
+                    .and_then(serde_json::Value::as_bool),
+                payload
+                    .get("content_redacted")
+                    .and_then(serde_json::Value::as_bool),
             )
         }
         _ => return None,
@@ -3821,6 +3895,10 @@ fn activity_progress_event_from_audit(entry: &AuditEntry) -> Option<ActivityProg
         sequence,
         stage,
         message,
+        byte_count,
+        char_count,
+        final_chunk,
+        content_redacted,
         stderr_redacted: payload
             .get("stderr_redacted")
             .and_then(serde_json::Value::as_bool)
@@ -6299,8 +6377,8 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "activity_events",
             "implemented",
-            "Repository-backed `/activity/events` exposes bounded redacted task metadata, audit event batches, and redacted installed-plugin plus model-step progress frames and is covered by CLI IPC E2E.",
-            "This is bounded state polling over SSE from audit evidence; activity recent tasks omit command bodies and this is not per-token model streaming or unbounded plugin-internal progress streaming.",
+            "Repository-backed `/activity/events` exposes bounded redacted task metadata, audit event batches, redacted installed-plugin progress, model-step progress, and model-output chunk metadata frames and is covered by CLI IPC E2E plus Swift decoding tests.",
+            "This is bounded state polling over SSE from audit evidence; activity recent tasks omit command bodies, model-output chunks expose counts with content_redacted:true rather than raw token text, and this is not provider-native raw token streaming or unbounded plugin-internal progress streaming.",
         ),
         feature(
             "scheduler_attention",
@@ -6785,8 +6863,8 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .implemented_features
             .iter()
             .any(|feature| feature.key == "activity_events"
-                && feature.proof.contains("model-step progress frames")
-                && feature.boundary.contains("not per-token model streaming")));
+                && feature.proof.contains("model-output chunk metadata frames")
+                && feature.boundary.contains("content_redacted:true")));
         assert!(readiness
             .implemented_features
             .iter()
@@ -9953,6 +10031,14 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .audit_entries
             .iter()
             .any(|entry| entry.event_type == "model_step_completed"));
+        let output_chunk = response
+            .audit_entries
+            .iter()
+            .find(|entry| entry.event_type == "model_output_chunk")
+            .expect("model output chunk audit");
+        assert_eq!(output_chunk.payload["content_redacted"], true);
+        assert_eq!(output_chunk.payload["model"], "fake-local-model");
+        assert!(output_chunk.payload.get("byte_count").is_some());
         assert!(response
             .audit_entries
             .iter()
@@ -10576,6 +10662,16 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                     && event.stage.as_deref() == Some("completed")
                     && event.model.as_deref() == Some("fake-local-model")
                     && event.plugin_id.is_none()
+            }),
+            "{activity_progress:?}"
+        );
+        assert!(
+            activity_progress.iter().any(|event| {
+                event.kind == "model_output"
+                    && event.content_redacted == Some(true)
+                    && event.byte_count.is_some()
+                    && event.char_count.is_some()
+                    && event.model.as_deref() == Some("fake-local-model")
             }),
             "{activity_progress:?}"
         );

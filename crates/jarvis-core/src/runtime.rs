@@ -574,6 +574,11 @@ where
                 &mut audit_entries,
                 model_audit_entry(task.id, step_index, &model_response),
             )?;
+            for chunk_entry in
+                model_output_chunk_audit_entries(task.id, step_index, &model_response)
+            {
+                self.record_audit(&mut audit_entries, chunk_entry)?;
+            }
 
             if !model_response.tool_requests.is_empty() {
                 self.record_audit(
@@ -949,6 +954,34 @@ fn model_audit_entry(task_id: Uuid, step_index: u32, response: &ModelResponse) -
     )
 }
 
+fn model_output_chunk_audit_entries(
+    task_id: Uuid,
+    step_index: u32,
+    response: &ModelResponse,
+) -> Vec<AuditEntry> {
+    response
+        .output_chunks
+        .iter()
+        .map(|chunk| {
+            AuditEntry::new(
+                Some(task_id),
+                "model_output_chunk",
+                "model output chunk metadata recorded",
+                json!({
+                    "step_index": step_index,
+                    "provider": response.route.provider,
+                    "model": response.route.model,
+                    "sequence": chunk.sequence,
+                    "byte_count": chunk.byte_count,
+                    "char_count": chunk.char_count,
+                    "final_chunk": chunk.final_chunk,
+                    "content_redacted": true,
+                }),
+            )
+        })
+        .collect()
+}
+
 fn tool_plan_audit_entry(
     task_id: Uuid,
     step_index: u32,
@@ -1212,6 +1245,7 @@ mod tests {
                 "model_route_selected",
                 "task_running",
                 "model_step_completed",
+                "model_output_chunk",
                 "task_completed"
             ]
         );
@@ -1235,7 +1269,7 @@ mod tests {
                 .list_audit_entries(Some(task_id))
                 .expect("reopened audit")
                 .len(),
-            5
+            6
         );
     }
 
@@ -1849,6 +1883,7 @@ mod tests {
                 route: ModelRoute::fake_local("counting local model"),
                 message: format!("counted: {}", request.user_input),
                 complete: true,
+                output_chunks: Vec::new(),
                 tool_requests: Vec::new(),
             })
         }
@@ -1874,6 +1909,7 @@ mod tests {
                 route: ModelRoute::fake_local("inventory capture model"),
                 message: "captured inventory".to_string(),
                 complete: true,
+                output_chunks: Vec::new(),
                 tool_requests: Vec::new(),
             })
         }
@@ -1945,6 +1981,7 @@ mod tests {
                     route: ModelRoute::fake_local("tool-aware local model"),
                     message: "planning echo".to_string(),
                     complete: false,
+                    output_chunks: Vec::new(),
                     tool_requests: vec![ModelToolRequest::new(
                         "fake_echo",
                         "echo",
@@ -1962,6 +1999,7 @@ mod tests {
                         .expect("echo message")
                 ),
                 complete: true,
+                output_chunks: Vec::new(),
                 tool_requests: Vec::new(),
             })
         }
@@ -1980,6 +2018,7 @@ mod tests {
                     ),
                     message: "provider envelope requested echo".to_string(),
                     complete: false,
+                    output_chunks: Vec::new(),
                     tool_requests: vec![ModelToolRequest::new(
                         "fake_echo",
                         "echo",
@@ -2000,6 +2039,7 @@ mod tests {
                         .expect("echo message")
                 ),
                 complete: true,
+                output_chunks: Vec::new(),
                 tool_requests: Vec::new(),
             })
         }
