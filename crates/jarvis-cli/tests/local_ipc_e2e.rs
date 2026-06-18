@@ -3206,6 +3206,52 @@ fn release_external_handoff_snapshots_match_live_runbook_commands() {
     let live_snapshot = read_json_file(handoff_dir.join("live-device-runbook.json"));
     let plugin_snapshot = read_json_file(handoff_dir.join("plugin-trust-runbook.json"));
     let readiness_snapshot = read_json_file(handoff_dir.join("release-readiness.json"));
+    let manifest = read_json_file(handoff_dir.join("release-handoff-manifest.json"));
+
+    assert_eq!(manifest["schema_version"], 1);
+    assert_eq!(
+        manifest["evidence_type"],
+        "release_external_handoff_manifest"
+    );
+    assert_eq!(manifest["release_version"], env!("CARGO_PKG_VERSION"));
+    assert!(
+        manifest["proof_boundary"]
+            .as_str()
+            .expect("manifest proof boundary")
+            .contains("does not prove signing"),
+        "{manifest}"
+    );
+    let manifest_files = manifest["files"].as_array().expect("manifest files");
+    for required in [
+        "release-live-device-qa.env",
+        "release-plugin-trust-qa.env",
+        "release-evidence-bundle.env",
+        "release-readiness.json",
+        "release-evidence-status.json",
+        "signed-distribution-runbook.json",
+        "live-device-runbook.json",
+        "plugin-trust-runbook.json",
+        "release-evidence-checklist.md",
+        "README.md",
+    ] {
+        let entry = manifest_files
+            .iter()
+            .find(|entry| entry["path"] == required)
+            .unwrap_or_else(|| panic!("manifest missing {required}: {manifest}"));
+        let handoff_file = handoff_dir.join(required);
+        let expected_sha = file_sha256(&handoff_file);
+        assert_eq!(
+            entry["sha256"], expected_sha,
+            "digest mismatch for {required}"
+        );
+        assert_eq!(
+            entry["bytes"].as_u64().expect("manifest byte count"),
+            fs::metadata(&handoff_file)
+                .expect("handoff file metadata")
+                .len(),
+            "byte count mismatch for {required}"
+        );
+    }
 
     assert_eq!(
         signed_snapshot["commands"], signed_direct["commands"],

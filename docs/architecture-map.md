@@ -50,6 +50,7 @@ flowchart TB
     LocalGate --> EvidenceDoctor["release-evidence-doctor.sh check/self-test evidence inventory and next-step commands"]
     LocalGate --> ExternalHandoff["release-external-handoff.sh check/self-test operator handoff generator"]
     ExternalHandoff --> ExternalHandoffDir["live-device, plugin-trust, final-bundle templates plus readiness/evidence/runbook snapshots"]
+    ExternalHandoffDir --> ExternalHandoffManifest["release-handoff-manifest.json with release version, git commit, endpoint, file digests, and proof boundary"]
     LocalGate --> DocsDriftSmoke["release-docs-drift-smoke.sh docs and KB command/boundary drift check"]
     LocalGate --> SwiftGate["Swift package build/test"]
     LocalGate --> CargoGate["fmt, clippy, tests, build, package"]
@@ -885,14 +886,14 @@ boundary that remained in force.
 Current readiness should always be refreshed before release claims. The
 historical 2026-06-12 UTC baseline after PR #268 started from `main` at
 `8cccb5b`, with the hosted `Release local gate` green for PR #268 run
-`27428860335` / job `81073692261`. The current post-PR #298 baseline at
-`main` commit `3f10761` continues to report `production_ready: false`,
+`27428860335` / job `81073692261`. The current post-PR #300 baseline at
+`main` commit `e195f2a` continues to report `production_ready: false`,
 `verified_feature_count: 16`, and `pending_feature_count: 1`, with
 `live_voice_loop` still `pending_manual_validation`, while the local repo-owned
 release handoff, workflow hygiene, docs drift smoke, evidence-note validation,
-and installed-plugin plus model-step/model-output activity-progress proof
-mechanics have improved without converting local evidence inspection into
-production proof.
+installed-plugin plus model-step/model-output activity-progress proof, and
+handoff manifest digest-binding mechanics have improved without converting local
+evidence inspection into production proof.
 `jarvis release evidence-status --json` remains expected to report
 `complete: false` with three satisfied evidence rows, six missing
 external/manual evidence artifacts, and zero invalid evidence rows after the
@@ -1089,11 +1090,13 @@ readiness, evidence-status, and release-runbook JSON snapshots plus a generated
 `release-evidence-checklist.md` naming exact signed-distribution artifacts,
 live-device command and scheduler notification fields, plugin artifact
 URI/SHA-256 bindings, and final archive URI with all external validation flags
-still defaulted false. Its `--check` and `--self-test` paths are part of the
-local release gate as handoff mechanics only; no signing, notarization,
-clean-profile install, Finder/LaunchServices launch, live-device QA,
-plugin-trust QA, host-level egress enforcement, or final evidence archival is
-performed.
+still defaulted false. It also writes `release-handoff-manifest.json` with
+generation metadata, release version, git commit, snapshot endpoint, proof
+boundary, byte counts, and SHA-256 digests for every generated handoff file. Its
+`--check` and `--self-test` paths are part of the local release gate as handoff
+mechanics only; no signing, notarization, clean-profile install,
+Finder/LaunchServices launch, live-device QA, plugin-trust QA, host-level egress
+enforcement, or final evidence archival is performed.
 The same slice hardens owner evidence-note validation so live-device,
 plugin-trust, and final-bundle reports reject embedded placeholder wording such
 as `TODO`, `pending`, `fixture`, `example`, or `self-test`, not only exact
