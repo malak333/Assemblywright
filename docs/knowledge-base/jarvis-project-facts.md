@@ -1191,11 +1191,13 @@ requires plugin-trust `generated_at`, `review_started_at`,
   use `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external` plus guarded
   `JARVIS_RELEASE_CORE_ENDPOINT` expansion, matching the live-device,
   signed-distribution, plugin-trust, package-preflight, and evidence-doctor
-  handoff guidance. `--check` and `--self-test` are part of the local release
-  gate and prove only template plus snapshot/checklist generation with
-  validation flags defaulted false; they do not sign, notarize, install,
-  Finder-launch, validate live device behavior, review plugin trust, enforce
-  egress, or archive final evidence.
+  handoff guidance. CLI E2E also verifies that the generated runbook snapshots
+  preserve the same command arrays, key evidence rows, feature state, and proof
+  boundaries as fresh direct CLI runbook JSON. `--check` and `--self-test` are
+  part of the local release gate and prove only template plus
+  snapshot/checklist generation with validation flags defaulted false; they do
+  not sign, notarize, install, Finder-launch, validate live device behavior,
+  review plugin trust, enforce egress, or archive final evidence.
 - Owner evidence-note validation now rejects embedded placeholder wording, not
   only exact placeholder values. Shell assertions and Rust evidence-status
   reject operator notes containing terms such as `TODO`, `pending`, `fixture`,

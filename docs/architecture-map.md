@@ -72,6 +72,8 @@ flowchart TB
         EvidenceBundleEnv --> EvidenceBundleRun
         LiveDeviceEnv --> LiveDeviceAssert
         PluginTrustEnv --> PluginTrustAssert
+        CleanProfileFinderQA["owner-recorded clean-profile install and Finder/LaunchServices QA"] --> LiveDeviceQAReport
+        ManualInstalledAppQA["owner-recorded manual installed-app command, audit, memory, scheduler, plugin, pause, diagnostics, notifications, restart QA"] --> LiveDeviceQAReport
         LiveNotificationQA["owner-recorded live macOS notification prompt and delivery QA"] --> EvidenceBundleRun
         LiveDeviceQAReport --> EvidenceBundleRun
         PluginTrustQAReport --> EvidenceBundleRun
@@ -800,10 +802,11 @@ flowchart TB
     DiagnosticsProd --> Diagnostics["local diagnostics export"]
     Diagnostics --> MacApp
     ReleaseOps["release operator"] --> PublicCI["public GitHub release-local PR gate"]
-    PublicCI --> FinalReleaseGate["./scripts/release-local.sh on macOS"]
-    FinalReleaseGate --> SignedApp["Developer ID signed, notarized, and stapled app zip"]
-    ReleaseOps --> SignedApp
-    ReleaseOps --> SignedInstaller["Developer ID signed and notarized /Applications installer package"]
+    PublicCI --> FinalReleaseGate["./scripts/release-local.sh on macOS prerequisite proof"]
+    FinalReleaseGate --> CredentialedPackageLane["credentialed package-distribution.sh signing and notarization lane"]
+    ReleaseOps --> CredentialedPackageLane
+    CredentialedPackageLane --> SignedApp["Developer ID signed, notarized, and stapled app zip"]
+    CredentialedPackageLane --> SignedInstaller["Developer ID signed and notarized /Applications installer package"]
     ReleaseOps --> CleanProfileQA["clean-profile install and Finder/LaunchServices launch QA"]
     ReleaseOps --> LiveDeviceQAProd["owner-recorded live microphone, Speech, transcript handoff, and audio-output QA"]
     LiveDeviceQAProd --> CommandEvidenceProd["repository-backed task/audit command-result evidence"]
