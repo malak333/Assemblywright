@@ -6299,7 +6299,7 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "activity_events",
             "implemented",
-            "Repository-backed `/activity/events` exposes bounded redacted task metadata, audit event batches, and redacted installed-plugin progress frames and is covered by CLI IPC E2E.",
+            "Repository-backed `/activity/events` exposes bounded redacted task metadata, audit event batches, and redacted installed-plugin plus model-step progress frames and is covered by CLI IPC E2E.",
             "This is bounded state polling over SSE from audit evidence; activity recent tasks omit command bodies and this is not per-token model streaming or unbounded plugin-internal progress streaming.",
         ),
         feature(
@@ -6781,6 +6781,12 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .any(|feature| feature.key == "installed_plugin_execution"
                 && feature.proof.contains("os_sandbox_enforced:false")
                 && feature.boundary.contains("os_sandbox_enforced:false")));
+        assert!(readiness
+            .implemented_features
+            .iter()
+            .any(|feature| feature.key == "activity_events"
+                && feature.proof.contains("model-step progress frames")
+                && feature.boundary.contains("not per-token model streaming")));
         assert!(readiness
             .implemented_features
             .iter()

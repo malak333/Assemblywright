@@ -51,6 +51,26 @@ fn release_readiness_cli_falls_back_without_running_server() {
         "key",
         "installed_plugin_execution",
     );
+    let activity_events_feature = release_readiness["implemented_features"]
+        .as_array()
+        .expect("implemented features")
+        .iter()
+        .find(|feature| feature["key"] == "activity_events")
+        .expect("activity events feature");
+    assert!(
+        activity_events_feature["proof"]
+            .as_str()
+            .expect("activity events proof")
+            .contains("model-step progress frames"),
+        "{activity_events_feature}"
+    );
+    assert!(
+        activity_events_feature["boundary"]
+            .as_str()
+            .expect("activity events boundary")
+            .contains("not per-token model streaming"),
+        "{activity_events_feature}"
+    );
     let installed_plugin_feature = release_readiness["implemented_features"]
         .as_array()
         .expect("implemented features")
@@ -3437,6 +3457,26 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         &release_readiness["implemented_features"],
         "key",
         "installed_plugin_execution",
+    );
+    let served_activity_events_feature = release_readiness["implemented_features"]
+        .as_array()
+        .expect("implemented features")
+        .iter()
+        .find(|feature| feature["key"] == "activity_events")
+        .expect("activity events feature");
+    assert!(
+        served_activity_events_feature["proof"]
+            .as_str()
+            .expect("activity events proof")
+            .contains("model-step progress frames"),
+        "{served_activity_events_feature}"
+    );
+    assert!(
+        served_activity_events_feature["boundary"]
+            .as_str()
+            .expect("activity events boundary")
+            .contains("not per-token model streaming"),
+        "{served_activity_events_feature}"
     );
     let served_installed_plugin_feature = release_readiness["implemented_features"]
         .as_array()
