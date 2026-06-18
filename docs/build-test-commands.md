@@ -602,7 +602,10 @@ bundle/doctor paths also require plugin report `generated_at` to be UTC, non-fut
 earlier than `review_completed_at`. Structured host egress evidence must also
 include the policy/profile label, ordered UTC egress validation timestamp, and
 deny/allow fixture notes. Each plugin-trust category must bind its archived
-manual evidence artifact with a non-placeholder URI and SHA-256 digest.
+manual evidence artifact with a non-placeholder URI and SHA-256 digest;
+evidence-status, evidence-doctor, and final bundle validation all reject
+missing or invalid bindings across the full marketplace, malware, sandbox,
+egress, signed-publisher, and manual-review artifact set.
 Production plugin-trust reports must carry
 `review_source=owner-asserted-manual-review`; imported reports and self-test
 review sources are rejected before they can clear evidence-aware readiness.

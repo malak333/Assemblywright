@@ -1387,47 +1387,35 @@ fn release_evidence_status_rejects_invalid_plugin_artifact_bindings() {
     let temp_dir = tempfile::tempdir().expect("temp release plugin report");
     let plugin_report_path = temp_dir.path().join("release-plugin-trust-qa-report.json");
 
-    fn blank_marketplace_artifact_uri(report: &mut Value) {
-        report["evidence_artifacts"]["marketplace_review"]["uri"] = json!("   ");
-    }
-    fn invalid_malware_scan_artifact_digest(report: &mut Value) {
-        report["evidence_artifacts"]["malware_scan"]["sha256"] = json!("not-a-sha");
-    }
-
-    for (name, mutate, detail_fragment) in [
-        (
-            "blank marketplace artifact URI",
-            blank_marketplace_artifact_uri as fn(&mut Value),
-            "evidence_artifacts.marketplace_review.uri",
-        ),
-        (
-            "invalid malware scan artifact digest",
-            invalid_malware_scan_artifact_digest as fn(&mut Value),
-            "evidence_artifacts.malware_scan.sha256",
-        ),
-    ] {
-        let mut plugin_report = valid_plugin_trust_qa_report();
-        mutate(&mut plugin_report);
-        write_json_report(&plugin_report_path, plugin_report);
-        let plugin_path = plugin_report_path.to_str().expect("plugin report utf8");
-        let evidence_status = run_cli_json_with_env(
-            [
-                "release",
-                "evidence-status",
-                "--endpoint",
-                endpoint.as_str(),
-            ],
-            &[("JARVIS_EVIDENCE_PLUGIN_QA_REPORT", plugin_path)],
-        );
-        let plugin_item = release_evidence_item(&evidence_status, "plugin_trust_qa_report");
-        assert_eq!(plugin_item["status"], "invalid", "{name}: {plugin_item}");
-        assert!(
-            plugin_item["detail"]
-                .as_str()
-                .expect("plugin detail")
-                .contains(detail_fragment),
-            "{name}: {plugin_item}"
-        );
+    for artifact in plugin_trust_artifact_keys() {
+        for (field, invalid_value) in [("uri", json!("   ")), ("sha256", json!("not-a-sha"))] {
+            let mut plugin_report = valid_plugin_trust_qa_report();
+            plugin_report["evidence_artifacts"][artifact][field] = invalid_value;
+            write_json_report(&plugin_report_path, plugin_report);
+            let plugin_path = plugin_report_path.to_str().expect("plugin report utf8");
+            let evidence_status = run_cli_json_with_env(
+                [
+                    "release",
+                    "evidence-status",
+                    "--endpoint",
+                    endpoint.as_str(),
+                ],
+                &[("JARVIS_EVIDENCE_PLUGIN_QA_REPORT", plugin_path)],
+            );
+            let plugin_item = release_evidence_item(&evidence_status, "plugin_trust_qa_report");
+            let detail_fragment = format!("evidence_artifacts.{artifact}.{field}");
+            assert_eq!(
+                plugin_item["status"], "invalid",
+                "{detail_fragment}: {plugin_item}"
+            );
+            assert!(
+                plugin_item["detail"]
+                    .as_str()
+                    .expect("plugin detail")
+                    .contains(&detail_fragment),
+                "{detail_fragment}: {plugin_item}"
+            );
+        }
     }
 }
 
@@ -7074,6 +7062,17 @@ fn valid_plugin_trust_qa_report() -> Value {
         },
         "proof_boundary": "Owner-recorded plugin trust fixture for CLI E2E."
     })
+}
+
+fn plugin_trust_artifact_keys() -> [&'static str; 6] {
+    [
+        "marketplace_review",
+        "malware_scan",
+        "os_sandbox",
+        "egress_enforcement",
+        "signed_publisher_policy",
+        "manual_trust_review",
+    ]
 }
 
 fn valid_release_evidence_bundle() -> Value {

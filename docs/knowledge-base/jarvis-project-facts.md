@@ -1140,6 +1140,12 @@ requires plugin-trust `generated_at`, `review_started_at`,
   assertion guidance, and Release tab runbook-load warnings, but they do not
   satisfy signing, notarization, installation, live-device QA, plugin-trust QA,
   or final evidence-bundle requirements.
+- Plugin-trust artifact evidence is enforced as a complete six-category set.
+  Evidence-status, evidence-doctor, and final bundle validation reject missing,
+  placeholder, or non-SHA-256 artifact bindings for marketplace review,
+  malware scan, OS sandbox, egress enforcement, signed-publisher policy, and
+  manual trust review before plugin-trust QA can count as valid release
+  evidence.
 - PR #254 made release runbooks a current implementation surface rather than a
   CLI-only operator path: `/release/live-device-runbook`,
   `/release/signed-distribution-runbook`, and `/release/plugin-trust-runbook`
