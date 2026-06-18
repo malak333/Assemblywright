@@ -16,10 +16,13 @@ current foundation work unless a narrower docs-only change justifies a focused
 documentation check.
 On GitHub, `.github/workflows/release-local.yml` runs the same gate on
 `macos-15` with SHA-pinned checkout/toolchain actions and Rust `1.95.0` for
-pull requests, pushes to `main`, and manual dispatch. The workflow is
-configuration evidence only; it still does not perform Developer ID signing,
-notarization, clean-profile installation, Finder launch validation, live-device
-QA, or plugin marketplace trust review.
+pull requests, pushes to `main`, and manual dispatch. CI sets
+`JARVIS_RELEASE_LOCAL_HEARTBEAT_SECONDS=60` so long-running release-local
+commands periodically print elapsed-time heartbeat lines without changing the
+canonical command list or proof boundary. The workflow is configuration
+evidence only; it still does not perform Developer ID signing, notarization,
+clean-profile installation, Finder launch validation, live-device QA, or plugin
+marketplace trust review.
 `/contract` and release readiness expose this lane as `release_ci_gate` with
 the same boundary.
 
@@ -68,6 +71,11 @@ Focused workflow-shape check:
 ```sh
 ./scripts/release-ci-workflow-smoke.sh
 ```
+
+This smoke verifies the pinned GitHub workflow still runs the canonical
+`./scripts/release-local.sh` gate, enforces the CI heartbeat environment, and
+runs `./scripts/release-local.sh --heartbeat-self-test` without recursively
+running the full release gate.
 
 Focused release-doc drift check:
 
