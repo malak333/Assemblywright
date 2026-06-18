@@ -392,8 +392,20 @@ and executable installed plugins with those actions require
 governance, not OS-level network sandboxing or host-level egress filtering.
 Installed subprocess plugins can also emit bounded `jarvis_progress` stderr
 JSON frames. Jarvis exposes only parsed sequence/stage/message progress events
-and `installed_plugin_progress` audit entries, plus redacted
-`activity_progress` frames on `/activity/events`; raw stderr remains redacted.
+and `installed_plugin_progress` audit entries. Model execution also emits
+model-step completion/failure audit evidence. `/activity/events` projects both
+as redacted `activity_progress` frames; raw stderr remains redacted and these
+frames are not per-token model streaming.
+
+Focused checks for the activity-progress and external handoff snapshot surface:
+
+```sh
+cargo test -p jarvis-core repository_backed_state_endpoints_expose_tasks_and_audit -- --nocapture
+cargo test -p jarvis-cli --test local_ipc_e2e release_external_handoff_snapshots_match_live_runbook_commands -- --nocapture
+swift test --package-path apps/mac --filter JarvisMacCoreTests/parsesActivityEventStream
+./scripts/release-external-handoff.sh --self-test
+```
+
 Background scheduler execution is opt-in on `jarvis serve`; it does not start
 for default smoke or manual inspection sessions unless `--scheduler-background`
 is passed.

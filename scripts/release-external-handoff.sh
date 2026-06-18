@@ -102,6 +102,31 @@ if key not in data:
 PY
 }
 
+require_json_string_contains() {
+  local label="$1"
+  local path="$2"
+  local key="$3"
+  local expected="$4"
+  require_file "$label" "$path"
+  python3 - "$path" "$key" "$expected" <<'PY'
+import json
+import sys
+
+path, key, expected = sys.argv[1:4]
+try:
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+except Exception as exc:
+    raise SystemExit(f"{path} is not valid JSON: {exc}")
+
+value = data.get(key)
+if not isinstance(value, str):
+    raise SystemExit(f"{path} top-level key {key} is not a string")
+if expected not in value:
+    raise SystemExit(f"{path} top-level key {key} does not contain {expected!r}")
+PY
+}
+
 write_readme() {
   local output_dir="$1"
   local generated_at
@@ -287,7 +312,7 @@ write_handoff() {
   run ./scripts/release-plugin-trust-qa.sh --write-template "$output_dir/release-plugin-trust-qa.env"
   run ./scripts/release-evidence-bundle.sh --write-template "$output_dir/release-evidence-bundle.env"
 
-  run cargo run -q -p jarvis-cli -- release readiness --json --endpoint "$ENDPOINT" >"$output_dir/release-readiness.json"
+  run env JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -q -p jarvis-cli -- release readiness --json --endpoint "$ENDPOINT" >"$output_dir/release-readiness.json"
   run cargo run -q -p jarvis-cli -- release evidence-status --json --endpoint "$ENDPOINT" >"$output_dir/release-evidence-status.json"
   run cargo run -q -p jarvis-cli -- release signed-distribution-runbook --json --endpoint "$ENDPOINT" >"$output_dir/signed-distribution-runbook.json"
   run cargo run -q -p jarvis-cli -- release live-device-runbook --json --endpoint "$ENDPOINT" >"$output_dir/live-device-runbook.json"
@@ -335,6 +360,7 @@ self_test() {
   require_file_contains "handoff checklist" "$tmp_dir/handoff/release-evidence-checklist.md" "JARVIS_PLUGIN_QA_MARKETPLACE_ARTIFACT_URI"
   require_file_contains "handoff checklist" "$tmp_dir/handoff/release-evidence-checklist.md" "JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI"
   require_json_key "readiness snapshot" "$tmp_dir/handoff/release-readiness.json" "production_ready"
+  require_json_string_contains "readiness snapshot" "$tmp_dir/handoff/release-readiness.json" "readiness_scope" "external release evidence status"
   require_json_key "evidence-status snapshot" "$tmp_dir/handoff/release-evidence-status.json" "complete"
   require_json_key "signed-distribution runbook snapshot" "$tmp_dir/handoff/signed-distribution-runbook.json" "commands"
   require_json_key "live-device runbook snapshot" "$tmp_dir/handoff/live-device-runbook.json" "commands"

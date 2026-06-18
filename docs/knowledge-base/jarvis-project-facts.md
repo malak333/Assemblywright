@@ -63,12 +63,14 @@ These notes capture durable facts for future agents working on this repository.
   repository evidence for current activity.
 - Repository-backed IPC also exposes `/activity/events`, and the CLI exposes
   `jarvis activity watch`, as bounded server-sent events carrying activity
-  summary snapshots with redacted recent task metadata and redacted
-  installed-plugin progress frames. This is local progress-streaming evidence
-  for current task/audit state, not per-token model streaming. The Swift Runs tab can manually watch a bounded event stream,
-  decode `activity_summary`, `activity_progress`, and `activity_error` frames,
-  update the visible activity summary from the latest summary event, and render
-  plugin progress stage/message text without opening an unbounded background
+  summary snapshots with redacted recent task metadata plus redacted
+  `activity_progress` frames for installed-plugin subprocess progress and
+  model-step completion/failure audit evidence. This is local progress-streaming
+  evidence for current task/audit state, not per-token model streaming. The
+  Swift Runs tab can manually watch a bounded event stream, decode
+  `activity_summary`, `activity_progress`, and `activity_error` frames, update
+  the visible activity summary from the latest summary event, and render plugin
+  or model-step stage/message text without opening an unbounded background
   listener.
 - Installed `local_subprocess` plugins can emit bounded newline-delimited
   stderr JSON frames with `jarvis_progress: true`, `stage`, and `message`.
@@ -1147,14 +1149,17 @@ requires plugin-trust `generated_at`, `review_started_at`,
   #268 run `27428860335` / job `81073692261`, `production_ready: false`,
   `verified_feature_count: 16`, `pending_feature_count: 1`, and, after local
   generated app presence artifacts exist, six missing external/manual evidence
-  artifacts. The current post-PR #288 baseline at `69c9fef` remains
+  artifacts. The current post-PR #296 baseline at `faae9ba` remains
   conservative with `production_ready: false`, `verified_feature_count: 16`,
-  and one pending manual `live_voice_loop` feature. PRs #283-#288 added
-  repo-owned clarity for voice permission gating, external handoff guidance,
-  architecture documentation, plugin-trust artifact SHA guidance, final doctor
-  assertion guidance, and Release tab runbook-load warnings, but they do not
-  satisfy signing, notarization, installation, live-device QA, plugin-trust QA,
-  or final evidence-bundle requirements.
+  `pending_feature_count: 1`, and `live_voice_loop` as the pending manual
+  feature; `/release/evidence-status` reports `complete: false`, three
+  satisfied evidence rows, six missing rows, and no invalid rows. PRs #283-#296
+  added repo-owned clarity for voice permission gating, external handoff
+  guidance, architecture documentation, plugin-trust artifact SHA guidance,
+  final doctor assertion guidance, Release tab runbook-load warnings, external
+  handoff mechanics, evidence-note validation, docs drift smoke, and release
+  workflow hygiene, but they do not satisfy signing, notarization, installation,
+  live-device QA, plugin-trust QA, or final evidence-bundle requirements.
 - Plugin-trust artifact evidence is enforced as a complete six-category set.
   Evidence-status, evidence-doctor, and final bundle validation reject missing,
   placeholder, or non-SHA-256 artifact bindings for marketplace review,
