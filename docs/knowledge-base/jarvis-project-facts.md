@@ -1146,6 +1146,11 @@ requires plugin-trust `generated_at`, `review_started_at`,
   malware scan, OS sandbox, egress enforcement, signed-publisher policy, and
   manual trust review before plugin-trust QA can count as valid release
   evidence.
+- The macOS Voice tab surfaces release live-device audio-output evidence fields:
+  `JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL` stays an operator-recorded device label,
+  while `JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE` includes the last spoken preview
+  text and speech-output status when available. This improves manual evidence
+  capture only; it does not prove live audio playback without owner validation.
 - PR #254 made release runbooks a current implementation surface rather than a
   CLI-only operator path: `/release/live-device-runbook`,
   `/release/signed-distribution-runbook`, and `/release/plugin-trust-runbook`
