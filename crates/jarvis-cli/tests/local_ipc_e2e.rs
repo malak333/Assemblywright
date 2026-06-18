@@ -61,14 +61,14 @@ fn release_readiness_cli_falls_back_without_running_server() {
         activity_events_feature["proof"]
             .as_str()
             .expect("activity events proof")
-            .contains("model-step progress frames"),
+            .contains("model-output chunk metadata frames"),
         "{activity_events_feature}"
     );
     assert!(
         activity_events_feature["boundary"]
             .as_str()
             .expect("activity events boundary")
-            .contains("not per-token model streaming"),
+            .contains("content_redacted:true"),
         "{activity_events_feature}"
     );
     let installed_plugin_feature = release_readiness["implemented_features"]
@@ -3468,14 +3468,14 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         served_activity_events_feature["proof"]
             .as_str()
             .expect("activity events proof")
-            .contains("model-step progress frames"),
+            .contains("model-output chunk metadata frames"),
         "{served_activity_events_feature}"
     );
     assert!(
         served_activity_events_feature["boundary"]
             .as_str()
             .expect("activity events boundary")
-            .contains("not per-token model streaming"),
+            .contains("content_redacted:true"),
         "{served_activity_events_feature}"
     );
     let served_installed_plugin_feature = release_readiness["implemented_features"]
@@ -3965,6 +3965,18 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     );
     assert!(
         activity_events.contains("\"kind\":\"model_step\""),
+        "{activity_events}"
+    );
+    assert!(
+        activity_events.contains("\"kind\":\"model_output\""),
+        "{activity_events}"
+    );
+    assert!(
+        activity_events.contains("\"content_redacted\":true"),
+        "{activity_events}"
+    );
+    assert!(
+        activity_events.contains("\"byte_count\""),
         "{activity_events}"
     );
     assert!(

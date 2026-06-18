@@ -522,6 +522,10 @@ public struct JarvisActivityProgressEvent: Decodable, Equatable, Sendable {
     public var sequence: Int?
     public var stage: String?
     public var message: String?
+    public var byteCount: Int?
+    public var charCount: Int?
+    public var finalChunk: Bool?
+    public var contentRedacted: Bool?
     public var stderrRedacted: Bool
 
     enum CodingKeys: String, CodingKey {
@@ -537,6 +541,10 @@ public struct JarvisActivityProgressEvent: Decodable, Equatable, Sendable {
         case sequence
         case stage
         case message
+        case byteCount = "byte_count"
+        case charCount = "char_count"
+        case finalChunk = "final_chunk"
+        case contentRedacted = "content_redacted"
         case stderrRedacted = "stderr_redacted"
     }
 }

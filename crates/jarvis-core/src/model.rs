@@ -301,7 +301,18 @@ pub struct ModelResponse {
     pub message: String,
     pub complete: bool,
     #[serde(default)]
+    pub output_chunks: Vec<ModelOutputChunk>,
+    #[serde(default)]
     pub tool_requests: Vec<ModelToolRequest>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelOutputChunk {
+    pub sequence: u64,
+    pub byte_count: usize,
+    pub char_count: usize,
+    #[serde(default)]
+    pub final_chunk: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -472,9 +483,11 @@ impl Default for FakeLocalModel {
 impl ModelExecutor for FakeLocalModel {
     async fn execute(&self, request: ModelRequest) -> JarvisResult<ModelResponse> {
         let complete = request.step_index + 1 >= self.complete_after_steps;
+        let message = format!("{}: {}", self.response_prefix, request.user_input);
         Ok(ModelResponse {
             route: ModelRoute::fake_local("local model is the default route for v1 commands"),
-            message: format!("{}: {}", self.response_prefix, request.user_input),
+            output_chunks: bounded_output_chunks(&message),
+            message,
             complete,
             tool_requests: if request.step_index == 0 {
                 self.tool_requests.clone()
@@ -607,6 +620,7 @@ impl ModelExecutor for OllamaHttpModel {
                     self.safe_endpoint()
                 ),
             ),
+            output_chunks: bounded_output_chunks(&envelope.message),
             message: envelope.message,
             complete: body.done.unwrap_or(envelope.complete),
             tool_requests: envelope.tool_requests,
@@ -813,11 +827,41 @@ impl ChatGptHttpModel {
                     route.redaction_applied
                 ),
             ),
+            output_chunks: bounded_output_chunks(&envelope.message),
             message: envelope.message,
             complete: envelope.complete,
             tool_requests: envelope.tool_requests,
         })
     }
+}
+
+pub fn bounded_output_chunks(message: &str) -> Vec<ModelOutputChunk> {
+    const MAX_CHUNKS: usize = 32;
+    const TARGET_CHUNK_CHARS: usize = 80;
+
+    if message.is_empty() {
+        return Vec::new();
+    }
+
+    let chars: Vec<char> = message.chars().collect();
+    let mut chunks = Vec::new();
+    for (sequence, slice) in chars
+        .chunks(TARGET_CHUNK_CHARS)
+        .take(MAX_CHUNKS)
+        .enumerate()
+    {
+        let text: String = slice.iter().collect();
+        chunks.push(ModelOutputChunk {
+            sequence: sequence as u64,
+            byte_count: text.len(),
+            char_count: slice.len(),
+            final_chunk: false,
+        });
+    }
+    if let Some(last) = chunks.last_mut() {
+        last.final_chunk = chars.len() <= TARGET_CHUNK_CHARS * MAX_CHUNKS;
+    }
+    chunks
 }
 
 #[derive(Debug, Deserialize)]

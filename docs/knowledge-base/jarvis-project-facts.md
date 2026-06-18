@@ -65,13 +65,15 @@ These notes capture durable facts for future agents working on this repository.
   `jarvis activity watch`, as bounded server-sent events carrying activity
   summary snapshots with redacted recent task metadata plus redacted
   `activity_progress` frames for installed-plugin subprocess progress and
-  model-step completion/failure audit evidence. This is local progress-streaming
-  evidence for current task/audit state, not per-token model streaming. The
-  Swift Runs tab can manually watch a bounded event stream, decode
-  `activity_summary`, `activity_progress`, and `activity_error` frames, update
-  the visible activity summary from the latest summary event, and render plugin
-  or model-step stage/message text without opening an unbounded background
-  listener.
+  model-step completion/failure audit evidence plus model-output chunk metadata.
+  Model-output chunk frames expose sequence, byte/character counts, and
+  `content_redacted: true`, not raw token text. This is local
+  progress-streaming evidence for current task/audit state, not provider-native
+  raw token streaming. The Swift Runs tab can manually watch a bounded event
+  stream, decode `activity_summary`, `activity_progress`, and `activity_error`
+  frames, update the visible activity summary from the latest summary event, and
+  render plugin, model-step, or redacted model-output chunk metadata without
+  opening an unbounded background listener.
 - Installed `local_subprocess` plugins can emit bounded newline-delimited
   stderr JSON frames with `jarvis_progress: true`, `stage`, and `message`.
   Jarvis records parsed sequence/stage/message events in the run response and
@@ -1158,8 +1160,8 @@ requires plugin-trust `generated_at`, `review_started_at`,
   guidance, architecture documentation, plugin-trust artifact SHA guidance,
   final doctor assertion guidance, Release tab runbook-load warnings, external
   handoff mechanics, evidence-note validation, docs drift smoke, release
-  workflow hygiene, and installed-plugin plus model-step activity-progress
-  proof, but they do not satisfy signing, notarization, installation,
+  workflow hygiene, and installed-plugin plus model-step/model-output
+  activity-progress proof, but they do not satisfy signing, notarization, installation,
   live-device QA, plugin-trust QA, or final evidence-bundle requirements.
 - Plugin-trust artifact evidence is enforced as a complete six-category set.
   Evidence-status, evidence-doctor, and final bundle validation reject missing,

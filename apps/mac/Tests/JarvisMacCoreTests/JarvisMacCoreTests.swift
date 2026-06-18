@@ -938,7 +938,7 @@ struct JarvisMacCoreTests {
         let taskId = UUID()
         let events = try JarvisActivityEvent.parseServerSentEvents(activityEventsSSE(taskId: taskId))
 
-        #expect(events.count == 4)
+        #expect(events.count == 5)
         #expect(events.first?.event == "activity_summary")
         #expect(events.first?.summary?.recentTasks.first?.id == taskId)
         #expect(events.first?.summary?.activeTaskCount == 1)
@@ -954,6 +954,15 @@ struct JarvisMacCoreTests {
         #expect(events[2].progress?.model == "fake-local-model")
         #expect(events[2].progress?.sequence == 0)
         #expect(events[2].progress?.stage == "completed")
+        #expect(events[3].event == "activity_progress")
+        #expect(events[3].progress?.kind == "model_output")
+        #expect(events[3].progress?.provider == "local")
+        #expect(events[3].progress?.model == "fake-local-model")
+        #expect(events[3].progress?.sequence == 0)
+        #expect(events[3].progress?.byteCount == 42)
+        #expect(events[3].progress?.charCount == 42)
+        #expect(events[3].progress?.finalChunk == true)
+        #expect(events[3].progress?.contentRedacted == true)
         #expect(events.last?.event == "activity_error")
         #expect(events.last?.error == "repository unavailable")
     }
@@ -3539,6 +3548,10 @@ struct JarvisMacCoreTests {
         {"audit_id":"\(UUID().uuidString)","task_id":"\(taskId.uuidString)","created_at":"2026-05-20T12:00:03Z","kind":"model_step","provider":"local","model":"fake-local-model","sequence":0,"stage":"completed","message":"model step 0 completed","stderr_redacted":true}
         """
             .replacingOccurrences(of: "\n", with: "")
+        let modelOutput = """
+        {"audit_id":"\(UUID().uuidString)","task_id":"\(taskId.uuidString)","created_at":"2026-05-20T12:00:04Z","kind":"model_output","provider":"local","model":"fake-local-model","sequence":0,"stage":"step_0","message":"model step 0 output chunk 0","byte_count":42,"char_count":42,"final_chunk":true,"content_redacted":true,"stderr_redacted":true}
+        """
+            .replacingOccurrences(of: "\n", with: "")
         return Data(
             """
             event: activity_summary
@@ -3549,6 +3562,9 @@ struct JarvisMacCoreTests {
 
             event: activity_progress
             data: \(modelProgress)
+
+            event: activity_progress
+            data: \(modelOutput)
 
             event: activity_error
             data: {"error":"repository unavailable"}

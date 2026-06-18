@@ -289,6 +289,10 @@ stage or when a PR needs focused evidence for one ownership slice.
   evidence, emit redacted `activity_progress` SSE frames through
   `/activity/events`, and do not expose raw stderr in responses, event streams,
   or audit payloads.
+- Confirm model responses append bounded `model_output_chunk` audit metadata,
+  expose only sequence and byte/character counts with `content_redacted: true`
+  through `/activity/events`, and do not expose raw model chunk text on safe
+  inspection streams.
 - Confirm persistent audit entries remain append-only in SQLite tests.
 - Confirm route, policy, approval, action, and failure evidence stay covered
   before claiming an end-to-end assistant release. The current command path
