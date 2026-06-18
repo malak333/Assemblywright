@@ -810,6 +810,48 @@ PLIST
   require_file_contains "live QA self-test embedded fixture evidence error" \
     "$tmp_dir/embedded-fixture-evidence.err" "owner-recorded external evidence"
 
+  if run_fixture_assertion "$tmp_dir/invalid-notification-kind.json" \
+    JARVIS_QA_NOTIFICATION_KIND="reminder" >/dev/null 2>"$tmp_dir/invalid-notification-kind.err"; then
+    fail "live QA self-test expected invalid notification kind to fail"
+  fi
+  require_file_contains "live QA self-test invalid notification kind error" \
+    "$tmp_dir/invalid-notification-kind.err" "JARVIS_QA_NOTIFICATION_KIND must be one of"
+
+  if run_fixture_assertion "$tmp_dir/blank-notification-title.json" \
+    JARVIS_QA_NOTIFICATION_TITLE="   " >/dev/null 2>"$tmp_dir/blank-notification-title.err"; then
+    fail "live QA self-test expected blank notification title to fail"
+  fi
+  require_file_contains "live QA self-test blank notification title error" \
+    "$tmp_dir/blank-notification-title.err" "JARVIS_QA_NOTIFICATION_TITLE"
+
+  if run_fixture_assertion "$tmp_dir/blank-notification-body.json" \
+    JARVIS_QA_NOTIFICATION_BODY="   " >/dev/null 2>"$tmp_dir/blank-notification-body.err"; then
+    fail "live QA self-test expected blank notification body to fail"
+  fi
+  require_file_contains "live QA self-test blank notification body error" \
+    "$tmp_dir/blank-notification-body.err" "JARVIS_QA_NOTIFICATION_BODY"
+
+  if run_fixture_assertion "$tmp_dir/wrong-notification-thread.json" \
+    JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER="jarvis.other" >/dev/null 2>"$tmp_dir/wrong-notification-thread.err"; then
+    fail "live QA self-test expected wrong notification thread identifier to fail"
+  fi
+  require_file_contains "live QA self-test wrong notification thread error" \
+    "$tmp_dir/wrong-notification-thread.err" "JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER must be jarvis.scheduler"
+
+  if run_fixture_assertion "$tmp_dir/malformed-notification-timestamp.json" \
+    JARVIS_QA_NOTIFICATION_OBSERVED_AT="2026-05-22T16:04:00-04:00" >/dev/null 2>"$tmp_dir/malformed-notification-timestamp.err"; then
+    fail "live QA self-test expected malformed notification timestamp to fail"
+  fi
+  require_file_contains "live QA self-test malformed notification timestamp error" \
+    "$tmp_dir/malformed-notification-timestamp.err" "JARVIS_QA_NOTIFICATION_OBSERVED_AT must be a UTC RFC3339 timestamp"
+
+  if run_fixture_assertion "$tmp_dir/early-notification-timestamp.json" \
+    JARVIS_QA_NOTIFICATION_OBSERVED_AT="2026-05-22T15:59:00Z" >/dev/null 2>"$tmp_dir/early-notification-timestamp.err"; then
+    fail "live QA self-test expected notification timestamp before voice start to fail"
+  fi
+  require_file_contains "live QA self-test early notification timestamp error" \
+    "$tmp_dir/early-notification-timestamp.err" "JARVIS_QA_NOTIFICATION_OBSERVED_AT must be greater than or equal to JARVIS_QA_VOICE_CHECK_STARTED_AT"
+
   if env -u JARVIS_QA_INTERNAL_SELF_TEST \
     JARVIS_QA_INSTALLED_APP_PATH="$fixture_app" \
     JARVIS_QA_REPORT_PATH="$tmp_dir/operator-self-test-fixture.json" \

@@ -898,8 +898,9 @@ requires plugin-trust `generated_at`, `review_started_at`,
   notification observation fields for kind/title/body/thread/timestamp, and
   proof boundary. Live macOS notification prompt/delivery validation is still
   manual clean-profile release QA, but the owner-recorded report now binds the
-  notification observation to allowed scheduler kinds, `jarvis.scheduler`, and
-  the owner-recorded notification timestamp.
+  notification observation to non-empty title/body values, allowed scheduler
+  kinds, `jarvis.scheduler`, and a UTC owner-recorded notification timestamp
+  that is not earlier than the voice-check start.
   `release-live-device-qa.sh --assert-complete` and `/release/evidence-status`
   both reject empty or placeholder owner evidence-note fields before this
   report can clear `live_voice_loop`.
