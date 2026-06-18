@@ -3142,6 +3142,90 @@ fn release_plugin_trust_runbook_summarizes_next_operator_steps() {
         .contains("host-level egress enforcement"));
 }
 
+#[cfg(unix)]
+#[test]
+fn release_external_handoff_snapshots_match_live_runbook_commands() {
+    let temp_dir = tempfile::tempdir().expect("temp external handoff");
+    let handoff_dir = temp_dir.path().join("handoff");
+    let handoff_dir_arg = handoff_dir
+        .to_str()
+        .expect("handoff path is valid UTF-8")
+        .to_string();
+
+    run_repo_script_with_env(
+        "scripts/release-external-handoff.sh",
+        &["--write", handoff_dir_arg.as_str()],
+        &[],
+    );
+
+    let endpoint = format!("http://{}", unused_loopback_addr());
+    let signed_direct = run_cli_json([
+        "release",
+        "signed-distribution-runbook",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    let live_direct = run_cli_json([
+        "release",
+        "live-device-runbook",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    let plugin_direct = run_cli_json([
+        "release",
+        "plugin-trust-runbook",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+
+    let signed_snapshot = read_json_file(handoff_dir.join("signed-distribution-runbook.json"));
+    let live_snapshot = read_json_file(handoff_dir.join("live-device-runbook.json"));
+    let plugin_snapshot = read_json_file(handoff_dir.join("plugin-trust-runbook.json"));
+
+    assert_eq!(
+        signed_snapshot["commands"], signed_direct["commands"],
+        "signed-distribution handoff snapshot commands must match the live runbook"
+    );
+    assert_eq!(
+        signed_snapshot["distribution_evidence"], signed_direct["distribution_evidence"],
+        "signed-distribution handoff snapshot must preserve evidence rows"
+    );
+    assert_eq!(
+        signed_snapshot["proof_boundary"], signed_direct["proof_boundary"],
+        "signed-distribution handoff snapshot must preserve the proof boundary"
+    );
+
+    assert_eq!(
+        live_snapshot["commands"], live_direct["commands"],
+        "live-device handoff snapshot commands must match the live runbook"
+    );
+    assert_eq!(
+        live_snapshot["live_device_evidence"], live_direct["live_device_evidence"],
+        "live-device handoff snapshot must preserve evidence status"
+    );
+    assert_eq!(
+        live_snapshot["live_voice_feature"], live_direct["live_voice_feature"],
+        "live-device handoff snapshot must preserve pending voice feature state"
+    );
+    assert_eq!(
+        live_snapshot["proof_boundary"], live_direct["proof_boundary"],
+        "live-device handoff snapshot must preserve the proof boundary"
+    );
+
+    assert_eq!(
+        plugin_snapshot["commands"], plugin_direct["commands"],
+        "plugin-trust handoff snapshot commands must match the live runbook"
+    );
+    assert_eq!(
+        plugin_snapshot["plugin_trust_evidence"], plugin_direct["plugin_trust_evidence"],
+        "plugin-trust handoff snapshot must preserve evidence status"
+    );
+    assert_eq!(
+        plugin_snapshot["proof_boundary"], plugin_direct["proof_boundary"],
+        "plugin-trust handoff snapshot must preserve the proof boundary"
+    );
+}
+
 #[test]
 fn serve_exposes_local_ipc_contract_and_persists_state() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -6703,6 +6787,16 @@ fn run_cli_json<const N: usize>(args: [&str; N]) -> Value {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         )
+    })
+}
+
+fn read_json_file(path: impl AsRef<Path>) -> Value {
+    let path = path.as_ref();
+    let data = fs::read(path).unwrap_or_else(|error| {
+        panic!("failed to read JSON file {}: {error}", path.display());
+    });
+    serde_json::from_slice(&data).unwrap_or_else(|error| {
+        panic!("file was not JSON: {error}\npath: {}", path.display());
     })
 }
 
