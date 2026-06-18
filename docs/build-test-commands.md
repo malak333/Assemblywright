@@ -528,11 +528,13 @@ readiness, evidence-status, and the three release runbooks. It also writes
 `release-evidence-checklist.md`, which names the exact signed-distribution
 artifact paths, live-device command and scheduler notification fields,
 plugin-trust artifact URI/SHA-256 bindings, and final reports archive URI that
-the release operator must fill before the final doctor assertion. Its `--check`
-and `--self-test` modes are part of the local release gate and prove only
-handoff generation mechanics; they do not perform signing, notarization,
-stapling, installation, Finder launch, live-device QA, plugin-trust QA,
-host-level egress enforcement, or final evidence archival.
+the release operator must fill before the final doctor assertion, plus
+`release-handoff-manifest.json` with the release version, git commit, snapshot
+endpoint, proof boundary, and per-file SHA-256 digests for the handoff package.
+Its `--check` and `--self-test` modes are part of the local release gate and
+prove only handoff generation mechanics; they do not perform signing,
+notarization, stapling, installation, Finder launch, live-device QA,
+plugin-trust QA, host-level egress enforcement, or final evidence archival.
 `cargo run -p jarvis-cli -- release
 signed-distribution-runbook` is read-only; it summarizes the current
 signed-app-bundle, app executable, bundled core, signed zip, signed installer,

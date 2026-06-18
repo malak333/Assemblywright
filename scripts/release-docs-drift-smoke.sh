@@ -51,6 +51,7 @@ done
 
 for file in "$BUILD_DOCS" "$CHECKLIST" "$ARCHITECTURE" "$KB" "$README"; do
   require_text "external handoff checklist" "$file" "release-evidence-checklist.md"
+  require_text "external handoff manifest" "$file" "release-handoff-manifest.json"
 done
 
 require_text "architecture current diagram" "$ARCHITECTURE" "Current Implementation And Evidence Boundary Diagram"
@@ -66,16 +67,20 @@ require_text "architecture local gate boundary" "$ARCHITECTURE" "does not perfor
 require_text "architecture local gate boundary" "$ARCHITECTURE" "notarization, clean-profile install, Finder/LaunchServices launch, live-device"
 require_text "architecture local gate boundary" "$ARCHITECTURE" "QA, plugin-trust QA, or final evidence bundling"
 require_text "architecture post-merge cleanup audit" "$ARCHITECTURE" "post-merge cleanup audit: open PRs, main workflow runs, worktrees, merged/unmerged codex branches, clean checkout"
-require_text "architecture current readiness baseline" "$ARCHITECTURE" 'current post-PR #298 baseline at'
-require_text "architecture current readiness commit" "$ARCHITECTURE" '`main` commit `3f10761`'
+require_text "architecture current readiness baseline" "$ARCHITECTURE" 'current post-PR #300 baseline at'
+require_text "architecture current readiness commit" "$ARCHITECTURE" '`main` commit `e195f2a`'
 require_text "architecture model-step progress boundary" "$ARCHITECTURE" "model-step, and redacted model-output chunk progress frames"
 require_text "architecture model-output progress boundary" "$ARCHITECTURE" "redacted model-output chunk progress frames"
-require_text "knowledge base current readiness baseline" "$KB" 'current post-PR #298 baseline at `3f10761`'
+require_text "architecture handoff manifest digest" "$ARCHITECTURE" "handoff manifest digest-binding"
+require_text "knowledge base current readiness baseline" "$KB" 'current post-PR #300 baseline at `e195f2a`'
 require_text "knowledge base model-step progress boundary" "$KB" "model-step completion/failure audit evidence"
 require_text "knowledge base model-output progress boundary" "$KB" "content_redacted: true"
 require_text "knowledge base model-step progress proof" "$KB" "installed-plugin plus model-step/model-output"
 require_text "knowledge base model-output progress proof" "$KB" "model-step/model-output"
+require_text "knowledge base handoff manifest digest" "$KB" "manifest digests match"
 require_text "build docs model-step progress command" "$BUILD_DOCS" "repository_backed_state_endpoints_expose_tasks_and_audit"
+require_text "build docs handoff manifest digest" "$BUILD_DOCS" "per-file SHA-256 digests"
+require_text "release checklist handoff manifest digest" "$CHECKLIST" "byte counts"
 require_text "release checklist model-output chunk boundary" "$CHECKLIST" "model_output_chunk"
 require_text "release checklist model-output redaction boundary" "$CHECKLIST" "content_redacted: true"
 require_text "build docs external handoff snapshot command" "$BUILD_DOCS" "release_external_handoff_snapshots_match_live_runbook_commands"

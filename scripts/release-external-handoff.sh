@@ -31,10 +31,12 @@ evidence sequence. It does not write files.
   live-device-runbook.json
   plugin-trust-runbook.json
   release-evidence-checklist.md
+  release-handoff-manifest.json
   README.md
 
 --self-test writes the handoff into a temporary directory and verifies that the
-templates and snapshots are present with validation flags still defaulted false.
+templates, snapshots, checklist, and digest manifest are present with validation
+flags still defaulted false.
 
 Optional:
   JARVIS_RELEASE_HANDOFF_DIR       Default output directory for --write
@@ -43,8 +45,8 @@ Optional:
                                    falls back to local read-only metadata when
                                    the endpoint is unavailable.
 
-Proof boundary: this script generates operator handoff files and read-only
-snapshots only. It does not sign, notarize, staple, install, Finder-launch,
+Proof boundary: this script generates operator handoff files, read-only
+snapshots, and a digest manifest only. It does not sign, notarize, staple, install, Finder-launch,
 validate live microphone/Speech/audio/notifications, run marketplace review,
 scan malware, enforce an OS sandbox, enforce host-level egress, or archive final
 production evidence.
@@ -155,6 +157,9 @@ claim.
   \`*-runbook.json\` files: read-only snapshots from the current checkout.
 - \`release-evidence-checklist.md\`: exact remaining evidence fields and artifact
   paths to fill before the final doctor assertion.
+- \`release-handoff-manifest.json\`: generation metadata plus SHA-256 digests for
+  every handoff file, so operators can archive and compare the package as a
+  single bounded artifact.
 
 ## Ordered Release Sequence
 
@@ -272,6 +277,67 @@ plugin trust, enforce egress, or archive evidence.
 EOF
 }
 
+write_manifest() {
+  local output_dir="$1"
+  local generated_at
+  local git_commit
+  generated_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  git_commit="$(git rev-parse HEAD)"
+
+  python3 - "$output_dir" "$generated_at" "$VERSION" "$git_commit" "$ENDPOINT" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+output_dir = Path(sys.argv[1])
+generated_at, version, git_commit, endpoint = sys.argv[2:6]
+files = [
+    "release-live-device-qa.env",
+    "release-plugin-trust-qa.env",
+    "release-evidence-bundle.env",
+    "release-readiness.json",
+    "release-evidence-status.json",
+    "signed-distribution-runbook.json",
+    "live-device-runbook.json",
+    "plugin-trust-runbook.json",
+    "release-evidence-checklist.md",
+    "README.md",
+]
+
+entries = []
+for name in files:
+    data = (output_dir / name).read_bytes()
+    entries.append(
+        {
+            "path": name,
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "bytes": len(data),
+        }
+    )
+
+manifest = {
+    "schema_version": 1,
+    "evidence_type": "release_external_handoff_manifest",
+    "generated_at": generated_at,
+    "release_version": version,
+    "git_commit": git_commit,
+    "snapshot_endpoint": endpoint,
+    "proof_boundary": (
+        "Handoff manifest and per-file digests only; this does not prove signing, "
+        "notarization, stapling, installation, Finder launch, live-device QA, "
+        "plugin trust QA, host-level egress enforcement, or final evidence archival."
+    ),
+    "files": entries,
+}
+
+(output_dir / "release-handoff-manifest.json").write_text(
+    json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+PY
+}
+
 check_prerequisites() {
   require_command cargo
   require_command python3
@@ -319,9 +385,10 @@ write_handoff() {
   run cargo run -q -p jarvis-cli -- release plugin-trust-runbook --json --endpoint "$ENDPOINT" >"$output_dir/plugin-trust-runbook.json"
   write_evidence_checklist "$output_dir"
   write_readme "$output_dir"
+  write_manifest "$output_dir"
 
   printf '\nJarvis external release handoff written: %s\n' "$output_dir"
-  printf 'Proof boundary: handoff templates and read-only snapshots only; no external release validation was performed.\n'
+  printf 'Proof boundary: handoff templates, read-only snapshots, and digest manifest only; no external release validation was performed.\n'
 }
 
 self_test() {
@@ -355,10 +422,13 @@ self_test() {
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" 'JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"'
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "Proof boundary"
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "release-evidence-checklist.md"
+  require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "release-handoff-manifest.json"
   require_file_contains "handoff checklist" "$tmp_dir/handoff/release-evidence-checklist.md" "JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER"
   require_file_contains "handoff checklist" "$tmp_dir/handoff/release-evidence-checklist.md" "jarvis.scheduler"
   require_file_contains "handoff checklist" "$tmp_dir/handoff/release-evidence-checklist.md" "JARVIS_PLUGIN_QA_MARKETPLACE_ARTIFACT_URI"
   require_file_contains "handoff checklist" "$tmp_dir/handoff/release-evidence-checklist.md" "JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI"
+  require_json_key "handoff manifest" "$tmp_dir/handoff/release-handoff-manifest.json" "files"
+  require_json_string_contains "handoff manifest" "$tmp_dir/handoff/release-handoff-manifest.json" "evidence_type" "release_external_handoff_manifest"
   require_json_key "readiness snapshot" "$tmp_dir/handoff/release-readiness.json" "production_ready"
   require_json_string_contains "readiness snapshot" "$tmp_dir/handoff/release-readiness.json" "readiness_scope" "external release evidence status"
   require_json_key "evidence-status snapshot" "$tmp_dir/handoff/release-evidence-status.json" "complete"
@@ -367,7 +437,7 @@ self_test() {
   require_json_key "plugin-trust runbook snapshot" "$tmp_dir/handoff/plugin-trust-runbook.json" "commands"
 
   printf 'Jarvis external release handoff self-test: ok\n'
-  printf 'Proof boundary: temporary templates, checklist, and read-only snapshots only; no external release validation was performed.\n'
+  printf 'Proof boundary: temporary templates, checklist, read-only snapshots, and digest manifest only; no external release validation was performed.\n'
 }
 
 while [[ $# -gt 0 ]]; do

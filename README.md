@@ -128,10 +128,12 @@ validate live devices, review plugins, or generate final evidence.
 `./scripts/release-external-handoff.sh --write target/release-external-handoff`
 prepares the public release-operator handoff directory with sourceable
 live-device, plugin-trust, and final-bundle env templates, read-only
-readiness/evidence/runbook JSON snapshots, and `release-evidence-checklist.md`.
-That checklist names the exact signed-distribution paths, live-device
+readiness/evidence/runbook JSON snapshots, `release-evidence-checklist.md`, and
+`release-handoff-manifest.json` with generation metadata plus per-file SHA-256
+digests. That checklist names the exact signed-distribution paths, live-device
 command/notification fields, plugin artifact URI/SHA-256 bindings, and final
-archive URI still required before the final doctor assertion. It is handoff
+archive URI still required before the final doctor assertion. The manifest helps
+operators archive and compare the handoff package, but it is still handoff
 scaffolding only, not owner-recorded external evidence that those checks were
 completed.
 The CLI command defaults to operator-readable text, supports `--json` for the

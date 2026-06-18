@@ -118,9 +118,12 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   creates the sourceable live-device, plugin-trust, and final-bundle env
   templates plus read-only readiness/evidence/runbook JSON snapshots and
   `release-evidence-checklist.md` with the remaining signed-distribution,
-  live-device notification, plugin artifact, and archive URI fields. All
-  external validation flags must still default false. Treat this as operator
-  handoff scaffolding only, not evidence that the external checks were completed.
+  live-device notification, plugin artifact, and archive URI fields, plus
+  `release-handoff-manifest.json` binding the generated handoff files to the
+  release version, git commit, snapshot endpoint, proof boundary, byte counts,
+  and SHA-256 digests. All external validation flags must still default false.
+  Treat this as operator handoff scaffolding only, not evidence that the
+  external checks were completed.
 - Confirm `jarvis release plugin-trust-runbook` hands off from completed
   plugin-trust QA into final evidence bundling and
   `release-evidence-doctor.sh --assert-complete`, not back to the signed

@@ -1151,18 +1151,19 @@ requires plugin-trust `generated_at`, `review_started_at`,
   #268 run `27428860335` / job `81073692261`, `production_ready: false`,
   `verified_feature_count: 16`, `pending_feature_count: 1`, and, after local
   generated app presence artifacts exist, six missing external/manual evidence
-  artifacts. The current post-PR #298 baseline at `3f10761` remains
+  artifacts. The current post-PR #300 baseline at `e195f2a` remains
   conservative with `production_ready: false`, `verified_feature_count: 16`,
   `pending_feature_count: 1`, and `live_voice_loop` as the pending manual
   feature; `/release/evidence-status` reports `complete: false`, three
-  satisfied evidence rows, six missing rows, and no invalid rows. PRs #283-#298
+  satisfied evidence rows, six missing rows, and no invalid rows. PRs #283-#300
   added repo-owned clarity for voice permission gating, external handoff
   guidance, architecture documentation, plugin-trust artifact SHA guidance,
   final doctor assertion guidance, Release tab runbook-load warnings, external
   handoff mechanics, evidence-note validation, docs drift smoke, release
-  workflow hygiene, and installed-plugin plus model-step/model-output
-  activity-progress proof, but they do not satisfy signing, notarization, installation,
-  live-device QA, plugin-trust QA, or final evidence-bundle requirements.
+  workflow hygiene, installed-plugin plus model-step/model-output
+  activity-progress proof, and external handoff manifest digest binding, but
+  they do not satisfy signing, notarization, installation, live-device QA,
+  plugin-trust QA, or final evidence-bundle requirements.
 - Plugin-trust artifact evidence is enforced as a complete six-category set.
   Evidence-status, evidence-doctor, and final bundle validation reject missing,
   placeholder, or non-SHA-256 artifact bindings for marketplace review,
@@ -1217,21 +1218,26 @@ requires plugin-trust `generated_at`, `review_started_at`,
   generator for the remaining external production gates. `--write` creates
   `release-live-device-qa.env`, `release-plugin-trust-qa.env`,
   `release-evidence-bundle.env`, read-only readiness/evidence-status/runbook
-  JSON snapshots, `release-evidence-checklist.md`, and a README with the
-  ordered release sequence. The checklist names exact signed-distribution
+  JSON snapshots, `release-evidence-checklist.md`,
+  `release-handoff-manifest.json`, and a README with the ordered release
+  sequence. The checklist names exact signed-distribution
   artifact paths, live-device command/result and scheduler notification fields,
   per-category plugin artifact URI/SHA-256 bindings, and the final reports
-  archive URI. The generated README's final evidence-status/readiness commands
-  use `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external` plus guarded
+  archive URI. The generated manifest records schema version, evidence type,
+  generation timestamp, release version, git commit, snapshot endpoint, proof
+  boundary, byte counts, and SHA-256 digests for each generated handoff file.
+  The generated README's final evidence-status/readiness commands use
+  `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external` plus guarded
   `JARVIS_RELEASE_CORE_ENDPOINT` expansion, matching the live-device,
   signed-distribution, plugin-trust, package-preflight, and evidence-doctor
   handoff guidance. CLI E2E also verifies that the generated runbook snapshots
   preserve the same command arrays, key evidence rows, feature state, and proof
-  boundaries as fresh direct CLI runbook JSON. `--check` and `--self-test` are
-  part of the local release gate and prove only template plus
-  snapshot/checklist generation with validation flags defaulted false; they do
-  not sign, notarize, install, Finder-launch, validate live device behavior,
-  review plugin trust, enforce egress, or archive final evidence.
+  boundaries as fresh direct CLI runbook JSON, and that manifest digests match
+  the generated handoff files. `--check` and `--self-test` are part of the local
+  release gate and prove only template plus snapshot/checklist/manifest
+  generation with validation flags defaulted false; they do not sign, notarize,
+  install, Finder-launch, validate live device behavior, review plugin trust,
+  enforce egress, or archive final evidence.
 - Owner evidence-note validation now rejects embedded placeholder wording, not
   only exact placeholder values. Shell assertions and Rust evidence-status
   reject operator notes containing terms such as `TODO`, `pending`, `fixture`,
