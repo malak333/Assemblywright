@@ -884,11 +884,12 @@ boundary that remained in force.
 Current readiness should always be refreshed before release claims. The
 historical 2026-06-12 UTC baseline after PR #268 started from `main` at
 `8cccb5b`, with the hosted `Release local gate` green for PR #268 run
-`27428860335` / job `81073692261`. After PR #296, `main` at `faae9ba`
-continues to report `production_ready: false`, `verified_feature_count: 16`,
-and `pending_feature_count: 1`, with `live_voice_loop` still
-`pending_manual_validation`, while the local repo-owned release handoff,
-workflow hygiene, docs drift smoke, and evidence-note validation mechanics have
+`27428860335` / job `81073692261`. The current post-PR #298 baseline at
+`main` commit `3f10761` continues to report `production_ready: false`,
+`verified_feature_count: 16`, and `pending_feature_count: 1`, with
+`live_voice_loop` still `pending_manual_validation`, while the local repo-owned
+release handoff, workflow hygiene, docs drift smoke, evidence-note validation,
+and installed-plugin plus model-step activity-progress proof mechanics have
 improved without converting local evidence inspection into production proof.
 `jarvis release evidence-status --json` remains expected to report
 `complete: false` with three satisfied evidence rows, six missing
