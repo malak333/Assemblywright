@@ -158,7 +158,12 @@ Confirm `/contract`, `jarvis release readiness --json`,
 as `release_ci_gate` with the same proof boundary before using CI-passing
 language in release notes. Release runbook commands keep the same JSON
 compatibility convention: `--json` is canonical, and `--format json` is accepted
-for older automation that expects format-style structured output.
+for older automation that expects format-style structured output. The CLI
+runbook JSON is the operator/snapshot JSON used by release scripts and handoff
+E2E tests; the IPC runbook endpoints expose the app-facing
+`ReleaseRunbookResponse` with the same release commands, manual checks, proof
+boundary, and evidence summaries, but it is a distinct contract shape for Swift
+clients.
 
 The script runs the full local gate below, including the opt-in ignored
 release-proof E2E test. Run individual commands only when diagnosing a failing
@@ -549,6 +554,13 @@ stage or when a PR needs focused evidence for one ownership slice.
   expectations, and proof boundaries without overclaiming production readiness.
 - Every phase summary records whether docs, KB facts, and E2E coverage were
   followed; unresolved gaps are blockers for stronger production claims.
+- Post-merge cleanup audit is recorded before stronger readiness language:
+  `gh pr list --state open --json number,title,headRefName,baseRefName,url`,
+  `gh run list --workflow release-local.yml --branch main --limit 5`,
+  `git worktree list --porcelain`,
+  `git branch --merged main --list 'codex/*'`,
+  `git branch --no-merged main --list 'codex/*'`, and
+  `git status --short --branch`.
 - README points to the active design and command gate.
 - Mermaid diagrams render in GitHub or the intended documentation viewer.
 

@@ -65,6 +65,17 @@ require_text "architecture final archive evidence" "$ARCHITECTURE" "archived fin
 require_text "architecture local gate boundary" "$ARCHITECTURE" "does not perform signing,"
 require_text "architecture local gate boundary" "$ARCHITECTURE" "notarization, clean-profile install, Finder/LaunchServices launch, live-device"
 require_text "architecture local gate boundary" "$ARCHITECTURE" "QA, plugin-trust QA, or final evidence bundling"
+require_text "architecture post-merge cleanup audit" "$ARCHITECTURE" "post-merge cleanup audit: open PRs, main workflow runs, worktrees, merged/unmerged codex branches, clean checkout"
+for file in "$BUILD_DOCS" "$CHECKLIST" "$KB"; do
+  require_text "runbook payload contract boundary" "$file" "operator/snapshot JSON"
+  require_text "runbook payload contract boundary" "$file" "ReleaseRunbookResponse"
+  require_text "post-merge cleanup audit" "$file" "gh pr list --state open --json number,title,headRefName,baseRefName,url"
+  require_text "post-merge cleanup audit" "$file" "gh run list --workflow release-local.yml --branch main --limit 5"
+  require_text "post-merge cleanup audit" "$file" "git worktree list --porcelain"
+  require_text "post-merge cleanup audit" "$file" "git branch --merged main --list 'codex/*'"
+  require_text "post-merge cleanup audit" "$file" "git branch --no-merged main --list 'codex/*'"
+  require_text "post-merge cleanup audit" "$file" "git status --short --branch"
+done
 require_text "release readiness blocker docs" "$CHECKLIST" "live-device QA"
 require_text "release readiness blocker docs" "$CHECKLIST" "plugin-trust QA"
 require_text "release readiness blocker docs" "$CHECKLIST" "Developer ID"
