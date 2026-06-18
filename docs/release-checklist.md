@@ -672,8 +672,11 @@ Clean-profile and manual production gates not proven by this local smoke:
   identity, and proof boundary, then preserve the
   `target/release-live-device-qa-report.json`
   artifact, or the `JARVIS_QA_REPORT_PATH` override, with the release notes.
-  Preserve `scheduler_notification_observation` fields for kind, title, body,
-  thread identifier, timestamp, and pending-action notes in the same report.
+  Preserve `notification_observation` fields for kind, title, body, thread
+  identifier, and timestamp in the same report; the assertion path rejects
+  blank title/body values, unsupported kinds, non-`jarvis.scheduler` threads,
+  malformed timestamps, and notification observations before the voice-check
+  start.
   Then rerun `jarvis release evidence-status` and
   `jarvis release readiness` against a core started or restarted with
   `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external` and confirm the live

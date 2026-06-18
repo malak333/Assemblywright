@@ -845,8 +845,12 @@ trimming, `JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID` must be `task:<uuid>` or
 task-associated audit row before it can clear readiness. `generated_at` must be
 UTC and no earlier than the completed voice check, but not future-dated.
 The notification observation timestamp must match
-`JARVIS_QA_NOTIFICATION_OBSERVED_AT`, and final bundle validation rejects any
-notification thread identifier other than `jarvis.scheduler`.
+`JARVIS_QA_NOTIFICATION_OBSERVED_AT`, must be UTC, and must be no earlier than
+`JARVIS_QA_VOICE_CHECK_STARTED_AT`. The shell assertion self-test,
+`jarvis release evidence-status`, and final bundle validation reject blank
+notification title/body values, notification kinds outside `due_now`, `failed`,
+or `blocked_by_emergency_pause`, and any notification thread identifier other
+than `jarvis.scheduler`.
 On success, `--assert-complete` writes a JSON evidence report to
 `JARVIS_QA_REPORT_PATH` or `target/release-live-device-qa-report.json` by
 default. The report includes installed-app metadata, app microphone/Speech usage
