@@ -945,6 +945,21 @@ struct SchedulerNotificationEvidencePresentation: Equatable {
     }
 }
 
+struct SpeechOutputEvidencePresentation: Equatable {
+    let deviceLabelField: String
+    let evidenceNoteField: String
+
+    init(statusText: String, lastSpokenText: String?) {
+        deviceLabelField = "JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL=<record actual output device>"
+        let spokenText = lastSpokenText?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let spokenText, !spokenText.isEmpty {
+            evidenceNoteField = "JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE=Observed playback for \"\(spokenText)\"; \(statusText)"
+        } else {
+            evidenceNoteField = "JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE=Record playback observation after Speak Preview; \(statusText)"
+        }
+    }
+}
+
 struct ApprovalCenterView: View {
     @ObservedObject var model: ApprovalManagementModel
     @State private var decisionReasons: [UUID: String] = [:]
@@ -1693,6 +1708,12 @@ struct VoiceStateView: View {
     @ObservedObject var speechOutput: SpeechOutputStateModel
     @ObservedObject var console: CommandConsoleModel
     @State private var speechPreview = "Jarvis voice output is ready."
+    private var speechOutputEvidence: SpeechOutputEvidencePresentation {
+        SpeechOutputEvidencePresentation(
+            statusText: speechOutput.statusText,
+            lastSpokenText: speechOutput.lastSpokenText
+        )
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -1710,6 +1731,13 @@ struct VoiceStateView: View {
             Text(speechOutput.statusText)
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(speechOutputEvidence.deviceLabelField)
+                Text(speechOutputEvidence.evidenceNoteField)
+            }
+            .font(.caption2.monospaced())
+            .foregroundStyle(.secondary)
+            .textSelection(.enabled)
 
             Text(model.isPushToTalkEnabled ? "Manual capture ready." : "Manual capture unavailable in the current voice state.")
                 .font(.caption)

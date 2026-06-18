@@ -131,6 +131,30 @@ struct JarvisMacAppTests {
         #expect(presentation.summary.contains("JARVIS_QA_NOTIFICATION_BODY=Nightly sync failed after retry exhaustion."))
         #expect(presentation.summary.contains("JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER=jarvis.scheduler"))
     }
+
+    @Test("Speech output evidence presentation exposes live-device QA fields before playback")
+    func speechOutputEvidencePresentationExposesBlankCaptureFields() {
+        let presentation = SpeechOutputEvidencePresentation(
+            statusText: "Speech output idle.",
+            lastSpokenText: nil
+        )
+
+        #expect(presentation.deviceLabelField == "JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL=<record actual output device>")
+        #expect(presentation.evidenceNoteField.contains("JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="))
+        #expect(presentation.evidenceNoteField.contains("Record playback observation after Speak Preview"))
+        #expect(presentation.evidenceNoteField.contains("Speech output idle."))
+    }
+
+    @Test("Speech output evidence presentation includes last spoken preview text")
+    func speechOutputEvidencePresentationIncludesLastSpokenText() {
+        let presentation = SpeechOutputEvidencePresentation(
+            statusText: "Speech output speaking.",
+            lastSpokenText: "  Jarvis status ready.  "
+        )
+
+        #expect(presentation.evidenceNoteField.contains("Observed playback for \"Jarvis status ready.\""))
+        #expect(presentation.evidenceNoteField.contains("Speech output speaking."))
+    }
 }
 
 private final class CapturingUserNotificationCenter: JarvisUserNotificationCenter, @unchecked Sendable {
