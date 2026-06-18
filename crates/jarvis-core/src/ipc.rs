@@ -7519,6 +7519,17 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         )
     }
 
+    fn plugin_trust_artifact_keys() -> [&'static str; 6] {
+        [
+            "marketplace_review",
+            "malware_scan",
+            "os_sandbox",
+            "egress_enforcement",
+            "signed_publisher_policy",
+            "manual_trust_review",
+        ]
+    }
+
     fn valid_release_evidence_bundle_json() -> serde_json::Value {
         let digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         json!({
@@ -8231,24 +8242,23 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
 
     #[test]
     fn plugin_trust_qa_report_rejects_missing_or_invalid_artifact_binding() {
-        let mut report = valid_plugin_trust_qa_report_json();
-        report["evidence_artifacts"]["marketplace_review"]["uri"] = json!("   ");
-        let (status, detail) = inspect_plugin_trust_qa_report_value(report);
-        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
-        assert!(
-            detail.contains("evidence_artifacts.marketplace_review.uri"),
-            "{detail}"
-        );
-
-        let mut report = valid_plugin_trust_qa_report_json();
-        report["evidence_artifacts"]["malware_scan"]["sha256"] = json!("not-a-sha");
-        let (status, detail) = inspect_plugin_trust_qa_report_value(report);
-        assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
-        assert!(
-            detail.contains("evidence_artifacts.malware_scan.sha256"),
-            "{detail}"
-        );
-        assert!(detail.contains("SHA-256"), "{detail}");
+        for artifact in plugin_trust_artifact_keys() {
+            for (field, invalid_value) in [("uri", json!("   ")), ("sha256", json!("not-a-sha"))] {
+                let mut report = valid_plugin_trust_qa_report_json();
+                report["evidence_artifacts"][artifact][field] = invalid_value;
+                let (status, detail) = inspect_plugin_trust_qa_report_value(report);
+                let expected_field = format!("evidence_artifacts.{artifact}.{field}");
+                assert_eq!(
+                    status,
+                    ReleaseEvidenceItemStatus::Invalid,
+                    "{expected_field}: {detail}"
+                );
+                assert!(detail.contains(&expected_field), "{detail}");
+                if field == "sha256" {
+                    assert!(detail.contains("SHA-256"), "{detail}");
+                }
+            }
+        }
     }
 
     #[test]
