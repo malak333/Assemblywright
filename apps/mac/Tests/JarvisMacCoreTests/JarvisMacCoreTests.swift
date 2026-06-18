@@ -938,15 +938,22 @@ struct JarvisMacCoreTests {
         let taskId = UUID()
         let events = try JarvisActivityEvent.parseServerSentEvents(activityEventsSSE(taskId: taskId))
 
-        #expect(events.count == 3)
+        #expect(events.count == 4)
         #expect(events.first?.event == "activity_summary")
         #expect(events.first?.summary?.recentTasks.first?.id == taskId)
         #expect(events.first?.summary?.activeTaskCount == 1)
         #expect(events[1].event == "activity_progress")
+        #expect(events[1].progress?.kind == "installed_plugin")
         #expect(events[1].progress?.pluginId == "local_runner_test")
         #expect(events[1].progress?.stage == "prepare")
         #expect(events[1].progress?.message == "validated request")
         #expect(events[1].progress?.stderrRedacted == true)
+        #expect(events[2].event == "activity_progress")
+        #expect(events[2].progress?.kind == "model_step")
+        #expect(events[2].progress?.provider == "local")
+        #expect(events[2].progress?.model == "fake-local-model")
+        #expect(events[2].progress?.sequence == 0)
+        #expect(events[2].progress?.stage == "completed")
         #expect(events.last?.event == "activity_error")
         #expect(events.last?.error == "repository unavailable")
     }
@@ -3525,7 +3532,11 @@ struct JarvisMacCoreTests {
         let summary = String(decoding: activitySummaryJSON(taskId: taskId), as: UTF8.self)
             .replacingOccurrences(of: "\n", with: "")
         let progress = """
-        {"audit_id":"\(UUID().uuidString)","task_id":"\(taskId.uuidString)","created_at":"2026-05-20T12:00:02Z","plugin_id":"local_runner_test","action":"inspect","session_id":"\(UUID().uuidString)","sequence":1,"stage":"prepare","message":"validated request","stderr_redacted":true}
+        {"audit_id":"\(UUID().uuidString)","task_id":"\(taskId.uuidString)","created_at":"2026-05-20T12:00:02Z","kind":"installed_plugin","plugin_id":"local_runner_test","action":"inspect","session_id":"\(UUID().uuidString)","sequence":1,"stage":"prepare","message":"validated request","stderr_redacted":true}
+        """
+            .replacingOccurrences(of: "\n", with: "")
+        let modelProgress = """
+        {"audit_id":"\(UUID().uuidString)","task_id":"\(taskId.uuidString)","created_at":"2026-05-20T12:00:03Z","kind":"model_step","provider":"local","model":"fake-local-model","sequence":0,"stage":"completed","message":"model step 0 completed","stderr_redacted":true}
         """
             .replacingOccurrences(of: "\n", with: "")
         return Data(
@@ -3535,6 +3546,9 @@ struct JarvisMacCoreTests {
 
             event: activity_progress
             data: \(progress)
+
+            event: activity_progress
+            data: \(modelProgress)
 
             event: activity_error
             data: {"error":"repository unavailable"}

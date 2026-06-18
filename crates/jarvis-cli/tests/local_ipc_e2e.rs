@@ -3177,10 +3177,15 @@ fn release_external_handoff_snapshots_match_live_runbook_commands() {
         "--endpoint",
         endpoint.as_str(),
     ]);
+    let readiness_direct = run_cli_json_with_env(
+        ["release", "readiness", "--endpoint", endpoint.as_str()],
+        &[("JARVIS_RELEASE_READINESS_EVIDENCE_MODE", "external")],
+    );
 
     let signed_snapshot = read_json_file(handoff_dir.join("signed-distribution-runbook.json"));
     let live_snapshot = read_json_file(handoff_dir.join("live-device-runbook.json"));
     let plugin_snapshot = read_json_file(handoff_dir.join("plugin-trust-runbook.json"));
+    let readiness_snapshot = read_json_file(handoff_dir.join("release-readiness.json"));
 
     assert_eq!(
         signed_snapshot["commands"], signed_direct["commands"],
@@ -3224,6 +3229,27 @@ fn release_external_handoff_snapshots_match_live_runbook_commands() {
         plugin_snapshot["proof_boundary"], plugin_direct["proof_boundary"],
         "plugin-trust handoff snapshot must preserve the proof boundary"
     );
+
+    assert_eq!(
+        readiness_snapshot["production_ready"], readiness_direct["production_ready"],
+        "release handoff readiness snapshot must match live external-mode readiness"
+    );
+    assert_eq!(
+        readiness_snapshot["pending_feature_count"], readiness_direct["pending_feature_count"],
+        "release handoff readiness snapshot must preserve pending feature count"
+    );
+    assert_eq!(
+        readiness_snapshot["blocking_manual_gates"], readiness_direct["blocking_manual_gates"],
+        "release handoff readiness snapshot must preserve manual release blockers"
+    );
+    assert_eq!(
+        readiness_snapshot["readiness_scope"], readiness_direct["readiness_scope"],
+        "release handoff readiness snapshot must be generated in external evidence mode"
+    );
+    assert!(readiness_snapshot["readiness_scope"]
+        .as_str()
+        .expect("readiness scope")
+        .contains("external release evidence status"));
 }
 
 #[test]
@@ -3891,6 +3917,22 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     ]);
     assert!(
         activity_events.matches("event: activity_summary").count() >= 2,
+        "{activity_events}"
+    );
+    assert!(
+        activity_events.contains("event: activity_progress"),
+        "{activity_events}"
+    );
+    assert!(
+        activity_events.contains("\"kind\":\"model_step\""),
+        "{activity_events}"
+    );
+    assert!(
+        activity_events.contains("\"stage\":\"completed\""),
+        "{activity_events}"
+    );
+    assert!(
+        activity_events.contains("\"model\":\"fake-local-model\""),
         "{activity_events}"
     );
     assert!(

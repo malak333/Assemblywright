@@ -527,10 +527,15 @@ pub struct ActivityProgressEvent {
     #[serde(default)]
     pub task_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
+    pub kind: String,
     #[serde(default)]
     pub plugin_id: Option<String>,
     #[serde(default)]
     pub action: Option<String>,
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
     #[serde(default)]
     pub session_id: Option<Uuid>,
     #[serde(default)]
@@ -3728,7 +3733,6 @@ fn activity_progress_events_from_summary(summary: &ActivitySummary) -> Vec<Activ
     summary
         .recent_audit_entries
         .iter()
-        .filter(|entry| entry.event_type == "installed_plugin_progress")
         .filter_map(activity_progress_event_from_audit)
         .collect()
 }
@@ -3739,11 +3743,70 @@ fn activity_progress_event_from_audit(entry: &AuditEntry) -> Option<ActivityProg
         .get("session_id")
         .and_then(serde_json::Value::as_str)
         .and_then(|value| Uuid::parse_str(value).ok());
+    let (kind, stage, message, provider, model, sequence) = match entry.event_type.as_str() {
+        "installed_plugin_progress" => (
+            "installed_plugin".to_string(),
+            payload
+                .get("stage")
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned),
+            payload
+                .get("message")
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned),
+            None,
+            None,
+            payload.get("sequence").and_then(serde_json::Value::as_u64),
+        ),
+        "model_step_completed" => {
+            let step_index = payload
+                .get("step_index")
+                .and_then(serde_json::Value::as_u64);
+            (
+                "model_step".to_string(),
+                Some("completed".to_string()),
+                Some(match step_index {
+                    Some(index) => format!("model step {index} completed"),
+                    None => "model step completed".to_string(),
+                }),
+                payload
+                    .get("provider")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned),
+                payload
+                    .get("model")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned),
+                step_index,
+            )
+        }
+        "model_step_failed" => {
+            let step_index = payload
+                .get("step_index")
+                .and_then(serde_json::Value::as_u64);
+            (
+                "model_step".to_string(),
+                Some("failed".to_string()),
+                Some(match step_index {
+                    Some(index) => format!("model step {index} failed"),
+                    None => "model step failed".to_string(),
+                }),
+                payload
+                    .get("selected_provider")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned),
+                None,
+                step_index,
+            )
+        }
+        _ => return None,
+    };
 
     Some(ActivityProgressEvent {
         audit_id: entry.id,
         task_id: entry.task_id,
         created_at: entry.created_at,
+        kind,
         plugin_id: payload
             .get("plugin_id")
             .and_then(serde_json::Value::as_str)
@@ -3752,16 +3815,12 @@ fn activity_progress_event_from_audit(entry: &AuditEntry) -> Option<ActivityProg
             .get("action")
             .and_then(serde_json::Value::as_str)
             .map(ToOwned::to_owned),
+        provider,
+        model,
         session_id,
-        sequence: payload.get("sequence").and_then(serde_json::Value::as_u64),
-        stage: payload
-            .get("stage")
-            .and_then(serde_json::Value::as_str)
-            .map(ToOwned::to_owned),
-        message: payload
-            .get("message")
-            .and_then(serde_json::Value::as_str)
-            .map(ToOwned::to_owned),
+        sequence,
+        stage,
+        message,
         stderr_redacted: payload
             .get("stderr_redacted")
             .and_then(serde_json::Value::as_bool)
@@ -10504,6 +10563,16 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .recent_audit_entries
             .iter()
             .any(|entry| entry.event_type == "plugin_completed"));
+        let activity_progress = activity_progress_events_from_summary(&summary);
+        assert!(
+            activity_progress.iter().any(|event| {
+                event.kind == "model_step"
+                    && event.stage.as_deref() == Some("completed")
+                    && event.model.as_deref() == Some("fake-local-model")
+                    && event.plugin_id.is_none()
+            }),
+            "{activity_progress:?}"
+        );
 
         let Json(all_entries) = list_audit_entries(State(state)).await.expect("audit");
         assert_eq!(all_entries.len(), entries.len());

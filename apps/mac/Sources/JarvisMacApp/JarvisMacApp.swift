@@ -1388,11 +1388,22 @@ struct RunActivityEventView: View {
     }
 
     private func progressLabel(_ progress: JarvisActivityProgressEvent) -> String {
-        let plugin = progress.pluginId ?? "installed plugin"
+        let source: String
+        if let plugin = progress.pluginId {
+            source = plugin
+        } else if let model = progress.model {
+            source = model
+        } else if let provider = progress.provider {
+            source = provider
+        } else if progress.kind == "model_step" {
+            source = "model"
+        } else {
+            source = "installed plugin"
+        }
         let stage = progress.stage ?? "progress"
         let message = progress.message ?? "progress event"
         let sequence = progress.sequence.map { " #\($0)" } ?? ""
-        return "\(plugin)\(sequence) \(stage): \(message)"
+        return "\(source)\(sequence) \(stage): \(message)"
     }
 }
 

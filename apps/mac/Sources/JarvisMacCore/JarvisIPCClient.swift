@@ -513,8 +513,11 @@ public struct JarvisActivityProgressEvent: Decodable, Equatable, Sendable {
     public var auditId: UUID
     public var taskId: UUID?
     public var createdAt: String
+    public var kind: String?
     public var pluginId: String?
     public var action: String?
+    public var provider: String?
+    public var model: String?
     public var sessionId: UUID?
     public var sequence: Int?
     public var stage: String?
@@ -525,8 +528,11 @@ public struct JarvisActivityProgressEvent: Decodable, Equatable, Sendable {
         case auditId = "audit_id"
         case taskId = "task_id"
         case createdAt = "created_at"
+        case kind
         case pluginId = "plugin_id"
         case action
+        case provider
+        case model
         case sessionId = "session_id"
         case sequence
         case stage
