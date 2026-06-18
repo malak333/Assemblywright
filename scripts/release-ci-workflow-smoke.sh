@@ -37,7 +37,14 @@ require_text "uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660c
 require_text "toolchain: 1.95.0" "$WORKFLOW"
 require_text "components: clippy,rustfmt" "$WORKFLOW"
 require_text "swift --version" "$WORKFLOW"
+require_text "JARVIS_RELEASE_LOCAL_HEARTBEAT_SECONDS: \"60\"" "$WORKFLOW"
 require_text "run: ./scripts/release-local.sh" "$WORKFLOW"
+require_text "still running after" "$LOCAL_GATE"
+require_text "completed in" "$LOCAL_GATE"
+require_text "command failed after" "$LOCAL_GATE"
+require_text "--heartbeat-self-test" "$LOCAL_GATE"
+
+"$ROOT_DIR/$LOCAL_GATE" --heartbeat-self-test
 
 expected_local_gate_commands=(
   "run ./scripts/release-version-consistency.sh --check"

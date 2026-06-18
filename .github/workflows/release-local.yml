@@ -37,4 +37,6 @@ jobs:
           swift --version
 
       - name: Run local release verification
+        env:
+          JARVIS_RELEASE_LOCAL_HEARTBEAT_SECONDS: "60"
         run: ./scripts/release-local.sh

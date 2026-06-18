@@ -1151,19 +1151,20 @@ requires plugin-trust `generated_at`, `review_started_at`,
   #268 run `27428860335` / job `81073692261`, `production_ready: false`,
   `verified_feature_count: 16`, `pending_feature_count: 1`, and, after local
   generated app presence artifacts exist, six missing external/manual evidence
-  artifacts. The current post-PR #300 baseline at `e195f2a` remains
+  artifacts. The current post-PR #301 baseline at `155ccd4` remains
   conservative with `production_ready: false`, `verified_feature_count: 16`,
   `pending_feature_count: 1`, and `live_voice_loop` as the pending manual
   feature; `/release/evidence-status` reports `complete: false`, three
-  satisfied evidence rows, six missing rows, and no invalid rows. PRs #283-#300
+  satisfied evidence rows, six missing rows, and no invalid rows. PRs #283-#301
   added repo-owned clarity for voice permission gating, external handoff
   guidance, architecture documentation, plugin-trust artifact SHA guidance,
   final doctor assertion guidance, Release tab runbook-load warnings, external
   handoff mechanics, evidence-note validation, docs drift smoke, release
   workflow hygiene, installed-plugin plus model-step/model-output
-  activity-progress proof, and external handoff manifest digest binding, but
-  they do not satisfy signing, notarization, installation, live-device QA,
-  plugin-trust QA, or final evidence-bundle requirements.
+  activity-progress proof, external handoff manifest digest binding, and
+  release-local command heartbeat observability, but they do not satisfy
+  signing, notarization, installation, live-device QA, plugin-trust QA, or final
+  evidence-bundle requirements.
 - Plugin-trust artifact evidence is enforced as a complete six-category set.
   Evidence-status, evidence-doctor, and final bundle validation reject missing,
   placeholder, or non-SHA-256 artifact bindings for marketplace review,

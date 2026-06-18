@@ -7,9 +7,75 @@ export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-$ROOT_DIR/target/clan
 mkdir -p "$CLANG_MODULE_CACHE_PATH"
 
 run() {
-  printf '\n==> %s\n' "$*"
-  "$@"
+  local heartbeat_seconds="${JARVIS_RELEASE_LOCAL_HEARTBEAT_SECONDS:-0}"
+  local started_at start_epoch end_epoch duration status
+  started_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  start_epoch="$(date -u '+%s')"
+  printf '\n==> [%s] %s\n' "$started_at" "$*"
+
+  if [[ "$heartbeat_seconds" =~ ^[0-9]+$ && "$heartbeat_seconds" -gt 0 ]]; then
+    local pid heartbeat_pid
+    "$@" &
+    pid="$!"
+    (
+      while sleep "$heartbeat_seconds"; do
+        if ! kill -0 "$pid" >/dev/null 2>&1; then
+          exit 0
+        fi
+        now="$(date -u '+%s')"
+        elapsed=$((now - start_epoch))
+        printf '==> [%s] still running after %ss: %s\n' \
+          "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$elapsed" "$*"
+      done
+    ) &
+    heartbeat_pid="$!"
+    set +e
+    wait "$pid"
+    status="$?"
+    kill "$heartbeat_pid" >/dev/null 2>&1
+    wait "$heartbeat_pid" >/dev/null 2>&1
+    set -e
+  else
+    set +e
+    "$@"
+    status="$?"
+    set -e
+  fi
+
+  end_epoch="$(date -u '+%s')"
+  duration=$((end_epoch - start_epoch))
+  if [[ "$status" -ne 0 ]]; then
+    printf '==> command failed after %ss with status %s: %s\n' \
+      "$duration" "$status" "$*" >&2
+    return "$status"
+  fi
+  printf '==> completed in %ss: %s\n' "$duration" "$*"
 }
+
+heartbeat_self_test() {
+  local output
+  if ! output="$(JARVIS_RELEASE_LOCAL_HEARTBEAT_SECONDS=1 run bash -c 'sleep 2' 2>&1)"; then
+    printf '%s\n' "$output" >&2
+    printf 'error: release-local heartbeat self-test command failed\n' >&2
+    exit 1
+  fi
+  if [[ "$output" != *"still running after"* ]]; then
+    printf '%s\n' "$output" >&2
+    printf 'error: release-local heartbeat self-test did not emit heartbeat output\n' >&2
+    exit 1
+  fi
+  if [[ "$output" != *"completed in"* ]]; then
+    printf '%s\n' "$output" >&2
+    printf 'error: release-local heartbeat self-test did not emit completion output\n' >&2
+    exit 1
+  fi
+  printf 'Jarvis release-local heartbeat self-test: ok\n'
+}
+
+if [[ "${1:-}" == "--heartbeat-self-test" ]]; then
+  heartbeat_self_test
+  exit 0
+fi
 
 run ./scripts/release-version-consistency.sh --check
 run ./scripts/release-ci-workflow-smoke.sh
