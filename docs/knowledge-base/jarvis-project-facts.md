@@ -986,6 +986,15 @@ requires plugin-trust `generated_at`, `review_started_at`,
   clean-profile install/Finder validation, owner-recorded live voice/audio QA,
   marketplace/plugin-trust plus OS-level sandbox/egress evidence, final
   evidence bundle archival, and manual release QA gates exist.
+- After merging production-readiness PR slices, run the post-merge cleanup
+  audit before stronger readiness statements:
+  `gh pr list --state open --json number,title,headRefName,baseRefName,url`,
+  `gh run list --workflow release-local.yml --branch main --limit 5`,
+  `git worktree list --porcelain`, `git branch --merged main --list 'codex/*'`,
+  `git branch --no-merged main --list 'codex/*'`, and
+  `git status --short --branch`. This distinguishes open review work, current
+  public release-local evidence, active worktrees, merged topic branches, and
+  historical unmerged branches.
 - Durable fact from phase 3 packaged app work: SwiftPM does not create a full
   release `.app` bundle by itself here, so the local smoke assembles the bundle
   deterministically in a temp directory and uses environment-configurable
@@ -1019,6 +1028,12 @@ requires plugin-trust `generated_at`, `review_started_at`,
   `jarvis release signed-distribution-runbook --format json`, and
   `jarvis release plugin-trust-runbook --format json` are compatibility aliases
   for their structured `--json` summaries.
+- Runbook payload shape has two explicit contracts: CLI `--json` and
+  `--format json` produce the operator/snapshot JSON used by release scripts and
+  handoff E2E checks, while IPC `/release/*-runbook` endpoints return the
+  Swift-facing `ReleaseRunbookResponse` shape. They must preserve the same
+  command sequence, manual checks, proof boundary, and evidence summaries, but
+  they are not required to be byte-for-byte identical.
 - `./scripts/package-distribution.sh --check` is now part of
   `./scripts/release-local.sh`, the readiness recommended-command list, and the
   signed-distribution runbook before the unsigned launch and credentialed

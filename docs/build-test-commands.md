@@ -531,7 +531,11 @@ sequence, manual checks, and `--json`/`--format json` parity for this runbook.
 The same runbook families are also exposed through redacted IPC endpoints for
 the Swift Release tab; Rust contract/runbook tests and Swift IPC/model tests
 cover that app-facing surface without treating it as completed release
-evidence.
+evidence. The CLI `--json` and `--format json` runbook output is the
+operator/snapshot JSON shape used by release scripts and E2E handoff checks;
+the IPC endpoints return the app-facing `ReleaseRunbookResponse` contract with
+shared commands, manual checks, proof boundary, and evidence summaries, but the
+two payloads are not required to be byte-for-byte identical.
 `cargo run -p jarvis-cli -- release plugin-trust-runbook` is read-only;
 it summarizes the current `plugin_trust_qa_report` evidence item and prints the
 exact plugin-trust template, assertion, evidence-status, evidence-doctor, and
@@ -858,6 +862,22 @@ changes. They only support docs-only PR evidence and should be reported as such.
 For the phase-3 docs architecture slice, the expected verification is the two
 `rg` checks above plus `git diff --check`; code gates belong to the executable
 phase-3 slices unless this branch starts changing code.
+
+Post-merge cleanup audit:
+
+```sh
+gh pr list --state open --json number,title,headRefName,baseRefName,url
+gh run list --workflow release-local.yml --branch main --limit 5
+git worktree list --porcelain
+git branch --merged main --list 'codex/*'
+git branch --no-merged main --list 'codex/*'
+git status --short --branch
+```
+
+Use this after merging PR slices to confirm no review PRs remain open, public
+release-local workflow evidence exists for `main`, active worktrees are known,
+merged `codex/` topic branches are distinguishable from unmerged historical
+lanes, and the primary checkout is clean before making readiness statements.
 
 For installed subprocess plugin progress-event changes, run the focused
 redaction/audit test before the full release gate:

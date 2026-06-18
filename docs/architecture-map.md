@@ -23,6 +23,7 @@ flowchart TB
     User --> MacShell["JarvisMacApp SwiftUI shell"]
     ReleaseWorkflow["repo-owned release workflow and docs alignment"] --> Docs["DESIGN, README, architecture map, release checklist, build/test commands, knowledge-base"]
     ReleaseWorkflow --> Sweep["isolated worktree/branch production sweep"]
+    Sweep --> PostMergeCleanupAudit["post-merge cleanup audit: open PRs, main workflow runs, worktrees, merged/unmerged codex branches, clean checkout"]
     Sweep --> LocalGate["./scripts/release-local.sh"]
     GitHubCI["GitHub Actions release-local macOS workflow"] --> LocalGate
     LocalGate --> CIWorkflowSmoke["release-ci-workflow-smoke.sh"]
