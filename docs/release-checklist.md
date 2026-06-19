@@ -420,7 +420,9 @@ stage or when a PR needs focused evidence for one ownership slice.
   Confirm the readiness runbook also includes the source-and-run
   `target/release-plugin-trust-qa.env` command for `--assert-complete`. Those
   flags may be changed only after the corresponding external plugin trust check
-  has actually completed.
+  has actually completed, and every artifact URI must point to a durable
+  release evidence archive rather than a placeholder, self-test, fixture, or
+  temporary path.
 - Confirm
   `./scripts/release-plugin-trust-qa.sh --self-test` proves only JSON report
   mechanics with fake validation flags and fake evidence notes. The report must

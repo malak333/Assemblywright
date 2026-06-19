@@ -3190,6 +3190,138 @@ fn release_plugin_trust_runbook_summarizes_next_operator_steps() {
 
 #[cfg(unix)]
 #[test]
+fn release_plugin_trust_qa_assertion_rejects_temporary_artifact_uri() {
+    let temp_dir = tempfile::tempdir().expect("temp plugin trust QA");
+    let report_path = temp_dir.path().join("release-plugin-trust-qa-report.json");
+    let report_path_arg = report_path
+        .to_str()
+        .expect("report path is valid UTF-8")
+        .to_string();
+    let output = run_repo_script_failure_with_env(
+        "scripts/release-plugin-trust-qa.sh",
+        &["--assert-complete"],
+        &[
+            ("JARVIS_PLUGIN_QA_REPORT_PATH", report_path_arg.as_str()),
+            (
+                "JARVIS_PLUGIN_QA_REVIEW_SOURCE",
+                "owner-asserted-manual-review",
+            ),
+            ("JARVIS_PLUGIN_QA_SELF_TEST_FIXTURE", "false"),
+            ("JARVIS_PLUGIN_QA_MARKETPLACE_REVIEW_VALIDATED", "true"),
+            ("JARVIS_PLUGIN_QA_MALWARE_SCAN_VALIDATED", "true"),
+            ("JARVIS_PLUGIN_QA_OS_SANDBOX_VALIDATED", "true"),
+            ("JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED", "true"),
+            ("JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_POLICY_VALIDATED", "true"),
+            ("JARVIS_PLUGIN_QA_MANUAL_TRUST_REVIEW_VALIDATED", "true"),
+            ("JARVIS_PLUGIN_QA_OWNER_NAME", "Release Operator"),
+            ("JARVIS_PLUGIN_QA_REVIEW_STARTED_AT", "2026-05-22T16:10:00Z"),
+            (
+                "JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT",
+                "2026-05-22T16:20:00Z",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE",
+                "Marketplace review evidence archived.",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_MARKETPLACE_ARTIFACT_URI",
+                "file:///tmp/jarvis/plugin-trust/marketplace-review.json",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_MARKETPLACE_ARTIFACT_SHA256",
+                "1111111111111111111111111111111111111111111111111111111111111111",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE",
+                "Malware scan evidence archived.",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_MALWARE_SCAN_ARTIFACT_URI",
+                "archive://jarvis/plugin-trust/malware-scan.json",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_MALWARE_SCAN_ARTIFACT_SHA256",
+                "2222222222222222222222222222222222222222222222222222222222222222",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE",
+                "OS sandbox validation evidence archived.",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_OS_SANDBOX_ARTIFACT_URI",
+                "archive://jarvis/plugin-trust/os-sandbox.json",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_OS_SANDBOX_ARTIFACT_SHA256",
+                "3333333333333333333333333333333333333333333333333333333333333333",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE",
+                "Host-level egress validation evidence archived.",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_EGRESS_ARTIFACT_URI",
+                "archive://jarvis/plugin-trust/egress.json",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_EGRESS_ARTIFACT_SHA256",
+                "4444444444444444444444444444444444444444444444444444444444444444",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_EGRESS_POLICY_LABEL",
+                "Host egress policy/profile reviewed.",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_EGRESS_VALIDATION_COMPLETED_AT",
+                "2026-05-22T16:18:00Z",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_EGRESS_DENY_FIXTURE_EVIDENCE_NOTE",
+                "Undeclared-host deny evidence archived.",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_EGRESS_ALLOW_FIXTURE_EVIDENCE_NOTE",
+                "Declared-host allow evidence archived.",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE",
+                "Signed publisher policy evidence archived.",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_ARTIFACT_URI",
+                "archive://jarvis/plugin-trust/signed-publisher.json",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_ARTIFACT_SHA256",
+                "5555555555555555555555555555555555555555555555555555555555555555",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE",
+                "Manual plugin trust review evidence archived.",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_MANUAL_REVIEW_ARTIFACT_URI",
+                "archive://jarvis/plugin-trust/manual-review.json",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_MANUAL_REVIEW_ARTIFACT_SHA256",
+                "6666666666666666666666666666666666666666666666666666666666666666",
+            ),
+        ],
+    );
+
+    assert!(
+        output.contains("JARVIS_PLUGIN_QA_MARKETPLACE_ARTIFACT_URI"),
+        "{output}"
+    );
+    assert!(
+        output.contains("durable release evidence archive"),
+        "{output}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn release_external_handoff_snapshots_match_live_runbook_commands() {
     let temp_dir = tempfile::tempdir().expect("temp external handoff");
     let handoff_dir = temp_dir.path().join("handoff");
