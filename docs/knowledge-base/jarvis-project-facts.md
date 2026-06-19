@@ -1206,6 +1206,11 @@ requires plugin-trust `generated_at`, `review_started_at`,
   incomplete evidence, invalid evidence, or failed evidence refresh keeps
   `effectiveProductionReady` false; the `live_voice_loop` row must continue to
   surface `pending_manual_validation` rather than implying hardware validation.
+- Bash final-bundle and evidence-doctor consumers must reject placeholder child
+  report owner notes with the same strictness as the live-device/plugin-trust
+  report producers and Rust evidence-status path. Child reports with note text
+  such as `pending`, `placeholder`, `fixture`, `todo`, or similar cannot clear
+  final release evidence assertions.
 - Plugin-trust artifact evidence is enforced as a complete six-category set.
   Evidence-status, evidence-doctor, and final bundle validation reject missing,
   placeholder, or non-SHA-256 artifact bindings for marketplace review,

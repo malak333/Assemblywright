@@ -1959,6 +1959,36 @@ PY
     fail "release evidence self-test expected blank live voice observation to be rejected"
   fi
 
+  python3 - "$tmp_dir/live.json" "$tmp_dir/placeholder-live-owner-note.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+with open(source, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["owner_recorded_live_voice_evidence"]["microphone_evidence_note"] = "pending external evidence"
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+PY
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/placeholder-live-owner-note.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/placeholder-live-owner-note-bundle.json" \
+    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
+    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+    "$0" --bundle >/dev/null 2>&1; then
+    fail "release evidence self-test expected placeholder live-device owner note to be rejected"
+  fi
+
   python3 - "$tmp_dir/live.json" "$tmp_dir/mismatched-command-live.json" <<'PY'
 import json
 import sys
@@ -2194,6 +2224,36 @@ PY
     JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>&1; then
     fail "release evidence self-test expected blank plugin trust observation to be rejected"
+  fi
+
+  python3 - "$tmp_dir/plugin.json" "$tmp_dir/placeholder-plugin-owner-note.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+with open(source, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["owner_recorded_plugin_trust_evidence"]["manual_review_evidence_note"] = "placeholder review evidence"
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+PY
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/placeholder-plugin-owner-note.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/placeholder-plugin-owner-note-bundle.json" \
+    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
+    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+    "$0" --bundle >/dev/null 2>&1; then
+    fail "release evidence self-test expected placeholder plugin-trust owner note to be rejected"
   fi
 
   python3 - "$tmp_dir/plugin.json" "$tmp_dir/non-utc-plugin.json" <<'PY'
@@ -2610,11 +2670,17 @@ require_json_number_equals "live-device QA report" "$LIVE_QA_REPORT" "schema_ver
 require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "evidence_type" "owner_recorded_live_device_qa"
 require_json_bool_false "live-device QA report" "$LIVE_QA_REPORT" "self_test_fixture"
 require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "installed_app_path" "$EXPECTED_INSTALLED_APP_PATH"
-for field in owner_name device_label profile_label voice_check_started_at voice_check_completed_at microphone_evidence_note speech_permission_evidence_note transcript_handoff_evidence_note audio_output_evidence_note; do
+for field in owner_name device_label profile_label voice_check_started_at voice_check_completed_at; do
   require_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.$field"
 done
-for field in clean_profile_evidence_note finder_launch_evidence_note notification_evidence_note notification_observed_at restart_evidence_note manual_release_qa_evidence_note; do
+for field in microphone_evidence_note speech_permission_evidence_note transcript_handoff_evidence_note audio_output_evidence_note; do
+  require_json_meaningful_evidence_string "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.$field"
+done
+for field in notification_observed_at; do
   require_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_non_voice_evidence.$field"
+done
+for field in clean_profile_evidence_note finder_launch_evidence_note notification_evidence_note restart_evidence_note manual_release_qa_evidence_note; do
+  require_json_meaningful_evidence_string "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_non_voice_evidence.$field"
 done
 require_json_utc_timestamp "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.voice_check_started_at"
 require_json_utc_timestamp "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.voice_check_completed_at"
@@ -2654,8 +2720,11 @@ require_json_string_equals "plugin trust QA report" "$PLUGIN_QA_REPORT" "evidenc
 require_json_string_equals "plugin trust QA report" "$PLUGIN_QA_REPORT" "version" "$EXPECTED_VERSION"
 require_json_bool_false "plugin trust QA report" "$PLUGIN_QA_REPORT" "self_test_fixture"
 require_json_string_equals "plugin trust QA report" "$PLUGIN_QA_REPORT" "review_source" "owner-asserted-manual-review"
-for field in owner_name review_started_at review_completed_at marketplace_evidence_note malware_scan_evidence_note os_sandbox_evidence_note egress_evidence_note egress_policy_label egress_deny_fixture_evidence_note egress_allow_fixture_evidence_note signed_publisher_evidence_note manual_review_evidence_note; do
+for field in owner_name review_started_at review_completed_at; do
   require_json_nonempty_string "plugin trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.$field"
+done
+for field in marketplace_evidence_note malware_scan_evidence_note os_sandbox_evidence_note egress_evidence_note egress_policy_label egress_deny_fixture_evidence_note egress_allow_fixture_evidence_note signed_publisher_evidence_note manual_review_evidence_note; do
+  require_json_meaningful_evidence_string "plugin trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.$field"
 done
 for artifact in marketplace_review malware_scan os_sandbox egress_enforcement signed_publisher_policy manual_trust_review; do
   require_json_meaningful_evidence_string "plugin trust QA report" "$PLUGIN_QA_REPORT" "evidence_artifacts.$artifact.uri"

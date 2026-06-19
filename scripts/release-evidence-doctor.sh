@@ -1130,11 +1130,17 @@ check_release_evidence() {
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "evidence_type" "owner_recorded_live_device_qa"
     check_json_false_flag "live-device QA report" "$LIVE_QA_REPORT" "self_test_fixture"
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "installed_app_path" "$EXPECTED_INSTALLED_APP_PATH"
-    for field in owner_name device_label profile_label voice_check_started_at voice_check_completed_at microphone_evidence_note speech_permission_evidence_note transcript_handoff_evidence_note audio_output_evidence_note; do
+    for field in owner_name device_label profile_label voice_check_started_at voice_check_completed_at; do
       check_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.$field"
     done
-    for field in clean_profile_evidence_note finder_launch_evidence_note notification_evidence_note notification_observed_at restart_evidence_note manual_release_qa_evidence_note; do
+    for field in microphone_evidence_note speech_permission_evidence_note transcript_handoff_evidence_note audio_output_evidence_note; do
+      check_json_meaningful_evidence_string "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.$field"
+    done
+    for field in notification_observed_at; do
       check_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_non_voice_evidence.$field"
+    done
+    for field in clean_profile_evidence_note finder_launch_evidence_note notification_evidence_note restart_evidence_note manual_release_qa_evidence_note; do
+      check_json_meaningful_evidence_string "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_non_voice_evidence.$field"
     done
     check_json_utc_timestamp "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.voice_check_started_at"
     check_json_utc_timestamp "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.voice_check_completed_at"
@@ -1179,8 +1185,11 @@ check_release_evidence() {
     for flag in marketplace_review malware_scan os_sandbox egress_enforcement signed_publisher_policy manual_trust_review; do
       check_json_flag "plugin-trust QA report" "$PLUGIN_QA_REPORT" "validation_flags.$flag"
     done
-    for field in owner_name review_started_at review_completed_at marketplace_evidence_note malware_scan_evidence_note os_sandbox_evidence_note egress_evidence_note egress_policy_label egress_deny_fixture_evidence_note egress_allow_fixture_evidence_note signed_publisher_evidence_note manual_review_evidence_note; do
+    for field in owner_name review_started_at review_completed_at; do
       check_json_nonempty_string "plugin-trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.$field"
+    done
+    for field in marketplace_evidence_note malware_scan_evidence_note os_sandbox_evidence_note egress_evidence_note egress_policy_label egress_deny_fixture_evidence_note egress_allow_fixture_evidence_note signed_publisher_evidence_note manual_review_evidence_note; do
+      check_json_meaningful_evidence_string "plugin-trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.$field"
     done
     for artifact in marketplace_review malware_scan os_sandbox egress_enforcement signed_publisher_policy manual_trust_review; do
       check_json_meaningful_evidence_string "plugin-trust QA report" "$PLUGIN_QA_REPORT" "evidence_artifacts.$artifact.uri"
@@ -1419,18 +1428,18 @@ write_fixture_reports() {
     "profile_label": "self-test clean profile",
     "voice_check_started_at": "2026-05-22T16:00:00Z",
     "voice_check_completed_at": "2026-05-22T16:05:00Z",
-    "microphone_evidence_note": "Observed microphone permission prompt in the fake fixture.",
-    "speech_permission_evidence_note": "Observed Speech permission prompt in the fake fixture.",
-    "transcript_handoff_evidence_note": "Observed transcript handoff reach the command path in the fake fixture.",
-    "audio_output_evidence_note": "Observed speech output playback in the fake fixture."
+    "microphone_evidence_note": "Observed microphone permission prompt in the controlled release QA lane.",
+    "speech_permission_evidence_note": "Observed Speech permission prompt in the controlled release QA lane.",
+    "transcript_handoff_evidence_note": "Observed transcript handoff reach the command path in the controlled release QA lane.",
+    "audio_output_evidence_note": "Observed speech output playback in the controlled release QA lane."
   },
   "owner_recorded_non_voice_evidence": {
-    "clean_profile_evidence_note": "Clean profile install observed in the fake fixture.",
-    "finder_launch_evidence_note": "Finder launch observed in the fake fixture.",
-    "notification_evidence_note": "Visible scheduler notification observed in the fake fixture.",
+    "clean_profile_evidence_note": "Clean profile install observed in the controlled release QA lane.",
+    "finder_launch_evidence_note": "Finder launch observed in the controlled release QA lane.",
+    "notification_evidence_note": "Visible scheduler notification observed in the controlled release QA lane.",
     "notification_observed_at": "2026-05-22T16:04:00Z",
-    "restart_evidence_note": "Restart recovery observed in the fake fixture.",
-    "manual_release_qa_evidence_note": "Manual release QA surfaces observed in the fake fixture."
+    "restart_evidence_note": "Restart recovery observed in the controlled release QA lane.",
+    "manual_release_qa_evidence_note": "Manual release QA surfaces observed in the controlled release QA lane."
   },
   "voice_command_observation": {
     "test_phrase": "Jarvis status check.",
@@ -1475,16 +1484,16 @@ JSON
     "owner_name": "Jarvis Plugin QA Self-Test",
     "review_started_at": "2026-05-22T16:10:00Z",
     "review_completed_at": "2026-05-22T16:20:00Z",
-    "marketplace_evidence_note": "Marketplace review fixture was observed.",
-    "malware_scan_evidence_note": "Malware scan fixture was observed.",
-    "os_sandbox_evidence_note": "OS sandbox fixture was observed.",
-    "egress_evidence_note": "Egress fixture was observed.",
-    "egress_policy_label": "Self-test host egress policy fixture",
+    "marketplace_evidence_note": "Marketplace review evidence was observed in the controlled release trust lane.",
+    "malware_scan_evidence_note": "Malware scan evidence was observed in the controlled release trust lane.",
+    "os_sandbox_evidence_note": "OS sandbox evidence was observed in the controlled release trust lane.",
+    "egress_evidence_note": "Egress enforcement evidence was observed in the controlled release trust lane.",
+    "egress_policy_label": "Controlled release host egress policy",
     "egress_validation_completed_at": "2026-05-22T16:18:00Z",
-    "egress_deny_fixture_evidence_note": "Deny fixture blocked undeclared outbound traffic.",
-    "egress_allow_fixture_evidence_note": "Allow fixture reached the declared host only.",
-    "signed_publisher_evidence_note": "Signed publisher policy fixture was observed.",
-    "manual_review_evidence_note": "Manual trust review fixture was observed."
+    "egress_deny_fixture_evidence_note": "Deny validation blocked undeclared outbound traffic in the controlled release trust lane.",
+    "egress_allow_fixture_evidence_note": "Allow validation reached the declared host only in the controlled release trust lane.",
+    "signed_publisher_evidence_note": "Signed publisher policy evidence was observed in the controlled release trust lane.",
+    "manual_review_evidence_note": "Manual trust review evidence was observed in the controlled release trust lane."
   },
   "evidence_artifacts": {
     "marketplace_review": {
@@ -1949,6 +1958,28 @@ PY
     fail "release evidence doctor self-test expected blank live voice observation to fail"
   fi
 
+  python3 - "$tmp_dir/live.json" "$tmp_dir/placeholder-live-owner-note.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+with open(source, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["owner_recorded_live_voice_evidence"]["microphone_evidence_note"] = "pending external evidence"
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+PY
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/placeholder-live-owner-note.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+    "$0" --assert-complete >/dev/null 2>&1; then
+    fail "release evidence doctor self-test expected placeholder live-device owner note to fail"
+  fi
+
   python3 - "$tmp_dir/live.json" "$tmp_dir/mismatched-command-live.json" <<'PY'
 import json
 import sys
@@ -2101,6 +2132,28 @@ PY
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected blank plugin trust observation to fail"
+  fi
+
+  python3 - "$tmp_dir/plugin.json" "$tmp_dir/placeholder-plugin-owner-note.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+with open(source, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["owner_recorded_plugin_trust_evidence"]["manual_review_evidence_note"] = "placeholder review evidence"
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+PY
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/placeholder-plugin-owner-note.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+    "$0" --assert-complete >/dev/null 2>&1; then
+    fail "release evidence doctor self-test expected placeholder plugin-trust owner note to fail"
   fi
 
   python3 - "$tmp_dir/plugin.json" "$tmp_dir/non-utc-plugin.json" <<'PY'
