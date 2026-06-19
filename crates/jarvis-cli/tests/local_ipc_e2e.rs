@@ -1,7 +1,7 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
@@ -14,7 +14,33 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
-const BIN: &str = env!("CARGO_BIN_EXE_jarvis");
+fn jarvis_cli_bin() -> PathBuf {
+    let cargo_bin = PathBuf::from(env!("CARGO_BIN_EXE_jarvis"));
+    if cargo_bin.is_file() {
+        return cargo_bin;
+    }
+
+    let workspace_debug_bin = workspace_root().join("target/debug/jarvis");
+    if workspace_debug_bin.is_file() {
+        return workspace_debug_bin;
+    }
+
+    let current_exe_debug_bin = std::env::current_exe()
+        .ok()
+        .and_then(|path| {
+            path.parent()
+                .and_then(|deps| deps.parent())
+                .map(Path::to_path_buf)
+        })
+        .map(|debug_dir| debug_dir.join("jarvis"));
+    if let Some(path) = current_exe_debug_bin {
+        if path.is_file() {
+            return path;
+        }
+    }
+
+    cargo_bin
+}
 
 #[test]
 fn release_readiness_cli_falls_back_without_running_server() {
@@ -6512,7 +6538,7 @@ impl JarvisServer {
                 limit.to_string(),
             ]);
         }
-        let mut command = Command::new(BIN);
+        let mut command = Command::new(jarvis_cli_bin());
         command
             .args(args)
             .current_dir(temp_dir.path())
@@ -6959,7 +6985,7 @@ fn run_cli_failure<const N: usize>(args: [&str; N]) -> String {
 }
 
 fn run_cli_failure_args(args: &[&str]) -> String {
-    let output = Command::new(BIN)
+    let output = Command::new(jarvis_cli_bin())
         .args(args)
         .stdin(Stdio::null())
         .output()
@@ -6994,7 +7020,7 @@ fn run_cli<const N: usize>(args: [&str; N]) -> Output {
 }
 
 fn run_cli_with_env<const N: usize>(args: [&str; N], env: &[(&str, &str)]) -> Output {
-    let mut command = Command::new(BIN);
+    let mut command = Command::new(jarvis_cli_bin());
     command.args(args).stdin(Stdio::null());
     for (key, value) in env {
         command.env(key, value);
