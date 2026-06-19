@@ -886,17 +886,16 @@ boundary that remained in force.
 Current readiness should always be refreshed before release claims. The
 historical 2026-06-12 UTC baseline after PR #268 started from `main` at
 `8cccb5b`, with the hosted `Release local gate` green for PR #268 run
-`27428860335` / job `81073692261`. The current post-PR #301 baseline at
-`main` commit `155ccd4` continues to report `production_ready: false`,
+`27428860335` / job `81073692261`. The current post-PR #308 baseline at
+`main` commit `af943e8` has hosted `Release local gate` success for push run
+`27828319448` / job `82358342509` and continues to report `production_ready: false`,
 `verified_feature_count: 16`, and `pending_feature_count: 1`, with
 `live_voice_loop` still `pending_manual_validation`, while the local repo-owned
 release handoff, workflow hygiene, docs drift smoke, evidence-note validation,
-installed-plugin plus model-step/model-output activity-progress proof, and
-handoff manifest digest-binding mechanics have improved without converting local
-evidence inspection into production proof. The GitHub release-local workflow now
-sets a CI-only release-local command heartbeat so long-running canonical gate
-commands emit periodic progress lines while preserving the same command list and
-coverage.
+installed-plugin plus model-step/model-output activity-progress proof,
+handoff manifest digest-binding, release-local command heartbeat, and
+final-bundle reports archive URI validation have improved without converting
+local evidence inspection into production proof.
 `jarvis release evidence-status --json` remains expected to report
 `complete: false` with three satisfied evidence rows, six missing
 external/manual evidence artifacts, and zero invalid evidence rows after the
