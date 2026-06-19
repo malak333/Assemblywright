@@ -1118,6 +1118,11 @@ requires plugin-trust `generated_at`, `review_started_at`,
   `jarvis release evidence-status` output includes each evidence item's path and
   detail, including present presence-only caveats on the item line, so
   operators do not need `--json` for basic triage.
+- Final release evidence bundle generation is overwrite-protected by default:
+  generated templates set `JARVIS_EVIDENCE_OVERWRITE_OUTPUT=false`, and
+  `release-evidence-bundle.sh --bundle` rejects an existing output path unless
+  the operator has preserved the old artifact and intentionally sets the
+  overwrite flag to `true`.
 - `JarvisMacAppTests` covers app-level Release tab presentation for
   presence-only evidence rows. Release tab evidence rows explicitly label the
   evidence path, detail text, and production/manual-gate requirement context so

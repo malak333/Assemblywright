@@ -450,7 +450,10 @@ stage or when a PR needs focused evidence for one ownership slice.
   readiness runbook also includes the source-and-run
   `target/release-evidence-bundle.env` command for `--bundle`;
   those flags may be changed only after the corresponding external release
-  check has actually completed. Confirm the readiness runbook also includes
+  check has actually completed. Confirm the template keeps
+  `JARVIS_EVIDENCE_OVERWRITE_OUTPUT=false`, and that any `true` override is
+  used only after preserving the previous bundle artifact. Confirm the readiness
+  runbook also includes
   `./scripts/release-evidence-doctor.sh --assert-complete` after the bundle
   command as the final inventory assertion. Treat `--check`,
   `release-evidence-doctor.sh`, `/release/evidence-status`, and

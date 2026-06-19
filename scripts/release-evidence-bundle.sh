@@ -13,6 +13,7 @@ SIGNED_PROVENANCE_REPORT="${JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT:-$DIST_DIR/
 LIVE_QA_REPORT="${JARVIS_EVIDENCE_LIVE_QA_REPORT:-${JARVIS_QA_REPORT_PATH:-$ROOT_DIR/target/release-live-device-qa-report.json}}"
 PLUGIN_QA_REPORT="${JARVIS_EVIDENCE_PLUGIN_QA_REPORT:-${JARVIS_PLUGIN_QA_REPORT_PATH:-$ROOT_DIR/target/release-plugin-trust-qa-report.json}}"
 OUTPUT_PATH="${JARVIS_EVIDENCE_OUTPUT_PATH:-$ROOT_DIR/target/release-evidence-bundle.json}"
+OVERWRITE_OUTPUT="${JARVIS_EVIDENCE_OVERWRITE_OUTPUT:-false}"
 VALIDATE_LOCAL_SIGNATURES="${JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES:-true}"
 EXPECTED_BUNDLE_ID="${JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID:-com.nobiletechnology.jarvis}"
 EXPECTED_VERSION="${JARVIS_EVIDENCE_EXPECTED_VERSION:-$VERSION}"
@@ -72,6 +73,9 @@ Optional:
   JARVIS_EVIDENCE_LIVE_QA_REPORT      Defaults to JARVIS_QA_REPORT_PATH or target/release-live-device-qa-report.json
   JARVIS_EVIDENCE_PLUGIN_QA_REPORT    Defaults to JARVIS_PLUGIN_QA_REPORT_PATH or target/release-plugin-trust-qa-report.json
   JARVIS_EVIDENCE_OUTPUT_PATH         Defaults to target/release-evidence-bundle.json
+  JARVIS_EVIDENCE_OVERWRITE_OUTPUT    Defaults to false. Set to true only when
+                                      intentionally replacing an existing
+                                      bundle after preserving the old artifact.
   JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES
                                       Defaults to true. Set to false only for
                                       fake self-test fixtures.
@@ -268,6 +272,22 @@ require_artifact_validation_mode() {
 require_production_signature_validation() {
   if [[ "$VALIDATE_LOCAL_SIGNATURES" != true && "${JARVIS_EVIDENCE_SELF_TEST_MODE:-}" != true ]]; then
     fail "JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false is only allowed during --self-test"
+  fi
+}
+
+require_output_write_mode() {
+  case "$OVERWRITE_OUTPUT" in
+    true|false)
+      ;;
+    *)
+      fail "JARVIS_EVIDENCE_OVERWRITE_OUTPUT must be true or false"
+      ;;
+  esac
+}
+
+require_output_path_available() {
+  if [[ -e "$OUTPUT_PATH" && "$OVERWRITE_OUTPUT" != true ]]; then
+    fail "release evidence bundle output already exists: $OUTPUT_PATH; preserve the existing artifact or set JARVIS_EVIDENCE_OVERWRITE_OUTPUT=true for an intentional replacement"
   fi
 }
 
@@ -1006,6 +1026,7 @@ write_bundle() {
   local_signature_validation="$VALIDATE_LOCAL_SIGNATURES"
 
   mkdir -p "$(dirname "$OUTPUT_PATH")"
+  require_output_path_available
   python3 - \
     "$OUTPUT_PATH" \
     "$generated_at" \
@@ -1136,6 +1157,7 @@ JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$SIGNED_PROVENANCE_REPORT"
 JARVIS_EVIDENCE_LIVE_QA_REPORT="$LIVE_QA_REPORT"
 JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$PLUGIN_QA_REPORT"
 JARVIS_EVIDENCE_OUTPUT_PATH="$OUTPUT_PATH"
+JARVIS_EVIDENCE_OVERWRITE_OUTPUT=false
 JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=true
 JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID="$EXPECTED_BUNDLE_ID"
 JARVIS_EVIDENCE_EXPECTED_VERSION="$EXPECTED_VERSION"
@@ -1458,6 +1480,7 @@ JSON
     JARVIS_EVIDENCE_LIVE_QA_REPORT \
     JARVIS_EVIDENCE_PLUGIN_QA_REPORT \
     JARVIS_EVIDENCE_OUTPUT_PATH \
+    JARVIS_EVIDENCE_OVERWRITE_OUTPUT \
     JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES \
     JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID \
     JARVIS_EVIDENCE_EXPECTED_VERSION \
@@ -1532,6 +1555,47 @@ note = data["owner_recorded_release_evidence"]["reports_archive_note"]
 if "\n" not in note or '"release archive index"' not in note or "\\ marker" not in note:
     raise SystemExit("release evidence self-test expected structured JSON writer to preserve multiline reports archive note")
 PY
+
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
+    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+    "$0" --bundle >/dev/null 2>"$tmp_dir/existing-output.err"; then
+    fail "release evidence self-test expected existing bundle output to be rejected"
+  fi
+  require_file_contains "existing bundle output error" "$tmp_dir/existing-output.err" "release evidence bundle output already exists"
+
+  JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+    JARVIS_EVIDENCE_OVERWRITE_OUTPUT=true \
+    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
+    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+    "$0" --bundle >/dev/null
+  require_json_contains "release evidence self-test overwritten bundle" "$tmp_dir/bundle.json" '"evidence_type": "release_evidence_bundle"'
 
   python3 - "$tmp_dir/bundle.json" "$tmp_dir/placeholder-archive-bundle.json" <<'PY'
 import json
@@ -2436,6 +2500,7 @@ require_json_string_contains "signed-distribution provenance report" "$SIGNED_PR
 require_json_gatekeeper_accepted "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "gatekeeper.app_bundle_assessment"
 require_json_gatekeeper_accepted "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "gatekeeper.installer_pkg_assessment"
 require_json_utc_timestamp "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "generated_at"
+require_output_write_mode
 require_production_signature_validation
 validate_local_distribution_evidence
 for flag in clean_profile finder_launch microphone speech_permission transcript_handoff audio_output notification restart manual_release_qa; do

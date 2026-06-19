@@ -408,6 +408,7 @@ self_test() {
   require_file_contains "plugin-trust template" "$tmp_dir/handoff/release-plugin-trust-qa.env" 'JARVIS_PLUGIN_QA_MALWARE_SCAN_ARTIFACT_SHA256=""'
   require_file_contains "plugin-trust template" "$tmp_dir/handoff/release-plugin-trust-qa.env" 'JARVIS_PLUGIN_QA_MANUAL_REVIEW_ARTIFACT_URI=""'
   require_file_contains "evidence-bundle template" "$tmp_dir/handoff/release-evidence-bundle.env" "JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=false"
+  require_file_contains "evidence-bundle template" "$tmp_dir/handoff/release-evidence-bundle.env" "JARVIS_EVIDENCE_OVERWRITE_OUTPUT=false"
   require_file_contains "evidence-bundle template" "$tmp_dir/handoff/release-evidence-bundle.env" 'JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI=""'
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "JARVIS_DEVELOPER_ID_APPLICATION"
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "set -a && source release-live-device-qa.env && set +a"
