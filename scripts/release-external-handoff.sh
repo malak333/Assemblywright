@@ -6,7 +6,8 @@ cd "$ROOT_DIR"
 
 OUTPUT_DIR="${JARVIS_RELEASE_HANDOFF_DIR:-$ROOT_DIR/target/release-external-handoff}"
 ENDPOINT="${JARVIS_RELEASE_HANDOFF_ENDPOINT:-http://127.0.0.1:7787}"
-VERSION="${JARVIS_RELEASE_HANDOFF_VERSION:-$("$ROOT_DIR/scripts/release-version.sh")}"
+CANONICAL_VERSION="$("$ROOT_DIR/scripts/release-version.sh")"
+VERSION="${JARVIS_RELEASE_HANDOFF_VERSION:-$CANONICAL_VERSION}"
 CHECK_ONLY=false
 WRITE=false
 SELF_TEST=false
@@ -44,6 +45,8 @@ Optional:
                                    Defaults to http://127.0.0.1:7787; the CLI
                                    falls back to local read-only metadata when
                                    the endpoint is unavailable.
+  JARVIS_RELEASE_HANDOFF_VERSION   Optional explicit version guard. If set, it
+                                   must match scripts/release-version.sh.
 
 Proof boundary: this script generates operator handoff files, read-only
 snapshots, and a digest manifest only. It does not sign, notarize, staple, install, Finder-launch,
@@ -80,6 +83,12 @@ require_file_contains() {
   require_file "$label" "$path"
   if ! grep -F "$expected" "$path" >/dev/null 2>&1; then
     fail "$label does not mention required text: $expected"
+  fi
+}
+
+require_handoff_version_consistency() {
+  if [[ -n "${JARVIS_RELEASE_HANDOFF_VERSION:-}" && "$JARVIS_RELEASE_HANDOFF_VERSION" != "$CANONICAL_VERSION" ]]; then
+    fail "JARVIS_RELEASE_HANDOFF_VERSION must match canonical release version $CANONICAL_VERSION"
   fi
 }
 
@@ -276,8 +285,9 @@ itself.
 
 ## Signed Distribution Evidence
 
-- \`target/distribution/Jarvis-$VERSION.zip\`: Developer ID signed, notarized,
-  stapled app zip.
+- \`target/distribution/Jarvis-$VERSION.zip\`: Developer ID signed and notarized
+  app zip containing the signed app bundle; stapling is validated against the
+  app bundle itself, not the zip container.
 - \`target/distribution/Jarvis-$VERSION.pkg\`: Developer ID Installer signed,
   notarized, stapled \`/Applications\` installer package.
 - \`target/distribution/Jarvis-$VERSION-signed-provenance.json\`: provenance report
@@ -510,6 +520,12 @@ self_test() {
   require_json_key "live-device runbook snapshot" "$tmp_dir/handoff/live-device-runbook.json" "commands"
   require_json_key "plugin-trust runbook snapshot" "$tmp_dir/handoff/plugin-trust-runbook.json" "commands"
 
+  local mismatch_log="$tmp_dir/version-mismatch.log"
+  if JARVIS_RELEASE_HANDOFF_VERSION="0.0.0-test" "$0" --write "$tmp_dir/version-mismatch" >"$mismatch_log" 2>&1; then
+    fail "handoff self-test expected version mismatch to fail"
+  fi
+  require_file_contains "version mismatch output" "$mismatch_log" "JARVIS_RELEASE_HANDOFF_VERSION must match canonical release version"
+
   printf 'Jarvis external release handoff self-test: ok\n'
   printf 'Proof boundary: temporary templates, checklist, read-only snapshots, and digest manifest only; no external release validation was performed.\n'
 }
@@ -547,6 +563,7 @@ mode_count=0
 [[ "$mode_count" -eq 1 ]] || fail "choose exactly one mode: --check, --write DIR, or --self-test"
 
 check_prerequisites
+require_handoff_version_consistency
 
 if [[ "$CHECK_ONLY" == true ]]; then
   print_check
