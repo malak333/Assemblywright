@@ -1205,6 +1205,11 @@ requires plugin-trust `generated_at`, `review_started_at`,
   malware scan, OS sandbox, egress enforcement, signed-publisher policy, and
   manual trust review before plugin-trust QA can count as valid release
   evidence.
+- External handoff manifests must bind to the canonical `scripts/release-version.sh`
+  release version. `JARVIS_RELEASE_HANDOFF_VERSION` is only an explicit guard and
+  fails closed if it drifts. Operator-facing zip evidence should say the app zip
+  is Developer ID signed and notarized; stapling is validated against the app
+  bundle itself, not the zip container.
 - The macOS Voice tab surfaces release live-device audio-output evidence fields:
   `JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL` stays an operator-recorded device label,
   while `JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE` includes the last spoken preview
