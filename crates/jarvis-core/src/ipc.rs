@@ -275,6 +275,7 @@ pub struct ModelToolCatalogResponse {
 pub struct ReleaseReadinessResponse {
     pub generated_at: DateTime<Utc>,
     pub production_ready: bool,
+    pub evidence_mode_enabled: bool,
     pub readiness_scope: String,
     pub verified_feature_count: usize,
     pub pending_feature_count: usize,
@@ -1071,6 +1072,7 @@ impl IpcState {
         ReleaseReadinessResponse {
             generated_at: Utc::now(),
             production_ready,
+            evidence_mode_enabled,
             readiness_scope:
                 "local Rust/CLI foundation and Swift shell evidence plus explicitly enabled external release evidence status"
                     .to_string(),
@@ -6850,6 +6852,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let commands = &readiness.recommended_verification_commands;
 
         assert!(!readiness.production_ready);
+        assert!(!readiness.evidence_mode_enabled);
         assert!(readiness
             .readiness_scope
             .contains("local Rust/CLI foundation"));

@@ -52,6 +52,7 @@ done < <(grep -E '^[[:space:]]*run ' "$LOCAL_GATE" | sed -E 's/^[[:space:]]*run 
 
 for file in "$BUILD_DOCS" "$CHECKLIST" "$ARCHITECTURE" "$KB" "$README"; do
   require_text "release evidence-mode boundary" "$file" "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external"
+  require_text "release evidence-mode field" "$file" "evidence_mode_enabled"
   require_text "release command evidence reference" "$file" "task:<uuid>"
   require_text "release command evidence reference" "$file" "audit:<uuid>"
   require_text "owner evidence boundary" "$file" "owner-recorded external evidence"
@@ -76,9 +77,11 @@ require_text "architecture local gate boundary" "$ARCHITECTURE" "does not perfor
 require_text "architecture local gate boundary" "$ARCHITECTURE" "notarization, clean-profile install, Finder/LaunchServices launch, live-device"
 require_text "architecture local gate boundary" "$ARCHITECTURE" "QA, plugin-trust QA, or final evidence bundling"
 require_text "architecture post-merge cleanup audit" "$ARCHITECTURE" "post-merge cleanup audit: open PRs, main workflow runs, worktrees, merged/unmerged codex branches, clean checkout"
-require_text "architecture current readiness baseline" "$ARCHITECTURE" 'current post-PR #310 baseline at'
-require_text "architecture current readiness commit" "$ARCHITECTURE" '`main` commit `27c33f5`'
-require_text "architecture current readiness run" "$ARCHITECTURE" '27832719258'
+require_text "architecture current readiness baseline" "$ARCHITECTURE" 'current post-PR #311 baseline at'
+require_text "architecture current readiness commit" "$ARCHITECTURE" '`main` commit `4417187`'
+require_text "architecture current readiness run" "$ARCHITECTURE" '27834520874'
+forbid_text "architecture stale readiness baseline" "$ARCHITECTURE" 'current post-PR #310 baseline at'
+forbid_text "architecture stale readiness commit" "$ARCHITECTURE" '`main` commit `27c33f5`'
 forbid_text "architecture stale readiness baseline" "$ARCHITECTURE" 'current post-PR #309 baseline at'
 forbid_text "architecture stale readiness commit" "$ARCHITECTURE" '`main` commit `38bd79e`'
 forbid_text "architecture stale readiness baseline" "$ARCHITECTURE" 'current post-PR #308 baseline at'
@@ -92,8 +95,9 @@ require_text "architecture handoff manifest self-test" "$ARCHITECTURE" "--self-t
 require_text "architecture release-local heartbeat" "$ARCHITECTURE" "release-local command heartbeat"
 require_text "architecture final bundle output collision guard" "$ARCHITECTURE" "final bundle writer must also reject"
 require_text "architecture final bundle output collision guard" "$ARCHITECTURE" "output paths that collide with signed-provenance"
-require_text "knowledge base current readiness baseline" "$KB" 'current post-PR #310 baseline at `27c33f5`'
-require_text "knowledge base current readiness run" "$KB" '27832719258'
+require_text "knowledge base current readiness baseline" "$KB" 'current post-PR #311 baseline at `4417187`'
+require_text "knowledge base current readiness run" "$KB" '27834520874'
+forbid_text "knowledge base stale readiness baseline" "$KB" 'current post-PR #310 baseline at `27c33f5`'
 forbid_text "knowledge base stale readiness baseline" "$KB" 'current post-PR #309 baseline at `38bd79e`'
 forbid_text "knowledge base stale readiness baseline" "$KB" 'current post-PR #308 baseline at `af943e8`'
 forbid_text "knowledge base stale readiness baseline" "$KB" 'current post-PR #301 baseline at `155ccd4`'

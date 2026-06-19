@@ -117,7 +117,9 @@ conservative local summary when the endpoint is unavailable. By default it
 treats standard release reports as inventory only; release operators can enable
 evidence-aware blocker clearing by starting or restarting the core with
 `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external` after preserving the relevant
-QA reports:
+QA reports; the structured readiness payload exposes `evidence_mode_enabled` so
+operators can distinguish conservative local mode from a core that was actually
+started in external evidence mode:
 
 ```sh
 cargo run -p jarvis-cli -- release readiness
@@ -468,7 +470,7 @@ including restricted environments that deny loopback sockets; use
 `JARVIS_CLI_JSON=1` for the exact structured payload. Evidence-aware mode can
 clear the live voice/audio blocker from a valid live-device QA report. When the
 running core has `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external`, it can
-compute `production_ready: true` only when every required
+report `evidence_mode_enabled: true` and compute `production_ready: true` only when every required
 `/release/evidence-status` item is present, no missing or invalid evidence
 remains, and evidence-cleared features leave no pending readiness features.
 That is still owner-recorded external evidence, not proof that Jarvis performed

@@ -107,6 +107,9 @@ These notes capture durable facts for future agents working on this repository.
   readiness can compute `production_ready: true` only when every required
   `/release/evidence-status` item is present, no missing or invalid evidence
   remains, and evidence-cleared features leave no pending readiness features.
+  The structured readiness payload exposes `evidence_mode_enabled`; this must
+  reflect the running core state, so setting the env var only on a client CLI
+  process does not clear readiness against a conservative core.
   This remains validated owner-recorded release evidence, not Jarvis-performed
   signing, notarization, stapling, live-device QA, plugin trust QA, or manual
   release QA. The CLI command prefers the IPC endpoint when it is running and
@@ -1173,13 +1176,13 @@ requires plugin-trust `generated_at`, `review_started_at`,
   #268 run `27428860335` / job `81073692261`, `production_ready: false`,
   `verified_feature_count: 16`, `pending_feature_count: 1`, and, after local
   generated app presence artifacts exist, six missing external/manual evidence
-  artifacts. The current post-PR #310 baseline at `27c33f5` has hosted
-  GitHub `Release local gate` success for push run `27832719258` / job
-  `82373209518` and remains conservative with `production_ready: false`,
-  `verified_feature_count: 16`, `pending_feature_count: 1`, and
+  artifacts. The current post-PR #311 baseline at `4417187` has hosted
+  GitHub `Release local gate` success for push run `27834520874` / job
+  `82379205652` and remains conservative with `production_ready: false`,
+  `evidence_mode_enabled: false`, `verified_feature_count: 16`, `pending_feature_count: 1`, and
   `live_voice_loop` as the pending manual feature; `/release/evidence-status`
   reports `complete: false`, three satisfied evidence rows, six missing rows,
-  and no invalid rows. PRs #283-#310 added repo-owned clarity for voice
+  and no invalid rows. PRs #283-#311 added repo-owned clarity for voice
   permission gating, external handoff guidance, architecture documentation,
   plugin-trust artifact SHA guidance, final doctor assertion guidance, Release
   tab runbook-load warnings, external handoff mechanics, evidence-note

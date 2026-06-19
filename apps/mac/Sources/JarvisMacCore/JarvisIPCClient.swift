@@ -219,6 +219,7 @@ public struct JarvisContractResponse: Decodable, Equatable, Sendable {
 public struct JarvisReleaseReadiness: Decodable, Equatable, Sendable {
     public var generatedAt: String
     public var productionReady: Bool
+    public var evidenceModeEnabled: Bool
     public var readinessScope: String
     public var verifiedFeatureCount: Int
     public var pendingFeatureCount: Int
@@ -231,6 +232,7 @@ public struct JarvisReleaseReadiness: Decodable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case generatedAt = "generated_at"
         case productionReady = "production_ready"
+        case evidenceModeEnabled = "evidence_mode_enabled"
         case readinessScope = "readiness_scope"
         case verifiedFeatureCount = "verified_feature_count"
         case pendingFeatureCount = "pending_feature_count"

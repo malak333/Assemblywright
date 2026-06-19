@@ -68,6 +68,8 @@ fn release_readiness_cli_falls_back_without_running_server() {
 
     assert_eq!(release_readiness["production_ready"], false);
     assert_eq!(format_release_readiness["production_ready"], false);
+    assert_eq!(release_readiness["evidence_mode_enabled"], false);
+    assert_eq!(format_release_readiness["evidence_mode_enabled"], false);
     assert_eq!(
         format_release_readiness["pending_feature_count"],
         release_readiness["pending_feature_count"]
@@ -186,6 +188,7 @@ fn release_readiness_cli_falls_back_without_running_server() {
         .contains("does not perform signing"));
     assert!(readable_readiness.contains("Jarvis release readiness:"));
     assert!(readable_readiness.contains("Production ready: false"));
+    assert!(readable_readiness.contains("External evidence mode: false"));
     assert!(readable_readiness.contains("Pending features:"));
     assert!(readable_readiness.contains("live_voice_loop"));
     assert!(readable_readiness.contains("Top manual gates:"));
@@ -582,11 +585,16 @@ fn release_readiness_cli_computes_production_ready_only_from_external_complete_e
     let conservative_readiness =
         run_cli_json(["release", "readiness", "--endpoint", endpoint.as_str()]);
     assert_eq!(conservative_readiness["production_ready"], false);
+    assert_eq!(conservative_readiness["evidence_mode_enabled"], false);
     let cli_only_external_env_readiness = run_cli_json_with_env(
         ["release", "readiness", "--endpoint", endpoint.as_str()],
         &[("JARVIS_RELEASE_READINESS_EVIDENCE_MODE", "external")],
     );
     assert_eq!(cli_only_external_env_readiness["production_ready"], false);
+    assert_eq!(
+        cli_only_external_env_readiness["evidence_mode_enabled"],
+        false
+    );
     server.stop();
 
     let mut external_env = evidence_env.clone();
@@ -619,6 +627,8 @@ fn release_readiness_cli_computes_production_ready_only_from_external_complete_e
             .expect("server-backed readiness --format json output");
     assert_eq!(external_readiness["production_ready"], true);
     assert_eq!(format_external_readiness["production_ready"], true);
+    assert_eq!(external_readiness["evidence_mode_enabled"], true);
+    assert_eq!(format_external_readiness["evidence_mode_enabled"], true);
     assert_eq!(external_readiness["pending_feature_count"], 0);
     assert_eq!(format_external_readiness["pending_feature_count"], 0);
     assert!(external_readiness["pending_features"]
@@ -3529,6 +3539,10 @@ fn release_external_handoff_snapshots_match_live_runbook_commands() {
     assert_eq!(
         readiness_snapshot["production_ready"], readiness_direct["production_ready"],
         "release handoff readiness snapshot must match live external-mode readiness"
+    );
+    assert_eq!(
+        readiness_snapshot["evidence_mode_enabled"], readiness_direct["evidence_mode_enabled"],
+        "release handoff readiness snapshot must preserve external evidence mode"
     );
     assert_eq!(
         readiness_snapshot["pending_feature_count"], readiness_direct["pending_feature_count"],
