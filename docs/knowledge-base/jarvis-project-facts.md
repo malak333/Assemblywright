@@ -1179,13 +1179,13 @@ requires plugin-trust `generated_at`, `review_started_at`,
   artifacts. Current release claims should refresh this baseline with
   `cargo run -p jarvis-cli -- release readiness --json` and
   `gh run list --branch main --workflow "Jarvis Release Local Gate" --limit 3`.
-  The latest verified main baseline at `14ab7bc` has hosted GitHub
-  `Release local gate` success for push run `27838303892` / job
-  `82391379400` and remains conservative with `production_ready: false`,
+  The latest verified main baseline at `ff19363` has hosted GitHub
+  `Release local gate` success for push run `27841672172` / job
+  `82401873712` and remains conservative with `production_ready: false`,
   `evidence_mode_enabled: false`, `verified_feature_count: 16`, `pending_feature_count: 1`, and
   `live_voice_loop` as the pending manual feature; `/release/evidence-status`
   reports `complete: false`, three satisfied evidence rows, six missing rows,
-  and no invalid rows. PRs #283-#313 added repo-owned clarity for voice
+  and no invalid rows. PRs #283-#316 added repo-owned clarity for voice
   permission gating, external handoff guidance, architecture documentation,
   plugin-trust artifact SHA guidance, final doctor assertion guidance, Release
   tab runbook-load warnings, external handoff mechanics, evidence-note
@@ -1196,9 +1196,16 @@ requires plugin-trust `generated_at`, `review_started_at`,
   final-bundle reports archive URI validation, architecture readiness baseline
   drift protection, final-bundle output path collision guards, and external
   handoff manifest integrity self-testing, and release evidence-mode visibility
-  in CLI/IPC/Swift, plus resilient baseline drift-smoke wording, but they do
-  not satisfy signing, notarization, installation, live-device QA,
-  plugin-trust QA, or final evidence-bundle requirements.
+  in CLI/IPC/Swift, resilient baseline drift-smoke wording, final-bundle
+  evidence report env precedence, and external handoff evidence metadata
+  hardening, but they do not satisfy signing, notarization, installation,
+  live-device QA, plugin-trust QA, or final evidence-bundle requirements.
+- The macOS Release tab must render runbook readiness through the same effective
+  readiness boundary as the page-level production-ready label. A raw runbook
+  `production_ready: true` is displayed as blocked when cached readiness,
+  incomplete evidence, invalid evidence, or failed evidence refresh keeps
+  `effectiveProductionReady` false; the `live_voice_loop` row must continue to
+  surface `pending_manual_validation` rather than implying hardware validation.
 - Plugin-trust artifact evidence is enforced as a complete six-category set.
   Evidence-status, evidence-doctor, and final bundle validation reject missing,
   placeholder, or non-SHA-256 artifact bindings for marketplace review,

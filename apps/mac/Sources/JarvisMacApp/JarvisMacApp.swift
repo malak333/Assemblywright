@@ -1484,16 +1484,21 @@ struct ReleaseReadinessView: View {
         ) {
             List {
                 if let readiness = model.readiness {
+                    let presentation = ReleaseReadinessPresentation(
+                        readiness: readiness,
+                        effectiveProductionReady: model.effectiveProductionReady,
+                        isShowingStaleReadiness: model.isShowingStaleReadiness
+                    )
                     LabelValueRow(label: "Generated", value: readiness.generatedAt)
-                    if model.isShowingStaleReadiness {
-                        Label("Showing cached readiness; refresh failed.", systemImage: "clock.badge.exclamationmark")
+                    if let staleWarning = presentation.staleWarning {
+                        Label(staleWarning, systemImage: "clock.badge.exclamationmark")
                             .font(.caption)
                             .foregroundStyle(.orange)
                     }
-                    LabelValueRow(label: "Production Ready", value: model.effectiveProductionReady ? "yes" : "no")
-                    LabelValueRow(label: "External Evidence Mode", value: readiness.evidenceModeEnabled ? "yes" : "no")
-                    if readiness.productionReady && !model.effectiveProductionReady {
-                        Label("Readiness claim is blocked until current evidence status is complete.", systemImage: "lock.shield")
+                    LabelValueRow(label: "Production Ready", value: presentation.productionReadyLine)
+                    LabelValueRow(label: "External Evidence Mode", value: presentation.evidenceModeLine)
+                    if let blockedReadinessWarning = presentation.blockedReadinessWarning {
+                        Label(blockedReadinessWarning, systemImage: "lock.shield")
                             .font(.caption)
                             .foregroundStyle(.orange)
                     }
@@ -1526,7 +1531,10 @@ struct ReleaseReadinessView: View {
                     if !model.releaseRunbooks.isEmpty {
                         Section("Release Runbooks") {
                             ForEach(model.releaseRunbooks) { runbook in
-                                ReleaseRunbookRow(runbook: runbook)
+                                ReleaseRunbookRow(
+                                    runbook: runbook,
+                                    effectiveProductionReady: presentation.effectiveProductionReady
+                                )
                             }
                         }
                     }
@@ -1568,10 +1576,39 @@ struct ReleaseReadinessView: View {
     }
 }
 
+struct ReleaseReadinessPresentation: Equatable {
+    let productionReadyLine: String
+    let evidenceModeLine: String
+    let staleWarning: String?
+    let blockedReadinessWarning: String?
+    let effectiveProductionReady: Bool
+
+    init(
+        readiness: JarvisReleaseReadiness,
+        effectiveProductionReady: Bool,
+        isShowingStaleReadiness: Bool
+    ) {
+        self.productionReadyLine = effectiveProductionReady ? "yes" : "no"
+        self.evidenceModeLine = readiness.evidenceModeEnabled ? "yes" : "no"
+        self.staleWarning = isShowingStaleReadiness
+            ? "Showing cached readiness; refresh failed."
+            : nil
+        self.blockedReadinessWarning = readiness.productionReady && !effectiveProductionReady
+            ? "Readiness claim is blocked until current evidence status is complete."
+            : nil
+        self.effectiveProductionReady = effectiveProductionReady
+    }
+}
+
 struct ReleaseRunbookRow: View {
     let runbook: JarvisReleaseRunbook
+    let effectiveProductionReady: Bool
+
     private var presentation: ReleaseRunbookPresentation {
-        ReleaseRunbookPresentation(runbook: runbook)
+        ReleaseRunbookPresentation(
+            runbook: runbook,
+            effectiveProductionReady: effectiveProductionReady
+        )
     }
 
     var body: some View {
@@ -1580,9 +1617,9 @@ struct ReleaseRunbookRow: View {
                 Text(title)
                     .font(.subheadline)
                 Spacer()
-                Text(runbook.productionReady ? "ready" : "not ready")
+                Text(presentation.readinessLine)
                     .font(.caption)
-                    .foregroundStyle(runbook.productionReady ? .green : .orange)
+                    .foregroundStyle(presentation.isReady ? .green : .orange)
             }
             if let liveVoiceFeature = runbook.liveVoiceFeature {
                 Text("\(liveVoiceFeature.key): \(liveVoiceFeature.status)")
@@ -1643,12 +1680,19 @@ struct ReleaseRunbookRow: View {
 }
 
 struct ReleaseRunbookPresentation: Equatable {
+    let readinessLine: String
+    let isReady: Bool
     let commands: [String]
     let manualChecks: [String]
+    let liveVoiceFeatureLine: String?
 
-    init(runbook: JarvisReleaseRunbook) {
+    init(runbook: JarvisReleaseRunbook, effectiveProductionReady: Bool) {
+        let blockedByEffectiveReadiness = runbook.productionReady && !effectiveProductionReady
+        readinessLine = blockedByEffectiveReadiness ? "blocked" : (runbook.productionReady ? "ready" : "not ready")
+        isReady = runbook.productionReady && effectiveProductionReady
         commands = runbook.commands
         manualChecks = runbook.manualChecks
+        liveVoiceFeatureLine = runbook.liveVoiceFeature.map { "\($0.key): \($0.status)" }
     }
 }
 
