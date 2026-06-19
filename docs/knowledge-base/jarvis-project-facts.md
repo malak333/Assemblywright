@@ -1176,13 +1176,13 @@ requires plugin-trust `generated_at`, `review_started_at`,
   #268 run `27428860335` / job `81073692261`, `production_ready: false`,
   `verified_feature_count: 16`, `pending_feature_count: 1`, and, after local
   generated app presence artifacts exist, six missing external/manual evidence
-  artifacts. The current post-PR #311 baseline at `4417187` has hosted
-  GitHub `Release local gate` success for push run `27834520874` / job
-  `82379205652` and remains conservative with `production_ready: false`,
+  artifacts. The current post-PR #312 baseline at `4b36c14` has hosted
+  GitHub `Release local gate` success for push run `27836547974` / job
+  `82385796019` and remains conservative with `production_ready: false`,
   `evidence_mode_enabled: false`, `verified_feature_count: 16`, `pending_feature_count: 1`, and
   `live_voice_loop` as the pending manual feature; `/release/evidence-status`
   reports `complete: false`, three satisfied evidence rows, six missing rows,
-  and no invalid rows. PRs #283-#311 added repo-owned clarity for voice
+  and no invalid rows. PRs #283-#312 added repo-owned clarity for voice
   permission gating, external handoff guidance, architecture documentation,
   plugin-trust artifact SHA guidance, final doctor assertion guidance, Release
   tab runbook-load warnings, external handoff mechanics, evidence-note
@@ -1192,9 +1192,10 @@ requires plugin-trust `generated_at`, `review_started_at`,
   digest binding, release-local command heartbeat observability,
   final-bundle reports archive URI validation, architecture readiness baseline
   drift protection, final-bundle output path collision guards, and external
-  handoff manifest integrity self-testing, but they do not satisfy signing,
-  notarization, installation, live-device QA, plugin-trust QA, or final
-  evidence-bundle requirements.
+  handoff manifest integrity self-testing, and release evidence-mode visibility
+  in CLI/IPC/Swift, but they do not satisfy signing, notarization,
+  installation, live-device QA, plugin-trust QA, or final evidence-bundle
+  requirements.
 - Plugin-trust artifact evidence is enforced as a complete six-category set.
   Evidence-status, evidence-doctor, and final bundle validation reject missing,
   placeholder, or non-SHA-256 artifact bindings for marketplace review,

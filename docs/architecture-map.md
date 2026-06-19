@@ -887,17 +887,18 @@ boundary that remained in force.
 Current readiness should always be refreshed before release claims. The
 historical 2026-06-12 UTC baseline after PR #268 started from `main` at
 `8cccb5b`, with the hosted `Release local gate` green for PR #268 run
-`27428860335` / job `81073692261`. The current post-PR #311 baseline at
-`main` commit `4417187` has hosted `Release local gate` success for push run
-`27834520874` / job `82379205652` and continues to report `production_ready: false`,
+`27428860335` / job `81073692261`. The current post-PR #312 baseline at
+`main` commit `4b36c14` has hosted `Release local gate` success for push run
+`27836547974` / job `82385796019` and continues to report `production_ready: false`,
 `evidence_mode_enabled: false`, `verified_feature_count: 16`, and `pending_feature_count: 1`, with
 `live_voice_loop` still `pending_manual_validation`, while the local repo-owned
 release handoff, workflow hygiene, docs drift smoke, evidence-note validation,
 installed-plugin plus model-step/model-output activity-progress proof,
 handoff manifest digest-binding, release-local command heartbeat,
 final-bundle reports archive URI validation, architecture readiness baseline
-drift protection, and final-bundle output path collision guards have improved
-without converting local evidence inspection into production proof.
+drift protection, final-bundle output path collision guards, external handoff
+manifest integrity self-testing, and release evidence-mode visibility have
+improved without converting local evidence inspection into production proof.
 `jarvis release evidence-status --json` remains expected to report
 `complete: false` with three satisfied evidence rows, six missing
 external/manual evidence artifacts, and zero invalid evidence rows after the
