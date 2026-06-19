@@ -46,7 +46,7 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   Treat default readiness as conservative inventory only. After owner-recorded
   evidence exists, start or restart the core with
   `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external`, rerun readiness against
-  that core, and confirm
+  that core, confirm the JSON field `evidence_mode_enabled` is true, and confirm
   `production_ready: true` only appears when every required
   `/release/evidence-status` item is present, no missing or invalid evidence
   remains, and evidence-cleared features leave no pending readiness features.

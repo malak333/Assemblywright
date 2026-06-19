@@ -423,6 +423,7 @@ struct JarvisMacCoreTests {
         )
 
         #expect(!readiness.productionReady)
+        #expect(!readiness.evidenceModeEnabled)
         #expect(readiness.verifiedFeatureCount == readiness.implementedFeatures.count)
         #expect(readiness.pendingFeatureCount == readiness.pendingFeatures.count)
         #expect(readiness.implementedFeatures.first?.key == "repository_state")
@@ -507,6 +508,7 @@ struct JarvisMacCoreTests {
         )
 
         #expect(readiness.productionReady)
+        #expect(readiness.evidenceModeEnabled)
         #expect(readiness.verifiedFeatureCount == readiness.implementedFeatures.count)
         #expect(readiness.pendingFeatureCount == readiness.pendingFeatures.count)
         #expect(readiness.pendingFeatures.isEmpty)
@@ -1462,6 +1464,7 @@ struct JarvisMacCoreTests {
         await model.refresh()
 
         #expect(model.readiness?.productionReady == false)
+        #expect(model.readiness?.evidenceModeEnabled == false)
         #expect(model.evidenceStatus?.complete == false)
         #expect(model.releaseRunbooks.map(\.runbook) == ["signed_distribution", "live_device", "plugin_trust"])
         #expect(!model.effectiveProductionReady)
@@ -1635,6 +1638,7 @@ struct JarvisMacCoreTests {
         await model.refresh()
 
         #expect(model.readiness?.productionReady == true)
+        #expect(model.readiness?.evidenceModeEnabled == true)
         #expect(model.readiness?.pendingFeatures.isEmpty == true)
         #expect(model.readiness?.blockingManualGates.isEmpty == true)
         #expect(model.evidenceStatus?.complete == true)
@@ -3825,6 +3829,7 @@ private func releaseReadinessJSON() -> Data {
         {
           "generated_at": "2026-05-22T08:00:00Z",
           "production_ready": false,
+          "evidence_mode_enabled": false,
           "readiness_scope": "local Rust/CLI foundation and Swift shell evidence only; full production distribution still has external manual gates",
           "verified_feature_count": 8,
           "pending_feature_count": 1,
@@ -3928,6 +3933,7 @@ private func externalProductionReadyReleaseReadinessJSON() -> Data {
         {
           "generated_at": "2026-05-22T17:05:00Z",
           "production_ready": true,
+          "evidence_mode_enabled": true,
           "readiness_scope": "local Rust/CLI foundation and Swift shell evidence plus explicitly enabled external release evidence status",
           "verified_feature_count": 4,
           "pending_feature_count": 0,

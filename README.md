@@ -149,7 +149,9 @@ The response keeps `production_ready: false` by default. When the running core
 has `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external`, readiness can compute
 `production_ready: true` only when every required `/release/evidence-status`
 item is present, no missing or invalid evidence remains, and evidence-cleared
-features leave no pending readiness features. That remains owner-recorded
+features leave no pending readiness features. The structured readiness payload
+also exposes `evidence_mode_enabled` so operators can verify that the running
+core, not only the CLI process, was started in external evidence mode. That remains owner-recorded
 external evidence: Jarvis does not itself perform Developer ID signing,
 notarization, stapling, clean-profile install/Finder validation, live-device
 QA, plugin trust QA, or manual release QA.

@@ -1491,6 +1491,7 @@ struct ReleaseReadinessView: View {
                             .foregroundStyle(.orange)
                     }
                     LabelValueRow(label: "Production Ready", value: model.effectiveProductionReady ? "yes" : "no")
+                    LabelValueRow(label: "External Evidence Mode", value: readiness.evidenceModeEnabled ? "yes" : "no")
                     if readiness.productionReady && !model.effectiveProductionReady {
                         Label("Readiness claim is blocked until current evidence status is complete.", systemImage: "lock.shield")
                             .font(.caption)

@@ -1898,6 +1898,10 @@ fn format_release_readiness(response: &str, all_commands: bool) -> anyhow::Resul
         .get("production_ready")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
+    let evidence_mode_enabled = value
+        .get("evidence_mode_enabled")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
     let verified_feature_count = value
         .get("verified_feature_count")
         .and_then(serde_json::Value::as_u64)
@@ -1915,6 +1919,7 @@ fn format_release_readiness(response: &str, all_commands: bool) -> anyhow::Resul
     let mut lines = vec![
         "Jarvis release readiness:".to_string(),
         format!("Production ready: {production_ready}"),
+        format!("External evidence mode: {evidence_mode_enabled}"),
         format!("Verified features: {verified_feature_count}"),
         format!("Pending features: {pending_feature_count}"),
         format!("Blocking manual gates: {blocker_count}"),
