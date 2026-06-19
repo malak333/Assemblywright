@@ -78,8 +78,8 @@ require_text "architecture local gate boundary" "$ARCHITECTURE" "notarization, c
 require_text "architecture local gate boundary" "$ARCHITECTURE" "QA, plugin-trust QA, or final evidence bundling"
 require_text "architecture post-merge cleanup audit" "$ARCHITECTURE" "post-merge cleanup audit: open PRs, main workflow runs, worktrees, merged/unmerged codex branches, clean checkout"
 require_text "architecture current readiness baseline" "$ARCHITECTURE" 'latest verified main baseline'
-require_text "architecture current readiness commit" "$ARCHITECTURE" '`main` commit `c047a02`'
-require_text "architecture current readiness run" "$ARCHITECTURE" '27846429791'
+require_text "architecture current readiness commit" "$ARCHITECTURE" '`main` commit `73dbd54`'
+require_text "architecture current readiness run" "$ARCHITECTURE" '27847887169'
 require_text "architecture current readiness refresh command" "$ARCHITECTURE" 'cargo run -p jarvis-cli -- release readiness --json'
 require_text "architecture current readiness refresh command" "$ARCHITECTURE" 'gh run list --branch main --workflow "Jarvis Release Local Gate"'
 forbid_text "architecture stale readiness baseline" "$ARCHITECTURE" 'current post-PR #312 baseline at'
@@ -101,8 +101,8 @@ require_text "architecture handoff manifest self-test" "$ARCHITECTURE" "--self-t
 require_text "architecture release-local heartbeat" "$ARCHITECTURE" "release-local command heartbeat"
 require_text "architecture final bundle output collision guard" "$ARCHITECTURE" "final bundle writer must also reject"
 require_text "architecture final bundle output collision guard" "$ARCHITECTURE" "output paths that collide with signed-provenance"
-require_text "knowledge base current readiness baseline" "$KB" 'latest verified main baseline at `c047a02`'
-require_text "knowledge base current readiness run" "$KB" '27846429791'
+require_text "knowledge base current readiness baseline" "$KB" 'latest verified main baseline at `73dbd54`'
+require_text "knowledge base current readiness run" "$KB" '27847887169'
 require_text "knowledge base current readiness refresh command" "$KB" 'cargo run -p jarvis-cli -- release readiness --json'
 require_text "knowledge base current readiness refresh command" "$KB" 'gh run list --branch main --workflow "Jarvis Release Local Gate"'
 forbid_text "knowledge base stale readiness baseline" "$KB" 'current post-PR #312 baseline at `4b36c14`'
@@ -118,12 +118,17 @@ require_text "knowledge base model-output progress proof" "$KB" "model-step/mode
 require_text "knowledge base handoff manifest digest" "$KB" "manifest digests match"
 require_text "knowledge base handoff manifest self-test" "$KB" "shell self-test verifies the expected file list"
 require_text "knowledge base handoff evidence-status parity" "$KB" "external-mode direct CLI evidence-status query"
+require_text "knowledge base missing live-device field E2E" "$KB" "removes required"
+require_text "knowledge base missing live-device field E2E" "$KB" "notification-observation fields"
 require_text "knowledge base release-local heartbeat" "$KB" "release-local command heartbeat"
 require_text "knowledge base final bundle output collision guard" "$KB" "final bundle output path must also be distinct"
 require_text "build docs model-step progress command" "$BUILD_DOCS" "repository_backed_state_endpoints_expose_tasks_and_audit"
 require_text "build docs handoff manifest digest" "$BUILD_DOCS" "per-file SHA-256 digests"
 require_text "build docs handoff manifest self-test" "$BUILD_DOCS" "handoff shell self-test verifies the expected manifest file list"
 require_text "build docs handoff evidence-status parity" "$BUILD_DOCS" "fresh external-mode direct CLI evidence-status query"
+require_text "build docs missing live-device field E2E" "$BUILD_DOCS" "removes required live voice"
+require_text "build docs missing live-device field E2E" "$BUILD_DOCS" "external-mode"
+require_text "build docs missing live-device field E2E" "$BUILD_DOCS" "readiness fail closed"
 require_text "build docs release-local heartbeat" "$BUILD_DOCS" "JARVIS_RELEASE_LOCAL_HEARTBEAT_SECONDS"
 require_text "build docs release-local heartbeat self-test" "$BUILD_DOCS" "--heartbeat-self-test"
 require_text "build docs final bundle output collision guard" "$BUILD_DOCS" "final bundle output path must also be distinct"

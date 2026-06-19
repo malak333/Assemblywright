@@ -911,7 +911,10 @@ requires plugin-trust `generated_at`, `review_started_at`,
   that is not earlier than the voice-check start.
   `release-live-device-qa.sh --assert-complete` and `/release/evidence-status`
   both reject empty or placeholder owner evidence-note fields before this
-  report can clear `live_voice_loop`.
+  report can clear `live_voice_loop`. CLI E2E also removes required
+  owner-recorded live voice, command-observation, audio-output-device, and
+  notification-observation fields from the report and verifies evidence-status
+  plus external-mode readiness fail closed.
   This standardizes manual evidence only; `--check` does not prove live device
   behavior, and the report remains an owner assertion. When the release operator
   explicitly enables evidence-aware readiness, this report can support the
@@ -1179,9 +1182,9 @@ requires plugin-trust `generated_at`, `review_started_at`,
   artifacts. Current release claims should refresh this baseline with
   `cargo run -p jarvis-cli -- release readiness --json` and
   `gh run list --branch main --workflow "Jarvis Release Local Gate" --limit 3`.
-  The latest verified main baseline at `c047a02` has hosted GitHub
-  `Release local gate` success for push run `27846429791` / job
-  `82416492459` and remains conservative with `production_ready: false`,
+  The latest verified main baseline at `73dbd54` has hosted GitHub
+  `Release local gate` success for push run `27847887169` / job
+  `82420866503` and remains conservative with `production_ready: false`,
   `evidence_mode_enabled: false`, `verified_feature_count: 16`, `pending_feature_count: 1`, and
   `live_voice_loop` as the pending manual feature; `/release/evidence-status`
   reports `complete: false`, three satisfied evidence rows, six missing rows,

@@ -853,7 +853,10 @@ values such as `TODO`, `pending`, `n/a`, `fixture`, or `self-test fixture`, and
 fixture self-test rather than release evidence. `--assert-complete`,
 `jarvis release evidence-status`, and `/release/evidence-status` enforce the
 same non-empty and non-placeholder live-device QA report fields before that
-evidence can clear `live_voice_loop`.
+evidence can clear `live_voice_loop`. CLI E2E removes required live voice,
+command-observation, audio-output-device, and notification-observation fields
+from owner-recorded reports and verifies evidence-status plus external-mode
+readiness fail closed.
 The observed transcript must match the spoken test phrase after trimming, the
 expected installed app path must match `JARVIS_QA_INSTALLED_APP_PATH` or
 `/Applications/Jarvis.app`, expected and observed command text must match after
