@@ -3477,14 +3477,17 @@ fn release_external_handoff_snapshots_match_live_runbook_commands() {
         .to_str()
         .expect("handoff path is valid UTF-8")
         .to_string();
+    let endpoint = format!("http://{}", unused_loopback_addr());
 
     run_repo_script_with_env(
         "scripts/release-external-handoff.sh",
         &["--write", handoff_dir_arg.as_str()],
-        &[],
+        &[
+            ("JARVIS_RELEASE_HANDOFF_ENDPOINT", endpoint.as_str()),
+            ("JARVIS_RELEASE_READINESS_EVIDENCE_MODE", "external"),
+        ],
     );
 
-    let endpoint = format!("http://{}", unused_loopback_addr());
     let signed_direct = run_cli_json([
         "release",
         "signed-distribution-runbook",
@@ -3507,11 +3510,21 @@ fn release_external_handoff_snapshots_match_live_runbook_commands() {
         ["release", "readiness", "--endpoint", endpoint.as_str()],
         &[("JARVIS_RELEASE_READINESS_EVIDENCE_MODE", "external")],
     );
+    let evidence_status_direct = run_cli_json_with_env(
+        [
+            "release",
+            "evidence-status",
+            "--endpoint",
+            endpoint.as_str(),
+        ],
+        &[("JARVIS_RELEASE_READINESS_EVIDENCE_MODE", "external")],
+    );
 
     let signed_snapshot = read_json_file(handoff_dir.join("signed-distribution-runbook.json"));
     let live_snapshot = read_json_file(handoff_dir.join("live-device-runbook.json"));
     let plugin_snapshot = read_json_file(handoff_dir.join("plugin-trust-runbook.json"));
     let readiness_snapshot = read_json_file(handoff_dir.join("release-readiness.json"));
+    let evidence_status_snapshot = read_json_file(handoff_dir.join("release-evidence-status.json"));
     let manifest = read_json_file(handoff_dir.join("release-handoff-manifest.json"));
     let evidence_bundle_template =
         fs::read_to_string(handoff_dir.join("release-evidence-bundle.env"))
@@ -3629,6 +3642,22 @@ fn release_external_handoff_snapshots_match_live_runbook_commands() {
         .as_str()
         .expect("readiness scope")
         .contains("external release evidence status"));
+    assert_eq!(
+        evidence_status_snapshot["complete"], evidence_status_direct["complete"],
+        "release handoff evidence-status snapshot must match live completion state"
+    );
+    assert_eq!(
+        evidence_status_snapshot["missing"], evidence_status_direct["missing"],
+        "release handoff evidence-status snapshot must preserve missing evidence"
+    );
+    assert_eq!(
+        evidence_status_snapshot["invalid"], evidence_status_direct["invalid"],
+        "release handoff evidence-status snapshot must preserve invalid evidence"
+    );
+    assert_eq!(
+        evidence_status_snapshot["items"], evidence_status_direct["items"],
+        "release handoff evidence-status snapshot must preserve evidence item rows"
+    );
     assert!(
         evidence_bundle_template.contains("JARVIS_EVIDENCE_OVERWRITE_OUTPUT=false"),
         "final bundle template must default overwrite protection off"
