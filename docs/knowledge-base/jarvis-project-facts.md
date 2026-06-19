@@ -1179,9 +1179,9 @@ requires plugin-trust `generated_at`, `review_started_at`,
   artifacts. Current release claims should refresh this baseline with
   `cargo run -p jarvis-cli -- release readiness --json` and
   `gh run list --branch main --workflow "Jarvis Release Local Gate" --limit 3`.
-  The latest verified main baseline at `ff19363` has hosted GitHub
-  `Release local gate` success for push run `27841672172` / job
-  `82401873712` and remains conservative with `production_ready: false`,
+  The latest verified main baseline at `c047a02` has hosted GitHub
+  `Release local gate` success for push run `27846429791` / job
+  `82416492459` and remains conservative with `production_ready: false`,
   `evidence_mode_enabled: false`, `verified_feature_count: 16`, `pending_feature_count: 1`, and
   `live_voice_loop` as the pending manual feature; `/release/evidence-status`
   reports `complete: false`, three satisfied evidence rows, six missing rows,
@@ -1286,7 +1286,10 @@ requires plugin-trust `generated_at`, `review_started_at`,
   signed-distribution, plugin-trust, package-preflight, and evidence-doctor
   handoff guidance. CLI E2E also verifies that the generated runbook snapshots
   preserve the same command arrays, key evidence rows, feature state, and proof
-  boundaries as fresh direct CLI runbook JSON, and that manifest digests match
+  boundaries as fresh direct CLI runbook JSON, that the generated
+  `release-evidence-status.json` snapshot preserves the same completion state,
+  missing evidence, invalid evidence, and evidence item rows as a fresh
+  external-mode direct CLI evidence-status query, and that manifest digests match
   the generated handoff files. `--check` and `--self-test` are part of the local
   release gate and prove only template plus snapshot/checklist/manifest
   generation with validation flags defaulted false; they do not sign, notarize,
