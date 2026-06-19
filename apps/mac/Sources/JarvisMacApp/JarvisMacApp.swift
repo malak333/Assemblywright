@@ -1667,11 +1667,15 @@ struct ReleaseEvidenceStatusRow: View {
                     .font(.caption)
                     .foregroundStyle(item.status == "present" ? .green : .orange)
             }
-            Text(item.path)
+            Text(presentation.pathLine)
                 .font(.caption.monospaced())
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
-            Text(item.detail)
+            Text(presentation.detailLine)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+            Text(presentation.requirementLine)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
@@ -1682,12 +1686,26 @@ struct ReleaseEvidenceStatusRow: View {
 
 struct ReleaseEvidenceStatusPresentation: Equatable {
     let statusLine: String
+    let pathLine: String
+    let detailLine: String
+    let requirementLine: String
 
     init(item: JarvisReleaseEvidenceStatusItem) {
         if item.status == "present", item.detail.contains("presence only") {
             statusLine = "\(item.status); presence-only caveat"
         } else {
             statusLine = item.status
+        }
+        pathLine = "Path: \(item.path)"
+        detailLine = "Detail: \(item.detail)"
+        if item.requiredForProduction && item.manualGate {
+            requirementLine = "Required for production; manual evidence gate"
+        } else if item.requiredForProduction {
+            requirementLine = "Required for production"
+        } else if item.manualGate {
+            requirementLine = "Manual evidence gate"
+        } else {
+            requirementLine = "Informational evidence"
         }
     }
 }

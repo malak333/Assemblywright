@@ -966,6 +966,8 @@ for release readiness, release evidence-status, and all three release runbooks,
 decodes release runbook payloads, requests the three runbook IPC endpoints,
 refreshes Release tab runbook state including runbook-load warnings, preflights
 direct macOS Speech/microphone authorization before concrete voice capture,
+shows release evidence status rows with explicit path, detail, and
+production/manual-gate context,
 exposes management models for
 approval evidence, memory classification summary, memory policy review counts,
 memory create/update/review/delete/restore state, runs/audit,
