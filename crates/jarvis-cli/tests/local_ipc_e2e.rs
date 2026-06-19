@@ -1187,6 +1187,76 @@ fn release_readiness_rejects_semantically_invalid_live_voice_evidence() {
 }
 
 #[test]
+fn release_readiness_rejects_missing_live_voice_evidence_fields() {
+    let endpoint = format!("http://{}", unused_loopback_addr());
+
+    for missing_path in [
+        "owner_recorded_live_voice_evidence.microphone_evidence_note",
+        "owner_recorded_live_voice_evidence.speech_permission_evidence_note",
+        "owner_recorded_live_voice_evidence.transcript_handoff_evidence_note",
+        "owner_recorded_live_voice_evidence.audio_output_evidence_note",
+        "voice_command_observation.command_result_evidence_id",
+        "voice_command_observation.audio_output_device_label",
+        "notification_observation.title",
+        "notification_observation.body",
+        "notification_observation.thread_identifier",
+        "notification_observation.observed_at",
+    ] {
+        let temp_dir = tempfile::tempdir().expect("temp missing live QA report");
+        let live_report_path = temp_dir
+            .path()
+            .join(format!("release-live-device-qa-report-{missing_path}.json"));
+        let mut report = valid_live_device_qa_report();
+        remove_json_field(&mut report, missing_path);
+        write_live_device_qa_report(&live_report_path, report);
+        let report_path = live_report_path
+            .to_str()
+            .expect("live report path is UTF-8")
+            .to_string();
+
+        let evidence_status = run_cli_json_with_env(
+            [
+                "release",
+                "evidence-status",
+                "--endpoint",
+                endpoint.as_str(),
+            ],
+            &[("JARVIS_QA_REPORT_PATH", report_path.as_str())],
+        );
+        let live_item = release_evidence_item(&evidence_status, "live_device_qa_report");
+        assert_eq!(
+            live_item["status"], "invalid",
+            "{missing_path}: {live_item}"
+        );
+        assert!(
+            live_item["detail"]
+                .as_str()
+                .expect("detail string")
+                .contains(missing_path),
+            "{missing_path}: {live_item}"
+        );
+
+        let readiness = run_cli_json_with_env(
+            ["release", "readiness", "--endpoint", endpoint.as_str()],
+            &[
+                ("JARVIS_QA_REPORT_PATH", report_path.as_str()),
+                ("JARVIS_RELEASE_READINESS_EVIDENCE_MODE", "external"),
+            ],
+        );
+        assert_eq!(readiness["production_ready"], false);
+        assert_array_contains(&readiness["pending_features"], "key", "live_voice_loop");
+        assert!(
+            !readiness["implemented_features"]
+                .as_array()
+                .expect("implemented features")
+                .iter()
+                .any(|feature| feature["key"] == "live_voice_loop"),
+            "{missing_path}: {readiness}"
+        );
+    }
+}
+
+#[test]
 fn release_evidence_status_resolves_live_voice_command_result_against_repository() {
     let temp_dir = tempfile::tempdir().expect("temp live QA repository evidence");
     let db_path = temp_dir.path().join("jarvis-e2e.sqlite");
@@ -7752,6 +7822,21 @@ fn write_json_report(path: &Path, report: Value) {
         serde_json::to_string_pretty(&report).expect("serialize JSON report"),
     )
     .expect("write JSON report");
+}
+
+fn remove_json_field(value: &mut Value, path: &str) {
+    let (parent_path, field) = path
+        .rsplit_once('.')
+        .unwrap_or_else(|| panic!("missing nested JSON path: {path}"));
+    let pointer = format!("/{}", parent_path.replace('.', "/"));
+    let parent = value
+        .pointer_mut(&pointer)
+        .unwrap_or_else(|| panic!("missing JSON parent {parent_path}"));
+    parent
+        .as_object_mut()
+        .unwrap_or_else(|| panic!("JSON parent is not an object: {parent_path}"))
+        .remove(field)
+        .unwrap_or_else(|| panic!("missing JSON field: {path}"));
 }
 
 #[cfg(unix)]

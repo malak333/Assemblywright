@@ -891,8 +891,8 @@ The
 historical 2026-06-12 UTC baseline after PR #268 started from `main` at
 `8cccb5b`, with the hosted `Release local gate` green for PR #268 run
 `27428860335` / job `81073692261`. The latest verified main baseline at
-`main` commit `c047a02` has hosted `Release local gate` success for push run
-`27846429791` / job `82416492459` and continues to report `production_ready: false`,
+`main` commit `73dbd54` has hosted `Release local gate` success for push run
+`27847887169` / job `82420866503` and continues to report `production_ready: false`,
 `evidence_mode_enabled: false`, `verified_feature_count: 16`, and `pending_feature_count: 1`, with
 `live_voice_loop` still `pending_manual_validation`, while the local repo-owned
 release handoff, workflow hygiene, docs drift smoke, evidence-note validation,
