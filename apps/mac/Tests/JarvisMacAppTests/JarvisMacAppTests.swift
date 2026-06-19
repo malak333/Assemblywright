@@ -6,6 +6,63 @@ import UserNotifications
 @MainActor
 @Suite("Jarvis Mac app release presentation")
 struct JarvisMacAppTests {
+    @Test("Release readiness presentation blocks raw ready claims when effective evidence is incomplete")
+    func releaseReadinessPresentationBlocksRawReadyClaimsWhenEvidenceIncomplete() {
+        let readiness = JarvisReleaseReadiness(
+            generatedAt: "2026-06-19T18:23:05Z",
+            productionReady: true,
+            evidenceModeEnabled: true,
+            readinessScope: "external evidence mode",
+            verifiedFeatureCount: 16,
+            pendingFeatureCount: 0,
+            implementedFeatures: [],
+            pendingFeatures: [],
+            blockingManualGates: [],
+            recommendedVerificationCommands: [],
+            proofBoundary: "Repo-owned readiness only; external evidence still gates production claims."
+        )
+
+        let presentation = ReleaseReadinessPresentation(
+            readiness: readiness,
+            effectiveProductionReady: false,
+            isShowingStaleReadiness: false
+        )
+
+        #expect(presentation.productionReadyLine == "no")
+        #expect(presentation.evidenceModeLine == "yes")
+        #expect(presentation.staleWarning == nil)
+        #expect(presentation.blockedReadinessWarning == "Readiness claim is blocked until current evidence status is complete.")
+        #expect(!presentation.effectiveProductionReady)
+    }
+
+    @Test("Release readiness presentation exposes stale cached readiness warning")
+    func releaseReadinessPresentationExposesStaleWarning() {
+        let readiness = JarvisReleaseReadiness(
+            generatedAt: "2026-06-19T18:23:05Z",
+            productionReady: false,
+            evidenceModeEnabled: false,
+            readinessScope: "repo-owned checks",
+            verifiedFeatureCount: 16,
+            pendingFeatureCount: 1,
+            implementedFeatures: [],
+            pendingFeatures: [],
+            blockingManualGates: ["live-device QA evidence recorded"],
+            recommendedVerificationCommands: [],
+            proofBoundary: "Cached readiness cannot clear production."
+        )
+
+        let presentation = ReleaseReadinessPresentation(
+            readiness: readiness,
+            effectiveProductionReady: false,
+            isShowingStaleReadiness: true
+        )
+
+        #expect(presentation.productionReadyLine == "no")
+        #expect(presentation.evidenceModeLine == "no")
+        #expect(presentation.staleWarning == "Showing cached readiness; refresh failed.")
+        #expect(presentation.blockedReadinessWarning == nil)
+    }
+
     @Test("Release evidence row marks present presence-only items on the status line")
     func releaseEvidenceRowMarksPresenceOnlyItems() {
         let item = JarvisReleaseEvidenceStatusItem(
@@ -89,12 +146,82 @@ struct JarvisMacAppTests {
             proofBoundary: "Runbook only."
         )
 
-        let presentation = ReleaseRunbookPresentation(runbook: runbook)
+        let presentation = ReleaseRunbookPresentation(
+            runbook: runbook,
+            effectiveProductionReady: false
+        )
 
+        #expect(presentation.readinessLine == "not ready")
+        #expect(!presentation.isReady)
         #expect(presentation.commands == runbook.commands)
         #expect(presentation.manualChecks == runbook.manualChecks)
         #expect(presentation.commands.count == 4)
         #expect(presentation.manualChecks.count == 3)
+    }
+
+    @Test("Release runbook presentation blocks raw ready badge when effective readiness is false")
+    func releaseRunbookPresentationBlocksRawReadyBadgeWhenEffectiveReadinessIsFalse() {
+        let runbook = JarvisReleaseRunbook(
+            generatedAt: "2026-06-19T18:23:05Z",
+            generatedFrom: "release readiness plus evidence-status",
+            runbook: "signed_distribution",
+            productionReady: true,
+            liveVoiceFeature: nil,
+            evidenceItems: [],
+            commands: [],
+            manualChecks: [],
+            proofBoundary: "Runbook only."
+        )
+
+        let blocked = ReleaseRunbookPresentation(
+            runbook: runbook,
+            effectiveProductionReady: false
+        )
+        let ready = ReleaseRunbookPresentation(
+            runbook: runbook,
+            effectiveProductionReady: true
+        )
+
+        #expect(blocked.readinessLine == "blocked")
+        #expect(!blocked.isReady)
+        #expect(ready.readinessLine == "ready")
+        #expect(ready.isReady)
+    }
+
+    @Test("Release runbook presentation preserves live voice manual validation boundary")
+    func releaseRunbookPresentationPreservesLiveVoiceManualValidationBoundary() {
+        let liveVoiceFeature = JarvisReleaseReadinessFeature(
+            key: "live_voice_loop",
+            status: "pending_manual_validation",
+            proof: "fake-adapter transcript staging and auto-submit tests",
+            boundary: "manual validation pending"
+        )
+        let runbook = JarvisReleaseRunbook(
+            generatedAt: "2026-06-19T18:23:05Z",
+            generatedFrom: "release readiness plus evidence-status",
+            runbook: "live_device",
+            productionReady: false,
+            liveVoiceFeature: liveVoiceFeature,
+            evidenceItems: [],
+            commands: [
+                "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --json"
+            ],
+            manualChecks: [
+                "Verify live microphone capture, Speech transcript, final transcript command submission, notification delivery, restart recovery, and audio output on a clean Mac profile."
+            ],
+            proofBoundary: "Runbook scaffolding only; no hardware validation is implied."
+        )
+
+        let presentation = ReleaseRunbookPresentation(
+            runbook: runbook,
+            effectiveProductionReady: false
+        )
+
+        #expect(presentation.readinessLine == "not ready")
+        #expect(!presentation.isReady)
+        #expect(presentation.liveVoiceFeatureLine == "live_voice_loop: pending_manual_validation")
+        #expect(presentation.commands.first?.contains("JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external") == true)
+        #expect(presentation.manualChecks.first?.contains("clean Mac profile") == true)
     }
 
     @Test("Mac scheduler notification adapter requests alert and sound authorization")

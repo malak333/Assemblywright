@@ -78,8 +78,8 @@ require_text "architecture local gate boundary" "$ARCHITECTURE" "notarization, c
 require_text "architecture local gate boundary" "$ARCHITECTURE" "QA, plugin-trust QA, or final evidence bundling"
 require_text "architecture post-merge cleanup audit" "$ARCHITECTURE" "post-merge cleanup audit: open PRs, main workflow runs, worktrees, merged/unmerged codex branches, clean checkout"
 require_text "architecture current readiness baseline" "$ARCHITECTURE" 'latest verified main baseline'
-require_text "architecture current readiness commit" "$ARCHITECTURE" '`main` commit `14ab7bc`'
-require_text "architecture current readiness run" "$ARCHITECTURE" '27838303892'
+require_text "architecture current readiness commit" "$ARCHITECTURE" '`main` commit `ff19363`'
+require_text "architecture current readiness run" "$ARCHITECTURE" '27841672172'
 require_text "architecture current readiness refresh command" "$ARCHITECTURE" 'cargo run -p jarvis-cli -- release readiness --json'
 require_text "architecture current readiness refresh command" "$ARCHITECTURE" 'gh run list --branch main --workflow "Jarvis Release Local Gate"'
 forbid_text "architecture stale readiness baseline" "$ARCHITECTURE" 'current post-PR #312 baseline at'
@@ -101,8 +101,8 @@ require_text "architecture handoff manifest self-test" "$ARCHITECTURE" "--self-t
 require_text "architecture release-local heartbeat" "$ARCHITECTURE" "release-local command heartbeat"
 require_text "architecture final bundle output collision guard" "$ARCHITECTURE" "final bundle writer must also reject"
 require_text "architecture final bundle output collision guard" "$ARCHITECTURE" "output paths that collide with signed-provenance"
-require_text "knowledge base current readiness baseline" "$KB" 'latest verified main baseline at `14ab7bc`'
-require_text "knowledge base current readiness run" "$KB" '27838303892'
+require_text "knowledge base current readiness baseline" "$KB" 'latest verified main baseline at `ff19363`'
+require_text "knowledge base current readiness run" "$KB" '27841672172'
 require_text "knowledge base current readiness refresh command" "$KB" 'cargo run -p jarvis-cli -- release readiness --json'
 require_text "knowledge base current readiness refresh command" "$KB" 'gh run list --branch main --workflow "Jarvis Release Local Gate"'
 forbid_text "knowledge base stale readiness baseline" "$KB" 'current post-PR #312 baseline at `4b36c14`'
