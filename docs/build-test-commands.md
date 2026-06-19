@@ -528,6 +528,9 @@ written.
 It also defaults `JARVIS_EVIDENCE_OVERWRITE_OUTPUT=false`, so `--bundle`
 fails instead of replacing an existing final bundle unless the operator has
 preserved the old artifact and intentionally sets the overwrite flag to `true`.
+The final bundle output path must also be distinct from the signed-provenance,
+live-device QA, plugin-trust QA, app zip, and installer package input paths, so
+the bundle writer cannot replace evidence it has just validated.
 The release readiness runbook also includes
 `set -a && source target/release-evidence-bundle.env && set +a &&
 ./scripts/release-evidence-bundle.sh --bundle` as the template-backed bundle

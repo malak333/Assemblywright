@@ -291,6 +291,36 @@ require_output_path_available() {
   fi
 }
 
+require_distinct_evidence_paths() {
+  require_command python3
+  python3 - \
+    "$OUTPUT_PATH" \
+    "$ZIP_PATH" \
+    "$PKG_PATH" \
+    "$SIGNED_PROVENANCE_REPORT" \
+    "$LIVE_QA_REPORT" \
+    "$PLUGIN_QA_REPORT" <<'PY'
+import os
+import sys
+
+output_path = os.path.abspath(os.path.expanduser(sys.argv[1]))
+inputs = [
+    ("app zip artifact", sys.argv[2]),
+    ("installer package artifact", sys.argv[3]),
+    ("signed-distribution provenance report", sys.argv[4]),
+    ("live-device QA report", sys.argv[5]),
+    ("plugin-trust QA report", sys.argv[6]),
+]
+for label, path in inputs:
+    normalized = os.path.abspath(os.path.expanduser(path))
+    if output_path == normalized:
+        raise SystemExit(
+            "release evidence bundle output path must not overwrite "
+            f"{label}: {path}"
+        )
+PY
+}
+
 require_json_contains() {
   local label="$1"
   local path="$2"
@@ -1018,6 +1048,7 @@ write_bundle() {
   require_command shasum
   require_command python3
   generated_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  require_distinct_evidence_paths
   zip_sha="$(file_sha256 "$ZIP_PATH")"
   pkg_sha="$(file_sha256 "$PKG_PATH")"
   live_sha="$(file_sha256 "$LIVE_QA_REPORT")"
@@ -1599,6 +1630,28 @@ PY
     fail "release evidence self-test expected bare reports archive location to be rejected"
   fi
   require_file_contains "bare reports archive URI error" "$tmp_dir/bare-archive-uri.err" "must be a URI with a scheme"
+
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_OVERWRITE_OUTPUT=true \
+    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
+    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+    "$0" --bundle >/dev/null 2>"$tmp_dir/output-collision.err"; then
+    fail "release evidence self-test expected bundle output collision to be rejected"
+  fi
+  require_file_contains "bundle output collision error" "$tmp_dir/output-collision.err" "must not overwrite live-device QA report"
 
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
     JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \

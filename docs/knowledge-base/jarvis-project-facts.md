@@ -1127,7 +1127,10 @@ requires plugin-trust `generated_at`, `review_started_at`,
   generated templates set `JARVIS_EVIDENCE_OVERWRITE_OUTPUT=false`, and
   `release-evidence-bundle.sh --bundle` rejects an existing output path unless
   the operator has preserved the old artifact and intentionally sets the
-  overwrite flag to `true`.
+  overwrite flag to `true`. The final bundle output path must also be distinct
+  from signed-provenance, live-device QA, plugin-trust QA, app zip, and
+  installer package input paths, so the bundle writer cannot replace evidence it
+  has just validated.
 - `JarvisMacAppTests` covers app-level Release tab presentation for
   presence-only evidence rows. Release tab evidence rows explicitly label the
   evidence path, detail text, and production/manual-gate requirement context so
@@ -1170,22 +1173,23 @@ requires plugin-trust `generated_at`, `review_started_at`,
   #268 run `27428860335` / job `81073692261`, `production_ready: false`,
   `verified_feature_count: 16`, `pending_feature_count: 1`, and, after local
   generated app presence artifacts exist, six missing external/manual evidence
-  artifacts. The current post-PR #308 baseline at `af943e8` has hosted
-  GitHub `Release local gate` success for push run `27828319448` / job
-  `82358342509` and remains conservative with `production_ready: false`,
+  artifacts. The current post-PR #309 baseline at `38bd79e` has hosted
+  GitHub `Release local gate` success for push run `27830392634` / job
+  `82365381482` and remains conservative with `production_ready: false`,
   `verified_feature_count: 16`, `pending_feature_count: 1`, and
   `live_voice_loop` as the pending manual feature; `/release/evidence-status`
   reports `complete: false`, three satisfied evidence rows, six missing rows,
-  and no invalid rows. PRs #283-#308 added repo-owned clarity for voice
+  and no invalid rows. PRs #283-#309 added repo-owned clarity for voice
   permission gating, external handoff guidance, architecture documentation,
   plugin-trust artifact SHA guidance, final doctor assertion guidance, Release
   tab runbook-load warnings, external handoff mechanics, evidence-note
   validation, docs drift smoke, release workflow hygiene,
   installed-plugin plus model-step/model-output activity-progress proof,
   external handoff manifest
-  digest binding, release-local command heartbeat observability, and
-  final-bundle reports archive URI validation, but they do not satisfy signing,
-  notarization, installation, live-device QA, plugin-trust QA, or final
+  digest binding, release-local command heartbeat observability,
+  final-bundle reports archive URI validation, and architecture readiness
+  baseline drift protection, but they do not satisfy signing, notarization,
+  installation, live-device QA, plugin-trust QA, or final
   evidence-bundle requirements.
 - Plugin-trust artifact evidence is enforced as a complete six-category set.
   Evidence-status, evidence-doctor, and final bundle validation reject missing,

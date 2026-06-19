@@ -76,17 +76,22 @@ require_text "architecture local gate boundary" "$ARCHITECTURE" "does not perfor
 require_text "architecture local gate boundary" "$ARCHITECTURE" "notarization, clean-profile install, Finder/LaunchServices launch, live-device"
 require_text "architecture local gate boundary" "$ARCHITECTURE" "QA, plugin-trust QA, or final evidence bundling"
 require_text "architecture post-merge cleanup audit" "$ARCHITECTURE" "post-merge cleanup audit: open PRs, main workflow runs, worktrees, merged/unmerged codex branches, clean checkout"
-require_text "architecture current readiness baseline" "$ARCHITECTURE" 'current post-PR #308 baseline at'
-require_text "architecture current readiness commit" "$ARCHITECTURE" '`main` commit `af943e8`'
-require_text "architecture current readiness run" "$ARCHITECTURE" '27828319448'
+require_text "architecture current readiness baseline" "$ARCHITECTURE" 'current post-PR #309 baseline at'
+require_text "architecture current readiness commit" "$ARCHITECTURE" '`main` commit `38bd79e`'
+require_text "architecture current readiness run" "$ARCHITECTURE" '27830392634'
+forbid_text "architecture stale readiness baseline" "$ARCHITECTURE" 'current post-PR #308 baseline at'
+forbid_text "architecture stale readiness commit" "$ARCHITECTURE" '`main` commit `af943e8`'
 forbid_text "architecture stale readiness baseline" "$ARCHITECTURE" 'current post-PR #301 baseline at'
 forbid_text "architecture stale readiness commit" "$ARCHITECTURE" '`main` commit `155ccd4`'
 require_text "architecture model-step progress boundary" "$ARCHITECTURE" "model-step, and redacted model-output chunk progress frames"
 require_text "architecture model-output progress boundary" "$ARCHITECTURE" "redacted model-output chunk progress frames"
 require_text "architecture handoff manifest digest" "$ARCHITECTURE" "handoff manifest digest-binding"
 require_text "architecture release-local heartbeat" "$ARCHITECTURE" "release-local command heartbeat"
-require_text "knowledge base current readiness baseline" "$KB" 'current post-PR #308 baseline at `af943e8`'
-require_text "knowledge base current readiness run" "$KB" '27828319448'
+require_text "architecture final bundle output collision guard" "$ARCHITECTURE" "final bundle writer must also reject"
+require_text "architecture final bundle output collision guard" "$ARCHITECTURE" "output paths that collide with signed-provenance"
+require_text "knowledge base current readiness baseline" "$KB" 'current post-PR #309 baseline at `38bd79e`'
+require_text "knowledge base current readiness run" "$KB" '27830392634'
+forbid_text "knowledge base stale readiness baseline" "$KB" 'current post-PR #308 baseline at `af943e8`'
 forbid_text "knowledge base stale readiness baseline" "$KB" 'current post-PR #301 baseline at `155ccd4`'
 require_text "knowledge base model-step progress boundary" "$KB" "model-step completion/failure audit evidence"
 require_text "knowledge base model-output progress boundary" "$KB" "content_redacted: true"
@@ -94,13 +99,16 @@ require_text "knowledge base model-step progress proof" "$KB" "installed-plugin 
 require_text "knowledge base model-output progress proof" "$KB" "model-step/model-output"
 require_text "knowledge base handoff manifest digest" "$KB" "manifest digests match"
 require_text "knowledge base release-local heartbeat" "$KB" "release-local command heartbeat"
+require_text "knowledge base final bundle output collision guard" "$KB" "final bundle output path must also be distinct"
 require_text "build docs model-step progress command" "$BUILD_DOCS" "repository_backed_state_endpoints_expose_tasks_and_audit"
 require_text "build docs handoff manifest digest" "$BUILD_DOCS" "per-file SHA-256 digests"
 require_text "build docs release-local heartbeat" "$BUILD_DOCS" "JARVIS_RELEASE_LOCAL_HEARTBEAT_SECONDS"
 require_text "build docs release-local heartbeat self-test" "$BUILD_DOCS" "--heartbeat-self-test"
+require_text "build docs final bundle output collision guard" "$BUILD_DOCS" "final bundle output path must also be distinct"
 require_text "release checklist handoff manifest digest" "$CHECKLIST" "byte counts"
 require_text "release checklist model-output chunk boundary" "$CHECKLIST" "model_output_chunk"
 require_text "release checklist model-output redaction boundary" "$CHECKLIST" "content_redacted: true"
+require_text "release checklist final bundle output collision guard" "$CHECKLIST" "bundle output path is distinct from the signed-distribution provenance"
 require_text "build docs external handoff snapshot command" "$BUILD_DOCS" "release_external_handoff_snapshots_match_live_runbook_commands"
 for file in "$BUILD_DOCS" "$CHECKLIST" "$KB"; do
   require_text "runbook payload contract boundary" "$file" "operator/snapshot JSON"
