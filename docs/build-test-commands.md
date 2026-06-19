@@ -520,6 +520,9 @@ The `--check` output points operators to
 target/release-evidence-bundle.env` to generate a sourceable final-bundle
 template. The template defaults every validation flag to `false`; operators
 must flip each one only after the matching external release check is complete.
+It also defaults `JARVIS_EVIDENCE_OVERWRITE_OUTPUT=false`, so `--bundle`
+fails instead of replacing an existing final bundle unless the operator has
+preserved the old artifact and intentionally sets the overwrite flag to `true`.
 The release readiness runbook also includes
 `set -a && source target/release-evidence-bundle.env && set +a &&
 ./scripts/release-evidence-bundle.sh --bundle` as the template-backed bundle

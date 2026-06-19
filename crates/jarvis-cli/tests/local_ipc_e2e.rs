@@ -3233,6 +3233,9 @@ fn release_external_handoff_snapshots_match_live_runbook_commands() {
     let plugin_snapshot = read_json_file(handoff_dir.join("plugin-trust-runbook.json"));
     let readiness_snapshot = read_json_file(handoff_dir.join("release-readiness.json"));
     let manifest = read_json_file(handoff_dir.join("release-handoff-manifest.json"));
+    let evidence_bundle_template =
+        fs::read_to_string(handoff_dir.join("release-evidence-bundle.env"))
+            .expect("read release evidence bundle template");
 
     assert_eq!(manifest["schema_version"], 1);
     assert_eq!(
@@ -3342,6 +3345,10 @@ fn release_external_handoff_snapshots_match_live_runbook_commands() {
         .as_str()
         .expect("readiness scope")
         .contains("external release evidence status"));
+    assert!(
+        evidence_bundle_template.contains("JARVIS_EVIDENCE_OVERWRITE_OUTPUT=false"),
+        "final bundle template must default overwrite protection off"
+    );
 }
 
 #[test]
