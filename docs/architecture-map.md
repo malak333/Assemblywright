@@ -884,12 +884,15 @@ That note records the original post-PR #259 readiness snapshot, the merged
 hosted release-gate evidence for that sweep, and the production evidence
 boundary that remained in force.
 
-Current readiness should always be refreshed before release claims. The
+Current readiness should always be refreshed before release claims with
+`cargo run -p jarvis-cli -- release readiness --json` and
+`gh run list --branch main --workflow "Jarvis Release Local Gate" --limit 3`.
+The
 historical 2026-06-12 UTC baseline after PR #268 started from `main` at
 `8cccb5b`, with the hosted `Release local gate` green for PR #268 run
-`27428860335` / job `81073692261`. The current post-PR #312 baseline at
-`main` commit `4b36c14` has hosted `Release local gate` success for push run
-`27836547974` / job `82385796019` and continues to report `production_ready: false`,
+`27428860335` / job `81073692261`. The latest verified main baseline at
+`main` commit `14ab7bc` has hosted `Release local gate` success for push run
+`27838303892` / job `82391379400` and continues to report `production_ready: false`,
 `evidence_mode_enabled: false`, `verified_feature_count: 16`, and `pending_feature_count: 1`, with
 `live_voice_loop` still `pending_manual_validation`, while the local repo-owned
 release handoff, workflow hygiene, docs drift smoke, evidence-note validation,
@@ -897,8 +900,9 @@ installed-plugin plus model-step/model-output activity-progress proof,
 handoff manifest digest-binding, release-local command heartbeat,
 final-bundle reports archive URI validation, architecture readiness baseline
 drift protection, final-bundle output path collision guards, external handoff
-manifest integrity self-testing, and release evidence-mode visibility have
-improved without converting local evidence inspection into production proof.
+manifest integrity self-testing, release evidence-mode visibility, and the
+resilient baseline drift guard have improved without converting local evidence
+inspection into production proof.
 `jarvis release evidence-status --json` remains expected to report
 `complete: false` with three satisfied evidence rows, six missing
 external/manual evidence artifacts, and zero invalid evidence rows after the
