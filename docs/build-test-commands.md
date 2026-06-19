@@ -550,6 +550,8 @@ plugin-trust artifact URI/SHA-256 bindings, and final reports archive URI that
 the release operator must fill before the final doctor assertion, plus
 `release-handoff-manifest.json` with the release version, git commit, snapshot
 endpoint, proof boundary, and per-file SHA-256 digests for the handoff package.
+The handoff shell self-test verifies the expected manifest file list, release
+version, current git commit, byte counts, and SHA-256 digests before passing.
 Its `--check` and `--self-test` modes are part of the local release gate and
 prove only handoff generation mechanics; they do not perform signing,
 notarization, stapling, installation, Finder launch, live-device QA,

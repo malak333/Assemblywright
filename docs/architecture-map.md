@@ -886,17 +886,17 @@ boundary that remained in force.
 Current readiness should always be refreshed before release claims. The
 historical 2026-06-12 UTC baseline after PR #268 started from `main` at
 `8cccb5b`, with the hosted `Release local gate` green for PR #268 run
-`27428860335` / job `81073692261`. The current post-PR #309 baseline at
-`main` commit `38bd79e` has hosted `Release local gate` success for push run
-`27830392634` / job `82365381482` and continues to report `production_ready: false`,
+`27428860335` / job `81073692261`. The current post-PR #310 baseline at
+`main` commit `27c33f5` has hosted `Release local gate` success for push run
+`27832719258` / job `82373209518` and continues to report `production_ready: false`,
 `verified_feature_count: 16`, and `pending_feature_count: 1`, with
 `live_voice_loop` still `pending_manual_validation`, while the local repo-owned
 release handoff, workflow hygiene, docs drift smoke, evidence-note validation,
 installed-plugin plus model-step/model-output activity-progress proof,
 handoff manifest digest-binding, release-local command heartbeat,
-final-bundle reports archive URI validation, and architecture readiness
-baseline drift protection have improved without converting local evidence
-inspection into production proof.
+final-bundle reports archive URI validation, architecture readiness baseline
+drift protection, and final-bundle output path collision guards have improved
+without converting local evidence inspection into production proof.
 `jarvis release evidence-status --json` remains expected to report
 `complete: false` with three satisfied evidence rows, six missing
 external/manual evidence artifacts, and zero invalid evidence rows after the
@@ -1099,8 +1099,10 @@ URI/SHA-256 bindings, and final archive URI with all external validation flags
 still defaulted false. It also writes `release-handoff-manifest.json` with
 generation metadata, release version, git commit, snapshot endpoint, proof
 boundary, byte counts, and SHA-256 digests for every generated handoff file. Its
-`--check` and `--self-test` paths are part of the local release gate as handoff
-mechanics only; no signing, notarization, clean-profile install,
+`--self-test` verifies the expected file list, release version, current git
+commit, byte counts, and SHA-256 digests before passing. Its `--check` and
+`--self-test` paths are part of the local release gate as handoff mechanics only;
+no signing, notarization, clean-profile install,
 Finder/LaunchServices launch, live-device QA, plugin-trust QA, host-level egress
 enforcement, or final evidence archival is performed.
 The same slice hardens owner evidence-note validation so live-device,

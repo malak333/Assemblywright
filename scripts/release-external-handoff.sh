@@ -129,6 +129,78 @@ if expected not in value:
 PY
 }
 
+require_manifest_integrity() {
+  local label="$1"
+  local output_dir="$2"
+  local manifest_path="$output_dir/release-handoff-manifest.json"
+  local expected_version
+  local expected_commit
+  expected_version="$("$ROOT_DIR/scripts/release-version.sh")"
+  expected_commit="$(git rev-parse HEAD)"
+  require_file "$label" "$manifest_path"
+  python3 - "$manifest_path" "$output_dir" "$expected_version" "$expected_commit" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+manifest_path = Path(sys.argv[1])
+output_dir = Path(sys.argv[2])
+expected_version = sys.argv[3]
+expected_commit = sys.argv[4]
+
+with manifest_path.open(encoding="utf-8") as handle:
+    manifest = json.load(handle)
+
+expected_files = [
+    "release-live-device-qa.env",
+    "release-plugin-trust-qa.env",
+    "release-evidence-bundle.env",
+    "release-readiness.json",
+    "release-evidence-status.json",
+    "signed-distribution-runbook.json",
+    "live-device-runbook.json",
+    "plugin-trust-runbook.json",
+    "release-evidence-checklist.md",
+    "README.md",
+]
+
+if manifest.get("release_version") != expected_version:
+    raise SystemExit(
+        f"manifest release_version mismatch: expected {expected_version}, "
+        f"got {manifest.get('release_version')!r}"
+    )
+if manifest.get("git_commit") != expected_commit:
+    raise SystemExit(
+        f"manifest git_commit mismatch: expected {expected_commit}, "
+        f"got {manifest.get('git_commit')!r}"
+    )
+
+entries = manifest.get("files")
+if not isinstance(entries, list):
+    raise SystemExit("manifest files must be a list")
+
+by_path = {entry.get("path"): entry for entry in entries if isinstance(entry, dict)}
+if sorted(by_path) != sorted(expected_files):
+    raise SystemExit(
+        f"manifest files mismatch: expected {sorted(expected_files)}, "
+        f"got {sorted(by_path)}"
+    )
+
+for name in expected_files:
+    path = output_dir / name
+    if not path.is_file():
+        raise SystemExit(f"manifest references missing handoff file: {name}")
+    data = path.read_bytes()
+    entry = by_path[name]
+    expected_sha = hashlib.sha256(data).hexdigest()
+    if entry.get("sha256") != expected_sha:
+        raise SystemExit(f"manifest sha256 mismatch for {name}")
+    if entry.get("bytes") != len(data):
+        raise SystemExit(f"manifest byte count mismatch for {name}")
+PY
+}
+
 write_readme() {
   local output_dir="$1"
   local generated_at
@@ -430,6 +502,7 @@ self_test() {
   require_file_contains "handoff checklist" "$tmp_dir/handoff/release-evidence-checklist.md" "JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI"
   require_json_key "handoff manifest" "$tmp_dir/handoff/release-handoff-manifest.json" "files"
   require_json_string_contains "handoff manifest" "$tmp_dir/handoff/release-handoff-manifest.json" "evidence_type" "release_external_handoff_manifest"
+  require_manifest_integrity "handoff manifest" "$tmp_dir/handoff"
   require_json_key "readiness snapshot" "$tmp_dir/handoff/release-readiness.json" "production_ready"
   require_json_string_contains "readiness snapshot" "$tmp_dir/handoff/release-readiness.json" "readiness_scope" "external release evidence status"
   require_json_key "evidence-status snapshot" "$tmp_dir/handoff/release-evidence-status.json" "complete"
