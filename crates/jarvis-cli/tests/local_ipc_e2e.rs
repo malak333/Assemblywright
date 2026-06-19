@@ -2539,6 +2539,75 @@ fn release_evidence_status_accepts_bundle_evidence_report_aliases() {
 }
 
 #[test]
+fn release_evidence_status_prefers_bundle_evidence_report_env_over_legacy_aliases() {
+    let temp_dir = tempfile::tempdir().expect("temp evidence report aliases");
+    let live_report_path = temp_dir.path().join("bundle-live-report.json");
+    let legacy_live_report_path = temp_dir.path().join("legacy-live-report.json");
+    let plugin_report_path = temp_dir.path().join("bundle-plugin-report.json");
+    let legacy_plugin_report_path = temp_dir.path().join("legacy-plugin-report.json");
+    write_valid_live_device_qa_report(&live_report_path);
+    write_valid_live_device_qa_report(&legacy_live_report_path);
+    write_json_report(&plugin_report_path, valid_plugin_trust_qa_report());
+    write_json_report(&legacy_plugin_report_path, valid_plugin_trust_qa_report());
+    let live_report = live_report_path
+        .to_str()
+        .expect("live report path is UTF-8")
+        .to_string();
+    let legacy_live_report = legacy_live_report_path
+        .to_str()
+        .expect("legacy live report path is UTF-8")
+        .to_string();
+    let plugin_report = plugin_report_path
+        .to_str()
+        .expect("plugin report path is UTF-8")
+        .to_string();
+    let legacy_plugin_report = legacy_plugin_report_path
+        .to_str()
+        .expect("legacy plugin report path is UTF-8")
+        .to_string();
+    let db_path = temp_dir.path().join("jarvis-precedence-evidence.sqlite");
+    let env = [
+        ("JARVIS_EVIDENCE_LIVE_QA_REPORT", live_report.as_str()),
+        ("JARVIS_QA_REPORT_PATH", legacy_live_report.as_str()),
+        ("JARVIS_EVIDENCE_PLUGIN_QA_REPORT", plugin_report.as_str()),
+        (
+            "JARVIS_PLUGIN_QA_REPORT_PATH",
+            legacy_plugin_report.as_str(),
+        ),
+    ];
+    let mut server = JarvisServer::start_with_env(&db_path, &env);
+    let endpoint = server.endpoint();
+    let command = run_cli_json([
+        "command",
+        "status check",
+        "--json",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    let task_id = command["task"]["id"].as_str().expect("task id");
+    let mut live_report_json: Value =
+        serde_json::from_str(&fs::read_to_string(&live_report_path).expect("read live report"))
+            .expect("decode live report");
+    live_report_json["voice_command_observation"]["command_result_evidence_id"] =
+        json!(format!("task:{task_id}"));
+    write_json_report(&live_report_path, live_report_json);
+
+    let evidence_status = run_cli_json([
+        "release",
+        "evidence-status",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    let live_item = release_evidence_item(&evidence_status, "live_device_qa_report");
+    let plugin_item = release_evidence_item(&evidence_status, "plugin_trust_qa_report");
+    assert_eq!(live_item["path"], live_report, "{live_item}");
+    assert_eq!(plugin_item["path"], plugin_report, "{plugin_item}");
+    assert_ne!(live_item["path"], legacy_live_report, "{live_item}");
+    assert_ne!(plugin_item["path"], legacy_plugin_report, "{plugin_item}");
+    server.stop();
+}
+
+#[test]
 #[cfg(unix)]
 fn release_evidence_status_marks_present_artifacts_as_presence_only() {
     let temp_dir = tempfile::tempdir().expect("temp evidence artifacts");
