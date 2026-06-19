@@ -156,6 +156,44 @@ if normalized in exact_placeholders or any(marker in normalized for marker in em
 PY
 }
 
+require_durable_artifact_uri_env() {
+  local name="$1"
+  local value="${!name:-}"
+  require_non_empty_env "$name"
+  python3 - "$name" "$value" <<'PY'
+import re
+import sys
+
+name, value = sys.argv[1:3]
+trimmed = value.strip()
+if ":" not in trimmed:
+    raise SystemExit(f"{name} must be a URI with a scheme and location")
+scheme, location = trimmed.split(":", 1)
+if not scheme or not location:
+    raise SystemExit(f"{name} must be a URI with a scheme and location")
+if not re.fullmatch(r"[A-Za-z][A-Za-z0-9+.-]*", scheme):
+    raise SystemExit(f"{name} must use a valid URI scheme")
+
+normalized = trimmed.lower()
+placeholder_markers = (
+    "self-test",
+    "placeholder",
+    "example",
+    "fixture",
+    "todo",
+    "tbd",
+    "replace-me",
+    "changeme",
+    "/tmp/",
+    "/temp/",
+)
+if any(marker in normalized for marker in placeholder_markers):
+    raise SystemExit(
+        f"{name} must point to a durable release evidence archive, not a placeholder or self-test location"
+    )
+PY
+}
+
 require_utc_env_timestamp() {
   local name="$1"
   local value="${!name:-}"
@@ -564,6 +602,86 @@ if [[ "$SELF_TEST" == true ]]; then
   require_file_contains "plugin trust QA self-test report" "$fixture_report" '"sha256": "1111111111111111111111111111111111111111111111111111111111111111"'
   require_file_contains "plugin trust QA self-test report" "$fixture_report" '"proof_boundary"'
 
+  if JARVIS_PLUGIN_QA_REPORT_PATH="$tmp_dir/temp-artifact-uri-report.json" \
+    JARVIS_PLUGIN_QA_REVIEW_SOURCE="self-test-fixture" \
+    JARVIS_PLUGIN_QA_SELF_TEST_FIXTURE=true \
+    JARVIS_PLUGIN_QA_INTERNAL_SELF_TEST=true \
+    JARVIS_PLUGIN_QA_MARKETPLACE_REVIEW_VALIDATED=true \
+    JARVIS_PLUGIN_QA_MALWARE_SCAN_VALIDATED=true \
+    JARVIS_PLUGIN_QA_OS_SANDBOX_VALIDATED=true \
+    JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED=true \
+    JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_POLICY_VALIDATED=true \
+    JARVIS_PLUGIN_QA_MANUAL_TRUST_REVIEW_VALIDATED=true \
+    JARVIS_PLUGIN_QA_OWNER_NAME="Jarvis Plugin QA Self-Test" \
+    JARVIS_PLUGIN_QA_REVIEW_STARTED_AT="2026-05-22T16:10:00Z" \
+    JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT="2026-05-22T16:20:00Z" \
+    JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE="Marketplace review fixture was observed." \
+    JARVIS_PLUGIN_QA_MARKETPLACE_ARTIFACT_URI="file:///tmp/jarvis/plugin-trust/marketplace-review.json" \
+    JARVIS_PLUGIN_QA_MARKETPLACE_ARTIFACT_SHA256="1111111111111111111111111111111111111111111111111111111111111111" \
+    JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE="Malware scan evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_MALWARE_SCAN_ARTIFACT_URI="archive://jarvis/plugin-trust/malware-scan.json" \
+    JARVIS_PLUGIN_QA_MALWARE_SCAN_ARTIFACT_SHA256="2222222222222222222222222222222222222222222222222222222222222222" \
+    JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE="OS sandbox evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_OS_SANDBOX_ARTIFACT_URI="archive://jarvis/plugin-trust/os-sandbox.json" \
+    JARVIS_PLUGIN_QA_OS_SANDBOX_ARTIFACT_SHA256="3333333333333333333333333333333333333333333333333333333333333333" \
+    JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE="Egress evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_EGRESS_ARTIFACT_URI="archive://jarvis/plugin-trust/egress.json" \
+    JARVIS_PLUGIN_QA_EGRESS_ARTIFACT_SHA256="4444444444444444444444444444444444444444444444444444444444444444" \
+    JARVIS_PLUGIN_QA_EGRESS_POLICY_LABEL="Host egress policy reviewed in the controlled release lane" \
+    JARVIS_PLUGIN_QA_EGRESS_VALIDATION_COMPLETED_AT="2026-05-22T16:18:00Z" \
+    JARVIS_PLUGIN_QA_EGRESS_DENY_FIXTURE_EVIDENCE_NOTE="Undeclared-host deny evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_EGRESS_ALLOW_FIXTURE_EVIDENCE_NOTE="Declared-host allow evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE="Signed publisher policy evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_ARTIFACT_URI="archive://jarvis/plugin-trust/signed-publisher.json" \
+    JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_ARTIFACT_SHA256="5555555555555555555555555555555555555555555555555555555555555555" \
+    JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE="Manual trust review evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_MANUAL_REVIEW_ARTIFACT_URI="archive://jarvis/plugin-trust/manual-review.json" \
+    JARVIS_PLUGIN_QA_MANUAL_REVIEW_ARTIFACT_SHA256="6666666666666666666666666666666666666666666666666666666666666666" \
+    "$0" --assert-complete >"$tmp_dir/temp-artifact-uri.out" 2>&1; then
+    fail "plugin trust QA self-test expected temporary artifact URI evidence to be rejected"
+  fi
+  require_file_contains "plugin trust QA temporary artifact URI rejection" "$tmp_dir/temp-artifact-uri.out" "durable release evidence archive"
+
+  if JARVIS_PLUGIN_QA_REPORT_PATH="$tmp_dir/bare-artifact-uri-report.json" \
+    JARVIS_PLUGIN_QA_REVIEW_SOURCE="self-test-fixture" \
+    JARVIS_PLUGIN_QA_SELF_TEST_FIXTURE=true \
+    JARVIS_PLUGIN_QA_INTERNAL_SELF_TEST=true \
+    JARVIS_PLUGIN_QA_MARKETPLACE_REVIEW_VALIDATED=true \
+    JARVIS_PLUGIN_QA_MALWARE_SCAN_VALIDATED=true \
+    JARVIS_PLUGIN_QA_OS_SANDBOX_VALIDATED=true \
+    JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED=true \
+    JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_POLICY_VALIDATED=true \
+    JARVIS_PLUGIN_QA_MANUAL_TRUST_REVIEW_VALIDATED=true \
+    JARVIS_PLUGIN_QA_OWNER_NAME="Jarvis Plugin QA Self-Test" \
+    JARVIS_PLUGIN_QA_REVIEW_STARTED_AT="2026-05-22T16:10:00Z" \
+    JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT="2026-05-22T16:20:00Z" \
+    JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE="Marketplace review fixture was observed." \
+    JARVIS_PLUGIN_QA_MARKETPLACE_ARTIFACT_URI="jarvis/plugin-trust/marketplace-review.json" \
+    JARVIS_PLUGIN_QA_MARKETPLACE_ARTIFACT_SHA256="1111111111111111111111111111111111111111111111111111111111111111" \
+    JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE="Malware scan evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_MALWARE_SCAN_ARTIFACT_URI="archive://jarvis/plugin-trust/malware-scan.json" \
+    JARVIS_PLUGIN_QA_MALWARE_SCAN_ARTIFACT_SHA256="2222222222222222222222222222222222222222222222222222222222222222" \
+    JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE="OS sandbox evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_OS_SANDBOX_ARTIFACT_URI="archive://jarvis/plugin-trust/os-sandbox.json" \
+    JARVIS_PLUGIN_QA_OS_SANDBOX_ARTIFACT_SHA256="3333333333333333333333333333333333333333333333333333333333333333" \
+    JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE="Egress evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_EGRESS_ARTIFACT_URI="archive://jarvis/plugin-trust/egress.json" \
+    JARVIS_PLUGIN_QA_EGRESS_ARTIFACT_SHA256="4444444444444444444444444444444444444444444444444444444444444444" \
+    JARVIS_PLUGIN_QA_EGRESS_POLICY_LABEL="Host egress policy reviewed in the controlled release lane" \
+    JARVIS_PLUGIN_QA_EGRESS_VALIDATION_COMPLETED_AT="2026-05-22T16:18:00Z" \
+    JARVIS_PLUGIN_QA_EGRESS_DENY_FIXTURE_EVIDENCE_NOTE="Undeclared-host deny evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_EGRESS_ALLOW_FIXTURE_EVIDENCE_NOTE="Declared-host allow evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE="Signed publisher policy evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_ARTIFACT_URI="archive://jarvis/plugin-trust/signed-publisher.json" \
+    JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_ARTIFACT_SHA256="5555555555555555555555555555555555555555555555555555555555555555" \
+    JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE="Manual trust review evidence archived in the controlled release lane." \
+    JARVIS_PLUGIN_QA_MANUAL_REVIEW_ARTIFACT_URI="archive://jarvis/plugin-trust/manual-review.json" \
+    JARVIS_PLUGIN_QA_MANUAL_REVIEW_ARTIFACT_SHA256="6666666666666666666666666666666666666666666666666666666666666666" \
+    "$0" --assert-complete >"$tmp_dir/bare-artifact-uri.out" 2>&1; then
+    fail "plugin trust QA self-test expected bare artifact URI evidence to be rejected"
+  fi
+  require_file_contains "plugin trust QA bare artifact URI rejection" "$tmp_dir/bare-artifact-uri.out" "must be a URI with a scheme and location"
+
   if JARVIS_PLUGIN_QA_REPORT_PATH="$tmp_dir/operator-self-test-identity-report.json" \
     JARVIS_PLUGIN_QA_REVIEW_SOURCE="owner-asserted-manual-review" \
     JARVIS_PLUGIN_QA_SELF_TEST_FIXTURE=true \
@@ -838,16 +956,16 @@ require_non_empty_env JARVIS_PLUGIN_QA_OWNER_NAME
 require_utc_env_timestamp_order JARVIS_PLUGIN_QA_REVIEW_STARTED_AT JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT
 require_not_future_utc_env_timestamp JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT
 require_meaningful_evidence_env JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE
-require_meaningful_evidence_env JARVIS_PLUGIN_QA_MARKETPLACE_ARTIFACT_URI
+require_durable_artifact_uri_env JARVIS_PLUGIN_QA_MARKETPLACE_ARTIFACT_URI
 require_sha256_env JARVIS_PLUGIN_QA_MARKETPLACE_ARTIFACT_SHA256
 require_meaningful_evidence_env JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE
-require_meaningful_evidence_env JARVIS_PLUGIN_QA_MALWARE_SCAN_ARTIFACT_URI
+require_durable_artifact_uri_env JARVIS_PLUGIN_QA_MALWARE_SCAN_ARTIFACT_URI
 require_sha256_env JARVIS_PLUGIN_QA_MALWARE_SCAN_ARTIFACT_SHA256
 require_meaningful_evidence_env JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE
-require_meaningful_evidence_env JARVIS_PLUGIN_QA_OS_SANDBOX_ARTIFACT_URI
+require_durable_artifact_uri_env JARVIS_PLUGIN_QA_OS_SANDBOX_ARTIFACT_URI
 require_sha256_env JARVIS_PLUGIN_QA_OS_SANDBOX_ARTIFACT_SHA256
 require_meaningful_evidence_env JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE
-require_meaningful_evidence_env JARVIS_PLUGIN_QA_EGRESS_ARTIFACT_URI
+require_durable_artifact_uri_env JARVIS_PLUGIN_QA_EGRESS_ARTIFACT_URI
 require_sha256_env JARVIS_PLUGIN_QA_EGRESS_ARTIFACT_SHA256
 require_meaningful_evidence_env JARVIS_PLUGIN_QA_EGRESS_POLICY_LABEL
 require_utc_env_timestamp_order JARVIS_PLUGIN_QA_REVIEW_STARTED_AT JARVIS_PLUGIN_QA_EGRESS_VALIDATION_COMPLETED_AT
@@ -855,10 +973,10 @@ require_utc_env_timestamp_order JARVIS_PLUGIN_QA_EGRESS_VALIDATION_COMPLETED_AT 
 require_meaningful_evidence_env JARVIS_PLUGIN_QA_EGRESS_DENY_FIXTURE_EVIDENCE_NOTE
 require_meaningful_evidence_env JARVIS_PLUGIN_QA_EGRESS_ALLOW_FIXTURE_EVIDENCE_NOTE
 require_meaningful_evidence_env JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE
-require_meaningful_evidence_env JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_ARTIFACT_URI
+require_durable_artifact_uri_env JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_ARTIFACT_URI
 require_sha256_env JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_ARTIFACT_SHA256
 require_meaningful_evidence_env JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE
-require_meaningful_evidence_env JARVIS_PLUGIN_QA_MANUAL_REVIEW_ARTIFACT_URI
+require_durable_artifact_uri_env JARVIS_PLUGIN_QA_MANUAL_REVIEW_ARTIFACT_URI
 require_sha256_env JARVIS_PLUGIN_QA_MANUAL_REVIEW_ARTIFACT_SHA256
 write_report
 

@@ -492,7 +492,8 @@ flags and fake evidence notes to verify report generation only; real release
 evidence must come from `--assert-complete` after the owner validates every
 `JARVIS_PLUGIN_QA_*` flag and populates the owner/timestamp/evidence-note fields
 plus the matching archived artifact URI and SHA-256 digest for each plugin-trust
-category.
+category. The assertion path rejects artifact URIs that lack a URI scheme and
+location or point at placeholder, self-test, fixture, or temporary paths.
 The generated report carries `schema_version: 1` and
 `evidence_type: owner_recorded_plugin_trust_qa` plus the current release
 `version`; final operator evidence must also keep `self_test_fixture=false` and
@@ -632,7 +633,7 @@ bundle/doctor paths also require plugin report `generated_at` to be UTC, non-fut
 earlier than `review_completed_at`. Structured host egress evidence must also
 include the policy/profile label, ordered UTC egress validation timestamp, and
 deny/allow fixture notes. Each plugin-trust category must bind its archived
-manual evidence artifact with a non-placeholder URI and SHA-256 digest;
+manual evidence artifact with a durable non-placeholder URI and SHA-256 digest;
 evidence-status, evidence-doctor, and final bundle validation all reject
 missing or invalid bindings across the full marketplace, malware, sandbox,
 egress, signed-publisher, and manual-review artifact set.

@@ -185,7 +185,9 @@ to explain what happened:
   `--self-test` proves only the assertion/report mechanics with fake evidence
   notes; `--assert-complete` writes owner-recorded evidence after external
   validation flags, non-empty owner/timestamp/evidence fields, and per-category
-  archived artifact URI/SHA-256 bindings are present.
+  archived artifact URI/SHA-256 bindings are present. Artifact URIs must include
+  a durable URI scheme and location and cannot point at placeholder, self-test,
+  fixture, or temporary paths.
   Host-level egress evidence must include the reviewed policy/profile label,
   ordered UTC egress validation timestamp, denied undeclared-host fixture note,
   and declared-host allow fixture note.

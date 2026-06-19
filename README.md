@@ -396,11 +396,13 @@ populated. The report must identify itself with `schema_version: 1` and
 `false`, before the doctor/status gates will accept it. Operator reports must
 also keep `review_source: owner-asserted-manual-review`; imported or
 self-test review sources are rejected by the assertion, doctor, bundle, and
-evidence-status paths. Host-level egress evidence now requires an owner-recorded
-policy label, UTC egress validation timestamp, denied undeclared-host fixture
-note, and declared-host allow fixture note, but that report remains manual
-external evidence rather than repo-local proof of marketplace, host sandbox, or
-host egress enforcement systems.
+evidence-status paths. Artifact URIs must include a durable URI scheme/location
+and cannot point at placeholder, self-test, fixture, or temporary paths.
+Host-level egress evidence now requires an owner-recorded policy label, UTC
+egress validation timestamp, denied undeclared-host fixture note, and
+declared-host allow fixture note, but that report remains manual external
+evidence rather than repo-local proof of marketplace, host sandbox, or host
+egress enforcement systems.
 `./scripts/release-evidence-bundle.sh --check` ties those external proof paths
 together by listing the expected signed distribution artifact paths,
 signed-distribution provenance report, live-device QA report,

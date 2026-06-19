@@ -393,6 +393,9 @@ These notes capture durable facts for future agents working on this repository.
   final bundle gate can accept the report. The review timestamps must be UTC `Z` values, the
   completed timestamp must be greater than or equal to the started timestamp,
   and the completed timestamp must not be later than report generation.
+  Artifact URIs in the shell assertion path must include a URI scheme and
+  location and cannot point at placeholder, self-test, fixture, or temporary
+  paths.
   `--write-template
   target/release-plugin-trust-qa.env` generates a sourceable checklist with all
   plugin trust validation flags defaulted to `false` and all evidence fields
