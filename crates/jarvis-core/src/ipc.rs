@@ -4690,13 +4690,13 @@ fn release_evidence_status_from_env_with_repository(
         dist_dir.join(format!("Jarvis-{version}.pkg")),
     );
     let live_qa_report = env_path_alias(
-        "JARVIS_QA_REPORT_PATH",
         "JARVIS_EVIDENCE_LIVE_QA_REPORT",
+        "JARVIS_QA_REPORT_PATH",
         "target/release-live-device-qa-report.json",
     );
     let plugin_qa_report = env_path_alias(
-        "JARVIS_PLUGIN_QA_REPORT_PATH",
         "JARVIS_EVIDENCE_PLUGIN_QA_REPORT",
+        "JARVIS_PLUGIN_QA_REPORT_PATH",
         "target/release-plugin-trust-qa-report.json",
     );
     let bundle_path = env_path(
