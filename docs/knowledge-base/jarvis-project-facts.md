@@ -1173,13 +1173,13 @@ requires plugin-trust `generated_at`, `review_started_at`,
   #268 run `27428860335` / job `81073692261`, `production_ready: false`,
   `verified_feature_count: 16`, `pending_feature_count: 1`, and, after local
   generated app presence artifacts exist, six missing external/manual evidence
-  artifacts. The current post-PR #309 baseline at `38bd79e` has hosted
-  GitHub `Release local gate` success for push run `27830392634` / job
-  `82365381482` and remains conservative with `production_ready: false`,
+  artifacts. The current post-PR #310 baseline at `27c33f5` has hosted
+  GitHub `Release local gate` success for push run `27832719258` / job
+  `82373209518` and remains conservative with `production_ready: false`,
   `verified_feature_count: 16`, `pending_feature_count: 1`, and
   `live_voice_loop` as the pending manual feature; `/release/evidence-status`
   reports `complete: false`, three satisfied evidence rows, six missing rows,
-  and no invalid rows. PRs #283-#309 added repo-owned clarity for voice
+  and no invalid rows. PRs #283-#310 added repo-owned clarity for voice
   permission gating, external handoff guidance, architecture documentation,
   plugin-trust artifact SHA guidance, final doctor assertion guidance, Release
   tab runbook-load warnings, external handoff mechanics, evidence-note
@@ -1187,9 +1187,10 @@ requires plugin-trust `generated_at`, `review_started_at`,
   installed-plugin plus model-step/model-output activity-progress proof,
   external handoff manifest
   digest binding, release-local command heartbeat observability,
-  final-bundle reports archive URI validation, and architecture readiness
-  baseline drift protection, but they do not satisfy signing, notarization,
-  installation, live-device QA, plugin-trust QA, or final
+  final-bundle reports archive URI validation, architecture readiness baseline
+  drift protection, final-bundle output path collision guards, and external
+  handoff manifest integrity self-testing, but they do not satisfy signing,
+  notarization, installation, live-device QA, plugin-trust QA, or final
   evidence-bundle requirements.
 - Plugin-trust artifact evidence is enforced as a complete six-category set.
   Evidence-status, evidence-doctor, and final bundle validation reject missing,
@@ -1253,6 +1254,8 @@ requires plugin-trust `generated_at`, `review_started_at`,
   archive URI. The generated manifest records schema version, evidence type,
   generation timestamp, release version, git commit, snapshot endpoint, proof
   boundary, byte counts, and SHA-256 digests for each generated handoff file.
+  The shell self-test verifies the expected file list, release version, current
+  git commit, byte counts, and SHA-256 digests before passing.
   The generated README's final evidence-status/readiness commands use
   `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external` plus guarded
   `JARVIS_RELEASE_CORE_ENDPOINT` expansion, matching the live-device,
