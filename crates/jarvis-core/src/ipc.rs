@@ -6565,6 +6565,8 @@ mod tests {
     use super::*;
     use crate::InstalledPluginProvenance;
 
+    static RELEASE_EVIDENCE_ARTIFACT_FIXTURE_LOCK: Mutex<()> = Mutex::new(());
+
     fn command_index(commands: &[String], expected: &str) -> usize {
         commands
             .iter()
@@ -8626,6 +8628,9 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
 
     #[test]
     fn release_evidence_bundle_rejects_stale_report_digest() {
+        let _fixture_lock = RELEASE_EVIDENCE_ARTIFACT_FIXTURE_LOCK
+            .lock()
+            .expect("release evidence artifact fixture lock");
         let temp_dir = tempfile::tempdir().expect("temp release evidence");
         let app_path = PathBuf::from("target/distribution/Jarvis.app");
         let bundled_core_path = app_path.join("Contents/Resources/bin/jarvis-cli");
@@ -8728,6 +8733,9 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
 
     #[test]
     fn release_evidence_bundle_rejects_semantically_invalid_child_report() {
+        let _fixture_lock = RELEASE_EVIDENCE_ARTIFACT_FIXTURE_LOCK
+            .lock()
+            .expect("release evidence artifact fixture lock");
         let temp_dir = tempfile::tempdir().expect("temp release evidence");
         let app_path = PathBuf::from("target/distribution/Jarvis.app");
         let bundled_core_path = app_path.join("Contents/Resources/bin/jarvis-cli");

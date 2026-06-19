@@ -22,6 +22,9 @@ struct JarvisMacAppTests {
         let presentation = ReleaseEvidenceStatusPresentation(item: item)
 
         #expect(presentation.statusLine == "present; presence-only caveat")
+        #expect(presentation.pathLine == "Path: target/distribution/Jarvis-0.1.4.zip")
+        #expect(presentation.detailLine == "Detail: file exists; presence only; signing, notarization, and stapling are not validated by evidence-status")
+        #expect(presentation.requirementLine == "Required for production; manual evidence gate")
     }
 
     @Test("Release evidence row keeps non presence-only statuses unchanged")
@@ -40,6 +43,27 @@ struct JarvisMacAppTests {
         let presentation = ReleaseEvidenceStatusPresentation(item: item)
 
         #expect(presentation.statusLine == "missing")
+    }
+
+    @Test("Release evidence row exposes non-production informational context")
+    func releaseEvidenceRowExposesInformationalContext() {
+        let item = JarvisReleaseEvidenceStatusItem(
+            key: "local_notes",
+            label: "Local notes",
+            path: "target/local-notes.json",
+            kind: "json_report",
+            status: "present",
+            requiredForProduction: false,
+            manualGate: false,
+            detail: "optional local operator notes"
+        )
+
+        let presentation = ReleaseEvidenceStatusPresentation(item: item)
+
+        #expect(presentation.statusLine == "present")
+        #expect(presentation.pathLine == "Path: target/local-notes.json")
+        #expect(presentation.detailLine == "Detail: optional local operator notes")
+        #expect(presentation.requirementLine == "Informational evidence")
     }
 
     @Test("Release runbook presentation preserves every command and manual check")

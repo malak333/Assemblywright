@@ -1119,8 +1119,16 @@ requires plugin-trust `generated_at`, `review_started_at`,
   detail, including present presence-only caveats on the item line, so
   operators do not need `--json` for basic triage.
 - `JarvisMacAppTests` covers app-level Release tab presentation for
-  presence-only evidence rows, while `JarvisMacCoreTests` continues to cover
-  the release-readiness model and evidence-status decoding.
+  presence-only evidence rows. Release tab evidence rows explicitly label the
+  evidence path, detail text, and production/manual-gate requirement context so
+  operators can distinguish local presence from required external evidence
+  without opening JSON. `JarvisMacCoreTests` continues to cover the
+  release-readiness model and evidence-status decoding.
+- Rust release-evidence tests that must create canonical signed-distribution or
+  final-bundle artifact fixtures under `target/distribution/Jarvis.app` should
+  hold the shared release-evidence artifact fixture lock while writing and
+  validating those files, because the workspace test runner executes evidence
+  tests in parallel.
 - `jarvis release evidence-status --help` documents that the default readable
   output includes per-item paths/details and same-line presence-only caveats;
   keep this help text, CLI E2E assertions, and `docs/release-checklist.md`
