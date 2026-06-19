@@ -423,6 +423,10 @@ stage or when a PR needs focused evidence for one ownership slice.
   has actually completed, and every artifact URI must point to a durable
   release evidence archive rather than a placeholder, self-test, fixture, or
   temporary path.
+- Confirm `./scripts/release-evidence-bundle.sh --self-test` validates the
+  final-bundle reports archive URI path instead of bypassing it: the positive
+  fake bundle uses a durable-looking URI, and temporary or non-URI archive
+  locations are rejected before a bundle is written.
 - Confirm
   `./scripts/release-plugin-trust-qa.sh --self-test` proves only JSON report
   mechanics with fake validation flags and fake evidence notes. The report must

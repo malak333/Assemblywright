@@ -1515,7 +1515,7 @@ JSON
   export JARVIS_EVIDENCE_LIVE_DEVICE_QA_NOTE="Live-device QA evidence reviewed in the controlled release lane."
   export JARVIS_EVIDENCE_PLUGIN_TRUST_QA_NOTE="Plugin-trust QA evidence reviewed in the controlled release lane."
   export JARVIS_EVIDENCE_REPORTS_ARCHIVE_NOTE=$'Release evidence reports archived in the controlled release lane.\nArchive reviewer noted "release archive index" and preserved backslash \\ marker.'
-  export JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI="file://self-test/release-evidence"
+  export JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI="file:///Users/jarvis/releases/evidence-archive"
 
   JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
     JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
@@ -1555,6 +1555,50 @@ note = data["owner_recorded_release_evidence"]["reports_archive_note"]
 if "\n" not in note or '"release archive index"' not in note or "\\ marker" not in note:
     raise SystemExit("release evidence self-test expected structured JSON writer to preserve multiline reports archive note")
 PY
+
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/temp-archive-uri-bundle.json" \
+    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
+    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+    JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI="file:///tmp/jarvis/release-evidence" \
+    "$0" --bundle >/dev/null 2>"$tmp_dir/temp-archive-uri.err"; then
+    fail "release evidence self-test expected temporary reports archive URI to be rejected"
+  fi
+  require_file_contains "temporary reports archive URI error" "$tmp_dir/temp-archive-uri.err" "durable release evidence archive"
+
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bare-archive-uri-bundle.json" \
+    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
+    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+    JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI="release-evidence/archive" \
+    "$0" --bundle >/dev/null 2>"$tmp_dir/bare-archive-uri.err"; then
+    fail "release evidence self-test expected bare reports archive location to be rejected"
+  fi
+  require_file_contains "bare reports archive URI error" "$tmp_dir/bare-archive-uri.err" "must be a URI with a scheme"
 
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
     JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
@@ -2586,11 +2630,7 @@ require_meaningful_evidence_env JARVIS_EVIDENCE_CLEAN_PROFILE_NOTE
 require_meaningful_evidence_env JARVIS_EVIDENCE_LIVE_DEVICE_QA_NOTE
 require_meaningful_evidence_env JARVIS_EVIDENCE_PLUGIN_TRUST_QA_NOTE
 require_meaningful_evidence_env JARVIS_EVIDENCE_REPORTS_ARCHIVE_NOTE
-if [[ "${JARVIS_EVIDENCE_SELF_TEST_MODE:-}" == "true" ]]; then
-  require_non_empty_env JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI
-else
-  require_reports_archive_uri_env JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI
-fi
+require_reports_archive_uri_env JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI
 write_bundle
 require_json_number_equals "release evidence bundle" "$OUTPUT_PATH" "schema_version" "1"
 require_json_string_equals "release evidence bundle" "$OUTPUT_PATH" "evidence_type" "release_evidence_bundle"
@@ -2600,9 +2640,7 @@ done
 for field in signed_distribution_note notarization_note clean_profile_note live_device_qa_note plugin_trust_qa_note reports_archive_note; do
   require_json_meaningful_evidence_string "release evidence bundle" "$OUTPUT_PATH" "owner_recorded_release_evidence.$field"
 done
-if [[ "${JARVIS_EVIDENCE_SELF_TEST_MODE:-}" != "true" ]]; then
-  require_json_reports_archive_uri "release evidence bundle" "$OUTPUT_PATH" "owner_recorded_release_evidence.reports_archive_uri"
-fi
+require_json_reports_archive_uri "release evidence bundle" "$OUTPUT_PATH" "owner_recorded_release_evidence.reports_archive_uri"
 require_json_utc_timestamp "release evidence bundle" "$OUTPUT_PATH" "owner_recorded_release_evidence.completed_at"
 require_json_timestamp_order "release evidence bundle" "$OUTPUT_PATH" "owner_recorded_release_evidence.completed_at" "generated_at"
 require_json_timestamp_between_reports "release evidence bundle signed provenance" "$SIGNED_PROVENANCE_REPORT" "generated_at" "$OUTPUT_PATH" "owner_recorded_release_evidence.completed_at" "$OUTPUT_PATH" "generated_at"

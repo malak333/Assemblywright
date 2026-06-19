@@ -521,6 +521,10 @@ The `--check` output points operators to
 target/release-evidence-bundle.env` to generate a sourceable final-bundle
 template. The template defaults every validation flag to `false`; operators
 must flip each one only after the matching external release check is complete.
+The bundle script validates `JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI` even in its
+fake self-test lane, and its self-test plus CLI E2E coverage reject temporary
+archive paths and bare non-URI archive locations before a final bundle is
+written.
 It also defaults `JARVIS_EVIDENCE_OVERWRITE_OUTPUT=false`, so `--bundle`
 fails instead of replacing an existing final bundle unless the operator has
 preserved the old artifact and intentionally sets the overwrite flag to `true`.

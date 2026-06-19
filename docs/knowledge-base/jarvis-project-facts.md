@@ -186,7 +186,9 @@ These notes capture durable facts for future agents working on this repository.
   evidence also requires non-placeholder owner evidence notes plus
   `reports_archive_uri` to be URI-shaped and durable; blank values, missing
   schemes, placeholders, examples, fixtures, and self-test archive paths are
-  invalid production evidence.
+  invalid production evidence. The bundle script applies that archive URI
+  validation in its fake self-test lane too, and the CLI E2E suite covers
+  temporary archive URI rejection before the script can write the final bundle.
 - `release-evidence-doctor.sh --assert-complete` must stay aligned with that
   final-bundle semantic floor. It should reject minimal or hand-written final
   bundles that omit artifact/report paths, point at stale artifact/report paths,
