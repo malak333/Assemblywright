@@ -458,8 +458,11 @@ stage or when a PR needs focused evidence for one ownership slice.
   those flags may be changed only after the corresponding external release
   check has actually completed. Confirm the template keeps
   `JARVIS_EVIDENCE_OVERWRITE_OUTPUT=false`, and that any `true` override is
-  used only after preserving the previous bundle artifact. Confirm the readiness
-  runbook also includes
+  used only after preserving the previous bundle artifact. Confirm the final
+  bundle output path is distinct from the signed-distribution provenance,
+  live-device QA, plugin-trust QA, app zip, and installer package input paths
+  so `--bundle` cannot overwrite evidence it has just validated. Confirm the
+  readiness runbook also includes
   `./scripts/release-evidence-doctor.sh --assert-complete` after the bundle
   command as the final inventory assertion. Treat `--check`,
   `release-evidence-doctor.sh`, `/release/evidence-status`, and
