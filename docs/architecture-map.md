@@ -1103,6 +1103,10 @@ enforcement, or final evidence archival is performed.
 The same slice hardens owner evidence-note validation so live-device,
 plugin-trust, and final-bundle reports reject embedded placeholder wording such
 as `TODO`, `pending`, `fixture`, `example`, or `self-test`, not only exact
+placeholder values. The current final-bundle script also validates the reports
+archive URI in its fake self-test lane, so temporary paths and bare archive
+locations are rejected before bundle writes in both shell self-test and CLI E2E
+coverage.
 placeholder values.
 The release docs drift slice adds `release-docs-drift-smoke.sh` to the local
 gate so the canonical release-local command matrix and release evidence

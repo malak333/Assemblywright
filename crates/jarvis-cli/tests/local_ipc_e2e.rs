@@ -1543,6 +1543,75 @@ fn release_evidence_status_rejects_invalid_final_bundle_owner_evidence() {
 }
 
 #[test]
+#[cfg(unix)]
+fn release_evidence_bundle_assertion_rejects_temporary_archive_uri() {
+    let temp_dir = tempfile::tempdir().expect("temp release evidence bundle assertion");
+    let fixture = write_complete_release_evidence_fixture(temp_dir.path());
+    let output_path = temp_dir
+        .path()
+        .join("generated-release-evidence-bundle.json");
+    let output_path_str = output_path.to_str().expect("bundle output path utf8");
+    let mut env = fixture.env_refs();
+    env.extend([
+        ("JARVIS_EVIDENCE_OUTPUT_PATH", output_path_str),
+        ("JARVIS_EVIDENCE_SELF_TEST_MODE", "true"),
+        ("JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES", "false"),
+        ("JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED", "true"),
+        ("JARVIS_EVIDENCE_NOTARIZATION_VALIDATED", "true"),
+        ("JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED", "true"),
+        ("JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED", "true"),
+        ("JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED", "true"),
+        ("JARVIS_EVIDENCE_REPORTS_ARCHIVED", "true"),
+        ("JARVIS_EVIDENCE_OWNER_NAME", "Jarvis Release E2E"),
+        ("JARVIS_EVIDENCE_COMPLETED_AT", "2026-05-22T16:45:00Z"),
+        (
+            "JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_NOTE",
+            "Signed distribution provenance reviewed in the controlled release lane.",
+        ),
+        (
+            "JARVIS_EVIDENCE_NOTARIZATION_NOTE",
+            "Notarization evidence reviewed in the controlled release lane.",
+        ),
+        (
+            "JARVIS_EVIDENCE_CLEAN_PROFILE_NOTE",
+            "Clean profile evidence reviewed in the controlled release lane.",
+        ),
+        (
+            "JARVIS_EVIDENCE_LIVE_DEVICE_QA_NOTE",
+            "Live-device QA evidence reviewed in the controlled release lane.",
+        ),
+        (
+            "JARVIS_EVIDENCE_PLUGIN_TRUST_QA_NOTE",
+            "Plugin-trust QA evidence reviewed in the controlled release lane.",
+        ),
+        (
+            "JARVIS_EVIDENCE_REPORTS_ARCHIVE_NOTE",
+            "Release evidence reports archived in the controlled release lane.",
+        ),
+        (
+            "JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI",
+            "file:///tmp/jarvis/release-evidence",
+        ),
+    ]);
+
+    let output =
+        run_repo_script_failure_with_env("scripts/release-evidence-bundle.sh", &["--bundle"], &env);
+    assert!(
+        output.contains("JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI"),
+        "{output}"
+    );
+    assert!(
+        output.contains("durable release evidence archive"),
+        "{output}"
+    );
+    assert!(
+        !output_path.exists(),
+        "temporary archive URI failure must not write {}",
+        output_path.display()
+    );
+}
+
+#[test]
 fn release_evidence_status_rejects_false_plugin_and_bundle_validation_flags() {
     let endpoint = format!("http://{}", unused_loopback_addr());
 
