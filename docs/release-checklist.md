@@ -781,7 +781,12 @@ Distribution packaging gate:
   observation fields, installed-app metadata, schema identity, and proof boundary.
   Confirm the same report is visible through `jarvis release evidence-status`
   without missing, placeholder, or invalid live voice evidence fields before
-  using evidence-aware readiness language.
+  using evidence-aware readiness language. Missing required live voice evidence
+  notes, the command-result evidence ID, the audio-output device label, the
+  notification title/body/thread/timestamp, or the proof boundary keep
+  `live_device_qa_report` invalid and keep `live_voice_loop` pending; CLI E2E
+  proves `/release/evidence-status` plus external-mode readiness fail closed for
+  those missing fields.
 
 ## Release Notes
 

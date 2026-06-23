@@ -6,9 +6,11 @@ This note records the autonomous production-readiness sweep state after PR
 itself. Use the
 checked-in code, PRs, and command output as proof.
 
-The follow-on refresh through PR #278 keeps this note historical for the
-original post-PR #259 sweep while recording the current conservative baseline
-from `main` at `57ae832`.
+The follow-on refresh through PR #278 kept this note historical for the
+original post-PR #259 sweep while recording the then-current conservative
+baseline from `main` at `57ae832`. The later follow-on refresh through PR #320
+is also historical and records the current conservative baseline from `main` at
+`8d61ad7`.
 
 ## Live Readiness Snapshot
 
@@ -81,6 +83,30 @@ Follow-on PRs merged after the original sweep snapshot:
 - PR #277 guarded release runbook evidence-status commands with the release
   endpoint handoff.
 - PR #278 clarified historical readiness counts in the knowledge base.
+
+## Follow-On Refresh Through PR #320
+
+Observed on 2026-06-23 UTC from `main` at `8d61ad7` after PR #320, with hosted
+GitHub `Release local gate` success for push run `27849385053` / job
+`82425294145`:
+
+- `production_ready: false`
+- `evidence_mode_enabled: false`
+- `verified_feature_count: 16`
+- `pending_feature_count: 1`
+- Remaining pending feature: `live_voice_loop`
+- `evidence-status complete: false`
+- `satisfied_count: 3`
+- `missing_count: 6`
+- `invalid_count: 0`
+
+The same six external/manual evidence items remain missing: signed app zip,
+signed installer package, signed-distribution provenance report, live-device QA
+report, plugin-trust QA report, and final release evidence bundle. PR #320
+hardened the repository-owned live-device evidence contract by proving missing
+required live voice, command-observation, audio-output-device, and notification
+observation fields keep `/release/evidence-status` invalid and external-mode
+readiness fail closed. It did not change the production-ready boundary.
 
 ## Merged PR State
 

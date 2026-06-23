@@ -363,6 +363,10 @@ non-placeholder text, not values such as `TODO`, `pending`, `n/a`, `fixture`, or
 `--self-test` report and is not valid release evidence.
 `/release/evidence-status` applies the same non-empty and non-placeholder checks
 to the generated report, so weak owner evidence cannot clear `live_voice_loop`.
+Missing required live voice evidence notes, command-result evidence ID,
+audio-output device label, notification title/body/thread/timestamp, or proof
+boundary also keep `live_device_qa_report` invalid and keep external-mode
+readiness fail-closed.
 It writes a JSON report, defaulting to
 `target/release-live-device-qa-report.json`, with installed-app metadata,
 microphone/Speech permission prompt evidence, spoken transcript handoff into

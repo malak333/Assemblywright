@@ -891,8 +891,8 @@ The
 historical 2026-06-12 UTC baseline after PR #268 started from `main` at
 `8cccb5b`, with the hosted `Release local gate` green for PR #268 run
 `27428860335` / job `81073692261`. The latest verified main baseline at
-`main` commit `73dbd54` has hosted `Release local gate` success for push run
-`27847887169` / job `82420866503` and continues to report `production_ready: false`,
+`main` commit `8d61ad7` has hosted `Release local gate` success for push run
+`27849385053` / job `82425294145` and continues to report `production_ready: false`,
 `evidence_mode_enabled: false`, `verified_feature_count: 16`, and `pending_feature_count: 1`, with
 `live_voice_loop` still `pending_manual_validation`, while the local repo-owned
 release handoff, workflow hygiene, docs drift smoke, evidence-note validation,
@@ -902,7 +902,10 @@ final-bundle reports archive URI validation, architecture readiness baseline
 drift protection, final-bundle output path collision guards, external handoff
 manifest integrity self-testing, release evidence-mode visibility, and the
 resilient baseline drift guard, final-bundle evidence report env precedence, and
-external handoff evidence metadata hardening have improved without converting
+external handoff evidence metadata hardening, Swift Release tab readiness
+presentation guardrails, placeholder child evidence-note rejection, external
+handoff evidence-status parity, and missing live-device evidence-field
+fail-closed E2E coverage have improved without converting
 local evidence inspection into production proof.
 `jarvis release evidence-status --json` remains expected to report
 `complete: false` with three satisfied evidence rows, six missing
@@ -1119,7 +1122,10 @@ placeholder values. The current final-bundle script also validates the reports
 archive URI in its fake self-test lane, so temporary paths and bare archive
 locations are rejected before bundle writes in both shell self-test and CLI E2E
 coverage.
-placeholder values.
+Post-PR #320 CLI E2E also removes required owner-recorded live voice,
+command-observation, audio-output-device, and notification-observation fields
+from live-device QA reports and proves `/release/evidence-status` plus
+external-mode readiness remain fail-closed.
 The release docs drift slice adds `release-docs-drift-smoke.sh` to the local
 gate so the canonical release-local command matrix and release evidence
 boundary phrases remain represented in build/test docs, the release checklist,

@@ -1182,27 +1182,29 @@ requires plugin-trust `generated_at`, `review_started_at`,
   artifacts. Current release claims should refresh this baseline with
   `cargo run -p jarvis-cli -- release readiness --json` and
   `gh run list --branch main --workflow "Jarvis Release Local Gate" --limit 3`.
-  The latest verified main baseline at `73dbd54` has hosted GitHub
-  `Release local gate` success for push run `27847887169` / job
-  `82420866503` and remains conservative with `production_ready: false`,
+  The latest verified main baseline at `8d61ad7` has hosted GitHub
+  `Release local gate` success for push run `27849385053` / job
+  `82425294145` and remains conservative with `production_ready: false`,
   `evidence_mode_enabled: false`, `verified_feature_count: 16`, `pending_feature_count: 1`, and
   `live_voice_loop` as the pending manual feature; `/release/evidence-status`
   reports `complete: false`, three satisfied evidence rows, six missing rows,
-  and no invalid rows. PRs #283-#316 added repo-owned clarity for voice
+  and no invalid rows. PRs #283-#320 added repo-owned clarity for voice
   permission gating, external handoff guidance, architecture documentation,
   plugin-trust artifact SHA guidance, final doctor assertion guidance, Release
   tab runbook-load warnings, external handoff mechanics, evidence-note
-  validation, docs drift smoke, release workflow hygiene,
-  installed-plugin plus model-step/model-output activity-progress proof,
-  external handoff manifest
-  digest binding, release-local command heartbeat observability,
-  final-bundle reports archive URI validation, architecture readiness baseline
-  drift protection, final-bundle output path collision guards, and external
-  handoff manifest integrity self-testing, and release evidence-mode visibility
-  in CLI/IPC/Swift, resilient baseline drift-smoke wording, final-bundle
-  evidence report env precedence, and external handoff evidence metadata
-  hardening, but they do not satisfy signing, notarization, installation,
-  live-device QA, plugin-trust QA, or final evidence-bundle requirements.
+  rejection, Swift Release tab readiness presentation guardrails, external
+  handoff evidence-status parity, and missing live-device evidence-field
+  fail-closed E2E coverage without converting owner-recorded external evidence
+  into local proof. The post-PR #320 refresh keeps the current-state and
+  production-target architecture diagrams aligned with the latest hosted main
+  gate while preserving the installed-plugin plus model-step/model-output
+  activity-progress proof and the manual/external release boundary.
+  It also preserves the handoff manifest digest check, the release-local command heartbeat
+  observability, and the rule that the final bundle output path must also be
+  distinct from signed-provenance output paths.
+  These repo-owned hardening slices do not satisfy signing, notarization,
+  installation, live-device QA, plugin-trust QA, or final evidence-bundle
+  requirements.
 - The macOS Release tab must render runbook readiness through the same effective
   readiness boundary as the page-level production-ready label. A raw runbook
   `production_ready: true` is displayed as blocked when cached readiness,

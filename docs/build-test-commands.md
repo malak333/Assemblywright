@@ -156,6 +156,7 @@ Focused regression checks for that release evidence boundary:
 ```sh
 cargo test -p jarvis-core live_device_qa_report -- --nocapture
 cargo test -p jarvis-cli --test local_ipc_e2e release_readiness_rejects_semantically_invalid_live_voice_evidence -- --nocapture
+cargo test -p jarvis-cli --test local_ipc_e2e release_readiness_rejects_missing_live_voice_evidence_fields -- --nocapture
 cargo test -p jarvis-cli --test local_ipc_e2e release_help_surfaces_current_evidence_boundaries -- --nocapture
 ```
 

@@ -78,12 +78,14 @@ require_text "architecture local gate boundary" "$ARCHITECTURE" "notarization, c
 require_text "architecture local gate boundary" "$ARCHITECTURE" "QA, plugin-trust QA, or final evidence bundling"
 require_text "architecture post-merge cleanup audit" "$ARCHITECTURE" "post-merge cleanup audit: open PRs, main workflow runs, worktrees, merged/unmerged codex branches, clean checkout"
 require_text "architecture current readiness baseline" "$ARCHITECTURE" 'latest verified main baseline'
-require_text "architecture current readiness commit" "$ARCHITECTURE" '`main` commit `73dbd54`'
-require_text "architecture current readiness run" "$ARCHITECTURE" '27847887169'
+require_text "architecture current readiness commit" "$ARCHITECTURE" '`main` commit `8d61ad7`'
+require_text "architecture current readiness run" "$ARCHITECTURE" '27849385053'
 require_text "architecture current readiness refresh command" "$ARCHITECTURE" 'cargo run -p jarvis-cli -- release readiness --json'
 require_text "architecture current readiness refresh command" "$ARCHITECTURE" 'gh run list --branch main --workflow "Jarvis Release Local Gate"'
 forbid_text "architecture stale readiness baseline" "$ARCHITECTURE" 'current post-PR #312 baseline at'
 forbid_text "architecture stale readiness commit" "$ARCHITECTURE" '`main` commit `4b36c14`'
+forbid_text "architecture stale readiness commit" "$ARCHITECTURE" '`main` commit `73dbd54`'
+forbid_text "architecture stale readiness run" "$ARCHITECTURE" '27847887169'
 forbid_text "architecture stale readiness baseline" "$ARCHITECTURE" 'current post-PR #311 baseline at'
 forbid_text "architecture stale readiness commit" "$ARCHITECTURE" '`main` commit `4417187`'
 forbid_text "architecture stale readiness baseline" "$ARCHITECTURE" 'current post-PR #310 baseline at'
@@ -101,11 +103,13 @@ require_text "architecture handoff manifest self-test" "$ARCHITECTURE" "--self-t
 require_text "architecture release-local heartbeat" "$ARCHITECTURE" "release-local command heartbeat"
 require_text "architecture final bundle output collision guard" "$ARCHITECTURE" "final bundle writer must also reject"
 require_text "architecture final bundle output collision guard" "$ARCHITECTURE" "output paths that collide with signed-provenance"
-require_text "knowledge base current readiness baseline" "$KB" 'latest verified main baseline at `73dbd54`'
-require_text "knowledge base current readiness run" "$KB" '27847887169'
+require_text "knowledge base current readiness baseline" "$KB" 'latest verified main baseline at `8d61ad7`'
+require_text "knowledge base current readiness run" "$KB" '27849385053'
 require_text "knowledge base current readiness refresh command" "$KB" 'cargo run -p jarvis-cli -- release readiness --json'
 require_text "knowledge base current readiness refresh command" "$KB" 'gh run list --branch main --workflow "Jarvis Release Local Gate"'
 forbid_text "knowledge base stale readiness baseline" "$KB" 'current post-PR #312 baseline at `4b36c14`'
+forbid_text "knowledge base stale readiness baseline" "$KB" 'latest verified main baseline at `73dbd54`'
+forbid_text "knowledge base stale readiness run" "$KB" '27847887169'
 forbid_text "knowledge base stale readiness baseline" "$KB" 'current post-PR #311 baseline at `4417187`'
 forbid_text "knowledge base stale readiness baseline" "$KB" 'current post-PR #310 baseline at `27c33f5`'
 forbid_text "knowledge base stale readiness baseline" "$KB" 'current post-PR #309 baseline at `38bd79e`'
@@ -136,6 +140,8 @@ require_text "release checklist handoff manifest digest" "$CHECKLIST" "byte coun
 require_text "release checklist model-output chunk boundary" "$CHECKLIST" "model_output_chunk"
 require_text "release checklist model-output redaction boundary" "$CHECKLIST" "content_redacted: true"
 require_text "release checklist final bundle output collision guard" "$CHECKLIST" "bundle output path is distinct from the signed-distribution provenance"
+require_text "release checklist missing live-device field E2E" "$CHECKLIST" "Missing required live voice evidence"
+require_text "release checklist missing live-device field E2E" "$CHECKLIST" "external-mode readiness fail closed"
 require_text "build docs external handoff snapshot command" "$BUILD_DOCS" "release_external_handoff_snapshots_match_live_runbook_commands"
 for file in "$BUILD_DOCS" "$CHECKLIST" "$KB"; do
   require_text "runbook payload contract boundary" "$file" "operator/snapshot JSON"
