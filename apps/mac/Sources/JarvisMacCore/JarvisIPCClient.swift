@@ -193,6 +193,7 @@ public struct JarvisContractResponse: Decodable, Equatable, Sendable {
         return paths.contains("/release/live-device-runbook")
             && paths.contains("/release/signed-distribution-runbook")
             && paths.contains("/release/plugin-trust-runbook")
+            && paths.contains("/release/evidence-bundle-runbook")
     }
 
     public var exposesApprovalApproveAction: Bool {
@@ -1641,6 +1642,7 @@ public protocol JarvisCoreClient: Sendable {
     func releaseLiveDeviceRunbook() async throws -> JarvisReleaseRunbook
     func releaseSignedDistributionRunbook() async throws -> JarvisReleaseRunbook
     func releasePluginTrustRunbook() async throws -> JarvisReleaseRunbook
+    func releaseEvidenceBundleRunbook() async throws -> JarvisReleaseRunbook
     func submit(_ command: JarvisCommandRequest) async throws -> JarvisCommandResponse
     func pause(reason: String) async throws -> JarvisPauseResponse
     func resume() async throws -> JarvisPauseResponse
@@ -1717,6 +1719,10 @@ public final class JarvisIPCClient: JarvisCoreClient {
 
     public func releasePluginTrustRunbook() async throws -> JarvisReleaseRunbook {
         try await send(path: "/release/plugin-trust-runbook", method: "GET", body: Optional<Data>.none)
+    }
+
+    public func releaseEvidenceBundleRunbook() async throws -> JarvisReleaseRunbook {
+        try await send(path: "/release/evidence-bundle-runbook", method: "GET", body: Optional<Data>.none)
     }
 
     public func submit(_ command: JarvisCommandRequest) async throws -> JarvisCommandResponse {

@@ -530,6 +530,16 @@ report digest into the final release-evidence bundle fixture, and verifies
 `jarvis release evidence-status` accepts both the plugin-trust QA report and
 bundle as present without treating marketplace, malware, sandbox, or host-egress
 review as repo-local proof.
+The release runbook surface now includes a final evidence-bundle handoff:
+`cargo run -p jarvis-cli -- release evidence-bundle-runbook` and the redacted
+IPC `/release/evidence-bundle-runbook` endpoint summarize the signed
+provenance, live-device QA, plugin-trust QA, and `release_evidence_bundle`
+rows, then print the final-bundle, evidence-doctor, external evidence-status,
+and external readiness commands. Rust E2E covers readable/JSON CLI output plus
+normalized `ReleaseRunbookResponse` endpoint payloads, and Swift IPC/model tests
+load the same runbook in the Release tab. The external handoff directory also
+writes `evidence-bundle-runbook.json`, and its manifest binds that snapshot
+with byte counts and SHA-256 digests.
 The `./scripts/release-evidence-bundle.sh --check` command ties the expected
 signed distribution artifact paths, live-device QA report, plugin-trust QA
 report, and owner validation flags into a final bundle manifest path. `--check`,

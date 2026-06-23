@@ -229,6 +229,21 @@ enum ReleaseCommand {
         #[arg(long, value_enum)]
         format: Option<OutputFormat>,
     },
+    /// Print the final evidence-bundle runbook and current evidence status.
+    #[command(
+        long_about = "Print the final evidence-bundle runbook and current evidence status.\n\nThis is a read-only operator guide for generating the final release evidence bundle after signed distribution, live-device QA, and plugin-trust QA evidence exist. It combines conservative release readiness with local evidence-status inspection and does not generate the bundle, sign, notarize, staple, install, launch Finder, run live-device QA, perform marketplace review, scan malware, deploy a sandbox, or enforce host-level egress."
+    )]
+    EvidenceBundleRunbook {
+        /// HTTP IPC endpoint. Falls back to local read-only readiness and evidence inspection when unavailable.
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+        /// Print a structured JSON runbook summary.
+        #[arg(long)]
+        json: bool,
+        /// Compatibility alias for machine-readable output. Only `json` is supported.
+        #[arg(long, value_enum)]
+        format: Option<OutputFormat>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -740,6 +755,25 @@ async fn main() -> anyhow::Result<()> {
                     println!(
                         "{}",
                         format_release_plugin_trust_runbook(&readiness, &evidence_status)?
+                    );
+                }
+            }
+            ReleaseCommand::EvidenceBundleRunbook {
+                endpoint,
+                json,
+                format,
+            } => {
+                let readiness = release_readiness(&endpoint)?;
+                let evidence_status = release_evidence_status(&endpoint)?;
+                if json || format == Some(OutputFormat::Json) || cli_json_requested() {
+                    println!(
+                        "{}",
+                        release_evidence_bundle_runbook_json(&readiness, &evidence_status)?
+                    );
+                } else {
+                    println!(
+                        "{}",
+                        format_release_evidence_bundle_runbook(&readiness, &evidence_status)?
                     );
                 }
             }
@@ -2430,6 +2464,139 @@ fn format_release_plugin_trust_runbook(
         "Raw JSON: rerun with --json for a structured runbook summary.".to_string(),
     ]
     .join("\n"))
+}
+
+fn release_evidence_bundle_runbook_json(
+    readiness_response: &str,
+    evidence_status_response: &str,
+) -> anyhow::Result<String> {
+    let readiness: serde_json::Value = serde_json::from_str(readiness_response)?;
+    let evidence_status: serde_json::Value = serde_json::from_str(evidence_status_response)?;
+    let child_keys = [
+        "signed_distribution_provenance_report",
+        "live_device_qa_report",
+        "plugin_trust_qa_report",
+    ];
+    let child_evidence = evidence_status
+        .get("items")
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter(|item| {
+                    item.get("key")
+                        .and_then(serde_json::Value::as_str)
+                        .map(|key| child_keys.contains(&key))
+                        .unwrap_or(false)
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let final_bundle_evidence = evidence_status
+        .get("items")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|items| {
+            items.iter().find(|item| {
+                item.get("key").and_then(serde_json::Value::as_str)
+                    == Some("release_evidence_bundle")
+            })
+        })
+        .cloned();
+    let payload = serde_json::json!({
+        "generated_from": "release readiness plus evidence-status",
+        "production_ready": readiness.get("production_ready").cloned().unwrap_or(serde_json::Value::Bool(false)),
+        "child_evidence": child_evidence,
+        "final_bundle_evidence": final_bundle_evidence,
+        "commands": [
+            "./scripts/release-evidence-bundle.sh --check",
+            "./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env",
+            "set -a && source target/release-evidence-bundle.env && set +a && ./scripts/release-evidence-bundle.sh --bundle",
+            "./scripts/release-evidence-doctor.sh --check",
+            "./scripts/release-evidence-doctor.sh --assert-complete",
+            "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks",
+            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"",
+            "Start or restart the core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external",
+            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
+        ],
+        "manual_checks": [
+            "Generate the final evidence bundle only after signed-distribution, live-device QA, and plugin-trust QA reports exist and have been archived.",
+            "Use a durable reports archive URI and preserve the signed zip, installer package, signed provenance report, live-device QA report, plugin-trust QA report, final bundle, and supporting logs.",
+            "Confirm release-evidence-doctor --assert-complete reports every required evidence item present before enabling external evidence-mode readiness.",
+            "Restart or start the release core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external before the final readiness check.",
+            "Confirm production_ready remains false if any required evidence item is missing, invalid, or stale."
+        ],
+        "proof_boundary": "Runbook and local evidence inspection only; this command does not generate the final bundle, sign, notarize, staple, install, Finder-launch, run live-device QA, perform marketplace review, scan malware, deploy a sandbox, or enforce host-level egress."
+    });
+    Ok(serde_json::to_string_pretty(&payload)?)
+}
+
+fn format_release_evidence_bundle_runbook(
+    readiness_response: &str,
+    evidence_status_response: &str,
+) -> anyhow::Result<String> {
+    let readiness: serde_json::Value = serde_json::from_str(readiness_response)?;
+    let evidence_status: serde_json::Value = serde_json::from_str(evidence_status_response)?;
+    let item_keys = [
+        "signed_distribution_provenance_report",
+        "live_device_qa_report",
+        "plugin_trust_qa_report",
+        "release_evidence_bundle",
+    ];
+    let items = evidence_status
+        .get("items")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut lines = vec![
+        "Jarvis final evidence-bundle runbook:".to_string(),
+        format!(
+            "Production ready: {}",
+            readiness
+                .get("production_ready")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+        ),
+        "Final bundle evidence:".to_string(),
+    ];
+    for key in item_keys {
+        let item = items.iter().find(|item| {
+            item.get("key")
+                .and_then(serde_json::Value::as_str)
+                .map(|candidate| candidate == key)
+                .unwrap_or(false)
+        });
+        let status = item
+            .and_then(|item| item.get("status"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown");
+        let detail = item
+            .and_then(|item| item.get("detail"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("No evidence detail was available.");
+        lines.push(format!("- {key}: {status} ({detail})"));
+    }
+    lines.extend([
+        "Run on the release machine:".to_string(),
+        "- ./scripts/release-evidence-bundle.sh --check".to_string(),
+        "- ./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env".to_string(),
+        "- set -a && source target/release-evidence-bundle.env && set +a && ./scripts/release-evidence-bundle.sh --bundle".to_string(),
+        "- ./scripts/release-evidence-doctor.sh --check".to_string(),
+        "- ./scripts/release-evidence-doctor.sh --assert-complete".to_string(),
+        "- Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks".to_string(),
+        "- JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"".to_string(),
+        "- Start or restart the core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external".to_string(),
+        "- JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"".to_string(),
+        "Manual checks:".to_string(),
+        "- Generate the final evidence bundle only after signed-distribution, live-device QA, and plugin-trust QA reports exist and have been archived.".to_string(),
+        "- Use a durable reports archive URI and preserve the signed zip, installer package, signed provenance report, live-device QA report, plugin-trust QA report, final bundle, and supporting logs.".to_string(),
+        "- Confirm release-evidence-doctor --assert-complete reports every required evidence item present before enabling external evidence-mode readiness.".to_string(),
+        "- Restart or start the release core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external before the final readiness check.".to_string(),
+        "- Confirm production_ready remains false if any required evidence item is missing, invalid, or stale.".to_string(),
+        "Boundary: runbook and local evidence inspection only; no final bundle was generated and no signing, notarization, stapling, installation, Finder launch, live-device QA, marketplace review, malware scan, sandbox deployment, or host-level egress enforcement was performed.".to_string(),
+        "Raw JSON: rerun with --json for a structured runbook summary.".to_string(),
+    ]);
+    Ok(lines.join("\n"))
 }
 
 fn is_transport_unavailable(error: &anyhow::Error) -> bool {

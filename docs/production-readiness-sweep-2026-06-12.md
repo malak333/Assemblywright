@@ -189,3 +189,28 @@ release evidence is archived:
   and host-level egress evidence.
 - Final evidence bundle generated after all child reports and validated by
   `release-evidence-doctor.sh --assert-complete`.
+
+## Follow-On Refresh Through PR #323 And Final-Bundle Runbook Slice
+
+After the earlier runbook-guidance sequence, PR #322 added plugin-trust QA
+script evidence E2E and PR #323 added live-device QA script evidence E2E. The
+current final-bundle runbook slice extends that handoff instead of changing the
+production-ready claim boundary:
+
+- `/release/evidence-bundle-runbook` now exposes a redacted
+  `ReleaseRunbookResponse` for the final evidence-bundle handoff.
+- `cargo run -p jarvis-cli -- release evidence-bundle-runbook` renders the
+  same final-bundle operator sequence for CLI users and `--json`/`--format
+  json` consumers.
+- Swift release readiness loading now includes signed-distribution,
+  live-device, plugin-trust, and evidence-bundle runbooks when the core exposes
+  all four endpoints.
+- `release-external-handoff.sh --write` now snapshots
+  `evidence-bundle-runbook.json` and records its byte count and SHA-256 digest
+  in `release-handoff-manifest.json`.
+- Rust and Swift focused tests cover the new CLI, IPC, handoff, and app-facing
+  surfaces.
+
+Production-ready language remains blocked until owner-recorded external
+evidence exists for signed/notarized distribution, clean-profile install,
+live-device QA, plugin-trust QA, and the final archived evidence bundle.

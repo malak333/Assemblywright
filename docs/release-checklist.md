@@ -128,6 +128,12 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   plugin-trust QA into final evidence bundling and
   `release-evidence-doctor.sh --assert-complete`, not back to the signed
   distribution runbook.
+- Confirm `jarvis release evidence-bundle-runbook` and
+  `/release/evidence-bundle-runbook` expose the final read-only handoff for
+  signed-distribution provenance, live-device QA, plugin-trust QA, and
+  `release_evidence_bundle`, and that `release-external-handoff.sh --write`
+  includes `evidence-bundle-runbook.json` in the manifest with byte count and
+  SHA-256 digest coverage.
 - Confirm `jarvis release --help`, `jarvis release readiness --help`, and
   `jarvis release evidence-status --help` preserve the same read-only,
   IPC-first/local-fallback, evidence-mode, and file/report-inspection

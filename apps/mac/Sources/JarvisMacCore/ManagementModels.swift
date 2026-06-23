@@ -56,10 +56,12 @@ public final class ReleaseReadinessModel: ObservableObject {
                 async let signedDistributionRunbook = client.releaseSignedDistributionRunbook()
                 async let liveDeviceRunbook = client.releaseLiveDeviceRunbook()
                 async let pluginTrustRunbook = client.releasePluginTrustRunbook()
+                async let evidenceBundleRunbook = client.releaseEvidenceBundleRunbook()
                 self.releaseRunbooks = try await [
                     signedDistributionRunbook,
                     liveDeviceRunbook,
                     pluginTrustRunbook,
+                    evidenceBundleRunbook,
                 ]
             } catch {
                 self.releaseRunbooks = []
