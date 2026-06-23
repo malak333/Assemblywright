@@ -157,6 +157,7 @@ Focused regression checks for that release evidence boundary:
 cargo test -p jarvis-core live_device_qa_report -- --nocapture
 cargo test -p jarvis-cli --test local_ipc_e2e release_readiness_rejects_semantically_invalid_live_voice_evidence -- --nocapture
 cargo test -p jarvis-cli --test local_ipc_e2e release_readiness_rejects_missing_live_voice_evidence_fields -- --nocapture
+cargo test -p jarvis-cli --test local_ipc_e2e release_live_device_qa_script_generated_report_clears_evidence_status -- --nocapture
 cargo test -p jarvis-cli --test local_ipc_e2e release_plugin_trust_qa_assertion_report_is_accepted_by_evidence_status -- --nocapture
 cargo test -p jarvis-cli --test local_ipc_e2e release_help_surfaces_current_evidence_boundaries -- --nocapture
 ```
@@ -862,6 +863,12 @@ evidence can clear `live_voice_loop`. CLI E2E removes required live voice,
 command-observation, audio-output-device, and notification-observation fields
 from owner-recorded reports and verifies evidence-status plus external-mode
 readiness fail closed.
+CLI E2E also runs `release-live-device-qa.sh --assert-complete` with a
+repository-backed command result, verifies the script-generated live-device QA
+report is accepted by `jarvis release evidence-status`, and confirms
+external-mode readiness moves `live_voice_loop` to implemented while production
+readiness stays blocked by the remaining signed distribution and final evidence
+bundle gates.
 The observed transcript must match the spoken test phrase after trimming, the
 expected installed app path must match `JARVIS_QA_INSTALLED_APP_PATH` or
 `/Applications/Jarvis.app`, expected and observed command text must match after

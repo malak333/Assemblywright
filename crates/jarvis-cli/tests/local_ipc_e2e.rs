@@ -759,6 +759,200 @@ fn release_readiness_external_mode_with_live_voice_evidence_but_incomplete_relea
 
 #[test]
 #[cfg(unix)]
+fn release_live_device_qa_script_generated_report_clears_evidence_status() {
+    let temp_dir = tempfile::tempdir().expect("temp live-device script evidence");
+    let app_path = write_live_device_qa_app_fixture(temp_dir.path());
+    let live_report_path = temp_dir.path().join("release-live-device-qa-report.json");
+    let db_path = temp_dir
+        .path()
+        .join("jarvis-live-device-script-evidence.sqlite");
+    let app_path_arg = app_path.to_str().expect("app path UTF-8").to_string();
+    let report_path_arg = live_report_path
+        .to_str()
+        .expect("live report path is UTF-8")
+        .to_string();
+    let expected_version = env!("CARGO_PKG_VERSION");
+    let server_env = [
+        ("JARVIS_QA_INSTALLED_APP_PATH", app_path_arg.as_str()),
+        ("JARVIS_QA_REPORT_PATH", report_path_arg.as_str()),
+        (
+            "JARVIS_QA_EXPECTED_BUNDLE_ID",
+            "com.nobiletechnology.jarvis.selftest",
+        ),
+        ("JARVIS_QA_EXPECTED_VERSION", expected_version),
+        ("JARVIS_RELEASE_READINESS_EVIDENCE_MODE", "external"),
+    ];
+    let mut server = JarvisServer::start_with_env(&db_path, &server_env);
+    let endpoint = server.endpoint();
+
+    let command = run_cli_json([
+        "command",
+        "status check",
+        "--json",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(command["accepted"], true, "{command}");
+    let task_id = command["task"]["id"].as_str().expect("task id");
+    let task_evidence_id = format!("task:{task_id}");
+
+    let script_output = run_repo_script_with_env(
+        "scripts/release-live-device-qa.sh",
+        &["--assert-complete"],
+        &[
+            ("JARVIS_QA_INSTALLED_APP_PATH", app_path_arg.as_str()),
+            ("JARVIS_QA_REPORT_PATH", report_path_arg.as_str()),
+            (
+                "JARVIS_QA_EXPECTED_BUNDLE_ID",
+                "com.nobiletechnology.jarvis.selftest",
+            ),
+            ("JARVIS_QA_EXPECTED_VERSION", expected_version),
+            ("JARVIS_QA_CLEAN_PROFILE_VALIDATED", "true"),
+            ("JARVIS_QA_FINDER_LAUNCH_VALIDATED", "true"),
+            ("JARVIS_QA_MICROPHONE_VALIDATED", "true"),
+            ("JARVIS_QA_SPEECH_PERMISSION_VALIDATED", "true"),
+            ("JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED", "true"),
+            ("JARVIS_QA_AUDIO_OUTPUT_VALIDATED", "true"),
+            ("JARVIS_QA_NOTIFICATION_VALIDATED", "true"),
+            ("JARVIS_QA_RESTART_VALIDATED", "true"),
+            ("JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED", "true"),
+            ("JARVIS_QA_OWNER_NAME", "Release Operator"),
+            ("JARVIS_QA_DEVICE_LABEL", "script E2E Mac fixture"),
+            ("JARVIS_QA_PROFILE_LABEL", "script E2E clean profile"),
+            ("JARVIS_QA_VOICE_CHECK_STARTED_AT", "2026-05-22T16:00:00Z"),
+            (
+                "JARVIS_QA_VOICE_CHECK_COMPLETED_AT",
+                "2026-05-22T16:05:00Z",
+            ),
+            (
+                "JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE",
+                "Clean profile install observed in the controlled release QA lane.",
+            ),
+            (
+                "JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE",
+                "Finder launch observed in the controlled release QA lane.",
+            ),
+            (
+                "JARVIS_QA_MICROPHONE_EVIDENCE_NOTE",
+                "Observed microphone permission prompt in the controlled release QA lane.",
+            ),
+            (
+                "JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE",
+                "Observed Speech permission prompt in the controlled release QA lane.",
+            ),
+            (
+                "JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE",
+                "Observed transcript handoff reach the command path in the controlled release QA lane.",
+            ),
+            (
+                "JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE",
+                "Observed speech output playback in the controlled release QA lane.",
+            ),
+            (
+                "JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE",
+                "Visible scheduler notification observed in the controlled release QA lane.",
+            ),
+            (
+                "JARVIS_QA_NOTIFICATION_OBSERVED_AT",
+                "2026-05-22T16:04:00Z",
+            ),
+            ("JARVIS_QA_NOTIFICATION_KIND", "due_now"),
+            (
+                "JARVIS_QA_NOTIFICATION_TITLE",
+                "Scheduler job ready: release verification",
+            ),
+            (
+                "JARVIS_QA_NOTIFICATION_BODY",
+                "A scheduled Jarvis job is due now.",
+            ),
+            (
+                "JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER",
+                "jarvis.scheduler",
+            ),
+            (
+                "JARVIS_QA_RESTART_EVIDENCE_NOTE",
+                "Restart recovery observed in the controlled release QA lane.",
+            ),
+            (
+                "JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE",
+                "Manual release QA surfaces observed in the controlled release QA lane.",
+            ),
+            ("JARVIS_QA_VOICE_TEST_PHRASE", "Jarvis status check."),
+            ("JARVIS_QA_OBSERVED_TRANSCRIPT", "Jarvis status check."),
+            ("JARVIS_QA_EXPECTED_COMMAND_TEXT", "status check"),
+            ("JARVIS_QA_OBSERVED_COMMAND_TEXT", "status check"),
+            (
+                "JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID",
+                task_evidence_id.as_str(),
+            ),
+            ("JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL", "Built-in speakers"),
+        ],
+    );
+    let script_stdout = String::from_utf8_lossy(&script_output.stdout);
+    assert!(
+        script_stdout.contains("Jarvis live-device QA assertion: complete"),
+        "{script_stdout}"
+    );
+    assert!(
+        script_stdout.contains(report_path_arg.as_str()),
+        "{script_stdout}"
+    );
+
+    let report = read_json_file(&live_report_path);
+    assert_eq!(report["schema_version"], 1);
+    assert_eq!(report["evidence_type"], "owner_recorded_live_device_qa");
+    assert_eq!(report["self_test_fixture"], false);
+    assert_eq!(report["installed_app_path"], app_path_arg);
+    assert_eq!(
+        report["app_bundle"]["bundle_identifier"],
+        "com.nobiletechnology.jarvis.selftest"
+    );
+    assert_eq!(
+        report["voice_command_observation"]["command_result_evidence_id"],
+        task_evidence_id
+    );
+    assert_eq!(
+        report["notification_observation"]["thread_identifier"],
+        "jarvis.scheduler"
+    );
+    assert_eq!(
+        report["voice_command_observation"]["audio_output_device_label"],
+        "Built-in speakers"
+    );
+
+    let evidence_status = run_cli_json([
+        "release",
+        "evidence-status",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(evidence_status["complete"], false, "{evidence_status}");
+    assert_release_evidence_item_status(
+        &evidence_status,
+        "live_device_qa_report",
+        "present",
+        "script-generated live-device report should resolve against repository evidence",
+    );
+
+    let readiness = run_cli_json(["release", "readiness", "--endpoint", endpoint.as_str()]);
+    assert_eq!(readiness["production_ready"], false);
+    assert!(readiness["pending_features"]
+        .as_array()
+        .expect("pending features")
+        .is_empty());
+    assert_array_contains(&readiness["implemented_features"], "key", "live_voice_loop");
+    let live_voice_feature = readiness_feature(&readiness, "live_voice_loop");
+    assert_eq!(live_voice_feature["status"], "implemented");
+    assert!(live_voice_feature["boundary"]
+        .as_str()
+        .expect("live voice boundary")
+        .contains("Owner-recorded live-device QA evidence"));
+
+    server.stop();
+}
+
+#[test]
+#[cfg(unix)]
 fn release_readiness_rejects_invalid_live_voice_evidence_even_when_other_evidence_is_complete() {
     let temp_dir = tempfile::tempdir().expect("temp complete release evidence");
     let fixture = write_complete_release_evidence_fixture(temp_dir.path());
@@ -8227,6 +8421,49 @@ fn make_executable(path: &Path) {
     let mut permissions = fs::metadata(path).expect("file metadata").permissions();
     permissions.set_mode(0o700);
     fs::set_permissions(path, permissions).expect("chmod executable");
+}
+
+#[cfg(unix)]
+fn write_live_device_qa_app_fixture(root: &Path) -> PathBuf {
+    let app_path = root.join("Jarvis.app");
+    let macos_dir = app_path.join("Contents/MacOS");
+    let contents_dir = app_path.join("Contents");
+    let resources_dir = app_path.join("Contents/Resources/bin");
+    fs::create_dir_all(&macos_dir).expect("create live QA app executable dir");
+    fs::create_dir_all(&resources_dir).expect("create live QA bundled core dir");
+    fs::write(
+        contents_dir.join("Info.plist"),
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleExecutable</key>
+  <string>JarvisMacApp</string>
+  <key>CFBundleIdentifier</key>
+  <string>com.nobiletechnology.jarvis.selftest</string>
+  <key>CFBundleShortVersionString</key>
+  <string>{version}</string>
+  <key>CFBundleVersion</key>
+  <string>{version}</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Jarvis uses microphone input only when you explicitly start local voice capture.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>Jarvis uses speech recognition only to turn your spoken command into a local assistant request.</string>
+</dict>
+</plist>
+"#,
+            version = env!("CARGO_PKG_VERSION")
+        ),
+    )
+    .expect("write live QA Info.plist");
+    let app_executable = macos_dir.join("JarvisMacApp");
+    let bundled_core = resources_dir.join("jarvis-cli");
+    fs::write(&app_executable, "#!/bin/sh\n").expect("write live QA app executable");
+    write_fixture_bundled_core_executable(&bundled_core);
+    make_executable(&app_executable);
+    make_executable(&bundled_core);
+    app_path
 }
 
 #[cfg(unix)]

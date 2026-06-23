@@ -1235,6 +1235,14 @@ requires plugin-trust `generated_at`, `review_started_at`,
   while `JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE` includes the last spoken preview
   text and speech-output status when available. This improves manual evidence
   capture only; it does not prove live audio playback without owner validation.
+- CLI E2E now runs `release-live-device-qa.sh --assert-complete` with a
+  repository-backed command result and a script-generated live-device QA
+  report, then verifies `jarvis release evidence-status` accepts that report and
+  external-mode readiness moves `live_voice_loop` to implemented while
+  production readiness stays blocked by the remaining signed-distribution and
+  final-evidence gates. This proves script/status/readiness compatibility for
+  owner-recorded evidence only; it does not automate live microphone, Speech,
+  audio-output, or notification validation on a real Mac.
 - PR #254 made release runbooks a current implementation surface rather than a
   CLI-only operator path: `/release/live-device-runbook`,
   `/release/signed-distribution-runbook`, and `/release/plugin-trust-runbook`
