@@ -442,6 +442,13 @@ stage or when a PR needs focused evidence for one ownership slice.
   owner/timestamp/evidence-note fields are present. Every category must also
   include the matching archived artifact URI and SHA-256 digest; structured
   egress evidence must include the policy label plus deny/allow fixture notes.
+- Confirm CLI E2E coverage still runs
+  `release-plugin-trust-qa.sh --assert-complete` with owner-recorded
+  archive URI/SHA-256 evidence fields, rebinds the generated report digest into
+  the final bundle fixture, and verifies `jarvis release evidence-status`
+  accepts the generated plugin-trust QA report and bundle as present. This
+  proves script/status compatibility only, not real marketplace, malware,
+  sandbox, or host-egress validation.
 - Confirm `./scripts/release-evidence-bundle.sh --check` is included in
   release readiness recommendations and the local release gate, that its
   preflight output points operators to the fillable final-bundle template, the

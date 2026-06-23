@@ -3540,6 +3540,203 @@ fn release_plugin_trust_qa_assertion_rejects_temporary_artifact_uri() {
 
 #[cfg(unix)]
 #[test]
+fn release_plugin_trust_qa_assertion_report_is_accepted_by_evidence_status() {
+    let temp_dir = tempfile::tempdir().expect("temp complete release evidence");
+    let fixture = write_complete_release_evidence_fixture(temp_dir.path());
+    let report_path = Path::new(&fixture.plugin_report_path);
+    let report_path_arg = fixture.plugin_report_path.clone();
+
+    let script_output = run_repo_script_with_env(
+        "scripts/release-plugin-trust-qa.sh",
+        &["--assert-complete"],
+        &[
+            ("JARVIS_PLUGIN_QA_REPORT_PATH", report_path_arg.as_str()),
+            (
+                "JARVIS_PLUGIN_QA_REVIEW_SOURCE",
+                "owner-asserted-manual-review",
+            ),
+            ("JARVIS_PLUGIN_QA_SELF_TEST_FIXTURE", "false"),
+            ("JARVIS_PLUGIN_QA_MARKETPLACE_REVIEW_VALIDATED", "true"),
+            ("JARVIS_PLUGIN_QA_MALWARE_SCAN_VALIDATED", "true"),
+            ("JARVIS_PLUGIN_QA_OS_SANDBOX_VALIDATED", "true"),
+            ("JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED", "true"),
+            ("JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_POLICY_VALIDATED", "true"),
+            ("JARVIS_PLUGIN_QA_MANUAL_TRUST_REVIEW_VALIDATED", "true"),
+            ("JARVIS_PLUGIN_QA_OWNER_NAME", "Release Operator"),
+            ("JARVIS_PLUGIN_QA_REVIEW_STARTED_AT", "2026-05-22T16:10:00Z"),
+            (
+                "JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT",
+                "2026-05-22T16:20:00Z",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE",
+                "Marketplace review evidence archived.",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_MARKETPLACE_ARTIFACT_URI",
+                "archive://jarvis/plugin-trust/marketplace-review.json",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_MARKETPLACE_ARTIFACT_SHA256",
+                "1111111111111111111111111111111111111111111111111111111111111111",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE",
+                "Malware scan evidence archived.",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_MALWARE_SCAN_ARTIFACT_URI",
+                "archive://jarvis/plugin-trust/malware-scan.json",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_MALWARE_SCAN_ARTIFACT_SHA256",
+                "2222222222222222222222222222222222222222222222222222222222222222",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE",
+                "OS sandbox validation evidence archived.",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_OS_SANDBOX_ARTIFACT_URI",
+                "archive://jarvis/plugin-trust/os-sandbox.json",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_OS_SANDBOX_ARTIFACT_SHA256",
+                "3333333333333333333333333333333333333333333333333333333333333333",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE",
+                "Host-level egress validation evidence archived.",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_EGRESS_ARTIFACT_URI",
+                "archive://jarvis/plugin-trust/egress.json",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_EGRESS_ARTIFACT_SHA256",
+                "4444444444444444444444444444444444444444444444444444444444444444",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_EGRESS_POLICY_LABEL",
+                "Host egress policy/profile reviewed.",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_EGRESS_VALIDATION_COMPLETED_AT",
+                "2026-05-22T16:18:00Z",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_EGRESS_DENY_FIXTURE_EVIDENCE_NOTE",
+                "Undeclared-host deny evidence archived.",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_EGRESS_ALLOW_FIXTURE_EVIDENCE_NOTE",
+                "Declared-host allow evidence archived.",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE",
+                "Signed publisher policy evidence archived.",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_ARTIFACT_URI",
+                "archive://jarvis/plugin-trust/signed-publisher.json",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_ARTIFACT_SHA256",
+                "5555555555555555555555555555555555555555555555555555555555555555",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE",
+                "Manual plugin trust review evidence archived.",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_MANUAL_REVIEW_ARTIFACT_URI",
+                "archive://jarvis/plugin-trust/manual-review.json",
+            ),
+            (
+                "JARVIS_PLUGIN_QA_MANUAL_REVIEW_ARTIFACT_SHA256",
+                "6666666666666666666666666666666666666666666666666666666666666666",
+            ),
+        ],
+    );
+    let script_stdout = String::from_utf8_lossy(&script_output.stdout);
+    assert!(
+        script_stdout.contains("Jarvis plugin trust QA assertion: complete"),
+        "{script_stdout}"
+    );
+    assert!(
+        script_stdout.contains(report_path_arg.as_str()),
+        "{script_stdout}"
+    );
+
+    assert!(report_path.exists(), "plugin trust QA report was written");
+    let report = read_json_file(report_path);
+    assert_eq!(report["schema_version"], 1);
+    assert_eq!(report["evidence_type"], "owner_recorded_plugin_trust_qa");
+    assert_eq!(report["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(report["self_test_fixture"], false);
+    assert_eq!(report["review_source"], "owner-asserted-manual-review");
+    assert_eq!(
+        report["evidence_artifacts"]["marketplace_review"]["uri"],
+        "archive://jarvis/plugin-trust/marketplace-review.json"
+    );
+    assert_eq!(
+        report["evidence_artifacts"]["egress_enforcement"]["sha256"],
+        "4444444444444444444444444444444444444444444444444444444444444444"
+    );
+
+    let plugin_generated_at = report["generated_at"]
+        .as_str()
+        .expect("plugin report generated_at")
+        .to_string();
+    let bundle_path = Path::new(&fixture.bundle_path);
+    let mut bundle_report = read_json_file(bundle_path);
+    bundle_report["reports"]["plugin_trust_qa_sha256"] = json!(file_sha256(report_path));
+    bundle_report["owner_recorded_release_evidence"]["completed_at"] =
+        json!(plugin_generated_at.as_str());
+    bundle_report["generated_at"] = json!(plugin_generated_at);
+    write_json_report(bundle_path, bundle_report);
+
+    let evidence_env = fixture.env_refs();
+    let db_path = temp_dir.path().join("jarvis-plugin-script-evidence.sqlite");
+    let mut server = JarvisServer::start_with_env(&db_path, &evidence_env);
+    let endpoint = server.endpoint();
+    let command = run_cli_json([
+        "command",
+        "status check",
+        "--json",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    let task_id = command["task"]["id"].as_str().expect("task id");
+    bind_complete_release_evidence_fixture_to_task(&fixture, task_id);
+
+    let evidence_status = run_cli_json([
+        "release",
+        "evidence-status",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(evidence_status["complete"], true, "{evidence_status}");
+    assert_eq!(evidence_status["missing_count"], 0, "{evidence_status}");
+    assert_eq!(evidence_status["invalid_count"], 0, "{evidence_status}");
+    assert_all_evidence_items_present(&evidence_status);
+    let plugin_trust_item = release_evidence_item(&evidence_status, "plugin_trust_qa_report");
+    assert_eq!(plugin_trust_item["status"], "present");
+    assert!(plugin_trust_item["detail"]
+        .as_str()
+        .expect("plugin trust detail")
+        .contains("egress validation timestamps"));
+    let bundle_item = release_evidence_item(&evidence_status, "release_evidence_bundle");
+    assert_eq!(bundle_item["status"], "present");
+    assert!(bundle_item["detail"]
+        .as_str()
+        .expect("bundle detail")
+        .contains("SHA-256"));
+    server.stop();
+}
+
+#[cfg(unix)]
+#[test]
 fn release_external_handoff_snapshots_match_live_runbook_commands() {
     let temp_dir = tempfile::tempdir().expect("temp external handoff");
     let handoff_dir = temp_dir.path().join("handoff");

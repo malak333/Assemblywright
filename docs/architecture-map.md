@@ -516,6 +516,12 @@ artifact URI/SHA-256 bindings. The report now carries `schema_version: 1`,
 `review_source: owner-asserted-manual-review` for operator evidence, and the
 evidence doctor/status validators reject wrong-version, self-test,
 misidentified, or non-owner-source plugin-trust report shapes.
+CLI E2E now runs `release-plugin-trust-qa.sh --assert-complete` with
+owner-recorded archive URI/SHA-256 evidence fields, rebinds the generated
+report digest into the final release-evidence bundle fixture, and verifies
+`jarvis release evidence-status` accepts both the plugin-trust QA report and
+bundle as present without treating marketplace, malware, sandbox, or host-egress
+review as repo-local proof.
 The `./scripts/release-evidence-bundle.sh --check` command ties the expected
 signed distribution artifact paths, live-device QA report, plugin-trust QA
 report, and owner validation flags into a final bundle manifest path. `--check`,
