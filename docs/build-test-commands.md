@@ -499,6 +499,10 @@ evidence must come from `--assert-complete` after the owner validates every
 plus the matching archived artifact URI and SHA-256 digest for each plugin-trust
 category. The assertion path rejects artifact URIs that lack a URI scheme and
 location or point at placeholder, self-test, fixture, or temporary paths.
+The downstream evidence consumers apply the same durability rule: the bundle
+script, evidence doctor, and `jarvis release evidence-status` reject plugin-trust
+reports whose `evidence_artifacts.*.uri` values are bare paths or temporary
+locations, even if the producer-side report was hand-edited after generation.
 CLI E2E now runs `release-plugin-trust-qa.sh --assert-complete` with
 owner-recorded archive URI/SHA-256 evidence fields and verifies the generated
 plugin-trust QA report is accepted by `jarvis release evidence-status`.

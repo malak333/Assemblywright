@@ -395,7 +395,10 @@ These notes capture durable facts for future agents working on this repository.
   validation timestamp, denied undeclared-host fixture note, and declared-host
   allow fixture note. Each plugin-trust category also requires an archived
   manual evidence artifact URI and SHA-256 digest before evidence-status or the
-  final bundle gate can accept the report. CLI E2E now runs
+  final bundle gate can accept the report. Bundle, doctor, and evidence-status
+  revalidation reject temporary plugin artifact URIs and bare artifact paths so
+  a hand-edited downstream report cannot bypass the durable evidence archive
+  requirement. CLI E2E now runs
   `release-plugin-trust-qa.sh --assert-complete` with owner-recorded archive
   URI/SHA-256 evidence fields and verifies the generated plugin-trust QA report
   is accepted by `jarvis release evidence-status`. The review timestamps must be UTC `Z` values, the
@@ -1195,13 +1198,13 @@ requires plugin-trust `generated_at`, `review_started_at`,
   artifacts. Current release claims should refresh this baseline with
   `cargo run -p jarvis-cli -- release readiness --json` and
   `gh run list --branch main --workflow "Jarvis Release Local Gate" --limit 3`.
-  The latest verified main baseline at `8d61ad7` has hosted GitHub
-  `Release local gate` success for push run `27849385053` / job
-  `82425294145` and remains conservative with `production_ready: false`,
+  The latest verified main baseline at `7f7b543` has hosted GitHub
+  `Release local gate` success for push run `28037502202` / job
+  `82994684590` and remains conservative with `production_ready: false`,
   `evidence_mode_enabled: false`, `verified_feature_count: 16`, `pending_feature_count: 1`, and
   `live_voice_loop` as the pending manual feature; `/release/evidence-status`
   reports `complete: false`, three satisfied evidence rows, six missing rows,
-  and no invalid rows. PRs #283-#320 added repo-owned clarity for voice
+  and no invalid rows. PRs #283-#324 added repo-owned clarity for voice
   permission gating, external handoff guidance, architecture documentation,
   plugin-trust artifact SHA guidance, final doctor assertion guidance, Release
   tab runbook-load warnings, external handoff mechanics, evidence-note

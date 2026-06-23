@@ -1710,6 +1710,70 @@ PY
   fi
   require_file_contains "placeholder archive URI error" "$tmp_dir/placeholder-archive.err" "durable release evidence archive"
 
+  python3 - "$tmp_dir/plugin.json" "$tmp_dir/temp-plugin-artifact-uri.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+with open(source, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["evidence_artifacts"]["manual_trust_review"]["uri"] = "file:///tmp/jarvis/plugin-trust/manual-review.json"
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+PY
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/temp-plugin-artifact-uri.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/temp-plugin-artifact-bundle.json" \
+    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
+    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+    "$0" --bundle >/dev/null 2>"$tmp_dir/temp-plugin-artifact.err"; then
+    fail "release evidence self-test expected temporary plugin artifact URI to be rejected"
+  fi
+  require_file_contains "temporary plugin artifact URI error" "$tmp_dir/temp-plugin-artifact.err" "durable release evidence archive"
+
+  python3 - "$tmp_dir/plugin.json" "$tmp_dir/bare-plugin-artifact-uri.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+with open(source, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["evidence_artifacts"]["manual_trust_review"]["uri"] = "jarvis/plugin-trust/manual-review.json"
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+PY
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/bare-plugin-artifact-uri.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bare-plugin-artifact-bundle.json" \
+    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
+    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
+    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+    "$0" --bundle >/dev/null 2>"$tmp_dir/bare-plugin-artifact.err"; then
+    fail "release evidence self-test expected bare plugin artifact URI to be rejected"
+  fi
+  require_file_contains "bare plugin artifact URI error" "$tmp_dir/bare-plugin-artifact.err" "URI with a scheme"
+
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
     JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
@@ -2727,7 +2791,7 @@ for field in marketplace_evidence_note malware_scan_evidence_note os_sandbox_evi
   require_json_meaningful_evidence_string "plugin trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.$field"
 done
 for artifact in marketplace_review malware_scan os_sandbox egress_enforcement signed_publisher_policy manual_trust_review; do
-  require_json_meaningful_evidence_string "plugin trust QA report" "$PLUGIN_QA_REPORT" "evidence_artifacts.$artifact.uri"
+  require_json_reports_archive_uri "plugin trust QA report" "$PLUGIN_QA_REPORT" "evidence_artifacts.$artifact.uri"
   require_json_sha256 "plugin trust QA report" "$PLUGIN_QA_REPORT" "evidence_artifacts.$artifact.sha256"
 done
 require_json_utc_timestamp "plugin trust QA report" "$PLUGIN_QA_REPORT" "generated_at"

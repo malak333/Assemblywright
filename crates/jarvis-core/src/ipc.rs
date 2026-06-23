@@ -5625,7 +5625,7 @@ fn validate_plugin_trust_qa_report(value: &serde_json::Value) -> Result<(), Stri
         "signed_publisher_policy",
         "manual_trust_review",
     ] {
-        require_json_meaningful_owner_evidence(
+        require_json_durable_evidence_archive_uri_value(
             value,
             &format!("evidence_artifacts.{artifact}.uri"),
         )?;
@@ -6176,6 +6176,13 @@ fn require_json_nonempty_string_value(
 }
 
 fn require_json_release_reports_archive_uri_value(
+    value: &serde_json::Value,
+    dotted_path: &str,
+) -> Result<(), String> {
+    require_json_durable_evidence_archive_uri_value(value, dotted_path)
+}
+
+fn require_json_durable_evidence_archive_uri_value(
     value: &serde_json::Value,
     dotted_path: &str,
 ) -> Result<(), String> {
@@ -8508,7 +8515,15 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
     #[test]
     fn plugin_trust_qa_report_rejects_missing_or_invalid_artifact_binding() {
         for artifact in plugin_trust_artifact_keys() {
-            for (field, invalid_value) in [("uri", json!("   ")), ("sha256", json!("not-a-sha"))] {
+            for (field, invalid_value) in [
+                ("uri", json!("   ")),
+                ("uri", json!("jarvis/plugin-trust/artifact.json")),
+                (
+                    "uri",
+                    json!("file:///tmp/jarvis/plugin-trust/artifact.json"),
+                ),
+                ("sha256", json!("not-a-sha")),
+            ] {
                 let mut report = valid_plugin_trust_qa_report_json();
                 report["evidence_artifacts"][artifact][field] = invalid_value;
                 let (status, detail) = inspect_plugin_trust_qa_report_value(report);
@@ -8521,6 +8536,13 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 assert!(detail.contains(&expected_field), "{detail}");
                 if field == "sha256" {
                     assert!(detail.contains("SHA-256"), "{detail}");
+                } else {
+                    assert!(
+                        detail.contains("durable release evidence archive")
+                            || detail.contains("URI with a scheme")
+                            || detail.contains("missing required fields"),
+                        "{detail}"
+                    );
                 }
             }
         }

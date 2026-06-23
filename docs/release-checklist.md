@@ -448,6 +448,9 @@ stage or when a PR needs focused evidence for one ownership slice.
   owner/timestamp/evidence-note fields are present. Every category must also
   include the matching archived artifact URI and SHA-256 digest; structured
   egress evidence must include the policy label plus deny/allow fixture notes.
+  Bundle, doctor, and evidence-status revalidation reject temporary plugin
+  artifact URIs and bare non-URI artifact locations, so hand-edited reports
+  cannot bypass the archived-evidence requirement after generation.
 - Confirm CLI E2E coverage still runs
   `release-plugin-trust-qa.sh --assert-complete` with owner-recorded
   archive URI/SHA-256 evidence fields, rebinds the generated report digest into
