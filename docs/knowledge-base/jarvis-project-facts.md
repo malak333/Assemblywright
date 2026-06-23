@@ -954,6 +954,16 @@ requires plugin-trust `generated_at`, `review_started_at`,
   perform marketplace review, malware scanning, sandbox deployment, host-level
   egress enforcement, signing, notarization, live-device QA, or final evidence
   bundling.
+- `cargo run -p jarvis-cli -- release evidence-bundle-runbook` and the redacted
+  IPC `/release/evidence-bundle-runbook` endpoint expose the final handoff
+  before production readiness: signed-distribution provenance, live-device QA,
+  plugin-trust QA, and `release_evidence_bundle` evidence rows plus final
+  bundle, doctor, external evidence-status, and external readiness commands.
+  The command and endpoint are read-only and do not generate the final bundle,
+  sign, notarize, staple, install, Finder-launch, run live-device QA, perform
+  marketplace review, scan malware, deploy a sandbox, or enforce host egress.
+  The external handoff package now includes `evidence-bundle-runbook.json` and
+  manifest digest coverage for that snapshot.
 - It is fair to describe the current repo as a Rust foundation with tested
   scaffolding for IPC, storage, policy, routing, runtime, scheduler, plugin
   contracts, deterministic first-party plugin command execution, bounded

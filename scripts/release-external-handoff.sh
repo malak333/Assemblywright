@@ -170,6 +170,7 @@ expected_files = [
     "signed-distribution-runbook.json",
     "live-device-runbook.json",
     "plugin-trust-runbook.json",
+    "evidence-bundle-runbook.json",
     "release-evidence-checklist.md",
     "README.md",
 ]
@@ -383,6 +384,7 @@ files = [
     "signed-distribution-runbook.json",
     "live-device-runbook.json",
     "plugin-trust-runbook.json",
+    "evidence-bundle-runbook.json",
     "release-evidence-checklist.md",
     "README.md",
 ]
@@ -465,6 +467,7 @@ write_handoff() {
   run cargo run -q -p jarvis-cli -- release signed-distribution-runbook --json --endpoint "$ENDPOINT" >"$output_dir/signed-distribution-runbook.json"
   run cargo run -q -p jarvis-cli -- release live-device-runbook --json --endpoint "$ENDPOINT" >"$output_dir/live-device-runbook.json"
   run cargo run -q -p jarvis-cli -- release plugin-trust-runbook --json --endpoint "$ENDPOINT" >"$output_dir/plugin-trust-runbook.json"
+  run cargo run -q -p jarvis-cli -- release evidence-bundle-runbook --json --endpoint "$ENDPOINT" >"$output_dir/evidence-bundle-runbook.json"
   write_evidence_checklist "$output_dir"
   write_readme "$output_dir"
   write_manifest "$output_dir"
@@ -519,6 +522,8 @@ self_test() {
   require_json_key "signed-distribution runbook snapshot" "$tmp_dir/handoff/signed-distribution-runbook.json" "commands"
   require_json_key "live-device runbook snapshot" "$tmp_dir/handoff/live-device-runbook.json" "commands"
   require_json_key "plugin-trust runbook snapshot" "$tmp_dir/handoff/plugin-trust-runbook.json" "commands"
+  require_json_key "evidence-bundle runbook snapshot" "$tmp_dir/handoff/evidence-bundle-runbook.json" "commands"
+  require_json_string_contains "evidence-bundle runbook snapshot" "$tmp_dir/handoff/evidence-bundle-runbook.json" "proof_boundary" "does not generate the final bundle"
 
   local mismatch_log="$tmp_dir/version-mismatch.log"
   if JARVIS_RELEASE_HANDOFF_VERSION="0.0.0-test" "$0" --write "$tmp_dir/version-mismatch" >"$mismatch_log" 2>&1; then

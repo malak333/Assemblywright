@@ -3201,6 +3201,13 @@ fn release_help_documents_operator_boundaries() {
     assert!(plugin_trust_help.contains("does not perform marketplace review"));
     assert!(plugin_trust_help
         .contains("Falls back to local read-only readiness and evidence inspection"));
+
+    let evidence_bundle_help = run_cli_text(["release", "evidence-bundle-runbook", "--help"]);
+    assert!(evidence_bundle_help.contains("final evidence-bundle runbook"));
+    assert!(evidence_bundle_help.contains("final release evidence bundle"));
+    assert!(evidence_bundle_help.contains("does not generate the bundle"));
+    assert!(evidence_bundle_help
+        .contains("Falls back to local read-only readiness and evidence inspection"));
 }
 
 #[test]
@@ -3600,6 +3607,199 @@ fn release_plugin_trust_runbook_summarizes_next_operator_steps() {
         .contains("host-level egress enforcement"));
 }
 
+#[test]
+fn release_evidence_bundle_runbook_summarizes_next_operator_steps() {
+    let endpoint = format!("http://{}", unused_loopback_addr());
+    let readable_runbook = run_cli_text([
+        "release",
+        "evidence-bundle-runbook",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    let json_runbook = run_cli_json([
+        "release",
+        "evidence-bundle-runbook",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    let format_json_runbook: Value = serde_json::from_str(&run_cli_text([
+        "release",
+        "evidence-bundle-runbook",
+        "--format",
+        "json",
+        "--endpoint",
+        endpoint.as_str(),
+    ]))
+    .expect("evidence-bundle runbook --format json output");
+
+    assert!(readable_runbook.contains("Jarvis final evidence-bundle runbook:"));
+    for key in [
+        "signed_distribution_provenance_report",
+        "live_device_qa_report",
+        "plugin_trust_qa_report",
+        "release_evidence_bundle",
+    ] {
+        assert!(readable_runbook.contains(key), "{readable_runbook}");
+    }
+    assert!(readable_runbook.contains("./scripts/release-evidence-bundle.sh --check"));
+    assert!(readable_runbook.contains(
+        "./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env"
+    ));
+    assert!(readable_runbook.contains(
+        "set -a && source target/release-evidence-bundle.env && set +a && ./scripts/release-evidence-bundle.sh --bundle"
+    ));
+    assert!(readable_runbook.contains("./scripts/release-evidence-doctor.sh --assert-complete"));
+    assert!(readable_runbook.contains("durable reports archive URI"));
+    assert!(readable_runbook.contains(
+        "Start or restart the core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external"
+    ));
+    assert!(readable_runbook.contains("Boundary: runbook and local evidence inspection only"));
+    assert!(readable_runbook.contains("no final bundle was generated"));
+    assert!(readable_runbook.contains("Raw JSON: rerun with --json"));
+
+    assert_eq!(
+        json_runbook["generated_from"],
+        "release readiness plus evidence-status"
+    );
+    assert_eq!(
+        format_json_runbook["generated_from"],
+        "release readiness plus evidence-status"
+    );
+    assert_eq!(json_runbook["production_ready"], false);
+    assert_eq!(format_json_runbook["production_ready"], false);
+    assert_eq!(
+        format_json_runbook, json_runbook,
+        "evidence-bundle --json and --format json must stay equivalent"
+    );
+    let child_keys = json_runbook["child_evidence"]
+        .as_array()
+        .expect("child evidence")
+        .iter()
+        .map(|item| item["key"].as_str().expect("child evidence key"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        child_keys,
+        [
+            "signed_distribution_provenance_report",
+            "live_device_qa_report",
+            "plugin_trust_qa_report",
+        ],
+        "final bundle runbook must preserve child evidence order"
+    );
+    assert_eq!(
+        json_runbook["final_bundle_evidence"]["key"],
+        "release_evidence_bundle"
+    );
+    assert_eq!(json_runbook["final_bundle_evidence"]["status"], "missing");
+    assert_eq!(
+        json_runbook["final_bundle_evidence"]["path"],
+        "target/release-evidence-bundle.json"
+    );
+    assert_string_array_exact(
+        &json_runbook["commands"],
+        &[
+            "./scripts/release-evidence-bundle.sh --check",
+            "./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env",
+            "set -a && source target/release-evidence-bundle.env && set +a && ./scripts/release-evidence-bundle.sh --bundle",
+            "./scripts/release-evidence-doctor.sh --check",
+            "./scripts/release-evidence-doctor.sh --assert-complete",
+            "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks",
+            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"",
+            "Start or restart the core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external",
+            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"",
+        ],
+    );
+    assert_string_array_contains_substring(
+        &json_runbook["manual_checks"],
+        "signed-distribution, live-device QA, and plugin-trust QA reports exist",
+    );
+    assert_string_array_contains_substring(
+        &json_runbook["manual_checks"],
+        "durable reports archive URI",
+    );
+    assert_string_array_contains_substring(
+        &json_runbook["manual_checks"],
+        "release-evidence-doctor --assert-complete",
+    );
+    assert!(json_runbook["proof_boundary"]
+        .as_str()
+        .expect("proof boundary")
+        .contains("does not generate the final bundle"));
+}
+
+#[test]
+fn release_runbook_ipc_endpoints_emit_normalized_core_json() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let db_path = temp_dir.path().join("jarvis-runbook-e2e.sqlite");
+    let mut server = JarvisServer::start(&db_path);
+    let endpoint = server.endpoint();
+
+    let expected = [
+        (
+            "/release/signed-distribution-runbook",
+            "signed_distribution",
+            vec![
+                "signed_app_bundle",
+                "app_executable",
+                "bundled_core_executable",
+                "signed_app_zip",
+                "signed_installer_package",
+                "signed_distribution_provenance_report",
+            ],
+        ),
+        (
+            "/release/live-device-runbook",
+            "live_device",
+            vec!["live_device_qa_report"],
+        ),
+        (
+            "/release/plugin-trust-runbook",
+            "plugin_trust",
+            vec!["plugin_trust_qa_report"],
+        ),
+        (
+            "/release/evidence-bundle-runbook",
+            "evidence_bundle",
+            vec![
+                "signed_distribution_provenance_report",
+                "live_device_qa_report",
+                "plugin_trust_qa_report",
+                "release_evidence_bundle",
+            ],
+        ),
+    ];
+
+    for (path, runbook, evidence_keys) in expected {
+        let response = http_get_json(&endpoint, path);
+        assert_eq!(
+            response["generated_from"],
+            "release readiness plus evidence-status"
+        );
+        assert_eq!(response["runbook"], runbook);
+        assert_eq!(response["production_ready"], false);
+        let actual_keys = response["evidence_items"]
+            .as_array()
+            .expect("runbook evidence items")
+            .iter()
+            .map(|item| item["key"].as_str().expect("evidence key"))
+            .collect::<Vec<_>>();
+        assert_eq!(actual_keys, evidence_keys, "{path}: {response}");
+        assert!(
+            !response["commands"]
+                .as_array()
+                .expect("commands")
+                .is_empty(),
+            "{path}: {response}"
+        );
+        assert!(response["proof_boundary"]
+            .as_str()
+            .expect("proof boundary")
+            .contains("Runbook and local evidence inspection only"));
+    }
+
+    server.stop();
+}
+
 #[cfg(unix)]
 #[test]
 fn release_plugin_trust_qa_assertion_rejects_temporary_artifact_uri() {
@@ -3967,6 +4167,12 @@ fn release_external_handoff_snapshots_match_live_runbook_commands() {
         "--endpoint",
         endpoint.as_str(),
     ]);
+    let bundle_direct = run_cli_json([
+        "release",
+        "evidence-bundle-runbook",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
     let readiness_direct = run_cli_json_with_env(
         ["release", "readiness", "--endpoint", endpoint.as_str()],
         &[("JARVIS_RELEASE_READINESS_EVIDENCE_MODE", "external")],
@@ -3984,6 +4190,7 @@ fn release_external_handoff_snapshots_match_live_runbook_commands() {
     let signed_snapshot = read_json_file(handoff_dir.join("signed-distribution-runbook.json"));
     let live_snapshot = read_json_file(handoff_dir.join("live-device-runbook.json"));
     let plugin_snapshot = read_json_file(handoff_dir.join("plugin-trust-runbook.json"));
+    let bundle_snapshot = read_json_file(handoff_dir.join("evidence-bundle-runbook.json"));
     let readiness_snapshot = read_json_file(handoff_dir.join("release-readiness.json"));
     let evidence_status_snapshot = read_json_file(handoff_dir.join("release-evidence-status.json"));
     let manifest = read_json_file(handoff_dir.join("release-handoff-manifest.json"));
@@ -4014,6 +4221,7 @@ fn release_external_handoff_snapshots_match_live_runbook_commands() {
         "signed-distribution-runbook.json",
         "live-device-runbook.json",
         "plugin-trust-runbook.json",
+        "evidence-bundle-runbook.json",
         "release-evidence-checklist.md",
         "README.md",
     ] {
@@ -4077,6 +4285,23 @@ fn release_external_handoff_snapshots_match_live_runbook_commands() {
     assert_eq!(
         plugin_snapshot["proof_boundary"], plugin_direct["proof_boundary"],
         "plugin-trust handoff snapshot must preserve the proof boundary"
+    );
+
+    assert_eq!(
+        bundle_snapshot["commands"], bundle_direct["commands"],
+        "evidence-bundle handoff snapshot commands must match the live runbook"
+    );
+    assert_eq!(
+        bundle_snapshot["child_evidence"], bundle_direct["child_evidence"],
+        "evidence-bundle handoff snapshot must preserve child evidence status"
+    );
+    assert_eq!(
+        bundle_snapshot["final_bundle_evidence"], bundle_direct["final_bundle_evidence"],
+        "evidence-bundle handoff snapshot must preserve final bundle evidence status"
+    );
+    assert_eq!(
+        bundle_snapshot["proof_boundary"], bundle_direct["proof_boundary"],
+        "evidence-bundle handoff snapshot must preserve the proof boundary"
     );
 
     assert_eq!(
@@ -7734,6 +7959,38 @@ fn run_cli_json<const N: usize>(args: [&str; N]) -> Value {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         )
+    })
+}
+
+fn http_get_json(endpoint: &str, path: &str) -> Value {
+    let host = endpoint
+        .strip_prefix("http://")
+        .unwrap_or_else(|| panic!("expected http endpoint: {endpoint}"));
+    let mut stream = TcpStream::connect(host).unwrap_or_else(|error| {
+        panic!("connect to {endpoint}: {error}");
+    });
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .expect("set http read timeout");
+    write!(
+        stream,
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
+    )
+    .expect("write http request");
+
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .expect("read http response");
+    let (head, body) = response
+        .split_once("\r\n\r\n")
+        .unwrap_or_else(|| panic!("invalid HTTP response: {response}"));
+    assert!(
+        head.starts_with("HTTP/1.1 200") || head.starts_with("HTTP/1.0 200"),
+        "unexpected HTTP response for {path}: {head}\n{body}"
+    );
+    serde_json::from_str(body).unwrap_or_else(|error| {
+        panic!("HTTP body was not JSON: {error}\npath: {path}\nbody:\n{body}");
     })
 }
 

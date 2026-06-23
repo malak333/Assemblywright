@@ -589,6 +589,17 @@ exact plugin-trust template, assertion, evidence-status, evidence-doctor, and
 signed-distribution follow-up commands without performing marketplace review,
 malware scanning, sandbox deployment, host-level egress enforcement, signing,
 notarization, live-device QA, or final evidence bundling.
+`cargo run -p jarvis-cli -- release evidence-bundle-runbook` is also read-only;
+it summarizes the signed-distribution provenance, live-device QA,
+plugin-trust QA, and final `release_evidence_bundle` rows, prints the
+final-bundle template, bundle, evidence-doctor, external evidence-status, and
+external readiness commands, and explicitly states that it does not generate
+the final bundle or perform signing, notarization, installation, live-device
+QA, marketplace review, malware scanning, sandbox deployment, or host-level
+egress enforcement. The external handoff package now snapshots
+`evidence-bundle-runbook.json` beside the signed-distribution, live-device, and
+plugin-trust runbooks, and the manifest/self-test/E2E checks pin the runbook
+snapshot command list and proof boundary.
 The doctor/status paths are read-only inventory plus semantic validation for
 expected paths, app bundle metadata, bundled-core marker metadata, JSON flags,
 non-future report timestamps, signed-distribution provenance, artifact/report
@@ -692,6 +703,10 @@ cargo test -p jarvis-core permission_policy_review_summarizes_unreviewed_memory_
 ./scripts/release-evidence-bundle.sh --self-test
 ./scripts/release-evidence-doctor.sh --self-test
 cargo test -p jarvis-core diagnostics_export_is_redacted_and_counts_repository_state -- --nocapture
+cargo test -p jarvis-core release_runbooks_expose_current_evidence_without_side_effects -- --nocapture
+cargo test -p jarvis-cli --test local_ipc_e2e release_evidence_bundle_runbook_summarizes_next_operator_steps -- --nocapture
+cargo test -p jarvis-cli --test local_ipc_e2e release_runbook_ipc_endpoints_emit_normalized_core_json -- --nocapture
+cargo test -p jarvis-cli --test local_ipc_e2e release_external_handoff_snapshots_match_live_runbook_commands -- --nocapture
 cargo test -p jarvis-core scheduler_attention -- --nocapture
 cargo test -p jarvis-core run_due_scheduler_jobs_executes_and_persists_visible_tasks -- --nocapture
 cargo test -p jarvis-core run_due_scheduler_jobs_blocks_non_proactive_plugin_actions -- --nocapture

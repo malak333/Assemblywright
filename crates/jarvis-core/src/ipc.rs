@@ -1002,6 +1002,7 @@ impl IpcState {
                 "/release/live-device-runbook".to_string(),
                 "/release/signed-distribution-runbook".to_string(),
                 "/release/plugin-trust-runbook".to_string(),
+                "/release/evidence-bundle-runbook".to_string(),
                 "/diagnostics/export".to_string(),
                 "/tools/model".to_string(),
                 "/plugins/manifests".to_string(),
@@ -1114,6 +1115,12 @@ impl IpcState {
         let evidence_status = self.release_evidence_status();
         let readiness = self.release_readiness();
         release_plugin_trust_runbook_from(&readiness, &evidence_status)
+    }
+
+    pub fn release_evidence_bundle_runbook(&self) -> ReleaseRunbookResponse {
+        let evidence_status = self.release_evidence_status();
+        let readiness = self.release_readiness();
+        release_evidence_bundle_runbook_from(&readiness, &evidence_status)
     }
 
     fn command_runtime_label(&self) -> String {
@@ -3483,6 +3490,10 @@ pub fn router(state: IpcState) -> Router {
             "/release/plugin-trust-runbook",
             get(release_plugin_trust_runbook),
         )
+        .route(
+            "/release/evidence-bundle-runbook",
+            get(release_evidence_bundle_runbook),
+        )
         .route("/diagnostics/export", get(diagnostics_export))
         .route("/tools/model", get(model_tool_catalog))
         .route("/commands", post(command))
@@ -3602,6 +3613,12 @@ async fn release_plugin_trust_runbook(
     State(state): State<IpcState>,
 ) -> Json<ReleaseRunbookResponse> {
     Json(state.release_plugin_trust_runbook())
+}
+
+async fn release_evidence_bundle_runbook(
+    State(state): State<IpcState>,
+) -> Json<ReleaseRunbookResponse> {
+    Json(state.release_evidence_bundle_runbook())
 }
 
 async fn model_tool_catalog(
@@ -4360,6 +4377,7 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
         endpoint("GET", "/release/live-device-runbook", false, true),
         endpoint("GET", "/release/signed-distribution-runbook", false, true),
         endpoint("GET", "/release/plugin-trust-runbook", false, true),
+        endpoint("GET", "/release/evidence-bundle-runbook", false, true),
         endpoint("GET", "/diagnostics/export", false, true),
         endpoint("GET", "/tools/model", false, true),
         endpoint("POST", "/commands", false, false),
@@ -4654,6 +4672,60 @@ fn release_plugin_trust_runbook_from(
         ],
         proof_boundary:
             "Runbook and local evidence inspection only; this endpoint does not perform marketplace review, malware scanning, sandbox deployment, host-level egress enforcement, signing, notarization, live-device QA, or final evidence bundling."
+                .to_string(),
+    }
+}
+
+fn release_evidence_bundle_runbook_from(
+    readiness: &ReleaseReadinessResponse,
+    evidence_status: &ReleaseEvidenceStatusResponse,
+) -> ReleaseRunbookResponse {
+    ReleaseRunbookResponse {
+        generated_at: Utc::now(),
+        generated_from: "release readiness plus evidence-status".to_string(),
+        runbook: "evidence_bundle".to_string(),
+        production_ready: readiness.production_ready,
+        live_voice_feature: None,
+        evidence_items: release_evidence_items_by_key(
+            evidence_status,
+            &[
+                "signed_distribution_provenance_report",
+                "live_device_qa_report",
+                "plugin_trust_qa_report",
+                "release_evidence_bundle",
+            ],
+        ),
+        commands: vec![
+            "./scripts/release-evidence-bundle.sh --check".to_string(),
+            "./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env"
+                .to_string(),
+            "set -a && source target/release-evidence-bundle.env && set +a && ./scripts/release-evidence-bundle.sh --bundle"
+                .to_string(),
+            "./scripts/release-evidence-doctor.sh --check".to_string(),
+            "./scripts/release-evidence-doctor.sh --assert-complete".to_string(),
+            "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks"
+                .to_string(),
+            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
+                .to_string(),
+            "Start or restart the core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external"
+                .to_string(),
+            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
+                .to_string(),
+        ],
+        manual_checks: vec![
+            "Generate the final evidence bundle only after signed-distribution, live-device QA, and plugin-trust QA reports exist and have been archived."
+                .to_string(),
+            "Use a durable reports archive URI and preserve the signed zip, installer package, signed provenance report, live-device QA report, plugin-trust QA report, final bundle, and supporting logs."
+                .to_string(),
+            "Confirm release-evidence-doctor --assert-complete reports every required evidence item present before enabling external evidence-mode readiness."
+                .to_string(),
+            "Restart or start the release core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external before the final readiness check."
+                .to_string(),
+            "Confirm production_ready remains false if any required evidence item is missing, invalid, or stale."
+                .to_string(),
+        ],
+        proof_boundary:
+            "Runbook and local evidence inspection only; this endpoint does not generate the final bundle, sign, notarize, staple, install, Finder-launch, run live-device QA, perform marketplace review, scan malware, deploy a sandbox, or enforce host-level egress."
                 .to_string(),
     }
 }
@@ -6357,6 +6429,7 @@ fn release_verification_commands() -> Vec<String> {
         "./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env".to_string(),
         "set -a && source target/release-plugin-trust-qa.env && set +a && ./scripts/release-plugin-trust-qa.sh --assert-complete".to_string(),
         "JARVIS_PLUGIN_QA_MARKETPLACE_REVIEW_VALIDATED=true JARVIS_PLUGIN_QA_MALWARE_SCAN_VALIDATED=true JARVIS_PLUGIN_QA_OS_SANDBOX_VALIDATED=true JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED=true JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_POLICY_VALIDATED=true JARVIS_PLUGIN_QA_MANUAL_TRUST_REVIEW_VALIDATED=true JARVIS_PLUGIN_QA_OWNER_NAME='Release Operator' JARVIS_PLUGIN_QA_REVIEW_STARTED_AT='2026-05-22T16:10:00Z' JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT='2026-05-22T16:20:00Z' JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE='Marketplace review evidence archived' JARVIS_PLUGIN_QA_MARKETPLACE_ARTIFACT_URI='archive://jarvis/plugin-trust/marketplace-review.json' JARVIS_PLUGIN_QA_MARKETPLACE_ARTIFACT_SHA256='1111111111111111111111111111111111111111111111111111111111111111' JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE='Malware scan evidence archived' JARVIS_PLUGIN_QA_MALWARE_SCAN_ARTIFACT_URI='archive://jarvis/plugin-trust/malware-scan.json' JARVIS_PLUGIN_QA_MALWARE_SCAN_ARTIFACT_SHA256='2222222222222222222222222222222222222222222222222222222222222222' JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE='OS sandbox validation evidence archived' JARVIS_PLUGIN_QA_OS_SANDBOX_ARTIFACT_URI='archive://jarvis/plugin-trust/os-sandbox.json' JARVIS_PLUGIN_QA_OS_SANDBOX_ARTIFACT_SHA256='3333333333333333333333333333333333333333333333333333333333333333' JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE='Host-level egress validation evidence archived' JARVIS_PLUGIN_QA_EGRESS_ARTIFACT_URI='archive://jarvis/plugin-trust/egress.json' JARVIS_PLUGIN_QA_EGRESS_ARTIFACT_SHA256='4444444444444444444444444444444444444444444444444444444444444444' JARVIS_PLUGIN_QA_EGRESS_POLICY_LABEL='Host egress policy/profile reviewed' JARVIS_PLUGIN_QA_EGRESS_VALIDATION_COMPLETED_AT='2026-05-22T16:18:00Z' JARVIS_PLUGIN_QA_EGRESS_DENY_FIXTURE_EVIDENCE_NOTE='Undeclared-host deny fixture evidence archived' JARVIS_PLUGIN_QA_EGRESS_ALLOW_FIXTURE_EVIDENCE_NOTE='Declared-host allow fixture evidence archived' JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE='Signed publisher policy evidence archived' JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_ARTIFACT_URI='archive://jarvis/plugin-trust/signed-publisher.json' JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_ARTIFACT_SHA256='5555555555555555555555555555555555555555555555555555555555555555' JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE='Manual plugin trust review evidence archived' JARVIS_PLUGIN_QA_MANUAL_REVIEW_ARTIFACT_URI='archive://jarvis/plugin-trust/manual-review.json' JARVIS_PLUGIN_QA_MANUAL_REVIEW_ARTIFACT_SHA256='6666666666666666666666666666666666666666666666666666666666666666' ./scripts/release-plugin-trust-qa.sh --assert-complete".to_string(),
+        "cargo run -p jarvis-cli -- release evidence-bundle-runbook".to_string(),
         "./scripts/release-evidence-bundle.sh --check".to_string(),
         "./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env".to_string(),
         "./scripts/release-evidence-doctor.sh --check".to_string(),
@@ -6706,6 +6779,9 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .contains(&"/release/plugin-trust-runbook".to_string()));
         assert!(contract
             .safe_inspection_paths
+            .contains(&"/release/evidence-bundle-runbook".to_string()));
+        assert!(contract
+            .safe_inspection_paths
             .contains(&"/diagnostics/export".to_string()));
         assert!(contract
             .safe_inspection_paths
@@ -6749,6 +6825,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             "/release/live-device-runbook",
             "/release/signed-distribution-runbook",
             "/release/plugin-trust-runbook",
+            "/release/evidence-bundle-runbook",
         ] {
             assert!(contract
                 .endpoints
@@ -7061,6 +7138,10 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             commands,
             "set -a && source target/release-plugin-trust-qa.env && set +a && ./scripts/release-plugin-trust-qa.sh --assert-complete",
         );
+        let evidence_bundle_runbook_index = command_index(
+            commands,
+            "cargo run -p jarvis-cli -- release evidence-bundle-runbook",
+        );
         let evidence_bundle_source_index = command_index(
             commands,
             "set -a && source target/release-evidence-bundle.env && set +a && ./scripts/release-evidence-bundle.sh --bundle",
@@ -7089,6 +7170,8 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert!(live_device_check_index < live_device_template_index);
         assert!(live_device_template_index < plugin_trust_runbook_index);
         assert!(plugin_trust_runbook_index < plugin_trust_assert_index);
+        assert!(plugin_trust_assert_index < evidence_bundle_runbook_index);
+        assert!(evidence_bundle_runbook_index < evidence_bundle_source_index);
         assert!(plugin_trust_assert_index < evidence_bundle_source_index);
         assert!(evidence_bundle_source_index < evidence_doctor_assert_index);
         assert!(evidence_bundle_inline_index < evidence_doctor_assert_index);
@@ -7193,6 +7276,40 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert!(plugin
             .proof_boundary
             .contains("does not perform marketplace review"));
+
+        let bundle = state.release_evidence_bundle_runbook();
+        assert_eq!(bundle.runbook, "evidence_bundle");
+        assert_eq!(bundle.evidence_items.len(), 4);
+        for key in [
+            "signed_distribution_provenance_report",
+            "live_device_qa_report",
+            "plugin_trust_qa_report",
+            "release_evidence_bundle",
+        ] {
+            assert!(bundle.evidence_items.iter().any(|item| item.key == key));
+        }
+        assert!(bundle.commands.contains(
+            &"./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env"
+                .to_string()
+        ));
+        assert!(bundle.commands.contains(
+            &"set -a && source target/release-evidence-bundle.env && set +a && ./scripts/release-evidence-bundle.sh --bundle"
+                .to_string()
+        ));
+        assert!(bundle
+            .commands
+            .contains(&"./scripts/release-evidence-doctor.sh --assert-complete".to_string()));
+        assert!(bundle.commands.contains(
+            &"JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
+                .to_string()
+        ));
+        assert!(bundle
+            .manual_checks
+            .iter()
+            .any(|check| check.contains("durable reports archive URI")));
+        assert!(bundle
+            .proof_boundary
+            .contains("does not generate the final bundle"));
     }
 
     #[test]
