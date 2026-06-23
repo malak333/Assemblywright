@@ -794,6 +794,14 @@ Distribution packaging gate:
   `live_device_qa_report` invalid and keep `live_voice_loop` pending; CLI E2E
   proves `/release/evidence-status` plus external-mode readiness fail closed for
   those missing fields.
+  Confirm CLI E2E coverage still runs
+  `release-live-device-qa.sh --assert-complete` with a repository-backed
+  command result, verifies the script-generated live-device QA report through
+  `jarvis release evidence-status`, and confirms external-mode readiness moves
+  `live_voice_loop` to implemented while production readiness remains blocked by
+  the remaining signed-distribution and final evidence gates. This is
+  script/status/readiness compatibility for owner-recorded evidence only, not
+  automated real-device microphone, Speech, audio-output, or notification proof.
 
 ## Release Notes
 

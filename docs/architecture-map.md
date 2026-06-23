@@ -364,6 +364,14 @@ authorization, delivery, deduplication, fail-closed denied-permission paths
 with fake adapters, and the concrete macOS `UNNotificationRequest` payload
 constructed by the app adapter; live OS notification permission prompts and delivery
 still require manual packaged-app validation.
+CLI E2E now runs `release-live-device-qa.sh --assert-complete` with a
+repository-backed command result and a script-generated live-device QA report,
+then verifies `jarvis release evidence-status` accepts that report and
+external-mode readiness moves `live_voice_loop` to implemented while production
+readiness remains blocked by the other signed-distribution and final-evidence
+gates. This proves script/status/readiness compatibility for owner-recorded
+live-device evidence, not automated microphone, Speech, audio-output, or
+notification validation on a real Mac.
 The mutating `/scheduler/recover-stale` endpoint and matching CLI command
 support explicit operator recovery when persisted jobs are stuck in `Running`
 after a killed process or crash. Recovery marks matching jobs failed, returns
