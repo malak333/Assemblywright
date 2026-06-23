@@ -456,6 +456,46 @@ if normalized in exact_placeholders or any(marker in normalized for marker in em
 PY
 }
 
+json_reports_archive_uri() {
+  local path="$1"
+  local dotted_key="$2"
+  python3 - "$path" "$dotted_key" <<'PY'
+import json
+import re
+import sys
+from urllib.parse import urlparse
+
+path, dotted_key = sys.argv[1:3]
+try:
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+except Exception:
+    raise SystemExit(1)
+
+cursor = data
+for segment in dotted_key.split("."):
+    if not isinstance(cursor, dict) or segment not in cursor:
+        raise SystemExit(1)
+    cursor = cursor[segment]
+
+if not isinstance(cursor, str) or not cursor.strip():
+    raise SystemExit(1)
+
+trimmed = cursor.strip()
+parsed = urlparse(trimmed)
+if not parsed.scheme:
+    raise SystemExit(1)
+if parsed.scheme == "file" and not (parsed.netloc or parsed.path):
+    raise SystemExit(1)
+if parsed.scheme != "file" and not (parsed.netloc or parsed.path):
+    raise SystemExit(1)
+
+placeholder = re.compile(r"(self-test|placeholder|example|fixture|todo|tbd|replace-me|changeme|/tmp/|/temp/)", re.IGNORECASE)
+if placeholder.search(trimmed):
+    raise SystemExit(1)
+PY
+}
+
 file_sha256() {
   local path="$1"
   shasum -a 256 "$path" | awk '{print $1}'
@@ -810,6 +850,18 @@ check_json_meaningful_evidence_string() {
     record_satisfied "$label: $dotted_key is owner evidence"
   else
     record_missing "$label placeholder or missing evidence field: $dotted_key in $path"
+  fi
+}
+
+check_json_reports_archive_uri() {
+  local label="$1"
+  local path="$2"
+  local dotted_key="$3"
+
+  if json_reports_archive_uri "$path" "$dotted_key"; then
+    record_satisfied "$label: $dotted_key points to a durable release evidence archive"
+  else
+    record_missing "$label invalid archive URI: $dotted_key must point to a durable release evidence archive in $path"
   fi
 }
 
@@ -1192,7 +1244,7 @@ check_release_evidence() {
       check_json_meaningful_evidence_string "plugin-trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.$field"
     done
     for artifact in marketplace_review malware_scan os_sandbox egress_enforcement signed_publisher_policy manual_trust_review; do
-      check_json_meaningful_evidence_string "plugin-trust QA report" "$PLUGIN_QA_REPORT" "evidence_artifacts.$artifact.uri"
+      check_json_reports_archive_uri "plugin-trust QA report" "$PLUGIN_QA_REPORT" "evidence_artifacts.$artifact.uri"
       check_json_sha256 "plugin-trust QA report" "$PLUGIN_QA_REPORT" "evidence_artifacts.$artifact.sha256"
     done
     check_json_utc_timestamp "plugin-trust QA report" "$PLUGIN_QA_REPORT" "generated_at"
@@ -1745,6 +1797,56 @@ PY
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected invalid plugin-trust artifact binding to fail"
+  fi
+
+  python3 - "$tmp_dir/plugin.json" "$tmp_dir/temp-plugin-artifact-uri.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+with open(source, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["evidence_artifacts"]["manual_trust_review"]["uri"] = "file:///tmp/jarvis/plugin-trust/manual-review.json"
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+PY
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/temp-plugin-artifact-uri.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+    "$0" --assert-complete >"$tmp_dir/temp-plugin-artifact.err" 2>&1; then
+    fail "release evidence doctor self-test expected temporary plugin-trust artifact URI to fail"
+  fi
+  if ! grep -q "durable release evidence archive" "$tmp_dir/temp-plugin-artifact.err"; then
+    fail "release evidence doctor self-test expected temporary plugin artifact URI error to mention durable release evidence archive"
+  fi
+
+  python3 - "$tmp_dir/plugin.json" "$tmp_dir/bare-plugin-artifact-uri.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+with open(source, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["evidence_artifacts"]["manual_trust_review"]["uri"] = "jarvis/plugin-trust/manual-review.json"
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+PY
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/bare-plugin-artifact-uri.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+    "$0" --assert-complete >"$tmp_dir/bare-plugin-artifact.err" 2>&1; then
+    fail "release evidence doctor self-test expected bare plugin-trust artifact URI to fail"
+  fi
+  if ! grep -q "durable release evidence archive" "$tmp_dir/bare-plugin-artifact.err"; then
+    fail "release evidence doctor self-test expected bare plugin artifact URI error to mention durable release evidence archive"
   fi
 
   printf 'jarvis 0.0.0\n' >"$tmp_dir/dist/Jarvis.app/Contents/Resources/bin/jarvis-cli.version"

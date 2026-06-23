@@ -1708,7 +1708,15 @@ fn release_evidence_status_rejects_invalid_plugin_artifact_bindings() {
     let plugin_report_path = temp_dir.path().join("release-plugin-trust-qa-report.json");
 
     for artifact in plugin_trust_artifact_keys() {
-        for (field, invalid_value) in [("uri", json!("   ")), ("sha256", json!("not-a-sha"))] {
+        for (field, invalid_value) in [
+            ("uri", json!("   ")),
+            ("uri", json!("jarvis/plugin-trust/artifact.json")),
+            (
+                "uri",
+                json!("file:///tmp/jarvis/plugin-trust/artifact.json"),
+            ),
+            ("sha256", json!("not-a-sha")),
+        ] {
             let mut plugin_report = valid_plugin_trust_qa_report();
             plugin_report["evidence_artifacts"][artifact][field] = invalid_value;
             write_json_report(&plugin_report_path, plugin_report);
@@ -1735,6 +1743,15 @@ fn release_evidence_status_rejects_invalid_plugin_artifact_bindings() {
                     .contains(&detail_fragment),
                 "{detail_fragment}: {plugin_item}"
             );
+            if field == "uri" {
+                let detail = plugin_item["detail"].as_str().expect("plugin detail");
+                assert!(
+                    detail.contains("durable release evidence archive")
+                        || detail.contains("URI with a scheme")
+                        || detail.contains("missing required fields"),
+                    "{detail_fragment}: {plugin_item}"
+                );
+            }
         }
     }
 }

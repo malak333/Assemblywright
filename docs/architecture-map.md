@@ -524,6 +524,10 @@ artifact URI/SHA-256 bindings. The report now carries `schema_version: 1`,
 `review_source: owner-asserted-manual-review` for operator evidence, and the
 evidence doctor/status validators reject wrong-version, self-test,
 misidentified, or non-owner-source plugin-trust report shapes.
+Bundle, doctor, and evidence-status revalidation also reject plugin-trust reports
+whose per-category artifact URI bindings are bare paths or temporary locations,
+so downstream evidence consumers preserve the durable archive rule even if a
+report is modified after `--assert-complete`.
 CLI E2E now runs `release-plugin-trust-qa.sh --assert-complete` with
 owner-recorded archive URI/SHA-256 evidence fields, rebinds the generated
 report digest into the final release-evidence bundle fixture, and verifies
@@ -915,8 +919,8 @@ The
 historical 2026-06-12 UTC baseline after PR #268 started from `main` at
 `8cccb5b`, with the hosted `Release local gate` green for PR #268 run
 `27428860335` / job `81073692261`. The latest verified main baseline at
-`main` commit `8d61ad7` has hosted `Release local gate` success for push run
-`27849385053` / job `82425294145` and continues to report `production_ready: false`,
+`main` commit `7f7b543` has hosted `Release local gate` success for push run
+`28037502202` / job `82994684590` and continues to report `production_ready: false`,
 `evidence_mode_enabled: false`, `verified_feature_count: 16`, and `pending_feature_count: 1`, with
 `live_voice_loop` still `pending_manual_validation`, while the local repo-owned
 release handoff, workflow hygiene, docs drift smoke, evidence-note validation,

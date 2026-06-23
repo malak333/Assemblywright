@@ -8,9 +8,9 @@ checked-in code, PRs, and command output as proof.
 
 The follow-on refresh through PR #278 kept this note historical for the
 original post-PR #259 sweep while recording the then-current conservative
-baseline from `main` at `57ae832`. The later follow-on refresh through PR #320
+baseline from `main` at `57ae832`. The later follow-on refresh through PR #324
 is also historical and records the current conservative baseline from `main` at
-`8d61ad7`.
+`7f7b543`.
 
 ## Live Readiness Snapshot
 
@@ -84,11 +84,11 @@ Follow-on PRs merged after the original sweep snapshot:
   endpoint handoff.
 - PR #278 clarified historical readiness counts in the knowledge base.
 
-## Follow-On Refresh Through PR #320
+## Follow-On Refresh Through PR #324
 
-Observed on 2026-06-23 UTC from `main` at `8d61ad7` after PR #320, with hosted
-GitHub `Release local gate` success for push run `27849385053` / job
-`82425294145`:
+Observed on 2026-06-23 UTC from `main` at `7f7b543` after PR #324, with hosted
+GitHub `Release local gate` success for push run `28037502202` / job
+`82994684590`:
 
 - `production_ready: false`
 - `evidence_mode_enabled: false`
@@ -102,11 +102,12 @@ GitHub `Release local gate` success for push run `27849385053` / job
 
 The same six external/manual evidence items remain missing: signed app zip,
 signed installer package, signed-distribution provenance report, live-device QA
-report, plugin-trust QA report, and final release evidence bundle. PR #320
-hardened the repository-owned live-device evidence contract by proving missing
-required live voice, command-observation, audio-output-device, and notification
-observation fields keep `/release/evidence-status` invalid and external-mode
-readiness fail closed. It did not change the production-ready boundary.
+report, plugin-trust QA report, and final release evidence bundle. PRs #320-#324
+hardened the repository-owned live-device and final evidence-bundle contracts,
+including missing live voice/command-observation/audio-output/notification
+evidence checks, final-bundle output path collision guards, final evidence
+bundle runbook handoff, and hosted main-gate validation. They did not change the
+production-ready boundary.
 
 ## Merged PR State
 
