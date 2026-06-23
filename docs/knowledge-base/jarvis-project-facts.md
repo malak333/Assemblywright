@@ -395,7 +395,10 @@ These notes capture durable facts for future agents working on this repository.
   validation timestamp, denied undeclared-host fixture note, and declared-host
   allow fixture note. Each plugin-trust category also requires an archived
   manual evidence artifact URI and SHA-256 digest before evidence-status or the
-  final bundle gate can accept the report. The review timestamps must be UTC `Z` values, the
+  final bundle gate can accept the report. CLI E2E now runs
+  `release-plugin-trust-qa.sh --assert-complete` with owner-recorded archive
+  URI/SHA-256 evidence fields and verifies the generated plugin-trust QA report
+  is accepted by `jarvis release evidence-status`. The review timestamps must be UTC `Z` values, the
   completed timestamp must be greater than or equal to the started timestamp,
   and the completed timestamp must not be later than report generation.
   Artifact URIs in the shell assertion path must include a URI scheme and

@@ -157,6 +157,7 @@ Focused regression checks for that release evidence boundary:
 cargo test -p jarvis-core live_device_qa_report -- --nocapture
 cargo test -p jarvis-cli --test local_ipc_e2e release_readiness_rejects_semantically_invalid_live_voice_evidence -- --nocapture
 cargo test -p jarvis-cli --test local_ipc_e2e release_readiness_rejects_missing_live_voice_evidence_fields -- --nocapture
+cargo test -p jarvis-cli --test local_ipc_e2e release_plugin_trust_qa_assertion_report_is_accepted_by_evidence_status -- --nocapture
 cargo test -p jarvis-cli --test local_ipc_e2e release_help_surfaces_current_evidence_boundaries -- --nocapture
 ```
 
@@ -497,6 +498,9 @@ evidence must come from `--assert-complete` after the owner validates every
 plus the matching archived artifact URI and SHA-256 digest for each plugin-trust
 category. The assertion path rejects artifact URIs that lack a URI scheme and
 location or point at placeholder, self-test, fixture, or temporary paths.
+CLI E2E now runs `release-plugin-trust-qa.sh --assert-complete` with
+owner-recorded archive URI/SHA-256 evidence fields and verifies the generated
+plugin-trust QA report is accepted by `jarvis release evidence-status`.
 The generated report carries `schema_version: 1` and
 `evidence_type: owner_recorded_plugin_trust_qa` plus the current release
 `version`; final operator evidence must also keep `self_test_fixture=false` and
