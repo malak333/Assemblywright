@@ -8,6 +8,8 @@ APP_PATH="${JARVIS_QA_INSTALLED_APP_PATH:-/Applications/Jarvis.app}"
 REPORT_PATH="${JARVIS_QA_REPORT_PATH:-$ROOT_DIR/target/release-live-device-qa-report.json}"
 EXPECTED_BUNDLE_ID="${JARVIS_QA_EXPECTED_BUNDLE_ID:-com.nobiletechnology.jarvis}"
 EXPECTED_VERSION="${JARVIS_QA_EXPECTED_VERSION:-$("$ROOT_DIR/scripts/release-version.sh")}"
+EXPECTED_MICROPHONE_USAGE_DESCRIPTION="Jarvis uses microphone input only when you explicitly start local voice capture."
+EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION="Jarvis uses speech recognition only to turn your spoken command into a local assistant request."
 CHECK_ONLY=false
 ASSERT_COMPLETE=false
 SELF_TEST=false
@@ -282,6 +284,15 @@ require_plist_value() {
   [[ -n "$value" ]] || fail "installed app Info.plist is missing $label"
 }
 
+require_plist_value_equals() {
+  local label="$1"
+  local value="$2"
+  local expected="$3"
+  require_plist_value "$label" "$value"
+  [[ "$value" == "$expected" ]] ||
+    fail "installed app Info.plist $label mismatch: expected '$expected', got '$value'"
+}
+
 validate_installed_app_bundle_metadata() {
   local info_plist="$APP_PATH/Contents/Info.plist"
   local core_path="$APP_PATH/Contents/Resources/bin/jarvis-cli"
@@ -296,8 +307,8 @@ validate_installed_app_bundle_metadata() {
   require_plist_value "CFBundleIdentifier" "$APP_BUNDLE_ID"
   require_plist_value "CFBundleShortVersionString" "$APP_SHORT_VERSION"
   require_plist_value "CFBundleVersion" "$APP_BUILD_VERSION"
-  require_plist_value "NSMicrophoneUsageDescription" "$APP_MICROPHONE_USAGE"
-  require_plist_value "NSSpeechRecognitionUsageDescription" "$APP_SPEECH_USAGE"
+  require_plist_value_equals "NSMicrophoneUsageDescription" "$APP_MICROPHONE_USAGE" "$EXPECTED_MICROPHONE_USAGE_DESCRIPTION"
+  require_plist_value_equals "NSSpeechRecognitionUsageDescription" "$APP_SPEECH_USAGE" "$EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION"
   [[ -x "$core_path" ]] || fail "installed app bundled core is missing or not executable: $core_path"
 
   [[ "$APP_BUNDLE_ID" == "$EXPECTED_BUNDLE_ID" ]] ||
@@ -602,6 +613,8 @@ INFO_TEMPLATE_HINT="$ROOT_DIR/scripts/package-distribution.sh"
 plutil -lint "$ENTITLEMENTS" >/dev/null
 require_file_contains "distribution packaging script" "$INFO_TEMPLATE_HINT" "NSMicrophoneUsageDescription"
 require_file_contains "distribution packaging script" "$INFO_TEMPLATE_HINT" "NSSpeechRecognitionUsageDescription"
+require_file_contains "distribution packaging script" "$INFO_TEMPLATE_HINT" "$EXPECTED_MICROPHONE_USAGE_DESCRIPTION"
+require_file_contains "distribution packaging script" "$INFO_TEMPLATE_HINT" "$EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION"
 require_file_contains "release checklist" "$ROOT_DIR/docs/release-checklist.md" "live microphone/Speech"
 require_file_contains "release checklist" "$ROOT_DIR/docs/release-checklist.md" "live audio-output"
 
@@ -634,9 +647,9 @@ if [[ "$SELF_TEST" == true ]]; then
   <key>CFBundleVersion</key>
   <string>$EXPECTED_VERSION</string>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Jarvis uses microphone input only when you explicitly start local voice capture.</string>
+  <string>$EXPECTED_MICROPHONE_USAGE_DESCRIPTION</string>
   <key>NSSpeechRecognitionUsageDescription</key>
-  <string>Jarvis uses speech recognition only to turn your spoken command into a local assistant request.</string>
+  <string>$EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION</string>
 </dict>
 </plist>
 PLIST
@@ -720,6 +733,8 @@ PLIST
   require_file_contains "live QA self-test report" "$fixture_report" '"self_test_fixture": true'
   require_file_contains "live QA self-test report" "$fixture_report" '"bundle_identifier": "com.nobiletechnology.jarvis.selftest"'
   require_file_contains "live QA self-test report" "$fixture_report" '"microphone_usage_description"'
+  require_file_contains "live QA self-test report" "$fixture_report" "$EXPECTED_MICROPHONE_USAGE_DESCRIPTION"
+  require_file_contains "live QA self-test report" "$fixture_report" "$EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION"
   require_file_contains "live QA self-test report" "$fixture_report" '"bundled_core"'
   require_file_contains "live QA self-test report" "$fixture_report" '"executable_path"'
   require_file_contains "live QA self-test report" "$fixture_report" "\"version\": \"jarvis $EXPECTED_VERSION\""
@@ -788,6 +803,38 @@ PLIST
       "$@" \
       "$0" --assert-complete
   }
+
+  set_fixture_plist_value() {
+    local key="$1"
+    local value="$2"
+    python3 - "$fixture_app/Contents/Info.plist" "$key" "$value" <<'PY'
+import plistlib
+import sys
+
+path, key, value = sys.argv[1:4]
+with open(path, "rb") as handle:
+    data = plistlib.load(handle)
+data[key] = value
+with open(path, "wb") as handle:
+    plistlib.dump(data, handle)
+PY
+  }
+
+  set_fixture_plist_value NSMicrophoneUsageDescription "Jarvis microphone fixture"
+  if run_fixture_assertion "$tmp_dir/mismatched-microphone-usage.json" >/dev/null 2>"$tmp_dir/mismatched-microphone-usage.err"; then
+    fail "live QA self-test expected mismatched microphone usage description to fail"
+  fi
+  require_file_contains "live QA self-test mismatched microphone usage error" \
+    "$tmp_dir/mismatched-microphone-usage.err" "NSMicrophoneUsageDescription mismatch"
+  set_fixture_plist_value NSMicrophoneUsageDescription "$EXPECTED_MICROPHONE_USAGE_DESCRIPTION"
+
+  set_fixture_plist_value NSSpeechRecognitionUsageDescription "Jarvis speech fixture"
+  if run_fixture_assertion "$tmp_dir/mismatched-speech-usage.json" >/dev/null 2>"$tmp_dir/mismatched-speech-usage.err"; then
+    fail "live QA self-test expected mismatched Speech usage description to fail"
+  fi
+  require_file_contains "live QA self-test mismatched Speech usage error" \
+    "$tmp_dir/mismatched-speech-usage.err" "NSSpeechRecognitionUsageDescription mismatch"
+  set_fixture_plist_value NSSpeechRecognitionUsageDescription "$EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION"
 
   if run_fixture_assertion "$tmp_dir/placeholder-live-voice-evidence.json" \
     JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="TODO before release" >/dev/null 2>"$tmp_dir/placeholder-live-voice-evidence.err"; then

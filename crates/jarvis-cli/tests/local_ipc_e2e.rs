@@ -1150,6 +1150,13 @@ fn release_readiness_rejects_semantically_invalid_live_voice_evidence() {
     fn wrong_version(report: &mut Value) {
         report["app_bundle"]["short_version"] = json!("9.9.9");
     }
+    fn mismatched_microphone_privacy_prompt(report: &mut Value) {
+        report["app_bundle"]["microphone_usage_description"] = json!("Jarvis microphone fixture");
+    }
+    fn mismatched_speech_privacy_prompt(report: &mut Value) {
+        report["app_bundle"]["speech_recognition_usage_description"] =
+            json!("Jarvis speech fixture");
+    }
     fn bad_started_timestamp(report: &mut Value) {
         report["owner_recorded_live_voice_evidence"]["voice_check_started_at"] =
             json!("not-a-timestamp");
@@ -1223,6 +1230,16 @@ fn release_readiness_rejects_semantically_invalid_live_voice_evidence() {
             "wrong version",
             wrong_version as fn(&mut Value),
             "app_bundle.short_version",
+        ),
+        (
+            "mismatched microphone privacy prompt",
+            mismatched_microphone_privacy_prompt as fn(&mut Value),
+            "app_bundle.microphone_usage_description",
+        ),
+        (
+            "mismatched speech privacy prompt",
+            mismatched_speech_privacy_prompt as fn(&mut Value),
+            "app_bundle.speech_recognition_usage_description",
         ),
         (
             "bad started timestamp",

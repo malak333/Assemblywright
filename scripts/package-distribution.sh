@@ -11,6 +11,8 @@ BUNDLE_ID="${JARVIS_BUNDLE_ID:-com.nobiletechnology.jarvis}"
 APP_NAME="Jarvis"
 APP_EXECUTABLE_NAME="JarvisMacApp"
 CORE_EXECUTABLE_NAME="jarvis-cli"
+EXPECTED_MICROPHONE_USAGE_DESCRIPTION="Jarvis uses microphone input only when you explicitly start local voice capture."
+EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION="Jarvis uses speech recognition only to turn your spoken command into a local assistant request."
 ENTITLEMENTS="$ROOT_DIR/packaging/Jarvis.entitlements"
 CORE_ENTITLEMENTS="$ROOT_DIR/packaging/JarvisCore.entitlements"
 DIST_DIR="${JARVIS_DISTRIBUTION_DIR:-$ROOT_DIR/target/distribution}"
@@ -112,11 +114,12 @@ PY
 
 validate_app_zip_payload() {
   local zip_path="$1"
-  python3 - "$zip_path" <<'PY'
+  python3 - "$zip_path" "$EXPECTED_MICROPHONE_USAGE_DESCRIPTION" "$EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION" <<'PY'
+import plistlib
 import sys
 import zipfile
 
-zip_path = sys.argv[1]
+zip_path, expected_microphone, expected_speech = sys.argv[1:4]
 required_entries = (
     "Jarvis.app/Contents/MacOS/JarvisMacApp",
     "Jarvis.app/Contents/Resources/bin/jarvis-cli",
@@ -146,6 +149,23 @@ app_roots = {
 if app_roots != {"Jarvis.app/"}:
     raise SystemExit(
         f"zip payload must contain exactly one top-level Jarvis.app root, got: {', '.join(sorted(app_roots))}"
+    )
+
+with zipfile.ZipFile(zip_path) as archive:
+    info_plist = plistlib.loads(archive.read("Jarvis.app/Contents/Info.plist"))
+
+actual_microphone = info_plist.get("NSMicrophoneUsageDescription")
+if actual_microphone != expected_microphone:
+    raise SystemExit(
+        "zip payload Info.plist NSMicrophoneUsageDescription mismatch: "
+        f"expected {expected_microphone!r}, got {actual_microphone!r}"
+    )
+
+actual_speech = info_plist.get("NSSpeechRecognitionUsageDescription")
+if actual_speech != expected_speech:
+    raise SystemExit(
+        "zip payload Info.plist NSSpeechRecognitionUsageDescription mismatch: "
+        f"expected {expected_speech!r}, got {actual_speech!r}"
     )
 PY
 }
@@ -616,6 +636,10 @@ SH
   <string>$VERSION</string>
   <key>CFBundleVersion</key>
   <string>$VERSION</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>$EXPECTED_MICROPHONE_USAGE_DESCRIPTION</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>$EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION</string>
 </dict>
 </plist>
 PLIST
@@ -756,6 +780,42 @@ with zipfile.ZipFile(zip_path, "w") as archive:
             archive.write(path, pathlib.Path("Jarvis.app") / path.relative_to(app_path))
 PY
 
+  python3 - "$ZIP_PATH" <<'PY'
+import plistlib
+import pathlib
+import sys
+import zipfile
+
+zip_path = pathlib.Path(sys.argv[1])
+with zipfile.ZipFile(zip_path) as source:
+    entries = {name: source.read(name) for name in source.namelist()}
+info = plistlib.loads(entries["Jarvis.app/Contents/Info.plist"])
+info["NSMicrophoneUsageDescription"] = "Jarvis microphone fixture"
+entries["Jarvis.app/Contents/Info.plist"] = plistlib.dumps(info)
+with zipfile.ZipFile(zip_path, "w") as archive:
+    for name, data in entries.items():
+        archive.writestr(name, data)
+PY
+  output="$(PATH="$stub_dir:$PATH" \
+    JARVIS_PACKAGE_STUB_VERSION="$VERSION" \
+    JARVIS_DEVELOPER_ID_APPLICATION="Developer ID Application: Jarvis QA Fixture" \
+    JARVIS_DEVELOPER_ID_INSTALLER="Developer ID Installer: Jarvis QA Fixture" \
+    write_signed_distribution_provenance 2>&1 || true)"
+  require_output_contains "signed provenance privacy prompt self-test" "$output" "NSMicrophoneUsageDescription mismatch"
+
+  python3 - "$APP_PATH" "$ZIP_PATH" <<'PY'
+import pathlib
+import sys
+import zipfile
+
+app_path = pathlib.Path(sys.argv[1])
+zip_path = pathlib.Path(sys.argv[2])
+with zipfile.ZipFile(zip_path, "w") as archive:
+    for path in sorted(app_path.rglob("*")):
+        if path.is_file():
+            archive.write(path, pathlib.Path("Jarvis.app") / path.relative_to(app_path))
+PY
+
   cat >"$ZIP_NOTARY_LOG" <<'LOG'
 id: not-a-submission-id
 status: Accepted
@@ -835,9 +895,9 @@ build_app_bundle() {
   <key>NSHighResolutionCapable</key>
   <true/>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Jarvis uses microphone input only when you explicitly start local voice capture.</string>
+  <string>$EXPECTED_MICROPHONE_USAGE_DESCRIPTION</string>
   <key>NSSpeechRecognitionUsageDescription</key>
-  <string>Jarvis uses speech recognition only to turn your spoken command into a local assistant request.</string>
+  <string>$EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION</string>
 </dict>
 </plist>
 PLIST
@@ -850,6 +910,8 @@ PLIST
   require_output_contains "Info.plist" "$INFO_PLIST_CONTENTS" "<string>APPL</string>"
   require_output_contains "Info.plist" "$INFO_PLIST_CONTENTS" "NSMicrophoneUsageDescription"
   require_output_contains "Info.plist" "$INFO_PLIST_CONTENTS" "NSSpeechRecognitionUsageDescription"
+  require_output_contains "Info.plist" "$INFO_PLIST_CONTENTS" "<string>$EXPECTED_MICROPHONE_USAGE_DESCRIPTION</string>"
+  require_output_contains "Info.plist" "$INFO_PLIST_CONTENTS" "<string>$EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION</string>"
 }
 
 validate_package_metadata() {

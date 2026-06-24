@@ -49,6 +49,10 @@ pub const MAX_SCHEDULER_BACKGROUND_LIMIT: usize = 64;
 pub const DEFAULT_ACTIVITY_EVENT_INTERVAL_MS: u64 = 1_000;
 pub const DEFAULT_ACTIVITY_EVENT_LIMIT: usize = 3;
 pub const MAX_ACTIVITY_EVENT_LIMIT: usize = 50;
+const EXPECTED_MICROPHONE_USAGE_DESCRIPTION: &str =
+    "Jarvis uses microphone input only when you explicitly start local voice capture.";
+const EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION: &str =
+    "Jarvis uses speech recognition only to turn your spoken command into a local assistant request.";
 const LIVE_DEVICE_QA_REQUIRED_FIELDS: &[&str] = &[
     "schema_version",
     "evidence_type",
@@ -5360,8 +5364,6 @@ fn validate_live_device_qa_report(
         "owner_recorded_live_voice_evidence.owner_name",
         "owner_recorded_live_voice_evidence.device_label",
         "owner_recorded_live_voice_evidence.profile_label",
-        "app_bundle.microphone_usage_description",
-        "app_bundle.speech_recognition_usage_description",
         "voice_command_observation.test_phrase",
         "voice_command_observation.observed_transcript",
         "voice_command_observation.expected_command_text",
@@ -5373,6 +5375,16 @@ fn validate_live_device_qa_report(
     ] {
         require_json_nonempty_string_value(value, field)?;
     }
+    require_json_string_value(
+        value,
+        "app_bundle.microphone_usage_description",
+        EXPECTED_MICROPHONE_USAGE_DESCRIPTION,
+    )?;
+    require_json_string_value(
+        value,
+        "app_bundle.speech_recognition_usage_description",
+        EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION,
+    )?;
     require_json_string_value(
         value,
         "notification_observation.thread_identifier",
@@ -7641,8 +7653,8 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 "bundle_identifier": "com.nobiletechnology.jarvis",
                 "short_version": "0.1.4",
                 "build_version": "0.1.4",
-                "microphone_usage_description": "fixture",
-                "speech_recognition_usage_description": "fixture"
+                "microphone_usage_description": EXPECTED_MICROPHONE_USAGE_DESCRIPTION,
+                "speech_recognition_usage_description": EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION
             },
             "bundled_core": {
                 "executable_path": "/Applications/Jarvis.app/Contents/Resources/bin/jarvis-cli",
@@ -8018,6 +8030,29 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 detail.contains("must be true") || detail.contains("missing required fields"),
                 "{field}: {detail}"
             );
+        }
+    }
+
+    #[test]
+    fn live_device_qa_report_rejects_mismatched_privacy_prompt_descriptions() {
+        for (field, path, value) in [
+            (
+                "app_bundle.microphone_usage_description",
+                ["app_bundle", "microphone_usage_description"],
+                "Jarvis microphone fixture",
+            ),
+            (
+                "app_bundle.speech_recognition_usage_description",
+                ["app_bundle", "speech_recognition_usage_description"],
+                "Jarvis speech fixture",
+            ),
+        ] {
+            let mut report = valid_live_device_qa_report_json();
+            report[path[0]][path[1]] = json!(value);
+            let (status, detail) = inspect_live_device_qa_report_value(report);
+            assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
+            assert!(detail.contains(field), "{field}: {detail}");
+            assert!(detail.contains("mismatch"), "{field}: {detail}");
         }
     }
 

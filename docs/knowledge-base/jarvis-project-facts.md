@@ -161,6 +161,9 @@ These notes capture durable facts for future agents working on this repository.
   `jarvis.scheduler`, plus non-voice owner notes for clean-profile, Finder
   launch, notification, restart, and manual QA with an ordered UTC notification
   timestamp. The
+  app usage descriptions must match the approved `Info.plist` copy exactly:
+  `NSMicrophoneUsageDescription` is `Jarvis uses microphone input only when you explicitly start local voice capture.`, and
+  `NSSpeechRecognitionUsageDescription` is `Jarvis uses speech recognition only to turn your spoken command into a local assistant request.`. The
   `release-live-device-qa.sh --assert-complete` path rejects whitespace-only
   and placeholder owner evidence-note values such as `TODO`, `pending`, `n/a`,
   `fixture`, and `self-test fixture`; `/release/evidence-status` enforces the
@@ -1198,9 +1201,9 @@ requires plugin-trust `generated_at`, `review_started_at`,
   artifacts. Current release claims should refresh this baseline with
   `cargo run -p jarvis-cli -- release readiness --json` and
   `gh run list --branch main --workflow "Jarvis Release Local Gate" --limit 3`.
-  The latest verified main baseline at `7f7b543` has hosted GitHub
-  `Release local gate` success for push run `28037502202` / job
-  `82994684590` and remains conservative with `production_ready: false`,
+  The latest verified main baseline at `051ec49` has hosted GitHub
+  `Release local gate` success for push run `28041417362` / job
+  `83008348690` and remains conservative with `production_ready: false`,
   `evidence_mode_enabled: false`, `verified_feature_count: 16`, `pending_feature_count: 1`, and
   `live_voice_loop` as the pending manual feature; `/release/evidence-status`
   reports `complete: false`, three satisfied evidence rows, six missing rows,
