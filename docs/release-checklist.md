@@ -700,6 +700,9 @@ Clean-profile and manual production gates not proven by this local smoke:
   identity, and proof boundary, then preserve the
   `target/release-live-device-qa-report.json`
   artifact, or the `JARVIS_QA_REPORT_PATH` override, with the release notes.
+  The installed app metadata must match the approved `Info.plist` copy exactly:
+  `NSMicrophoneUsageDescription` is `Jarvis uses microphone input only when you explicitly start local voice capture.`, and
+  `NSSpeechRecognitionUsageDescription` is `Jarvis uses speech recognition only to turn your spoken command into a local assistant request.`.
   Preserve `notification_observation` fields for kind, title, body, thread
   identifier, and timestamp in the same report; the assertion path rejects
   blank title/body values, unsupported kinds, non-`jarvis.scheduler` threads,

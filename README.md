@@ -373,6 +373,9 @@ microphone/Speech permission prompt evidence, spoken transcript handoff into
 the command path, speech-output playback evidence, owner-recorded live voice
 and non-voice evidence notes, bundled-core path/version/digest evidence, structured command
 observation, and the proof boundary. The
+installed app metadata must match the approved `Info.plist` copy exactly:
+`NSMicrophoneUsageDescription` is `Jarvis uses microphone input only when you explicitly start local voice capture.`, and
+`NSSpeechRecognitionUsageDescription` is `Jarvis uses speech recognition only to turn your spoken command into a local assistant request.`. The
 local release gate also runs `./scripts/release-live-device-qa.sh --self-test`
 against a fake app fixture to prove the assertion/report mechanics without
 claiming real device validation.

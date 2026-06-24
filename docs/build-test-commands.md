@@ -911,6 +911,9 @@ validation flags, voice-loop evidence fields, owner/device/profile/timestamp
 and live voice/non-voice evidence-note fields, structured command observation
 including `audio_output_device_label`, structured notification observation,
 schema identity, and the proof boundary.
+The installed app metadata must match the approved `Info.plist` copy exactly:
+`NSMicrophoneUsageDescription` is `Jarvis uses microphone input only when you explicitly start local voice capture.`, and
+`NSSpeechRecognitionUsageDescription` is `Jarvis uses speech recognition only to turn your spoken command into a local assistant request.`.
 After generating it, run `cargo run -p jarvis-cli -- release evidence-status`
 and `cargo run -p jarvis-cli -- release readiness` against a core started or
 restarted with `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external`

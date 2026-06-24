@@ -18,6 +18,8 @@ VALIDATE_LOCAL_SIGNATURES="${JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES:-true}"
 EXPECTED_BUNDLE_ID="${JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID:-com.nobiletechnology.jarvis}"
 EXPECTED_VERSION="${JARVIS_EVIDENCE_EXPECTED_VERSION:-$VERSION}"
 EXPECTED_INSTALLED_APP_PATH="${JARVIS_QA_INSTALLED_APP_PATH:-/Applications/Jarvis.app}"
+EXPECTED_MICROPHONE_USAGE_DESCRIPTION="Jarvis uses microphone input only when you explicitly start local voice capture."
+EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION="Jarvis uses speech recognition only to turn your spoken command into a local assistant request."
 CHECK_ONLY=false
 BUNDLE=false
 SELF_TEST=false
@@ -1372,8 +1374,8 @@ LOG
     "bundle_identifier": "com.nobiletechnology.jarvis",
     "short_version": "$VERSION",
     "build_version": "$VERSION",
-    "microphone_usage_description": "self-test fixture",
-    "speech_recognition_usage_description": "self-test fixture"
+    "microphone_usage_description": "$EXPECTED_MICROPHONE_USAGE_DESCRIPTION",
+    "speech_recognition_usage_description": "$EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION"
   },
   "bundled_core": {
     "executable_path": "/Applications/Jarvis.app/Contents/Resources/bin/jarvis-cli",
@@ -2770,8 +2772,8 @@ require_json_command_result_evidence_id "live-device QA report" "$LIVE_QA_REPORT
 require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.bundle_identifier" "$EXPECTED_BUNDLE_ID"
 require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.short_version" "$EXPECTED_VERSION"
 require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.build_version" "$EXPECTED_VERSION"
-require_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.microphone_usage_description"
-require_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.speech_recognition_usage_description"
+require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.microphone_usage_description" "$EXPECTED_MICROPHONE_USAGE_DESCRIPTION"
+require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.speech_recognition_usage_description" "$EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION"
 require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "bundled_core.executable_path" "$EXPECTED_INSTALLED_APP_PATH/Contents/Resources/bin/jarvis-cli"
 require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "bundled_core.version" "jarvis $EXPECTED_VERSION"
 require_json_sha256 "live-device QA report" "$LIVE_QA_REPORT" "bundled_core.sha256"

@@ -504,7 +504,10 @@ live-device QA runbook executable in the default gate;
 writes a JSON evidence report with installed-app metadata, voice-loop evidence
 fields, owner/device/profile/timestamp/evidence notes, structured
 spoken-command observation fields, validation flags, schema identity, and proof
-boundary, not an automated proof. Owner-recorded evidence-note fields must contain
+boundary, not an automated proof. The installed app metadata must match the
+approved `Info.plist` privacy copy exactly:
+`NSMicrophoneUsageDescription` is `Jarvis uses microphone input only when you explicitly start local voice capture.`, and
+`NSSpeechRecognitionUsageDescription` is `Jarvis uses speech recognition only to turn your spoken command into a local assistant request.`. Owner-recorded evidence-note fields must contain
 non-placeholder text, not values such as `TODO`, `pending`, `n/a`, `fixture`, or
 `self-test fixture`, and self-test fixture identity is reserved for the script's
 internal fake-fixture self-test. The `--assert-complete` path rejects those
@@ -919,8 +922,8 @@ The
 historical 2026-06-12 UTC baseline after PR #268 started from `main` at
 `8cccb5b`, with the hosted `Release local gate` green for PR #268 run
 `27428860335` / job `81073692261`. The latest verified main baseline at
-`main` commit `7f7b543` has hosted `Release local gate` success for push run
-`28037502202` / job `82994684590` and continues to report `production_ready: false`,
+`main` commit `051ec49` has hosted `Release local gate` success for push run
+`28041417362` / job `83008348690` and continues to report `production_ready: false`,
 `evidence_mode_enabled: false`, `verified_feature_count: 16`, and `pending_feature_count: 1`, with
 `live_voice_loop` still `pending_manual_validation`, while the local repo-owned
 release handoff, workflow hygiene, docs drift smoke, evidence-note validation,
