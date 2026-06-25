@@ -249,6 +249,14 @@ failures now stay inside
 the command contract: the runtime marks the task failed, appends
 `model_step_failed` with redacted provider diagnostics, and returns route
 evidence instead of letting IPC translate the failure into a transport error.
+The macOS Model tab labels the approved ChatGPT/OpenAI-compatible cloud route
+as `Codex`. That selection is still the same guarded cloud-provider boundary:
+the app-supervised core is restarted with local model execution disabled,
+`JARVIS_CHATGPT_ENABLED=true`, the selected OpenAI-compatible model/base URL,
+`JARVIS_CHATGPT_REQUIRES_APPROVAL=true`, and a Keychain-injected OpenAI API key.
+The core `/health` payload reports cloud-provider enabled/model/approval state
+so Swift can display the active `codex` provider without relying on pending form
+state.
 `package-distribution.sh` now writes a signed-distribution provenance report
 during the full Developer ID lane after app/pkg signing, notarization, stapling,
 Gatekeeper assessment, exact notary `Accepted` status capture, notary log

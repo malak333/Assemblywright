@@ -145,7 +145,7 @@ Installed plugin list, requested permissions, enable/disable controls, logs, and
 
 ### Settings And Model Routing
 
-Local model configuration, ChatGPT configuration, default routing policy, privacy controls, voice settings, and diagnostics export.
+Local model configuration, ChatGPT configuration, Codex-labeled selection for the approved OpenAI-compatible cloud route, default routing policy, privacy controls, voice settings, and diagnostics export.
 
 ## Command Data Flow
 
@@ -216,6 +216,7 @@ The initial runtime can be first-party in-process Rust modules, subprocess plugi
 
 - Default to local models for simple commands, personal context, memory operations, home/system context, and sensitive data.
 - Use ChatGPT only through explicit policy for higher-reasoning tasks, coding help, research synthesis, complex planning, or when local models are insufficient.
+- Treat any Codex-labeled UI affordance as a label over that same approved ChatGPT/OpenAI-compatible cloud route, not as a separate unaudited provider.
 - Do not send restricted, credential-adjacent, private personal, or sensitive system data to ChatGPT without explicit approval for that task.
 - Record the model route and reason in the audit log.
 - Minimize cloud context before any ChatGPT call and redact obvious secrets.

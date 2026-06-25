@@ -1,6 +1,7 @@
 import Foundation
 
 public enum JarvisModelProviderSelection: String, CaseIterable, Identifiable, Sendable {
+    case codex
     case fake
     case ollama
 
@@ -8,6 +9,8 @@ public enum JarvisModelProviderSelection: String, CaseIterable, Identifiable, Se
 
     public var label: String {
         switch self {
+        case .codex:
+            return "Codex"
         case .fake:
             return "Fake local"
         case .ollama:
@@ -20,38 +23,61 @@ public struct JarvisModelConfiguration: Equatable, Sendable {
     public var provider: JarvisModelProviderSelection
     public var localModel: String
     public var ollamaBaseURL: String
+    public var codexModel: String
+    public var codexBaseURL: String
     public var timeoutMilliseconds: String
 
     public init(
-        provider: JarvisModelProviderSelection = .ollama,
-        localModel: String = "llama3.2",
+        provider: JarvisModelProviderSelection = .fake,
+        localModel: String = "fake-local-model",
         ollamaBaseURL: String = "http://127.0.0.1:11434",
+        codexModel: String = "gpt-4.1-mini",
+        codexBaseURL: String = "https://api.openai.com/v1",
         timeoutMilliseconds: String = "60000"
     ) {
         self.provider = provider
         self.localModel = localModel
         self.ollamaBaseURL = ollamaBaseURL
+        self.codexModel = codexModel
+        self.codexBaseURL = codexBaseURL
         self.timeoutMilliseconds = timeoutMilliseconds
     }
 
     public static func fromEnvironment(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> Self {
         let provider = JarvisModelProviderSelection(
             rawValue: environment["JARVIS_LOCAL_MODEL_PROVIDER"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        ) ?? .ollama
+        ) ?? (environment["JARVIS_CHATGPT_ENABLED"] == "true" ? .codex : .fake)
         let model = environment["JARVIS_LOCAL_MODEL"]?.trimmingCharacters(in: .whitespacesAndNewlines)
         let baseURL = environment["JARVIS_OLLAMA_BASE_URL"]?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let timeout = environment["JARVIS_LOCAL_MODEL_TIMEOUT_MS"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let codexModel = environment["JARVIS_CHATGPT_MODEL"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let codexBaseURL = (environment["JARVIS_OPENAI_BASE_URL"] ?? environment["JARVIS_CHATGPT_BASE_URL"])?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let timeout = (provider == .codex
+            ? environment["JARVIS_CHATGPT_TIMEOUT_MS"]
+            : environment["JARVIS_LOCAL_MODEL_TIMEOUT_MS"])?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
 
         return JarvisModelConfiguration(
             provider: provider,
             localModel: model?.isEmpty == false ? model! : (provider == .ollama ? "llama3.2" : "fake-local-model"),
             ollamaBaseURL: baseURL?.isEmpty == false ? baseURL! : "http://127.0.0.1:11434",
+            codexModel: codexModel?.isEmpty == false ? codexModel! : "gpt-4.1-mini",
+            codexBaseURL: codexBaseURL?.isEmpty == false ? codexBaseURL! : "https://api.openai.com/v1",
             timeoutMilliseconds: timeout?.isEmpty == false ? timeout! : "60000"
         )
     }
 
     public var launchEnvironmentOverrides: [String: String] {
         switch provider {
+        case .codex:
+            return [
+                "JARVIS_LOCAL_MODEL_ENABLED": "false",
+                "JARVIS_CHATGPT_ENABLED": "true",
+                "JARVIS_CHATGPT_MODEL": sanitizedCodexModel,
+                "JARVIS_OPENAI_BASE_URL": sanitizedCodexBaseURL,
+                "JARVIS_CHATGPT_TIMEOUT_MS": sanitizedTimeoutMilliseconds,
+                "JARVIS_CHATGPT_REQUIRES_APPROVAL": "true"
+            ]
         case .fake:
             return [
                 "JARVIS_LOCAL_MODEL_ENABLED": "true",
@@ -79,6 +105,16 @@ public struct JarvisModelConfiguration: Equatable, Sendable {
     public var sanitizedOllamaBaseURL: String {
         let trimmed = ollamaBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "http://127.0.0.1:11434" : trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
+
+    public var sanitizedCodexModel: String {
+        let trimmed = codexModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "gpt-4.1-mini" : trimmed
+    }
+
+    public var sanitizedCodexBaseURL: String {
+        let trimmed = codexBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "https://api.openai.com/v1" : trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     }
 
     public var sanitizedTimeoutMilliseconds: String {
@@ -271,21 +307,29 @@ public final class ModelConfigurationModel: ObservableObject {
     @Published public private(set) var activeProvider: String?
     @Published public private(set) var activeModel: String?
     @Published public private(set) var statusMessage: String?
+    @Published public var codexAPIKeyEntry: String
+    @Published public private(set) var hasStoredCodexCredential: Bool
     @Published public private(set) var isWorking: Bool
 
     private let controller: any JarvisLocalModelRuntimeControlling
+    private let credentialStore: any JarvisCredentialStore
 
     public init(
         configuration: JarvisModelConfiguration = .fromEnvironment(),
-        controller: any JarvisLocalModelRuntimeControlling = OllamaModelRuntimeController()
+        controller: any JarvisLocalModelRuntimeControlling = OllamaModelRuntimeController(),
+        credentialStore: any JarvisCredentialStore = KeychainJarvisCredentialStore()
     ) {
         self.configuration = configuration
         self.controller = controller
+        self.credentialStore = credentialStore
         self.availableModels = []
         self.activeProvider = nil
         self.activeModel = nil
         self.statusMessage = nil
+        self.codexAPIKeyEntry = ""
+        self.hasStoredCodexCredential = false
         self.isWorking = false
+        refreshCodexCredentialState()
     }
 
     public var launchEnvironmentOverrides: [String: String] {
@@ -297,8 +341,57 @@ public final class ModelConfigurationModel: ObservableObject {
     }
 
     public func applyHealth(_ health: JarvisHealth?) {
-        activeProvider = health?.localModelProvider
-        activeModel = health?.localModel
+        if health?.chatgptEnabled == true {
+            activeProvider = "codex"
+            activeModel = health?.chatgptModel
+        } else {
+            activeProvider = health?.localModelProvider
+            activeModel = health?.localModel
+        }
+    }
+
+    public func refreshCodexCredentialState() {
+        hasStoredCodexCredential = ((try? credentialStore.readCredential(.openAIAPIKey)) ?? nil)?
+            .isEmpty == false
+    }
+
+    public func saveCodexCredential() {
+        let trimmed = codexAPIKeyEntry.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            statusMessage = "Enter a Codex API key before saving."
+            refreshCodexCredentialState()
+            return
+        }
+
+        do {
+            try credentialStore.saveCredential(trimmed, for: .openAIAPIKey)
+            codexAPIKeyEntry = ""
+            hasStoredCodexCredential = true
+            statusMessage = "Codex application credential saved to Keychain."
+        } catch {
+            statusMessage = "Codex credential save failed: \(error)"
+            refreshCodexCredentialState()
+        }
+    }
+
+    public func deleteCodexCredential() {
+        do {
+            try credentialStore.deleteCredential(.openAIAPIKey)
+            codexAPIKeyEntry = ""
+            hasStoredCodexCredential = false
+            statusMessage = "Codex application credential removed."
+        } catch {
+            statusMessage = "Codex credential removal failed: \(error)"
+            refreshCodexCredentialState()
+        }
+    }
+
+    public func saveEnteredCodexCredentialIfNeeded() {
+        guard !codexAPIKeyEntry.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            refreshCodexCredentialState()
+            return
+        }
+        saveCodexCredential()
     }
 
     public func refreshAvailableModels() async {

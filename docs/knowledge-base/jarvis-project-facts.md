@@ -635,6 +635,22 @@ requires plugin-trust `generated_at`, `review_started_at`,
   `JARVIS_LOCAL_MODEL_TIMEOUT_MS` overrides. The tab cannot reconfigure a
   separate terminal-owned `jarvis serve` process; that external core must be
   stopped before the app can relaunch a supervised core with new model settings.
+- The Swift Model tab also exposes a `Codex` provider selection as the
+  user-facing label for the existing approved ChatGPT/OpenAI-compatible cloud
+  route. Selecting it disables the local provider for the app-supervised core,
+  sets `JARVIS_CHATGPT_ENABLED=true`, passes the chosen
+  `JARVIS_CHATGPT_MODEL`, `JARVIS_OPENAI_BASE_URL`, and
+  `JARVIS_CHATGPT_TIMEOUT_MS`, and keeps
+  `JARVIS_CHATGPT_REQUIRES_APPROVAL=true`. The API key remains a Keychain-backed
+  OpenAI credential injected by `JarvisCoreCredentialProvider`; it is not
+  stored in SQLite, docs, diagnostics, or the model launch override map.
+  `/health` now reports `chatgpt_enabled`, `chatgpt_model`, and
+  `chatgpt_requires_approval`, so the Swift Model tab can display an active
+  `codex` provider/model when the supervised core is running in that cloud
+  mode. CLI E2E starts a real `jarvis serve` with the same Codex-equivalent
+  environment, checks the `routed-codex-cloud-model+first-party-plugins`
+  runtime label, executes through a stub OpenAI-compatible endpoint, and
+  verifies selected-model reporting plus API-key redaction.
 - The Swift shell exposes production-facing management tabs for approval
   evidence, runs/audit, scheduler create/inspect/cancel/run-due/recover-stale,
   redacted diagnostics, release readiness, and voice state. Voice supports typed transcript staging,

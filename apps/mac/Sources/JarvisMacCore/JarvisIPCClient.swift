@@ -33,6 +33,9 @@ public struct JarvisHealth: Decodable, Equatable, Sendable {
     public var localModelProvider: String
     public var localModel: String
     public var localEndpointConfigured: Bool
+    public var chatgptEnabled: Bool
+    public var chatgptModel: String
+    public var chatgptRequiresApproval: Bool
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -46,6 +49,9 @@ public struct JarvisHealth: Decodable, Equatable, Sendable {
         localModelProvider = try container.decodeIfPresent(String.self, forKey: .localModelProvider) ?? "fake"
         localModel = try container.decodeIfPresent(String.self, forKey: .localModel) ?? "fake-local-model"
         localEndpointConfigured = try container.decodeIfPresent(Bool.self, forKey: .localEndpointConfigured) ?? false
+        chatgptEnabled = try container.decodeIfPresent(Bool.self, forKey: .chatgptEnabled) ?? false
+        chatgptModel = try container.decodeIfPresent(String.self, forKey: .chatgptModel) ?? "chatgpt-disabled"
+        chatgptRequiresApproval = try container.decodeIfPresent(Bool.self, forKey: .chatgptRequiresApproval) ?? true
     }
 
     public init(
@@ -58,7 +64,10 @@ public struct JarvisHealth: Decodable, Equatable, Sendable {
         commandRuntime: String,
         localModelProvider: String = "fake",
         localModel: String = "fake-local-model",
-        localEndpointConfigured: Bool = false
+        localEndpointConfigured: Bool = false,
+        chatgptEnabled: Bool = false,
+        chatgptModel: String = "chatgpt-disabled",
+        chatgptRequiresApproval: Bool = true
     ) {
         self.status = status
         self.version = version
@@ -70,6 +79,9 @@ public struct JarvisHealth: Decodable, Equatable, Sendable {
         self.localModelProvider = localModelProvider
         self.localModel = localModel
         self.localEndpointConfigured = localEndpointConfigured
+        self.chatgptEnabled = chatgptEnabled
+        self.chatgptModel = chatgptModel
+        self.chatgptRequiresApproval = chatgptRequiresApproval
     }
 
     enum CodingKeys: String, CodingKey {
@@ -83,6 +95,9 @@ public struct JarvisHealth: Decodable, Equatable, Sendable {
         case localModelProvider = "local_model_provider"
         case localModel = "local_model"
         case localEndpointConfigured = "local_endpoint_configured"
+        case chatgptEnabled = "chatgpt_enabled"
+        case chatgptModel = "chatgpt_model"
+        case chatgptRequiresApproval = "chatgpt_requires_approval"
     }
 }
 

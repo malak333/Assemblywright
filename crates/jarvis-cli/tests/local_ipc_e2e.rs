@@ -7490,6 +7490,62 @@ fn serve_executes_chatgpt_native_tool_call() {
 }
 
 #[test]
+fn serve_reports_codex_cloud_provider_health_and_executes_selected_model() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let db_path = temp_dir.path().join("jarvis-codex-cloud-e2e.sqlite");
+    let (chatgpt_base_url, server_thread) = start_chatgpt_native_tool_server();
+    let mut server = JarvisServer::start_with_env(
+        &db_path,
+        &[
+            ("JARVIS_LOCAL_MODEL_ENABLED", "false"),
+            ("JARVIS_CHATGPT_ENABLED", "true"),
+            ("JARVIS_CHATGPT_MODEL", "gpt-codex-e2e"),
+            ("JARVIS_OPENAI_API_KEY", "test-openai-token"),
+            ("JARVIS_OPENAI_BASE_URL", chatgpt_base_url.as_str()),
+            ("JARVIS_CHATGPT_REQUIRES_APPROVAL", "true"),
+        ],
+    );
+    let endpoint = server.endpoint();
+
+    let health = http_get_json(endpoint.as_str(), "/health");
+    assert_eq!(
+        health["command_runtime"],
+        "routed-codex-cloud-model+first-party-plugins"
+    );
+    assert_eq!(health["chatgpt_enabled"], true);
+    assert_eq!(health["chatgpt_model"], "gpt-codex-e2e");
+    assert_eq!(health["chatgpt_requires_approval"], true);
+
+    let command = run_cli_json([
+        "command",
+        "ask codex provider for status",
+        "--sensitivity",
+        "workspace",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+
+    assert_eq!(command["accepted"], true, "{command}");
+    assert_eq!(command["task"]["status"], "completed", "{command}");
+    assert_eq!(command["route"]["provider"], "chat_gpt");
+    assert_eq!(command["route"]["model"], "gpt-codex-e2e");
+    assert_eq!(
+        command["steps"][0]["tool_results"][0]["plugin_id"],
+        "fake_status"
+    );
+    assert_eq!(command["message"], "native tool result observed");
+    let encoded = serde_json::to_string(&command).expect("command JSON");
+    assert!(!encoded.contains("test-openai-token"));
+    assert!(!encoded.contains("JARVIS_OPENAI_API_KEY"));
+
+    server.stop();
+    server_thread
+        .join()
+        .expect("codex cloud provider stub thread");
+    drop(temp_dir);
+}
+
+#[test]
 #[ignore = "opt-in release proof; spawns jarvis smoke and duplicates broader CLI coverage"]
 fn cli_smoke_command_is_release_gate_compatible() {
     let output = run_cli(["smoke"]);

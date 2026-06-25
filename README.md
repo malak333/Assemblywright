@@ -71,6 +71,10 @@ fail closed before policy checks or tool execution, then feed registered-tool
 guidance back to the model as rejected tool results for bounded recovery. Mixed
 prose plus JSON `tool_requests` is treated as malformed provider output instead
 of a normal answer.
+The macOS Model tab exposes this approved cloud route as `Codex`: selecting it
+disables the local provider for the app-supervised core, sets the chosen
+OpenAI-compatible model/base URL, keeps `JARVIS_CHATGPT_REQUIRES_APPROVAL=true`,
+and stores the application credential in Keychain instead of SQLite or docs.
 Plugin availability for model planning means the `/tools/model` first-party
 catalog only. `jarvis tools list`, `jarvis tools model`, and
 `jarvis tools catalog` all print that same catalog. Chrome/browser-extension
@@ -178,7 +182,8 @@ permission policy review plus scheduler trigger review and notification
 controls, including redacted proactive scheduler policy audit before due
 command execution, explicit stale-running scheduler recovery, opt-in startup
 stale-running recovery, and strict provider tool-request envelope coverage for
-Ollama-compatible and ChatGPT/OpenAI-compatible text responses. Later slices
+Ollama-compatible and ChatGPT/OpenAI-compatible text responses, including the
+Codex-labeled macOS Model tab route over that same guarded cloud provider. Later slices
 continue the same branch/PR discipline;
 release language should describe only the merged repo-owned surfaces with
 recorded focused E2E or integration proof.

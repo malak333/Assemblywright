@@ -365,6 +365,9 @@ pub struct HealthResponse {
     pub local_model_provider: LocalModelProviderKind,
     pub local_model: String,
     pub local_endpoint_configured: bool,
+    pub chatgpt_enabled: bool,
+    pub chatgpt_model: String,
+    pub chatgpt_requires_approval: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1050,6 +1053,9 @@ impl IpcState {
             local_model_provider: self.provider_config.local.provider,
             local_model: self.provider_config.local.model.clone(),
             local_endpoint_configured: self.provider_config.local.base_url.is_some(),
+            chatgpt_enabled: self.provider_config.chatgpt.enabled,
+            chatgpt_model: self.provider_config.chatgpt.model.clone(),
+            chatgpt_requires_approval: self.provider_config.chatgpt.requires_approval,
         }
     }
 
@@ -1128,6 +1134,10 @@ impl IpcState {
     }
 
     fn command_runtime_label(&self) -> String {
+        if !self.provider_config.local.enabled && self.provider_config.chatgpt.enabled {
+            return "routed-codex-cloud-model+first-party-plugins".to_string();
+        }
+
         match self.provider_config.local.provider {
             LocalModelProviderKind::Fake => "routed-fake-local-model+first-party-plugins",
             LocalModelProviderKind::Ollama => "routed-ollama-local-model+first-party-plugins",

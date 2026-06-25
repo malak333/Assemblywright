@@ -3272,7 +3272,10 @@ struct JarvisMacCoreTests {
                   "command_runtime": "routed-ollama-local-model+first-party-plugins",
                   "local_model_provider": "ollama",
                   "local_model": "qwen2.5:7b",
-                  "local_endpoint_configured": true
+                  "local_endpoint_configured": true,
+                  "chatgpt_enabled": true,
+                  "chatgpt_model": "gpt-test",
+                  "chatgpt_requires_approval": true
                 }
                 """.utf8
             )
@@ -3281,6 +3284,9 @@ struct JarvisMacCoreTests {
         #expect(health.localModelProvider == "ollama")
         #expect(health.localModel == "qwen2.5:7b")
         #expect(health.localEndpointConfigured)
+        #expect(health.chatgptEnabled)
+        #expect(health.chatgptModel == "gpt-test")
+        #expect(health.chatgptRequiresApproval)
     }
 
     @Test("Model configuration maps selected Ollama model to launch environment")
@@ -3299,6 +3305,79 @@ struct JarvisMacCoreTests {
         #expect(environment["JARVIS_OLLAMA_BASE_URL"] == "http://127.0.0.1:11434")
         #expect(environment["JARVIS_LOCAL_MODEL_TIMEOUT_MS"] == "45000")
         #expect(environment["JARVIS_CHATGPT_ENABLED"] == "false")
+    }
+
+    @Test("Model configuration defaults to fake local provider for packaged smoke")
+    func modelConfigurationDefaultsToFakeLocalProviderForPackagedSmoke() {
+        let configuration = JarvisModelConfiguration.fromEnvironment([:])
+
+        #expect(configuration.provider == .fake)
+        #expect(configuration.launchEnvironmentOverrides["JARVIS_LOCAL_MODEL_PROVIDER"] == "fake")
+        #expect(configuration.launchEnvironmentOverrides["JARVIS_LOCAL_MODEL"] == "fake-local-model")
+        #expect(configuration.launchEnvironmentOverrides["JARVIS_CHATGPT_ENABLED"] == "false")
+    }
+
+    @Test("Model configuration maps selected Codex model to guarded cloud launch environment")
+    func modelConfigurationMapsCodexSelectionToEnvironment() {
+        let configuration = JarvisModelConfiguration(
+            provider: .codex,
+            codexModel: " gpt-codex-test ",
+            codexBaseURL: " https://api.openai.test/v1/ ",
+            timeoutMilliseconds: "45000"
+        )
+
+        let environment = configuration.launchEnvironmentOverrides
+
+        #expect(environment["JARVIS_LOCAL_MODEL_ENABLED"] == "false")
+        #expect(environment["JARVIS_CHATGPT_ENABLED"] == "true")
+        #expect(environment["JARVIS_CHATGPT_MODEL"] == "gpt-codex-test")
+        #expect(environment["JARVIS_OPENAI_BASE_URL"] == "https://api.openai.test/v1")
+        #expect(environment["JARVIS_CHATGPT_TIMEOUT_MS"] == "45000")
+        #expect(environment["JARVIS_CHATGPT_REQUIRES_APPROVAL"] == "true")
+        #expect(environment["JARVIS_OPENAI_API_KEY"] == nil)
+    }
+
+    @MainActor
+    @Test("Model configuration manages Codex application credential through credential store")
+    func modelConfigurationManagesCodexCredential() {
+        let store = FakeCredentialStore()
+        let model = ModelConfigurationModel(credentialStore: store)
+
+        #expect(!model.hasStoredCodexCredential)
+
+        model.codexAPIKeyEntry = " test-key "
+        model.saveCodexCredential()
+
+        #expect(store.values[.openAIAPIKey] == "test-key")
+        #expect(model.hasStoredCodexCredential)
+        #expect(model.codexAPIKeyEntry.isEmpty)
+
+        model.deleteCodexCredential()
+
+        #expect(store.values[.openAIAPIKey] == nil)
+        #expect(!model.hasStoredCodexCredential)
+    }
+
+    @MainActor
+    @Test("Model configuration health prefers active Codex provider when cloud routing is enabled")
+    func modelConfigurationHealthPrefersCodexProviderWhenEnabled() {
+        let model = ModelConfigurationModel(credentialStore: FakeCredentialStore())
+
+        model.applyHealth(JarvisHealth(
+            status: "ok",
+            version: "0.1.4",
+            emergencyPaused: false,
+            emergencyPauseReason: nil,
+            schedulerJobs: 0,
+            commandRuntime: "routed-codex-cloud-model+first-party-plugins",
+            localModelProvider: "fake",
+            localModel: "fake-local-model",
+            chatgptEnabled: true,
+            chatgptModel: "gpt-codex-test"
+        ))
+
+        #expect(model.activeProvider == "codex")
+        #expect(model.activeModel == "gpt-codex-test")
     }
 
     @MainActor
@@ -3426,7 +3505,10 @@ struct JarvisMacCoreTests {
                 details: "llama / 7B / Q4"
             )
         ])
-        let model = ModelConfigurationModel(controller: controller)
+        let model = ModelConfigurationModel(
+            configuration: JarvisModelConfiguration(provider: .ollama, localModel: "llama3.2"),
+            controller: controller
+        )
 
         await model.refreshAvailableModels()
 
@@ -3440,7 +3522,10 @@ struct JarvisMacCoreTests {
     @Test("Selecting missing model downloads it automatically")
     func selectingMissingModelDownloadsAutomatically() async {
         let controller = CapturingModelRuntimeController()
-        let model = ModelConfigurationModel(controller: controller)
+        let model = ModelConfigurationModel(
+            configuration: JarvisModelConfiguration(provider: .ollama, localModel: "llama3.2"),
+            controller: controller
+        )
         let missingModel = JarvisOllamaModelInfo(name: "qwen2.5:7b", installed: false)
 
         await model.selectModel(missingModel)

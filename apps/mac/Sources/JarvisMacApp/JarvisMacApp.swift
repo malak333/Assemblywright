@@ -370,6 +370,14 @@ struct ModelConfigurationView: View {
                 }
                 .pickerStyle(.segmented)
 
+                TextField("Codex model", text: codexModelBinding)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(model.configuration.provider != .codex)
+
+                TextField("Codex API URL", text: codexBaseURLBinding)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(model.configuration.provider != .codex)
+
                 TextField("Ollama URL", text: ollamaBaseURLBinding)
                     .textFieldStyle(.roundedBorder)
                     .disabled(model.configuration.provider != .ollama)
@@ -411,9 +419,37 @@ struct ModelConfigurationView: View {
                 }
             }
 
+            if model.configuration.provider == .codex {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Application Credential")
+                            .font(.subheadline)
+                        Spacer()
+                        Text(model.hasStoredCodexCredential ? "Saved in Keychain" : "Not saved")
+                            .font(.caption)
+                            .foregroundStyle(model.hasStoredCodexCredential ? .green : .orange)
+                    }
+
+                    SecureField("OpenAI API key", text: codexAPIKeyBinding)
+                        .textFieldStyle(.roundedBorder)
+
+                    HStack(spacing: 8) {
+                        Button("Save Credential") {
+                            model.saveCodexCredential()
+                        }
+                        Button("Forget Credential") {
+                            model.deleteCodexCredential()
+                        }
+                        .disabled(!model.hasStoredCodexCredential)
+                        Spacer()
+                    }
+                }
+            }
+
             HStack(spacing: 8) {
                 Button("Restart Core With Selection") {
                     Task {
+                        model.saveEnteredCodexCredentialIfNeeded()
                         await model.ensureSelectedModelAvailable()
                         supervisor.stop()
                         await supervisor.start(environmentOverrides: model.launchEnvironmentOverrides)
@@ -475,7 +511,29 @@ struct ModelConfigurationView: View {
                 } else if model.configuration.localModel == "fake-local-model" {
                     model.configuration.localModel = "llama3.2"
                 }
+                model.refreshCodexCredentialState()
             }
+        )
+    }
+
+    private var codexModelBinding: Binding<String> {
+        Binding(
+            get: { model.configuration.codexModel },
+            set: { model.configuration.codexModel = $0 }
+        )
+    }
+
+    private var codexBaseURLBinding: Binding<String> {
+        Binding(
+            get: { model.configuration.codexBaseURL },
+            set: { model.configuration.codexBaseURL = $0 }
+        )
+    }
+
+    private var codexAPIKeyBinding: Binding<String> {
+        Binding(
+            get: { model.codexAPIKeyEntry },
+            set: { model.codexAPIKeyEntry = $0 }
         )
     }
 

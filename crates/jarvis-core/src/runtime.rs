@@ -1064,7 +1064,7 @@ fn route_from_evidence(record: &ModelRouteRecord) -> Option<ModelRoute> {
             record.reason.clone(),
         )),
         Some(crate::router::ModelProvider::ChatGpt) => {
-            Some(ModelRoute::chatgpt("chatgpt", record.reason.clone()))
+            Some(ModelRoute::chatgpt("codex", record.reason.clone()))
         }
         None => None,
     }
