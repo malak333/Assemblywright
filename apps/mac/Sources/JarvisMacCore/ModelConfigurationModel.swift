@@ -128,7 +128,11 @@ public struct JarvisModelConfiguration: Equatable, Sendable {
 
 public protocol JarvisLocalModelRuntimeControlling: Sendable {
     func listOllamaModels(baseURL: URL) async throws -> [JarvisOllamaModelInfo]
-    func pullOllamaModel(model: String, baseURL: URL) async throws
+    func pullOllamaModel(
+        model: String,
+        baseURL: URL,
+        progress: @escaping @Sendable (JarvisOllamaPullProgress) async -> Void
+    ) async throws
     func loadOllamaModel(model: String, baseURL: URL) async throws
     func unloadOllamaModel(model: String, baseURL: URL) async throws
 }
@@ -158,16 +162,30 @@ public struct OllamaModelRuntimeController: JarvisLocalModelRuntimeControlling {
         }
     }
 
-    public func pullOllamaModel(model: String, baseURL: URL) async throws {
+    public func pullOllamaModel(
+        model: String,
+        baseURL: URL,
+        progress: @escaping @Sendable (JarvisOllamaPullProgress) async -> Void
+    ) async throws {
         let url = baseURL.appending(path: "api").appending(path: "pull")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(OllamaPullRequest(model: model, stream: false))
+        request.httpBody = try JSONEncoder().encode(OllamaPullRequest(model: model, stream: true))
 
-        let (_, response) = try await urlSession.data(for: request)
+        let (bytes, response) = try await urlSession.bytes(for: request)
         guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
             throw URLError(.badServerResponse)
+        }
+
+        let decoder = JSONDecoder()
+        for try await line in bytes.lines {
+            guard !line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+            let event = try decoder.decode(OllamaPullResponse.self, from: Data(line.utf8))
+            if let error = event.error?.trimmingCharacters(in: .whitespacesAndNewlines), !error.isEmpty {
+                throw OllamaPullError(message: error)
+            }
+            await progress(event.progress)
         }
     }
 
@@ -235,11 +253,50 @@ public struct JarvisOllamaModelInfo: Equatable, Identifiable, Sendable {
         return "Model size: \(Self.formatBytes(diskSizeBytes))"
     }
 
+    public func matches(name otherName: String) -> Bool {
+        Self.namesMatch(name, otherName)
+    }
+
+    public static func namesMatch(_ lhs: String, _ rhs: String) -> Bool {
+        normalizedName(lhs) == normalizedName(rhs)
+    }
+
     public static func formatBytes(_ bytes: Int64) -> String {
         let formatter = ByteCountFormatter()
         formatter.allowedUnits = [.useGB, .useMB]
         formatter.countStyle = .memory
         return formatter.string(fromByteCount: bytes)
+    }
+
+    private static func normalizedName(_ name: String) -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.hasSuffix(":latest") ? String(trimmed.dropLast(":latest".count)) : trimmed
+    }
+}
+
+public struct JarvisOllamaPullProgress: Equatable, Sendable {
+    public var status: String
+    public var completedBytes: Int64?
+    public var totalBytes: Int64?
+
+    public init(status: String, completedBytes: Int64? = nil, totalBytes: Int64? = nil) {
+        self.status = status
+        self.completedBytes = completedBytes
+        self.totalBytes = totalBytes
+    }
+
+    public var fractionCompleted: Double? {
+        guard let completedBytes, let totalBytes, totalBytes > 0 else { return nil }
+        return min(max(Double(completedBytes) / Double(totalBytes), 0), 1)
+    }
+
+    public var detailLine: String {
+        guard let completedBytes, let totalBytes, totalBytes > 0 else {
+            return status
+        }
+        let completed = JarvisOllamaModelInfo.formatBytes(completedBytes)
+        let total = JarvisOllamaModelInfo.formatBytes(totalBytes)
+        return "\(status) \(completed) of \(total)"
     }
 }
 
@@ -294,6 +351,25 @@ private struct OllamaPullRequest: Encodable {
     var stream: Bool
 }
 
+private struct OllamaPullResponse: Decodable {
+    var status: String?
+    var total: Int64?
+    var completed: Int64?
+    var error: String?
+
+    var progress: JarvisOllamaPullProgress {
+        JarvisOllamaPullProgress(status: status ?? "download response", completedBytes: completed, totalBytes: total)
+    }
+}
+
+private struct OllamaPullError: LocalizedError {
+    var message: String
+
+    var errorDescription: String? {
+        message
+    }
+}
+
 private extension String {
     var nilIfEmpty: String? {
         isEmpty ? nil : self
@@ -310,6 +386,7 @@ public final class ModelConfigurationModel: ObservableObject {
     @Published public var codexAPIKeyEntry: String
     @Published public private(set) var hasStoredCodexCredential: Bool
     @Published public private(set) var isWorking: Bool
+    @Published public private(set) var downloadProgress: JarvisOllamaPullProgress?
 
     private let controller: any JarvisLocalModelRuntimeControlling
     private let credentialStore: any JarvisCredentialStore
@@ -329,6 +406,7 @@ public final class ModelConfigurationModel: ObservableObject {
         self.codexAPIKeyEntry = ""
         self.hasStoredCodexCredential = false
         self.isWorking = false
+        self.downloadProgress = nil
         refreshCodexCredentialState()
     }
 
@@ -338,6 +416,11 @@ public final class ModelConfigurationModel: ObservableObject {
 
     public var canControlSelectedModelRuntime: Bool {
         configuration.provider == .ollama && URL(string: configuration.sanitizedOllamaBaseURL) != nil
+    }
+
+    public var selectedModelIsInstalled: Bool {
+        let selected = configuration.sanitizedModel
+        return availableModels.contains { $0.matches(name: selected) && $0.installed }
     }
 
     public func applyHealth(_ health: JarvisHealth?) {
@@ -423,14 +506,20 @@ public final class ModelConfigurationModel: ObservableObject {
     }
 
     public func downloadSelectedModel() async {
-        await runOllamaAction(action: "downloaded") {
+        downloadProgress = JarvisOllamaPullProgress(status: "Starting download")
+        await runOllamaAction(action: "downloaded and reloaded") {
             try await controller.pullOllamaModel(
                 model: configuration.sanitizedModel,
-                baseURL: try ollamaBaseURL()
+                baseURL: try ollamaBaseURL(),
+                progress: { [weak self] progress in
+                    await MainActor.run {
+                        self?.downloadProgress = progress
+                    }
+                }
             )
-            let installedModels = try await controller.listOllamaModels(baseURL: try ollamaBaseURL())
-            availableModels = mergedModels(installedModels: installedModels)
+            try await refreshAvailableModelsAfterDownload()
         }
+        downloadProgress = nil
     }
 
     public func ensureSelectedModelAvailable() async {
@@ -439,7 +528,7 @@ public final class ModelConfigurationModel: ObservableObject {
         if availableModels.isEmpty {
             await refreshAvailableModels()
         }
-        let isInstalled = availableModels.contains { $0.name == selected && $0.installed }
+        let isInstalled = availableModels.contains { $0.matches(name: selected) && $0.installed }
         if !isInstalled {
             await downloadSelectedModel()
         }
@@ -481,6 +570,11 @@ public final class ModelConfigurationModel: ObservableObject {
         }
     }
 
+    private func refreshAvailableModelsAfterDownload() async throws {
+        let installedModels = try await controller.listOllamaModels(baseURL: try ollamaBaseURL())
+        availableModels = mergedModels(installedModels: installedModels)
+    }
+
     private func ollamaBaseURL() throws -> URL {
         guard let url = URL(string: configuration.sanitizedOllamaBaseURL) else {
             throw URLError(.badURL)
@@ -490,10 +584,10 @@ public final class ModelConfigurationModel: ObservableObject {
 
     private func mergedModels(installedModels: [JarvisOllamaModelInfo]) -> [JarvisOllamaModelInfo] {
         var byName = Dictionary(uniqueKeysWithValues: installedModels.map { ($0.name, $0) })
-        for model in Self.recommendedModels where byName[model.name] == nil {
+        for model in Self.recommendedModels where !byName.keys.contains(where: { JarvisOllamaModelInfo.namesMatch($0, model.name) }) {
             byName[model.name] = model
         }
-        if byName[configuration.sanitizedModel] == nil {
+        if !byName.keys.contains(where: { JarvisOllamaModelInfo.namesMatch($0, configuration.sanitizedModel) }) {
             byName[configuration.sanitizedModel] = JarvisOllamaModelInfo(
                 name: configuration.sanitizedModel,
                 installed: false

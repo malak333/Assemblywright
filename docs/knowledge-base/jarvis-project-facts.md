@@ -628,9 +628,13 @@ requires plugin-trust `generated_at`, `review_started_at`,
   downloadable Llama/Mistral/Phi/Gemma/Qwen options including Gemma 4,
   Gemma 3, Qwen3.6, Qwen3, Qwen2.5, Qwen2.5-Coder, and Qwen2.5-VL tags, shows
   RAM estimates from the installed Ollama model size or the curated pre-download
-  estimate, pulls missing selections through `/api/pull`, starts and stops
-  selected Ollama residency through `/api/generate` keep-alive requests, and
-  restarts the supervised core with `JARVIS_LOCAL_MODEL_PROVIDER`,
+  estimate, pulls missing selections through streamed `/api/pull` JSON-line
+  progress, shows determinate download progress when Ollama supplies byte totals
+  and indeterminate status otherwise, automatically reloads installed inventory
+  after a successful pull, treats `:latest` inventory aliases as satisfying the
+  selected base model, gates Start until the selected model is installed, starts
+  and stops selected Ollama residency through `/api/generate` keep-alive requests,
+  and restarts the supervised core with `JARVIS_LOCAL_MODEL_PROVIDER`,
   `JARVIS_LOCAL_MODEL`, `JARVIS_OLLAMA_BASE_URL`, and
   `JARVIS_LOCAL_MODEL_TIMEOUT_MS` overrides. The tab cannot reconfigure a
   separate terminal-owned `jarvis serve` process; that external core must be
@@ -751,12 +755,15 @@ requires plugin-trust `generated_at`, `review_started_at`,
   model-specific tool discipline can vary, and Jarvis relies on the runtime
   advertised inventory plus fail-closed validation for safety.
 - Swift focused integration coverage now pins the Model tab support path:
-  `ModelConfigurationModel` tests cover Ollama inventory merging, RAM estimate
-  display, missing-model auto-download-on-select, supervised-core launch
-  environment overrides, and selected-model start/stop. The
+  `ModelConfigurationModel` tests cover Ollama inventory merging including
+  `:latest` alias matching, RAM estimate display, missing-model
+  auto-download-on-select, streamed download progress, automatic inventory reload
+  after pull completion, supervised-core launch environment overrides, and
+  selected-model start/stop. `JarvisMacAppTests` covers the visible Model tab
+  Start/Download/Stop gating and progress presentation, while the
   `OllamaModelRuntimeController` HTTP test uses an injected `URLSession` to
-  assert `/api/tags`, `/api/pull`, and `/api/generate` keep-alive request shape
-  without requiring a live Ollama daemon.
+  assert streamed `/api/pull` plus `/api/tags` and `/api/generate` keep-alive
+  request shape without requiring a live Ollama daemon.
 - The current E2E expectation for Rust/CLI foundation changes is
   `cargo test -p jarvis-cli --test local_ipc_e2e`; the ignored variant is
   release-proof coverage and is included by `./scripts/release-local.sh`.

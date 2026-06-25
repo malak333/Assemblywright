@@ -194,13 +194,15 @@ JARVIS_LOCAL_MODEL_TIMEOUT_MS=60000 cargo run -p jarvis-cli -- serve
 The Swift Model tab can also supervise this configuration without editing shell
 environment variables. It reads the local Ollama inventory from `/api/tags`,
 shows installed models plus recommended downloadable Gemma/Qwen/Llama/Mistral
-options with estimated RAM, pulls missing selections through `/api/pull`, loads
-or unloads the selected model through `/api/generate` keep-alive requests, and
-restarts the supervised core with `JARVIS_LOCAL_MODEL_PROVIDER`,
-`JARVIS_LOCAL_MODEL`, `JARVIS_OLLAMA_BASE_URL`, and
-`JARVIS_LOCAL_MODEL_TIMEOUT_MS` overrides. If another terminal already owns the
-core port, stop that external `jarvis serve` process before applying the Model
-tab restart.
+options with estimated RAM, pulls missing selections through streamed
+`/api/pull` progress, automatically reloads inventory after completion, treats
+Ollama `:latest` aliases as installed for the selected base model, enables
+Start only after the selected model is installed, loads or unloads the selected
+model through `/api/generate` keep-alive requests, and restarts the supervised
+core with `JARVIS_LOCAL_MODEL_PROVIDER`, `JARVIS_LOCAL_MODEL`,
+`JARVIS_OLLAMA_BASE_URL`, and `JARVIS_LOCAL_MODEL_TIMEOUT_MS` overrides. If
+another terminal already owns the core port, stop that external `jarvis serve`
+process before applying the Model tab restart.
 
 Live local testing with `llama3.2` has proven this Ollama route can complete
 real model commands. Local model behavior is still model-dependent, so the
@@ -1034,6 +1036,9 @@ refreshes Release tab runbook state including runbook-load warnings, preflights
 direct macOS Speech/microphone authorization before concrete voice capture,
 shows release evidence status rows with explicit path, detail, and
 production/manual-gate context,
+shows Model tab streamed Ollama download progress, automatic inventory reload,
+`:latest` installed-model alias handling, and Start/Download gating through
+focused model and app presentation tests,
 exposes management models for
 approval evidence, memory classification summary, memory policy review counts,
 memory create/update/review/delete/restore state, runs/audit,

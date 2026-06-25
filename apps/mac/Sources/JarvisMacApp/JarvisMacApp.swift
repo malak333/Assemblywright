@@ -339,6 +339,15 @@ struct ModelConfigurationView: View {
     @ObservedObject var supervisor: JarvisCoreSupervisor
     @ObservedObject var console: CommandConsoleModel
 
+    private var controlsPresentation: ModelConfigurationPresentation {
+        ModelConfigurationPresentation(
+            canControlSelectedModelRuntime: model.canControlSelectedModelRuntime,
+            isWorking: model.isWorking,
+            selectedModelIsInstalled: model.selectedModelIsInstalled,
+            downloadProgress: model.downloadProgress
+        )
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .firstTextBaseline) {
@@ -407,7 +416,7 @@ struct ModelConfigurationView: View {
                                 } label: {
                                     ModelSelectionRow(
                                         model: availableModel,
-                                        selected: availableModel.name == model.configuration.sanitizedModel
+                                        selected: availableModel.matches(name: model.configuration.sanitizedModel)
                                     )
                                 }
                                 .buttonStyle(.plain)
@@ -461,19 +470,32 @@ struct ModelConfigurationView: View {
                 Button("Start Model") {
                     Task { await model.loadSelectedModel() }
                 }
-                .disabled(!model.canControlSelectedModelRuntime || model.isWorking)
+                .disabled(!controlsPresentation.canStartModel)
 
                 Button("Download Selected") {
                     Task { await model.downloadSelectedModel() }
                 }
-                .disabled(!model.canControlSelectedModelRuntime || model.isWorking)
+                .disabled(!controlsPresentation.canDownloadSelected)
 
                 Button("Stop Model") {
                     Task { await model.unloadSelectedModel() }
                 }
-                .disabled(!model.canControlSelectedModelRuntime || model.isWorking)
+                .disabled(!controlsPresentation.canStopModel)
 
                 Spacer()
+            }
+
+            if let progress = model.downloadProgress {
+                VStack(alignment: .leading, spacing: 6) {
+                    if let fraction = controlsPresentation.progressValue {
+                        ProgressView(value: fraction)
+                    } else {
+                        ProgressView()
+                    }
+                    Text(controlsPresentation.progressDetailLine ?? progress.detailLine)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             if let statusMessage = model.statusMessage {
@@ -549,6 +571,27 @@ struct ModelConfigurationView: View {
             get: { model.configuration.timeoutMilliseconds },
             set: { model.configuration.timeoutMilliseconds = $0 }
         )
+    }
+}
+
+struct ModelConfigurationPresentation: Equatable {
+    var canStartModel: Bool
+    var canDownloadSelected: Bool
+    var canStopModel: Bool
+    var progressValue: Double?
+    var progressDetailLine: String?
+
+    init(
+        canControlSelectedModelRuntime: Bool,
+        isWorking: Bool,
+        selectedModelIsInstalled: Bool,
+        downloadProgress: JarvisOllamaPullProgress?
+    ) {
+        canStartModel = canControlSelectedModelRuntime && !isWorking && selectedModelIsInstalled
+        canDownloadSelected = canControlSelectedModelRuntime && !isWorking && !selectedModelIsInstalled
+        canStopModel = canControlSelectedModelRuntime && !isWorking
+        progressValue = downloadProgress?.fractionCompleted
+        progressDetailLine = downloadProgress?.detailLine
     }
 }
 

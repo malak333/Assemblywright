@@ -3503,6 +3503,13 @@ struct JarvisMacCoreTests {
                 diskSizeBytes: 4_294_967_296,
                 estimatedRamBytes: 4_294_967_296,
                 details: "llama / 7B / Q4"
+            ),
+            JarvisOllamaModelInfo(
+                name: "llama3.2:latest",
+                installed: true,
+                diskSizeBytes: 2_019_393_189,
+                estimatedRamBytes: 2_019_393_189,
+                details: "llama / 3.2B / Q4"
             )
         ])
         let model = ModelConfigurationModel(
@@ -3515,7 +3522,9 @@ struct JarvisMacCoreTests {
         let customModel = try! #require(model.availableModels.first { $0.name == "custom-local:latest" })
         #expect(customModel.installed)
         #expect(customModel.memoryLine.contains("4"))
-        #expect(model.availableModels.contains { $0.name == "llama3.2" })
+        #expect(model.availableModels.contains { $0.name == "llama3.2:latest" })
+        #expect(!model.availableModels.contains { $0.name == "llama3.2" })
+        #expect(model.selectedModelIsInstalled)
     }
 
     @MainActor
@@ -3534,6 +3543,34 @@ struct JarvisMacCoreTests {
         #expect(controller.pullRequests == [
             CapturingModelRuntimeController.Request(model: "qwen2.5:7b", baseURL: "http://127.0.0.1:11434")
         ])
+        #expect(model.selectedModelIsInstalled)
+        #expect(model.downloadProgress == nil)
+        #expect(model.statusMessage == "qwen2.5:7b downloaded and reloaded through Ollama.")
+    }
+
+    @MainActor
+    @Test("Download selected model tracks progress and reloads inventory")
+    func downloadSelectedModelTracksProgressAndReloadsInventory() async {
+        let controller = CapturingModelRuntimeController()
+        let model = ModelConfigurationModel(
+            configuration: JarvisModelConfiguration(provider: .ollama, localModel: "gemma3:270m"),
+            controller: controller
+        )
+
+        await model.downloadSelectedModel()
+
+        #expect(controller.pullRequests == [
+            CapturingModelRuntimeController.Request(model: "gemma3:270m", baseURL: "http://127.0.0.1:11434")
+        ])
+        #expect(controller.listRequests.count == 1)
+        #expect(controller.progressSnapshots == [
+            JarvisOllamaPullProgress(status: "pulling manifest"),
+            JarvisOllamaPullProgress(status: "downloading", completedBytes: 50, totalBytes: 100),
+            JarvisOllamaPullProgress(status: "success")
+        ])
+        #expect(model.selectedModelIsInstalled)
+        #expect(model.availableModels.first { $0.name == "gemma3:270m" }?.installed == true)
+        #expect(model.downloadProgress == nil)
     }
 
     @Test("Ollama runtime controller sends inventory, pull, load, and unload HTTP requests")
@@ -3554,22 +3591,42 @@ struct JarvisMacCoreTests {
                     """.data(using: .utf8)!
                 )
             }
+            if path == "/api/pull" {
+                return (
+                    200,
+                    """
+                    {"status":"pulling manifest"}
+                    {"status":"downloading","completed":25,"total":100}
+                    {"status":"success"}
+                    """.data(using: .utf8)!
+                )
+            }
             return (200, #"{"status":"ok"}"#.data(using: .utf8)!)
         }
 
+        let progressRecorder = CapturingProgressRecorder()
         let models = try await controller.listOllamaModels(baseURL: baseURL)
-        try await controller.pullOllamaModel(model: "qwen2.5:7b", baseURL: baseURL)
+        try await controller.pullOllamaModel(model: "qwen2.5:7b", baseURL: baseURL) { progress in
+            await progressRecorder.append(progress)
+        }
         try await controller.loadOllamaModel(model: "qwen2.5:7b", baseURL: baseURL)
         try await controller.unloadOllamaModel(model: "qwen2.5:7b", baseURL: baseURL)
 
         let requests = await CapturingURLProtocol.requests
         let bodies = await CapturingURLProtocol.bodyStrings
+        let progressEvents = await progressRecorder.events
         #expect(models.first?.name == "qwen2.5:7b")
         #expect(models.first?.estimatedRamBytes == 4_700_000_000)
         #expect(requests.map { $0.url?.path } == ["/api/tags", "/api/pull", "/api/generate", "/api/generate"])
         #expect(bodies[1]?.contains("\"model\":\"qwen2.5:7b\"") == true)
+        #expect(bodies[1]?.contains("\"stream\":true") == true)
         #expect(bodies[2]?.contains("\"keep_alive\":\"5m\"") == true)
         #expect(bodies[3]?.contains("\"keep_alive\":\"0\"") == true)
+        #expect(progressEvents == [
+            JarvisOllamaPullProgress(status: "pulling manifest"),
+            JarvisOllamaPullProgress(status: "downloading", completedBytes: 25, totalBytes: 100),
+            JarvisOllamaPullProgress(status: "success")
+        ])
     }
 
     private func memoryItemJSON(id: UUID) -> Data {
@@ -4977,18 +5034,34 @@ private final class CapturingModelRuntimeController: JarvisLocalModelRuntimeCont
     private(set) var loadRequests: [Request] = []
     private(set) var unloadRequests: [Request] = []
     private(set) var pullRequests: [Request] = []
+    private(set) var listRequests: [String] = []
+    private(set) var progressSnapshots: [JarvisOllamaPullProgress] = []
     private var installedModels: [JarvisOllamaModelInfo]
 
     init(installedModels: [JarvisOllamaModelInfo] = []) {
         self.installedModels = installedModels
     }
 
-    func listOllamaModels(baseURL _: URL) async throws -> [JarvisOllamaModelInfo] {
-        installedModels
+    func listOllamaModels(baseURL: URL) async throws -> [JarvisOllamaModelInfo] {
+        listRequests.append(baseURL.absoluteString)
+        return installedModels
     }
 
-    func pullOllamaModel(model: String, baseURL: URL) async throws {
+    func pullOllamaModel(
+        model: String,
+        baseURL: URL,
+        progress: @escaping @Sendable (JarvisOllamaPullProgress) async -> Void
+    ) async throws {
         pullRequests.append(Request(model: model, baseURL: baseURL.absoluteString))
+        let snapshots = [
+            JarvisOllamaPullProgress(status: "pulling manifest"),
+            JarvisOllamaPullProgress(status: "downloading", completedBytes: 50, totalBytes: 100),
+            JarvisOllamaPullProgress(status: "success")
+        ]
+        for snapshot in snapshots {
+            progressSnapshots.append(snapshot)
+            await progress(snapshot)
+        }
         if !installedModels.contains(where: { $0.name == model }) {
             installedModels.append(JarvisOllamaModelInfo(
                 name: model,
@@ -5006,6 +5079,18 @@ private final class CapturingModelRuntimeController: JarvisLocalModelRuntimeCont
 
     func unloadOllamaModel(model: String, baseURL: URL) async throws {
         unloadRequests.append(Request(model: model, baseURL: baseURL.absoluteString))
+    }
+}
+
+private actor CapturingProgressRecorder {
+    private var capturedEvents: [JarvisOllamaPullProgress] = []
+
+    var events: [JarvisOllamaPullProgress] {
+        capturedEvents
+    }
+
+    func append(_ progress: JarvisOllamaPullProgress) {
+        capturedEvents.append(progress)
     }
 }
 

@@ -6,6 +6,58 @@ import UserNotifications
 @MainActor
 @Suite("Jarvis Mac app release presentation")
 struct JarvisMacAppTests {
+    @Test("Model tab presentation gates start and download around installed state")
+    func modelTabPresentationGatesStartAndDownloadAroundInstalledState() {
+        let missingModel = ModelConfigurationPresentation(
+            canControlSelectedModelRuntime: true,
+            isWorking: false,
+            selectedModelIsInstalled: false,
+            downloadProgress: nil
+        )
+        let installedModel = ModelConfigurationPresentation(
+            canControlSelectedModelRuntime: true,
+            isWorking: false,
+            selectedModelIsInstalled: true,
+            downloadProgress: nil
+        )
+        let busyModel = ModelConfigurationPresentation(
+            canControlSelectedModelRuntime: true,
+            isWorking: true,
+            selectedModelIsInstalled: true,
+            downloadProgress: nil
+        )
+
+        #expect(!missingModel.canStartModel)
+        #expect(missingModel.canDownloadSelected)
+        #expect(missingModel.canStopModel)
+        #expect(installedModel.canStartModel)
+        #expect(!installedModel.canDownloadSelected)
+        #expect(installedModel.canStopModel)
+        #expect(!busyModel.canStartModel)
+        #expect(!busyModel.canDownloadSelected)
+        #expect(!busyModel.canStopModel)
+    }
+
+    @Test("Model tab presentation exposes streamed download progress")
+    func modelTabPresentationExposesStreamedDownloadProgress() {
+        let presentation = ModelConfigurationPresentation(
+            canControlSelectedModelRuntime: true,
+            isWorking: true,
+            selectedModelIsInstalled: false,
+            downloadProgress: JarvisOllamaPullProgress(
+                status: "downloading",
+                completedBytes: 25,
+                totalBytes: 100
+            )
+        )
+
+        #expect(presentation.progressValue == 0.25)
+        #expect(presentation.progressDetailLine?.contains("downloading") == true)
+        #expect(presentation.progressDetailLine?.contains("of") == true)
+        #expect(!presentation.canStartModel)
+        #expect(!presentation.canDownloadSelected)
+    }
+
     @Test("Release readiness presentation blocks raw ready claims when effective evidence is incomplete")
     func releaseReadinessPresentationBlocksRawReadyClaimsWhenEvidenceIncomplete() {
         let readiness = JarvisReleaseReadiness(
