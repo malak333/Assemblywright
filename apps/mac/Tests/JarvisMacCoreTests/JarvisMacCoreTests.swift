@@ -3629,6 +3629,39 @@ struct JarvisMacCoreTests {
         ])
     }
 
+    @Test("Ollama runtime controller normalizes update-required pull errors")
+    func ollamaRuntimeControllerNormalizesUpdateRequiredPullErrors() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [CapturingURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let controller = OllamaModelRuntimeController(urlSession: session)
+        let baseURL = URL(string: "http://ollama.test")!
+        await CapturingURLProtocol.reset()
+        await CapturingURLProtocol.setResponder { request in
+            let path = request.url?.path ?? ""
+            if path == "/api/pull" {
+                return (
+                    200,
+                    """
+                    {"error":"pull model manifest: 412: \\nThe model you are attempting to pull requires a newer version of Ollama.\\n\\nPlease download the latest version at:\\n\\nhttps://ollama.com/download"}
+                    """.data(using: .utf8)!
+                )
+            }
+            return (200, Data())
+        }
+
+        do {
+            try await controller.pullOllamaModel(model: "gemma4:12b", baseURL: baseURL) { _ in }
+            Issue.record("expected update-required pull error")
+        } catch {
+            let message = error.localizedDescription
+            #expect(message.hasPrefix("Update Ollama before retrying."))
+            #expect(message.contains("requires a newer version of Ollama"))
+            #expect(message.contains("https://ollama.com/download"))
+            #expect(!message.contains("\\n"))
+        }
+    }
+
     private func memoryItemJSON(id: UUID) -> Data {
         Data(
             """

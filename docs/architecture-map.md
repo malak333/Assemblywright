@@ -903,9 +903,10 @@ external action, or broader production operation.
 
 The Swift Model tab download path now uses streamed Ollama `/api/pull` JSON-line
 progress, auto-reloads `/api/tags` after successful pulls, treats `:latest`
-inventory aliases as installed for base-model selections, and gates Start until
-the selected model is installed. Swift focused integration tests cover the
-model/controller path, and `JarvisMacAppTests` covers the app-level
+inventory aliases as installed for base-model selections, normalizes
+update-required pull failures into actionable Ollama update guidance, and gates
+Start until the selected model is installed. Swift focused integration tests
+cover the model/controller path, and `JarvisMacAppTests` covers the app-level
 Start/Download/Stop gating plus progress presentation without requiring a live
 Ollama daemon.
 

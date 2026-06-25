@@ -204,6 +204,11 @@ core with `JARVIS_LOCAL_MODEL_PROVIDER`, `JARVIS_LOCAL_MODEL`,
 another terminal already owns the core port, stop that external `jarvis serve`
 process before applying the Model tab restart.
 
+If a Model tab download fails with `pull model manifest: 412` and says the model
+requires a newer version of Ollama, update and restart Ollama before retrying the
+same model. Jarvis normalizes that provider error, but it cannot make an older
+Ollama daemon pull a model that requires newer manifest/runtime support.
+
 Live local testing with `llama3.2` has proven this Ollama route can complete
 real model commands. Local model behavior is still model-dependent, so the
 runtime derives the provider-visible tool catalog from validated first-party
@@ -1038,7 +1043,8 @@ shows release evidence status rows with explicit path, detail, and
 production/manual-gate context,
 shows Model tab streamed Ollama download progress, automatic inventory reload,
 `:latest` installed-model alias handling, and Start/Download gating through
-focused model and app presentation tests,
+focused model and app presentation tests, including normalized update-required
+pull failures,
 exposes management models for
 approval evidence, memory classification summary, memory policy review counts,
 memory create/update/review/delete/restore state, runs/audit,

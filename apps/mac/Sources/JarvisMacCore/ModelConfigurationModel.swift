@@ -366,7 +366,20 @@ private struct OllamaPullError: LocalizedError {
     var message: String
 
     var errorDescription: String? {
+        let normalized = Self.normalized(message)
+        if normalized.localizedCaseInsensitiveContains("requires a newer version of Ollama") {
+            return "Update Ollama before retrying. \(normalized)"
+        }
+        return normalized
+    }
+
+    private static func normalized(_ message: String) -> String {
         message
+            .replacingOccurrences(of: "\\n", with: "\n")
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
     }
 }
 
@@ -507,7 +520,7 @@ public final class ModelConfigurationModel: ObservableObject {
 
     public func downloadSelectedModel() async {
         downloadProgress = JarvisOllamaPullProgress(status: "Starting download")
-        await runOllamaAction(action: "downloaded and reloaded") {
+        await runOllamaAction(action: "downloaded and reloaded", failureAction: "download") {
             try await controller.pullOllamaModel(
                 model: configuration.sanitizedModel,
                 baseURL: try ollamaBaseURL(),
@@ -553,7 +566,11 @@ public final class ModelConfigurationModel: ObservableObject {
         }
     }
 
-    private func runOllamaAction(action: String, operation: () async throws -> Void) async {
+    private func runOllamaAction(
+        action: String,
+        failureAction: String? = nil,
+        operation: () async throws -> Void
+    ) async {
         guard configuration.provider == .ollama else {
             statusMessage = "Model runtime controls are available for Ollama only."
             return
@@ -566,8 +583,17 @@ public final class ModelConfigurationModel: ObservableObject {
             try await operation()
             statusMessage = "\(configuration.sanitizedModel) \(action) through Ollama."
         } catch {
-            statusMessage = "Ollama model \(action) failed: \(error)"
+            statusMessage = "Ollama model \(failureAction ?? action) failed: \(Self.errorMessage(error))"
         }
+    }
+
+    private static func errorMessage(_ error: any Error) -> String {
+        error.localizedDescription
+            .replacingOccurrences(of: "\\n", with: "\n")
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
     }
 
     private func refreshAvailableModelsAfterDownload() async throws {

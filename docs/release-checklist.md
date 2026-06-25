@@ -35,7 +35,8 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
 - Confirm Swift Model tab behavior remains represented in docs and tests:
   streamed Ollama `/api/pull` progress, automatic `/api/tags` reload after
   download completion, `:latest` installed-model alias handling, and Start gated
-  until the selected model is installed.
+  until the selected model is installed. Update-required Ollama pull failures
+  should stay normalized into actionable update guidance.
 - Confirm the current-vs-target implementation phase table is up to date before
   using any production-readiness language. Release notes may claim foundation
   readiness only for verified Rust/Swift surfaces, not full assistant readiness.

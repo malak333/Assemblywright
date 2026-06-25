@@ -639,6 +639,9 @@ requires plugin-trust `generated_at`, `review_started_at`,
   `JARVIS_LOCAL_MODEL_TIMEOUT_MS` overrides. The tab cannot reconfigure a
   separate terminal-owned `jarvis serve` process; that external core must be
   stopped before the app can relaunch a supervised core with new model settings.
+  If Ollama returns a `/api/pull` 412 update-required error for a newer model
+  family, Jarvis surfaces a normalized "Update Ollama before retrying" failure;
+  the fix is to update and restart Ollama before retrying the same model pull.
 - The Swift Model tab also exposes a `Codex` provider selection as the
   user-facing label for the existing approved ChatGPT/OpenAI-compatible cloud
   route. Selecting it disables the local provider for the app-supervised core,
@@ -762,8 +765,9 @@ requires plugin-trust `generated_at`, `review_started_at`,
   selected-model start/stop. `JarvisMacAppTests` covers the visible Model tab
   Start/Download/Stop gating and progress presentation, while the
   `OllamaModelRuntimeController` HTTP test uses an injected `URLSession` to
-  assert streamed `/api/pull` plus `/api/tags` and `/api/generate` keep-alive
-  request shape without requiring a live Ollama daemon.
+  assert streamed `/api/pull`, update-required pull-error normalization, plus
+  `/api/tags` and `/api/generate` keep-alive request shape without requiring a
+  live Ollama daemon.
 - The current E2E expectation for Rust/CLI foundation changes is
   `cargo test -p jarvis-cli --test local_ipc_e2e`; the ignored variant is
   release-proof coverage and is included by `./scripts/release-local.sh`.
