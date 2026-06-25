@@ -622,6 +622,19 @@ requires plugin-trust `generated_at`, `review_started_at`,
   known credentials such as the OpenAI API key from Keychain and injects only
   missing process environment values when launching the bundled core; explicit
   environment values still win, and the provider does not auto-enable ChatGPT.
+- The Swift Model tab can select the app-supervised local model without
+  requiring shell env edits. It decodes `/health` active provider/model fields,
+  lists installed Ollama models from `/api/tags`, merges recommended
+  downloadable Llama/Mistral/Phi/Gemma/Qwen options including Gemma 4,
+  Gemma 3, Qwen3.6, Qwen3, Qwen2.5, Qwen2.5-Coder, and Qwen2.5-VL tags, shows
+  RAM estimates from the installed Ollama model size or the curated pre-download
+  estimate, pulls missing selections through `/api/pull`, starts and stops
+  selected Ollama residency through `/api/generate` keep-alive requests, and
+  restarts the supervised core with `JARVIS_LOCAL_MODEL_PROVIDER`,
+  `JARVIS_LOCAL_MODEL`, `JARVIS_OLLAMA_BASE_URL`, and
+  `JARVIS_LOCAL_MODEL_TIMEOUT_MS` overrides. The tab cannot reconfigure a
+  separate terminal-owned `jarvis serve` process; that external core must be
+  stopped before the app can relaunch a supervised core with new model settings.
 - The Swift shell exposes production-facing management tabs for approval
   evidence, runs/audit, scheduler create/inspect/cancel/run-due/recover-stale,
   redacted diagnostics, release readiness, and voice state. Voice supports typed transcript staging,
@@ -721,6 +734,13 @@ requires plugin-trust `generated_at`, `review_started_at`,
   local runtime boundary claim, not a finished conversational assistant claim:
   model-specific tool discipline can vary, and Jarvis relies on the runtime
   advertised inventory plus fail-closed validation for safety.
+- Swift focused integration coverage now pins the Model tab support path:
+  `ModelConfigurationModel` tests cover Ollama inventory merging, RAM estimate
+  display, missing-model auto-download-on-select, supervised-core launch
+  environment overrides, and selected-model start/stop. The
+  `OllamaModelRuntimeController` HTTP test uses an injected `URLSession` to
+  assert `/api/tags`, `/api/pull`, and `/api/generate` keep-alive request shape
+  without requiring a live Ollama daemon.
 - The current E2E expectation for Rust/CLI foundation changes is
   `cargo test -p jarvis-cli --test local_ipc_e2e`; the ignored variant is
   release-proof coverage and is included by `./scripts/release-local.sh`.

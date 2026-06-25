@@ -276,7 +276,7 @@ public final class JarvisCoreSupervisor: ObservableObject {
         )
     }
 
-    public func start() async {
+    public func start(environmentOverrides: [String: String] = [:]) async {
         mode = .starting
 
         if await refreshHealth() {
@@ -291,10 +291,12 @@ public final class JarvisCoreSupervisor: ObservableObject {
 
         do {
             try createDatabaseDirectoryIfNeeded()
+            var environment = credentialProvider.launchEnvironment(base: ProcessInfo.processInfo.environment)
+            environment.merge(environmentOverrides) { _, override in override }
             process = try processLauncher.launch(
                 executableURL: executableURL,
                 arguments: configuration.launchArguments,
-                environment: credentialProvider.launchEnvironment(base: ProcessInfo.processInfo.environment)
+                environment: environment
             )
             try await waitUntilHealthy()
             mode = .available

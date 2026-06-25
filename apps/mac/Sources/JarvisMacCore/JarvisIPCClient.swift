@@ -30,6 +30,23 @@ public struct JarvisHealth: Decodable, Equatable, Sendable {
     public var emergencyPauseReason: String?
     public var schedulerJobs: Int
     public var commandRuntime: String
+    public var localModelProvider: String
+    public var localModel: String
+    public var localEndpointConfigured: Bool
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        status = try container.decode(String.self, forKey: .status)
+        version = try container.decode(String.self, forKey: .version)
+        contract = try container.decodeIfPresent(JarvisContractMetadata.self, forKey: .contract)
+        emergencyPaused = try container.decode(Bool.self, forKey: .emergencyPaused)
+        emergencyPauseReason = try container.decodeIfPresent(String.self, forKey: .emergencyPauseReason)
+        schedulerJobs = try container.decode(Int.self, forKey: .schedulerJobs)
+        commandRuntime = try container.decode(String.self, forKey: .commandRuntime)
+        localModelProvider = try container.decodeIfPresent(String.self, forKey: .localModelProvider) ?? "fake"
+        localModel = try container.decodeIfPresent(String.self, forKey: .localModel) ?? "fake-local-model"
+        localEndpointConfigured = try container.decodeIfPresent(Bool.self, forKey: .localEndpointConfigured) ?? false
+    }
 
     public init(
         status: String,
@@ -38,7 +55,10 @@ public struct JarvisHealth: Decodable, Equatable, Sendable {
         emergencyPaused: Bool,
         emergencyPauseReason: String?,
         schedulerJobs: Int,
-        commandRuntime: String
+        commandRuntime: String,
+        localModelProvider: String = "fake",
+        localModel: String = "fake-local-model",
+        localEndpointConfigured: Bool = false
     ) {
         self.status = status
         self.version = version
@@ -47,6 +67,9 @@ public struct JarvisHealth: Decodable, Equatable, Sendable {
         self.emergencyPauseReason = emergencyPauseReason
         self.schedulerJobs = schedulerJobs
         self.commandRuntime = commandRuntime
+        self.localModelProvider = localModelProvider
+        self.localModel = localModel
+        self.localEndpointConfigured = localEndpointConfigured
     }
 
     enum CodingKeys: String, CodingKey {
@@ -57,6 +80,9 @@ public struct JarvisHealth: Decodable, Equatable, Sendable {
         case emergencyPauseReason = "emergency_pause_reason"
         case schedulerJobs = "scheduler_jobs"
         case commandRuntime = "command_runtime"
+        case localModelProvider = "local_model_provider"
+        case localModel = "local_model"
+        case localEndpointConfigured = "local_endpoint_configured"
     }
 }
 

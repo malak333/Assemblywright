@@ -350,6 +350,33 @@ private extension JarvisVoiceAdapterError {
     }
 }
 
+@MainActor
+public final class UnavailableVoiceAdapter: JarvisVoiceAdapter {
+    public private(set) var phase: JarvisVoiceAdapterPhase
+    private let error: JarvisVoiceAdapterError
+
+    public init(reason: String) {
+        self.error = .frameworkUnavailable(reason)
+        self.phase = .unavailable(reason: error.description)
+    }
+
+    public func requestPermissions() async -> Result<Void, JarvisVoiceAdapterError> {
+        .failure(error)
+    }
+
+    public func startCapture(callbacks _: JarvisVoiceCaptureCallbacks) async -> Result<Void, JarvisVoiceAdapterError> {
+        .failure(error)
+    }
+
+    public func stopCapture() async -> Result<Void, JarvisVoiceAdapterError> {
+        .failure(.noActiveCapture)
+    }
+
+    public func interrupt(reason _: String) async -> Result<Void, JarvisVoiceAdapterError> {
+        .failure(.noActiveCapture)
+    }
+}
+
 #if canImport(AVFoundation) && canImport(Speech)
 @available(macOS 14.0, *)
 @MainActor

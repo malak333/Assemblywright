@@ -10,7 +10,7 @@ protocol JarvisUserNotificationCenter: Sendable {
 private final class SystemUserNotificationCenter: JarvisUserNotificationCenter, @unchecked Sendable {
     private let notificationCenter: UNUserNotificationCenter
 
-    init(notificationCenter: UNUserNotificationCenter = .current()) {
+    init(notificationCenter: UNUserNotificationCenter) {
         self.notificationCenter = notificationCenter
     }
 
@@ -23,11 +23,29 @@ private final class SystemUserNotificationCenter: JarvisUserNotificationCenter, 
     }
 }
 
+private struct UnavailableUserNotificationCenter: JarvisUserNotificationCenter {
+    func requestAuthorization(options: UNAuthorizationOptions) async throws -> Bool {
+        false
+    }
+
+    func add(_ request: UNNotificationRequest) async throws {
+        throw CocoaError(.featureUnsupported)
+    }
+}
+
 actor MacSchedulerNotificationAdapter: JarvisSchedulerNotificationAdapter {
     private let notificationCenter: any JarvisUserNotificationCenter
 
-    init(notificationCenter: any JarvisUserNotificationCenter = SystemUserNotificationCenter()) {
+    init(notificationCenter: any JarvisUserNotificationCenter = MacSchedulerNotificationAdapter.defaultNotificationCenter()) {
         self.notificationCenter = notificationCenter
+    }
+
+    static func defaultNotificationCenter(bundleURL: URL = Bundle.main.bundleURL) -> any JarvisUserNotificationCenter {
+        guard bundleURL.pathExtension == "app" else {
+            return UnavailableUserNotificationCenter()
+        }
+
+        return SystemUserNotificationCenter(notificationCenter: .current())
     }
 
     func requestAuthorization() async throws -> Bool {

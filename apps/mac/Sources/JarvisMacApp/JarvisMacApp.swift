@@ -1,4 +1,5 @@
 import JarvisMacCore
+import AppKit
 import SwiftUI
 
 @main
@@ -16,6 +17,7 @@ struct JarvisMacApp: App {
     @StateObject private var voice: VoiceStateModel
     @StateObject private var voiceAdapter: VoiceAdapterStateModel
     @StateObject private var speechOutput: SpeechOutputStateModel
+    @StateObject private var modelConfiguration: ModelConfigurationModel
 
     init() {
         let configuration = JarvisCoreSupervisorConfiguration()
@@ -37,7 +39,7 @@ struct JarvisMacApp: App {
         _voice = StateObject(wrappedValue: voice)
         _voiceAdapter = StateObject(
             wrappedValue: VoiceAdapterStateModel(
-                adapter: MacSpeechVoiceAdapter(),
+                adapter: JarvisMacApp.defaultVoiceAdapter(),
                 voiceState: voice,
                 shouldAutoSubmitFinalTranscript: { !console.isWorking },
                 autoSubmitUnavailableReason: {
@@ -49,6 +51,18 @@ struct JarvisMacApp: App {
             )
         )
         _speechOutput = StateObject(wrappedValue: SpeechOutputStateModel(adapter: MacSpeechOutputAdapter()))
+        _modelConfiguration = StateObject(wrappedValue: ModelConfigurationModel())
+    }
+
+    @MainActor
+    private static func defaultVoiceAdapter(bundleURL: URL = Bundle.main.bundleURL) -> any JarvisVoiceAdapter {
+        guard bundleURL.pathExtension == "app" else {
+            return UnavailableVoiceAdapter(
+                reason: "Voice capture is unavailable while running from SwiftPM; launch a packaged app bundle for microphone and Speech permissions."
+            )
+        }
+
+        return MacSpeechVoiceAdapter()
     }
 
     var body: some Scene {
@@ -66,12 +80,15 @@ struct JarvisMacApp: App {
                 releaseReadiness: releaseReadiness,
                 voice: voice,
                 voiceAdapter: voiceAdapter,
-                speechOutput: speechOutput
+                speechOutput: speechOutput,
+                modelConfiguration: modelConfiguration
             )
+                .background(AppActivationView())
                 .task {
-                    await supervisor.start()
+                    await supervisor.start(environmentOverrides: modelConfiguration.launchEnvironmentOverrides)
                     if supervisor.isAvailable {
                         await console.refreshHealth()
+                        modelConfiguration.applyHealth(console.health)
                     } else if case let .degraded(reason) = supervisor.mode {
                         console.markDegraded(reason)
                     }
@@ -83,12 +100,26 @@ struct JarvisMacApp: App {
                     Task {
                         await supervisor.refreshHealth()
                         await console.refreshHealth()
+                        modelConfiguration.applyHealth(console.health)
                     }
                 }
                 .keyboardShortcut("r", modifiers: [.command])
             }
         }
     }
+}
+
+private struct AppActivationView: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async {
+            NSApp.setActivationPolicy(.regular)
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
 struct JarvisShellView: View {
@@ -105,14 +136,21 @@ struct JarvisShellView: View {
     @ObservedObject var voice: VoiceStateModel
     @ObservedObject var voiceAdapter: VoiceAdapterStateModel
     @ObservedObject var speechOutput: SpeechOutputStateModel
+    @ObservedObject var modelConfiguration: ModelConfigurationModel
 
     var body: some View {
         VStack(spacing: 0) {
-            CoreStatusBanner(supervisor: supervisor)
+            CoreStatusBanner(supervisor: supervisor, modelConfiguration: modelConfiguration)
 
             TabView {
                 CommandConsoleView(model: console)
                     .tabItem { Text("Console") }
+                ModelConfigurationView(
+                    model: modelConfiguration,
+                    supervisor: supervisor,
+                    console: console
+                )
+                    .tabItem { Text("Model") }
                 MemoryManagerView(model: memory)
                     .tabItem { Text("Memory") }
                 PluginManagerView(model: plugins)
@@ -137,6 +175,7 @@ struct JarvisShellView: View {
 
 struct CoreStatusBanner: View {
     @ObservedObject var supervisor: JarvisCoreSupervisor
+    @ObservedObject var modelConfiguration: ModelConfigurationModel
 
     var body: some View {
         HStack(spacing: 12) {
@@ -155,7 +194,7 @@ struct CoreStatusBanner: View {
                 .foregroundStyle(.secondary)
 
             Button("Start") {
-                Task { await supervisor.start() }
+                Task { await supervisor.start(environmentOverrides: modelConfiguration.launchEnvironmentOverrides) }
             }
             .disabled(supervisor.isAvailable)
 
@@ -198,6 +237,7 @@ struct CoreStatusBanner: View {
 struct CommandConsoleView: View {
     @ObservedObject var model: CommandConsoleModel
     @State private var input = ""
+    @FocusState private var inputFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -232,6 +272,7 @@ struct CommandConsoleView: View {
             HStack(spacing: 8) {
                 TextField("Ask Jarvis", text: $input)
                     .textFieldStyle(.roundedBorder)
+                    .focused($inputFocused)
                     .onSubmit(send)
                 Button("Send", action: send)
                     .disabled(model.isWorking || input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -239,6 +280,9 @@ struct CommandConsoleView: View {
             .padding()
         }
         .frame(minWidth: 720, minHeight: 480)
+        .onAppear {
+            inputFocused = true
+        }
     }
 
     private var statusBar: some View {
@@ -287,6 +331,198 @@ struct CommandConsoleView: View {
         Task {
             await model.submit(input: command)
         }
+    }
+}
+
+struct ModelConfigurationView: View {
+    @ObservedObject var model: ModelConfigurationModel
+    @ObservedObject var supervisor: JarvisCoreSupervisor
+    @ObservedObject var console: CommandConsoleModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Model")
+                        .font(.headline)
+                    Text(activeRuntimeText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Button("Refresh") {
+                    Task {
+                        await supervisor.refreshHealth()
+                        await console.refreshHealth()
+                        model.applyHealth(console.health)
+                        await model.refreshAvailableModels()
+                    }
+                }
+            }
+
+            Form {
+                Picker("Provider", selection: providerBinding) {
+                    ForEach(JarvisModelProviderSelection.allCases) { provider in
+                        Text(provider.label).tag(provider)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                TextField("Ollama URL", text: ollamaBaseURLBinding)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(model.configuration.provider != .ollama)
+
+                TextField("Timeout ms", text: timeoutBinding)
+                    .textFieldStyle(.roundedBorder)
+            }
+            .formStyle(.grouped)
+
+            if model.configuration.provider == .ollama {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Available Models")
+                            .font(.subheadline)
+                        Spacer()
+                        Button("Reload") {
+                            Task { await model.refreshAvailableModels() }
+                        }
+                        .disabled(model.isWorking)
+                    }
+
+                    ScrollView {
+                        LazyVStack(spacing: 6) {
+                            ForEach(model.availableModels) { availableModel in
+                                Button {
+                                    Task { await model.selectModel(availableModel) }
+                                } label: {
+                                    ModelSelectionRow(
+                                        model: availableModel,
+                                        selected: availableModel.name == model.configuration.sanitizedModel
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(model.isWorking)
+                            }
+                        }
+                    }
+                    .frame(minHeight: 180, maxHeight: 260)
+                }
+            }
+
+            HStack(spacing: 8) {
+                Button("Restart Core With Selection") {
+                    Task {
+                        await model.ensureSelectedModelAvailable()
+                        supervisor.stop()
+                        await supervisor.start(environmentOverrides: model.launchEnvironmentOverrides)
+                        await console.refreshHealth()
+                        model.applyHealth(console.health)
+                    }
+                }
+
+                Button("Start Model") {
+                    Task { await model.loadSelectedModel() }
+                }
+                .disabled(!model.canControlSelectedModelRuntime || model.isWorking)
+
+                Button("Download Selected") {
+                    Task { await model.downloadSelectedModel() }
+                }
+                .disabled(!model.canControlSelectedModelRuntime || model.isWorking)
+
+                Button("Stop Model") {
+                    Task { await model.unloadSelectedModel() }
+                }
+                .disabled(!model.canControlSelectedModelRuntime || model.isWorking)
+
+                Spacer()
+            }
+
+            if let statusMessage = model.statusMessage {
+                Text(statusMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Text("Selection changes apply after restarting the supervised core. If another terminal already owns the core port, stop that process before restarting from the app.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Spacer()
+        }
+        .padding()
+        .frame(minWidth: 720, minHeight: 480, alignment: .topLeading)
+        .task {
+            await model.refreshAvailableModels()
+        }
+    }
+
+    private var activeRuntimeText: String {
+        let provider = model.activeProvider ?? "unknown provider"
+        let activeModel = model.activeModel ?? "unknown model"
+        return "Active: \(provider) / \(activeModel)"
+    }
+
+    private var providerBinding: Binding<JarvisModelProviderSelection> {
+        Binding(
+            get: { model.configuration.provider },
+            set: { provider in
+                model.configuration.provider = provider
+                if provider == .fake {
+                    model.configuration.localModel = "fake-local-model"
+                } else if model.configuration.localModel == "fake-local-model" {
+                    model.configuration.localModel = "llama3.2"
+                }
+            }
+        )
+    }
+
+    private var ollamaBaseURLBinding: Binding<String> {
+        Binding(
+            get: { model.configuration.ollamaBaseURL },
+            set: { model.configuration.ollamaBaseURL = $0 }
+        )
+    }
+
+    private var timeoutBinding: Binding<String> {
+        Binding(
+            get: { model.configuration.timeoutMilliseconds },
+            set: { model.configuration.timeoutMilliseconds = $0 }
+        )
+    }
+}
+
+private struct ModelSelectionRow: View {
+    let model: JarvisOllamaModelInfo
+    let selected: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(selected ? .blue : .secondary)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack {
+                    Text(model.name)
+                        .font(.subheadline)
+                    Text(model.installed ? "Installed" : "Downloads on select")
+                        .font(.caption2)
+                        .foregroundStyle(model.installed ? .green : .orange)
+                }
+                Text(model.memoryLine)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(model.details ?? model.sizeLine)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(selected ? Color.accentColor.opacity(0.14) : Color.secondary.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 }
 

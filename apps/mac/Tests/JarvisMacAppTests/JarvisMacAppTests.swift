@@ -236,6 +236,18 @@ struct JarvisMacAppTests {
         #expect(notificationCenter.requestedAuthorizationOptions?.contains(.sound) == true)
     }
 
+    @Test("Mac scheduler notification adapter does not require app bundle for SwiftPM launch")
+    func macSchedulerNotificationAdapterFallsBackOutsideAppBundle() async throws {
+        let notificationCenter = MacSchedulerNotificationAdapter.defaultNotificationCenter(
+            bundleURL: URL(fileURLWithPath: "/tmp/JarvisSwiftPM/.build/arm64-apple-macosx/debug")
+        )
+        let adapter = MacSchedulerNotificationAdapter(notificationCenter: notificationCenter)
+
+        let authorized = try await adapter.requestAuthorization()
+
+        #expect(!authorized)
+    }
+
     @Test("Mac scheduler notification adapter preserves scheduler payload")
     func macSchedulerNotificationAdapterPreservesSchedulerPayload() async throws {
         let notificationCenter = CapturingUserNotificationCenter(authorizationResult: true)

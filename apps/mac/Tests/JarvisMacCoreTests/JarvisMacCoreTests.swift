@@ -3254,6 +3254,53 @@ struct JarvisMacCoreTests {
         #expect(resolvedURL?.path == cargoExecutable.path)
     }
 
+    @Test("Health decoding includes active local model metadata")
+    func healthDecodingIncludesModelMetadata() throws {
+        let health = try JSONDecoder().decode(
+            JarvisHealth.self,
+            from: Data(
+                """
+                {
+                  "status": "ok",
+                  "version": "0.1.4",
+                  "contract": { "name": "jarvis.local-ipc", "version": 1, "core_version": "0.1.4" },
+                  "started_at": "2026-06-25T17:00:00Z",
+                  "emergency_paused": false,
+                  "emergency_pause_reason": null,
+                  "emergency_pause_updated_at": null,
+                  "scheduler_jobs": 0,
+                  "command_runtime": "routed-ollama-local-model+first-party-plugins",
+                  "local_model_provider": "ollama",
+                  "local_model": "qwen2.5:7b",
+                  "local_endpoint_configured": true
+                }
+                """.utf8
+            )
+        )
+
+        #expect(health.localModelProvider == "ollama")
+        #expect(health.localModel == "qwen2.5:7b")
+        #expect(health.localEndpointConfigured)
+    }
+
+    @Test("Model configuration maps selected Ollama model to launch environment")
+    func modelConfigurationMapsOllamaSelectionToEnvironment() {
+        let configuration = JarvisModelConfiguration(
+            provider: .ollama,
+            localModel: " qwen2.5:7b ",
+            ollamaBaseURL: " http://127.0.0.1:11434/ ",
+            timeoutMilliseconds: "45000"
+        )
+
+        let environment = configuration.launchEnvironmentOverrides
+
+        #expect(environment["JARVIS_LOCAL_MODEL_PROVIDER"] == "ollama")
+        #expect(environment["JARVIS_LOCAL_MODEL"] == "qwen2.5:7b")
+        #expect(environment["JARVIS_OLLAMA_BASE_URL"] == "http://127.0.0.1:11434")
+        #expect(environment["JARVIS_LOCAL_MODEL_TIMEOUT_MS"] == "45000")
+        #expect(environment["JARVIS_CHATGPT_ENABLED"] == "false")
+    }
+
     @MainActor
     @Test("Supervisor enters degraded mode when no core executable is configured")
     func supervisorDegradesWithoutExecutable() async {
@@ -3310,6 +3357,134 @@ struct JarvisMacCoreTests {
         #expect(supervisor.lastHealth?.status == "ok")
         #expect(supervisor.smokeSnapshot.canAttemptPackagedCoreSmoke)
         #expect(supervisor.smokeSnapshot.summary.contains("jarvis-cli"))
+    }
+
+    @MainActor
+    @Test("Supervisor launch applies selected model environment overrides")
+    func supervisorLaunchAppliesModelEnvironmentOverrides() async {
+        let launcher = FakeProcessLauncher()
+        let supervisor = JarvisCoreSupervisor(
+            configuration: JarvisCoreSupervisorConfiguration(
+                bindAddress: "127.0.0.1:9902",
+                executableURL: URL(fileURLWithPath: "/tmp/jarvis-cli"),
+                databaseURL: nil,
+                startupTimeoutSeconds: 0.1,
+                healthPollIntervalNanoseconds: 1
+            ),
+            client: FakeCoreClient(healthResults: [
+                .failure(URLError(.cannotConnectToHost)),
+                .success(sampleHealth())
+            ]),
+            processLauncher: launcher
+        )
+
+        await supervisor.start(environmentOverrides: [
+            "JARVIS_LOCAL_MODEL_PROVIDER": "ollama",
+            "JARVIS_LOCAL_MODEL": "qwen2.5:7b",
+            "JARVIS_OLLAMA_BASE_URL": "http://127.0.0.1:11434"
+        ])
+
+        #expect(launcher.launches.first?.environment["JARVIS_LOCAL_MODEL_PROVIDER"] == "ollama")
+        #expect(launcher.launches.first?.environment["JARVIS_LOCAL_MODEL"] == "qwen2.5:7b")
+        #expect(launcher.launches.first?.environment["JARVIS_OLLAMA_BASE_URL"] == "http://127.0.0.1:11434")
+    }
+
+    @MainActor
+    @Test("Model configuration model starts and stops selected Ollama model")
+    func modelConfigurationModelControlsSelectedOllamaModel() async {
+        let controller = CapturingModelRuntimeController()
+        let model = ModelConfigurationModel(
+            configuration: JarvisModelConfiguration(
+                provider: .ollama,
+                localModel: "llama3.2",
+                ollamaBaseURL: "http://127.0.0.1:11434",
+                timeoutMilliseconds: "60000"
+            ),
+            controller: controller
+        )
+
+        await model.loadSelectedModel()
+        await model.unloadSelectedModel()
+
+        #expect(controller.loadRequests == [
+            CapturingModelRuntimeController.Request(model: "llama3.2", baseURL: "http://127.0.0.1:11434")
+        ])
+        #expect(controller.unloadRequests == [
+            CapturingModelRuntimeController.Request(model: "llama3.2", baseURL: "http://127.0.0.1:11434")
+        ])
+    }
+
+    @MainActor
+    @Test("Model configuration model lists installed models with RAM estimates")
+    func modelConfigurationModelListsInstalledModelsWithMemoryEstimates() async {
+        let controller = CapturingModelRuntimeController(installedModels: [
+            JarvisOllamaModelInfo(
+                name: "custom-local:latest",
+                installed: true,
+                diskSizeBytes: 4_294_967_296,
+                estimatedRamBytes: 4_294_967_296,
+                details: "llama / 7B / Q4"
+            )
+        ])
+        let model = ModelConfigurationModel(controller: controller)
+
+        await model.refreshAvailableModels()
+
+        let customModel = try! #require(model.availableModels.first { $0.name == "custom-local:latest" })
+        #expect(customModel.installed)
+        #expect(customModel.memoryLine.contains("4"))
+        #expect(model.availableModels.contains { $0.name == "llama3.2" })
+    }
+
+    @MainActor
+    @Test("Selecting missing model downloads it automatically")
+    func selectingMissingModelDownloadsAutomatically() async {
+        let controller = CapturingModelRuntimeController()
+        let model = ModelConfigurationModel(controller: controller)
+        let missingModel = JarvisOllamaModelInfo(name: "qwen2.5:7b", installed: false)
+
+        await model.selectModel(missingModel)
+
+        #expect(model.configuration.localModel == "qwen2.5:7b")
+        #expect(controller.pullRequests == [
+            CapturingModelRuntimeController.Request(model: "qwen2.5:7b", baseURL: "http://127.0.0.1:11434")
+        ])
+    }
+
+    @Test("Ollama runtime controller sends inventory, pull, load, and unload HTTP requests")
+    func ollamaRuntimeControllerSendsExpectedHTTPRequests() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [CapturingURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let controller = OllamaModelRuntimeController(urlSession: session)
+        let baseURL = URL(string: "http://ollama.test")!
+        await CapturingURLProtocol.reset()
+        await CapturingURLProtocol.setResponder { request in
+            let path = request.url?.path ?? ""
+            if path == "/api/tags" {
+                return (
+                    200,
+                    """
+                    {"models":[{"name":"qwen2.5:7b","size":4700000000,"details":{"family":"qwen2","parameter_size":"7B","quantization_level":"Q4_K_M"}}]}
+                    """.data(using: .utf8)!
+                )
+            }
+            return (200, #"{"status":"ok"}"#.data(using: .utf8)!)
+        }
+
+        let models = try await controller.listOllamaModels(baseURL: baseURL)
+        try await controller.pullOllamaModel(model: "qwen2.5:7b", baseURL: baseURL)
+        try await controller.loadOllamaModel(model: "qwen2.5:7b", baseURL: baseURL)
+        try await controller.unloadOllamaModel(model: "qwen2.5:7b", baseURL: baseURL)
+
+        let requests = await CapturingURLProtocol.requests
+        let bodies = await CapturingURLProtocol.bodyStrings
+        #expect(models.first?.name == "qwen2.5:7b")
+        #expect(models.first?.estimatedRamBytes == 4_700_000_000)
+        #expect(requests.map { $0.url?.path } == ["/api/tags", "/api/pull", "/api/generate", "/api/generate"])
+        #expect(bodies[1]?.contains("\"model\":\"qwen2.5:7b\"") == true)
+        #expect(bodies[2]?.contains("\"keep_alive\":\"5m\"") == true)
+        #expect(bodies[3]?.contains("\"keep_alive\":\"0\"") == true)
     }
 
     private func memoryItemJSON(id: UUID) -> Data {
@@ -4705,6 +4880,117 @@ private final class FakeProcessLauncher: JarvisCoreProcessLaunching, @unchecked 
     ) throws -> any JarvisCoreProcess {
         launches.append(Launch(executableURL: executableURL, arguments: arguments, environment: environment))
         return FakeProcess()
+    }
+}
+
+private final class CapturingModelRuntimeController: JarvisLocalModelRuntimeControlling, @unchecked Sendable {
+    struct Request: Equatable {
+        var model: String
+        var baseURL: String
+    }
+
+    private(set) var loadRequests: [Request] = []
+    private(set) var unloadRequests: [Request] = []
+    private(set) var pullRequests: [Request] = []
+    private var installedModels: [JarvisOllamaModelInfo]
+
+    init(installedModels: [JarvisOllamaModelInfo] = []) {
+        self.installedModels = installedModels
+    }
+
+    func listOllamaModels(baseURL _: URL) async throws -> [JarvisOllamaModelInfo] {
+        installedModels
+    }
+
+    func pullOllamaModel(model: String, baseURL: URL) async throws {
+        pullRequests.append(Request(model: model, baseURL: baseURL.absoluteString))
+        if !installedModels.contains(where: { $0.name == model }) {
+            installedModels.append(JarvisOllamaModelInfo(
+                name: model,
+                installed: true,
+                diskSizeBytes: 1_073_741_824,
+                estimatedRamBytes: 1_073_741_824,
+                details: "downloaded test model"
+            ))
+        }
+    }
+
+    func loadOllamaModel(model: String, baseURL: URL) async throws {
+        loadRequests.append(Request(model: model, baseURL: baseURL.absoluteString))
+    }
+
+    func unloadOllamaModel(model: String, baseURL: URL) async throws {
+        unloadRequests.append(Request(model: model, baseURL: baseURL.absoluteString))
+    }
+}
+
+private final class CapturingURLProtocol: URLProtocol {
+    private nonisolated(unsafe) static var capturedRequests: [URLRequest] = []
+    private nonisolated(unsafe) static var capturedBodyStrings: [String?] = []
+    private nonisolated(unsafe) static var responseHandler: ((URLRequest) -> (Int, Data))?
+
+    static var requests: [URLRequest] {
+        get async { capturedRequests }
+    }
+
+    static var bodyStrings: [String?] {
+        get async { capturedBodyStrings }
+    }
+
+    static func reset() async {
+        capturedRequests = []
+        capturedBodyStrings = []
+        responseHandler = nil
+    }
+
+    static func setResponder(_ responder: @escaping (URLRequest) -> (Int, Data)) async {
+        responseHandler = responder
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        Self.capturedRequests.append(request)
+        Self.capturedBodyStrings.append(Self.bodyString(from: request))
+        let (status, data) = Self.responseHandler?(request) ?? (200, Data())
+        let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: status,
+            httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"]
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+
+    private static func bodyString(from request: URLRequest) -> String? {
+        if let httpBody = request.httpBody {
+            return String(data: httpBody, encoding: .utf8)
+        }
+        guard let stream = request.httpBodyStream else {
+            return nil
+        }
+
+        stream.open()
+        defer { stream.close() }
+
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 1024)
+        while stream.hasBytesAvailable {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            if count <= 0 { break }
+            data.append(buffer, count: count)
+        }
+        return String(data: data, encoding: .utf8)
     }
 }
 
