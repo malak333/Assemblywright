@@ -68,6 +68,14 @@ Jarvis v1 runs as two cooperating local processes.
 
 The app should feel like a real Mac product: menu bar presence, command surface, settings, clear current activity, and predictable recovery from degraded modes.
 
+The current shell implements that presence with a native SwiftUI
+`MenuBarExtra`. It shares the app's existing supervisor and command/model state,
+uses a stable scene identifier to reopen the main window, and limits its
+lifecycle controls to refresh, start, stop, and quit. It is not a second core
+owner or a hidden background agent: core startup remains app-supervised and all
+production claims still require the packaged-app and manual release evidence
+defined by the release checklist.
+
 ### jarvis-core
 
 `jarvis-core` is a Rust local service started and supervised by the Swift app. It owns durable execution: task planning, model routing, memory reads and writes, plugin execution, scheduled jobs, event triggers, risk policy evaluation, and audit logging.

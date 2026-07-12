@@ -562,6 +562,12 @@ stage or when a PR needs focused evidence for one ownership slice.
   `local_ipc_e2e`, Swift package tests, a focused integration proof, or the
   implemented packaged Mac smoke lane. Docs-only changes should still name the
   existing proof boundary they preserve.
+- For menu-bar changes, run `swift test --package-path apps/mac` and preserve
+  contract coverage for the stable main-window scene route plus every
+  supervisor lifecycle presentation state. Treat actual menu-bar rendering,
+  reopening after window closure, and lifecycle actions in a signed installed
+  app as manual Finder/LaunchServices QA; Swift package tests do not prove
+  those live GUI behaviors.
 - Confirm local packaged-app proof remains separate from signed production app
   evidence until a Developer ID signed and notarized app exists.
   `./scripts/packaged-supervision-proof.sh`

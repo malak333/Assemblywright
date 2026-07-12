@@ -24,7 +24,12 @@ release-readiness blocker inspection,
 read-only signed-distribution/live-device/plugin-trust runbook rendering,
 adapter-backed scheduler notification controls, degraded-mode handling,
 Speech/AVFoundation voice input controls, AVFoundation speech-output controls,
-and a core supervisor abstraction.
+and a core supervisor abstraction. A native `MenuBarExtra` keeps Jarvis
+reachable when its main window is closed, reflects the shared supervisor's
+stopped/starting/available/degraded state, reopens the existing SwiftUI shell,
+and routes refresh/start/stop through the same app-owned models. This local
+contract does not replace signed-app, Finder/LaunchServices, or live-device UI
+validation.
 Scheduler due execution records a redacted proactive policy audit before
 submitting commands, using the same trigger classification as
 `/permissions/policy-review`, so proactive routines stay inspectable without

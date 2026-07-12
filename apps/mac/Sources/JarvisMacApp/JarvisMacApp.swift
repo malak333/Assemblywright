@@ -66,7 +66,7 @@ struct JarvisMacApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("Jarvis") {
+        WindowGroup("Jarvis", id: JarvisMenuBarContract.mainWindowID) {
             JarvisShellView(
                 supervisor: supervisor,
                 console: console,
@@ -106,6 +106,20 @@ struct JarvisMacApp: App {
                 .keyboardShortcut("r", modifiers: [.command])
             }
         }
+
+        MenuBarExtra {
+            JarvisMenuBarView(
+                supervisor: supervisor,
+                console: console,
+                modelConfiguration: modelConfiguration
+            )
+        } label: {
+            Label(
+                JarvisMenuBarContract.title,
+                systemImage: JarvisMenuBarPresentation(mode: supervisor.mode).systemImage
+            )
+        }
+        .menuBarExtraStyle(.menu)
     }
 }
 
