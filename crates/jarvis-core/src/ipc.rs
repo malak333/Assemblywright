@@ -4893,7 +4893,7 @@ fn release_evidence_status_from_env_with_repository(
         invalid_count,
         items,
         proof_boundary:
-            "File/report inventory only; complete means expected paths are present, app bundle metadata matches the expected bundle identifier/version/build, bundled core version-marker metadata matches the expected release version, and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/non-future timestamp semantics, required repository-backed task/audit command-result evidence resolution, plugin-trust non-future timestamp and owner-asserted review-source semantics, and final evidence-bundle path/digest/archive-URI/signature-validation/non-future timestamp semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, execute release artifacts, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
+            "File/report inventory only; complete means expected paths are present, app bundle metadata matches the expected bundle identifier/version/build and approved microphone/Speech privacy prompt copy, bundled core version-marker metadata matches the expected release version, and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/non-future timestamp semantics, required repository-backed task/audit command-result evidence resolution, plugin-trust non-future timestamp and owner-asserted review-source semantics, and final evidence-bundle path/digest/archive-URI/signature-validation/non-future timestamp semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, execute release artifacts, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
             .to_string(),
     }
 }
@@ -5109,6 +5109,14 @@ fn inspect_release_app_bundle(path: &FsPath) -> (ReleaseEvidenceItemStatus, Stri
         ("CFBundleIdentifier", expected_bundle_id.as_str()),
         ("CFBundleShortVersionString", expected_version.as_str()),
         ("CFBundleVersion", expected_version.as_str()),
+        (
+            "NSMicrophoneUsageDescription",
+            EXPECTED_MICROPHONE_USAGE_DESCRIPTION,
+        ),
+        (
+            "NSSpeechRecognitionUsageDescription",
+            EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION,
+        ),
     ] {
         match plist_xml_string_value(&contents, key) {
             Some(actual) if actual == expected => {}
@@ -5131,7 +5139,7 @@ fn inspect_release_app_bundle(path: &FsPath) -> (ReleaseEvidenceItemStatus, Stri
 
     (
         ReleaseEvidenceItemStatus::Present,
-        "directory exists; Info.plist bundle identifier, short version, and build version match expected release metadata; signing, notarization, and stapling are not validated by evidence-status".to_string(),
+        "directory exists; Info.plist bundle identifier, short version, build version, and privacy prompt copy match expected release metadata; signing, notarization, and stapling are not validated by evidence-status".to_string(),
     )
 }
 
@@ -6561,7 +6569,7 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "release_evidence_status",
             "implemented",
-            "`/release/evidence-status` and `jarvis release evidence-status` expose structured present, missing, or invalid status for standard signed artifacts, QA reports, and final evidence bundle paths, including app bundle metadata matching, bundled core version-marker matching, signed-provenance core path/version/digest binding, signed-provenance artifact digest matching, live-device QA bundle/version/non-future timestamp and repository-backed command-result evidence checks, plugin-trust release-version, non-future timestamp, owner-review-source, host-egress policy and deny/allow fixture checks, and final-bundle path/digest/local-signature/archive-URI validation plus child-report semantic revalidation, with Rust, CLI E2E, and Swift model coverage.",
+            "`/release/evidence-status` and `jarvis release evidence-status` expose structured present, missing, or invalid status for standard signed artifacts, QA reports, and final evidence bundle paths, including app bundle metadata and approved privacy prompt copy matching, bundled core version-marker matching, signed-provenance core path/version/digest binding, signed-provenance artifact digest matching, live-device QA bundle/version/non-future timestamp and repository-backed command-result evidence checks, plugin-trust release-version, non-future timestamp, owner-review-source, host-egress policy and deny/allow fixture checks, and final-bundle path/digest/local-signature/archive-URI validation plus child-report semantic revalidation, with Rust, CLI E2E, and Swift model coverage.",
             "Read-only file/report inventory plus report semantic validation only; it does not sign, notarize, staple, install, Finder-launch, execute release artifacts, run live-device QA, review marketplace trust, scan malware, or enforce OS sandboxing.",
         ),
         feature(
@@ -7504,11 +7512,17 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
   <string>{}</string>
   <key>CFBundleVersion</key>
   <string>{}</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>{}</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>{}</string>
 </dict>
 </plist>
 "#,
                 env!("CARGO_PKG_VERSION"),
-                env!("CARGO_PKG_VERSION")
+                env!("CARGO_PKG_VERSION"),
+                EXPECTED_MICROPHONE_USAGE_DESCRIPTION,
+                EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION
             ),
         )
         .expect("write matching Info.plist");
@@ -7516,6 +7530,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let (present_status, present_detail) = inspect_release_app_bundle(&app_dir);
         assert_eq!(present_status, ReleaseEvidenceItemStatus::Present);
         assert!(present_detail.contains("Info.plist bundle identifier"));
+        assert!(present_detail.contains("privacy prompt copy"));
         assert!(present_detail.contains("not validated by evidence-status"));
 
         std::fs::write(
@@ -7529,6 +7544,10 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
   <string>0.1.4</string>
   <key>CFBundleVersion</key>
   <string>0.1.4</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Jarvis uses microphone input only when you explicitly start local voice capture.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>Jarvis uses speech recognition only to turn your spoken command into a local assistant request.</string>
 </dict>
 </plist>
 "#,
@@ -7538,6 +7557,56 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let (invalid_status, invalid_detail) = inspect_release_app_bundle(&app_dir);
         assert_eq!(invalid_status, ReleaseEvidenceItemStatus::Invalid);
         assert!(invalid_detail.contains("CFBundleIdentifier mismatch"));
+
+        std::fs::write(
+            &info_plist,
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>com.nobiletechnology.jarvis</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.1.4</string>
+  <key>CFBundleVersion</key>
+  <string>0.1.4</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Jarvis microphone fixture</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>Jarvis uses speech recognition only to turn your spoken command into a local assistant request.</string>
+</dict>
+</plist>
+"#,
+        )
+        .expect("write privacy-mismatched Info.plist");
+
+        let (invalid_status, invalid_detail) = inspect_release_app_bundle(&app_dir);
+        assert_eq!(invalid_status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(invalid_detail.contains("NSMicrophoneUsageDescription mismatch"));
+
+        std::fs::write(
+            &info_plist,
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>com.nobiletechnology.jarvis</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.1.4</string>
+  <key>CFBundleVersion</key>
+  <string>0.1.4</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Jarvis uses microphone input only when you explicitly start local voice capture.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>Jarvis speech fixture</string>
+</dict>
+</plist>
+"#,
+        )
+        .expect("write Speech-privacy-mismatched Info.plist");
+
+        let (invalid_status, invalid_detail) = inspect_release_app_bundle(&app_dir);
+        assert_eq!(invalid_status, ReleaseEvidenceItemStatus::Invalid);
+        assert!(invalid_detail.contains("NSSpeechRecognitionUsageDescription mismatch"));
     }
 
     #[test]

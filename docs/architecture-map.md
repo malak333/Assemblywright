@@ -326,7 +326,8 @@ standard signed artifact, signed-distribution provenance report, live-device QA
 report, plugin-trust QA report, and final evidence bundle inventory as
 structured JSON with present, missing, or invalid item status. Artifact paths
 remain presence-only checks except the app bundle, whose `Info.plist` bundle id,
-short version, and build version must match expected release metadata, and the
+short version, build version, and approved microphone/Speech privacy prompt copy
+must match expected release metadata, and the
 bundled core executable, whose adjacent `jarvis-cli.version` marker must match
 the expected release version; missing or stale marker details point operators
 back to the unsigned launch check for local evidence or the signed packaging
@@ -592,8 +593,8 @@ payload validate through Apple-tool-derived checks. Production bundle creation k
 mandatory, parses every required live-device/plugin-trust report flag, requires
 non-empty and non-placeholder owner-recorded evidence-note fields in both QA
 reports plus the final bundle owner attestation, confirms the live-device QA bundle id/version/build
-metadata matches the expected release, checks live-device voice and notification
-timestamps are ordered UTC values,
+metadata and approved microphone/Speech privacy prompt copy match the expected
+release, checks live-device voice and notification timestamps are ordered UTC values,
 and records SHA-256 digests for distribution artifacts and QA reports before
 writing evidence.
 The `./scripts/release-evidence-doctor.sh --check` command inventories the
@@ -967,8 +968,8 @@ The
 historical 2026-06-12 UTC baseline after PR #268 started from `main` at
 `8cccb5b`, with the hosted `Release local gate` green for PR #268 run
 `27428860335` / job `81073692261`. The latest verified main baseline at
-`main` commit `051ec49` has hosted `Release local gate` success for push run
-`28041417362` / job `83008348690` and continues to report `production_ready: false`,
+`main` commit `c474946` has hosted `Release local gate` success for push run
+`28122973227` / job `83276912070` and continues to report `production_ready: false`,
 `evidence_mode_enabled: false`, `verified_feature_count: 16`, and `pending_feature_count: 1`, with
 `live_voice_loop` still `pending_manual_validation`, while the local repo-owned
 release handoff, workflow hygiene, docs drift smoke, evidence-note validation,

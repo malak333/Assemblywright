@@ -506,8 +506,9 @@ stage or when a PR needs focused evidence for one ownership slice.
   fields in both QA reports, require structured live-device notification
   observation fields for kind/title/body/thread/timestamp with
   `thread_identifier: jarvis.scheduler`, confirm the live-device QA report
-  matches the expected app bundle `Info.plist` bundle id/version/build, reject
-  future-dated report timestamps, require plugin-trust
+  matches the expected app bundle `Info.plist` bundle id/version/build and
+  approved microphone/Speech privacy prompt copy, reject future-dated report
+  timestamps, require plugin-trust
   `review_source: owner-asserted-manual-review`, verify signed-provenance zip/pkg/core/notary-log digests
   against the current artifact files and preserved notarytool logs, and write SHA-256 digests for the signed
   distribution artifacts, signed provenance, plus QA reports before writing evidence. The

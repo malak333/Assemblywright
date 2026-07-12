@@ -1032,10 +1032,12 @@ check_app_bundle_metadata() {
     return
   fi
 
-  local bundle_id short_version build_version
+  local bundle_id short_version build_version microphone_usage speech_usage
   bundle_id="$(plist_string_value "$info_plist" CFBundleIdentifier || true)"
   short_version="$(plist_string_value "$info_plist" CFBundleShortVersionString || true)"
   build_version="$(plist_string_value "$info_plist" CFBundleVersion || true)"
+  microphone_usage="$(plist_string_value "$info_plist" NSMicrophoneUsageDescription || true)"
+  speech_usage="$(plist_string_value "$info_plist" NSSpeechRecognitionUsageDescription || true)"
 
   if [[ "$bundle_id" == "$EXPECTED_BUNDLE_ID" ]]; then
     record_satisfied "app bundle Info.plist CFBundleIdentifier matches expected bundle id"
@@ -1051,6 +1053,16 @@ check_app_bundle_metadata() {
     record_satisfied "app bundle Info.plist CFBundleVersion matches expected version"
   else
     record_missing "app bundle Info.plist CFBundleVersion mismatch: expected $EXPECTED_VERSION, got ${build_version:-<missing>}"
+  fi
+  if [[ "$microphone_usage" == "$EXPECTED_MICROPHONE_USAGE_DESCRIPTION" ]]; then
+    record_satisfied "app bundle Info.plist NSMicrophoneUsageDescription matches approved privacy copy"
+  else
+    record_missing "app bundle Info.plist NSMicrophoneUsageDescription mismatch: expected $EXPECTED_MICROPHONE_USAGE_DESCRIPTION, got ${microphone_usage:-<missing>}"
+  fi
+  if [[ "$speech_usage" == "$EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION" ]]; then
+    record_satisfied "app bundle Info.plist NSSpeechRecognitionUsageDescription matches approved privacy copy"
+  else
+    record_missing "app bundle Info.plist NSSpeechRecognitionUsageDescription mismatch: expected $EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION, got ${speech_usage:-<missing>}"
   fi
 }
 
@@ -1429,6 +1441,10 @@ write_fixture_app() {
   <string>$VERSION</string>
   <key>CFBundleVersion</key>
   <string>$VERSION</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>$EXPECTED_MICROPHONE_USAGE_DESCRIPTION</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>$EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION</string>
 </dict>
 </plist>
 XML
@@ -1778,6 +1794,32 @@ JSON
   JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null
+
+  python3 - "$tmp_dir/dist/Jarvis.app/Contents/Info.plist" <<'PY'
+import plistlib
+import sys
+
+path = sys.argv[1]
+with open(path, "rb") as handle:
+    info = plistlib.load(handle)
+info["NSMicrophoneUsageDescription"] = "Jarvis microphone fixture"
+with open(path, "wb") as handle:
+    plistlib.dump(info, handle)
+PY
+  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="" \
+    JARVIS_EVIDENCE_PKG_PATH="" \
+    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
+    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+    "$0" --assert-complete >"$tmp_dir/privacy-copy.err" 2>&1; then
+    fail "release evidence doctor self-test expected stale app privacy prompt copy to fail"
+  fi
+  if ! grep -q "NSMicrophoneUsageDescription mismatch" "$tmp_dir/privacy-copy.err"; then
+    fail "release evidence doctor self-test expected stale app privacy prompt error to name NSMicrophoneUsageDescription"
+  fi
+  write_fixture_app "$tmp_dir/dist/Jarvis.app"
 
   python3 - "$tmp_dir/plugin.json" "$tmp_dir/invalid-plugin-artifact.json" <<'PY'
 import json
