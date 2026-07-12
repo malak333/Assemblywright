@@ -26,9 +26,9 @@ pub use ipc::{
     MAX_ACTIVITY_EVENT_LIMIT, MAX_SCHEDULER_BACKGROUND_LIMIT,
 };
 pub use model::{
-    redact_url_credentials, ChatGptHttpModel, ChatGptProviderConfig, FakeLocalModel,
-    LocalModelConfig, LocalModelExecutor, LocalModelProviderKind, ModelExecutor, ModelProvider,
-    ModelRequest, ModelResponse, ModelRoute, ModelToolDefinition, ModelToolRequest,
+    redact_url_credentials, ChatGptAuthMode, ChatGptHttpModel, ChatGptProviderConfig,
+    FakeLocalModel, LocalModelConfig, LocalModelExecutor, LocalModelProviderKind, ModelExecutor,
+    ModelProvider, ModelRequest, ModelResponse, ModelRoute, ModelToolDefinition, ModelToolRequest,
     ModelToolResult, OllamaHttpModel, ProviderConfig, ProviderStatus, RoutedModelExecutor,
 };
 pub use plugin::{

@@ -366,6 +366,7 @@ pub struct HealthResponse {
     pub local_model: String,
     pub local_endpoint_configured: bool,
     pub chatgpt_enabled: bool,
+    pub chatgpt_auth_mode: crate::ChatGptAuthMode,
     pub chatgpt_model: String,
     pub chatgpt_requires_approval: bool,
 }
@@ -1054,6 +1055,7 @@ impl IpcState {
             local_model: self.provider_config.local.model.clone(),
             local_endpoint_configured: self.provider_config.local.base_url.is_some(),
             chatgpt_enabled: self.provider_config.chatgpt.enabled,
+            chatgpt_auth_mode: self.provider_config.chatgpt.auth_mode,
             chatgpt_model: self.provider_config.chatgpt.model.clone(),
             chatgpt_requires_approval: self.provider_config.chatgpt.requires_approval,
         }
@@ -10263,9 +10265,11 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             },
             chatgpt: crate::ChatGptProviderConfig {
                 enabled: true,
+                auth_mode: crate::ChatGptAuthMode::ApiKey,
                 model: "gpt-test".to_string(),
                 base_url: format!("http://{address}"),
                 api_key: Some("test-token".to_string()),
+                codex_executable: "codex".to_string(),
                 requires_approval: true,
                 timeout_ms: 2_000,
             },

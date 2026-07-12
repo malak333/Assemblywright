@@ -642,22 +642,43 @@ requires plugin-trust `generated_at`, `review_started_at`,
   If Ollama returns a `/api/pull` 412 update-required error for a newer model
   family, Jarvis surfaces a normalized "Update Ollama before retrying" failure;
   the fix is to update and restart Ollama before retrying the same model pull.
-- The Swift Model tab also exposes a `Codex` provider selection as the
-  user-facing label for the existing approved ChatGPT/OpenAI-compatible cloud
-  route. Selecting it disables the local provider for the app-supervised core,
-  sets `JARVIS_CHATGPT_ENABLED=true`, passes the chosen
-  `JARVIS_CHATGPT_MODEL`, `JARVIS_OPENAI_BASE_URL`, and
-  `JARVIS_CHATGPT_TIMEOUT_MS`, and keeps
-  `JARVIS_CHATGPT_REQUIRES_APPROVAL=true`. The API key remains a Keychain-backed
-  OpenAI credential injected by `JarvisCoreCredentialProvider`; it is not
-  stored in SQLite, docs, diagnostics, or the model launch override map.
-  `/health` now reports `chatgpt_enabled`, `chatgpt_model`, and
-  `chatgpt_requires_approval`, so the Swift Model tab can display an active
-  `codex` provider/model when the supervised core is running in that cloud
-  mode. CLI E2E starts a real `jarvis serve` with the same Codex-equivalent
+- The Swift Model tab exposes separate `OpenAI API` and `Codex account`
+  provider selections for approved ChatGPT/OpenAI-compatible cloud routing.
+  Both disable the local provider for the app-supervised core, set
+  `JARVIS_CHATGPT_ENABLED=true`, pass the chosen `JARVIS_CHATGPT_MODEL` and
+  `JARVIS_CHATGPT_TIMEOUT_MS`, and keep
+  `JARVIS_CHATGPT_REQUIRES_APPROVAL=true`. `OpenAI API` sets
+  `JARVIS_CHATGPT_AUTH=api_key`, passes `JARVIS_OPENAI_BASE_URL`, and receives a
+  Keychain-backed OpenAI credential injected by `JarvisCoreCredentialProvider`.
+  `Codex account` sets `JARVIS_CHATGPT_AUTH=codex_account` and
+  `JARVIS_CODEX_EXECUTABLE`, shells through a logged-in Codex CLI, and does not
+  require or store an OpenAI Platform API key. The subprocess receives its
+  redacted prompt over stdin, starts in a temporary directory with a private
+  final-message file, ignores user config and project rules, fixes approval
+  policy to `never`, requests the CLI read-only sandbox, uses strict config with
+  web search disabled, disables the current CLI tool/integration feature set,
+  inherits only an account/network environment allowlist, discards child logs,
+  kills the child if its private response file crosses 1 MiB, and repeats the
+  size check before reading. Prompt delivery runs concurrently with timeout and
+  response-file monitoring so a non-reading child remains bounded. The Jarvis request payload contains only redacted
+  route context, while Codex may still add its own runtime/system context. A CLI
+  lacking the complete constrained argument contract fails closed before model
+  execution. `/health` now reports
+  `chatgpt_enabled`, `chatgpt_auth_mode`, `chatgpt_model`, and
+  `chatgpt_requires_approval`, so the Swift Model tab can display the active
+  cloud provider/model and reject an already-running core with the wrong auth
+  mode. CLI E2E starts a real `jarvis serve` with the same API-key cloud
   environment, checks the `routed-codex-cloud-model+first-party-plugins`
   runtime label, executes through a stub OpenAI-compatible endpoint, and
-  verifies selected-model reporting plus API-key redaction.
+  verifies selected-model reporting plus API-key redaction. A separate
+  cross-process CLI E2E starts `jarvis serve` with a stub Codex executable and
+  verifies the expected CLI argument contract, prompt delivery over stdin, environment
+  minimization, auth-mode health, response routing, and executable-path/secret
+  redaction. Model-selection restart now waits for the supervised process to
+  exit and validates the newly launched core's provider, auth mode, and model
+  health before reporting it available; it does not accept stale health from a
+  terminating core, and a shutdown timeout aborts restart without replacing the
+  still-running process handle.
 - The Swift shell exposes production-facing management tabs for approval
   evidence, runs/audit, scheduler create/inspect/cancel/run-due/recover-stale,
   redacted diagnostics, release readiness, and voice state. Voice supports typed transcript staging,

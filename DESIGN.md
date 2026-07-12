@@ -51,6 +51,7 @@
 | Swift owns the human-facing shell | Rust UI, web UI | Gives the best path to native voice, macOS permissions, notifications, menus, settings, and polished UI. |
 | App-supervised core first | LaunchAgent from day one | Reduces v1 complexity while preserving a path to stronger background reliability later. |
 | Local-model first with ChatGPT as the only approved cloud model | Cloud-first routing, provider-agnostic cloud routing | Matches the privacy posture while allowing explicit escalation for harder reasoning tasks. |
+| Support both OpenAI API-key and logged-in Codex-account authentication inside the approved ChatGPT route | API-key only, unaudited general Codex agent execution | Account authentication avoids a second stored Platform key while retaining the same sensitivity gate, route evidence, approval requirement, redacted request context, and failure audit. The Codex subprocess must ignore user/project rules, disable tool capabilities mechanically, minimize inherited environment, bound output, and fail closed when its constrained CLI contract is unavailable. |
 | Capability scopes plus risk tiers | Simple allow/deny prompts, risk tiers only | High autonomy needs both explicit permission boundaries and per-action risk evaluation. |
 | SQLite as primary structured storage | Flat files only, external database | SQLite is durable, inspectable, easy to migrate, and enough for single-user v1. |
 | macOS Keychain for secrets | Store credentials in SQLite or config files | Secrets should use the platform credential store. |
@@ -145,7 +146,13 @@ Installed plugin list, requested permissions, enable/disable controls, logs, and
 
 ### Settings And Model Routing
 
-Local model configuration, ChatGPT configuration, Codex-labeled selection for the approved OpenAI-compatible cloud route, default routing policy, privacy controls, voice settings, and diagnostics export.
+Local model configuration, ChatGPT configuration with separate OpenAI API-key
+and logged-in Codex-account authentication choices inside the same approved,
+policy-checked cloud route, default routing policy, privacy controls, voice
+settings, and diagnostics export. Codex-account execution is response-only at
+the Jarvis boundary: shell, unified execution, code-host, app/plugin, browser,
+computer, web-search, image-generation, multi-agent, and workspace-dependency
+tool features are disabled before redacted context is sent.
 
 ## Command Data Flow
 
@@ -216,7 +223,12 @@ The initial runtime can be first-party in-process Rust modules, subprocess plugi
 
 - Default to local models for simple commands, personal context, memory operations, home/system context, and sensitive data.
 - Use ChatGPT only through explicit policy for higher-reasoning tasks, coding help, research synthesis, complex planning, or when local models are insufficient.
-- Treat any Codex-labeled UI affordance as a label over that same approved ChatGPT/OpenAI-compatible cloud route, not as a separate unaudited provider.
+- Treat both OpenAI API-key and Codex-account UI affordances as authentication
+  choices inside the same approved, audited ChatGPT cloud route, not as
+  unaudited provider bypasses. Codex-account execution must use strict config,
+  mechanically disable agent/tool/integration surfaces including web search,
+  minimize inherited environment, ignore user/project rules, monitor and cap
+  the private response file, and fail closed if the CLI cannot honor those controls.
 - Do not send restricted, credential-adjacent, private personal, or sensitive system data to ChatGPT without explicit approval for that task.
 - Record the model route and reason in the audit log.
 - Minimize cloud context before any ChatGPT call and redact obvious secrets.

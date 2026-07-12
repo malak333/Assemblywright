@@ -1,6 +1,7 @@
 import Foundation
 
 public enum JarvisModelProviderSelection: String, CaseIterable, Identifiable, Sendable {
+    case codexAccount
     case codex
     case fake
     case ollama
@@ -9,8 +10,10 @@ public enum JarvisModelProviderSelection: String, CaseIterable, Identifiable, Se
 
     public var label: String {
         switch self {
+        case .codexAccount:
+            return "Codex account"
         case .codex:
-            return "Codex"
+            return "OpenAI API"
         case .fake:
             return "Fake local"
         case .ollama:
@@ -25,6 +28,7 @@ public struct JarvisModelConfiguration: Equatable, Sendable {
     public var ollamaBaseURL: String
     public var codexModel: String
     public var codexBaseURL: String
+    public var codexExecutable: String
     public var timeoutMilliseconds: String
 
     public init(
@@ -33,6 +37,7 @@ public struct JarvisModelConfiguration: Equatable, Sendable {
         ollamaBaseURL: String = "http://127.0.0.1:11434",
         codexModel: String = "gpt-4.1-mini",
         codexBaseURL: String = "https://api.openai.com/v1",
+        codexExecutable: String = JarvisModelConfiguration.defaultCodexExecutable(),
         timeoutMilliseconds: String = "60000"
     ) {
         self.provider = provider
@@ -40,19 +45,27 @@ public struct JarvisModelConfiguration: Equatable, Sendable {
         self.ollamaBaseURL = ollamaBaseURL
         self.codexModel = codexModel
         self.codexBaseURL = codexBaseURL
+        self.codexExecutable = codexExecutable
         self.timeoutMilliseconds = timeoutMilliseconds
     }
 
     public static func fromEnvironment(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> Self {
+        let rawProvider = environment["JARVIS_LOCAL_MODEL_PROVIDER"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let chatGPTAuth = (environment["JARVIS_CHATGPT_AUTH"] ?? environment["JARVIS_CHATGPT_AUTH_MODE"])?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
         let provider = JarvisModelProviderSelection(
-            rawValue: environment["JARVIS_LOCAL_MODEL_PROVIDER"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        ) ?? (environment["JARVIS_CHATGPT_ENABLED"] == "true" ? .codex : .fake)
+            rawValue: rawProvider
+        ) ?? (environment["JARVIS_CHATGPT_ENABLED"] == "true"
+            ? (chatGPTAuth == "codex_account" ? .codexAccount : .codex)
+            : .fake)
         let model = environment["JARVIS_LOCAL_MODEL"]?.trimmingCharacters(in: .whitespacesAndNewlines)
         let baseURL = environment["JARVIS_OLLAMA_BASE_URL"]?.trimmingCharacters(in: .whitespacesAndNewlines)
         let codexModel = environment["JARVIS_CHATGPT_MODEL"]?.trimmingCharacters(in: .whitespacesAndNewlines)
         let codexBaseURL = (environment["JARVIS_OPENAI_BASE_URL"] ?? environment["JARVIS_CHATGPT_BASE_URL"])?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let timeout = (provider == .codex
+        let codexExecutable = environment["JARVIS_CODEX_EXECUTABLE"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let timeout = (provider == .codex || provider == .codexAccount
             ? environment["JARVIS_CHATGPT_TIMEOUT_MS"]
             : environment["JARVIS_LOCAL_MODEL_TIMEOUT_MS"])?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -61,18 +74,30 @@ public struct JarvisModelConfiguration: Equatable, Sendable {
             provider: provider,
             localModel: model?.isEmpty == false ? model! : (provider == .ollama ? "llama3.2" : "fake-local-model"),
             ollamaBaseURL: baseURL?.isEmpty == false ? baseURL! : "http://127.0.0.1:11434",
-            codexModel: codexModel?.isEmpty == false ? codexModel! : "gpt-4.1-mini",
+            codexModel: codexModel?.isEmpty == false ? codexModel! : (provider == .codexAccount ? "gpt-5.5" : "gpt-4.1-mini"),
             codexBaseURL: codexBaseURL?.isEmpty == false ? codexBaseURL! : "https://api.openai.com/v1",
+            codexExecutable: codexExecutable?.isEmpty == false ? codexExecutable! : defaultCodexExecutable(),
             timeoutMilliseconds: timeout?.isEmpty == false ? timeout! : "60000"
         )
     }
 
     public var launchEnvironmentOverrides: [String: String] {
         switch provider {
+        case .codexAccount:
+            return [
+                "JARVIS_LOCAL_MODEL_ENABLED": "false",
+                "JARVIS_CHATGPT_ENABLED": "true",
+                "JARVIS_CHATGPT_AUTH": "codex_account",
+                "JARVIS_CHATGPT_MODEL": sanitizedCodexModel,
+                "JARVIS_CODEX_EXECUTABLE": sanitizedCodexExecutable,
+                "JARVIS_CHATGPT_TIMEOUT_MS": sanitizedTimeoutMilliseconds,
+                "JARVIS_CHATGPT_REQUIRES_APPROVAL": "true"
+            ]
         case .codex:
             return [
                 "JARVIS_LOCAL_MODEL_ENABLED": "false",
                 "JARVIS_CHATGPT_ENABLED": "true",
+                "JARVIS_CHATGPT_AUTH": "api_key",
                 "JARVIS_CHATGPT_MODEL": sanitizedCodexModel,
                 "JARVIS_OPENAI_BASE_URL": sanitizedCodexBaseURL,
                 "JARVIS_CHATGPT_TIMEOUT_MS": sanitizedTimeoutMilliseconds,
@@ -109,12 +134,25 @@ public struct JarvisModelConfiguration: Equatable, Sendable {
 
     public var sanitizedCodexModel: String {
         let trimmed = codexModel.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "gpt-4.1-mini" : trimmed
+        return trimmed.isEmpty ? (provider == .codexAccount ? "gpt-5.5" : "gpt-4.1-mini") : trimmed
     }
 
     public var sanitizedCodexBaseURL: String {
         let trimmed = codexBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "https://api.openai.com/v1" : trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
+
+    public var sanitizedCodexExecutable: String {
+        let trimmed = codexExecutable.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? Self.defaultCodexExecutable() : trimmed
+    }
+
+    public static func defaultCodexExecutable(fileManager: FileManager = .default) -> String {
+        let candidates = [
+            "/Applications/ChatGPT.app/Contents/Resources/codex",
+            "/Applications/Codex.app/Contents/Resources/codex"
+        ]
+        return candidates.first(where: fileManager.isExecutableFile(atPath:)) ?? "codex"
     }
 
     public var sanitizedTimeoutMilliseconds: String {
@@ -438,7 +476,7 @@ public final class ModelConfigurationModel: ObservableObject {
 
     public func applyHealth(_ health: JarvisHealth?) {
         if health?.chatgptEnabled == true {
-            activeProvider = "codex"
+            activeProvider = health?.chatgptAuthMode == "codex_account" ? "codex account" : "openai api"
             activeModel = health?.chatgptModel
         } else {
             activeProvider = health?.localModelProvider
@@ -483,6 +521,10 @@ public final class ModelConfigurationModel: ObservableObject {
     }
 
     public func saveEnteredCodexCredentialIfNeeded() {
+        guard configuration.provider == .codex else {
+            refreshCodexCredentialState()
+            return
+        }
         guard !codexAPIKeyEntry.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             refreshCodexCredentialState()
             return

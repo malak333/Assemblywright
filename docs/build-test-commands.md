@@ -267,10 +267,42 @@ provider errors:
 ```sh
 JARVIS_LOCAL_MODEL_ENABLED=false \
 JARVIS_CHATGPT_ENABLED=true \
+JARVIS_CHATGPT_AUTH=api_key \
 JARVIS_OPENAI_API_KEY=... \
 JARVIS_CHATGPT_MODEL=gpt-4.1-mini \
 cargo run -p jarvis-cli -- serve
 ```
+
+To use the ChatGPT/Codex account route without OpenAI Platform billing, sign in
+once with the Codex CLI and then select the Codex account auth mode:
+
+```sh
+codex login --device-auth
+
+JARVIS_LOCAL_MODEL_ENABLED=false \
+JARVIS_CHATGPT_ENABLED=true \
+JARVIS_CHATGPT_AUTH=codex_account \
+JARVIS_CHATGPT_MODEL=gpt-5.5 \
+JARVIS_CODEX_EXECUTABLE="$(command -v codex)" \
+cargo run -p jarvis-cli -- serve
+```
+
+Jarvis sends the redacted request to this subprocess over stdin, uses a private
+temporary final-message file, clears unrelated inherited environment values,
+ignores user config and project rules, disables approvals, and requests the
+Codex CLI read-only sandbox. It also uses strict config with web search disabled,
+disables the current CLI tool/integration feature set, discards subprocess
+logs, kills the child if its private response file crosses 1 MiB, and repeats
+the size check before reading. Prompt delivery runs concurrently with timeout
+and response-file monitoring, so a child that never reads stdin cannot bypass
+either bound. The Jarvis request payload contains only
+redacted route context, although Codex supplies its own runtime/system context.
+The configured CLI must support this full constrained argument contract; an
+older or incompatible CLI fails closed with update/login guidance before model
+execution. The CLI E2E suite exercises the real
+`jarvis serve` boundary with a stub Codex executable and verifies the expected
+argument contract, health auth-mode reporting, prompt stdin, environment
+minimization, response routing, and path/secret redaction.
 
 If the selected local or ChatGPT/OpenAI-compatible provider fails during
 execution, `/commands` now returns a normal failed command response with

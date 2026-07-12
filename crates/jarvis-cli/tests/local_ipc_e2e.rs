@@ -4173,43 +4173,75 @@ fn release_external_handoff_snapshots_match_live_runbook_commands() {
         .expect("handoff path is valid UTF-8")
         .to_string();
     let endpoint = format!("http://{}", unused_loopback_addr());
+    let evidence_root = temp_dir.path().join("isolated-evidence");
+    let evidence_dist = evidence_root.join("distribution");
+    let evidence_live = evidence_root.join("live-device.json");
+    let evidence_plugin = evidence_root.join("plugin-trust.json");
+    let evidence_bundle = evidence_root.join("bundle.json");
+    let evidence_dist_arg = evidence_dist.to_string_lossy().to_string();
+    let evidence_live_arg = evidence_live.to_string_lossy().to_string();
+    let evidence_plugin_arg = evidence_plugin.to_string_lossy().to_string();
+    let evidence_bundle_arg = evidence_bundle.to_string_lossy().to_string();
+    let evidence_env = [
+        ("JARVIS_EVIDENCE_DIST_DIR", evidence_dist_arg.as_str()),
+        ("JARVIS_EVIDENCE_LIVE_QA_REPORT", evidence_live_arg.as_str()),
+        (
+            "JARVIS_EVIDENCE_PLUGIN_QA_REPORT",
+            evidence_plugin_arg.as_str(),
+        ),
+        ("JARVIS_EVIDENCE_OUTPUT_PATH", evidence_bundle_arg.as_str()),
+    ];
+    let mut external_evidence_env = evidence_env.to_vec();
+    external_evidence_env.extend([
+        ("JARVIS_RELEASE_HANDOFF_ENDPOINT", endpoint.as_str()),
+        ("JARVIS_RELEASE_READINESS_EVIDENCE_MODE", "external"),
+    ]);
 
     run_repo_script_with_env(
         "scripts/release-external-handoff.sh",
         &["--write", handoff_dir_arg.as_str()],
-        &[
-            ("JARVIS_RELEASE_HANDOFF_ENDPOINT", endpoint.as_str()),
-            ("JARVIS_RELEASE_READINESS_EVIDENCE_MODE", "external"),
-        ],
+        &external_evidence_env,
     );
 
-    let signed_direct = run_cli_json([
-        "release",
-        "signed-distribution-runbook",
-        "--endpoint",
-        endpoint.as_str(),
-    ]);
-    let live_direct = run_cli_json([
-        "release",
-        "live-device-runbook",
-        "--endpoint",
-        endpoint.as_str(),
-    ]);
-    let plugin_direct = run_cli_json([
-        "release",
-        "plugin-trust-runbook",
-        "--endpoint",
-        endpoint.as_str(),
-    ]);
-    let bundle_direct = run_cli_json([
-        "release",
-        "evidence-bundle-runbook",
-        "--endpoint",
-        endpoint.as_str(),
-    ]);
+    let signed_direct = run_cli_json_with_env(
+        [
+            "release",
+            "signed-distribution-runbook",
+            "--endpoint",
+            endpoint.as_str(),
+        ],
+        &evidence_env,
+    );
+    let live_direct = run_cli_json_with_env(
+        [
+            "release",
+            "live-device-runbook",
+            "--endpoint",
+            endpoint.as_str(),
+        ],
+        &evidence_env,
+    );
+    let plugin_direct = run_cli_json_with_env(
+        [
+            "release",
+            "plugin-trust-runbook",
+            "--endpoint",
+            endpoint.as_str(),
+        ],
+        &evidence_env,
+    );
+    let bundle_direct = run_cli_json_with_env(
+        [
+            "release",
+            "evidence-bundle-runbook",
+            "--endpoint",
+            endpoint.as_str(),
+        ],
+        &evidence_env,
+    );
     let readiness_direct = run_cli_json_with_env(
         ["release", "readiness", "--endpoint", endpoint.as_str()],
-        &[("JARVIS_RELEASE_READINESS_EVIDENCE_MODE", "external")],
+        &external_evidence_env,
     );
     let evidence_status_direct = run_cli_json_with_env(
         [
@@ -4218,7 +4250,7 @@ fn release_external_handoff_snapshots_match_live_runbook_commands() {
             "--endpoint",
             endpoint.as_str(),
         ],
-        &[("JARVIS_RELEASE_READINESS_EVIDENCE_MODE", "external")],
+        &external_evidence_env,
     );
 
     let signed_snapshot = read_json_file(handoff_dir.join("signed-distribution-runbook.json"));
@@ -7499,6 +7531,7 @@ fn serve_reports_codex_cloud_provider_health_and_executes_selected_model() {
         &[
             ("JARVIS_LOCAL_MODEL_ENABLED", "false"),
             ("JARVIS_CHATGPT_ENABLED", "true"),
+            ("JARVIS_CHATGPT_AUTH", "api_key"),
             ("JARVIS_CHATGPT_MODEL", "gpt-codex-e2e"),
             ("JARVIS_OPENAI_API_KEY", "test-openai-token"),
             ("JARVIS_OPENAI_BASE_URL", chatgpt_base_url.as_str()),
@@ -7513,6 +7546,7 @@ fn serve_reports_codex_cloud_provider_health_and_executes_selected_model() {
         "routed-codex-cloud-model+first-party-plugins"
     );
     assert_eq!(health["chatgpt_enabled"], true);
+    assert_eq!(health["chatgpt_auth_mode"], "api_key");
     assert_eq!(health["chatgpt_model"], "gpt-codex-e2e");
     assert_eq!(health["chatgpt_requires_approval"], true);
 
@@ -7543,6 +7577,126 @@ fn serve_reports_codex_cloud_provider_health_and_executes_selected_model() {
         .join()
         .expect("codex cloud provider stub thread");
     drop(temp_dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn serve_executes_codex_account_through_constrained_cli_subprocess() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let db_path = temp_dir.path().join("jarvis-codex-account-e2e.sqlite");
+    let codex_executable = temp_dir.path().join("codex-account-stub");
+    fs::write(
+        &codex_executable,
+        r#"#!/bin/sh
+out=""
+saw_approval_policy=false
+saw_ignore_config=false
+saw_ignore_rules=false
+saw_shell_disabled=false
+saw_exec_disabled=false
+saw_code_host_disabled=false
+saw_apps_disabled=false
+saw_browser_disabled=false
+saw_computer_disabled=false
+saw_strict_config=false
+saw_web_search_disabled=false
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --ask-for-approval) exit 41 ;;
+    --ignore-user-config) saw_ignore_config=true ;;
+    --ignore-rules) saw_ignore_rules=true ;;
+    --strict-config) saw_strict_config=true ;;
+    --disable)
+      shift
+      case "$1" in
+        shell_tool) saw_shell_disabled=true ;;
+        unified_exec) saw_exec_disabled=true ;;
+        code_mode_host) saw_code_host_disabled=true ;;
+        apps) saw_apps_disabled=true ;;
+        browser_use) saw_browser_disabled=true ;;
+        computer_use) saw_computer_disabled=true ;;
+      esac
+      ;;
+    -c)
+      shift
+      case "$1" in
+        approval_policy=*never*) saw_approval_policy=true ;;
+        web_search=*disabled*) saw_web_search_disabled=true ;;
+      esac
+      ;;
+    --output-last-message)
+      shift
+      out="$1"
+      ;;
+  esac
+  shift
+done
+[ "$saw_approval_policy" = true ] || exit 42
+[ "$saw_ignore_config" = true ] || exit 43
+[ "$saw_ignore_rules" = true ] || exit 44
+[ "$saw_shell_disabled" = true ] || exit 49
+[ "$saw_exec_disabled" = true ] || exit 50
+[ "$saw_code_host_disabled" = true ] || exit 51
+[ "$saw_apps_disabled" = true ] || exit 52
+[ "$saw_browser_disabled" = true ] || exit 53
+[ "$saw_computer_disabled" = true ] || exit 54
+[ "$saw_strict_config" = true ] || exit 55
+[ "$saw_web_search_disabled" = true ] || exit 56
+[ -n "$out" ] || exit 45
+[ -z "${JARVIS_OPENAI_API_KEY+x}" ] || exit 46
+[ -z "${JARVIS_SECRET_LEAK_TEST+x}" ] || exit 47
+prompt=$(cat)
+case "$prompt" in *"Redacted task context:"*) ;; *) exit 48 ;; esac
+printf 'codex account e2e ok' > "$out"
+printf '{"type":"done"}\n'
+"#,
+    )
+    .expect("write Codex account stub");
+    make_executable(&codex_executable);
+    let executable = codex_executable
+        .to_str()
+        .expect("Codex executable path is UTF-8");
+
+    let mut server = JarvisServer::start_with_env(
+        &db_path,
+        &[
+            ("JARVIS_LOCAL_MODEL_ENABLED", "false"),
+            ("JARVIS_CHATGPT_ENABLED", "true"),
+            ("JARVIS_CHATGPT_AUTH", "codex_account"),
+            ("JARVIS_CHATGPT_MODEL", "gpt-codex-account-e2e"),
+            ("JARVIS_CODEX_EXECUTABLE", executable),
+            ("JARVIS_CHATGPT_TIMEOUT_MS", "10000"),
+            ("JARVIS_CHATGPT_REQUIRES_APPROVAL", "true"),
+            ("JARVIS_OPENAI_API_KEY", "must-not-reach-codex-child"),
+            ("JARVIS_SECRET_LEAK_TEST", "must-not-reach-codex-child"),
+        ],
+    );
+    let endpoint = server.endpoint();
+
+    let health = http_get_json(endpoint.as_str(), "/health");
+    assert_eq!(health["chatgpt_enabled"], true);
+    assert_eq!(health["chatgpt_auth_mode"], "codex_account");
+    assert_eq!(health["chatgpt_model"], "gpt-codex-account-e2e");
+
+    let command = run_cli_json([
+        "command",
+        "answer through the logged-in Codex account",
+        "--sensitivity",
+        "workspace",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+
+    assert_eq!(command["accepted"], true, "{command}");
+    assert_eq!(command["task"]["status"], "completed", "{command}");
+    assert_eq!(command["route"]["provider"], "chat_gpt");
+    assert_eq!(command["route"]["model"], "gpt-codex-account-e2e");
+    assert_eq!(command["message"], "codex account e2e ok");
+    let encoded = serde_json::to_string(&command).expect("command JSON");
+    assert!(!encoded.contains("must-not-reach-codex-child"));
+    assert!(!encoded.contains(executable));
+
+    server.stop();
 }
 
 #[test]

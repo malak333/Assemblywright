@@ -276,11 +276,30 @@ public final class JarvisCoreSupervisor: ObservableObject {
         )
     }
 
-    public func start(environmentOverrides: [String: String] = [:]) async {
+    public func start(
+        environmentOverrides: [String: String] = [:],
+        requireMatchingConfiguration: Bool = false
+    ) async {
         mode = .starting
 
         if await refreshHealth() {
-            mode = .available
+            if requireMatchingConfiguration,
+               let lastHealth,
+               !Self.health(lastHealth, matches: environmentOverrides)
+            {
+                mode = .degraded(
+                    reason: "A different Jarvis core is already running at \(configuration.endpoint.baseURL.absoluteString). Stop that process before restarting with the selected model."
+                )
+            } else {
+                mode = .available
+            }
+            return
+        }
+
+        if process?.isRunning == true {
+            mode = .degraded(
+                reason: "The previous app-supervised Jarvis core is still running but unavailable. Wait for it to exit before starting another core."
+            )
             return
         }
 
@@ -298,7 +317,10 @@ public final class JarvisCoreSupervisor: ObservableObject {
                 arguments: configuration.launchArguments,
                 environment: environment
             )
-            try await waitUntilHealthy()
+            try await waitUntilHealthy(
+                environmentOverrides: environmentOverrides,
+                requireMatchingConfiguration: requireMatchingConfiguration
+            )
             mode = .available
         } catch {
             process?.terminate()
@@ -307,11 +329,24 @@ public final class JarvisCoreSupervisor: ObservableObject {
         }
     }
 
-    public func stop() {
-        process?.terminate()
+    @discardableResult
+    public func stop() async -> Bool {
+        let stoppingProcess = process
+        stoppingProcess?.terminate()
+        if let stoppingProcess {
+            let deadline = Date().addingTimeInterval(configuration.startupTimeoutSeconds)
+            while stoppingProcess.isRunning, Date() < deadline {
+                try? await Task.sleep(nanoseconds: configuration.healthPollIntervalNanoseconds)
+            }
+            if stoppingProcess.isRunning {
+                mode = .degraded(reason: "jarvis core did not exit before the shutdown timeout")
+                return false
+            }
+        }
         process = nil
         lastHealth = nil
         mode = .stopped
+        return true
     }
 
     @discardableResult
@@ -329,10 +364,15 @@ public final class JarvisCoreSupervisor: ObservableObject {
         }
     }
 
-    private func waitUntilHealthy() async throws {
+    private func waitUntilHealthy(
+        environmentOverrides: [String: String],
+        requireMatchingConfiguration: Bool
+    ) async throws {
         let deadline = Date().addingTimeInterval(configuration.startupTimeoutSeconds)
         repeat {
-            if await refreshHealth() {
+            if await refreshHealth(),
+               !requireMatchingConfiguration || lastHealth.map({ Self.health($0, matches: environmentOverrides) }) == true
+            {
                 return
             }
             try await Task.sleep(nanoseconds: configuration.healthPollIntervalNanoseconds)
@@ -345,6 +385,38 @@ public final class JarvisCoreSupervisor: ObservableObject {
         guard let databaseURL = configuration.databaseURL else { return }
         let directory = databaseURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+
+    private static func health(_ health: JarvisHealth, matches environment: [String: String]) -> Bool {
+        if environment["JARVIS_CHATGPT_ENABLED"] == "true" {
+            let expectedModel = environment["JARVIS_CHATGPT_MODEL"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let expectedAuthMode = (environment["JARVIS_CHATGPT_AUTH"] ?? environment["JARVIS_CHATGPT_AUTH_MODE"])?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return health.chatgptEnabled
+                && health.chatgptRequiresApproval
+                && (expectedAuthMode?.isEmpty != false || health.chatgptAuthMode == expectedAuthMode)
+                && (expectedModel?.isEmpty != false || health.chatgptModel == expectedModel)
+        }
+
+        if environment["JARVIS_CHATGPT_ENABLED"] == "false", health.chatgptEnabled {
+            return false
+        }
+
+        if let expectedProvider = environment["JARVIS_LOCAL_MODEL_PROVIDER"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !expectedProvider.isEmpty,
+           health.localModelProvider != expectedProvider
+        {
+            return false
+        }
+
+        if let expectedModel = environment["JARVIS_LOCAL_MODEL"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !expectedModel.isEmpty,
+           health.localModel != expectedModel
+        {
+            return false
+        }
+
+        return true
     }
 }
 
