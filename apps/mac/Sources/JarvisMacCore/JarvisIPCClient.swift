@@ -34,6 +34,7 @@ public struct JarvisHealth: Decodable, Equatable, Sendable {
     public var localModel: String
     public var localEndpointConfigured: Bool
     public var chatgptEnabled: Bool
+    public var chatgptAuthMode: String
     public var chatgptModel: String
     public var chatgptRequiresApproval: Bool
 
@@ -50,6 +51,7 @@ public struct JarvisHealth: Decodable, Equatable, Sendable {
         localModel = try container.decodeIfPresent(String.self, forKey: .localModel) ?? "fake-local-model"
         localEndpointConfigured = try container.decodeIfPresent(Bool.self, forKey: .localEndpointConfigured) ?? false
         chatgptEnabled = try container.decodeIfPresent(Bool.self, forKey: .chatgptEnabled) ?? false
+        chatgptAuthMode = try container.decodeIfPresent(String.self, forKey: .chatgptAuthMode) ?? "api_key"
         chatgptModel = try container.decodeIfPresent(String.self, forKey: .chatgptModel) ?? "chatgpt-disabled"
         chatgptRequiresApproval = try container.decodeIfPresent(Bool.self, forKey: .chatgptRequiresApproval) ?? true
     }
@@ -66,6 +68,7 @@ public struct JarvisHealth: Decodable, Equatable, Sendable {
         localModel: String = "fake-local-model",
         localEndpointConfigured: Bool = false,
         chatgptEnabled: Bool = false,
+        chatgptAuthMode: String = "api_key",
         chatgptModel: String = "chatgpt-disabled",
         chatgptRequiresApproval: Bool = true
     ) {
@@ -80,6 +83,7 @@ public struct JarvisHealth: Decodable, Equatable, Sendable {
         self.localModel = localModel
         self.localEndpointConfigured = localEndpointConfigured
         self.chatgptEnabled = chatgptEnabled
+        self.chatgptAuthMode = chatgptAuthMode
         self.chatgptModel = chatgptModel
         self.chatgptRequiresApproval = chatgptRequiresApproval
     }
@@ -96,6 +100,7 @@ public struct JarvisHealth: Decodable, Equatable, Sendable {
         case localModel = "local_model"
         case localEndpointConfigured = "local_endpoint_configured"
         case chatgptEnabled = "chatgpt_enabled"
+        case chatgptAuthMode = "chatgpt_auth_mode"
         case chatgptModel = "chatgpt_model"
         case chatgptRequiresApproval = "chatgpt_requires_approval"
     }

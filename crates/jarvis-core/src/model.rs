@@ -2,7 +2,39 @@ use async_trait::async_trait;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::time::Duration;
+use std::path::Path;
+use std::process::Stdio;
+use std::time::{Duration, Instant};
+use tempfile::Builder as TempFileBuilder;
+use tokio::io::AsyncWriteExt;
+use tokio::process::Command;
+
+const MAX_CODEX_ACCOUNT_RESPONSE_BYTES: u64 = 1_048_576;
+const CODEX_ACCOUNT_DISABLED_FEATURES: &[&str] = &[
+    "apps",
+    "auth_elicitation",
+    "browser_use",
+    "browser_use_external",
+    "browser_use_full_cdp_access",
+    "chronicle",
+    "code_mode_host",
+    "computer_use",
+    "goals",
+    "hooks",
+    "image_generation",
+    "in_app_browser",
+    "memories",
+    "multi_agent",
+    "plugins",
+    "request_permissions_tool",
+    "shell_tool",
+    "skill_mcp_dependency_install",
+    "standalone_web_search",
+    "tool_call_mcp_elicitation",
+    "tool_suggest",
+    "unified_exec",
+    "workspace_dependencies",
+];
 
 use crate::plugin::{EchoPlugin, InProcessPlugin, PluginManifest, PluginSource, StatusPlugin};
 use crate::router::{ModelProvider as RoutedModelProvider, ModelRouteRecord};
@@ -58,21 +90,47 @@ impl Default for LocalModelConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChatGptProviderConfig {
     pub enabled: bool,
+    pub auth_mode: ChatGptAuthMode,
     pub model: String,
     pub base_url: String,
     #[serde(skip_serializing, skip_deserializing)]
     pub api_key: Option<String>,
+    pub codex_executable: String,
     pub requires_approval: bool,
     pub timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatGptAuthMode {
+    #[serde(rename = "api_key")]
+    ApiKey,
+    CodexAccount,
+}
+
+impl ChatGptAuthMode {
+    fn parse(value: &str) -> JarvisResult<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "api_key" | "apikey" | "openai_api_key" | "platform" | "platform_api_key" => {
+                Ok(Self::ApiKey)
+            }
+            "codex_account" | "chatgpt" | "chatgpt_oauth" | "codex" => Ok(Self::CodexAccount),
+            other => Err(JarvisError::Validation(format!(
+                "unsupported ChatGPT auth mode: {other}"
+            ))),
+        }
+    }
 }
 
 impl Default for ChatGptProviderConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            auth_mode: ChatGptAuthMode::ApiKey,
             model: "chatgpt-disabled".to_string(),
             base_url: "https://api.openai.com/v1".to_string(),
             api_key: None,
+            codex_executable: "codex".to_string(),
             requires_approval: true,
             timeout_ms: 30_000,
         }
@@ -140,6 +198,11 @@ impl ProviderConfig {
             config.chatgpt.enabled = parse_bool("JARVIS_CHATGPT_ENABLED", &value)?;
         }
 
+        if let Some(value) = get("JARVIS_CHATGPT_AUTH").or_else(|| get("JARVIS_CHATGPT_AUTH_MODE"))
+        {
+            config.chatgpt.auth_mode = ChatGptAuthMode::parse(&value)?;
+        }
+
         if let Some(value) = get("JARVIS_CHATGPT_MODEL") {
             let value = value.trim();
             if value.is_empty() {
@@ -167,6 +230,13 @@ impl ProviderConfig {
             }
         }
 
+        if let Some(value) = get("JARVIS_CODEX_EXECUTABLE") {
+            let value = value.trim();
+            if !value.is_empty() {
+                config.chatgpt.codex_executable = value.to_string();
+            }
+        }
+
         if let Some(value) = get("JARVIS_CHATGPT_TIMEOUT_MS") {
             config.chatgpt.timeout_ms = parse_positive_u64("JARVIS_CHATGPT_TIMEOUT_MS", &value)?;
         }
@@ -178,9 +248,14 @@ impl ProviderConfig {
 
         if config.chatgpt.enabled {
             if config.chatgpt.model == "chatgpt-disabled" {
-                config.chatgpt.model = "gpt-4.1-mini".to_string();
+                config.chatgpt.model = match config.chatgpt.auth_mode {
+                    ChatGptAuthMode::ApiKey => "gpt-4.1-mini".to_string(),
+                    ChatGptAuthMode::CodexAccount => "gpt-5.5".to_string(),
+                };
             }
-            if config.chatgpt.api_key.is_none() {
+            if config.chatgpt.auth_mode == ChatGptAuthMode::ApiKey
+                && config.chatgpt.api_key.is_none()
+            {
                 return Err(JarvisError::Validation(
                     "JARVIS_CHATGPT_ENABLED requires JARVIS_OPENAI_API_KEY".to_string(),
                 ));
@@ -210,8 +285,17 @@ impl ProviderConfig {
 
     pub fn with_chatgpt_enabled(mut self, model: impl Into<String>) -> Self {
         self.chatgpt.enabled = true;
+        self.chatgpt.auth_mode = ChatGptAuthMode::ApiKey;
         self.chatgpt.model = model.into();
         self.chatgpt.api_key = Some("test-openai-api-key".to_string());
+        self.chatgpt.requires_approval = true;
+        self
+    }
+
+    pub fn with_codex_account_enabled(mut self, model: impl Into<String>) -> Self {
+        self.chatgpt.enabled = true;
+        self.chatgpt.auth_mode = ChatGptAuthMode::CodexAccount;
+        self.chatgpt.model = model.into();
         self.chatgpt.requires_approval = true;
         self
     }
@@ -363,7 +447,7 @@ pub trait ModelExecutor: Send + Sync {
 #[derive(Debug, Clone)]
 pub struct RoutedModelExecutor {
     local: Option<LocalModelExecutor>,
-    chatgpt: Option<ChatGptHttpModel>,
+    chatgpt: Option<CloudModelExecutor>,
 }
 
 impl RoutedModelExecutor {
@@ -375,11 +459,39 @@ impl RoutedModelExecutor {
                 None
             },
             chatgpt: if config.chatgpt.enabled {
-                Some(ChatGptHttpModel::from_config(&config.chatgpt)?)
+                Some(CloudModelExecutor::from_config(&config.chatgpt)?)
             } else {
                 None
             },
         })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum CloudModelExecutor {
+    OpenAiApi(ChatGptHttpModel),
+    CodexAccount(CodexAccountModel),
+}
+
+impl CloudModelExecutor {
+    pub fn from_config(config: &ChatGptProviderConfig) -> JarvisResult<Self> {
+        match config.auth_mode {
+            ChatGptAuthMode::ApiKey => Ok(Self::OpenAiApi(ChatGptHttpModel::from_config(config)?)),
+            ChatGptAuthMode::CodexAccount => {
+                Ok(Self::CodexAccount(CodexAccountModel::from_config(config)?))
+            }
+        }
+    }
+
+    async fn execute_guarded(
+        &self,
+        request: ModelRequest,
+        route: &ModelRouteRecord,
+    ) -> JarvisResult<ModelResponse> {
+        match self {
+            Self::OpenAiApi(model) => model.execute_guarded(request, route).await,
+            Self::CodexAccount(model) => model.execute_guarded(request, route).await,
+        }
     }
 }
 
@@ -835,6 +947,294 @@ impl ChatGptHttpModel {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct CodexAccountModel {
+    model: String,
+    executable: String,
+    timeout: Duration,
+}
+
+impl CodexAccountModel {
+    pub fn from_config(config: &ChatGptProviderConfig) -> JarvisResult<Self> {
+        if !config.enabled {
+            return Err(JarvisError::Validation(
+                "Codex account provider is disabled; set JARVIS_CHATGPT_ENABLED=true to opt in"
+                    .to_string(),
+            ));
+        }
+        if !config.requires_approval {
+            return Err(JarvisError::Validation(
+                "Codex account provider requires explicit route approval".to_string(),
+            ));
+        }
+        if config.model.trim().is_empty() || config.model == "chatgpt-disabled" {
+            return Err(JarvisError::Validation(
+                "Codex account provider requires a concrete model".to_string(),
+            ));
+        }
+        if config.codex_executable.trim().is_empty() {
+            return Err(JarvisError::Validation(
+                "Codex account provider requires JARVIS_CODEX_EXECUTABLE or codex on PATH"
+                    .to_string(),
+            ));
+        }
+
+        Ok(Self {
+            model: config.model.clone(),
+            executable: config.codex_executable.clone(),
+            timeout: Duration::from_millis(config.timeout_ms),
+        })
+    }
+
+    fn safe_endpoint(&self) -> String {
+        let executable = Path::new(&self.executable)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .unwrap_or("configured-executable");
+        format!("codex-cli:{executable}")
+    }
+
+    async fn execute_guarded(
+        &self,
+        request: ModelRequest,
+        route: &ModelRouteRecord,
+    ) -> JarvisResult<ModelResponse> {
+        if route.selected_provider != Some(RoutedModelProvider::ChatGpt) {
+            return Err(JarvisError::Validation(
+                "Codex account execution requires a selected ChatGPT/Codex route".to_string(),
+            ));
+        }
+        if route.context_for_model.is_none() {
+            return Err(JarvisError::Validation(
+                "Codex account execution requires redacted route context".to_string(),
+            ));
+        }
+        if route.evidence.restricted_cloud_block {
+            return Err(JarvisError::Validation(
+                "Codex account execution cannot run with restricted route evidence".to_string(),
+            ));
+        }
+
+        let output_file = TempFileBuilder::new()
+            .prefix("jarvis-codex-account-")
+            .suffix(".txt")
+            .tempfile_in(std::env::temp_dir())
+            .map_err(|error| {
+                codex_account_error(
+                    "failed to create private final-response file",
+                    &self.safe_endpoint(),
+                    self.timeout,
+                    Some(error.to_string()),
+                )
+            })?;
+        let output_path = output_file.path().to_path_buf();
+        let prompt = codex_account_prompt(&request, route)?;
+
+        let mut command = Command::new(&self.executable);
+        command
+            .arg("exec")
+            .arg("--skip-git-repo-check")
+            .arg("--ephemeral")
+            .arg("--json")
+            .arg("--sandbox")
+            .arg("read-only")
+            .arg("--ignore-user-config")
+            .arg("--ignore-rules")
+            .arg("--strict-config");
+        for feature in CODEX_ACCOUNT_DISABLED_FEATURES {
+            command.arg("--disable").arg(feature);
+        }
+        command
+            .arg("-c")
+            .arg("approval_policy=\"never\"")
+            .arg("-c")
+            .arg("web_search=\"disabled\"")
+            .arg("--color")
+            .arg("never")
+            .arg("--output-last-message")
+            .arg(&output_path)
+            .arg("-m")
+            .arg(&self.model)
+            .arg("-")
+            .current_dir(std::env::temp_dir())
+            .env_clear()
+            .env("NO_COLOR", "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+
+        for name in [
+            "HOME",
+            "CODEX_HOME",
+            "PATH",
+            "TMPDIR",
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "NO_PROXY",
+            "SSL_CERT_FILE",
+            "SSL_CERT_DIR",
+        ] {
+            if let Some(value) = std::env::var_os(name) {
+                command.env(name, value);
+            }
+        }
+
+        let mut child = command.spawn().map_err(|error| {
+            codex_account_error(
+                "failed to start codex exec",
+                &self.safe_endpoint(),
+                self.timeout,
+                Some(error.to_string()),
+            )
+        })?;
+        let stdin = child.stdin.take().ok_or_else(|| {
+            codex_account_error(
+                "Codex CLI stdin was not available",
+                &self.safe_endpoint(),
+                self.timeout,
+                None,
+            )
+        })?;
+        let input_task = tokio::spawn(async move {
+            let mut stdin = stdin;
+            stdin.write_all(prompt.as_bytes()).await?;
+            stdin.shutdown().await
+        });
+
+        let started = Instant::now();
+        let output = loop {
+            if std::fs::metadata(&output_path)
+                .map(|metadata| metadata.len() > MAX_CODEX_ACCOUNT_RESPONSE_BYTES)
+                .unwrap_or(false)
+            {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                input_task.abort();
+                let _ = input_task.await;
+                return Err(codex_account_error(
+                    "codex exec final response exceeded the 1 MiB limit",
+                    &self.safe_endpoint(),
+                    self.timeout,
+                    None,
+                ));
+            }
+
+            if let Some(status) = child.try_wait().map_err(|error| {
+                codex_account_error(
+                    "failed while waiting for codex exec",
+                    &self.safe_endpoint(),
+                    self.timeout,
+                    Some(error.to_string()),
+                )
+            })? {
+                break status;
+            }
+
+            if started.elapsed() >= self.timeout {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                input_task.abort();
+                let _ = input_task.await;
+                return Err(codex_account_error(
+                    "codex exec timed out",
+                    &self.safe_endpoint(),
+                    self.timeout,
+                    None,
+                ));
+            }
+
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        };
+
+        input_task
+            .await
+            .map_err(|error| {
+                codex_account_error(
+                    "codex exec input task did not complete",
+                    &self.safe_endpoint(),
+                    self.timeout,
+                    Some(error.to_string()),
+                )
+            })?
+            .map_err(|error| {
+                codex_account_error(
+                    "failed to deliver redacted context to codex exec",
+                    &self.safe_endpoint(),
+                    self.timeout,
+                    Some(error.to_string()),
+                )
+            })?;
+
+        if !output.success() {
+            return Err(codex_account_error(
+                &format!("codex exec exited with {output}"),
+                &self.safe_endpoint(),
+                self.timeout,
+                Some(
+                    "Codex CLI rejected the constrained argument contract or failed privately; update/login and run the configured executable directly for diagnostics"
+                        .to_string(),
+                ),
+            ));
+        }
+
+        let response_metadata = std::fs::metadata(&output_path).map_err(|error| {
+            codex_account_error(
+                "codex exec did not write a final response",
+                &self.safe_endpoint(),
+                self.timeout,
+                Some(error.to_string()),
+            )
+        })?;
+        if response_metadata.len() > MAX_CODEX_ACCOUNT_RESPONSE_BYTES {
+            return Err(codex_account_error(
+                "codex exec final response exceeded the 1 MiB limit",
+                &self.safe_endpoint(),
+                self.timeout,
+                None,
+            ));
+        }
+        let raw_message = std::fs::read_to_string(&output_path)
+            .map_err(|error| {
+                codex_account_error(
+                    "codex exec did not write a final response",
+                    &self.safe_endpoint(),
+                    self.timeout,
+                    Some(error.to_string()),
+                )
+            })?
+            .trim()
+            .to_string();
+
+        if raw_message.is_empty() {
+            return Err(codex_account_error(
+                "codex exec returned an empty response",
+                &self.safe_endpoint(),
+                self.timeout,
+                None,
+            ));
+        }
+
+        Ok(ModelResponse {
+            route: ModelRoute::chatgpt(
+                self.model.clone(),
+                format!(
+                    "Codex account selected by audited route {}; endpoint={}; redaction_applied={}",
+                    route.id,
+                    self.safe_endpoint(),
+                    route.redaction_applied
+                ),
+            ),
+            output_chunks: bounded_output_chunks(&raw_message),
+            message: raw_message,
+            complete: true,
+            tool_requests: vec![],
+        })
+    }
+}
+
 pub fn bounded_output_chunks(message: &str) -> Vec<ModelOutputChunk> {
     const MAX_CHUNKS: usize = 32;
     const TARGET_CHUNK_CHARS: usize = 80;
@@ -914,6 +1314,28 @@ fn chatgpt_prompt(request: &ModelRequest, route: &ModelRouteRecord) -> JarvisRes
 
     Ok(format!(
         "Route id: {}\nSensitivity: {:?}\nRedacted task context: {}\nStep: {}\nTool results: {}",
+        route.id, route.sensitivity, context, request.step_index, tool_results
+    ))
+}
+
+fn codex_account_prompt(request: &ModelRequest, route: &ModelRouteRecord) -> JarvisResult<String> {
+    let context = route.context_for_model.as_ref().ok_or_else(|| {
+        JarvisError::Validation("Codex account route context is missing".to_string())
+    })?;
+    let tool_results = if request.tool_results.is_empty() {
+        "[]".to_string()
+    } else {
+        redact_obvious_secrets(
+            &serde_json::to_string(&request.tool_results).map_err(|error| {
+                JarvisError::Validation(format!(
+                    "failed to encode tool results for Codex account prompt: {error}"
+                ))
+            })?,
+        )
+    };
+
+    Ok(format!(
+        "You are Jarvis's Codex account model adapter. Answer directly in natural language. Do not inspect files, edit files, run shell commands, browse, or use tools. If a tool or local file access would be required, explain that limitation and return a direct answer using only the redacted context below.\n\nRoute id: {}\nSensitivity: {:?}\nRedacted task context: {}\nStep: {}\nTool results: {}",
         route.id, route.sensitivity, context, request.step_index, tool_results
     ))
 }
@@ -1187,6 +1609,21 @@ fn chatgpt_error(
     ))
 }
 
+fn codex_account_error(
+    summary: &str,
+    safe_endpoint: &str,
+    timeout: Duration,
+    details: Option<String>,
+) -> JarvisError {
+    let detail = details
+        .map(|value| redact_obvious_secrets(&value))
+        .unwrap_or_else(|| "no provider detail".to_string());
+    JarvisError::Model(format!(
+        "Codex account provider failed: {summary}; endpoint={safe_endpoint}; timeout_ms={}; detail={detail}",
+        timeout.as_millis()
+    ))
+}
+
 fn parse_bool(name: &str, value: &str) -> JarvisResult<bool> {
     match value.trim().to_ascii_lowercase().as_str() {
         "1" | "true" | "yes" | "on" => Ok(true),
@@ -1335,10 +1772,36 @@ mod tests {
         assert_eq!(config.chatgpt.base_url, "http://127.0.0.1:1234/v1");
         assert_eq!(config.chatgpt.timeout_ms, 2500);
         assert_eq!(config.chatgpt.api_key.as_deref(), Some("test-token-value"));
+        assert_eq!(config.chatgpt.auth_mode, ChatGptAuthMode::ApiKey);
 
         let encoded = serde_json::to_string(&config).expect("provider config json");
         assert!(!encoded.contains("test-token-value"));
-        assert!(!encoded.contains("api_key"));
+        assert!(!encoded.contains("\"api_key\":"));
+    }
+
+    #[test]
+    fn provider_config_allows_codex_account_auth_without_platform_api_key() {
+        let config = ProviderConfig::from_env_values(|key| match key {
+            "JARVIS_CHATGPT_ENABLED" => Some("true".to_string()),
+            "JARVIS_CHATGPT_AUTH" => Some("codex_account".to_string()),
+            "JARVIS_CHATGPT_MODEL" => Some("gpt-5.5".to_string()),
+            "JARVIS_CODEX_EXECUTABLE" => {
+                Some("/Applications/Codex.app/Contents/Resources/codex".to_string())
+            }
+            "JARVIS_CHATGPT_TIMEOUT_MS" => Some("45000".to_string()),
+            _ => None,
+        })
+        .expect("Codex account env config");
+
+        assert!(config.chatgpt.enabled);
+        assert_eq!(config.chatgpt.auth_mode, ChatGptAuthMode::CodexAccount);
+        assert_eq!(config.chatgpt.model, "gpt-5.5");
+        assert_eq!(
+            config.chatgpt.codex_executable,
+            "/Applications/Codex.app/Contents/Resources/codex"
+        );
+        assert_eq!(config.chatgpt.timeout_ms, 45_000);
+        assert!(config.chatgpt.api_key.is_none());
     }
 
     #[test]
@@ -1676,9 +2139,11 @@ mod tests {
 
         let config = ChatGptProviderConfig {
             enabled: true,
+            auth_mode: ChatGptAuthMode::ApiKey,
             model: "gpt-test".to_string(),
             base_url: format!("http://{address}/v1"),
             api_key: Some("test-token-value".to_string()),
+            codex_executable: "codex".to_string(),
             requires_approval: true,
             timeout_ms: 2_000,
         };
@@ -1760,9 +2225,11 @@ mod tests {
 
         let config = ChatGptProviderConfig {
             enabled: true,
+            auth_mode: ChatGptAuthMode::ApiKey,
             model: "gpt-test".to_string(),
             base_url: format!("http://{address}/v1"),
             api_key: Some("test-token-value".to_string()),
+            codex_executable: "codex".to_string(),
             requires_approval: true,
             timeout_ms: 2_000,
         };
@@ -1825,9 +2292,11 @@ mod tests {
 
         let config = ChatGptProviderConfig {
             enabled: true,
+            auth_mode: ChatGptAuthMode::ApiKey,
             model: "gpt-test".to_string(),
             base_url: format!("http://{address}/v1"),
             api_key: Some("test-token-value".to_string()),
+            codex_executable: "codex".to_string(),
             requires_approval: true,
             timeout_ms: 2_000,
         };
@@ -1878,9 +2347,11 @@ mod tests {
 
         let config = ChatGptProviderConfig {
             enabled: true,
+            auth_mode: ChatGptAuthMode::ApiKey,
             model: "gpt-test".to_string(),
             base_url: format!("http://user:password@{address}/v1"),
             api_key: Some("test-token-value".to_string()),
+            codex_executable: "codex".to_string(),
             requires_approval: true,
             timeout_ms: 2_000,
         };
@@ -1932,6 +2403,210 @@ mod tests {
         assert!(!message.contains("test-token-value"));
         assert!(!message.contains("password"));
         assert!(!message.contains("raw command"));
+    }
+
+    #[tokio::test]
+    async fn codex_account_provider_runs_codex_cli_answer_only_adapter() {
+        #[cfg(unix)]
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = tempfile::tempdir().expect("temp codex cli");
+        let executable = temp_dir.path().join("codex");
+        std::fs::write(
+            &executable,
+            r#"#!/bin/sh
+out=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output-last-message" ]; then
+    shift
+    out="$1"
+  fi
+  shift
+done
+printf 'codex account ok' > "$out"
+printf '{"type":"done"}\n'
+"#,
+        )
+        .expect("write fake codex");
+        #[cfg(unix)]
+        {
+            let mut permissions = std::fs::metadata(&executable)
+                .expect("fake codex metadata")
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&executable, permissions).expect("fake codex executable");
+        }
+
+        let config = ChatGptProviderConfig {
+            enabled: true,
+            auth_mode: ChatGptAuthMode::CodexAccount,
+            model: "gpt-5.5".to_string(),
+            base_url: "https://api.openai.com/v1".to_string(),
+            api_key: None,
+            codex_executable: executable.to_string_lossy().to_string(),
+            requires_approval: true,
+            timeout_ms: 2_000,
+        };
+        let model = CodexAccountModel::from_config(&config).expect("codex account model");
+        let route = test_chatgpt_route(&config, "workspace context");
+
+        let response = model
+            .execute_guarded(
+                ModelRequest {
+                    task_id: route.task_id.expect("task id"),
+                    session_id: uuid::Uuid::new_v4(),
+                    user_input: "answer from codex account".to_string(),
+                    step_index: 0,
+                    tool_results: Vec::new(),
+                    first_party_tools: default_first_party_model_tools(),
+                },
+                &route,
+            )
+            .await
+            .expect("codex account response");
+
+        assert_eq!(response.message, "codex account ok");
+        assert!(response.complete);
+        assert!(response.tool_requests.is_empty());
+        assert_eq!(response.route.provider, ModelProvider::ChatGpt);
+        assert_eq!(response.route.model, "gpt-5.5");
+        assert!(response.route.reason.contains("Codex account selected"));
+    }
+
+    #[tokio::test]
+    async fn codex_account_provider_rejects_oversized_final_response() {
+        #[cfg(unix)]
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = tempfile::tempdir().expect("temp codex cli");
+        let executable = temp_dir.path().join("codex");
+        std::fs::write(
+            &executable,
+            r#"#!/bin/sh
+out=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output-last-message" ]; then
+    shift
+    out="$1"
+  fi
+  shift
+done
+/bin/dd if=/dev/zero of="$out" bs=1048577 count=1 2>/dev/null
+"#,
+        )
+        .expect("write oversized fake codex");
+        #[cfg(unix)]
+        {
+            let mut permissions = std::fs::metadata(&executable)
+                .expect("fake codex metadata")
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&executable, permissions).expect("fake codex executable");
+        }
+
+        let config = ChatGptProviderConfig {
+            enabled: true,
+            auth_mode: ChatGptAuthMode::CodexAccount,
+            model: "gpt-5.5".to_string(),
+            base_url: "https://api.openai.com/v1".to_string(),
+            api_key: None,
+            codex_executable: executable.to_string_lossy().to_string(),
+            requires_approval: true,
+            timeout_ms: 2_000,
+        };
+        let model = CodexAccountModel::from_config(&config).expect("codex account model");
+        let route = test_chatgpt_route(&config, "workspace context");
+        let error = model
+            .execute_guarded(
+                ModelRequest {
+                    task_id: route.task_id.expect("task id"),
+                    session_id: uuid::Uuid::new_v4(),
+                    user_input: "oversized response".to_string(),
+                    step_index: 0,
+                    tool_results: Vec::new(),
+                    first_party_tools: default_first_party_model_tools(),
+                },
+                &route,
+            )
+            .await
+            .expect_err("oversized Codex response must fail closed");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("codex exec exited") || message.contains("exceeded the 1 MiB limit"),
+            "{message}"
+        );
+        assert!(!message.contains(&executable.to_string_lossy().to_string()));
+    }
+
+    #[tokio::test]
+    async fn codex_account_monitor_bounds_non_reading_child_during_large_prompt_delivery() {
+        #[cfg(unix)]
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = tempfile::tempdir().expect("temp codex cli");
+        let executable = temp_dir.path().join("codex");
+        std::fs::write(
+            &executable,
+            r#"#!/bin/sh
+out=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output-last-message" ]; then
+    shift
+    out="$1"
+  fi
+  shift
+done
+exec /bin/dd if=/dev/zero of="$out" bs=1048577 count=1 2>/dev/null
+"#,
+        )
+        .expect("write non-reading fake codex");
+        #[cfg(unix)]
+        {
+            let mut permissions = std::fs::metadata(&executable)
+                .expect("fake codex metadata")
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&executable, permissions).expect("fake codex executable");
+        }
+
+        let config = ChatGptProviderConfig {
+            enabled: true,
+            auth_mode: ChatGptAuthMode::CodexAccount,
+            model: "gpt-5.5".to_string(),
+            base_url: "https://api.openai.com/v1".to_string(),
+            api_key: None,
+            codex_executable: executable.to_string_lossy().to_string(),
+            requires_approval: true,
+            // Leave enough headroom for a contended full-workspace test run;
+            // the assertion below still proves the response monitor wins well
+            // before the provider timeout while stdin delivery is blocked.
+            timeout_ms: 5_000,
+        };
+        let model = CodexAccountModel::from_config(&config).expect("codex account model");
+        let large_context = "x".repeat(2_000_000);
+        let route = test_chatgpt_route(&config, &large_context);
+        let started = Instant::now();
+        let error = model
+            .execute_guarded(
+                ModelRequest {
+                    task_id: route.task_id.expect("task id"),
+                    session_id: uuid::Uuid::new_v4(),
+                    user_input: "large prompt".to_string(),
+                    step_index: 0,
+                    tool_results: Vec::new(),
+                    first_party_tools: default_first_party_model_tools(),
+                },
+                &route,
+            )
+            .await
+            .expect_err("non-reading oversized child must fail closed");
+
+        assert!(started.elapsed() < Duration::from_secs(4));
+        assert!(
+            error.to_string().contains("exceeded the 1 MiB limit"),
+            "{error}"
+        );
     }
 
     fn test_chatgpt_route(

@@ -51,9 +51,14 @@ default command path still uses `FakeLocalModel`; set
 `JARVIS_LOCAL_MODEL_PROVIDER=ollama`, `JARVIS_LOCAL_MODEL`, and optionally
 `JARVIS_OLLAMA_BASE_URL`/`JARVIS_LOCAL_MODEL_TIMEOUT_MS` to exercise the local
 HTTP provider. ChatGPT execution is disabled by default and requires explicit
-typed env opt-in with `JARVIS_CHATGPT_ENABLED=true`,
+typed env opt-in. The Platform API-key path uses
+`JARVIS_CHATGPT_ENABLED=true`, `JARVIS_CHATGPT_AUTH=api_key`,
 `JARVIS_OPENAI_API_KEY`, and optional `JARVIS_CHATGPT_MODEL`,
-`JARVIS_OPENAI_BASE_URL`, and `JARVIS_CHATGPT_TIMEOUT_MS`; route policy still
+`JARVIS_OPENAI_BASE_URL`, and `JARVIS_CHATGPT_TIMEOUT_MS`. The Codex account
+path uses a logged-in Codex CLI instead: run `codex login --device-auth`, then
+launch with `JARVIS_CHATGPT_ENABLED=true`,
+`JARVIS_CHATGPT_AUTH=codex_account`, and optional `JARVIS_CODEX_EXECUTABLE`,
+`JARVIS_CHATGPT_MODEL`, and `JARVIS_CHATGPT_TIMEOUT_MS`. Route policy still
 blocks restricted data and sends only redacted route context. Provider failures
 return failed command responses with redacted diagnostics instead of becoming
 IPC transport errors. Provider text responses may also use a strict JSON
@@ -71,10 +76,26 @@ fail closed before policy checks or tool execution, then feed registered-tool
 guidance back to the model as rejected tool results for bounded recovery. Mixed
 prose plus JSON `tool_requests` is treated as malformed provider output instead
 of a normal answer.
-The macOS Model tab exposes this approved cloud route as `Codex`: selecting it
-disables the local provider for the app-supervised core, sets the chosen
-OpenAI-compatible model/base URL, keeps `JARVIS_CHATGPT_REQUIRES_APPROVAL=true`,
-and stores the application credential in Keychain instead of SQLite or docs.
+The macOS Model tab exposes separate approved cloud routes for `OpenAI API` and
+`Codex account`: both disable the local provider for the app-supervised core
+and keep `JARVIS_CHATGPT_REQUIRES_APPROVAL=true`. `OpenAI API` stores the
+application credential in Keychain instead of SQLite or docs, while `Codex
+account` shells through the logged-in Codex CLI and does not require an OpenAI
+Platform API key. Jarvis launches that subprocess from a temporary directory,
+passes the redacted prompt over stdin, ignores user configuration and project
+rules, fixes approval policy to `never`, requests the CLI's read-only sandbox,
+uses strict config with web search disabled, mechanically disables the current
+CLI tool/integration feature set (including shell, unified-exec, code-host,
+apps/plugins, browser, computer use, image generation, multi-agent, and
+workspace dependencies), forwards only the small environment allowlist needed
+for account auth and networking, discards child logs, monitors and kills the
+child if its private final-message file crosses 1 MiB, and repeats the size
+check before reading. The
+request payload contains only Jarvis's redacted route context, but Codex still
+adds its own runtime/system context. A CLI that does not support the constrained
+argument contract fails closed before model execution; update the bundled
+Codex/ChatGPT app or CLI before retrying. Use `OpenAI API` when a non-agentic
+HTTP provider boundary is required.
 Plugin availability for model planning means the `/tools/model` first-party
 catalog only. `jarvis tools list`, `jarvis tools model`, and
 `jarvis tools catalog` all print that same catalog. Chrome/browser-extension
@@ -183,7 +204,7 @@ controls, including redacted proactive scheduler policy audit before due
 command execution, explicit stale-running scheduler recovery, opt-in startup
 stale-running recovery, and strict provider tool-request envelope coverage for
 Ollama-compatible and ChatGPT/OpenAI-compatible text responses, including the
-Codex-labeled macOS Model tab route over that same guarded cloud provider. Later slices
+macOS Model tab routes over that same guarded cloud provider. Later slices
 continue the same branch/PR discipline;
 release language should describe only the merged repo-owned surfaces with
 recorded focused E2E or integration proof.

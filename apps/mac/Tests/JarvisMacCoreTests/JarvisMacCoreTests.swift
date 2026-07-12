@@ -3274,6 +3274,7 @@ struct JarvisMacCoreTests {
                   "local_model": "qwen2.5:7b",
                   "local_endpoint_configured": true,
                   "chatgpt_enabled": true,
+                  "chatgpt_auth_mode": "codex_account",
                   "chatgpt_model": "gpt-test",
                   "chatgpt_requires_approval": true
                 }
@@ -3285,6 +3286,7 @@ struct JarvisMacCoreTests {
         #expect(health.localModel == "qwen2.5:7b")
         #expect(health.localEndpointConfigured)
         #expect(health.chatgptEnabled)
+        #expect(health.chatgptAuthMode == "codex_account")
         #expect(health.chatgptModel == "gpt-test")
         #expect(health.chatgptRequiresApproval)
     }
@@ -3330,11 +3332,34 @@ struct JarvisMacCoreTests {
 
         #expect(environment["JARVIS_LOCAL_MODEL_ENABLED"] == "false")
         #expect(environment["JARVIS_CHATGPT_ENABLED"] == "true")
+        #expect(environment["JARVIS_CHATGPT_AUTH"] == "api_key")
         #expect(environment["JARVIS_CHATGPT_MODEL"] == "gpt-codex-test")
         #expect(environment["JARVIS_OPENAI_BASE_URL"] == "https://api.openai.test/v1")
         #expect(environment["JARVIS_CHATGPT_TIMEOUT_MS"] == "45000")
         #expect(environment["JARVIS_CHATGPT_REQUIRES_APPROVAL"] == "true")
         #expect(environment["JARVIS_OPENAI_API_KEY"] == nil)
+    }
+
+    @Test("Model configuration maps Codex account auth to CLI-backed launch environment")
+    func modelConfigurationMapsCodexAccountSelectionToEnvironment() {
+        let configuration = JarvisModelConfiguration(
+            provider: .codexAccount,
+            codexModel: " gpt-5.5 ",
+            codexExecutable: " /Applications/Codex.app/Contents/Resources/codex ",
+            timeoutMilliseconds: "45000"
+        )
+
+        let environment = configuration.launchEnvironmentOverrides
+
+        #expect(environment["JARVIS_LOCAL_MODEL_ENABLED"] == "false")
+        #expect(environment["JARVIS_CHATGPT_ENABLED"] == "true")
+        #expect(environment["JARVIS_CHATGPT_AUTH"] == "codex_account")
+        #expect(environment["JARVIS_CHATGPT_MODEL"] == "gpt-5.5")
+        #expect(environment["JARVIS_CODEX_EXECUTABLE"] == "/Applications/Codex.app/Contents/Resources/codex")
+        #expect(environment["JARVIS_CHATGPT_TIMEOUT_MS"] == "45000")
+        #expect(environment["JARVIS_CHATGPT_REQUIRES_APPROVAL"] == "true")
+        #expect(environment["JARVIS_OPENAI_API_KEY"] == nil)
+        #expect(environment["JARVIS_OPENAI_BASE_URL"] == nil)
     }
 
     @MainActor
@@ -3373,10 +3398,11 @@ struct JarvisMacCoreTests {
             localModelProvider: "fake",
             localModel: "fake-local-model",
             chatgptEnabled: true,
+            chatgptAuthMode: "codex_account",
             chatgptModel: "gpt-codex-test"
         ))
 
-        #expect(model.activeProvider == "codex")
+        #expect(model.activeProvider == "codex account")
         #expect(model.activeModel == "gpt-codex-test")
     }
 
@@ -3466,6 +3492,264 @@ struct JarvisMacCoreTests {
         #expect(launcher.launches.first?.environment["JARVIS_LOCAL_MODEL_PROVIDER"] == "ollama")
         #expect(launcher.launches.first?.environment["JARVIS_LOCAL_MODEL"] == "qwen2.5:7b")
         #expect(launcher.launches.first?.environment["JARVIS_OLLAMA_BASE_URL"] == "http://127.0.0.1:11434")
+    }
+
+    @MainActor
+    @Test("Supervisor waits for launched core health to match selected model configuration")
+    func supervisorWaitsForMatchingLaunchedCoreHealth() async {
+        let launcher = FakeProcessLauncher()
+        let mismatched = JarvisHealth(
+            status: "ok",
+            version: "0.1.0",
+            emergencyPaused: false,
+            emergencyPauseReason: nil,
+            schedulerJobs: 0,
+            commandRuntime: "routed-codex-cloud-model+first-party-plugins",
+            chatgptEnabled: true,
+            chatgptAuthMode: "api_key",
+            chatgptModel: "gpt-old",
+            chatgptRequiresApproval: true
+        )
+        let matching = JarvisHealth(
+            status: "ok",
+            version: "0.1.0",
+            emergencyPaused: false,
+            emergencyPauseReason: nil,
+            schedulerJobs: 0,
+            commandRuntime: "routed-codex-cloud-model+first-party-plugins",
+            chatgptEnabled: true,
+            chatgptAuthMode: "codex_account",
+            chatgptModel: "gpt-codex-test",
+            chatgptRequiresApproval: true
+        )
+        let supervisor = JarvisCoreSupervisor(
+            configuration: JarvisCoreSupervisorConfiguration(
+                bindAddress: "127.0.0.1:9906",
+                executableURL: URL(fileURLWithPath: "/tmp/jarvis-cli"),
+                databaseURL: nil,
+                startupTimeoutSeconds: 0.1,
+                healthPollIntervalNanoseconds: 1
+            ),
+            client: FakeCoreClient(healthResults: [
+                .failure(URLError(.cannotConnectToHost)),
+                .success(mismatched),
+                .success(matching)
+            ]),
+            processLauncher: launcher
+        )
+
+        await supervisor.start(
+            environmentOverrides: [
+                "JARVIS_CHATGPT_ENABLED": "true",
+                "JARVIS_CHATGPT_AUTH": "codex_account",
+                "JARVIS_CHATGPT_MODEL": "gpt-codex-test",
+                "JARVIS_CHATGPT_REQUIRES_APPROVAL": "true"
+            ],
+            requireMatchingConfiguration: true
+        )
+
+        #expect(supervisor.mode == .available)
+        #expect(supervisor.lastHealth?.chatgptAuthMode == "codex_account")
+        #expect(launcher.launches.count == 1)
+    }
+
+    @MainActor
+    @Test("Supervisor stop waits for the supervised process to exit")
+    func supervisorStopWaitsForProcessExit() async {
+        let launcher = DelayedStopProcessLauncher(runningChecksAfterTerminate: 2)
+        let supervisor = JarvisCoreSupervisor(
+            configuration: JarvisCoreSupervisorConfiguration(
+                bindAddress: "127.0.0.1:9907",
+                executableURL: URL(fileURLWithPath: "/tmp/jarvis-cli"),
+                databaseURL: nil,
+                startupTimeoutSeconds: 0.1,
+                healthPollIntervalNanoseconds: 1
+            ),
+            client: FakeCoreClient(healthResults: [
+                .failure(URLError(.cannotConnectToHost)),
+                .success(sampleHealth())
+            ]),
+            processLauncher: launcher
+        )
+
+        await supervisor.start()
+        let stopped = await supervisor.stop()
+
+        #expect(stopped)
+        #expect(launcher.process.terminateCalled)
+        #expect(launcher.process.runningChecksAfterTerminate == 0)
+        #expect(supervisor.mode == .stopped)
+        #expect(supervisor.lastHealth == nil)
+    }
+
+    @MainActor
+    @Test("Supervisor does not replace a process that misses the shutdown timeout")
+    func supervisorDoesNotReplaceProcessAfterShutdownTimeout() async {
+        let launcher = DelayedStopProcessLauncher(runningChecksAfterTerminate: .max)
+        let supervisor = JarvisCoreSupervisor(
+            configuration: JarvisCoreSupervisorConfiguration(
+                bindAddress: "127.0.0.1:9908",
+                executableURL: URL(fileURLWithPath: "/tmp/jarvis-cli"),
+                databaseURL: nil,
+                startupTimeoutSeconds: 0.001,
+                healthPollIntervalNanoseconds: 100_000
+            ),
+            client: FakeCoreClient(healthResults: [
+                .failure(URLError(.cannotConnectToHost)),
+                .success(sampleHealth()),
+                .failure(URLError(.cannotConnectToHost))
+            ]),
+            processLauncher: launcher
+        )
+
+        await supervisor.start()
+        let stopped = await supervisor.stop()
+        await supervisor.start()
+
+        #expect(!stopped)
+        #expect(launcher.launchCount == 1)
+        if case let .degraded(reason) = supervisor.mode {
+            #expect(reason.contains("still running"))
+        } else {
+            Issue.record("expected degraded mode, got \(supervisor.mode)")
+        }
+    }
+
+    @MainActor
+    @Test("Supervisor rejects mismatched existing core when selected model configuration is required")
+    func supervisorRejectsMismatchedExistingCoreForRequiredConfiguration() async {
+        let launcher = FakeProcessLauncher()
+        let supervisor = JarvisCoreSupervisor(
+            configuration: JarvisCoreSupervisorConfiguration(
+                bindAddress: "127.0.0.1:9903",
+                executableURL: URL(fileURLWithPath: "/tmp/jarvis-cli"),
+                databaseURL: nil,
+                startupTimeoutSeconds: 0.1,
+                healthPollIntervalNanoseconds: 1
+            ),
+            client: FakeCoreClient(healthResults: [
+                .success(JarvisHealth(
+                    status: "ok",
+                    version: "0.1.0",
+                    emergencyPaused: false,
+                    emergencyPauseReason: nil,
+                    schedulerJobs: 0,
+                    commandRuntime: "routed-ollama-local-model+first-party-plugins",
+                    localModelProvider: "ollama",
+                    localModel: "llama3.2",
+                    localEndpointConfigured: true
+                ))
+            ]),
+            processLauncher: launcher
+        )
+
+        await supervisor.start(
+            environmentOverrides: [
+                "JARVIS_CHATGPT_ENABLED": "true",
+                "JARVIS_CHATGPT_AUTH": "codex_account",
+                "JARVIS_CHATGPT_MODEL": "gpt-codex-test",
+                "JARVIS_CHATGPT_REQUIRES_APPROVAL": "true"
+            ],
+            requireMatchingConfiguration: true
+        )
+
+        #expect(launcher.launches.isEmpty)
+        if case let .degraded(reason) = supervisor.mode {
+            #expect(reason.contains("different Jarvis core"))
+            #expect(reason.contains("selected model"))
+        } else {
+            Issue.record("expected degraded mode, got \(supervisor.mode)")
+        }
+    }
+
+    @MainActor
+    @Test("Supervisor accepts matching existing core when selected model configuration is required")
+    func supervisorAcceptsMatchingExistingCoreForRequiredConfiguration() async {
+        let launcher = FakeProcessLauncher()
+        let supervisor = JarvisCoreSupervisor(
+            configuration: JarvisCoreSupervisorConfiguration(
+                bindAddress: "127.0.0.1:9904",
+                executableURL: URL(fileURLWithPath: "/tmp/jarvis-cli"),
+                databaseURL: nil,
+                startupTimeoutSeconds: 0.1,
+                healthPollIntervalNanoseconds: 1
+            ),
+            client: FakeCoreClient(healthResults: [
+                .success(JarvisHealth(
+                    status: "ok",
+                    version: "0.1.0",
+                    emergencyPaused: false,
+                    emergencyPauseReason: nil,
+                    schedulerJobs: 0,
+                    commandRuntime: "routed-codex-cloud-model+first-party-plugins",
+                    chatgptEnabled: true,
+                    chatgptAuthMode: "codex_account",
+                    chatgptModel: "gpt-codex-test",
+                    chatgptRequiresApproval: true
+                ))
+            ]),
+            processLauncher: launcher
+        )
+
+        await supervisor.start(
+            environmentOverrides: [
+                "JARVIS_CHATGPT_ENABLED": "true",
+                "JARVIS_CHATGPT_AUTH": "codex_account",
+                "JARVIS_CHATGPT_MODEL": "gpt-codex-test",
+                "JARVIS_CHATGPT_REQUIRES_APPROVAL": "true"
+            ],
+            requireMatchingConfiguration: true
+        )
+
+        #expect(supervisor.mode == .available)
+        #expect(launcher.launches.isEmpty)
+    }
+
+    @MainActor
+    @Test("Supervisor rejects existing cloud core with different ChatGPT auth mode")
+    func supervisorRejectsExistingCloudCoreWithDifferentChatGPTAuthMode() async {
+        let launcher = FakeProcessLauncher()
+        let supervisor = JarvisCoreSupervisor(
+            configuration: JarvisCoreSupervisorConfiguration(
+                bindAddress: "127.0.0.1:9905",
+                executableURL: URL(fileURLWithPath: "/tmp/jarvis-cli"),
+                databaseURL: nil,
+                startupTimeoutSeconds: 0.1,
+                healthPollIntervalNanoseconds: 1
+            ),
+            client: FakeCoreClient(healthResults: [
+                .success(JarvisHealth(
+                    status: "ok",
+                    version: "0.1.0",
+                    emergencyPaused: false,
+                    emergencyPauseReason: nil,
+                    schedulerJobs: 0,
+                    commandRuntime: "routed-codex-cloud-model+first-party-plugins",
+                    chatgptEnabled: true,
+                    chatgptAuthMode: "api_key",
+                    chatgptModel: "gpt-codex-test",
+                    chatgptRequiresApproval: true
+                ))
+            ]),
+            processLauncher: launcher
+        )
+
+        await supervisor.start(
+            environmentOverrides: [
+                "JARVIS_CHATGPT_ENABLED": "true",
+                "JARVIS_CHATGPT_AUTH": "codex_account",
+                "JARVIS_CHATGPT_MODEL": "gpt-codex-test",
+                "JARVIS_CHATGPT_REQUIRES_APPROVAL": "true"
+            ],
+            requireMatchingConfiguration: true
+        )
+
+        #expect(launcher.launches.isEmpty)
+        if case let .degraded(reason) = supervisor.mode {
+            #expect(reason.contains("different Jarvis core"))
+        } else {
+            Issue.record("expected degraded mode, got \(supervisor.mode)")
+        }
     }
 
     @MainActor
@@ -5055,6 +5339,44 @@ private final class FakeProcessLauncher: JarvisCoreProcessLaunching, @unchecked 
     ) throws -> any JarvisCoreProcess {
         launches.append(Launch(executableURL: executableURL, arguments: arguments, environment: environment))
         return FakeProcess()
+    }
+}
+
+private final class DelayedStopProcess: JarvisCoreProcess, @unchecked Sendable {
+    private(set) var terminateCalled = false
+    private(set) var runningChecksAfterTerminate: Int
+
+    init(runningChecksAfterTerminate: Int) {
+        self.runningChecksAfterTerminate = runningChecksAfterTerminate
+    }
+
+    var isRunning: Bool {
+        guard terminateCalled else { return true }
+        guard runningChecksAfterTerminate > 0 else { return false }
+        runningChecksAfterTerminate -= 1
+        return true
+    }
+
+    func terminate() {
+        terminateCalled = true
+    }
+}
+
+private final class DelayedStopProcessLauncher: JarvisCoreProcessLaunching, @unchecked Sendable {
+    let process: DelayedStopProcess
+    private(set) var launchCount = 0
+
+    init(runningChecksAfterTerminate: Int) {
+        process = DelayedStopProcess(runningChecksAfterTerminate: runningChecksAfterTerminate)
+    }
+
+    func launch(
+        executableURL: URL,
+        arguments: [String],
+        environment: [String: String]
+    ) throws -> any JarvisCoreProcess {
+        launchCount += 1
+        return process
     }
 }
 

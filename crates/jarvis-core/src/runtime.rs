@@ -1432,9 +1432,11 @@ mod tests {
             },
             chatgpt: ChatGptProviderConfig {
                 enabled: true,
+                auth_mode: crate::ChatGptAuthMode::ApiKey,
                 model: "gpt-test".to_string(),
                 base_url: format!("http://{address}/v1"),
                 api_key: Some("test-token-value".to_string()),
+                codex_executable: "codex".to_string(),
                 requires_approval: true,
                 timeout_ms: 2_000,
             },

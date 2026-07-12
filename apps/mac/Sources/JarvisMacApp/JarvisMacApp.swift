@@ -199,7 +199,7 @@ struct CoreStatusBanner: View {
             .disabled(supervisor.isAvailable)
 
             Button("Stop") {
-                supervisor.stop()
+                Task { _ = await supervisor.stop() }
             }
         }
         .padding(.horizontal)
@@ -381,11 +381,15 @@ struct ModelConfigurationView: View {
 
                 TextField("Codex model", text: codexModelBinding)
                     .textFieldStyle(.roundedBorder)
-                    .disabled(model.configuration.provider != .codex)
+                    .disabled(!selectedProviderUsesCodexModel)
 
-                TextField("Codex API URL", text: codexBaseURLBinding)
+                TextField("OpenAI API URL", text: codexBaseURLBinding)
                     .textFieldStyle(.roundedBorder)
                     .disabled(model.configuration.provider != .codex)
+
+                TextField("Codex executable", text: codexExecutableBinding)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(model.configuration.provider != .codexAccount)
 
                 TextField("Ollama URL", text: ollamaBaseURLBinding)
                     .textFieldStyle(.roundedBorder)
@@ -428,6 +432,19 @@ struct ModelConfigurationView: View {
                 }
             }
 
+            if model.configuration.provider == .codexAccount {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Account Authentication")
+                            .font(.subheadline)
+                        Spacer()
+                        Text("Uses Codex CLI login")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
             if model.configuration.provider == .codex {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
@@ -460,8 +477,15 @@ struct ModelConfigurationView: View {
                     Task {
                         model.saveEnteredCodexCredentialIfNeeded()
                         await model.ensureSelectedModelAvailable()
-                        supervisor.stop()
-                        await supervisor.start(environmentOverrides: model.launchEnvironmentOverrides)
+                        guard await supervisor.stop() else {
+                            await console.refreshHealth()
+                            model.applyHealth(console.health)
+                            return
+                        }
+                        await supervisor.start(
+                            environmentOverrides: model.launchEnvironmentOverrides,
+                            requireMatchingConfiguration: true
+                        )
                         await console.refreshHealth()
                         model.applyHealth(console.health)
                     }
@@ -533,9 +557,19 @@ struct ModelConfigurationView: View {
                 } else if model.configuration.localModel == "fake-local-model" {
                     model.configuration.localModel = "llama3.2"
                 }
+                if provider == .codexAccount && model.configuration.codexModel == "gpt-4.1-mini" {
+                    model.configuration.codexModel = "gpt-5.5"
+                }
+                if provider == .codex && model.configuration.codexModel == "gpt-5.5" {
+                    model.configuration.codexModel = "gpt-4.1-mini"
+                }
                 model.refreshCodexCredentialState()
             }
         )
+    }
+
+    private var selectedProviderUsesCodexModel: Bool {
+        model.configuration.provider == .codex || model.configuration.provider == .codexAccount
     }
 
     private var codexModelBinding: Binding<String> {
@@ -549,6 +583,13 @@ struct ModelConfigurationView: View {
         Binding(
             get: { model.configuration.codexBaseURL },
             set: { model.configuration.codexBaseURL = $0 }
+        )
+    }
+
+    private var codexExecutableBinding: Binding<String> {
+        Binding(
+            get: { model.configuration.codexExecutable },
+            set: { model.configuration.codexExecutable = $0 }
         )
     }
 
