@@ -45,6 +45,9 @@ enum CliCommand {
         /// Read one bounded trusted-wake public-key enrollment document from stdin before serving.
         #[arg(long)]
         trusted_wake_bootstrap_stdin: bool,
+        /// Consume one bounded, short-lived trusted-wake key-control grant document from stdin before serving.
+        #[arg(long)]
+        trusted_wake_key_control_stdin: bool,
     },
     /// Query core health over HTTP IPC.
     Health {
@@ -333,6 +336,28 @@ enum SystemWakeCommand {
         event_id: String,
         #[arg(long)]
         expected_generation: u64,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    /// Prepare an explicit rotate or lost-key recovery grant from bounded stdin.
+    #[command(
+        long_about = "Prepare an explicit rotate or lost-key recovery grant from one JSON document read from bounded stdin.\n\nThe response contains a short-lived one-time grant_token secret. Deliver it directly to trusted device-only journal code, which constructs the distinct supervised install document; the raw prepare response is not install input. Never place the prepare document, proof, or returned token in argv, shell history, terminal output, logs, or files."
+    )]
+    KeyPrepare {
+        /// Read exactly one prepare JSON document (maximum 8192 bytes) from stdin.
+        #[arg(long, required = true)]
+        document_stdin: bool,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    /// Cancel/reset a pending grant while keeping the advanced generation disabled.
+    KeyCancel {
+        #[arg(long)]
+        expected_generation: u64,
+        #[arg(long)]
+        expected_fingerprint: String,
+        #[arg(long)]
+        confirmation: String,
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
@@ -682,7 +707,13 @@ async fn main() -> anyhow::Result<()> {
             scheduler_stale_older_than_seconds,
             scheduler_stale_recovery_limit,
             trusted_wake_bootstrap_stdin,
+            trusted_wake_key_control_stdin,
         } => {
+            if trusted_wake_bootstrap_stdin && trusted_wake_key_control_stdin {
+                anyhow::bail!(
+                    "trusted wake bootstrap and key-control stdin are mutually exclusive"
+                );
+            }
             let provider_config = jarvis_core::ProviderConfig::from_env()?;
             let state = match db_path {
                 Some(path) => {
@@ -705,6 +736,16 @@ async fn main() -> anyhow::Result<()> {
                 let enrollment: jarvis_core::TrustedWakeRuleEnrollment =
                     serde_json::from_slice(&bootstrap)?;
                 state.bootstrap_trusted_wake_rule(enrollment)?;
+            }
+            if trusted_wake_key_control_stdin {
+                let mut document = Vec::new();
+                std::io::stdin().take(8_193).read_to_end(&mut document)?;
+                if document.is_empty() || document.len() > 8_192 {
+                    anyhow::bail!("trusted wake key-control stdin must contain at most 8192 bytes");
+                }
+                let document: jarvis_core::TrustedWakeKeyControlInstallDocument =
+                    serde_json::from_slice(&document)?;
+                state.install_trusted_wake_key_control(document)?;
             }
             if scheduler_recover_stale_on_startup {
                 state.recover_stale_scheduler_jobs_automatically(
@@ -996,6 +1037,53 @@ async fn main() -> anyhow::Result<()> {
                         &endpoint,
                         "POST",
                         &format!("/system-wake/events/{event_id}/resolve"),
+                        Some(&body),
+                    )?
+                );
+            }
+            SystemWakeCommand::KeyPrepare {
+                document_stdin,
+                endpoint,
+            } => {
+                if !document_stdin {
+                    anyhow::bail!("trusted wake key prepare requires --document-stdin");
+                }
+                let mut document = Vec::new();
+                std::io::stdin().take(8_193).read_to_end(&mut document)?;
+                if document.is_empty() || document.len() > 8_192 {
+                    anyhow::bail!("trusted wake key prepare stdin must contain at most 8192 bytes");
+                }
+                let request: jarvis_core::TrustedWakeKeyControlPrepareRequest =
+                    serde_json::from_slice(&document)?;
+                let body = serde_json::to_string(&request)?;
+                println!(
+                    "{}",
+                    server_required_request(
+                        &endpoint,
+                        "POST",
+                        "/system-wake/key-control/prepare",
+                        Some(&body),
+                    )?
+                );
+            }
+            SystemWakeCommand::KeyCancel {
+                expected_generation,
+                expected_fingerprint,
+                confirmation,
+                endpoint,
+            } => {
+                let body =
+                    serde_json::to_string(&jarvis_core::TrustedWakeKeyControlCancelRequest {
+                        expected_generation,
+                        expected_fingerprint,
+                        confirmation,
+                    })?;
+                println!(
+                    "{}",
+                    server_required_request(
+                        &endpoint,
+                        "POST",
+                        "/system-wake/key-control/cancel",
                         Some(&body),
                     )?
                 );

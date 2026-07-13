@@ -1760,6 +1760,8 @@ public protocol JarvisCoreClient: Sendable {
     func trustedWakeAttention() async throws -> [JarvisTrustedWakeAttentionItem]
     func resolveTrustedWakeAttention(id: UUID, request: JarvisTrustedWakeResolutionRequest) async throws -> JarvisTrustedWakeAttentionItem
     func setTrustedWakeEnabled(_ request: JarvisTrustedWakeRuleEnablement) async throws -> JarvisTrustedWakeRule
+    func prepareTrustedWakeKeyControl(_ request: JarvisTrustedWakeKeyControlPrepareRequest) async throws -> JarvisTrustedWakeKeyControlPrepareResponse
+    func cancelTrustedWakeKeyControl(_ request: JarvisTrustedWakeKeyControlCancelRequest) async throws -> JarvisTrustedWakeRule
     func submitTrustedWake(_ envelope: JarvisTrustedWakeEnvelope) async throws -> JarvisTrustedWakeEventResponse
     func diagnosticsExport() async throws -> JarvisDiagnosticsExport
     func permissionGrantSummary() async throws -> JarvisPermissionGrantSummary
@@ -1992,6 +1994,26 @@ public final class JarvisIPCClient: JarvisCoreClient {
         _ request: JarvisTrustedWakeRuleEnablement
     ) async throws -> JarvisTrustedWakeRule {
         try await send(path: "/system-wake/rule", method: "POST", body: encoder.encode(request))
+    }
+
+    public func prepareTrustedWakeKeyControl(
+        _ request: JarvisTrustedWakeKeyControlPrepareRequest
+    ) async throws -> JarvisTrustedWakeKeyControlPrepareResponse {
+        try await send(
+            path: "/system-wake/key-control/prepare",
+            method: "POST",
+            body: encoder.encode(request)
+        )
+    }
+
+    public func cancelTrustedWakeKeyControl(
+        _ request: JarvisTrustedWakeKeyControlCancelRequest
+    ) async throws -> JarvisTrustedWakeRule {
+        try await send(
+            path: "/system-wake/key-control/cancel",
+            method: "POST",
+            body: encoder.encode(request)
+        )
     }
 
     public func submitTrustedWake(

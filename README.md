@@ -23,11 +23,23 @@ Provision action prepares only the public key while the current supervised core
 keeps running, then performs one bounded-stdin restart. Swift signs
 session/challenge/generation-bound wake payloads. Counter allocation also
 advances past Rust's durable replay high-water to recover safely from Keychain
-counter loss or a backward wall clock. Rust schema v10 persists
+counter loss or a backward wall clock. Rust schema v11 persists
 replay and dispatch state before using the existing proactive scheduler,
 policy, plugin, and emergency-pause funnel. This is not Apple attestation, OS
 wake provenance, background launch, same-user IPC, exactly-once effects,
 live-device QA, or production readiness.
+Explicit normal key rotation requires an old-key, session-bound,
+domain-separated P-256 proof. Explicit lost-key recovery uses a stronger typed
+warning but no old-key proof; on unauthenticated loopback it is operator
+accident prevention, not authorization or ownership authentication. Both use a
+short-lived one-shot grant, a single supervised stdin restart, staged Keychain
+material, durable crash reconciliation, and a disabled new enrollment that
+must be enabled separately. Secret-bearing prepare JSON is accepted by the CLI
+only with `system-wake key-prepare --document-stdin`; its response must be
+delivered directly to trusted device-only Keychain journal code, which builds
+the distinct supervised install document. The raw response is not install
+stdin, and neither form belongs in argv, terminal output, shell history, logs,
+or intermediate files.
 It also includes the buildable Swift/SwiftUI Mac shell under
 `apps/mac`, with a tested IPC client, command-console state model,
 activity/audit panel with current progress summary, memory

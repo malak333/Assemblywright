@@ -27,7 +27,10 @@ use crate::storage::{
     EmergencyPauseState as StoredEmergencyPauseState, MemoryClassificationSummary, NewMemoryItem,
     NewPendingApproval, PendingApproval, SqliteRepository,
 };
-use crate::trusted_wake::{decode_public_key, validate_command, verify_envelope};
+use crate::trusted_wake::{
+    decode_public_key, hash_grant_token, validate_command, verify_envelope,
+    verify_key_control_proof, TRUSTED_WAKE_KEY_GRANT_TTL_SECONDS,
+};
 use crate::{
     execute_installed_subprocess_plugin, plugin_permission_scopes, ApprovalDecision, ApprovalGrant,
     ApprovalStatus, AuditEntry, CapabilityScope, ConversationRuntime, InstalledPlugin,
@@ -41,9 +44,11 @@ use crate::{
 };
 use crate::{
     TrustedWakeAcceptedEvent, TrustedWakeAttentionItem, TrustedWakeEnvelope,
-    TrustedWakeResolutionRequest, TrustedWakeRule, TrustedWakeRuleEnablement,
-    TrustedWakeRuleEnrollment, TrustedWakeSessionStatus, TRUSTED_WAKE_RULE_ID,
-    TRUSTED_WAKE_SCHEMA_VERSION,
+    TrustedWakeKeyControlCancelRequest, TrustedWakeKeyControlInstallDocument,
+    TrustedWakeKeyControlMode, TrustedWakeKeyControlPrepareRequest,
+    TrustedWakeKeyControlPrepareResponse, TrustedWakeResolutionRequest, TrustedWakeRule,
+    TrustedWakeRuleEnablement, TrustedWakeRuleEnrollment, TrustedWakeSessionStatus,
+    TRUSTED_WAKE_CANCEL_CONFIRMATION, TRUSTED_WAKE_RULE_ID, TRUSTED_WAKE_SCHEMA_VERSION,
 };
 
 pub const IPC_CONTRACT_VERSION: u16 = 1;
@@ -2753,6 +2758,12 @@ impl IpcState {
         &self,
         enrollment: TrustedWakeRuleEnrollment,
     ) -> JarvisResult<TrustedWakeRule> {
+        if enrollment.allow_rotation {
+            return Err(JarvisError::Validation(
+                "trusted wake bootstrap rotation is unsupported; use explicit key-control prepare/install"
+                    .to_string(),
+            ));
+        }
         self.append_scheduler_audit_entry(
             None,
             "trusted_wake_bootstrap_attempted",
@@ -2806,6 +2817,9 @@ impl IpcState {
         })?;
         let ambiguous_dispatch_count =
             self.using_repository(SqliteRepository::trusted_wake_ambiguous_count)?;
+        let pending_key_control = self.using_repository(|repository| {
+            repository.trusted_wake_pending_key_control(TRUSTED_WAKE_RULE_ID)
+        })?;
         Ok(TrustedWakeSessionStatus {
             schema_version: TRUSTED_WAKE_SCHEMA_VERSION,
             session_id: self.trusted_wake_session_id,
@@ -2813,7 +2827,126 @@ impl IpcState {
             rule,
             attention_required: ambiguous_dispatch_count > 0,
             ambiguous_dispatch_count,
-            proof_boundary: "Enrolled-key possession, active-core session binding, bounded clock skew, and durable replay high-water only. There is no supported enrollment-key rotation or key-loss/mismatch recovery workflow; manual SQLite or Keychain mutation is unsupported. This is not Apple attestation, OS wake provenance, same-user isolation, background launch, exactly-once effects, live-device evidence, or production readiness.".to_string(),
+            pending_key_control,
+            proof_boundary: "Local explicit enrolled-key rotation and stronger-warning lost-key recovery use generation/fingerprint CAS, a short-lived one-shot grant, disabled install, and redacted audit only. Recovery confirmation prevents operator accidents on an unauthenticated loopback route; it is not authorization, device authentication, or ownership proof, and same-user/process isolation is not enforced. This is not Apple attestation, OS wake provenance, background launch, exactly-once effects, live-device evidence, or production readiness.".to_string(),
+        })
+    }
+
+    pub fn prepare_trusted_wake_key_control(
+        &self,
+        request: TrustedWakeKeyControlPrepareRequest,
+    ) -> JarvisResult<TrustedWakeKeyControlPrepareResponse> {
+        if request.confirmation != request.operation.required_confirmation() {
+            return Err(JarvisError::Validation(
+                "trusted wake key-control confirmation phrase did not match the requested operation"
+                    .to_string(),
+            ));
+        }
+        let current = self
+            .using_repository(|repository| repository.get_trusted_wake_rule(TRUSTED_WAKE_RULE_ID))?
+            .ok_or_else(|| {
+                JarvisError::Validation("trusted wake rule is not enrolled".to_string())
+            })?;
+        if current.public.generation != request.expected_generation
+            || current.public.key_fingerprint != request.expected_fingerprint
+        {
+            return Err(JarvisError::Validation(
+                "trusted wake key-control generation or fingerprint changed".to_string(),
+            ));
+        }
+        let (_new_public_key, new_fingerprint) =
+            decode_public_key(&request.new_public_key_x963_b64)?;
+        if new_fingerprint == current.public.key_fingerprint {
+            return Err(JarvisError::Validation(
+                "trusted wake replacement key must differ from the enrolled key".to_string(),
+            ));
+        }
+        match request.operation {
+            TrustedWakeKeyControlMode::Rotate => {
+                let proof = request.proof.as_ref().ok_or_else(|| {
+                    JarvisError::Validation(
+                        "trusted wake normal rotation requires an old-key proof".to_string(),
+                    )
+                })?;
+                verify_key_control_proof(
+                    proof,
+                    &current.public_key,
+                    &request,
+                    &new_fingerprint,
+                    self.trusted_wake_session_id,
+                    &self.trusted_wake_challenge,
+                    Utc::now(),
+                )?;
+            }
+            TrustedWakeKeyControlMode::Recover => {
+                if request.proof.is_some() {
+                    return Err(JarvisError::Validation(
+                        "trusted wake lost-key recovery rejects an ambiguous old-key proof"
+                            .to_string(),
+                    ));
+                }
+            }
+        }
+        let grant_token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+        let grant_token_hash = hash_grant_token(&grant_token)?;
+        let expires_at = Utc::now() + Duration::seconds(TRUSTED_WAKE_KEY_GRANT_TTL_SECONDS);
+        let (pending, blocked_accepted_count) = self.using_repository(|repository| {
+            repository.prepare_trusted_wake_key_control(
+                TRUSTED_WAKE_RULE_ID,
+                request.operation,
+                request.expected_generation,
+                &request.expected_fingerprint,
+                &new_fingerprint,
+                &grant_token_hash,
+                expires_at,
+            )
+        })?;
+        Ok(TrustedWakeKeyControlPrepareResponse {
+            pending,
+            grant_token,
+            blocked_accepted_count,
+            proof_boundary: "One local short-lived one-shot grant was returned once. Only its hash is persisted; the rule is disabled and must be explicitly re-enabled after the staged key is proven installed.".to_string(),
+        })
+    }
+
+    pub fn install_trusted_wake_key_control(
+        &self,
+        document: TrustedWakeKeyControlInstallDocument,
+    ) -> JarvisResult<TrustedWakeRule> {
+        if document.rule_id != TRUSTED_WAKE_RULE_ID {
+            return Err(JarvisError::Validation(
+                "trusted wake key-control install rule id is not recognized".to_string(),
+            ));
+        }
+        let (new_public_key, new_fingerprint) =
+            decode_public_key(&document.new_public_key_x963_b64)?;
+        let grant_token_hash = hash_grant_token(&document.grant_token)?;
+        self.using_repository(|repository| {
+            repository.consume_trusted_wake_key_control(
+                document.rule_id,
+                document.target_generation,
+                &new_public_key,
+                &new_fingerprint,
+                &grant_token_hash,
+            )
+        })
+    }
+
+    pub fn cancel_trusted_wake_key_control(
+        &self,
+        request: TrustedWakeKeyControlCancelRequest,
+    ) -> JarvisResult<TrustedWakeRule> {
+        if request.confirmation != TRUSTED_WAKE_CANCEL_CONFIRMATION {
+            return Err(JarvisError::Validation(
+                "trusted wake cancel-reset confirmation phrase did not match".to_string(),
+            ));
+        }
+        self.using_repository(|repository| {
+            repository.cancel_trusted_wake_key_control(
+                TRUSTED_WAKE_RULE_ID,
+                request.expected_generation,
+                &request.expected_fingerprint,
+            )
         })
     }
 
@@ -4003,6 +4136,14 @@ pub fn router(state: IpcState) -> Router {
         .route("/system-wake/status", get(trusted_wake_status))
         .route("/system-wake/attention", get(trusted_wake_attention))
         .route("/system-wake/rule", post(set_trusted_wake_rule_enabled))
+        .route(
+            "/system-wake/key-control/prepare",
+            post(prepare_trusted_wake_key_control),
+        )
+        .route(
+            "/system-wake/key-control/cancel",
+            post(cancel_trusted_wake_key_control),
+        )
         .route("/system-wake/events", post(accept_trusted_wake_event))
         .route(
             "/system-wake/events/:id/resolve",
@@ -4879,6 +5020,26 @@ async fn trusted_wake_attention(
         .map_err(error_response)
 }
 
+async fn prepare_trusted_wake_key_control(
+    State(state): State<IpcState>,
+    Json(request): Json<TrustedWakeKeyControlPrepareRequest>,
+) -> Result<Json<TrustedWakeKeyControlPrepareResponse>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .prepare_trusted_wake_key_control(request)
+        .map(Json)
+        .map_err(error_response)
+}
+
+async fn cancel_trusted_wake_key_control(
+    State(state): State<IpcState>,
+    Json(request): Json<TrustedWakeKeyControlCancelRequest>,
+) -> Result<Json<TrustedWakeRule>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .cancel_trusted_wake_key_control(request)
+        .map(Json)
+        .map_err(error_response)
+}
+
 async fn resolve_trusted_wake_attention(
     State(state): State<IpcState>,
     Path(id): Path<Uuid>,
@@ -4988,6 +5149,8 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
         endpoint("GET", "/system-wake/status", true, true),
         endpoint("GET", "/system-wake/attention", true, true),
         endpoint("POST", "/system-wake/rule", true, false),
+        endpoint("POST", "/system-wake/key-control/prepare", true, false),
+        endpoint("POST", "/system-wake/key-control/cancel", true, false),
         endpoint("POST", "/system-wake/events", true, false),
         endpoint("POST", "/system-wake/events/:id/resolve", true, false),
     ]
@@ -7043,8 +7206,8 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "trusted_macos_system_wake",
             "implemented",
-            "A disabled-by-default schema-v10 wake rule accepts bounded P-256 envelopes from the app Keychain key, binds them to core session and enrollment generation, persists replay high-water and dispatch intent, and enters the existing proactive policy funnel.",
-            "Enrolled-key possession and local restart-safe replay governance only; not Apple attestation, OS wake provenance, same-user isolation, background launch reliability, exactly-once side effects, live-device QA, or production readiness.",
+            "A disabled-by-default schema-v11 wake rule accepts bounded P-256 envelopes, supports old-key-signed rotation plus explicit stronger-warning lost-key recovery through short-lived one-shot grants, persists replay/dispatch evidence, and enters the existing proactive policy funnel.",
+            "Local enrolled-key possession and explicit key control only. Recovery confirmation is accident prevention on unauthenticated loopback, not authorization, device authentication, ownership proof, or same-user/process isolation; no Apple attestation, OS wake provenance, background launch reliability, exactly-once side effects, live-device QA, or production readiness is claimed.",
         ),
         feature(
             "scheduler_trigger_policy_review",
@@ -12317,7 +12480,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .expect("diagnostics export");
         assert_eq!(export.health.status, "ok");
         assert!(export.repository_backed);
-        assert_eq!(export.schema_version, Some(10));
+        assert_eq!(export.schema_version, Some(11));
         assert_eq!(export.task_count, Some(1));
         assert!(export.audit_entry_count.unwrap_or_default() >= 2);
         assert_eq!(export.model_route_record_count, Some(1));
@@ -12576,10 +12739,10 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let disabled_status = state.trusted_wake_status().unwrap();
         assert!(disabled_status
             .proof_boundary
-            .contains("no supported enrollment-key rotation"));
+            .contains("Local explicit enrolled-key rotation"));
         assert!(disabled_status
             .proof_boundary
-            .contains("manual SQLite or Keychain mutation is unsupported"));
+            .contains("not Apple attestation"));
         assert!(state
             .accept_trusted_wake_envelope(sign(1, &disabled_status))
             .await
@@ -12661,6 +12824,218 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 .len(),
             2
         );
+    }
+
+    #[test]
+    fn trusted_wake_key_control_requires_old_key_for_rotate_and_consumes_one_shot_grants() {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        use p256::ecdsa::{signature::Signer, Signature, SigningKey};
+
+        let state = IpcState::with_repository(SqliteRepository::in_memory().unwrap()).unwrap();
+        let old_key = SigningKey::from_bytes((&[21_u8; 32]).into()).unwrap();
+        let new_key = SigningKey::from_bytes((&[22_u8; 32]).into()).unwrap();
+        let third_key = SigningKey::from_bytes((&[23_u8; 32]).into()).unwrap();
+        let old_public = old_key.verifying_key().to_encoded_point(false);
+        let new_public = new_key.verifying_key().to_encoded_point(false);
+        let third_public = third_key.verifying_key().to_encoded_point(false);
+        let enrolled = state
+            .bootstrap_trusted_wake_rule(TrustedWakeRuleEnrollment {
+                rule_id: TRUSTED_WAKE_RULE_ID,
+                public_key_x963_b64: STANDARD.encode(old_public.as_bytes()),
+                command: "trusted wake local check".to_string(),
+                allow_rotation: false,
+            })
+            .unwrap();
+        state
+            .set_trusted_wake_enabled(TrustedWakeRuleEnablement {
+                enabled: true,
+                expected_generation: enrolled.generation,
+            })
+            .unwrap();
+        let status = state.trusted_wake_status().unwrap();
+        let new_fingerprint =
+            crate::trusted_wake::decode_public_key(&STANDARD.encode(new_public.as_bytes()))
+                .unwrap()
+                .1;
+        let confirmation = crate::TRUSTED_WAKE_ROTATE_CONFIRMATION.to_string();
+        let proof_payload = crate::TrustedWakeKeyControlProofPayload {
+            domain: crate::TRUSTED_WAKE_KEY_CONTROL_DOMAIN.to_string(),
+            schema_version: TRUSTED_WAKE_SCHEMA_VERSION,
+            operation: crate::TrustedWakeKeyControlMode::Rotate,
+            rule_id: TRUSTED_WAKE_RULE_ID,
+            expected_generation: enrolled.generation,
+            expected_fingerprint: enrolled.key_fingerprint.clone(),
+            new_fingerprint: new_fingerprint.clone(),
+            session_id: status.session_id,
+            challenge: status.challenge.clone(),
+            confirmation: confirmation.clone(),
+            occurred_at: Utc::now(),
+            nonce: Uuid::new_v4().to_string(),
+        };
+        let proof_bytes = serde_json::to_vec(&proof_payload).unwrap();
+        let proof_signature: Signature = old_key.sign(&proof_bytes);
+        let request = crate::TrustedWakeKeyControlPrepareRequest {
+            operation: crate::TrustedWakeKeyControlMode::Rotate,
+            expected_generation: enrolled.generation,
+            expected_fingerprint: enrolled.key_fingerprint.clone(),
+            new_public_key_x963_b64: STANDARD.encode(new_public.as_bytes()),
+            confirmation,
+            proof: Some(crate::TrustedWakeKeyControlProof {
+                payload_b64: STANDARD.encode(proof_bytes),
+                signature_der_b64: STANDARD.encode(proof_signature.to_der().as_bytes()),
+            }),
+        };
+        let stored_rule = state
+            .using_repository(|repository| repository.get_trusted_wake_rule(TRUSTED_WAKE_RULE_ID))
+            .unwrap()
+            .unwrap();
+        let (ambiguous, _, _) = state
+            .using_repository(|repository| {
+                repository.accept_trusted_wake_event(
+                    &stored_rule,
+                    1,
+                    "key-control-ambiguous",
+                    status.session_id,
+                )
+            })
+            .unwrap();
+        state
+            .using_repository(|repository| {
+                repository.begin_trusted_wake_dispatch(ambiguous.id, enrolled.generation)
+            })
+            .unwrap();
+        assert!(state
+            .prepare_trusted_wake_key_control(request.clone())
+            .unwrap_err()
+            .to_string()
+            .contains("ambiguous"));
+        state
+            .resolve_trusted_wake_attention(
+                ambiguous.id,
+                TrustedWakeResolutionRequest {
+                    expected_generation: enrolled.generation,
+                    expected_state: crate::TrustedWakeDispatchState::DispatchStarted,
+                },
+            )
+            .unwrap();
+        state
+            .using_repository(|repository| {
+                repository.accept_trusted_wake_event(
+                    &stored_rule,
+                    2,
+                    "key-control-accepted",
+                    status.session_id,
+                )
+            })
+            .unwrap();
+        let mut bad_request = request.clone();
+        bad_request.proof = None;
+        assert!(state.prepare_trusted_wake_key_control(bad_request).is_err());
+
+        let prepared = state
+            .prepare_trusted_wake_key_control(request.clone())
+            .unwrap();
+        assert_eq!(prepared.blocked_accepted_count, 1);
+        assert!(state
+            .prepare_trusted_wake_key_control(request)
+            .unwrap_err()
+            .to_string()
+            .contains("generation or fingerprint changed"));
+        assert_eq!(prepared.pending.target_generation, enrolled.generation + 1);
+        let prepared_status = state.trusted_wake_status().unwrap();
+        assert!(!prepared_status.rule.as_ref().unwrap().enabled);
+        assert!(state
+            .set_trusted_wake_enabled(TrustedWakeRuleEnablement {
+                enabled: true,
+                expected_generation: prepared.pending.target_generation,
+            })
+            .unwrap_err()
+            .to_string()
+            .contains("key-control grant is pending"));
+        assert_eq!(
+            prepared_status.pending_key_control.as_ref(),
+            Some(&prepared.pending)
+        );
+        let installed = state
+            .install_trusted_wake_key_control(crate::TrustedWakeKeyControlInstallDocument {
+                rule_id: TRUSTED_WAKE_RULE_ID,
+                target_generation: prepared.pending.target_generation,
+                new_public_key_x963_b64: STANDARD.encode(new_public.as_bytes()),
+                grant_token: prepared.grant_token.clone(),
+            })
+            .unwrap();
+        assert_eq!(installed.key_fingerprint, new_fingerprint);
+        assert!(!installed.enabled);
+        assert!(
+            state
+                .set_trusted_wake_enabled(TrustedWakeRuleEnablement {
+                    enabled: true,
+                    expected_generation: installed.generation,
+                })
+                .unwrap()
+                .enabled
+        );
+        state
+            .set_trusted_wake_enabled(TrustedWakeRuleEnablement {
+                enabled: false,
+                expected_generation: installed.generation,
+            })
+            .unwrap();
+        assert!(state
+            .install_trusted_wake_key_control(crate::TrustedWakeKeyControlInstallDocument {
+                rule_id: TRUSTED_WAKE_RULE_ID,
+                target_generation: prepared.pending.target_generation,
+                new_public_key_x963_b64: STANDARD.encode(new_public.as_bytes()),
+                grant_token: prepared.grant_token,
+            })
+            .is_err());
+        assert!(state
+            .trusted_wake_status()
+            .unwrap()
+            .pending_key_control
+            .is_none());
+
+        let recovered = state
+            .prepare_trusted_wake_key_control(crate::TrustedWakeKeyControlPrepareRequest {
+                operation: crate::TrustedWakeKeyControlMode::Recover,
+                expected_generation: installed.generation,
+                expected_fingerprint: installed.key_fingerprint.clone(),
+                new_public_key_x963_b64: STANDARD.encode(third_public.as_bytes()),
+                confirmation: crate::TRUSTED_WAKE_RECOVER_CONFIRMATION.to_string(),
+                proof: None,
+            })
+            .unwrap();
+        let cancelled = state
+            .cancel_trusted_wake_key_control(crate::TrustedWakeKeyControlCancelRequest {
+                expected_generation: recovered.pending.target_generation,
+                expected_fingerprint: installed.key_fingerprint.clone(),
+                confirmation: crate::TRUSTED_WAKE_CANCEL_CONFIRMATION.to_string(),
+            })
+            .unwrap();
+        assert_eq!(cancelled.generation, recovered.pending.target_generation);
+        assert!(!cancelled.enabled);
+        assert!(state
+            .trusted_wake_status()
+            .unwrap()
+            .pending_key_control
+            .is_none());
+
+        let fourth_key = SigningKey::from_bytes((&[24_u8; 32]).into()).unwrap();
+        assert!(state
+            .prepare_trusted_wake_key_control(crate::TrustedWakeKeyControlPrepareRequest {
+                operation: crate::TrustedWakeKeyControlMode::Recover,
+                expected_generation: cancelled.generation,
+                expected_fingerprint: cancelled.key_fingerprint,
+                new_public_key_x963_b64: STANDARD.encode(
+                    fourth_key
+                        .verifying_key()
+                        .to_encoded_point(false)
+                        .as_bytes()
+                ),
+                confirmation: crate::TRUSTED_WAKE_RECOVER_CONFIRMATION.to_string(),
+                proof: None,
+            })
+            .is_ok());
     }
 
     #[test]

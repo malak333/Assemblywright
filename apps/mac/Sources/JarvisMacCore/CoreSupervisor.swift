@@ -250,6 +250,7 @@ public final class JarvisCoreSupervisor: ObservableObject {
     private let credentialProvider: JarvisCoreCredentialProvider
     private var process: (any JarvisCoreProcess)?
     private var pendingTrustedWakeBootstrap: Data?
+    private var pendingTrustedWakeKeyControl: Data?
     private var activeEnvironmentOverrides: [String: String]
     private var trustedWakeProvisionInFlight: Bool
     private var lifecycleOperationInProgress: Bool
@@ -267,6 +268,7 @@ public final class JarvisCoreSupervisor: ObservableObject {
         self.mode = .stopped
         self.lastHealth = nil
         self.pendingTrustedWakeBootstrap = nil
+        self.pendingTrustedWakeKeyControl = nil
         self.activeEnvironmentOverrides = [:]
         self.trustedWakeProvisionInFlight = false
         self.lifecycleOperationInProgress = false
@@ -346,15 +348,18 @@ public final class JarvisCoreSupervisor: ObservableObject {
             var environment = credentialProvider.launchEnvironment(base: ProcessInfo.processInfo.environment)
             environment.merge(environmentOverrides) { _, override in override }
             let trustedWakeBootstrap = pendingTrustedWakeBootstrap
+            let trustedWakeKeyControl = pendingTrustedWakeKeyControl
             var launchArguments = configuration.launchArguments
             if trustedWakeBootstrap != nil {
                 launchArguments.append("--trusted-wake-bootstrap-stdin")
+            } else if trustedWakeKeyControl != nil {
+                launchArguments.append("--trusted-wake-key-control-stdin")
             }
             process = try processLauncher.launch(
                 executableURL: executableURL,
                 arguments: launchArguments,
                 environment: environment,
-                standardInput: trustedWakeBootstrap
+                standardInput: trustedWakeBootstrap ?? trustedWakeKeyControl
             )
             try await waitUntilHealthy(
                 environmentOverrides: environmentOverrides,
@@ -420,6 +425,68 @@ public final class JarvisCoreSupervisor: ObservableObject {
 
         pendingTrustedWakeBootstrap = bootstrap
         defer { pendingTrustedWakeBootstrap = nil }
+        await startInternal(
+            environmentOverrides: environmentOverrides,
+            requireMatchingConfiguration: false,
+            skipExistingHealthCheck: true
+        )
+        guard isAvailable else {
+            throw JarvisCoreSupervisorError.trustedWakeRestartFailed
+        }
+    }
+
+    public func installTrustedWakeKeyControl(
+        using provider: any TrustedWakeKeyControlInstallProviding = TrustedWakeKeyRing()
+    ) async throws {
+        guard !trustedWakeProvisionInFlight else {
+            throw JarvisCoreSupervisorError.trustedWakeProvisionInProgress
+        }
+        trustedWakeProvisionInFlight = true
+        defer { trustedWakeProvisionInFlight = false }
+
+        guard isAvailable, let originalProcess = process, originalProcess.isRunning else {
+            throw JarvisCoreSupervisorError.trustedWakeCoreNotAppSupervised
+        }
+        let environmentOverrides = activeEnvironmentOverrides
+        let minimumValiditySeconds = configuration.startupTimeoutSeconds + 5
+        let document: Data?
+        do {
+            document = try await Task.detached(priority: .userInitiated) {
+                try provider.installData(
+                    minimumValiditySeconds: minimumValiditySeconds
+                )
+            }.value
+        } catch {
+            throw JarvisCoreSupervisorError.trustedWakeKeyControlPreparationFailed
+        }
+        guard let document, !document.isEmpty else {
+            throw JarvisCoreSupervisorError.trustedWakeKeyControlUnavailable
+        }
+        guard document.count <= 8 * 1024 else {
+            throw JarvisCoreSupervisorError.trustedWakeBootstrapTooLarge
+        }
+        guard isAvailable,
+              let currentProcess = process,
+              currentProcess === originalProcess,
+              originalProcess.isRunning else {
+            throw JarvisCoreSupervisorError.trustedWakeCoreChangedDuringPreparation
+        }
+        guard beginLifecycleOperation() else {
+            throw JarvisCoreSupervisorError.trustedWakeLifecycleBusy
+        }
+        defer { endLifecycleOperation() }
+        guard isAvailable,
+              let lockedProcess = process,
+              lockedProcess === originalProcess,
+              originalProcess.isRunning else {
+            throw JarvisCoreSupervisorError.trustedWakeCoreChangedDuringPreparation
+        }
+        guard await stopInternal() else {
+            throw JarvisCoreSupervisorError.trustedWakeStopFailed
+        }
+
+        pendingTrustedWakeKeyControl = document
+        defer { pendingTrustedWakeKeyControl = nil }
         await startInternal(
             environmentOverrides: environmentOverrides,
             requireMatchingConfiguration: false,
@@ -549,6 +616,8 @@ public enum JarvisCoreSupervisorError: Error, Equatable {
     case trustedWakeBootstrapPreparationFailed
     case trustedWakeBootstrapUnavailable
     case trustedWakeBootstrapTooLarge
+    case trustedWakeKeyControlPreparationFailed
+    case trustedWakeKeyControlUnavailable
     case trustedWakeStopFailed
     case trustedWakeRestartFailed
 }

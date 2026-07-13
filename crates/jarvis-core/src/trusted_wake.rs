@@ -15,6 +15,12 @@ pub const MAX_WAKE_PUBLIC_KEY_BYTES: usize = 65;
 pub const MAX_WAKE_NONCE_BYTES: usize = 64;
 pub const MAX_WAKE_COMMAND_BYTES: usize = 2 * 1024;
 pub const MAX_WAKE_CLOCK_SKEW_SECONDS: i64 = 120;
+pub const TRUSTED_WAKE_KEY_CONTROL_DOMAIN: &str = "jarvis.trusted-wake.key-control.v1";
+pub const TRUSTED_WAKE_ROTATE_CONFIRMATION: &str = "ROTATE TRUSTED WAKE KEY";
+pub const TRUSTED_WAKE_RECOVER_CONFIRMATION: &str =
+    "RECOVER LOST TRUSTED WAKE KEY AND BLOCK PENDING WORK";
+pub const TRUSTED_WAKE_CANCEL_CONFIRMATION: &str = "CANCEL TRUSTED WAKE KEY CHANGE";
+pub const TRUSTED_WAKE_KEY_GRANT_TTL_SECONDS: i64 = 300;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -57,6 +63,100 @@ pub struct TrustedWakeRuleEnrollment {
     pub allow_rotation: bool,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TrustedWakeKeyControlMode {
+    Rotate,
+    Recover,
+}
+
+impl TrustedWakeKeyControlMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Rotate => "rotate",
+            Self::Recover => "recover",
+        }
+    }
+
+    pub fn required_confirmation(self) -> &'static str {
+        match self {
+            Self::Rotate => TRUSTED_WAKE_ROTATE_CONFIRMATION,
+            Self::Recover => TRUSTED_WAKE_RECOVER_CONFIRMATION,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct TrustedWakeKeyControlProofPayload {
+    pub domain: String,
+    pub schema_version: u16,
+    pub operation: TrustedWakeKeyControlMode,
+    pub rule_id: Uuid,
+    pub expected_generation: u64,
+    pub expected_fingerprint: String,
+    pub new_fingerprint: String,
+    pub session_id: Uuid,
+    pub challenge: String,
+    pub confirmation: String,
+    pub occurred_at: DateTime<Utc>,
+    pub nonce: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct TrustedWakeKeyControlProof {
+    pub payload_b64: String,
+    pub signature_der_b64: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct TrustedWakeKeyControlPrepareRequest {
+    pub operation: TrustedWakeKeyControlMode,
+    pub expected_generation: u64,
+    pub expected_fingerprint: String,
+    pub new_public_key_x963_b64: String,
+    pub confirmation: String,
+    pub proof: Option<TrustedWakeKeyControlProof>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TrustedWakePendingKeyControl {
+    pub operation: TrustedWakeKeyControlMode,
+    pub source_generation: u64,
+    pub target_generation: u64,
+    pub old_fingerprint: String,
+    pub new_fingerprint: String,
+    pub expires_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TrustedWakeKeyControlPrepareResponse {
+    pub pending: TrustedWakePendingKeyControl,
+    pub grant_token: String,
+    pub blocked_accepted_count: usize,
+    pub proof_boundary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct TrustedWakeKeyControlCancelRequest {
+    pub expected_generation: u64,
+    pub expected_fingerprint: String,
+    pub confirmation: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct TrustedWakeKeyControlInstallDocument {
+    pub rule_id: Uuid,
+    pub target_generation: u64,
+    pub new_public_key_x963_b64: String,
+    pub grant_token: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct TrustedWakeRuleEnablement {
@@ -72,6 +172,7 @@ pub struct TrustedWakeSessionStatus {
     pub rule: Option<TrustedWakeRule>,
     pub attention_required: bool,
     pub ambiguous_dispatch_count: usize,
+    pub pending_key_control: Option<TrustedWakePendingKeyControl>,
     pub proof_boundary: String,
 }
 
@@ -232,6 +333,104 @@ pub fn verify_envelope(
     })
 }
 
+pub fn verify_key_control_proof(
+    proof: &TrustedWakeKeyControlProof,
+    public_key: &[u8],
+    request: &TrustedWakeKeyControlPrepareRequest,
+    new_fingerprint: &str,
+    expected_session_id: Uuid,
+    expected_challenge: &str,
+    now: DateTime<Utc>,
+) -> JarvisResult<()> {
+    if proof.payload_b64.len() > encoded_limit(MAX_WAKE_PAYLOAD_BYTES)
+        || proof.signature_der_b64.len() > encoded_limit(MAX_WAKE_SIGNATURE_BYTES)
+    {
+        return Err(JarvisError::Validation(
+            "trusted wake key-control proof exceeds bounded input limits".to_string(),
+        ));
+    }
+    let payload_bytes = STANDARD.decode(&proof.payload_b64).map_err(|_| {
+        JarvisError::Validation(
+            "trusted wake key-control proof payload must be valid base64".to_string(),
+        )
+    })?;
+    if payload_bytes.is_empty() || payload_bytes.len() > MAX_WAKE_PAYLOAD_BYTES {
+        return Err(JarvisError::Validation(
+            "trusted wake key-control proof payload exceeds bounded input limits".to_string(),
+        ));
+    }
+    let signature_bytes = STANDARD.decode(&proof.signature_der_b64).map_err(|_| {
+        JarvisError::Validation(
+            "trusted wake key-control signature must be valid base64".to_string(),
+        )
+    })?;
+    let signature = Signature::from_der(&signature_bytes).map_err(|_| {
+        JarvisError::Validation(
+            "trusted wake key-control signature is not DER-encoded P-256".to_string(),
+        )
+    })?;
+    VerifyingKey::from_sec1_bytes(public_key)
+        .map_err(|_| {
+            JarvisError::Validation("stored trusted wake public key is invalid".to_string())
+        })?
+        .verify(&payload_bytes, &signature)
+        .map_err(|_| {
+            JarvisError::Validation(
+                "trusted wake key-control signature verification failed".to_string(),
+            )
+        })?;
+    let payload: TrustedWakeKeyControlProofPayload = serde_json::from_slice(&payload_bytes)
+        .map_err(|_| {
+            JarvisError::Validation(
+                "trusted wake key-control signed payload is invalid JSON".to_string(),
+            )
+        })?;
+    if payload.domain != TRUSTED_WAKE_KEY_CONTROL_DOMAIN
+        || payload.schema_version != TRUSTED_WAKE_SCHEMA_VERSION
+        || payload.operation != TrustedWakeKeyControlMode::Rotate
+        || request.operation != TrustedWakeKeyControlMode::Rotate
+        || payload.rule_id != TRUSTED_WAKE_RULE_ID
+        || payload.expected_generation != request.expected_generation
+        || payload.expected_fingerprint != request.expected_fingerprint
+        || payload.new_fingerprint != new_fingerprint
+        || payload.session_id != expected_session_id
+        || payload.challenge != expected_challenge
+        || payload.confirmation != request.confirmation
+    {
+        return Err(JarvisError::Validation(
+            "trusted wake key-control proof bindings do not match the active request".to_string(),
+        ));
+    }
+    if payload.nonce.len() > MAX_WAKE_NONCE_BYTES || Uuid::parse_str(&payload.nonce).is_err() {
+        return Err(JarvisError::Validation(
+            "trusted wake key-control nonce must be a UUID inside bounded limits".to_string(),
+        ));
+    }
+    if payload.occurred_at < now - Duration::seconds(MAX_WAKE_CLOCK_SKEW_SECONDS)
+        || payload.occurred_at > now + Duration::seconds(MAX_WAKE_CLOCK_SKEW_SECONDS)
+    {
+        return Err(JarvisError::Validation(
+            "trusted wake key-control proof timestamp is outside the accepted clock-skew window"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+pub fn hash_grant_token(token: &str) -> JarvisResult<String> {
+    if token.len() < 32
+        || token.len() > 256
+        || !token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        return Err(JarvisError::Validation(
+            "trusted wake key-control grant token is outside bounded syntax".to_string(),
+        ));
+    }
+    Ok(hex_sha256(token.as_bytes()))
+}
+
 pub fn validate_command(command: &str) -> JarvisResult<String> {
     let command = command.trim();
     if command.is_empty() || command.len() > MAX_WAKE_COMMAND_BYTES {
@@ -371,6 +570,139 @@ mod tests {
             public_key.as_bytes(),
             session_id,
             "challenge",
+            now,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn key_control_proof_rejects_signature_domain_session_time_and_binding_substitution() {
+        use p256::ecdsa::{signature::Signer, SigningKey};
+
+        let old_key = SigningKey::from_bytes((&[41_u8; 32]).into()).unwrap();
+        let wrong_key = SigningKey::from_bytes((&[42_u8; 32]).into()).unwrap();
+        let new_key = SigningKey::from_bytes((&[43_u8; 32]).into()).unwrap();
+        let old_public = old_key.verifying_key().to_encoded_point(false);
+        let new_public_b64 = STANDARD.encode(new_key.verifying_key().to_encoded_point(false));
+        let new_fingerprint = decode_public_key(&new_public_b64).unwrap().1;
+        let session_id = Uuid::new_v4();
+        let now = Utc::now();
+        let request = TrustedWakeKeyControlPrepareRequest {
+            operation: TrustedWakeKeyControlMode::Rotate,
+            expected_generation: 7,
+            expected_fingerprint: "old-fingerprint".to_string(),
+            new_public_key_x963_b64: new_public_b64,
+            confirmation: TRUSTED_WAKE_ROTATE_CONFIRMATION.to_string(),
+            proof: None,
+        };
+        let payload = TrustedWakeKeyControlProofPayload {
+            domain: TRUSTED_WAKE_KEY_CONTROL_DOMAIN.to_string(),
+            schema_version: TRUSTED_WAKE_SCHEMA_VERSION,
+            operation: TrustedWakeKeyControlMode::Rotate,
+            rule_id: TRUSTED_WAKE_RULE_ID,
+            expected_generation: request.expected_generation,
+            expected_fingerprint: request.expected_fingerprint.clone(),
+            new_fingerprint: new_fingerprint.clone(),
+            session_id,
+            challenge: "active-challenge".to_string(),
+            confirmation: request.confirmation.clone(),
+            occurred_at: now,
+            nonce: Uuid::new_v4().to_string(),
+        };
+        let signed = |payload: &TrustedWakeKeyControlProofPayload, key: &SigningKey| {
+            let bytes = serde_json::to_vec(payload).unwrap();
+            let signature: Signature = key.sign(&bytes);
+            TrustedWakeKeyControlProof {
+                payload_b64: STANDARD.encode(bytes),
+                signature_der_b64: STANDARD.encode(signature.to_der().as_bytes()),
+            }
+        };
+        assert!(verify_key_control_proof(
+            &signed(&payload, &old_key),
+            old_public.as_bytes(),
+            &request,
+            &new_fingerprint,
+            session_id,
+            "active-challenge",
+            now,
+        )
+        .is_ok());
+        assert!(verify_key_control_proof(
+            &signed(&payload, &wrong_key),
+            old_public.as_bytes(),
+            &request,
+            &new_fingerprint,
+            session_id,
+            "active-challenge",
+            now,
+        )
+        .is_err());
+
+        for mutated in [
+            TrustedWakeKeyControlProofPayload {
+                domain: "jarvis.trusted-wake.event.v1".to_string(),
+                ..payload.clone()
+            },
+            TrustedWakeKeyControlProofPayload {
+                session_id: Uuid::new_v4(),
+                ..payload.clone()
+            },
+            TrustedWakeKeyControlProofPayload {
+                challenge: "wrong-challenge".to_string(),
+                ..payload.clone()
+            },
+            TrustedWakeKeyControlProofPayload {
+                occurred_at: now - Duration::seconds(MAX_WAKE_CLOCK_SKEW_SECONDS + 1),
+                ..payload.clone()
+            },
+            TrustedWakeKeyControlProofPayload {
+                expected_generation: request.expected_generation + 1,
+                ..payload.clone()
+            },
+            TrustedWakeKeyControlProofPayload {
+                expected_fingerprint: "different-old-fingerprint".to_string(),
+                ..payload.clone()
+            },
+            TrustedWakeKeyControlProofPayload {
+                new_fingerprint: "different-new-fingerprint".to_string(),
+                ..payload.clone()
+            },
+        ] {
+            assert!(verify_key_control_proof(
+                &signed(&mutated, &old_key),
+                old_public.as_bytes(),
+                &request,
+                &new_fingerprint,
+                session_id,
+                "active-challenge",
+                now,
+            )
+            .is_err());
+        }
+
+        let mut malformed = signed(&payload, &old_key);
+        malformed.signature_der_b64 = STANDARD.encode([0_u8; 64]);
+        assert!(verify_key_control_proof(
+            &malformed,
+            old_public.as_bytes(),
+            &request,
+            &new_fingerprint,
+            session_id,
+            "active-challenge",
+            now,
+        )
+        .is_err());
+        let oversized = TrustedWakeKeyControlProof {
+            payload_b64: "A".repeat(encoded_limit(MAX_WAKE_PAYLOAD_BYTES) + 1),
+            signature_der_b64: STANDARD.encode([1_u8; 8]),
+        };
+        assert!(verify_key_control_proof(
+            &oversized,
+            old_public.as_bytes(),
+            &request,
+            &new_fingerprint,
+            session_id,
+            "active-challenge",
             now,
         )
         .is_err());

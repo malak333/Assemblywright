@@ -6748,7 +6748,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
 
     let diagnostics = run_cli_json(["diagnostics", "export", "--endpoint", endpoint.as_str()]);
     assert_eq!(diagnostics["repository_backed"], true);
-    assert_eq!(diagnostics["schema_version"], 10);
+    assert_eq!(diagnostics["schema_version"], 11);
     assert_eq!(
         diagnostics["health"]["contract"]["name"],
         "jarvis.local-ipc"
@@ -7902,6 +7902,42 @@ fn cli_smoke_command_is_release_gate_compatible() {
 }
 
 #[test]
+fn trusted_wake_key_prepare_keeps_secrets_off_argv_and_bounds_stdin() {
+    let help = run_cli_text(["system-wake", "key-prepare", "--help"]);
+    assert!(help.contains("--document-stdin"));
+    assert!(help.contains("maximum 8192 bytes"));
+    assert!(help.contains("short-lived one-time grant_token secret"));
+    assert!(help.contains("trusted device-only journal code"));
+    assert!(help.contains("raw prepare response is not install input"));
+    assert!(help.contains("Never place the prepare document, proof, or returned token in argv"));
+    assert!(!help.contains("--proof-payload-b64"));
+    assert!(!help.contains("--proof-signature-der-b64"));
+    assert!(!help.contains("--grant-token"));
+    assert!(!help.contains("--confirmation"));
+    assert!(!help.contains("--new-public-key-x963-b64"));
+
+    let missing_flag = run_cli_failure(["system-wake", "key-prepare"]);
+    assert!(missing_flag.contains("--document-stdin"));
+
+    let mut child = Command::new(jarvis_cli_bin())
+        .args(["system-wake", "key-prepare", "--document-stdin"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(&vec![b'x'; 8_193])
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("at most 8192 bytes"));
+}
+
+#[test]
 fn trusted_wake_cross_process_is_disabled_signed_idempotent_and_redacted() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("wake.sqlite");
@@ -7920,6 +7956,44 @@ fn trusted_wake_cross_process_is_disabled_signed_idempotent_and_redacted() {
             .unwrap();
     assert_eq!(status["rule"]["enabled"], false);
     let generation = status["rule"]["generation"].as_u64().unwrap();
+    let original_fingerprint = status["rule"]["key_fingerprint"].clone();
+    let bypass_key = P256SigningKey::from_bytes((&[14_u8; 32]).into()).unwrap();
+    let bypass = json!({
+        "rule_id": "4a617276-6973-4000-8000-000000000010",
+        "public_key_x963_b64": BASE64_STANDARD.encode(
+            bypass_key.verifying_key().to_encoded_point(false).as_bytes()
+        ),
+        "command": "legacy bootstrap must not rotate",
+        "allow_rotation": true,
+    });
+    let bypass_bind = unused_loopback_addr();
+    let mut bypass_child = Command::new(jarvis_cli_bin())
+        .args([
+            "serve",
+            "--bind",
+            &bypass_bind.to_string(),
+            "--db-path",
+            db_path.to_str().unwrap(),
+            "--trusted-wake-bootstrap-stdin",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    bypass_child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(bypass.to_string().as_bytes())
+        .unwrap();
+    let bypass_output = bypass_child.wait_with_output().unwrap();
+    assert!(!bypass_output.status.success());
+    let unchanged: Value =
+        serde_json::from_str(&request(&endpoint, "GET", "/system-wake/status", None).unwrap())
+            .unwrap();
+    assert_eq!(unchanged["rule"]["generation"], generation);
+    assert_eq!(unchanged["rule"]["key_fingerprint"], original_fingerprint);
     let enable = json!({ "enabled": true, "expected_generation": generation });
     request(
         &endpoint,
@@ -7979,6 +8053,264 @@ fn trusted_wake_cross_process_is_disabled_signed_idempotent_and_redacted() {
     server.stop();
 }
 
+#[test]
+fn trusted_wake_lost_key_recovery_is_one_shot_disabled_and_redacted_across_processes() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("wake-recovery.sqlite");
+    let old_key = P256SigningKey::from_bytes((&[31_u8; 32]).into()).unwrap();
+    let old_public = old_key.verifying_key().to_encoded_point(false);
+    let bootstrap = json!({
+        "rule_id": "4a617276-6973-4000-8000-000000000010",
+        "public_key_x963_b64": BASE64_STANDARD.encode(old_public.as_bytes()),
+        "command": "trusted wake recovery cross process local check",
+        "allow_rotation": false,
+    });
+    let mut original = JarvisServer::start_with_trusted_wake_bootstrap(&db_path, &bootstrap);
+    let status: Value = serde_json::from_str(
+        &request(&original.endpoint(), "GET", "/system-wake/status", None).unwrap(),
+    )
+    .unwrap();
+    let new_key = P256SigningKey::from_bytes((&[32_u8; 32]).into()).unwrap();
+    let new_public = new_key.verifying_key().to_encoded_point(false);
+    let new_public_b64 = BASE64_STANDARD.encode(new_public.as_bytes());
+    let prepare = json!({
+        "operation": "recover",
+        "expected_generation": status["rule"]["generation"],
+        "expected_fingerprint": status["rule"]["key_fingerprint"],
+        "new_public_key_x963_b64": new_public_b64,
+        "confirmation": "RECOVER LOST TRUSTED WAKE KEY AND BLOCK PENDING WORK",
+        "proof": null,
+    });
+    let prepared: Value = serde_json::from_str(
+        &request(
+            &original.endpoint(),
+            "POST",
+            "/system-wake/key-control/prepare",
+            Some(&prepare.to_string()),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let token = prepared["grant_token"].as_str().unwrap().to_string();
+    let target_generation = prepared["pending"]["target_generation"].as_u64().unwrap();
+    assert_eq!(prepared["blocked_accepted_count"], 0);
+    let prepared_status: Value = serde_json::from_str(
+        &request(&original.endpoint(), "GET", "/system-wake/status", None).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(prepared_status["rule"]["enabled"], false);
+    assert_eq!(prepared_status["rule"]["generation"], target_generation);
+    original.stop();
+
+    let install = json!({
+        "rule_id": "4a617276-6973-4000-8000-000000000010",
+        "target_generation": target_generation,
+        "new_public_key_x963_b64": new_public_b64,
+        "grant_token": token,
+    });
+    let mut restarted = JarvisServer::start_with_trusted_wake_key_control(&db_path, &install);
+    let installed: Value = serde_json::from_str(
+        &request(&restarted.endpoint(), "GET", "/system-wake/status", None).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(installed["rule"]["generation"], target_generation);
+    assert_eq!(installed["rule"]["enabled"], false);
+    assert!(installed["pending_key_control"].is_null());
+    let expected_fingerprint = Sha256::digest(new_public.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    assert_eq!(installed["rule"]["key_fingerprint"], expected_fingerprint);
+    let audit = request(&restarted.endpoint(), "GET", "/audit", None).unwrap();
+    assert!(!audit.contains(prepared["grant_token"].as_str().unwrap()));
+    assert!(!audit.contains(&new_public_b64));
+    assert!(audit.contains("trusted_wake_key_control_installed"));
+    restarted.stop();
+}
+
+#[test]
+fn trusted_wake_signed_rotation_rejects_wrong_key_and_token_replay_across_processes() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("wake-rotation.sqlite");
+    let old_key = P256SigningKey::from_bytes((&[51_u8; 32]).into()).unwrap();
+    let old_public = old_key.verifying_key().to_encoded_point(false);
+    let bootstrap = json!({
+        "rule_id": "4a617276-6973-4000-8000-000000000010",
+        "public_key_x963_b64": BASE64_STANDARD.encode(old_public.as_bytes()),
+        "command": "trusted wake signed rotation local check",
+        "allow_rotation": false,
+    });
+    let mut original = JarvisServer::start_with_trusted_wake_bootstrap(&db_path, &bootstrap);
+    let status: Value = serde_json::from_str(
+        &request(&original.endpoint(), "GET", "/system-wake/status", None).unwrap(),
+    )
+    .unwrap();
+    let new_key = P256SigningKey::from_bytes((&[52_u8; 32]).into()).unwrap();
+    let new_public = new_key.verifying_key().to_encoded_point(false);
+    let new_public_b64 = BASE64_STANDARD.encode(new_public.as_bytes());
+    let new_fingerprint = Sha256::digest(new_public.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let proof_payload = json!({
+        "domain": "jarvis.trusted-wake.key-control.v1",
+        "schema_version": 1,
+        "operation": "rotate",
+        "rule_id": "4a617276-6973-4000-8000-000000000010",
+        "expected_generation": status["rule"]["generation"],
+        "expected_fingerprint": status["rule"]["key_fingerprint"],
+        "new_fingerprint": new_fingerprint,
+        "session_id": status["session_id"],
+        "challenge": status["challenge"],
+        "confirmation": "ROTATE TRUSTED WAKE KEY",
+        "occurred_at": chrono::Utc::now(),
+        "nonce": "00000000-0000-4000-8000-000000000551",
+    });
+    let proof_bytes = serde_json::to_vec(&proof_payload).unwrap();
+    let proof_signature: P256Signature = old_key.sign(&proof_bytes);
+    let prepare = json!({
+        "operation": "rotate",
+        "expected_generation": status["rule"]["generation"],
+        "expected_fingerprint": status["rule"]["key_fingerprint"],
+        "new_public_key_x963_b64": new_public_b64,
+        "confirmation": "ROTATE TRUSTED WAKE KEY",
+        "proof": {
+            "payload_b64": BASE64_STANDARD.encode(&proof_bytes),
+            "signature_der_b64": BASE64_STANDARD.encode(proof_signature.to_der().as_bytes())
+        }
+    });
+    let prepared: Value = serde_json::from_str(
+        &request(
+            &original.endpoint(),
+            "POST",
+            "/system-wake/key-control/prepare",
+            Some(&prepare.to_string()),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let token = prepared["grant_token"].as_str().unwrap().to_string();
+    let target_generation = prepared["pending"]["target_generation"].as_u64().unwrap();
+    original.stop();
+
+    let wrong_key = P256SigningKey::from_bytes((&[53_u8; 32]).into()).unwrap();
+    let wrong_install = json!({
+        "rule_id": "4a617276-6973-4000-8000-000000000010",
+        "target_generation": target_generation,
+        "new_public_key_x963_b64": BASE64_STANDARD.encode(
+            wrong_key.verifying_key().to_encoded_point(false).as_bytes()
+        ),
+        "grant_token": token,
+    });
+    assert_key_control_start_fails(&db_path, &wrong_install);
+
+    let install = json!({
+        "rule_id": "4a617276-6973-4000-8000-000000000010",
+        "target_generation": target_generation,
+        "new_public_key_x963_b64": new_public_b64,
+        "grant_token": prepared["grant_token"],
+    });
+    let mut installed_server =
+        JarvisServer::start_with_trusted_wake_key_control(&db_path, &install);
+    let installed: Value = serde_json::from_str(
+        &request(
+            &installed_server.endpoint(),
+            "GET",
+            "/system-wake/status",
+            None,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(installed["rule"]["enabled"], false);
+    assert_eq!(installed["rule"]["key_fingerprint"], new_fingerprint);
+    installed_server.stop();
+    assert_key_control_start_fails(&db_path, &install);
+
+    let mut active = JarvisServer::start(&db_path);
+    let active_status: Value = serde_json::from_str(
+        &request(&active.endpoint(), "GET", "/system-wake/status", None).unwrap(),
+    )
+    .unwrap();
+    request(
+        &active.endpoint(),
+        "POST",
+        "/system-wake/rule",
+        Some(&json!({ "enabled": true, "expected_generation": target_generation }).to_string()),
+    )
+    .unwrap();
+    let wake_payload = json!({
+        "schema_version": 1,
+        "rule_id": "4a617276-6973-4000-8000-000000000010",
+        "rule_generation": target_generation,
+        "session_id": active_status["session_id"],
+        "challenge": active_status["challenge"],
+        "counter": 1,
+        "occurred_at": chrono::Utc::now(),
+        "nonce": "00000000-0000-4000-8000-000000000552",
+    });
+    let wake_bytes = serde_json::to_vec(&wake_payload).unwrap();
+    let old_signature: P256Signature = old_key.sign(&wake_bytes);
+    let old_envelope = json!({
+        "payload_b64": BASE64_STANDARD.encode(&wake_bytes),
+        "signature_der_b64": BASE64_STANDARD.encode(old_signature.to_der().as_bytes()),
+    });
+    assert!(request(
+        &active.endpoint(),
+        "POST",
+        "/system-wake/events",
+        Some(&old_envelope.to_string()),
+    )
+    .is_err());
+    let new_signature: P256Signature = new_key.sign(&wake_bytes);
+    let new_envelope = json!({
+        "payload_b64": BASE64_STANDARD.encode(&wake_bytes),
+        "signature_der_b64": BASE64_STANDARD.encode(new_signature.to_der().as_bytes()),
+    });
+    let accepted: Value = serde_json::from_str(
+        &request(
+            &active.endpoint(),
+            "POST",
+            "/system-wake/events",
+            Some(&new_envelope.to_string()),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(accepted["event"]["state"], "completed");
+    let audit = request(&active.endpoint(), "GET", "/audit", None).unwrap();
+    assert!(!audit.contains(&token));
+    assert!(!audit.contains(&new_public_b64));
+    assert!(!audit.contains(&BASE64_STANDARD.encode(&proof_bytes)));
+    assert!(!audit.contains(&BASE64_STANDARD.encode(proof_signature.to_der().as_bytes())));
+    active.stop();
+}
+
+fn assert_key_control_start_fails(db_path: &Path, document: &Value) {
+    let bind = unused_loopback_addr();
+    let mut child = Command::new(jarvis_cli_bin())
+        .args([
+            "serve",
+            "--bind",
+            &bind.to_string(),
+            "--db-path",
+            db_path.to_str().unwrap(),
+            "--trusted-wake-key-control-stdin",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(document.to_string().as_bytes())
+        .unwrap();
+    assert!(!child.wait_with_output().unwrap().status.success());
+}
+
 struct JarvisServer {
     child: Option<Child>,
     endpoint: String,
@@ -8012,6 +8344,41 @@ impl JarvisServer {
             .expect("bootstrap stdin")
             .write_all(serde_json::to_string(bootstrap).unwrap().as_bytes())
             .expect("write bootstrap");
+        let mut server = Self {
+            child: Some(child),
+            endpoint,
+            _temp_dir: temp_dir,
+        };
+        server.wait_until_healthy();
+        server
+    }
+
+    fn start_with_trusted_wake_key_control(db_path: &Path, document: &Value) -> Self {
+        let _startup_guard = jarvis_server_startup_lock().lock().expect("startup lock");
+        let bind = unused_loopback_addr();
+        let endpoint = format!("http://{bind}");
+        let temp_dir = tempfile::tempdir().expect("server temp dir");
+        let mut child = Command::new(jarvis_cli_bin())
+            .args([
+                "serve",
+                "--bind",
+                &bind.to_string(),
+                "--db-path",
+                db_path.to_str().expect("db path"),
+                "--trusted-wake-key-control-stdin",
+            ])
+            .current_dir(temp_dir.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("start key-control jarvis serve");
+        child
+            .stdin
+            .take()
+            .expect("key-control stdin")
+            .write_all(serde_json::to_string(document).unwrap().as_bytes())
+            .expect("write key-control document");
         let mut server = Self {
             child: Some(child),
             endpoint,

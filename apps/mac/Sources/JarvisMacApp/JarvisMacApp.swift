@@ -42,7 +42,8 @@ struct JarvisMacApp: App {
         )
         let trustedWake = TrustedWakeModel(
             client: client,
-            provision: { try await supervisor.provisionTrustedWake() }
+            provision: { try await supervisor.provisionTrustedWake() },
+            installKeyControl: { try await supervisor.installTrustedWakeKeyControl() }
         )
         _trustedWake = StateObject(wrappedValue: trustedWake)
         _wakeCoordinator = StateObject(
@@ -210,6 +211,7 @@ struct JarvisShellView: View {
 
 struct TrustedWakeView: View {
     @ObservedObject var model: TrustedWakeModel
+    @State private var keyControlConfirmation = ""
 
     var body: some View {
         Form {
@@ -226,7 +228,12 @@ struct TrustedWakeView: View {
                             set: { enabled in Task { await model.setEnabled(enabled) } }
                         )
                     )
-                    .disabled(model.isWorking)
+                    .disabled(model.isWorking || model.status?.pendingKeyControl != nil)
+                    if model.status?.pendingKeyControl != nil {
+                        Text("Enablement is quarantined while a key change is pending. Complete or cancel/reset the change first.")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
                 } else if model.status != nil {
                     Button("Provision trusted wake") {
                         Task { await model.provision() }
@@ -242,9 +249,75 @@ struct TrustedWakeView: View {
                             .foregroundStyle(.orange)
                     }
                 }
-                Text("Key loss or enrollment-key mismatch has no supported recovery workflow in this foundation and remains a production blocker. Do not manually mutate Keychain or SQLite state.")
+                if model.status?.rule != nil {
+                    TextField("Type the exact key-control confirmation", text: $keyControlConfirmation)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Rotate confirmation: \(jarvisTrustedWakeRotateConfirmation)")
+                        Text("Lost-key recovery confirmation: \(jarvisTrustedWakeRecoverConfirmation)")
+                            .foregroundStyle(.orange)
+                        Text("Cancel/reset confirmation: \(jarvisTrustedWakeCancelConfirmation)")
+                    }
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    HStack {
+                        Button("Rotate key") {
+                            let confirmation = keyControlConfirmation
+                            Task {
+                                await model.beginKeyControl(
+                                    operation: .rotate,
+                                    confirmation: confirmation
+                                )
+                            }
+                        }
+                        .disabled(
+                            model.isWorking
+                                || keyControlConfirmation != jarvisTrustedWakeRotateConfirmation
+                                || model.status?.pendingKeyControl != nil
+                        )
+                        Button("Recover lost key") {
+                            let confirmation = keyControlConfirmation
+                            Task {
+                                await model.beginKeyControl(
+                                    operation: .recover,
+                                    confirmation: confirmation
+                                )
+                            }
+                        }
+                        .disabled(
+                            model.isWorking
+                                || keyControlConfirmation != jarvisTrustedWakeRecoverConfirmation
+                                || model.status?.pendingKeyControl != nil
+                        )
+                    }
+                    Text("Rotate requires the currently enrolled private key. Recovery does not prove old-key possession: the exact phrase is destructive-action accident prevention on an unauthenticated loopback route, not authorization, device authentication, ownership proof, or same-user/process isolation.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+                if let pending = model.status?.pendingKeyControl {
+                    Text("Pending \(pending.operation.rawValue) to generation \(pending.targetGeneration). The rule is quarantined disabled; Jarvis will not retry or enable it automatically.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                    HStack {
+                        Button("Resume one-shot install") {
+                            Task { await model.resumeKeyControl() }
+                        }
+                        .disabled(model.isWorking)
+                        Button("Cancel/reset pending change") {
+                            let confirmation = keyControlConfirmation
+                            Task { await model.cancelKeyControl(confirmation: confirmation) }
+                        }
+                        .disabled(
+                            model.isWorking
+                                || keyControlConfirmation != jarvisTrustedWakeCancelConfirmation
+                        )
+                    }
+                }
+                Text("Key rotation and lost-key recovery are explicit local control workflows. They do not establish Apple attestation, OS provenance, background execution, or production readiness; do not manually mutate Keychain or SQLite state.")
                     .font(.caption)
                     .foregroundStyle(.orange)
+                if let message = model.keyControlMessage {
+                    Text(message).foregroundStyle(.secondary)
+                }
                 if let event = model.lastEvent {
                     Text("Last wake event: \(event.state)")
                 }

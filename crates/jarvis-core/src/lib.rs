@@ -67,9 +67,14 @@ pub use storage::{
 pub use storage::{MemoryClassificationCount, MemoryClassificationSummary};
 pub use trusted_wake::{
     TrustedWakeAcceptedEvent, TrustedWakeAttentionItem, TrustedWakeDispatchState,
-    TrustedWakeEnvelope, TrustedWakePayload, TrustedWakeResolutionRequest, TrustedWakeRule,
-    TrustedWakeRuleEnablement, TrustedWakeRuleEnrollment, TrustedWakeSessionStatus,
-    TRUSTED_WAKE_RULE_ID, TRUSTED_WAKE_SCHEMA_VERSION,
+    TrustedWakeEnvelope, TrustedWakeKeyControlCancelRequest, TrustedWakeKeyControlInstallDocument,
+    TrustedWakeKeyControlMode, TrustedWakeKeyControlPrepareRequest,
+    TrustedWakeKeyControlPrepareResponse, TrustedWakeKeyControlProof,
+    TrustedWakeKeyControlProofPayload, TrustedWakePayload, TrustedWakePendingKeyControl,
+    TrustedWakeResolutionRequest, TrustedWakeRule, TrustedWakeRuleEnablement,
+    TrustedWakeRuleEnrollment, TrustedWakeSessionStatus, TRUSTED_WAKE_CANCEL_CONFIRMATION,
+    TRUSTED_WAKE_KEY_CONTROL_DOMAIN, TRUSTED_WAKE_RECOVER_CONFIRMATION,
+    TRUSTED_WAKE_ROTATE_CONFIRMATION, TRUSTED_WAKE_RULE_ID, TRUSTED_WAKE_SCHEMA_VERSION,
 };
 pub use types::{
     ApprovalStatus, AuditEntry, JarvisError, JarvisResult, RiskTier, Sensitivity, TaskRecord,

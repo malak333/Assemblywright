@@ -76,6 +76,26 @@ release requirements, not optional UX guidance.
   Swift counter allocation must advance past both its Keychain counter and the
   Rust rule's durable replay high-water; overflow fails closed. Ambiguous
   events require an explicit generation/state-bound resolve-without-retry action.
+  Legacy bootstrap can create or idempotently confirm an enrollment only; it
+  cannot rotate a key or command. Normal key rotation requires an old-key,
+  active-session, domain-separated P-256 signature. Lost-key recovery requires
+  the stronger exact destructive confirmation but is an unauthenticated local
+  operator path: the phrase prevents accidents and is not authorization,
+  device authentication, ownership proof, or same-user/process isolation.
+  Prepare runs in one immediate transaction, rejects ambiguous dispatch,
+  blocks accepted old-generation work, disables and advances the rule, resets
+  replay high-water, stores only a bounded one-shot token hash, and quarantines
+  enablement until install or cancel. Supervised install consumes the grant
+  atomically and installs the staged public key disabled. Swift must retain the
+  old active key until fingerprint/generation proof, journal crash recovery,
+  reject expired or near-expiry restart attempts, and never auto-enable,
+  auto-retry, auto-rollback, or expose private keys, tokens, or proofs. Key
+  prepare accepts its secret-bearing JSON only through bounded stdin (or the
+  in-process Swift IPC client), never proof/key/confirmation argv. The returned
+  one-time token must flow immediately to trusted device-only Keychain journal
+  code, which constructs the distinct supervised install document. The raw
+  prepare response is not install stdin; neither secret-bearing form may reach
+  a terminal, shell history, log, or file.
 - Diagnostics exports must redact credentials, command bodies, scheduler
   commands, audit payloads, memory values, raw cancellation reasons, and other
   sensitive payloads.
