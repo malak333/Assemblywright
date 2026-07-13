@@ -9,6 +9,7 @@ pub mod scheduler;
 pub mod storage;
 pub mod trusted_wake;
 pub mod types;
+pub mod workspace;
 
 pub use ipc::{
     router, serve, serve_listener, ApprovalDecisionRequest, ApprovalExecutionResponse,
@@ -17,15 +18,16 @@ pub use ipc::{
     HealthResponse, InstallPluginRequest, InstalledPluginExecutionRequest,
     InstalledPluginGrantSurface, InstalledPluginPublisherSignatureVerificationRequest,
     InstalledPluginPublisherVerificationRequest, InstalledPluginRunRequest,
-    InstalledPluginRunResponse, IpcState, ModelToolCatalogResponse, PermissionGrantSummary,
-    PermissionPolicyReview, PermissionPolicyReviewItem, ReleaseReadinessFeature,
-    ReleaseReadinessResponse, SchedulerAttentionItem, SchedulerAttentionSummary,
-    SchedulerBackgroundConfig, SchedulerJobExecution, SchedulerRunResponse,
-    SchedulerStaleRecoveryItem, SchedulerStaleRecoveryResponse, UpdateMemoryItemRequest,
-    DEFAULT_ACTIVITY_EVENT_INTERVAL_MS, DEFAULT_ACTIVITY_EVENT_LIMIT,
-    DEFAULT_SCHEDULER_BACKGROUND_INTERVAL_MS, DEFAULT_SCHEDULER_BACKGROUND_LIMIT,
-    DEFAULT_SCHEDULER_STALE_RECOVERY_LIMIT, DEFAULT_SCHEDULER_STALE_RECOVERY_OLDER_THAN_SECONDS,
-    MAX_ACTIVITY_EVENT_LIMIT, MAX_SCHEDULER_BACKGROUND_LIMIT,
+    InstalledPluginRunResponse, IpcState, ModelToolCatalogEntry, ModelToolCatalogResponse,
+    ModelToolConstraints, PermissionGrantSummary, PermissionPolicyReview,
+    PermissionPolicyReviewItem, ReleaseReadinessFeature, ReleaseReadinessResponse,
+    SchedulerAttentionItem, SchedulerAttentionSummary, SchedulerBackgroundConfig,
+    SchedulerJobExecution, SchedulerRunResponse, SchedulerStaleRecoveryItem,
+    SchedulerStaleRecoveryResponse, UpdateMemoryItemRequest, DEFAULT_ACTIVITY_EVENT_INTERVAL_MS,
+    DEFAULT_ACTIVITY_EVENT_LIMIT, DEFAULT_SCHEDULER_BACKGROUND_INTERVAL_MS,
+    DEFAULT_SCHEDULER_BACKGROUND_LIMIT, DEFAULT_SCHEDULER_STALE_RECOVERY_LIMIT,
+    DEFAULT_SCHEDULER_STALE_RECOVERY_OLDER_THAN_SECONDS, MAX_ACTIVITY_EVENT_LIMIT,
+    MAX_SCHEDULER_BACKGROUND_LIMIT,
 };
 pub use memory_index::{
     MemoryIndexState, MemoryIndexStatus, MemoryIndexStore, MEMORY_INDEX_VERSION,
@@ -38,13 +40,13 @@ pub use model::{
 };
 pub use plugin::{
     execute_installed_subprocess_plugin, plugin_permission_scopes, CancellationBehavior,
-    CancellationSignal, EchoPlugin, InProcessPlugin, InstalledPlugin,
-    InstalledPluginExecutionGrant, InstalledPluginIntegrityStatus, InstalledPluginProvenance,
-    JsonSchema, PluginAccess, PluginActionManifest, PluginCallMetadata, PluginCallRequest,
-    PluginCallResult, PluginCallStatus, PluginHost, PluginManifest, PluginNetworkAccess,
-    PluginNetworkAccessMode, PluginPermission, PluginProgressEvent, PluginPublisherSignature,
-    PluginSource, PluginSubprocessManifest, PluginSubprocessStream, PluginTimeout,
-    PluginTimeoutAction, StatusPlugin, SubprocessPluginExecution,
+    CancellationSignal, InProcessPlugin, InstalledPlugin, InstalledPluginExecutionGrant,
+    InstalledPluginIntegrityStatus, InstalledPluginProvenance, JsonSchema, PluginAccess,
+    PluginActionManifest, PluginCallMetadata, PluginCallRequest, PluginCallResult,
+    PluginCallStatus, PluginHost, PluginManifest, PluginNetworkAccess, PluginNetworkAccessMode,
+    PluginPermission, PluginProgressEvent, PluginPublisherSignature, PluginSource,
+    PluginSubprocessManifest, PluginSubprocessStream, PluginTimeout, PluginTimeoutAction,
+    StatusPlugin, SubprocessPluginExecution,
 };
 pub use policy::{
     ApprovalDecision, ApprovalGrant, CapabilityScope, PermissionEngine, PolicyDecision,
@@ -79,4 +81,9 @@ pub use trusted_wake::{
 pub use types::{
     ApprovalStatus, AuditEntry, JarvisError, JarvisResult, RiskTier, Sensitivity, TaskRecord,
     TaskStatus,
+};
+pub use workspace::{
+    WorkspaceInspectPlugin, WorkspaceRootConfig, MAX_WORKSPACE_LIST_ENTRIES,
+    MAX_WORKSPACE_RELATIVE_PATH_BYTES, MAX_WORKSPACE_ROOTS, MAX_WORKSPACE_ROOT_ID_BYTES,
+    MAX_WORKSPACE_TEXT_BYTES,
 };

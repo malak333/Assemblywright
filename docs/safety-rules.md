@@ -45,6 +45,21 @@ release requirements, not optional UX guidance.
   and malformed provider envelopes must fail the task. Native provider
   function-call formatting cannot bypass registry lookup or schema validation,
   and installed plugin records cannot become model-planned tools.
+- Production workspace inspection is disabled unless an operator configures an
+  allowlisted root. Requests may contain only an opaque root ID and validated
+  relative path. Descriptor-anchored no-follow traversal must reject absolute,
+  empty, dot/parent, hidden, credential-like, symlink, special, binary, and
+  oversized targets; list/read results are bounded and audits contain only
+  root ID, normalized relative path, counts, limits, truncation, and outcome.
+  File contents are untrusted data, never instructions, and may continue only
+  through a local-model route. ChatGPT/cloud routes fail closed before a
+  workspace action runs or a workspace result is exposed. Emergency pause,
+  task cancellation, and timeout dominate completion and discard late output.
+  `fake_*` tools are test fixtures and must not appear in production inventory.
+  `workspace_inspect.list` may use only the explicit `@root` sentinel for the
+  held root; other inputs are non-empty normal relative paths. The enforced
+  ceilings are 200 listed entries, 64 KiB per UTF-8 read, 16 KiB per line, and
+  128 KiB cumulative tool output per task.
 - Audit logs must explain model route, permission checks, tool calls,
   approvals, denials, files touched, external actions attempted, failures, and
   final state.

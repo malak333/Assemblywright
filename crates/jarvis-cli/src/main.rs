@@ -30,6 +30,9 @@ enum CliCommand {
         bind: String,
         #[arg(long, env = "JARVIS_DB_PATH")]
         db_path: Option<PathBuf>,
+        /// Add an explicit read-only workspace authority as <id>=<absolute-path>. Repeat for multiple roots.
+        #[arg(long = "workspace-root")]
+        workspace_roots: Vec<String>,
         #[arg(long)]
         scheduler_background: bool,
         #[arg(long, default_value_t = jarvis_core::DEFAULT_SCHEDULER_BACKGROUND_INTERVAL_MS)]
@@ -700,6 +703,7 @@ async fn main() -> anyhow::Result<()> {
         CliCommand::Serve {
             bind,
             db_path,
+            workspace_roots,
             scheduler_background,
             scheduler_interval_ms,
             scheduler_limit,
@@ -715,17 +719,25 @@ async fn main() -> anyhow::Result<()> {
                 );
             }
             let provider_config = jarvis_core::ProviderConfig::from_env()?;
+            let workspace_roots = workspace_roots
+                .iter()
+                .map(|value| jarvis_core::WorkspaceRootConfig::parse(value))
+                .collect::<jarvis_core::JarvisResult<Vec<_>>>()?;
             let state = match db_path {
                 Some(path) => {
                     if let Some(parent) = path.parent() {
                         std::fs::create_dir_all(parent)?;
                     }
-                    jarvis_core::IpcState::with_repository_and_provider_config(
+                    jarvis_core::IpcState::with_repository_provider_and_workspace_roots(
                         jarvis_core::SqliteRepository::open(path)?,
                         provider_config,
+                        workspace_roots,
                     )?
                 }
-                None => jarvis_core::IpcState::with_provider_config(provider_config),
+                None => jarvis_core::IpcState::with_provider_config_and_workspace_roots(
+                    provider_config,
+                    workspace_roots,
+                )?,
             };
             if trusted_wake_bootstrap_stdin {
                 let mut bootstrap = Vec::new();
@@ -2892,12 +2904,12 @@ async fn run_smoke() -> anyhow::Result<()> {
 
     let manifests = request(&endpoint, "GET", "/plugins/manifests", None)?;
     let manifests_json: serde_json::Value = serde_json::from_str(&manifests)?;
-    require_array_contains_object_field(&manifests_json, "id", "fake_echo")?;
+    require_array_contains_object_field(&manifests_json, "id", "system_status")?;
 
     let tools = request(&endpoint, "GET", "/tools/model", None)?;
     let tools_json: serde_json::Value = serde_json::from_str(&tools)?;
     require_json_field(&tools_json, "source", "registered_first_party_plugins")?;
-    require_array_contains_object_field(&tools_json["tools"], "plugin_id", "fake_status")?;
+    require_array_contains_object_field(&tools_json["tools"], "plugin_id", "system_status")?;
 
     let diagnostics = request(&endpoint, "GET", "/diagnostics/export", None)?;
     let diagnostics_json: serde_json::Value = serde_json::from_str(&diagnostics)?;

@@ -223,11 +223,36 @@ requests `plugin_id: "status"` or `plugin_id: "chrome_extension"`, that is a
 provider hallucination, not a missing installed plugin. Inspect the exact
 model-visible catalog with `cargo run -q -p jarvis-cli -- tools list`,
 `cargo run -q -p jarvis-cli -- tools model`, or
-`cargo run -q -p jarvis-cli -- tools catalog`. Current valid first-party
-model-visible pairs are `fake_echo.approval_echo`, `fake_echo.echo`, and
-`fake_status.status`; installed plugins can be inspected or explicitly run
-through `jarvis plugins ...` commands, but they are not exposed to
-model-originated tool planning.
+`cargo run -q -p jarvis-cli -- tools catalog`. Production inventory contains
+`system_status.status` and excludes deterministic `fake_*` test fixtures.
+Starting the core with one or more explicit roots adds the bounded local-only
+workspace tools for those roots:
+
+```bash
+cargo run -p jarvis-cli -- serve \
+  --workspace-root project=/absolute/path/to/project
+cargo run -q -p jarvis-cli -- tools list
+cargo test -p jarvis-core workspace_inspect -- --nocapture
+cargo test -p jarvis-core runtime_cancellation -- --nocapture
+cargo test -p jarvis-cli --test local_ipc_e2e production_workspace -- --nocapture
+swift test --disable-sandbox --package-path apps/mac --filter PluginManager
+```
+
+`workspace_inspect.list` and `workspace_inspect.read_text` are absent when no
+root is configured. They use only opaque root IDs plus relative paths, enforce
+descriptor-anchored no-follow traversal and hard output budgets, reject
+hidden/credential-like/symlink/special/binary/oversized targets, and are
+local-model-only. Their audit evidence contains metadata, not contents or
+absolute paths. Installed plugins remain outside model-originated planning.
+These commands prove bounded repository contracts, not macOS sandboxing,
+same-user IPC isolation, malware resistance, signed distribution, app-owned
+root selection, live-device QA, or marketplace trust.
+Use `path: "@root"` only when listing the configured root; empty paths are
+invalid. The current ceilings fail closed beyond 200 visible entries, 64 KiB
+per read, 16 KiB per line, and 128 KiB cumulative tool output per task.
+Restart E2E also preserves unresolved historical `fake_*` approvals as
+critical `removed_fixture_approval` policy-review attention while proving the
+fixture action cannot execute; it never deletes approval history silently.
 
 The interactive CLI defaults to operator-readable text for `jarvis command`
 and its `jarvis ask` alias, `jarvis plugins list/get`, `jarvis tools list`,
@@ -403,8 +428,8 @@ Current boundary: the command endpoint runs `ConversationRuntime` with
 `FakeLocalModel` by default, an opt-in Ollama-compatible local HTTP provider, or
 an opt-in ChatGPT/OpenAI-compatible HTTP provider from typed env config. It
 records local-first `ModelRouter` audit evidence, sends ChatGPT only minimized
-redacted route context after policy selection, can execute deterministic
-first-party plugin commands such as `plugin echo ...` through the policy
+redacted route context after policy selection, can execute bounded production
+first-party commands such as `status` through the policy
 engine, honors `--dry-run` for plugin execution, and can persist task/audit
 state plus redacted model-route records when configured with a
 repository-backed IPC state. It also has deterministic coverage for bounded

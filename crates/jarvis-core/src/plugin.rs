@@ -1645,6 +1645,11 @@ impl PluginCallRequest {
         self.sensitivity = sensitivity;
         self
     }
+
+    pub fn with_proactive(mut self, proactive: bool) -> Self {
+        self.proactive = proactive;
+        self
+    }
 }
 
 fn default_plugin_sensitivity() -> Sensitivity {
@@ -1665,6 +1670,8 @@ pub struct PluginCallMetadata {
     pub timeout_ms: u64,
     pub cancellation: CancellationBehavior,
     pub audit_fields: Vec<String>,
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub audit_summary: Value,
 }
 
 impl PluginCallMetadata {
@@ -1686,6 +1693,11 @@ impl PluginCallMetadata {
             timeout_ms: action.timeout.timeout_ms,
             cancellation: action.cancellation,
             audit_fields: action.audit_fields.clone(),
+            audit_summary: if manifest.id == "workspace_inspect" {
+                crate::workspace::audit_request_summary(&request.input)
+            } else {
+                Value::Null
+            },
         }
     }
 }
@@ -1708,7 +1720,8 @@ pub struct PluginCallResult {
 }
 
 impl PluginCallResult {
-    fn approval_required(metadata: PluginCallMetadata) -> Self {
+    fn approval_required(mut metadata: PluginCallMetadata) -> Self {
+        finish_plugin_audit(&mut metadata, "approval_required", None);
         Self {
             status: PluginCallStatus::ApprovalRequired,
             output: json!({ "approval_required": true }),
@@ -1716,12 +1729,19 @@ impl PluginCallResult {
         }
     }
 
-    fn timed_out(metadata: PluginCallMetadata) -> Self {
+    fn timed_out(mut metadata: PluginCallMetadata) -> Self {
+        finish_plugin_audit(&mut metadata, "timed_out", None);
         Self {
             status: PluginCallStatus::TimedOut,
             output: json!({ "timed_out": true }),
             metadata,
         }
+    }
+}
+
+fn finish_plugin_audit(metadata: &mut PluginCallMetadata, outcome: &str, output: Option<&Value>) {
+    if metadata.plugin_id == "workspace_inspect" {
+        crate::workspace::finish_audit_summary(&mut metadata.audit_summary, outcome, output);
     }
 }
 
@@ -1763,7 +1783,7 @@ pub trait InProcessPlugin: Send + Sync + 'static {
     ) -> JarvisResult<Value>;
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct PluginHost {
     plugins: HashMap<String, Arc<dyn InProcessPlugin>>,
 }
@@ -1774,9 +1794,26 @@ impl PluginHost {
     }
 
     pub fn with_first_party_plugins() -> JarvisResult<Self> {
+        Self::with_workspace_roots(Vec::new())
+    }
+
+    pub fn with_workspace_roots(
+        workspace_roots: Vec<crate::WorkspaceRootConfig>,
+    ) -> JarvisResult<Self> {
+        let mut host = Self::new();
+        let workspace = crate::WorkspaceInspectPlugin::open(workspace_roots)?;
+        host.register(StatusPlugin)?;
+        if let Some(workspace) = workspace {
+            host.register(workspace)?;
+        }
+        Ok(host)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_test_fixtures() -> JarvisResult<Self> {
         let mut host = Self::new();
         host.register(EchoPlugin)?;
-        host.register(StatusPlugin)?;
+        host.register(FakeStatusPlugin)?;
         Ok(host)
     }
 
@@ -1817,6 +1854,14 @@ impl PluginHost {
     }
 
     pub fn execute(&self, request: PluginCallRequest) -> JarvisResult<PluginCallResult> {
+        self.execute_cancellable(request, || false)
+    }
+
+    pub fn execute_cancellable(
+        &self,
+        request: PluginCallRequest,
+        should_cancel: impl Fn() -> bool,
+    ) -> JarvisResult<PluginCallResult> {
         let plugin = Arc::clone(self.plugins.get(&request.plugin_id).ok_or_else(|| {
             JarvisError::Plugin(format!("plugin {} is not registered", request.plugin_id))
         })?);
@@ -1878,32 +1923,102 @@ impl PluginHost {
             let _ = sender.send(result);
         });
 
-        match receiver.recv_timeout(timeout.duration()) {
-            Ok(Ok(output)) => {
-                output_schema
-                    .validate_value(&format!("{plugin_id}.{action_name} output"), &output)?;
-                Ok(PluginCallResult {
-                    status: PluginCallStatus::Completed,
-                    output,
+        let deadline = Instant::now() + timeout.duration();
+        loop {
+            if should_cancel() {
+                cancellation.cancel();
+                finish_plugin_audit(&mut metadata, "cancelled", None);
+                return Ok(PluginCallResult {
+                    status: PluginCallStatus::Cancelled,
+                    output: json!({ "cancelled": true }),
                     metadata,
-                })
+                });
             }
-            Ok(Err(error)) => Ok(PluginCallResult {
-                status: PluginCallStatus::Failed,
-                output: json!({ "error": error.to_string() }),
-                metadata,
-            }),
-            Err(mpsc::RecvTimeoutError::Timeout) => {
+            let now = Instant::now();
+            if now >= deadline {
                 if timeout.on_timeout == PluginTimeoutAction::Cancel {
                     cancellation.cancel();
                 }
-                Ok(PluginCallResult::timed_out(metadata))
+                return Ok(PluginCallResult::timed_out(metadata));
             }
-            Err(mpsc::RecvTimeoutError::Disconnected) => Ok(PluginCallResult {
-                status: PluginCallStatus::Failed,
-                output: json!({ "error": "plugin worker disconnected" }),
-                metadata,
-            }),
+            let wait = std::cmp::min(deadline - now, Duration::from_millis(10));
+            match receiver.recv_timeout(wait) {
+                Ok(Ok(output)) => {
+                    if should_cancel() {
+                        cancellation.cancel();
+                        finish_plugin_audit(&mut metadata, "cancelled", None);
+                        return Ok(PluginCallResult {
+                            status: PluginCallStatus::Cancelled,
+                            output: json!({ "cancelled": true }),
+                            metadata,
+                        });
+                    }
+                    output_schema
+                        .validate_value(&format!("{plugin_id}.{action_name} output"), &output)?;
+                    if should_cancel() {
+                        cancellation.cancel();
+                        finish_plugin_audit(&mut metadata, "cancelled", None);
+                        return Ok(PluginCallResult {
+                            status: PluginCallStatus::Cancelled,
+                            output: json!({ "cancelled": true }),
+                            metadata,
+                        });
+                    }
+                    if Instant::now() >= deadline {
+                        cancellation.cancel();
+                        return Ok(PluginCallResult::timed_out(metadata));
+                    }
+                    finish_plugin_audit(&mut metadata, "completed", Some(&output));
+                    return Ok(PluginCallResult {
+                        status: PluginCallStatus::Completed,
+                        output,
+                        metadata,
+                    });
+                }
+                Ok(Err(error)) => {
+                    if should_cancel() {
+                        cancellation.cancel();
+                        finish_plugin_audit(&mut metadata, "cancelled", None);
+                        return Ok(PluginCallResult {
+                            status: PluginCallStatus::Cancelled,
+                            output: json!({ "cancelled": true }),
+                            metadata,
+                        });
+                    }
+                    if Instant::now() >= deadline {
+                        cancellation.cancel();
+                        return Ok(PluginCallResult::timed_out(metadata));
+                    }
+                    finish_plugin_audit(&mut metadata, "failed", None);
+                    return Ok(PluginCallResult {
+                        status: PluginCallStatus::Failed,
+                        output: json!({ "error": error.to_string() }),
+                        metadata,
+                    });
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    if should_cancel() {
+                        cancellation.cancel();
+                        finish_plugin_audit(&mut metadata, "cancelled", None);
+                        return Ok(PluginCallResult {
+                            status: PluginCallStatus::Cancelled,
+                            output: json!({ "cancelled": true }),
+                            metadata,
+                        });
+                    }
+                    if Instant::now() >= deadline {
+                        cancellation.cancel();
+                        return Ok(PluginCallResult::timed_out(metadata));
+                    }
+                    finish_plugin_audit(&mut metadata, "failed", None);
+                    return Ok(PluginCallResult {
+                        status: PluginCallStatus::Failed,
+                        output: json!({ "error": "plugin worker disconnected" }),
+                        metadata,
+                    });
+                }
+            }
         }
     }
 }
@@ -1928,9 +2043,11 @@ pub fn plugin_permission_scopes(permissions: &[PluginPermission]) -> Vec<Capabil
     scopes
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
-pub struct EchoPlugin;
+pub(crate) struct EchoPlugin;
 
+#[cfg(test)]
 impl InProcessPlugin for EchoPlugin {
     fn manifest(&self) -> PluginManifest {
         let mut input_properties = Map::new();
@@ -2019,13 +2136,12 @@ impl InProcessPlugin for StatusPlugin {
     fn manifest(&self) -> PluginManifest {
         let mut output_properties = Map::new();
         output_properties.insert("status".to_string(), json!({ "type": "string" }));
-        output_properties.insert("plugin_count".to_string(), json!({ "type": "integer" }));
 
         PluginManifest {
             manifest_schema_version: LOCAL_MANIFEST_SCHEMA_VERSION,
-            id: "fake_status".to_string(),
-            name: "Fake Status".to_string(),
-            version: "0.1.0".to_string(),
+            id: "system_status".to_string(),
+            name: "System Status".to_string(),
+            version: "1.0.0".to_string(),
             source: PluginSource::FirstParty,
             author: "Jarvis".to_string(),
             source_path: None,
@@ -2033,16 +2149,12 @@ impl InProcessPlugin for StatusPlugin {
             publisher_signature: None,
             actions: vec![PluginActionManifest {
                 name: "status".to_string(),
-                description: "Report deterministic first-party host status for contract testing."
-                    .to_string(),
-                permissions: vec![
-                    PluginPermission::SystemStatus,
-                    PluginPermission::ProactiveRun,
-                ],
+                description: "Report bounded local first-party capability-host status.".to_string(),
+                permissions: vec![PluginPermission::SystemStatus],
                 risk_tier: RiskTier::Notify,
                 input_schema: JsonSchema::empty_object(),
                 output_schema: JsonSchema::object(output_properties, vec!["status".to_string()]),
-                proactive: true,
+                proactive: false,
                 memory_access: PluginAccess::None,
                 model_access: PluginAccess::None,
                 network_access: PluginNetworkAccess::default(),
@@ -2064,9 +2176,46 @@ impl InProcessPlugin for StatusPlugin {
         }
 
         Ok(json!({
-            "status": "ok",
-            "plugin_count": 2
+            "status": "operational"
         }))
+    }
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone)]
+pub(crate) struct FakeStatusPlugin;
+
+#[cfg(test)]
+impl InProcessPlugin for FakeStatusPlugin {
+    fn manifest(&self) -> PluginManifest {
+        let mut manifest = StatusPlugin.manifest();
+        manifest.id = "fake_status".to_string();
+        manifest.name = "Fake Status".to_string();
+        manifest.version = "0.1.0".to_string();
+        manifest.actions[0].proactive = true;
+        manifest.actions[0]
+            .permissions
+            .push(PluginPermission::ProactiveRun);
+        let properties = manifest.actions[0]
+            .output_schema
+            .schema
+            .get_mut("properties")
+            .and_then(Value::as_object_mut)
+            .expect("status output properties");
+        properties.insert("plugin_count".to_string(), json!({"type":"integer"}));
+        manifest
+    }
+
+    fn execute(
+        &self,
+        _action: &PluginActionManifest,
+        _input: Value,
+        cancellation: CancellationSignal,
+    ) -> JarvisResult<Value> {
+        if cancellation.is_cancelled() {
+            return Err(JarvisError::Plugin("status cancelled".to_string()));
+        }
+        Ok(json!({"status":"ok", "plugin_count":2}))
     }
 }
 
@@ -2076,11 +2225,12 @@ mod tests {
     use ed25519_dalek::{Signer, SigningKey};
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+    use std::sync::atomic::AtomicBool as TestAtomicBool;
     use std::{fs, thread, time::Duration};
 
     #[test]
     fn validates_first_party_manifests() {
-        let host = PluginHost::with_first_party_plugins().expect("host should build");
+        let host = PluginHost::with_test_fixtures().expect("host should build");
         let manifests = host.manifests().expect("manifests should validate");
 
         assert_eq!(manifests.len(), 2);
@@ -2512,7 +2662,7 @@ mod tests {
 
     #[test]
     fn echo_plugin_round_trips_input_and_metadata() {
-        let host = PluginHost::with_first_party_plugins().expect("host should build");
+        let host = PluginHost::with_test_fixtures().expect("host should build");
         let result = host
             .execute(
                 PluginCallRequest::reactive("fake_echo", "echo", json!({ "message": "hello" }))
@@ -2533,7 +2683,7 @@ mod tests {
 
     #[test]
     fn status_plugin_allows_proactive_notify_runs() {
-        let host = PluginHost::with_first_party_plugins().expect("host should build");
+        let host = PluginHost::with_test_fixtures().expect("host should build");
         let mut request = PluginCallRequest::reactive("fake_status", "status", json!({}));
         request.proactive = true;
         request.granted_scopes = plugin_permission_scopes(&[
@@ -2558,7 +2708,7 @@ mod tests {
 
     #[test]
     fn schema_validation_blocks_invalid_input() {
-        let host = PluginHost::with_first_party_plugins().expect("host should build");
+        let host = PluginHost::with_test_fixtures().expect("host should build");
         let error = host
             .execute(
                 PluginCallRequest::reactive("fake_echo", "echo", json!({ "message": 42 }))
@@ -2573,7 +2723,7 @@ mod tests {
 
     #[test]
     fn missing_granted_scope_blocks_before_execution() {
-        let host = PluginHost::with_first_party_plugins().expect("host should build");
+        let host = PluginHost::with_test_fixtures().expect("host should build");
         let error = host
             .execute(PluginCallRequest::reactive(
                 "fake_echo",
@@ -2589,7 +2739,7 @@ mod tests {
 
     #[test]
     fn private_sensitivity_requires_approval_even_for_low_risk_action() {
-        let host = PluginHost::with_first_party_plugins().expect("host should build");
+        let host = PluginHost::with_test_fixtures().expect("host should build");
         let result = host
             .execute(
                 PluginCallRequest::reactive("fake_echo", "echo", json!({ "message": "private" }))
@@ -2694,6 +2844,27 @@ mod tests {
     }
 
     #[test]
+    fn external_cancellation_dominates_worker_error_race() {
+        let cancelled = Arc::new(TestAtomicBool::new(false));
+        let mut host = PluginHost::new();
+        host.register(ErrorAfterCancellationPlugin {
+            cancelled: Arc::clone(&cancelled),
+        })
+        .expect("register cancellation race plugin");
+
+        let result = host
+            .execute_cancellable(
+                PluginCallRequest::reactive("cancel_race", "run", json!({}))
+                    .with_granted_scopes(vec![CapabilityScope::PluginRun]),
+                || cancelled.load(Ordering::SeqCst),
+            )
+            .expect("cancellation result");
+
+        assert_eq!(result.status, PluginCallStatus::Cancelled);
+        assert_eq!(result.output, json!({"cancelled": true}));
+    }
+
+    #[test]
     fn local_subprocess_output_within_limits_executes_and_parses_progress() {
         let fixture = local_subprocess_fixture(
             r#"#!/bin/sh
@@ -2742,8 +2913,8 @@ PY
         )
         .expect_err("oversize stdout must fail closed");
 
-        assert!(error.to_string().contains("stdout exceeded"));
-        assert!(error.to_string().contains("byte limit"));
+        assert!(error.to_string().contains("stdout exceeded"), "{error}");
+        assert!(error.to_string().contains("byte limit"), "{error}");
     }
 
     #[test]
@@ -2770,8 +2941,8 @@ PY
         )
         .expect_err("oversize stderr must fail closed");
 
-        assert!(error.to_string().contains("stderr exceeded"));
-        assert!(error.to_string().contains("byte limit"));
+        assert!(error.to_string().contains("stderr exceeded"), "{error}");
+        assert!(error.to_string().contains("byte limit"), "{error}");
     }
 
     fn local_subprocess_fixture(script: &str) -> tempfile::TempDir {
@@ -2820,7 +2991,11 @@ PY
                 network_access: PluginNetworkAccess::default(),
                 audit_fields: Vec::new(),
                 timeout: PluginTimeout {
-                    timeout_ms: 2_000,
+                    // Python startup and pipe draining can exceed two seconds when the
+                    // full test suite runs subprocess-heavy cases in parallel. Keep
+                    // this fixture comfortably below the production maximum while
+                    // ensuring the output-bound assertion remains the failure source.
+                    timeout_ms: 10_000,
                     on_timeout: PluginTimeoutAction::Cancel,
                 },
                 cancellation: CancellationBehavior::Cooperative,
@@ -2891,6 +3066,33 @@ PY
     }
 
     struct SlowPlugin;
+
+    struct ErrorAfterCancellationPlugin {
+        cancelled: Arc<TestAtomicBool>,
+    }
+
+    impl InProcessPlugin for ErrorAfterCancellationPlugin {
+        fn manifest(&self) -> PluginManifest {
+            let mut manifest = SlowPlugin.manifest();
+            manifest.id = "cancel_race".to_string();
+            manifest.name = "Cancellation Race".to_string();
+            manifest.actions[0].name = "run".to_string();
+            manifest.actions[0].timeout.timeout_ms = 1_000;
+            manifest
+        }
+
+        fn execute(
+            &self,
+            _action: &PluginActionManifest,
+            _input: Value,
+            _cancellation: CancellationSignal,
+        ) -> JarvisResult<Value> {
+            self.cancelled.store(true, Ordering::SeqCst);
+            Err(JarvisError::Plugin(
+                "worker failed after cancellation".to_string(),
+            ))
+        }
+    }
 
     impl InProcessPlugin for SlowPlugin {
         fn manifest(&self) -> PluginManifest {

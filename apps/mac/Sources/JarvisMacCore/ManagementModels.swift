@@ -514,6 +514,8 @@ public final class MemoryManagerModel: ObservableObject {
 @MainActor
 public final class PluginManagerModel: ObservableObject {
     @Published public private(set) var manifests: [JarvisPluginManifest]
+    @Published public private(set) var modelTools: [JarvisModelToolCatalogEntry]
+    @Published public private(set) var modelToolCatalogWarning: String?
     @Published public private(set) var installedPlugins: [JarvisInstalledPluginRecord]
     @Published public private(set) var installedRegistryWarning: String?
     @Published public private(set) var isLoading: Bool
@@ -524,6 +526,8 @@ public final class PluginManagerModel: ObservableObject {
     public init(client: any JarvisCoreClient = JarvisIPCClient()) {
         self.client = client
         self.manifests = []
+        self.modelTools = []
+        self.modelToolCatalogWarning = nil
         self.installedPlugins = []
         self.installedRegistryWarning = nil
         self.isLoading = false
@@ -537,16 +541,25 @@ public final class PluginManagerModel: ObservableObject {
 
         do {
             self.manifests = try await client.listPluginManifests()
-
-            do {
-                self.installedPlugins = try await client.listInstalledPlugins()
-                self.installedRegistryWarning = nil
-            } catch {
-                self.installedPlugins = []
-                self.installedRegistryWarning = "Installed plugin registry unavailable: \(error)"
-            }
         } catch {
+            self.manifests = []
             lastError = String(describing: error)
+        }
+
+        do {
+            self.modelTools = try await client.modelToolCatalog().tools
+            self.modelToolCatalogWarning = nil
+        } catch {
+            self.modelTools = []
+            self.modelToolCatalogWarning = "Production capability catalog unavailable: \(error)"
+        }
+
+        do {
+            self.installedPlugins = try await client.listInstalledPlugins()
+            self.installedRegistryWarning = nil
+        } catch {
+            self.installedPlugins = []
+            self.installedRegistryWarning = "Installed plugin registry unavailable: \(error)"
         }
     }
 }

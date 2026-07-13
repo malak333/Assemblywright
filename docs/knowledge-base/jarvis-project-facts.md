@@ -39,13 +39,31 @@ These notes capture durable facts for future agents working on this repository.
   approval execution and permission-center review, bounded activity
   events/progress, installed-plugin metadata/provenance/grants, diagnostics,
   plugin manifest validation, and deterministic first-party test plugins.
-- IPC `/commands` now uses repository-backed runtime storage when `IpcState` is
+- Production first-party inventory is separate from deterministic test
+  fixtures: `fake_*` plugins do not appear in `/tools/model`, provider
+  advertisements, or production manifest inspection. `system_status.status`
+  is the bounded always-present status action. Explicit repeatable
+  `serve --workspace-root <id>=<absolute-path>` configuration adds local-only
+  `workspace_inspect.list` and `workspace_inspect.read_text`; no configured
+  root means those tools are absent. Rust holds root descriptors, rejects
+  traversal/symlink/hidden/credential-like/special/binary/oversized targets,
+  returns bounded untrusted data, redacts content/absolute paths from audit,
+  and blocks workspace results from ChatGPT continuation. This is local
+  containment evidence, not an OS sandbox or same-user IPC proof.
+  Root listing uses the explicit `@root` sentinel; empty paths are rejected.
+  Runtime ceilings fail closed beyond 200 visible entries, 64 KiB per read,
+  16 KiB per line, and 128 KiB cumulative tool output per task.
+  Historical pending or approved `fake_*` approvals are preserved after
+  upgrade but appear as critical `removed_fixture_approval` policy-review
+  attention. The removed fixture cannot execute, and decided history is not
+  silently rewritten or deleted.
+- IPC `/commands` uses repository-backed runtime storage when `IpcState` is
   constructed with `SqliteRepository`, records a local-first model-router audit
-  entry, and can execute deterministic first-party plugin commands such as
-  `plugin echo ...` and `status` through policy. `dry_run` skips plugin
-  execution and records audit evidence. For provider-originated tool requests,
-  `status` is an action on the registered `fake_status` plugin, not a valid
-  standalone `plugin_id`; `chrome_extension` is also unavailable unless it
+  entry, and dispatches only the exact configured production `PluginHost`.
+  `dry_run` skips plugin execution and records audit evidence. For
+  provider-originated requests, `system_status.status` is the valid status
+  pair; `status`, `fake_*`, `chrome_extension`, installed plugins, and
+  unconfigured workspace actions remain unavailable unless the exact pair
   appears in `/tools/model` or `jarvis tools list`.
 - Repository-backed `/commands` also persists append-only SQLite model-route
   records. The stored and inspectable route copy keeps provider/outcome/policy

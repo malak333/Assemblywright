@@ -742,6 +742,8 @@ struct JarvisMacCoreTests {
                 return (response, memoryItemJSON(id: memoryId))
             case "/plugins/manifests":
                 return (response, Data("[]".utf8))
+            case "/tools/model":
+                return (response, modelToolCatalogJSON())
             case "/scheduler/jobs":
                 if request.httpMethod == "GET" {
                     return (response, Data("[]".utf8))
@@ -799,6 +801,7 @@ struct JarvisMacCoreTests {
         _ = try await client.deleteMemoryItem(id: memoryId)
         _ = try await client.restoreMemoryItem(id: memoryId)
         _ = try await client.listPluginManifests()
+        _ = try await client.modelToolCatalog()
         _ = try await client.listSchedulerJobs()
         _ = try await client.schedulerAttention()
         _ = try await client.createSchedulerJob(
@@ -835,6 +838,7 @@ struct JarvisMacCoreTests {
             "GET",
             "GET",
             "GET",
+            "GET",
             "POST",
             "GET",
             "POST",
@@ -861,6 +865,7 @@ struct JarvisMacCoreTests {
             "/memory/\(memoryId.uuidString)",
             "/memory/\(memoryId.uuidString)/restore",
             "/plugins/manifests",
+            "/tools/model",
             "/scheduler/jobs",
             "/scheduler/attention",
             "/scheduler/jobs",
@@ -873,7 +878,7 @@ struct JarvisMacCoreTests {
         ])
         #expect(requests[10].body?["key"] as? String == "release-gate")
         #expect(requests[12].body?["value"] as? String == "preview then sync")
-        #expect(requests[19].body?["command"] as? String == "status check")
+        #expect(requests[20].body?["command"] as? String == "status check")
     }
 
     @Test("Management payloads decode tasks and audit list")
@@ -1118,6 +1123,30 @@ struct JarvisMacCoreTests {
                 "message": .object(["type": .string("string")])
             ])
         ]))
+    }
+
+    @Test("Management payloads decode the redacted model-visible capability catalog")
+    func decodesModelToolCatalog() throws {
+        let catalog = try JSONDecoder().decode(
+            JarvisModelToolCatalog.self,
+            from: modelToolCatalogJSON()
+        )
+        let tool = try #require(catalog.tools.first)
+
+        #expect(catalog.source == "registered_first_party_plugins")
+        #expect(tool.id == "workspace_inspect.list")
+        #expect(tool.description == "List a bounded allowlisted workspace directory.")
+        #expect(tool.riskTier == "low")
+        #expect(tool.scopes == ["read_workspace"])
+        #expect(tool.proactive == false)
+        #expect(tool.constraints == JarvisModelToolConstraints(
+            readOnly: true,
+            bounded: true,
+            noNetwork: true,
+            localModelOnly: true
+        ))
+        #expect(tool.constraints.hasProductionReadOnlyBoundary)
+        #expect(tool.constraints.operatorBadge == "bounded read-only • no network • local model only")
     }
 
     @Test("Management payloads decode installed plugin registry records")
@@ -3062,6 +3091,7 @@ struct JarvisMacCoreTests {
         )
         let client = FakeCoreClient(
             pluginManifests: [samplePluginManifest()],
+            modelToolCatalog: sampleModelToolCatalog(),
             installedPlugins: installed
         )
         let model = PluginManagerModel(client: client)
@@ -3069,9 +3099,28 @@ struct JarvisMacCoreTests {
         await model.refresh()
 
         #expect(model.manifests.map(\.id) == ["calendar"])
+        #expect(model.modelTools.map(\.id) == ["workspace_inspect.list"])
+        #expect(model.modelToolCatalogWarning == nil)
         #expect(model.installedPlugins.map(\.id) == ["local_runner_test"])
         #expect(model.installedPlugins.first?.provenance.needsReview == true)
         #expect(model.installedPlugins.first?.isExecutable == false)
+    }
+
+    @MainActor
+    @Test("Plugin manager treats model tool catalog failure as an independent degraded surface")
+    func pluginManagerModelDegradesWhenModelToolCatalogFails() async {
+        let client = FakeCoreClient(
+            pluginManifests: [samplePluginManifest()],
+            modelToolCatalogUnavailable: true
+        )
+        let model = PluginManagerModel(client: client)
+
+        await model.refresh()
+
+        #expect(model.manifests.map(\.id) == ["calendar"])
+        #expect(model.modelTools.isEmpty)
+        #expect(model.modelToolCatalogWarning?.contains("Production capability catalog unavailable") == true)
+        #expect(model.lastError == nil)
     }
 
     @MainActor
@@ -5263,6 +5312,38 @@ private func samplePluginManifest() -> JarvisPluginManifest {
     )
 }
 
+private func sampleModelToolCatalog() -> JarvisModelToolCatalog {
+    try! JSONDecoder().decode(JarvisModelToolCatalog.self, from: modelToolCatalogJSON())
+}
+
+private func modelToolCatalogJSON() -> Data {
+    Data(
+        """
+        {
+          "generated_at": "2026-07-13T12:00:00Z",
+          "source": "registered_first_party_plugins",
+          "tools": [
+            {
+              "plugin_id": "workspace_inspect",
+              "action": "list",
+              "description": "List a bounded allowlisted workspace directory.",
+              "risk_tier": "low",
+              "scopes": ["read_workspace"],
+              "proactive": false,
+              "constraints": {
+                "read_only": true,
+                "bounded": true,
+                "no_network": true,
+                "local_model_only": true
+              }
+            }
+          ],
+          "proof_boundary": "Redacted registered first-party capability metadata only."
+        }
+        """.utf8
+    )
+}
+
 private func installedPluginsJSON() -> Data {
     Data(
         """
@@ -6766,6 +6847,8 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     private var releaseEvidenceBundleRunbookResults: [Result<JarvisReleaseRunbook, Error>]
     private var approvals: [JarvisPendingApproval]
     private var pluginManifests: [JarvisPluginManifest]
+    private var modelToolCatalogResult: JarvisModelToolCatalog
+    private var modelToolCatalogUnavailable: Bool
     private var installedPlugins: [JarvisInstalledPluginRecord]
     private var installedPluginsUnavailable: Bool
     private var schedulerJobs: [JarvisSchedulerJob]
@@ -6802,6 +6885,8 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         releaseEvidenceBundleRunbookResults: [Result<JarvisReleaseRunbook, Error>] = [],
         approvals: [JarvisPendingApproval] = [],
         pluginManifests: [JarvisPluginManifest] = [],
+        modelToolCatalog: JarvisModelToolCatalog = sampleModelToolCatalog(),
+        modelToolCatalogUnavailable: Bool = false,
         installedPlugins: [JarvisInstalledPluginRecord] = [],
         installedPluginsUnavailable: Bool = false,
         schedulerJobs: [JarvisSchedulerJob] = [],
@@ -6829,6 +6914,8 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         self.releaseEvidenceBundleRunbookResults = releaseEvidenceBundleRunbookResults
         self.approvals = approvals
         self.pluginManifests = pluginManifests
+        self.modelToolCatalogResult = modelToolCatalog
+        self.modelToolCatalogUnavailable = modelToolCatalogUnavailable
         self.installedPlugins = installedPlugins
         self.installedPluginsUnavailable = installedPluginsUnavailable
         self.schedulerJobs = schedulerJobs
@@ -7163,6 +7250,13 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
 
     func listPluginManifests() async throws -> [JarvisPluginManifest] {
         pluginManifests
+    }
+
+    func modelToolCatalog() async throws -> JarvisModelToolCatalog {
+        if modelToolCatalogUnavailable {
+            throw URLError(.cannotConnectToHost)
+        }
+        return modelToolCatalogResult
     }
 
     func listInstalledPlugins() async throws -> [JarvisInstalledPluginRecord] {

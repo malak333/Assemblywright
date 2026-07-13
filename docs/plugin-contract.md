@@ -1,5 +1,31 @@
 # Plugin Contract
 
+## First-Party Workspace Inspection
+
+Production first-party inventory may expose `workspace_inspect.list` and
+`workspace_inspect.read_text` only when an operator has explicitly configured
+an allowlisted workspace root. The model receives an opaque root identifier,
+never authority to choose an absolute root. Inputs use validated relative paths
+and hard list/read budgets. Rust opens each path component relative to a held
+root directory descriptor with no-follow semantics, rejects hidden and
+credential-like names, symlinks, non-regular/special files, binary/non-UTF-8
+content, traversal, and oversize input, and returns only bounded structured
+results marked as untrusted data.
+
+Workspace output is local-model-only. It cannot be advertised to or continued
+through ChatGPT. Audit and diagnostics record metadata and redaction flags, not
+file contents, snippets, absolute paths, environment values, or credentials.
+Cancellation, emergency pause, and timeout must cooperatively stop traversal
+and suppress late results. Repository tests establish these local contracts;
+they do not establish a macOS sandbox, same-user IPC isolation, malware
+resistance, signed distribution, live-device QA, or marketplace trust.
+
+`workspace_inspect.list` accepts `@root` as the only root-directory sentinel;
+all other list/read targets are non-empty normal relative paths. Current hard
+ceilings fail closed beyond 200 visible list entries, 64 KiB per UTF-8 file,
+16 KiB per line, and 128 KiB cumulative tool output per task. These are runtime
+contracts, not hints.
+
 Jarvis plugins are executable capabilities behind an explicit manifest and the
 same policy engine used for built-in tools. The implemented local plugin
 boundary supports first-party Rust modules and local subprocess plugins over

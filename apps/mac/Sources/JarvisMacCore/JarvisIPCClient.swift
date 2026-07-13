@@ -960,6 +960,68 @@ public struct JarvisPluginTimeout: Decodable, Equatable, Sendable {
     }
 }
 
+public struct JarvisModelToolCatalog: Decodable, Equatable, Sendable {
+    public var generatedAt: String
+    public var source: String
+    public var tools: [JarvisModelToolCatalogEntry]
+    public var proofBoundary: String
+
+    enum CodingKeys: String, CodingKey {
+        case generatedAt = "generated_at"
+        case source
+        case tools
+        case proofBoundary = "proof_boundary"
+    }
+}
+
+/// A deliberately redacted operator view of a model-visible first-party tool.
+/// Input schemas and execution metadata are decoded nowhere on this surface.
+public struct JarvisModelToolCatalogEntry: Decodable, Equatable, Identifiable, Sendable {
+    public var pluginId: String
+    public var action: String
+    public var description: String
+    public var riskTier: String
+    public var scopes: [String]
+    public var proactive: Bool
+    public var constraints: JarvisModelToolConstraints
+
+    public var id: String { "\(pluginId).\(action)" }
+
+    enum CodingKeys: String, CodingKey {
+        case pluginId = "plugin_id"
+        case action
+        case description
+        case riskTier = "risk_tier"
+        case scopes
+        case proactive
+        case constraints
+    }
+}
+
+public struct JarvisModelToolConstraints: Decodable, Equatable, Sendable {
+    public var readOnly: Bool
+    public var bounded: Bool
+    public var noNetwork: Bool
+    public var localModelOnly: Bool
+
+    public var hasProductionReadOnlyBoundary: Bool {
+        readOnly && bounded && noNetwork && localModelOnly
+    }
+
+    public var operatorBadge: String {
+        hasProductionReadOnlyBoundary
+            ? "bounded read-only • no network • local model only"
+            : "review constraints"
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case readOnly = "read_only"
+        case bounded
+        case noNetwork = "no_network"
+        case localModelOnly = "local_model_only"
+    }
+}
+
 public struct JarvisInstalledPluginProvenance: Decodable, Equatable, Sendable {
     public var provenanceSchemaVersion: Int
     public var captureMethod: String
@@ -1748,6 +1810,7 @@ public protocol JarvisCoreClient: Sendable {
     func deleteMemoryItem(id: UUID) async throws -> JarvisMemoryItem
     func restoreMemoryItem(id: UUID) async throws -> JarvisMemoryItem
     func listPluginManifests() async throws -> [JarvisPluginManifest]
+    func modelToolCatalog() async throws -> JarvisModelToolCatalog
     func listInstalledPlugins() async throws -> [JarvisInstalledPluginRecord]
     func listSchedulerJobs() async throws -> [JarvisSchedulerJob]
     func schedulerAttention() async throws -> JarvisSchedulerAttentionSummary
@@ -1923,6 +1986,10 @@ public final class JarvisIPCClient: JarvisCoreClient {
 
     public func listPluginManifests() async throws -> [JarvisPluginManifest] {
         try await send(path: "/plugins/manifests", method: "GET", body: Optional<Data>.none)
+    }
+
+    public func modelToolCatalog() async throws -> JarvisModelToolCatalog {
+        try await send(path: "/tools/model", method: "GET", body: Optional<Data>.none)
     }
 
     public func listInstalledPlugins() async throws -> [JarvisInstalledPluginRecord] {
