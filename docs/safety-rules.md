@@ -47,6 +47,10 @@ release requirements, not optional UX guidance.
   original action and scope contract and records side-effect audit evidence.
 - Memory writes must have provenance, timestamp, category, sensitivity label,
   and review/delete controls.
+- Memory index artifacts are rebuildable projections, never canonical state.
+  Status surfaces expose counts only; values, keys, provenance, source IDs,
+  digests, and artifact paths stay local and redacted. Corrupt or stale indexes
+  fail closed until an explicit rebuild from active SQLite records succeeds.
 - Scheduler jobs must remain inspectable and cancellable. Persisted scheduler
   metadata is not permission to execute proactive side effects; trigger
   execution still has to pass policy and visibility rules. Scheduled plugin

@@ -604,8 +604,11 @@ requires plugin-trust `generated_at`, `review_started_at`,
   updates value, provenance, and sensitivity. Restore clears `deleted_at`
   through `/memory/:id/restore` and stays subject to the active
   `(category, key)` uniqueness guard. `/memory/retention-plan` is rendered as
-  an operator review queue only; Swift does not perform autonomous purge,
-  rewrite, or vector-index governance actions.
+  an operator review queue only. The same tab now renders count-only
+  `/memory/index/status` and invokes explicit `/memory/index/rebuild`. The
+  versioned sibling manifest is atomically rebuilt from active SQLite rows;
+  SQLite remains canonical, corrupt/stale projections fail closed, and no
+  semantic retrieval, model-context injection, autonomous purge, or rewrite is performed.
 - Repository-backed IPC exposes `/memory/classification`, and the CLI exposes
   `jarvis memory classification`, as a read-only memory corpus summary. It
   groups memory by sensitivity and category, reports active/deleted/reviewed

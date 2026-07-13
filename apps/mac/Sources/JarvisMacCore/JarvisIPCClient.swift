@@ -823,6 +823,42 @@ public struct JarvisMemoryClassificationCount: Decodable, Equatable, Identifiabl
     }
 }
 
+public struct JarvisMemoryIndexStatus: Decodable, Equatable, Sendable {
+    public var generatedAt: String
+    public var state: String
+    public var indexVersion: Int?
+    public var rebuiltAt: String?
+    public var activeRecordCount: Int
+    public var indexedEntryCount: Int
+    public var currentEntryCount: Int
+    public var missingEntryCount: Int
+    public var staleEntryCount: Int
+    public var orphanedEntryCount: Int
+    public var deletedProjectionCount: Int
+    public var canonicalSource: String
+    public var retrievalEnabled: Bool
+    public var redaction: String
+    public var detail: String
+
+    enum CodingKeys: String, CodingKey {
+        case generatedAt = "generated_at"
+        case state
+        case indexVersion = "index_version"
+        case rebuiltAt = "rebuilt_at"
+        case activeRecordCount = "active_record_count"
+        case indexedEntryCount = "indexed_entry_count"
+        case currentEntryCount = "current_entry_count"
+        case missingEntryCount = "missing_entry_count"
+        case staleEntryCount = "stale_entry_count"
+        case orphanedEntryCount = "orphaned_entry_count"
+        case deletedProjectionCount = "deleted_projection_count"
+        case canonicalSource = "canonical_source"
+        case retrievalEnabled = "retrieval_enabled"
+        case redaction
+        case detail
+    }
+}
+
 public struct JarvisMemoryRetentionPlan: Decodable, Equatable, Sendable {
     public var generatedAt: String
     public var status: String
@@ -1700,6 +1736,8 @@ public protocol JarvisCoreClient: Sendable {
     func activityEvents(maxEvents: Int, intervalMilliseconds: Int) async throws -> [JarvisActivityEvent]
     func listMemoryItems(includeDeleted: Bool) async throws -> [JarvisMemoryItem]
     func memoryClassification(includeDeleted: Bool) async throws -> JarvisMemoryClassificationSummary
+    func memoryIndexStatus() async throws -> JarvisMemoryIndexStatus
+    func rebuildMemoryIndex() async throws -> JarvisMemoryIndexStatus
     func memoryRetentionPlan() async throws -> JarvisMemoryRetentionPlan
     func createMemoryItem(_ request: JarvisCreateMemoryItemRequest) async throws -> JarvisMemoryItem
     func memoryItem(id: UUID) async throws -> JarvisMemoryItem
@@ -1836,6 +1874,14 @@ public final class JarvisIPCClient: JarvisCoreClient {
     public func memoryClassification(includeDeleted: Bool = false) async throws -> JarvisMemoryClassificationSummary {
         let path = includeDeleted ? "/memory/classification?include_deleted=true" : "/memory/classification"
         return try await send(path: path, method: "GET", body: Optional<Data>.none)
+    }
+
+    public func memoryIndexStatus() async throws -> JarvisMemoryIndexStatus {
+        try await send(path: "/memory/index/status", method: "GET", body: Optional<Data>.none)
+    }
+
+    public func rebuildMemoryIndex() async throws -> JarvisMemoryIndexStatus {
+        try await send(path: "/memory/index/rebuild", method: "POST", body: Optional<Data>.none)
     }
 
     public func memoryRetentionPlan() async throws -> JarvisMemoryRetentionPlan {

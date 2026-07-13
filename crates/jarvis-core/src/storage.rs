@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -17,6 +18,7 @@ use crate::{
     PluginManifest, RiskTier, SchedulerJob, SchedulerJobStatus, Sensitivity, TaskRecord,
     TaskStatus, TriggerKind,
 };
+use crate::{MemoryIndexStatus, MemoryIndexStore};
 
 const CURRENT_SCHEMA_VERSION: i64 = 9;
 
@@ -113,6 +115,7 @@ pub struct NewPendingApproval {
 
 pub struct SqliteRepository {
     conn: Connection,
+    memory_index_path: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -147,7 +150,23 @@ impl SqliteRepository {
 
     pub fn in_memory() -> JarvisResult<Self> {
         let conn = Connection::open_in_memory().map_err(storage_error)?;
-        let repo = Self { conn };
+        let repo = Self {
+            conn,
+            memory_index_path: None,
+        };
+        repo.configure()?;
+        repo.migrate()?;
+        Ok(repo)
+    }
+
+    pub fn in_memory_with_memory_index_path(
+        memory_index_path: impl Into<PathBuf>,
+    ) -> JarvisResult<Self> {
+        let conn = Connection::open_in_memory().map_err(storage_error)?;
+        let repo = Self {
+            conn,
+            memory_index_path: Some(memory_index_path.into()),
+        };
         repo.configure()?;
         repo.migrate()?;
         Ok(repo)
@@ -542,6 +561,48 @@ impl SqliteRepository {
             }),
             by_category: classify_memory_items(&items, |item| item.category.clone()),
         })
+    }
+
+    pub fn memory_index_status(&self) -> JarvisResult<MemoryIndexStatus> {
+        let items = self.list_memory_items(true)?;
+        Ok(match &self.memory_index_path {
+            Some(path) => MemoryIndexStore::new(path).status(&items),
+            None => MemoryIndexStatus::unavailable(
+                items
+                    .iter()
+                    .filter(|item| item.deleted_at.is_none())
+                    .count(),
+            ),
+        })
+    }
+
+    pub fn rebuild_memory_index(&self) -> JarvisResult<MemoryIndexStatus> {
+        self.rebuild_memory_index_with_hook(|| {})
+    }
+
+    fn rebuild_memory_index_with_hook(
+        &self,
+        after_manifest_write: impl FnOnce(),
+    ) -> JarvisResult<MemoryIndexStatus> {
+        let path = self.memory_index_path.as_ref().ok_or_else(|| {
+            JarvisError::Storage("memory index artifact path is not configured".to_string())
+        })?;
+        let data_version_before = self.sqlite_data_version()?;
+        let items = self.list_memory_items(true)?;
+        let status = MemoryIndexStore::new(path).rebuild(&items)?;
+        after_manifest_write();
+        if self.sqlite_data_version()? != data_version_before {
+            return Err(JarvisError::Storage(
+                "canonical memory changed during index rebuild; rebuild again".to_string(),
+            ));
+        }
+        Ok(status)
+    }
+
+    fn sqlite_data_version(&self) -> JarvisResult<i64> {
+        self.conn
+            .query_row("PRAGMA data_version", [], |row| row.get(0))
+            .map_err(storage_error)
     }
 
     pub fn update_memory_item(
@@ -1770,7 +1831,10 @@ fn open_with_migration_backup_dir_and_hook(
             unreachable!("restore_after_open_failure always returns Err");
         }
     };
-    let repo = SqliteRepository { conn };
+    let repo = SqliteRepository {
+        conn,
+        memory_index_path: Some(memory_index_path_for_database(path)),
+    };
 
     if let Err(error) = repo.configure().and_then(|()| repo.migrate()) {
         drop(repo);
@@ -1779,6 +1843,15 @@ fn open_with_migration_backup_dir_and_hook(
     }
 
     Ok(repo)
+}
+
+fn memory_index_path_for_database(db_path: &Path) -> PathBuf {
+    let file_name = db_path
+        .file_name()
+        .unwrap_or_else(|| OsStr::new("jarvis.sqlite"));
+    let mut index_file_name = file_name.to_os_string();
+    index_file_name.push(".memory-index.json");
+    db_path.with_file_name(index_file_name)
 }
 
 fn prepare_migration_backup(
@@ -2892,7 +2965,10 @@ mod tests {
         assert!((1..CURRENT_SCHEMA_VERSION).contains(&schema_version));
 
         let conn = Connection::open(db_path).unwrap();
-        let repo = SqliteRepository { conn };
+        let repo = SqliteRepository {
+            conn,
+            memory_index_path: None,
+        };
         repo.configure().unwrap();
         repo.raw_connection()
             .execute_batch(
@@ -3240,5 +3316,102 @@ mod tests {
         assert!(repo
             .decide_pending_approval(pending.id, ApprovalStatus::Denied, "cli", None)
             .is_err());
+    }
+
+    #[test]
+    fn memory_index_rebuild_is_restart_durable_and_tracks_canonical_mutations() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("jarvis.sqlite");
+        let repo = SqliteRepository::open(&db_path).unwrap();
+        let memory = repo
+            .create_memory_item(NewMemoryItem {
+                category: "profile".to_string(),
+                key: "theme".to_string(),
+                value: "private preference".to_string(),
+                provenance: "user".to_string(),
+                sensitivity: Sensitivity::Private,
+            })
+            .unwrap();
+        assert_eq!(
+            repo.memory_index_status().unwrap().state,
+            crate::MemoryIndexState::Missing
+        );
+        assert_eq!(
+            repo.rebuild_memory_index().unwrap().state,
+            crate::MemoryIndexState::Current
+        );
+        drop(repo);
+
+        let repo = SqliteRepository::open(&db_path).unwrap();
+        assert_eq!(
+            repo.memory_index_status().unwrap().state,
+            crate::MemoryIndexState::Current
+        );
+        repo.update_memory_item(
+            memory.id,
+            "changed private preference",
+            "user",
+            Sensitivity::Private,
+        )
+        .unwrap();
+        assert_eq!(repo.memory_index_status().unwrap().stale_entry_count, 1);
+        repo.delete_memory_item(memory.id).unwrap();
+        assert_eq!(
+            repo.memory_index_status().unwrap().deleted_projection_count,
+            1
+        );
+        let rebuilt = repo.rebuild_memory_index().unwrap();
+        assert_eq!(rebuilt.indexed_entry_count, 0);
+        assert_eq!(rebuilt.state, crate::MemoryIndexState::Current);
+    }
+
+    #[test]
+    fn memory_index_detects_mutation_from_another_sqlite_connection() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("jarvis.sqlite");
+        let first = SqliteRepository::open(&db_path).unwrap();
+        let memory = first
+            .create_memory_item(NewMemoryItem {
+                category: "profile".to_string(),
+                key: "timezone".to_string(),
+                value: "local".to_string(),
+                provenance: "user".to_string(),
+                sensitivity: Sensitivity::Personal,
+            })
+            .unwrap();
+        let second = SqliteRepository::open(&db_path).unwrap();
+        let result = first.rebuild_memory_index_with_hook(|| {
+            second
+                .update_memory_item(
+                    memory.id,
+                    "changed during rebuild",
+                    "other connection",
+                    Sensitivity::Personal,
+                )
+                .unwrap();
+        });
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("changed during index rebuild"));
+        let status = first.memory_index_status().unwrap();
+        assert_eq!(status.state, crate::MemoryIndexState::Stale);
+        assert_eq!(status.stale_entry_count, 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn memory_index_paths_preserve_non_utf8_database_filenames() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let first = PathBuf::from(std::ffi::OsString::from_vec(b"first-\xff.sqlite".to_vec()));
+        let second = PathBuf::from(std::ffi::OsString::from_vec(b"second-\xff.sqlite".to_vec()));
+        let first_index = memory_index_path_for_database(&first);
+        let second_index = memory_index_path_for_database(&second);
+        assert_ne!(first_index, second_index);
+        assert!(first_index
+            .as_os_str()
+            .as_encoded_bytes()
+            .ends_with(b".memory-index.json"));
     }
 }

@@ -415,6 +415,16 @@ enum MemoryCommand {
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
+    /// Inspect the redacted rebuildable memory-index projection status.
+    IndexStatus {
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    /// Rebuild the local memory-index projection from canonical active SQLite records.
+    IndexRebuild {
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
     /// Create a persisted memory item.
     Create {
         category: String,
@@ -1036,6 +1046,18 @@ async fn main() -> anyhow::Result<()> {
                 println!(
                     "{}",
                     server_required_request(&endpoint, "GET", "/memory/retention-plan", None)?
+                );
+            }
+            MemoryCommand::IndexStatus { endpoint } => {
+                println!(
+                    "{}",
+                    server_required_request(&endpoint, "GET", "/memory/index/status", None)?
+                );
+            }
+            MemoryCommand::IndexRebuild { endpoint } => {
+                println!(
+                    "{}",
+                    server_required_request(&endpoint, "POST", "/memory/index/rebuild", None)?
                 );
             }
             MemoryCommand::Create {

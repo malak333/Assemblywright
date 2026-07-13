@@ -223,8 +223,12 @@ without exposing memory values. `/memory/retention-plan` and
 operator action list for active unreviewed memory and deleted sensitive memory
 that is still retained locally; the plan is inspection-only and keeps
 automation disabled. The Swift Memory tab renders the same redacted plan above
-the item list. These surfaces still do not grant broader marketplace
-trust, malware safety, autonomous memory rewriting, purge automation, or
+the item list. `/memory/index/status`, `/memory/index/rebuild`, the matching
+`jarvis memory index-*` commands, and the Swift Memory tab now govern an atomic,
+versioned projection manifest rebuilt only from active canonical SQLite rows.
+Public status is count-only and the projection is not used for retrieval or
+cloud context. These surfaces still do not grant broader marketplace
+trust, malware safety, autonomous memory rewriting, semantic retrieval, purge automation, or
 OS-level network sandboxing.
 Approval grant/deny decisions remain side-effect-free. Approved first-party
 approval records require a separate one-shot `/approvals/:id/execute` or

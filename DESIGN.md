@@ -98,7 +98,7 @@ Chooses between local models and ChatGPT. Local is default. ChatGPT requires an 
 
 ### Memory Store
 
-Stores user preferences, project and workflow memory, personal operating context, and decision logs. Every memory item should have provenance, timestamps, category, sensitivity, and review/delete controls.
+Stores user preferences, project and workflow memory, personal operating context, and decision logs. Every memory item has provenance, timestamps, category, sensitivity, and review/delete controls. A versioned local projection manifest can be atomically rebuilt from active canonical records and inspected through count-only status.
 
 ### Permission And Risk Engine
 
@@ -203,7 +203,7 @@ An app-owned support directory stores larger generated files, transcripts, expor
 
 ### Vector Index
 
-Memory and document retrieval can use a local vector index. The index must be rebuildable and tied back to canonical SQLite records. It is not the source of truth.
+Memory and document retrieval can use a local vector index. The implemented governance layer keeps a versioned, atomic, rebuildable projection tied to canonical SQLite records and detects missing, stale, deleted, orphaned, or corrupt entries. SQLite remains the source of truth. Semantic/vector retrieval and model-context injection remain future work.
 
 ### Sensitivity Labels
 

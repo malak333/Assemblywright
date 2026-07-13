@@ -719,6 +719,26 @@ struct MemoryManagerView: View {
                         .padding(.horizontal)
                 }
 
+                if let index = model.indexStatus {
+                    HStack(spacing: 10) {
+                        Label("Index: \(index.state)", systemImage: index.state == "current" ? "checkmark.circle" : "arrow.triangle.2.circlepath")
+                        Text("\(index.currentEntryCount) current, \(index.missingEntryCount) missing, \(index.staleEntryCount) stale, \(index.deletedProjectionCount) deleted, \(index.orphanedEntryCount) orphaned")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Rebuild from SQLite") {
+                            Task { await model.rebuildIndex() }
+                        }
+                        .disabled(model.isLoading)
+                    }
+                    .font(.caption)
+                    .padding(.horizontal)
+                    Text("SQLite remains canonical; this local projection is rebuildable and is not used for retrieval or cloud context.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal)
+                }
+
                 if let retentionPlan = model.retentionPlan {
                     MemoryRetentionPlanView(plan: retentionPlan)
                         .padding(.horizontal)
