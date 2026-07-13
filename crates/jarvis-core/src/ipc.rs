@@ -31,15 +31,17 @@ use crate::trusted_wake::{
     verify_key_control_proof, TRUSTED_WAKE_KEY_GRANT_TTL_SECONDS,
 };
 use crate::{
-    execute_installed_subprocess_plugin, plugin_permission_scopes, ApprovalDecision, ApprovalGrant,
-    ApprovalStatus, AuditEntry, CapabilityScope, ConversationRuntime, InstalledPlugin,
-    InstalledPluginExecutionGrant, InstalledPluginIntegrityStatus, InstalledPluginRecord,
-    JarvisError, JarvisResult, LocalModelProviderKind, ModelRoute, ModelRouteRecord,
-    PermissionEngine, PluginCallRequest, PluginCallResult, PluginCallStatus, PluginHost,
-    PluginManifest, PluginSource, PolicyRequest, ProviderConfig, RoutedModelExecutor,
-    RuntimeCommandRequest, RuntimeCommandStore, RuntimeConfig, RuntimeControl, RuntimeStep,
-    Scheduler, SchedulerJob, SchedulerJobSpec, SchedulerJobStatus, Sensitivity, TaskRecord,
-    TaskStatus, TriggerKind,
+    execute_installed_subprocess_plugin, execute_installed_wasm_plugin, plugin_permission_scopes,
+    read_wasm_artifact, ApprovalDecision, ApprovalGrant, ApprovalStatus, AuditEntry,
+    CapabilityScope, ConversationRuntime, InstalledPlugin, InstalledPluginExecutionGrant,
+    InstalledPluginIntegrityStatus, InstalledPluginRecord, JarvisError, JarvisResult,
+    LocalModelProviderKind, ModelRoute, ModelRouteRecord, PermissionEngine, PluginCallRequest,
+    PluginCallResult, PluginCallStatus, PluginHost, PluginManifest, PluginSource, PolicyRequest,
+    ProviderConfig, RoutedModelExecutor, RuntimeCommandRequest, RuntimeCommandStore, RuntimeConfig,
+    RuntimeControl, RuntimeStep, Scheduler, SchedulerJob, SchedulerJobSpec, SchedulerJobStatus,
+    Sensitivity, TaskRecord, TaskStatus, TriggerKind, WasmControlState, MAX_WASM_FUEL,
+    MAX_WASM_MEMORY_BYTES, MAX_WASM_MODULE_BYTES, MAX_WASM_OUTPUT_BYTES, MAX_WASM_REQUEST_BYTES,
+    MAX_WASM_TABLE_ELEMENTS,
 };
 use crate::{
     TrustedWakeAcceptedEvent, TrustedWakeAttentionItem, TrustedWakeEnvelope,
@@ -749,7 +751,16 @@ pub struct InstalledPluginRunRequest {
     #[serde(default)]
     pub session_id: Option<Uuid>,
     #[serde(default)]
+    pub cancellation_id: Option<Uuid>,
+    #[serde(default)]
     pub dry_run: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeCancellationResponse {
+    pub cancellation_id: Uuid,
+    pub cancellation_requested: bool,
+    pub audit_entry: AuditEntry,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -768,6 +779,9 @@ pub struct InstalledPluginRunResponse {
     pub input_valid: bool,
     pub contract_validated: bool,
     pub side_effect_executed: bool,
+    pub runtime_kind: String,
+    pub wasm_confinement_enforced: bool,
+    pub os_sandbox_enforced: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -791,6 +805,9 @@ pub struct InstalledPluginInspectionRecord {
     pub installed_at: DateTime<Utc>,
     pub local_paths_redacted: bool,
     pub provenance_hashes_redacted: bool,
+    pub runtime_kind: String,
+    pub wasm_confinement_enforced: bool,
+    pub os_sandbox_enforced: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -904,9 +921,12 @@ fn installed_plugin_inspection_record(
     record: InstalledPluginRecord,
 ) -> InstalledPluginInspectionRecord {
     let provenance = installed_plugin_provenance_inspection(&record);
+    let runtime_kind = installed_plugin_runtime_kind(record.manifest.source).to_string();
+    let wasm_confinement_enforced = record.manifest.source == PluginSource::LocalWasm;
     let mut manifest = record.manifest;
     manifest.source_path = None;
     manifest.subprocess = None;
+    manifest.wasm = None;
     manifest.publisher_signature = None;
 
     InstalledPluginInspectionRecord {
@@ -918,6 +938,18 @@ fn installed_plugin_inspection_record(
         installed_at: record.installed_at,
         local_paths_redacted: true,
         provenance_hashes_redacted: true,
+        runtime_kind,
+        wasm_confinement_enforced,
+        os_sandbox_enforced: false,
+    }
+}
+
+fn installed_plugin_runtime_kind(source: PluginSource) -> &'static str {
+    match source {
+        PluginSource::FirstParty => "first_party",
+        PluginSource::LocalSubprocess => "subprocess",
+        PluginSource::LocalWasm => "wasm",
+        PluginSource::ThirdParty | PluginSource::LocalDevelopment => "metadata",
     }
 }
 
@@ -2341,79 +2373,212 @@ impl IpcState {
                 "installed plugin action cannot be empty".to_string(),
             ));
         }
+        let mut cancellation_guard = request
+            .cancellation_id
+            .map(|cancellation_id| {
+                self.runtime_control
+                    .register_runtime_cancellation(cancellation_id)
+                    .ok_or_else(|| {
+                        JarvisError::Validation(
+                            "installed plugin cancellation_id is already active or the active-run limit was reached"
+                                .to_string(),
+                        )
+                    })
+            })
+            .transpose()?;
 
-        self.using_repository(|repository| {
-            let record = repository.verify_installed_plugin_provenance(id)?;
-            let manifest_validation = validate_installed_plugin_record(&record);
-            let manifest_valid = manifest_validation.is_ok();
-            let action_manifest = if manifest_valid {
-                record.manifest.action(&request.action)
-            } else {
-                None
-            };
-            let action_declared = action_manifest.is_some();
-            let input_validation = if let Some(action) = action_manifest {
-                action
-                    .input_schema
-                    .validate_value("installed plugin input", &request.input)
-            } else {
-                Ok(())
-            };
-            let input_valid = action_declared && input_validation.is_ok();
-            let contract_validated = manifest_valid && action_declared && input_valid;
-            let action_requires_network_grant = action_manifest
-                .is_some_and(|action| action.network_access.mode != crate::PluginNetworkAccessMode::None);
-            let action_network_allowed_hosts = action_manifest
-                .map(|action| {
-                    if action.network_access.mode == crate::PluginNetworkAccessMode::DeclaredHosts {
-                        action.network_access.allowed_hosts.clone()
-                    } else {
-                        Vec::new()
+        // Snapshot and verify under the repository mutex, then release it before
+        // any untrusted runtime starts so emergency pause and inspection remain live.
+        let record =
+            self.using_repository(|repository| repository.verify_installed_plugin_provenance(id))?;
+        let manifest_validation = validate_installed_plugin_record(&record);
+        let manifest_valid = manifest_validation.is_ok();
+        let action_manifest = manifest_valid
+            .then(|| record.manifest.action(&request.action))
+            .flatten();
+        let action_declared = action_manifest.is_some();
+        let input_validation = action_manifest.map_or(Ok(()), |action| {
+            action
+                .input_schema
+                .validate_value("installed plugin input", &request.input)
+        });
+        let input_valid = action_declared && input_validation.is_ok();
+        let contract_validated = manifest_valid && action_declared && input_valid;
+        let provenance_ready = record.provenance.integrity_status
+            == InstalledPluginIntegrityStatus::MatchesInstallSnapshot;
+        let action_requires_network_grant = action_manifest.is_some_and(|action| {
+            action.network_access.mode != crate::PluginNetworkAccessMode::None
+        });
+        let action_network_allowed_hosts = action_manifest
+            .map(|action| {
+                if action.network_access.mode == crate::PluginNetworkAccessMode::DeclaredHosts {
+                    action.network_access.allowed_hosts.clone()
+                } else {
+                    Vec::new()
+                }
+            })
+            .unwrap_or_default();
+        let runtime_kind = installed_plugin_runtime_kind(record.manifest.source).to_string();
+
+        // For WASM, execute the exact no-follow bytes whose digest is compared
+        // with install provenance. This closes the verify-then-reopen race.
+        let (wasm_artifact, wasm_artifact_error) = if record.manifest.source
+            == PluginSource::LocalWasm
+            && provenance_ready
+        {
+            match (
+                record.provenance.wasm_module_path.as_deref(),
+                record.provenance.wasm_module_sha256.as_deref(),
+            ) {
+                (Some(path), Some(expected_sha)) => {
+                    match read_wasm_artifact(std::path::Path::new(path)) {
+                        Ok(artifact) if artifact.sha256 == expected_sha => (Some(artifact), None),
+                        Ok(_) => (
+                            None,
+                            Some(
+                                "WASM module digest no longer matches install provenance"
+                                    .to_string(),
+                            ),
+                        ),
+                        Err(error) => (None, Some(error.to_string())),
                     }
-                })
-                .unwrap_or_default();
-            let execution_ready = contract_validated
-                && record.execution_enabled
-                && installed_plugin_grant_allows_action(
-                    record.execution_grant,
-                    action_requires_network_grant,
-                )
-                && record.provenance.integrity_status
-                    == InstalledPluginIntegrityStatus::MatchesInstallSnapshot
-                && record.manifest.source == PluginSource::LocalSubprocess
-                && record.manifest.subprocess.is_some();
-            let mut output = None;
-            let mut stdout_bytes = None;
-            let mut stderr_bytes = None;
-            let mut exit_code = None;
-            let mut progress_events = Vec::new();
-            let mut side_effect_executed = false;
+                }
+                _ => (
+                    None,
+                    Some("WASM module provenance is incomplete".to_string()),
+                ),
+            }
+        } else {
+            (None, None)
+        };
 
-            let (status, reason) = if let Err(error) = &manifest_validation {
-                ("blocked".to_string(), error.to_string())
-            } else if !action_declared {
-                (
-                    "blocked".to_string(),
-                    format!(
-                        "installed plugin {} does not declare action {}",
-                        record.id, request.action
-                    ),
-                )
-            } else if let Err(error) = &input_validation {
-                ("blocked".to_string(), error.to_string())
-            } else if request.dry_run {
+        let mut output = None;
+        let mut stdout_bytes = None;
+        let mut stderr_bytes = None;
+        let mut exit_code = None;
+        let mut progress_events = Vec::new();
+        let mut runtime_started = false;
+        let mut wasm_request_bytes = None;
+        let mut wasm_output_bytes = None;
+        let mut wasm_fuel_consumed = None;
+        let cancellation_requested = || {
+            request
+                .cancellation_id
+                .is_some_and(|id| self.runtime_control.is_runtime_cancelled(id))
+        };
+
+        let (mut status, mut reason) = if let Err(error) = &manifest_validation {
+            ("blocked".to_string(), error.to_string())
+        } else if !action_declared {
+            (
+                "blocked".to_string(),
+                format!(
+                    "installed plugin {} does not declare action {}",
+                    record.id, request.action
+                ),
+            )
+        } else if let Err(error) = &input_validation {
+            ("blocked".to_string(), error.to_string())
+        } else if request.dry_run && record.manifest.source != PluginSource::LocalWasm {
+            (
+                "dry_run".to_string(),
+                "installed plugin dry run validated the manifest, action, and input schema without executing plugin code"
+                    .to_string(),
+            )
+        } else if request.dry_run && !provenance_ready {
+            (
+                "blocked".to_string(),
+                "installed plugin provenance is not verified against the local install snapshot"
+                    .to_string(),
+            )
+        } else if request.dry_run {
+            if let Some(error) = wasm_artifact_error {
+                ("blocked".to_string(), error)
+            } else {
                 (
                     "dry_run".to_string(),
-                    "installed plugin contract dry run validated manifest, action, and input schema without executing plugin code"
+                    "installed plugin dry run validated manifest, action, input schema, and current provenance without compiling, instantiating, or executing plugin code"
                         .to_string(),
                 )
-            } else if record.execution_grant == InstalledPluginExecutionGrant::MetadataOnly {
+            }
+        } else if record.execution_grant == InstalledPluginExecutionGrant::MetadataOnly {
+            (
+                "blocked".to_string(),
+                "installed plugin execution grant is metadata_only; only contract dry runs are allowed"
+                    .to_string(),
+            )
+        } else if !provenance_ready {
+            (
+                "blocked".to_string(),
+                "installed plugin provenance is not verified against the local install snapshot"
+                    .to_string(),
+            )
+        } else if let Some(error) = wasm_artifact_error {
+            ("blocked".to_string(), error)
+        } else if !record.execution_enabled {
+            (
+                "blocked".to_string(),
+                "installed plugin execution is disabled; enable execution with an explicit non-metadata grant"
+                    .to_string(),
+            )
+        } else if self.runtime_control.is_emergency_paused() {
+            (
+                "blocked".to_string(),
+                "installed plugin execution is blocked by emergency pause".to_string(),
+            )
+        } else if cancellation_requested() {
+            (
+                "blocked".to_string(),
+                "installed plugin execution was cancelled before runtime start".to_string(),
+            )
+        } else if record.manifest.source == PluginSource::LocalWasm {
+            if record.execution_grant != InstalledPluginExecutionGrant::WasmCompute {
                 (
                     "blocked".to_string(),
-                    "installed plugin execution grant is metadata_only; only contract dry runs are allowed"
-                        .to_string(),
+                    "local_wasm execution requires the wasm_compute grant".to_string(),
                 )
-            } else if action_requires_network_grant
+            } else if let (Some(action), Some(artifact)) = (action_manifest, wasm_artifact.as_ref())
+            {
+                runtime_started = true;
+                if let Some(guard) = cancellation_guard.as_mut() {
+                    guard.activate();
+                }
+                match execute_installed_wasm_plugin(
+                    &record.manifest,
+                    action,
+                    &artifact.bytes,
+                    &request.input,
+                    || {
+                        if self.runtime_control.is_emergency_paused() {
+                            WasmControlState::EmergencyPaused
+                        } else if cancellation_requested() {
+                            WasmControlState::Cancelled
+                        } else {
+                            WasmControlState::Continue
+                        }
+                    },
+                ) {
+                    Ok(execution) => {
+                        wasm_request_bytes = Some(execution.request_bytes);
+                        wasm_output_bytes = Some(execution.output_bytes);
+                        wasm_fuel_consumed = Some(execution.fuel_consumed);
+                        output = Some(execution.output);
+                        (
+                            "completed".to_string(),
+                            "installed plugin WASM completed with confined validated JSON output"
+                                .to_string(),
+                        )
+                    }
+                    Err(error) => ("failed".to_string(), error.to_string()),
+                }
+            } else {
+                (
+                    "blocked".to_string(),
+                    "local_wasm execution requires current module provenance".to_string(),
+                )
+            }
+        } else if record.manifest.source == PluginSource::LocalSubprocess {
+            if action_requires_network_grant
                 && record.execution_grant != InstalledPluginExecutionGrant::SubprocessStdioNetwork
             {
                 (
@@ -2429,38 +2594,29 @@ impl IpcState {
                     "installed plugin action does not declare network access; subprocess_stdio_network grant is reserved for network-declaring actions"
                         .to_string(),
                 )
-            } else if !record.execution_enabled {
+            } else if !installed_plugin_grant_allows_action(
+                record.execution_grant,
+                action_requires_network_grant,
+            ) {
                 (
                     "blocked".to_string(),
-                    "installed plugin execution is disabled; enable execution with an explicit non-metadata grant"
-                        .to_string(),
-                )
-            } else if record.provenance.integrity_status
-                != InstalledPluginIntegrityStatus::MatchesInstallSnapshot
-            {
-                (
-                    "blocked".to_string(),
-                    "installed plugin provenance is not verified against the local install snapshot"
-                        .to_string(),
-                )
-            } else if record.manifest.source != PluginSource::LocalSubprocess {
-                (
-                    "blocked".to_string(),
-                    "installed plugin execution requires local_subprocess source".to_string(),
+                    "installed plugin grant does not allow this subprocess action".to_string(),
                 )
             } else if record.manifest.subprocess.is_none() {
                 (
                     "blocked".to_string(),
                     "installed plugin execution requires subprocess config".to_string(),
                 )
-            } else if execution_ready {
+            } else {
                 let action = action_manifest.expect("contract validated action");
-                let source_path = std::path::Path::new(&record.source_path);
-                side_effect_executed = true;
+                runtime_started = true;
+                if let Some(guard) = cancellation_guard.as_mut() {
+                    guard.activate();
+                }
                 match execute_installed_subprocess_plugin(
                     &record.manifest,
                     action,
-                    source_path,
+                    std::path::Path::new(&record.source_path),
                     &request.input,
                 ) {
                     Ok(execution) => {
@@ -2477,64 +2633,173 @@ impl IpcState {
                     }
                     Err(error) => ("failed".to_string(), error.to_string()),
                 }
-            } else {
-                (
-                    "blocked".to_string(),
-                    "installed plugin execution did not satisfy subprocess execution preconditions"
-                        .to_string(),
-                )
-            };
-            let event_type = if status == "completed" {
-                "installed_plugin_subprocess_completed"
-            } else if status == "failed" {
-                "installed_plugin_subprocess_failed"
-            } else if request.dry_run && contract_validated {
-                "installed_plugin_contract_dry_run"
-            } else if manifest_valid && action_declared && !input_valid {
+            }
+        } else {
+            (
+                "blocked".to_string(),
+                "installed plugin source has no executable runtime grant".to_string(),
+            )
+        };
+
+        // Pause and record replacement dominate completion. Output from a late
+        // runtime is discarded before it reaches audit, IPC, or the caller.
+        if runtime_started && self.runtime_control.is_emergency_paused() {
+            status = "blocked".to_string();
+            reason = "installed plugin completion discarded by emergency pause".to_string();
+            output = None;
+        }
+        if runtime_started && cancellation_requested() {
+            status = "failed".to_string();
+            reason = "installed plugin completion discarded by cancellation".to_string();
+            output = None;
+        }
+        let snapshot_current = if runtime_started {
+            self.using_repository(|repository| {
+                let current = repository.get_installed_plugin(id)?;
+                Ok(current.is_some_and(|current| {
+                    current.manifest == record.manifest
+                        && current.source_path == record.source_path
+                        && current.execution_enabled == record.execution_enabled
+                        && current.execution_grant == record.execution_grant
+                        && current.provenance.manifest_sha256 == record.provenance.manifest_sha256
+                        && current.provenance.source_tree_sha256
+                            == record.provenance.source_tree_sha256
+                        && current.provenance.wasm_module_sha256
+                            == record.provenance.wasm_module_sha256
+                }))
+            })?
+        } else {
+            true
+        };
+        if runtime_started && !snapshot_current {
+            status = "failed".to_string();
+            reason =
+                "installed plugin state changed during execution; output discarded".to_string();
+            output = None;
+        }
+        // This is the output-acceptance linearization point. Finalizing removes
+        // the ID from the active registry and atomically returns any accepted
+        // cancellation; later cancellation requests must report not active.
+        let cancellation_observed = cancellation_guard
+            .take()
+            .is_some_and(|guard| guard.finalize());
+        if runtime_started && cancellation_observed {
+            status = "failed".to_string();
+            reason = "installed plugin completion discarded by cancellation".to_string();
+            output = None;
+        }
+
+        let event_type = match (runtime_kind.as_str(), status.as_str()) {
+            ("wasm", "completed") => "installed_plugin_wasm_completed",
+            ("wasm", "failed") => "installed_plugin_wasm_failed",
+            ("subprocess", "completed") => "installed_plugin_subprocess_completed",
+            ("subprocess", "failed") => "installed_plugin_subprocess_failed",
+            (_, "dry_run") => "installed_plugin_contract_dry_run",
+            _ if manifest_valid && action_declared && !input_valid => {
                 "installed_plugin_input_invalid"
-            } else if manifest_valid && action_declared {
-                "installed_plugin_execution_blocked"
-            } else if manifest_valid {
-                "installed_plugin_action_blocked"
-            } else {
-                "installed_plugin_manifest_invalid"
-            };
-            let audit_entry = AuditEntry::new(
-                None,
-                event_type,
-                "installed plugin run request failed closed before execution",
-                json!({
-                    "plugin_id": record.id,
-                    "action": request.action,
-                    "session_id": request.session_id,
-                    "manifest_schema_version": record.manifest.manifest_schema_version,
-                    "manifest_version": record.manifest.version,
-                    "source": record.manifest.source,
-                    "provenance": installed_plugin_provenance_inspection(&record),
-                    "local_paths_redacted": true,
-                    "provenance_hashes_redacted": true,
-                    "execution_enabled": record.execution_enabled,
-                    "execution_grant": record.execution_grant,
-                    "dry_run": request.dry_run,
-                    "manifest_valid": manifest_valid,
-                    "action_declared": action_declared,
-                    "action_requires_network_grant": action_requires_network_grant,
-                    "action_network_allowed_hosts": action_network_allowed_hosts,
-                    "input_valid": input_valid,
-                    "contract_validated": contract_validated,
-                    "input_provided": !request.input.is_null(),
-                    "side_effect_executed": side_effect_executed,
-                    "subprocess_started": side_effect_executed,
-                    "sandbox_process_started": false,
-                    "os_sandbox_enforced": false,
-                    "os_sandbox_boundary": "installed subprocess execution clears app/core environment and validates manifest/provenance/grants, but does not enforce an OS sandbox or host-level egress policy",
-                    "stdout_bytes": stdout_bytes,
-                    "stderr_bytes": stderr_bytes,
-                    "exit_code": exit_code,
-                    "progress_event_count": progress_events.len(),
-                    "reason": reason,
-                }),
-            );
+            }
+            _ if manifest_valid && action_declared => "installed_plugin_execution_blocked",
+            _ if manifest_valid => "installed_plugin_action_blocked",
+            _ => "installed_plugin_manifest_invalid",
+        };
+        let wasm_confinement_enforced = runtime_kind == "wasm" && runtime_started;
+        let wasm_runtime_evidence = (runtime_kind == "wasm").then(|| {
+            json!({
+                "instance_started": runtime_started,
+                "confinement_enforced": wasm_confinement_enforced,
+                "imports_allowed": false,
+                "wasi_enabled": false,
+                "filesystem_available": false,
+                "network_available": false,
+                "environment_available": false,
+            })
+        });
+        let mut audit_payload = json!({
+            "plugin_id": record.id,
+            "action": request.action,
+                "session_id": request.session_id,
+                "cancellation_id_present": request.cancellation_id.is_some(),
+                "cancellation_requested": cancellation_observed,
+            "action_requires_network_grant": action_requires_network_grant,
+            "subprocess_started": runtime_kind == "subprocess" && runtime_started,
+            "sandbox_process_started": false,
+            "os_sandbox_enforced": false,
+            "progress_event_count": progress_events.len(),
+            "contract": {
+                "manifest_schema_version": record.manifest.manifest_schema_version,
+                "manifest_version": record.manifest.version,
+                "source": record.manifest.source,
+                "runtime_kind": runtime_kind,
+                "execution_enabled": record.execution_enabled,
+                "execution_grant": record.execution_grant,
+                "dry_run": request.dry_run,
+                "manifest_valid": manifest_valid,
+                "action_declared": action_declared,
+                "action_requires_network_grant": action_requires_network_grant,
+                "action_network_allowed_hosts": action_network_allowed_hosts,
+                "input_valid": input_valid,
+                "contract_validated": contract_validated,
+                "input_provided": !request.input.is_null(),
+            },
+            "provenance": installed_plugin_provenance_inspection(&record),
+            "redaction": {
+                "local_paths_redacted": true,
+                "provenance_hashes_redacted": true,
+                "input_output_content_redacted": true,
+            },
+            "runtime": {
+                "side_effect_executed": runtime_started,
+                "subprocess_started": runtime_kind == "subprocess" && runtime_started,
+                "wasm": wasm_runtime_evidence,
+                "os_sandbox_enforced": false,
+            },
+            "os_sandbox_boundary": "Wasmi enforces an import-free language-level compute boundary for local_wasm; legacy subprocess execution does not enforce an OS sandbox or host-level egress policy, and neither runtime proves marketplace trust",
+            "limits": {
+                "wasm_module_bytes": MAX_WASM_MODULE_BYTES,
+                "wasm_request_bytes": MAX_WASM_REQUEST_BYTES,
+                "wasm_output_bytes": MAX_WASM_OUTPUT_BYTES,
+                "wasm_memory_bytes": MAX_WASM_MEMORY_BYTES,
+                "wasm_table_elements": MAX_WASM_TABLE_ELEMENTS,
+                "wasm_fuel": MAX_WASM_FUEL,
+            },
+            "result": {
+                "wasm_request_bytes": wasm_request_bytes,
+                "wasm_output_bytes": wasm_output_bytes,
+                "wasm_fuel_consumed": wasm_fuel_consumed,
+                "stdout_bytes": stdout_bytes,
+                "stderr_bytes": stderr_bytes,
+                "exit_code": exit_code,
+                "progress_event_count": progress_events.len(),
+                "snapshot_current_at_completion": snapshot_current,
+            },
+            "reason": reason,
+        });
+        let legacy_contract = audit_payload
+            .as_object_mut()
+            .expect("installed plugin audit payload must be an object");
+        legacy_contract.insert(
+            "manifest_schema_version".to_string(),
+            json!(record.manifest.manifest_schema_version),
+        );
+        legacy_contract.insert(
+            "execution_enabled".to_string(),
+            json!(record.execution_enabled),
+        );
+        legacy_contract.insert("execution_grant".to_string(), json!(record.execution_grant));
+        legacy_contract.insert("dry_run".to_string(), json!(request.dry_run));
+        legacy_contract.insert(
+            "action_network_allowed_hosts".to_string(),
+            json!(action_network_allowed_hosts),
+        );
+        legacy_contract.insert("contract_validated".to_string(), json!(contract_validated));
+        legacy_contract.insert("side_effect_executed".to_string(), json!(runtime_started));
+        let audit_entry = AuditEntry::new(
+            None,
+            event_type,
+            "installed plugin run request recorded with bounded runtime evidence",
+            audit_payload,
+        );
+        self.using_repository(|repository| {
             for progress_event in &progress_events {
                 repository.append_audit_entry(&AuditEntry::new(
                     None,
@@ -2551,31 +2816,34 @@ impl IpcState {
                     }),
                 ))?;
             }
-            repository.append_audit_entry(&audit_entry)?;
+            repository.append_audit_entry(&audit_entry)
+        })?;
 
-            let response_provenance = installed_plugin_provenance_inspection(&record);
-            Ok(InstalledPluginRunResponse {
-                plugin_id: record.id,
-                action: request.action,
-                status,
-                reason,
-                execution_enabled: record.execution_enabled,
-                execution_grant: record.execution_grant,
-                provenance: response_provenance,
-                local_paths_redacted: true,
-                provenance_hashes_redacted: true,
-                manifest_valid,
-                action_declared,
-                input_valid,
-                contract_validated,
-                side_effect_executed,
-                output,
-                stdout_bytes,
-                stderr_bytes,
-                exit_code,
-                progress_events,
-                audit_entry,
-            })
+        let response_provenance = installed_plugin_provenance_inspection(&record);
+        Ok(InstalledPluginRunResponse {
+            plugin_id: record.id,
+            action: request.action,
+            status,
+            reason,
+            execution_enabled: record.execution_enabled,
+            execution_grant: record.execution_grant,
+            provenance: response_provenance,
+            local_paths_redacted: true,
+            provenance_hashes_redacted: true,
+            manifest_valid,
+            action_declared,
+            input_valid,
+            contract_validated,
+            side_effect_executed: runtime_started,
+            runtime_kind,
+            wasm_confinement_enforced,
+            os_sandbox_enforced: false,
+            output,
+            stdout_bytes,
+            stderr_bytes,
+            exit_code,
+            progress_events,
+            audit_entry,
         })
     }
 
@@ -2591,55 +2859,126 @@ impl IpcState {
             validate_installed_plugin_record(&record)?;
 
             if request.execution_enabled {
-                let has_network_action = record
-                    .manifest
-                    .actions
-                    .iter()
-                    .any(|action| action.network_access.mode != crate::PluginNetworkAccessMode::None);
-                let has_non_network_action = record
-                    .manifest
-                    .actions
-                    .iter()
-                    .any(|action| action.network_access.mode == crate::PluginNetworkAccessMode::None);
-                match request.execution_grant {
-                    InstalledPluginExecutionGrant::MetadataOnly => {
-                        return Err(JarvisError::Validation(
-                            "installed plugin execution requires subprocess_stdio or subprocess_stdio_network grant".to_string(),
-                        ));
-                    }
-                    InstalledPluginExecutionGrant::SubprocessStdio if !has_non_network_action => {
-                        return Err(JarvisError::Validation(
-                            "subprocess_stdio grant requires at least one non-network action".to_string(),
-                        ));
-                    }
-                    InstalledPluginExecutionGrant::SubprocessStdioNetwork
-                        if !has_network_action =>
+                let source_path = std::path::Path::new(&record.source_path);
+                if request.execution_grant == InstalledPluginExecutionGrant::MetadataOnly {
+                    let reason = if record.manifest.source == PluginSource::LocalWasm {
+                        "local_wasm execution requires the wasm_compute grant"
+                    } else {
+                        "local_subprocess execution requires subprocess_stdio or subprocess_stdio_network grant"
+                    };
+                    return Err(JarvisError::Validation(reason.to_string()));
+                }
+                match record.manifest.source {
+                    PluginSource::LocalWasm
+                        if request.execution_grant
+                            != InstalledPluginExecutionGrant::WasmCompute =>
                     {
                         return Err(JarvisError::Validation(
-                            "subprocess_stdio_network grant requires at least one network-declaring action".to_string(),
+                            "local_wasm execution requires the wasm_compute grant".to_string(),
                         ));
                     }
-                    InstalledPluginExecutionGrant::SubprocessStdio
-                    | InstalledPluginExecutionGrant::SubprocessStdioNetwork => {}
+                    PluginSource::LocalSubprocess
+                        if matches!(
+                            request.execution_grant,
+                            InstalledPluginExecutionGrant::MetadataOnly
+                                | InstalledPluginExecutionGrant::WasmCompute
+                        ) =>
+                    {
+                        return Err(JarvisError::Validation(
+                            "local_subprocess execution requires subprocess_stdio or subprocess_stdio_network grant"
+                                .to_string(),
+                        ));
+                    }
+                    PluginSource::FirstParty
+                    | PluginSource::ThirdParty
+                    | PluginSource::LocalDevelopment => {
+                        return Err(JarvisError::Validation(
+                            "installed plugin source has no executable runtime".to_string(),
+                        ));
+                    }
+                    PluginSource::LocalWasm | PluginSource::LocalSubprocess => {}
                 }
-                if record.manifest.source != PluginSource::LocalSubprocess {
-                    return Err(JarvisError::Validation(
-                        "installed plugin execution requires local_subprocess source".to_string(),
-                    ));
-                }
-                let source_path = std::path::Path::new(&record.source_path);
-                let subprocess = record.manifest.subprocess.as_ref().ok_or_else(|| {
-                    JarvisError::Validation(
-                        "installed plugin execution requires subprocess config".to_string(),
-                    )
-                })?;
-                subprocess.validate(&record.id, source_path)?;
                 if record.provenance.integrity_status
                     != InstalledPluginIntegrityStatus::MatchesInstallSnapshot
                 {
                     return Err(JarvisError::Validation(
                         "installed plugin execution requires local provenance verification to match the install snapshot".to_string(),
                     ));
+                }
+                match record.manifest.source {
+                    PluginSource::LocalWasm => {
+                        if request.execution_grant != InstalledPluginExecutionGrant::WasmCompute {
+                            return Err(JarvisError::Validation(
+                                "local_wasm execution requires the wasm_compute grant"
+                                    .to_string(),
+                            ));
+                        }
+                        let wasm = record.manifest.wasm.as_ref().ok_or_else(|| {
+                            JarvisError::Validation(
+                                "local_wasm execution requires wasm config".to_string(),
+                            )
+                        })?;
+                        let module_path = wasm.validate(&record.id, source_path)?;
+                        let artifact = read_wasm_artifact(&module_path)?;
+                        if record.provenance.wasm_module_sha256.as_deref()
+                            != Some(artifact.sha256.as_str())
+                        {
+                            return Err(JarvisError::Validation(
+                                "local_wasm execution requires module bytes matching install provenance"
+                                    .to_string(),
+                            ));
+                        }
+                    }
+                    PluginSource::LocalSubprocess => {
+                        let has_network_action = record.manifest.actions.iter().any(|action| {
+                            action.network_access.mode
+                                != crate::PluginNetworkAccessMode::None
+                        });
+                        let has_non_network_action = record.manifest.actions.iter().any(|action| {
+                            action.network_access.mode
+                                == crate::PluginNetworkAccessMode::None
+                        });
+                        match request.execution_grant {
+                            InstalledPluginExecutionGrant::SubprocessStdio
+                                if has_non_network_action => {}
+                            InstalledPluginExecutionGrant::SubprocessStdioNetwork
+                                if has_network_action => {}
+                            InstalledPluginExecutionGrant::SubprocessStdio => {
+                                return Err(JarvisError::Validation(
+                                    "subprocess_stdio grant requires at least one non-network action"
+                                        .to_string(),
+                                ));
+                            }
+                            InstalledPluginExecutionGrant::SubprocessStdioNetwork => {
+                                return Err(JarvisError::Validation(
+                                    "subprocess_stdio_network grant requires at least one network-declaring action"
+                                        .to_string(),
+                                ));
+                            }
+                            InstalledPluginExecutionGrant::MetadataOnly
+                            | InstalledPluginExecutionGrant::WasmCompute => {
+                                return Err(JarvisError::Validation(
+                                    "local_subprocess execution requires subprocess_stdio or subprocess_stdio_network grant"
+                                        .to_string(),
+                                ));
+                            }
+                        }
+                        let subprocess =
+                            record.manifest.subprocess.as_ref().ok_or_else(|| {
+                                JarvisError::Validation(
+                                    "installed plugin execution requires subprocess config"
+                                        .to_string(),
+                                )
+                            })?;
+                        subprocess.validate(&record.id, source_path)?;
+                    }
+                    PluginSource::FirstParty
+                    | PluginSource::ThirdParty
+                    | PluginSource::LocalDevelopment => {
+                        return Err(JarvisError::Validation(
+                            "installed plugin source has no executable runtime".to_string(),
+                        ));
+                    }
                 }
             }
 
@@ -2648,6 +2987,32 @@ impl IpcState {
                 request.execution_enabled,
                 request.execution_grant,
             )
+        })
+    }
+
+    pub fn cancel_runtime_execution(
+        &self,
+        cancellation_id: Uuid,
+    ) -> JarvisResult<RuntimeCancellationResponse> {
+        let cancellation_requested = self
+            .runtime_control
+            .cancel_runtime_execution(cancellation_id);
+        let audit_entry = AuditEntry::new(
+            None,
+            "runtime_cancellation_requested",
+            "runtime cancellation was requested through local IPC",
+            json!({
+                "cancellation_id": cancellation_id,
+                "active_execution_found": cancellation_requested,
+                "installed_plugin_runtime_supported": true,
+                "request_content_redacted": true,
+            }),
+        );
+        self.using_repository(|repository| repository.append_audit_entry(&audit_entry))?;
+        Ok(RuntimeCancellationResponse {
+            cancellation_id,
+            cancellation_requested,
+            audit_entry,
         })
     }
 
@@ -4237,6 +4602,7 @@ pub fn router(state: IpcState) -> Router {
         .route("/tasks", get(list_tasks))
         .route("/tasks/:id", get(get_task))
         .route("/tasks/:id/audit", get(list_task_audit_entries))
+        .route("/runtime/cancellations/:id", post(cancel_runtime_execution))
         .route("/audit", get(list_audit_entries))
         .route("/activity/summary", get(activity_summary))
         .route("/activity/events", get(activity_events))
@@ -5123,6 +5489,16 @@ async fn run_installed_plugin(
         .map_err(error_response)
 }
 
+async fn cancel_runtime_execution(
+    State(state): State<IpcState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<RuntimeCancellationResponse>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .cancel_runtime_execution(id)
+        .map(Json)
+        .map_err(error_response)
+}
+
 async fn pause_status(State(state): State<IpcState>) -> Json<EmergencyPauseResponse> {
     Json(state.pause_status())
 }
@@ -5303,6 +5679,7 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
         endpoint("POST", "/commands", false, false),
         endpoint("GET", "/tasks", true, false),
         endpoint("GET", "/tasks/:id", true, false),
+        endpoint("POST", "/runtime/cancellations/:id", true, false),
         endpoint("GET", "/tasks/:id/audit", true, false),
         endpoint("GET", "/audit", true, false),
         endpoint("GET", "/activity/summary", true, true),
@@ -7464,8 +7841,14 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "installed_plugin_execution",
             "implemented",
-            "Local subprocess plugins require full source-tree provenance verification plus explicit subprocess_stdio or subprocess_stdio_network grants, run with inherited environment cleared, enforce stdout/stderr byte limits, and emit audit evidence that separates subprocess start from os_sandbox_enforced:false; covered by Rust unit and CLI IPC E2E tests.",
-            "Constrained local subprocess execution only; audit evidence reports os_sandbox_enforced:false, so this is not a WASM, OS-level, host-egress, or marketplace sandbox.",
+            "Local subprocess plugins retain explicit source-matched grants and bounded JSON streams with os_sandbox_enforced:false audit evidence. Compute-only local_wasm plugins require wasm_compute, exact current artifact provenance, no imports/WASI/filesystem/network/environment, fixed module/request/output/memory/fuel limits, and pause-dominant resumable execution. Repository locks are released before either untrusted runtime starts and reacquired only for redacted audit persistence.",
+            "Wasmi supplies language-level confinement for low-risk compute-only modules, not an OS process sandbox, marketplace approval, malware analysis, publisher reputation, same-user IPC authorization, or host-level egress proof. Legacy subprocess audit remains os_sandbox_enforced:false.",
+        ),
+        feature(
+            "wasm_plugin_confinement",
+            "implemented",
+            "The jarvis_json_v1 ABI requires memory, jarvis_alloc(i32)->i32, and jarvis_run(i32,i32)->i64 exports; every import is rejected and exact executed bytes are bound to install provenance. Unit and cross-process tests cover success plus import, mutation, schema, resource, timeout, pause, and restart denial paths.",
+            "Compute-only Wasmi boundary with no host capabilities. It does not clear external plugin-trust, signed-distribution, or live-device evidence gates.",
         ),
         feature(
             "plugin_publisher_signature",
@@ -7568,7 +7951,8 @@ fn installed_plugin_grant_allows_action(
         (InstalledPluginExecutionGrant::SubprocessStdio, false) => true,
         (InstalledPluginExecutionGrant::MetadataOnly, _)
         | (InstalledPluginExecutionGrant::SubprocessStdio, true)
-        | (InstalledPluginExecutionGrant::SubprocessStdioNetwork, false) => false,
+        | (InstalledPluginExecutionGrant::SubprocessStdioNetwork, false)
+        | (InstalledPluginExecutionGrant::WasmCompute, _) => false,
     }
 }
 
@@ -10508,6 +10892,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                     action: "inspect".to_string(),
                     input: json!({ "path": "README.md" }),
                     session_id: Some(Uuid::new_v4()),
+                    cancellation_id: None,
                     dry_run: false,
                 },
             )
@@ -10580,6 +10965,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                     action: "missing".to_string(),
                     input: json!({}),
                     session_id: None,
+                    cancellation_id: None,
                     dry_run: false,
                 },
             )
@@ -10624,6 +11010,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                     action: "inspect".to_string(),
                     input: json!({ "path": "README.md" }),
                     session_id: None,
+                    cancellation_id: None,
                     dry_run: true,
                 },
             )
@@ -10675,6 +11062,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                     action: "inspect".to_string(),
                     input: json!({ "path": "README.md", "extra": true }),
                     session_id: None,
+                    cancellation_id: None,
                     dry_run: true,
                 },
             )
@@ -10759,6 +11147,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                     action: "inspect".to_string(),
                     input: json!({ "path": "README.md" }),
                     session_id: None,
+                    cancellation_id: None,
                     dry_run: false,
                 },
             )
@@ -10808,6 +11197,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                     action: "inspect".to_string(),
                     input: json!({ "path": "README.md" }),
                     session_id: None,
+                    cancellation_id: None,
                     dry_run: false,
                 },
             )
@@ -10857,6 +11247,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                     action: "inspect".to_string(),
                     input: json!({ "path": "README.md" }),
                     session_id: None,
+                    cancellation_id: None,
                     dry_run: false,
                 },
             )
@@ -11005,6 +11396,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                     action: "inspect".to_string(),
                     input: json!({ "path": "README.md" }),
                     session_id: None,
+                    cancellation_id: None,
                     dry_run: false,
                 },
             )
@@ -11048,6 +11440,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                     action: "inspect".to_string(),
                     input: json!({ "path": "README.md" }),
                     session_id: None,
+                    cancellation_id: None,
                     dry_run: false,
                 },
             )
@@ -11112,6 +11505,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                     action: "inspect".to_string(),
                     input: json!({ "path": "README.md" }),
                     session_id: None,
+                    cancellation_id: None,
                     dry_run: false,
                 },
             )
@@ -11126,6 +11520,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                     action: "fetch".to_string(),
                     input: json!({ "path": "README.md" }),
                     session_id: None,
+                    cancellation_id: None,
                     dry_run: false,
                 },
             )
@@ -11160,6 +11555,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                     action: "fetch".to_string(),
                     input: json!({ "path": "README.md" }),
                     session_id: None,
+                    cancellation_id: None,
                     dry_run: false,
                 },
             )
@@ -11182,6 +11578,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                     action: "inspect".to_string(),
                     input: json!({ "path": "README.md" }),
                     session_id: None,
+                    cancellation_id: None,
                     dry_run: false,
                 },
             )
@@ -11319,6 +11716,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             author: "Jarvis Test".to_string(),
             source_path: Some(source_path.to_string()),
             subprocess: None,
+            wasm: None,
             publisher_signature: None,
             actions: vec![crate::PluginActionManifest {
                 name: "inspect".to_string(),
@@ -11364,6 +11762,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 stdin: crate::PluginSubprocessStream::Json,
                 stdout: crate::PluginSubprocessStream::Json,
             }),
+            wasm: None,
             publisher_signature: None,
             actions: vec![crate::PluginActionManifest {
                 name: "inspect".to_string(),
@@ -12700,7 +13099,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .expect("diagnostics export");
         assert_eq!(export.health.status, "ok");
         assert!(export.repository_backed);
-        assert_eq!(export.schema_version, Some(11));
+        assert_eq!(export.schema_version, Some(12));
         assert_eq!(export.task_count, Some(1));
         assert!(export.audit_entry_count.unwrap_or_default() >= 2);
         assert_eq!(export.model_route_record_count, Some(1));

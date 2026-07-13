@@ -567,8 +567,9 @@ enum PluginsCommand {
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
-    /// Enable an installed local subprocess plugin with an explicit execution grant.
-    /// Network-declaring actions require --grant subprocess_stdio_network.
+    /// Enable an installed executable plugin with an explicit source-matched grant.
+    /// Use wasm_compute for import-free local_wasm; network-declaring subprocess
+    /// actions require subprocess_stdio_network.
     EnableInstalled {
         id: String,
         #[arg(long, default_value = "subprocess_stdio")]
@@ -620,6 +621,15 @@ enum PluginsCommand {
         input: String,
         #[arg(long)]
         dry_run: bool,
+        /// Attach a unique cooperative cancellation identifier to this run.
+        #[arg(long)]
+        cancellation_id: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    /// Request cancellation for an installed-plugin run using its unique identifier.
+    CancelRun {
+        cancellation_id: String,
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
@@ -1461,6 +1471,7 @@ async fn main() -> anyhow::Result<()> {
                 action,
                 input,
                 dry_run,
+                cancellation_id,
                 endpoint,
             } => {
                 let input: serde_json::Value = serde_json::from_str(&input)?;
@@ -1468,6 +1479,7 @@ async fn main() -> anyhow::Result<()> {
                     "action": action,
                     "input": input,
                     "session_id": null,
+                    "cancellation_id": cancellation_id,
                     "dry_run": dry_run,
                 }))?;
                 println!(
@@ -1477,6 +1489,20 @@ async fn main() -> anyhow::Result<()> {
                         "POST",
                         &format!("/plugins/installed/{id}/run"),
                         Some(&body)
+                    )?
+                );
+            }
+            PluginsCommand::CancelRun {
+                cancellation_id,
+                endpoint,
+            } => {
+                println!(
+                    "{}",
+                    server_required_request(
+                        &endpoint,
+                        "POST",
+                        &format!("/runtime/cancellations/{cancellation_id}"),
+                        None,
                     )?
                 );
             }

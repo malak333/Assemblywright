@@ -183,6 +183,25 @@ network-capable installed plugins are enabled with `subprocess_stdio_network`.
 This is runtime grant gating and manifest governance, not an OS-level network
 sandbox or host-level egress filter.
 
+Installed `local_wasm` plugins provide a narrower compute-only alternative.
+They require the explicit `wasm_compute` grant and the custom
+`jarvis_json_v1` exports `memory`, `jarvis_alloc`, and `jarvis_run`. Jarvis
+rejects all imports, including WASI, environment, filesystem, network, clock,
+and process authority, and enforces 4 MiB module, 256 KiB request, 1 MiB output,
+16 MiB linear-memory, zero table elements, and 10 million fuel ceilings. Eligible actions are
+low-risk, non-proactive computation only, with no memory, model, or network
+access. Exact module bytes are included in the install provenance snapshot;
+pause, cancellation, timeout, or fuel exhaustion fails closed before output is
+accepted. The installed-plugin inspection endpoint and Swift Plugin tab expose
+only redacted runtime/confinement metadata. `WASM confined` means Wasmi
+language-level confinement; it does not mean a macOS OS sandbox, same-user IPC
+isolation, malware analysis, publisher/marketplace trust, signing/notarization,
+or live-device validation. `local_subprocess` remains a separate runner and is
+presented as `not OS sandboxed`.
+Runs may carry a unique `--cancellation-id`; `jarvis plugins cancel-run <id>`
+requests cooperative cancellation through local IPC. Wasmi checks it between
+fuel slices and before accepting output.
+
 ## Production Work Protocol
 
 This public repository is being advanced through isolated worktrees, topic
@@ -336,7 +355,7 @@ run the focused storage recovery proof:
 
 That script proves legacy file-backed DB migration creates a preflight backup,
 failed migration-open restores the backup, newer schema versions fail with an
-explicit upgrade diagnostic, and representative schema v1-v8 fixtures preserve
+explicit upgrade diagnostic, and representative schema v1-v11 fixtures preserve
 critical rows through the current migration path. It does not replace installer
 upgrade QA.
 

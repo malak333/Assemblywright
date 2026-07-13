@@ -6600,7 +6600,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
 
     let diagnostics = run_cli_json(["diagnostics", "export", "--endpoint", endpoint.as_str()]);
     assert_eq!(diagnostics["repository_backed"], true);
-    assert_eq!(diagnostics["schema_version"], 11);
+    assert_eq!(diagnostics["schema_version"], 12);
     assert_eq!(
         diagnostics["health"]["contract"]["name"],
         "jarvis.local-ipc"
@@ -7039,6 +7039,362 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
 
     restarted.stop();
     drop(temp_dir);
+}
+
+#[test]
+fn installed_wasm_is_confined_redacted_and_restart_durable() {
+    let temp_dir = tempfile::tempdir().expect("create WASM e2e dir");
+    let db_path = temp_dir.path().join("jarvis-wasm-e2e.sqlite");
+    let plugin_dir = temp_dir.path().join("wasm-plugin");
+    fs::create_dir(&plugin_dir).expect("create WASM plugin dir");
+    let plugin_dir = plugin_dir
+        .canonicalize()
+        .expect("canonical WASM plugin dir");
+    let module_path = plugin_dir.join("plugin.wasm");
+    let output = r#"{"ok":true}"#;
+    let packed = (1024_u64 << 32) | output.len() as u64;
+    let valid_module = wat::parse_str(format!(
+        r#"(module
+            (memory (export "memory") 1)
+            (data (i32.const 1024) "{{\"ok\":true}}")
+            (func (export "jarvis_alloc") (param i32) (result i32) i32.const 0)
+            (func (export "jarvis_run") (param i32 i32) (result i64)
+                i64.const {packed}))"#
+    ))
+    .expect("compile valid WASM fixture");
+    fs::write(&module_path, &valid_module).expect("write valid WASM fixture");
+    let manifest_path = plugin_dir.join("jarvis-plugin.json");
+    fs::write(
+        &manifest_path,
+        json!({
+            "manifest_schema_version": 1,
+            "id": "local_wasm_e2e",
+            "name": "Local WASM E2E",
+            "version": "0.1.0",
+            "source": "local_wasm",
+            "author": "Jarvis E2E",
+            "source_path": plugin_dir.display().to_string(),
+            "wasm": { "module": "plugin.wasm", "abi": "jarvis_json_v1" },
+            "actions": [{
+                "name": "run",
+                "description": "Return a bounded compute result.",
+                "permissions": [],
+                "risk_tier": "low",
+                "input_schema": { "schema": {
+                    "type": "object", "properties": {}, "required": [],
+                    "additionalProperties": false
+                }},
+                "output_schema": { "schema": {
+                    "type": "object",
+                    "properties": { "ok": { "type": "boolean" } },
+                    "required": ["ok"], "additionalProperties": false
+                }},
+                "proactive": false,
+                "memory_access": "none",
+                "model_access": "none",
+                "network_access": { "mode": "none", "allowed_hosts": [] },
+                "audit_fields": [],
+                "timeout": { "timeout_ms": 5000, "on_timeout": "cancel" },
+                "cancellation": "cooperative"
+            }]
+        })
+        .to_string(),
+    )
+    .expect("write WASM manifest");
+
+    let mut server = JarvisServer::start(&db_path);
+    let endpoint = server.endpoint();
+    let installed = run_cli_json([
+        "plugins",
+        "install",
+        manifest_path.to_str().expect("manifest path"),
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(installed["manifest"]["source"], "local_wasm");
+    assert_eq!(installed["execution_grant"], "metadata_only");
+
+    let initial_dry_run = run_cli_json([
+        "plugins",
+        "run-installed",
+        "local_wasm_e2e",
+        "run",
+        "--input",
+        "{}",
+        "--dry-run",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(initial_dry_run["status"], "dry_run");
+    assert_eq!(initial_dry_run["side_effect_executed"], false);
+
+    let verified = run_cli_json([
+        "plugins",
+        "verify-installed",
+        "local_wasm_e2e",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(
+        verified["provenance"]["integrity_status"],
+        "matches_install_snapshot"
+    );
+    let dry_run = run_cli_json([
+        "plugins",
+        "run-installed",
+        "local_wasm_e2e",
+        "run",
+        "--input",
+        "{}",
+        "--dry-run",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(dry_run["status"], "dry_run");
+    assert_eq!(dry_run["side_effect_executed"], false);
+    assert_eq!(dry_run["wasm_confinement_enforced"], false);
+
+    let wrong_grant = run_cli_failure([
+        "plugins",
+        "enable-installed",
+        "local_wasm_e2e",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert!(wrong_grant.contains("wasm_compute"), "{wrong_grant}");
+    let enabled = run_cli_json([
+        "plugins",
+        "enable-installed",
+        "local_wasm_e2e",
+        "--grant",
+        "wasm_compute",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(enabled["execution_grant"], "wasm_compute");
+
+    let inspected = run_cli_json([
+        "plugins",
+        "installed-get",
+        "local_wasm_e2e",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(inspected["runtime_kind"], "wasm");
+    assert_eq!(inspected["wasm_confinement_enforced"], true);
+    assert_eq!(inspected["os_sandbox_enforced"], false);
+    let inspected_encoded = serde_json::to_string(&inspected).unwrap();
+    assert!(!inspected_encoded.contains("plugin.wasm"));
+    assert!(!inspected_encoded.contains(plugin_dir.to_str().unwrap()));
+    assert!(!inspected_encoded.contains("wasm_module_sha256"));
+
+    let run = run_cli_json([
+        "plugins",
+        "run-installed",
+        "local_wasm_e2e",
+        "run",
+        "--input",
+        "{}",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(run["status"], "completed", "{run}");
+    assert_eq!(run["output"], json!({"ok": true}));
+    assert_eq!(run["runtime_kind"], "wasm");
+    assert_eq!(run["wasm_confinement_enforced"], true);
+    assert_eq!(run["os_sandbox_enforced"], false);
+    assert_eq!(
+        run["audit_entry"]["event_type"],
+        "installed_plugin_wasm_completed"
+    );
+    assert_eq!(
+        run["audit_entry"]["payload"]["runtime"]["wasm"]["imports_allowed"],
+        false
+    );
+    assert_eq!(
+        run["audit_entry"]["payload"]["runtime"]["wasm"]["filesystem_available"],
+        false
+    );
+    assert_eq!(
+        run["audit_entry"]["payload"]["runtime"]["wasm"]["network_available"],
+        false
+    );
+    let run_encoded = serde_json::to_string(&run).unwrap();
+    assert!(!run_encoded.contains(plugin_dir.to_str().unwrap()));
+    assert!(!run_encoded.contains("wasm_module_sha256"));
+
+    run_cli_json([
+        "pause",
+        "--reason",
+        "WASM e2e pause",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    let paused = run_cli_json([
+        "plugins",
+        "run-installed",
+        "local_wasm_e2e",
+        "run",
+        "--input",
+        "{}",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(paused["status"], "blocked");
+    assert_eq!(paused["side_effect_executed"], false);
+    assert!(paused["reason"]
+        .as_str()
+        .unwrap()
+        .contains("emergency pause"));
+    run_cli_json(["resume", "--endpoint", endpoint.as_str()]);
+
+    let cancel_plugin_dir = temp_dir.path().join("wasm-cancel-plugin");
+    fs::create_dir(&cancel_plugin_dir).expect("create cancellation plugin dir");
+    let cancel_plugin_dir = cancel_plugin_dir
+        .canonicalize()
+        .expect("canonical cancellation plugin dir");
+    fs::write(
+        cancel_plugin_dir.join("plugin.wasm"),
+        wat::parse_str(
+            r#"(module
+                (memory (export "memory") 1)
+                (func (export "jarvis_alloc") (param i32) (result i32) i32.const 0)
+                (func (export "jarvis_run") (param i32 i32) (result i64)
+                    (loop $forever (br $forever))
+                    i64.const 0))"#,
+        )
+        .expect("compile infinite WASM fixture"),
+    )
+    .expect("write infinite WASM fixture");
+    let mut cancel_manifest: Value =
+        serde_json::from_str(&fs::read_to_string(&manifest_path).expect("read base WASM manifest"))
+            .expect("parse base WASM manifest");
+    cancel_manifest["id"] = json!("local_wasm_cancel_e2e");
+    cancel_manifest["name"] = json!("Local WASM Cancellation E2E");
+    cancel_manifest["source_path"] = json!(cancel_plugin_dir.display().to_string());
+    let cancel_manifest_path = cancel_plugin_dir.join("jarvis-plugin.json");
+    fs::write(&cancel_manifest_path, cancel_manifest.to_string())
+        .expect("write cancellation WASM manifest");
+    run_cli_json([
+        "plugins",
+        "install",
+        cancel_manifest_path.to_str().expect("cancel manifest path"),
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    run_cli_json([
+        "plugins",
+        "verify-installed",
+        "local_wasm_cancel_e2e",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    run_cli_json([
+        "plugins",
+        "enable-installed",
+        "local_wasm_cancel_e2e",
+        "--grant",
+        "wasm_compute",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+
+    let cancellation_id = "11111111-2222-4333-8444-555555555555";
+    let run_endpoint = endpoint.clone();
+    let run_handle = thread::spawn(move || {
+        request(
+            &run_endpoint,
+            "POST",
+            "/plugins/installed/local_wasm_cancel_e2e/run",
+            Some(
+                &json!({
+                    "action": "run",
+                    "input": {},
+                    "cancellation_id": cancellation_id,
+                    "dry_run": false
+                })
+                .to_string(),
+            ),
+        )
+        .expect("run infinite WASM request")
+    });
+    let mut cancellation = None;
+    for _ in 0..100 {
+        let response = request(
+            endpoint.as_str(),
+            "POST",
+            &format!("/runtime/cancellations/{cancellation_id}"),
+            None,
+        )
+        .expect("request in-flight cancellation");
+        let response: Value = serde_json::from_str(&response).expect("cancellation response");
+        if response["cancellation_requested"] == true {
+            cancellation = Some(response);
+            break;
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+    let cancellation = cancellation.expect("observe active WASM execution");
+    assert_eq!(cancellation["cancellation_id"], cancellation_id);
+    let cancelled: Value =
+        serde_json::from_str(&run_handle.join().expect("join cancelled WASM request"))
+            .expect("cancelled WASM response");
+    assert_eq!(cancelled["status"], "failed", "{cancelled}");
+    assert_eq!(cancelled["side_effect_executed"], true);
+    assert_eq!(cancelled["output"], Value::Null);
+    assert_eq!(cancelled["wasm_confinement_enforced"], true);
+    assert_eq!(
+        cancelled["audit_entry"]["event_type"],
+        "installed_plugin_wasm_failed"
+    );
+    assert!(cancelled["reason"]
+        .as_str()
+        .expect("cancellation reason")
+        .contains("cancellation"));
+    let cancellation_audit = run_cli_json(["tasks", "audit", "--endpoint", endpoint.as_str()]);
+    assert!(!cancellation_audit
+        .as_array()
+        .expect("audit array")
+        .iter()
+        .any(|entry| {
+            entry["event_type"] == "installed_plugin_wasm_completed"
+                && entry["payload"]["plugin_id"] == "local_wasm_cancel_e2e"
+        }));
+
+    server.stop();
+    let mut restarted = JarvisServer::start(&db_path);
+    let restarted_endpoint = restarted.endpoint();
+    let durable = run_cli_json([
+        "plugins",
+        "run-installed",
+        "local_wasm_e2e",
+        "run",
+        "--input",
+        "{}",
+        "--endpoint",
+        restarted_endpoint.as_str(),
+    ]);
+    assert_eq!(durable["status"], "completed", "{durable}");
+    assert_eq!(durable["execution_grant"], "wasm_compute");
+
+    fs::write(&module_path, wat::parse_str("(module)").unwrap()).expect("mutate WASM artifact");
+    let changed = run_cli_json([
+        "plugins",
+        "run-installed",
+        "local_wasm_e2e",
+        "run",
+        "--input",
+        "{}",
+        "--endpoint",
+        restarted_endpoint.as_str(),
+    ]);
+    assert_eq!(changed["status"], "blocked");
+    assert_eq!(
+        changed["provenance"]["integrity_status"],
+        "changed_since_install"
+    );
+    assert_eq!(changed["side_effect_executed"], false);
+    restarted.stop();
 }
 
 #[test]

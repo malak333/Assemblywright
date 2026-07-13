@@ -89,6 +89,23 @@ matrix is represented in `docs/build-test-commands.md` and
 external evidence-mode, command-evidence, owner-evidence, and handoff-script
 boundary phrases. It is documentation contract coverage only.
 
+Focused installed-WASM confinement checks:
+
+```sh
+cargo test -p jarvis-core wasm -- --nocapture
+cargo test -p jarvis-cli --test local_ipc_e2e installed_wasm -- --nocapture
+swift test --disable-sandbox --package-path apps/mac --filter pluginManagerModelDecodesWasmConfinement
+./scripts/release-docs-drift-smoke.sh
+```
+
+The Rust tests cover the `jarvis_json_v1` no-import ABI, `wasm_compute` grant,
+exact-byte provenance, schema-v12 migration, byte/memory/table/fuel ceilings,
+pause/cancel/timeout behavior, audit redaction, and cross-process restart. The
+Swift test covers only backward-compatible decoding and read-only redacted
+presentation. These checks prove Wasmi language-level confinement, not an OS
+sandbox, same-user IPC, marketplace/publisher trust, malware analysis,
+signing/notarization, or live-device behavior.
+
 ## Current Health Check
 
 `jarvis health` is a strict IPC liveness check. Strict IPC commands such as
@@ -842,7 +859,7 @@ release-proof smoke command and is run by `./scripts/release-local.sh`.
 proof for migration changes: it runs Rust tests that create a legacy
 file-backed DB, verify preflight backup creation, corrupt the DB after backup
 to prove restore on migration-open failure, verify newer schema versions fail
-with an explicit upgrade diagnostic, and migrate representative schema v1-v8
+with an explicit upgrade diagnostic, and migrate representative schema v1-v11
 fixtures while preserving tasks, audit, memory, scheduler, approval, plugin,
 and route rows.
 `./scripts/release-operator-qa-smoke.sh` is the local operator-facing release

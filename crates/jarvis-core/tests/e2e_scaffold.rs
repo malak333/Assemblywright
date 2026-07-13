@@ -177,6 +177,7 @@ fn plugin_manifest_rejects_actions_outside_declared_scopes() {
         author: "Jarvis".to_string(),
         source_path: None,
         subprocess: None,
+        wasm: None,
         publisher_signature: None,
         actions: vec![PluginActionManifest {
             name: "write_memory_without_scope".to_string(),
@@ -272,6 +273,7 @@ impl InProcessPlugin for ConfirmWritePlugin {
             author: "Jarvis".to_string(),
             source_path: None,
             subprocess: None,
+            wasm: None,
             publisher_signature: None,
             actions: vec![PluginActionManifest {
                 name: "write_note".to_string(),

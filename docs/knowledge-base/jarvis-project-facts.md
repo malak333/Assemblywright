@@ -109,6 +109,44 @@ These notes capture durable facts for future agents working on this repository.
   validates manifest/provenance/grants and clears inherited environment
   variables without enforcing an OS sandbox or host-level egress policy. Those
   external controls remain part of plugin-trust QA evidence.
+- Installed `local_wasm` plugins are a distinct compute-only runtime. They use
+  the `wasm_compute` grant and custom `jarvis_json_v1` ABI with required
+  `memory`, `jarvis_alloc`, and `jarvis_run` exports. Wasmi links no imports or
+  WASI, so the guest receives no environment, filesystem, network, clock, or
+  process authority. Hard ceilings are 4 MiB module, 256 KiB request, 1 MiB
+  output, 16 MiB memory, zero table elements, and 10 million fuel per invocation. Only low-risk,
+  non-proactive, no-memory/model/network compute actions qualify.
+- WASM install provenance binds the exact module bytes. Schema v12 migrates
+  existing installed-plugin rows without enabling them or broadening grants;
+  restart retains the WASM grant and provenance contract. Pause, cooperative
+  cancellation, timeout, traps, and fuel exhaustion fail closed and suppress
+  output. Audit/IPC/Swift expose only redacted runtime and confinement fields.
+- Installed-plugin runs can carry a unique `cancellation_id`; local IPC
+  `POST /runtime/cancellations/:id` and `jarvis plugins cancel-run` set the
+  shared cancellation state checked before Wasmi start, between fuel slices,
+  and before output acceptance. The registry accepts cancellation only after
+  activation immediately before runtime entry, caps concurrency at 128 IDs,
+  and consumes IDs on every exit. Legacy
+  subprocess effects are not reversible.
+  Output acceptance atomically finalizes the active ID and returns its
+  cancellation state; later requests cannot report acceptance for a published
+  completion.
+- The Swift Plugin tab has no installed-plugin execution control. It labels a
+  verified Wasmi record `WASM confined • no imports • no filesystem • no
+  network` and labels the distinct subprocess path `not OS sandboxed`.
+  `wasm_confinement_enforced: true` is language-level confinement only;
+  `os_sandbox_enforced` remains false unless a real OS mechanism exists.
+- The WASM phase is covered by focused core tests, cross-process
+  `local_ipc_e2e` restart/execution tests, Swift decoding/presentation tests,
+  docs drift, and the canonical local release gate. It does not prove an OS
+  sandbox, same-user IPC isolation, marketplace/publisher trust, malware
+  analysis, signing/notarization, or live-device evidence.
+- Installed subprocess and WASM execution snapshot/revalidate repository-owned
+  state and exact current provenance while holding the repository mutex, then
+  release it before guest work. Repository access is reacquired only for
+  redacted audit persistence. Pause/cancel checks after unlock and immediately
+  before output/completion-audit acceptance prevent plugins from blocking
+  unrelated SQLite work or publishing a late success.
 - `/contract` includes a `compatibility` block with supported version range,
   additive-change, deprecation, removed/deprecated endpoint, and client
   requirement policy, plus a `features` list with stable keys, status, proof,
@@ -578,10 +616,11 @@ requires plugin-trust `generated_at`, `review_started_at`,
   `plugins run-installed` for disabled-by-default local manifests, auditable
   publisher-origin review, trusted-key signature verification, and explicit
   subprocess execution.
-- A local unsigned distribution launch proof exists, and installed plugin execution now
-  has a constrained local subprocess proof. Developer ID signing,
+- A local unsigned distribution launch proof exists, and installed plugin
+  execution now has constrained local subprocess plus no-import Wasmi compute
+  proof. Developer ID signing,
   notarization, installer validation, App Store distribution, owner-recorded
-  live-device voice-loop validation, broader plugin marketplace/WASM isolation,
+  live-device voice-loop validation, broader plugin marketplace trust,
   OS-level process/network sandboxing, host-level egress filtering, plugin
   malware analysis, and broader production operations are still external/manual
   gates.
@@ -794,7 +833,7 @@ requires plugin-trust `generated_at`, `review_started_at`,
   `./scripts/release-evidence-doctor.sh --self-test`, `swift test
   --package-path apps/mac`, and `swift build --package-path apps/mac`.
   It also runs `./scripts/storage-migration-backup-smoke.sh` so file-backed
-  migration backup/recovery and representative schema v1-v8 fixture
+  migration backup/recovery and representative schema v1-v11 fixture
   preservation stay part of the default local release evidence.
 - Local-model proof now includes stubbed provider-envelope E2E plus live
   Ollama route viability observed during manual testing. The proof is still a
@@ -1274,7 +1313,7 @@ requires plugin-trust `generated_at`, `review_started_at`,
   app-owned local files, may include personal memory/audit/plugin metadata, and
   are not redacted diagnostics exports. Keychain secrets are not stored in
   SQLite backups.
-- Storage migration coverage includes a representative schema v1-v8 fixture
+- Storage migration coverage includes a representative schema v1-v11 fixture
   matrix that preserves task, audit, emergency-pause, memory, scheduler,
   approval, installed-plugin, plugin-provenance, and route records through the
   current schema. This is repo-owned migration proof, not installer upgrade or

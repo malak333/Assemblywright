@@ -60,6 +60,28 @@ release requirements, not optional UX guidance.
   held root; other inputs are non-empty normal relative paths. The enforced
   ceilings are 200 listed entries, 64 KiB per UTF-8 read, 16 KiB per line, and
   128 KiB cumulative tool output per task.
+- Installed `local_wasm` execution is allowed only for validated low-risk,
+  non-proactive compute actions with no memory, model, filesystem, environment,
+  process, clock, or network authority and the explicit `wasm_compute` grant.
+  The `jarvis_json_v1` module must import nothing and export `memory`,
+  `jarvis_alloc`, and `jarvis_run`. Validation and execution fail closed beyond
+  4 MiB of module bytes, 256 KiB of request JSON, 1 MiB of output JSON, 16 MiB
+  of linear memory, zero table elements, or 10 million fuel units. Exact module bytes participate in
+  provenance verification. Emergency pause, cooperative cancellation, timeout,
+  and fuel exhaustion dominate completion and suppress output. Audit and Swift
+  inspection may expose redacted runtime/enforcement metadata, never module
+  bytes, paths, hashes, inputs, outputs, or raw engine errors. Wasmi confinement
+  is a guest-language boundary, not an OS sandbox, same-user IPC isolation,
+  marketplace/publisher trust, malware analysis, signing/notarization, or
+  live-device proof.
+  Installed-plugin cancellation uses an explicit unique `cancellation_id` and
+  `POST /runtime/cancellations/:id`; Wasmi observes it between fuel slices and
+  before output acceptance. Only runs activated immediately before runtime
+  entry accept cancellation; bounded registration alone does not. The active
+  registry is capped at 128 IDs and consumes each ID on exit. A legacy subprocess may already have caused
+  external effects before Jarvis discards its late result.
+  Output acceptance atomically finalizes the active cancellation ID; requests
+  arriving after that point report that no active execution was found.
 - Audit logs must explain model route, permission checks, tool calls,
   approvals, denials, files touched, external actions attempted, failures, and
   final state.
@@ -140,6 +162,9 @@ policy:
   host-level egress enforcement until those controls are actually enforced;
   current subprocess audit payloads report `os_sandbox_enforced: false` and
   keep OS sandbox/egress proof in the manual plugin-trust QA lane.
+- Treating Wasmi language-level confinement as an OS sandbox, host-egress
+  policy, marketplace approval, malware scan, publisher identity, same-user IPC
+  isolation, or signed/live-device release evidence.
 
 ## Regression Tests
 
@@ -159,6 +184,13 @@ Safety regressions should fail release verification:
 - Installed subprocess plugin audit evidence that reports an OS sandbox as
   enforced when the runner only validated manifest/provenance/grants and
   cleared the inherited environment.
+- WASM modules that import any host capability, omit the required
+  `jarvis_json_v1` exports, exceed module/request/output/memory/fuel ceilings,
+  request non-compute authority, run proactively, execute without
+  `wasm_compute`, bypass exact-byte provenance, or expose output after
+  pause/cancellation/timeout/fuel exhaustion.
+- WASM inspection or audit surfaces that expose module bytes, local paths,
+  hashes, request/output bodies, raw engine errors, or claim OS sandboxing.
 - Local plugin manifests installing with invalid schema, blocked risk tier,
   missing proactive/memory/model permissions, unsafe source paths, or
   `first_party` source claims.

@@ -56,6 +56,7 @@
 | SQLite as primary structured storage | Flat files only, external database | SQLite is durable, inspectable, easy to migrate, and enough for single-user v1. |
 | macOS Keychain for secrets | Store credentials in SQLite or config files | Secrets should use the platform credential store. |
 | First-party plugins first | Third-party marketplace in v1 | The safety model and plugin contract need to prove themselves before third-party expansion. |
+| Add a no-import Wasmi compute runtime before broader third-party execution | Treat subprocess grants as sufficient containment, enable WASI, or wait for an OS sandbox | A deliberately small `jarvis_json_v1` ABI can provide useful low-risk local computation while mechanically denying guest filesystem, environment, network, clock, and process authority. Wasmi confinement is a language-runtime boundary, not an OS sandbox or plugin trust system. |
 | Auditability as an architectural requirement | Best-effort logs after the fact | Jarvis must be able to explain why it acted, what data it used, and what permissions were involved. |
 
 ## Architecture
@@ -118,6 +119,32 @@ results are local-model-only and must never be returned to a ChatGPT step.
 Emergency pause and task cancellation dominate completion and suppress late
 capability output. Deterministic `fake_*` plugins remain test fixtures and are
 not part of production inventory.
+
+Installed `local_wasm` plugins are a separate compute-only runtime. They must
+hold the `wasm_compute` grant, preserve exact module-byte provenance, and export
+`memory`, `jarvis_alloc`, and `jarvis_run` under the `jarvis_json_v1` ABI. The
+runtime rejects every import, including WASI, environment, filesystem, network,
+clock, and process imports. It caps the module at 4 MiB, request JSON at
+256 KiB, output JSON at 1 MiB, linear memory at 16 MiB, table elements at zero,
+and each invocation at 10 million fuel units. Only low-risk, non-proactive, compute-only actions with
+no memory/model/network permissions are eligible. Emergency pause,
+cooperative cancellation, timeout, and fuel exhaustion fail closed and discard
+late output. Wasmi enforces this guest-language boundary but is not a macOS OS
+sandbox, same-user IPC isolation, publisher or marketplace trust, malware
+analysis, signing/notarization, or live-device evidence. Local subprocess
+plugins remain a distinct repository-backed runner and truthfully report that
+they are not OS sandboxed.
+
+Installed execution never holds the repository mutex across guest work. It
+snapshots and validates the installed record and exact current provenance under
+the lock, releases the lock before starting either subprocess or Wasmi code,
+then reacquires repository access only for redacted audit persistence. Pause and
+cancellation are checked after unlock and again before output or completion
+audit acceptance, preventing long-running plugins from blocking unrelated
+repository operations or publishing a late success.
+Installed-plugin callers attach a unique cancellation identifier and request
+it through local IPC. Wasmi observes it between fuel slices and before output
+acceptance; legacy subprocess effects may precede late-result suppression.
 
 ### Scheduler And Trigger Engine
 
@@ -269,7 +296,11 @@ A plugin declares:
 - Audit fields it must emit.
 - Timeout and cancellation behavior.
 
-The initial runtime can be first-party in-process Rust modules, subprocess plugins over JSON-RPC, or WASM plugins. The first architectural commitment is the manifest and policy contract, not the final sandbox mechanism.
+The runtime supports first-party in-process Rust modules, constrained local
+subprocess plugins over bounded JSON stdin/stdout, and no-import `local_wasm`
+compute plugins using `jarvis_json_v1`. The manifest and policy contract stays
+stable across runtimes; each runtime must expose its actual confinement status
+without implying a stronger OS or trust boundary.
 
 ## Model Routing
 
@@ -391,7 +422,7 @@ be enabled with the explicit `subprocess_stdio_network` grant. OS-level network
 sandbox enforcement and host-level egress filtering remain target architecture.
 The product still lacks
 Apple-tool-validated signed/notarized/stapled release evidence, live microphone and audio-output validation,
-marketplace/WASM/OS-network-sandbox plugin trust boundaries, richer
+marketplace/OS-network-sandbox plugin trust boundaries, richer
 proactive trigger policy, and live OS notification validation. Swift supervision
 remains unsigned production-wise, but local packaged-app smoke and unsigned
 distribution-layout launch proof now cover configured/bundled core discovery;

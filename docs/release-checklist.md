@@ -386,10 +386,42 @@ stage or when a PR needs focused evidence for one ownership slice.
   `side_effects_require_approval` invariant. This inspection surface must not
   enable installed plugin code execution.
 - Confirm the Swift Plugin tab renders installed-plugin registry records
-  read-only, including source path, execution grant, provenance integrity,
-  origin-review state, and executable status, and that first-party manifests
-  remain visible with a warning when the repository-backed installed registry
-  endpoint is unavailable.
+  read-only, including source type, execution grant, provenance integrity,
+  origin-review state, executable status, and redacted runtime confinement
+  fields while omitting source/module/command paths and bytes, and that
+  first-party manifests remain visible with a warning when the
+  repository-backed installed registry endpoint is unavailable.
+- Confirm installed `local_wasm` records require source `local_wasm`, grant
+  `wasm_compute`, exact module-byte provenance, and `jarvis_json_v1` exports
+  `memory`, `jarvis_alloc`, and `jarvis_run`; reject every import including
+  WASI, environment, filesystem, network, clock, and process authority.
+- Confirm WASM actions are low-risk, non-proactive compute only with no
+  memory/model/network permission, and fail closed above 4 MiB module,
+  256 KiB request, 1 MiB output, 16 MiB memory, zero table elements, or 10 million fuel.
+- Confirm emergency pause, cooperative cancellation, timeout, traps, and fuel
+  exhaustion discard WASM output; dry-run does not compile or invoke code; and
+  audit/inspection omit module bytes, paths, hashes, request/output bodies, and
+  raw engine errors.
+- Confirm `cancellation_id` plus `/runtime/cancellations/:id` blocks a
+  cross-process WASM run, and keep legacy subprocess late-result suppression
+  distinct from prevention of already-issued effects.
+- Confirm installed subprocess and WASM execution snapshot/revalidate state and
+  current provenance under the repository mutex, release it before guest work,
+  and check pause/cancel after unlock and before output/completion-audit
+  acceptance; unrelated repository operations must not wait on guest execution.
+- Confirm schema v12 migrates legacy installed-plugin state without enabling or
+  broadening existing grants, then preserves WASM grant/provenance state across
+  restart. Run `cargo test -p jarvis-core wasm -- --nocapture` and
+  `cargo test -p jarvis-cli --test local_ipc_e2e installed_wasm -- --nocapture`.
+- Confirm the Swift Plugin tab is inspection-only and presents redacted WASM
+  records as `WASM confined • no imports • no filesystem • no network`, while
+  presenting `local_subprocess` as `not OS sandboxed`. Run
+  `swift test --disable-sandbox --package-path apps/mac --filter
+  pluginManagerModelDecodesWasmConfinement`.
+- Do not use Wasmi evidence to claim an OS sandbox, host-egress enforcement,
+  same-user IPC isolation, marketplace/publisher trust, malware analysis,
+  signing/notarization, or live-device validation. Those remain separate
+  external release gates.
 - Confirm `/permissions/policy-review` and `jarvis permissions review` expose
   read-only severity-ranked review items for pending approvals, high-risk
   plugin actions, unverified provenance, and unverified origin claims without
@@ -591,7 +623,7 @@ stage or when a PR needs focused evidence for one ownership slice.
   repository-backed local smoke.
 - Confirm `./scripts/storage-migration-backup-smoke.sh` passes for storage
   changes, proving legacy DB backup creation, restore after migration-open
-  failure, newer-schema diagnostics, and representative schema v1-v8 fixture
+  failure, newer-schema diagnostics, and representative schema v1-v11 fixture
   preservation. Treat broad installer upgrade behavior as a separate
   release-candidate gate.
 - Confirm local plugin metadata install/list/get coverage remains in that E2E

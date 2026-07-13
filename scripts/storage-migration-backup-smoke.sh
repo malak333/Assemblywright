@@ -15,4 +15,4 @@ run cargo test -p jarvis-core storage::tests::newer_schema_version_fails_with_ex
 run cargo test -p jarvis-core storage::tests::historical_fixture_matrix_migrates_supported_versions
 
 printf '\nJarvis storage migration backup smoke: ok\n'
-printf 'Proof boundary: focused Rust storage tests for legacy DB backup, restore after migration-open failure, newer-schema diagnostics, and schema v1-v8 fixture preservation; no installer upgrade or Finder/LaunchServices recovery proof.\n'
+printf 'Proof boundary: focused Rust storage tests for legacy DB backup, restore after migration-open failure, newer-schema diagnostics, and schema v1-v11 fixture preservation; no installer upgrade or Finder/LaunchServices recovery proof.\n'

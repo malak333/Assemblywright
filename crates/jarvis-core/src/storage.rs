@@ -27,7 +27,7 @@ use crate::{
 };
 use crate::{MemoryIndexStatus, MemoryIndexStore};
 
-const CURRENT_SCHEMA_VERSION: i64 = 11;
+const CURRENT_SCHEMA_VERSION: i64 = 12;
 
 #[derive(Debug, Clone)]
 pub struct StoredTrustedWakeRule {
@@ -2386,6 +2386,9 @@ impl SqliteRepository {
         if version < 11 {
             self.apply_migration_11()?;
         }
+        if version < 12 {
+            self.apply_migration_12()?;
+        }
 
         let migrated = self.schema_version()?;
         if migrated != CURRENT_SCHEMA_VERSION {
@@ -2584,6 +2587,58 @@ impl SqliteRepository {
         tx.execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
             params![11, now],
+        )
+        .map_err(storage_error)?;
+        tx.commit().map_err(storage_error)?;
+        Ok(())
+    }
+
+    fn apply_migration_12(&self) -> JarvisResult<()> {
+        let now = to_db_time(Utc::now());
+        let tx = self.conn.unchecked_transaction().map_err(storage_error)?;
+        tx.execute_batch(
+            "
+            ALTER TABLE installed_plugins RENAME TO installed_plugins_v11;
+
+            CREATE TABLE installed_plugins (
+                id TEXT PRIMARY KEY NOT NULL,
+                manifest_json TEXT NOT NULL,
+                source_path TEXT NOT NULL,
+                provenance_json TEXT NOT NULL,
+                execution_enabled INTEGER NOT NULL CHECK (execution_enabled IN (0, 1)),
+                execution_grant TEXT NOT NULL CHECK (
+                    execution_grant IN (
+                        'metadata_only',
+                        'subprocess_stdio',
+                        'subprocess_stdio_network',
+                        'wasm_compute'
+                    )
+                ),
+                installed_at TEXT NOT NULL
+            );
+
+            INSERT INTO installed_plugins
+                (id, manifest_json, source_path, provenance_json, execution_enabled, execution_grant, installed_at)
+            SELECT
+                id,
+                manifest_json,
+                source_path,
+                provenance_json,
+                execution_enabled,
+                execution_grant,
+                installed_at
+            FROM installed_plugins_v11;
+
+            DROP TABLE installed_plugins_v11;
+
+            CREATE INDEX idx_installed_plugins_installed_at
+                ON installed_plugins (installed_at);
+            ",
+        )
+        .map_err(storage_error)?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+            params![12, now],
         )
         .map_err(storage_error)?;
         tx.commit().map_err(storage_error)?;
@@ -3811,7 +3866,7 @@ mod tests {
                 DROP TABLE trusted_wake_key_grants;
                 DROP TABLE trusted_wake_events;
                 DROP TABLE trusted_wake_rules;
-                DELETE FROM schema_migrations WHERE version IN (7, 8, 9, 10, 11);
+                DELETE FROM schema_migrations WHERE version IN (7, 8, 9, 10, 11, 12);
                 ",
             )
             .unwrap();
@@ -3881,7 +3936,7 @@ mod tests {
                 DROP TABLE trusted_wake_key_grants;
                 DROP TABLE trusted_wake_events;
                 DROP TABLE trusted_wake_rules;
-                DELETE FROM schema_migrations WHERE version IN (7, 8, 9, 10, 11);
+                DELETE FROM schema_migrations WHERE version IN (7, 8, 9, 10, 11, 12);
                 ",
             )
             .unwrap();
@@ -4316,6 +4371,7 @@ mod tests {
                 8 => repo.apply_migration_8().unwrap(),
                 9 => repo.apply_migration_9().unwrap(),
                 10 => repo.apply_migration_10().unwrap(),
+                11 => repo.apply_migration_11().unwrap(),
                 _ => unreachable!("unsupported fixture version"),
             }
         }
@@ -4499,7 +4555,7 @@ mod tests {
                     )
                     .unwrap();
             }
-            8..=10 => {
+            8..=11 => {
                 let provenance = InstalledPluginProvenance {
                     provenance_schema_version: 1,
                     capture_method: "fixture_v8".to_string(),
@@ -4511,6 +4567,8 @@ mod tests {
                     source_tree_file_count: Some(3),
                     subprocess_command_path: None,
                     subprocess_command_sha256: None,
+                    wasm_module_path: None,
+                    wasm_module_sha256: None,
                     captured_at: Utc::now(),
                     last_verified_at: Some(Utc::now()),
                     integrity_status: InstalledPluginIntegrityStatus::MatchesInstallSnapshot,
@@ -4546,6 +4604,7 @@ mod tests {
             author: "Jarvis Test".to_string(),
             source_path: Some(source_path.to_string()),
             subprocess: None,
+            wasm: None,
             publisher_signature: None,
             actions: vec![crate::PluginActionManifest {
                 name: "inspect".to_string(),
