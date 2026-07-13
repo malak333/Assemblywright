@@ -7691,6 +7691,59 @@ fn configured_workspace_provider_plan_lists_reads_and_redacts_cross_process() {
 }
 
 #[test]
+fn serve_startup_config_is_strict_preopen_and_keeps_workspace_paths_off_argv() {
+    let help = run_cli_text(["serve", "--help"]);
+    assert!(help.contains("--startup-config-stdin"));
+    assert!(help.contains("--workspace-root"));
+    assert!(help.contains("--trusted-wake-bootstrap-stdin"));
+
+    let workspace = tempfile::tempdir().expect("workspace fixture");
+    fs::write(workspace.path().join("README.md"), "startup config\n").unwrap();
+    let temp = tempfile::tempdir().expect("db dir");
+    let db_path = temp.path().join("jarvis.sqlite");
+    let mut server =
+        JarvisServer::start_with_workspace_env(&db_path, "project", workspace.path(), &[]);
+    server.assert_process_argv_excludes(workspace.path().to_string_lossy().as_ref());
+    server.stop();
+
+    let legacy_dir = tempfile::tempdir().expect("legacy db dir");
+    let legacy_db = legacy_dir.path().join("legacy-workspace.sqlite");
+    assert_legacy_workspace_startup_succeeds(&legacy_db, "legacy", workspace.path());
+
+    let invalid_cases = [
+        (
+            vec!["--workspace-root", "legacy=/tmp"],
+            json!({"version":1,"workspace_roots":[{"id":"project","path":"/tmp"}]})
+                .to_string(),
+            "cannot be combined",
+        ),
+        (
+            Vec::new(),
+            json!({"version":1,"workspace_roots":[{"id":"project","path":"/tmp"}],"unexpected":true})
+                .to_string(),
+            "startup configuration stdin is invalid",
+        ),
+    ];
+    for (extra_args, input, expected_error) in invalid_cases {
+        let case_dir = tempfile::tempdir().unwrap();
+        let case_db = case_dir.path().join("must-not-open.sqlite");
+        let error = run_startup_config_failure(&case_db, &extra_args, input.as_bytes());
+        assert!(error.contains(expected_error), "{error}");
+        assert!(
+            !case_db.exists(),
+            "invalid startup must not open the database"
+        );
+    }
+
+    let oversized_dir = tempfile::tempdir().unwrap();
+    let oversized_db = oversized_dir.path().join("must-not-open.sqlite");
+    let oversized = vec![b'x'; jarvis_core::MAX_SERVE_STARTUP_CONFIG_BYTES + 1];
+    let error = run_startup_config_failure(&oversized_db, &[], &oversized);
+    assert!(error.contains("at most 65536 bytes"), "{error}");
+    assert!(!oversized_db.exists());
+}
+
+#[test]
 fn workspace_dry_run_and_alias_mismatch_never_expose_unrequested_content_cross_process() {
     let workspace = tempfile::tempdir().expect("workspace fixture");
     fs::write(workspace.path().join("README.md"), "requested-content\n").unwrap();
@@ -8469,6 +8522,7 @@ fn trusted_wake_key_prepare_keeps_secrets_off_argv_and_bounds_stdin() {
 #[test]
 fn trusted_wake_cross_process_is_disabled_signed_idempotent_and_redacted() {
     let dir = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("wake.sqlite");
     let signing_key = P256SigningKey::from_bytes((&[13_u8; 32]).into()).unwrap();
     let public_key = signing_key.verifying_key().to_encoded_point(false);
@@ -8478,7 +8532,12 @@ fn trusted_wake_cross_process_is_disabled_signed_idempotent_and_redacted() {
         "command": "trusted wake cross process local check",
         "allow_rotation": false,
     });
-    let mut server = JarvisServer::start_with_trusted_wake_bootstrap(&db_path, &bootstrap);
+    let mut server = JarvisServer::start_with_trusted_wake_bootstrap_and_workspace(
+        &db_path,
+        &bootstrap,
+        "project",
+        workspace.path(),
+    );
     let endpoint = server.endpoint();
     let status: Value =
         serde_json::from_str(&request(&endpoint, "GET", "/system-wake/status", None).unwrap())
@@ -8847,6 +8906,52 @@ struct JarvisServer {
 }
 
 impl JarvisServer {
+    fn start_with_trusted_wake_bootstrap_and_workspace(
+        db_path: &Path,
+        bootstrap: &Value,
+        root_id: &str,
+        workspace: &Path,
+    ) -> Self {
+        let _startup_guard = jarvis_server_startup_lock().lock().expect("startup lock");
+        let bind = unused_loopback_addr();
+        let endpoint = format!("http://{bind}");
+        let temp_dir = tempfile::tempdir().expect("server temp dir");
+        let input = json!({
+            "version": 1,
+            "workspace_roots": [{"id": root_id, "path": workspace}],
+            "trusted_wake": {"kind": "bootstrap", "document": bootstrap}
+        })
+        .to_string();
+        let mut child = Command::new(jarvis_cli_bin())
+            .args([
+                "serve",
+                "--bind",
+                &bind.to_string(),
+                "--db-path",
+                db_path.to_str().expect("db path"),
+                "--startup-config-stdin",
+            ])
+            .current_dir(temp_dir.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("start unified bootstrapped jarvis serve");
+        child
+            .stdin
+            .take()
+            .expect("startup configuration stdin")
+            .write_all(input.as_bytes())
+            .expect("write startup configuration");
+        let mut server = Self {
+            child: Some(child),
+            endpoint,
+            _temp_dir: temp_dir,
+        };
+        server.wait_until_healthy();
+        server
+    }
+
     fn start_with_trusted_wake_bootstrap(db_path: &Path, bootstrap: &Value) -> Self {
         let _startup_guard = jarvis_server_startup_lock().lock().expect("startup lock");
         let bind = unused_loopback_addr();
@@ -8894,7 +8999,7 @@ impl JarvisServer {
                 &bind.to_string(),
                 "--db-path",
                 db_path.to_str().expect("db path"),
-                "--trusted-wake-key-control-stdin",
+                "--startup-config-stdin",
             ])
             .current_dir(temp_dir.path())
             .stdin(Stdio::piped())
@@ -8902,11 +9007,16 @@ impl JarvisServer {
             .stderr(Stdio::null())
             .spawn()
             .expect("start key-control jarvis serve");
+        let input = json!({
+            "version": 1,
+            "trusted_wake": {"kind": "key_control", "document": document}
+        })
+        .to_string();
         child
             .stdin
             .take()
             .expect("key-control stdin")
-            .write_all(serde_json::to_string(document).unwrap().as_bytes())
+            .write_all(input.as_bytes())
             .expect("write key-control document");
         let mut server = Self {
             child: Some(child),
@@ -8942,7 +9052,7 @@ impl JarvisServer {
             db_path,
             None,
             None,
-            Some(format!("{root_id}={}", workspace.display())),
+            Some((root_id.to_string(), workspace.to_path_buf())),
             env,
         )
     }
@@ -8965,7 +9075,7 @@ impl JarvisServer {
         db_path: &Path,
         scheduler_background: Option<(u64, usize)>,
         scheduler_startup_recovery: Option<(u64, usize)>,
-        workspace_root: Option<String>,
+        workspace_root: Option<(String, PathBuf)>,
         env: &[(&str, &str)],
     ) -> Self {
         let _startup_guard = jarvis_server_startup_lock()
@@ -8986,8 +9096,15 @@ impl JarvisServer {
             "--db-path".to_string(),
             db_path_arg,
         ];
-        if let Some(workspace_root) = workspace_root {
-            args.extend(["--workspace-root".to_string(), workspace_root]);
+        let startup_input = workspace_root.map(|(id, path)| {
+            json!({
+                "version": 1,
+                "workspace_roots": [{"id": id, "path": path}]
+            })
+            .to_string()
+        });
+        if startup_input.is_some() {
+            args.push("--startup-config-stdin".to_string());
         }
         if let Some((interval_ms, limit)) = scheduler_background {
             args.extend([
@@ -9011,13 +9128,29 @@ impl JarvisServer {
         command
             .args(args)
             .current_dir(temp_dir.path())
-            .stdin(Stdio::null())
+            .stdin(if startup_input.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stderr(if startup_input.is_some() {
+                Stdio::inherit()
+            } else {
+                Stdio::null()
+            });
         for (key, value) in env {
             command.env(key, value);
         }
-        let child = command.spawn().expect("start jarvis serve");
+        let mut child = command.spawn().expect("start jarvis serve");
+        if let Some(startup_input) = startup_input {
+            child
+                .stdin
+                .take()
+                .expect("startup configuration stdin")
+                .write_all(startup_input.as_bytes())
+                .expect("write startup configuration");
+        }
 
         let mut server = Self {
             child: Some(child),
@@ -9072,6 +9205,83 @@ impl JarvisServer {
             last_error.unwrap_or_else(|| "no request attempted".to_string())
         );
     }
+
+    fn assert_process_argv_excludes(&self, sensitive: &str) {
+        let pid = self.child.as_ref().expect("server child").id();
+        #[cfg(target_os = "linux")]
+        let command_line = String::from_utf8_lossy(
+            &fs::read(format!("/proc/{pid}/cmdline")).expect("read server command line"),
+        )
+        .into_owned();
+        #[cfg(target_os = "macos")]
+        let command_line = {
+            let output = Command::new("ps")
+                .args(["-ww", "-o", "command=", "-p", &pid.to_string()])
+                .output()
+                .expect("inspect server command line");
+            assert!(output.status.success());
+            String::from_utf8_lossy(&output.stdout).into_owned()
+        };
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        let command_line = String::new();
+        assert!(!command_line.contains(sensitive), "{command_line}");
+        assert!(command_line.contains("--startup-config-stdin"));
+    }
+}
+
+fn assert_legacy_workspace_startup_succeeds(db_path: &Path, root_id: &str, workspace: &Path) {
+    let workspace_arg = format!("{root_id}={}", workspace.display());
+    let mut child = Command::new(jarvis_cli_bin())
+        .args([
+            "serve",
+            "--bind",
+            "127.0.0.1:0",
+            "--db-path",
+            db_path.to_str().expect("db path"),
+            "--workspace-root",
+            &workspace_arg,
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start legacy workspace jarvis serve");
+    thread::sleep(Duration::from_millis(200));
+    assert!(
+        child
+            .try_wait()
+            .expect("check legacy workspace server")
+            .is_none(),
+        "legacy workspace configuration must remain accepted"
+    );
+    child.kill().expect("stop legacy workspace server");
+    child.wait().expect("reap legacy workspace server");
+}
+
+fn run_startup_config_failure(db_path: &Path, extra_args: &[&str], input: &[u8]) -> String {
+    let bind = unused_loopback_addr();
+    let mut command = Command::new(jarvis_cli_bin());
+    command.args([
+        "serve",
+        "--bind",
+        &bind.to_string(),
+        "--db-path",
+        db_path.to_str().expect("db path"),
+        "--startup-config-stdin",
+    ]);
+    command.args(extra_args);
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start invalid startup configuration");
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(input);
+    }
+    let output = child.wait_with_output().expect("wait for startup failure");
+    assert!(!output.status.success());
+    String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
 fn jarvis_server_startup_lock() -> &'static Mutex<()> {

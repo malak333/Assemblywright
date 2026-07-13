@@ -242,8 +242,9 @@ model-visible catalog with `cargo run -q -p jarvis-cli -- tools list`,
 `cargo run -q -p jarvis-cli -- tools model`, or
 `cargo run -q -p jarvis-cli -- tools catalog`. Production inventory contains
 `system_status.status` and excludes deterministic `fake_*` test fixtures.
-Starting the core with one or more explicit roots adds the bounded local-only
-workspace tools for those roots:
+The macOS app is the production owner of user-selected workspace bookmarks and
+passes resolved roots through bounded startup stdin. For compatibility testing,
+the CLI still accepts a legacy explicit root flag:
 
 ```bash
 cargo run -p jarvis-cli -- serve \
@@ -252,7 +253,7 @@ cargo run -q -p jarvis-cli -- tools list
 cargo test -p jarvis-core workspace_inspect -- --nocapture
 cargo test -p jarvis-core runtime_cancellation -- --nocapture
 cargo test -p jarvis-cli --test local_ipc_e2e production_workspace -- --nocapture
-swift test --disable-sandbox --package-path apps/mac --filter PluginManager
+swift test --disable-sandbox --package-path apps/mac --filter WorkspaceRoot
 ```
 
 `workspace_inspect.list` and `workspace_inspect.read_text` are absent when no
@@ -261,9 +262,12 @@ descriptor-anchored no-follow traversal and hard output budgets, reject
 hidden/credential-like/symlink/special/binary/oversized targets, and are
 local-model-only. Their audit evidence contains metadata, not contents or
 absolute paths. Installed plugins remain outside model-originated planning.
-These commands prove bounded repository contracts, not macOS sandboxing,
-same-user IPC isolation, malware resistance, signed distribution, app-owned
-root selection, live-device QA, or marketplace trust.
+The cross-process workspace E2E uses the versioned startup-stdin envelope and
+checks that app-style root paths are absent from argv; a separate compatibility
+case covers the legacy flag. These commands prove bookmark/store/supervisor and
+bounded repository contracts, not macOS sandboxing, child sandbox-extension
+inheritance, same-user IPC isolation, malware resistance, signed distribution,
+live-device QA, or marketplace trust.
 Use `path: "@root"` only when listing the configured root; empty paths are
 invalid. The current ceilings fail closed beyond 200 visible entries, 64 KiB
 per read, 16 KiB per line, and 128 KiB cumulative tool output per task.

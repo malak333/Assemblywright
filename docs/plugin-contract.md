@@ -12,6 +12,20 @@ credential-like names, symlinks, non-regular/special files, binary/non-UTF-8
 content, traversal, and oversize input, and returns only bounded structured
 results marked as untrusted data.
 
+The macOS app persists user-selected directories as security-scoped bookmark
+data with opaque random root IDs. Before each supervised launch it resolves all
+bookmarks atomically, rejects stale-unrecoverable, inaccessible, duplicate,
+non-directory, or oversized entries, and holds balanced security-scope access
+for the child lifetime. A strict version-1 startup envelope carries the resolved
+roots over bounded stdin so app-selected paths never enter argv or environment;
+it can also carry one existing trusted-wake bootstrap or key-control document.
+Mixing that envelope with legacy workspace or trusted-wake stdin flags fails
+closed. The legacy `--workspace-root` flag remains an explicit CLI compatibility
+surface and therefore exposes its path in the manual process argument list.
+Delivery is off the main actor and deadline-bounded; failed delivery
+force-terminates and reaps the child, while unexpected later child exit releases
+the retained security-scope lease and degrades supervision.
+
 Workspace output is local-model-only. It cannot be advertised to or continued
 through ChatGPT. Audit and diagnostics record metadata and redaction flags, not
 file contents, snippets, absolute paths, environment values, or credentials.

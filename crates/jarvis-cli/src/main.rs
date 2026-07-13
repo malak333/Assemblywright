@@ -33,6 +33,9 @@ enum CliCommand {
         /// Add an explicit read-only workspace authority as <id>=<absolute-path>. Repeat for multiple roots.
         #[arg(long = "workspace-root")]
         workspace_roots: Vec<String>,
+        /// Read strict v1 workspace-root and optional trusted-wake startup configuration from bounded stdin.
+        #[arg(long)]
+        startup_config_stdin: bool,
         #[arg(long)]
         scheduler_background: bool,
         #[arg(long, default_value_t = jarvis_core::DEFAULT_SCHEDULER_BACKGROUND_INTERVAL_MS)]
@@ -714,6 +717,7 @@ async fn main() -> anyhow::Result<()> {
             bind,
             db_path,
             workspace_roots,
+            startup_config_stdin,
             scheduler_background,
             scheduler_interval_ms,
             scheduler_limit,
@@ -728,11 +732,61 @@ async fn main() -> anyhow::Result<()> {
                     "trusted wake bootstrap and key-control stdin are mutually exclusive"
                 );
             }
+            if startup_config_stdin
+                && (trusted_wake_bootstrap_stdin
+                    || trusted_wake_key_control_stdin
+                    || !workspace_roots.is_empty())
+            {
+                anyhow::bail!(
+                    "startup configuration stdin cannot be combined with legacy trusted-wake stdin or --workspace-root"
+                );
+            }
+
+            let (workspace_roots, trusted_wake) = if startup_config_stdin {
+                let mut bytes = Vec::new();
+                std::io::stdin()
+                    .take((jarvis_core::MAX_SERVE_STARTUP_CONFIG_BYTES + 1) as u64)
+                    .read_to_end(&mut bytes)?;
+                let config = jarvis_core::ServeStartupConfig::parse(&bytes)?;
+                (config.workspace_roots, config.trusted_wake)
+            } else {
+                let workspace_roots = workspace_roots
+                    .iter()
+                    .map(|value| jarvis_core::WorkspaceRootConfig::parse(value))
+                    .collect::<jarvis_core::JarvisResult<Vec<_>>>()?;
+                let trusted_wake = if trusted_wake_bootstrap_stdin {
+                    let mut bootstrap = Vec::new();
+                    std::io::stdin().take(8_193).read_to_end(&mut bootstrap)?;
+                    if bootstrap.is_empty() || bootstrap.len() > 8_192 {
+                        anyhow::bail!(
+                            "trusted wake bootstrap stdin must contain at most 8192 bytes"
+                        );
+                    }
+                    let enrollment: jarvis_core::TrustedWakeRuleEnrollment =
+                        serde_json::from_slice(&bootstrap)?;
+                    Some(jarvis_core::TrustedWakeStartupDocument::Bootstrap(
+                        enrollment,
+                    ))
+                } else if trusted_wake_key_control_stdin {
+                    let mut document = Vec::new();
+                    std::io::stdin().take(8_193).read_to_end(&mut document)?;
+                    if document.is_empty() || document.len() > 8_192 {
+                        anyhow::bail!(
+                            "trusted wake key-control stdin must contain at most 8192 bytes"
+                        );
+                    }
+                    let document: jarvis_core::TrustedWakeKeyControlInstallDocument =
+                        serde_json::from_slice(&document)?;
+                    Some(jarvis_core::TrustedWakeStartupDocument::KeyControl(
+                        document,
+                    ))
+                } else {
+                    None
+                };
+                (workspace_roots, trusted_wake)
+            };
+
             let provider_config = jarvis_core::ProviderConfig::from_env()?;
-            let workspace_roots = workspace_roots
-                .iter()
-                .map(|value| jarvis_core::WorkspaceRootConfig::parse(value))
-                .collect::<jarvis_core::JarvisResult<Vec<_>>>()?;
             let state = match db_path {
                 Some(path) => {
                     if let Some(parent) = path.parent() {
@@ -749,25 +803,15 @@ async fn main() -> anyhow::Result<()> {
                     workspace_roots,
                 )?,
             };
-            if trusted_wake_bootstrap_stdin {
-                let mut bootstrap = Vec::new();
-                std::io::stdin().take(8_193).read_to_end(&mut bootstrap)?;
-                if bootstrap.is_empty() || bootstrap.len() > 8_192 {
-                    anyhow::bail!("trusted wake bootstrap stdin must contain at most 8192 bytes");
+            if let Some(trusted_wake) = trusted_wake {
+                match trusted_wake {
+                    jarvis_core::TrustedWakeStartupDocument::Bootstrap(enrollment) => {
+                        state.bootstrap_trusted_wake_rule(enrollment)?;
+                    }
+                    jarvis_core::TrustedWakeStartupDocument::KeyControl(document) => {
+                        state.install_trusted_wake_key_control(document)?;
+                    }
                 }
-                let enrollment: jarvis_core::TrustedWakeRuleEnrollment =
-                    serde_json::from_slice(&bootstrap)?;
-                state.bootstrap_trusted_wake_rule(enrollment)?;
-            }
-            if trusted_wake_key_control_stdin {
-                let mut document = Vec::new();
-                std::io::stdin().take(8_193).read_to_end(&mut document)?;
-                if document.is_empty() || document.len() > 8_192 {
-                    anyhow::bail!("trusted wake key-control stdin must contain at most 8192 bytes");
-                }
-                let document: jarvis_core::TrustedWakeKeyControlInstallDocument =
-                    serde_json::from_slice(&document)?;
-                state.install_trusted_wake_key_control(document)?;
             }
             if scheduler_recover_stale_on_startup {
                 state.recover_stale_scheduler_jobs_automatically(

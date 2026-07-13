@@ -56,6 +56,7 @@
 | SQLite as primary structured storage | Flat files only, external database | SQLite is durable, inspectable, easy to migrate, and enough for single-user v1. |
 | macOS Keychain for secrets | Store credentials in SQLite or config files | Secrets should use the platform credential store. |
 | First-party plugins first | Third-party marketplace in v1 | The safety model and plugin contract need to prove themselves before third-party expansion. |
+| App-owned security-scoped bookmarks for workspace roots | Put root paths in app child arguments, store plain paths, or let the model select roots | Native user selection establishes an explicit local grant; opaque IDs and bounded startup stdin keep app-selected paths out of argv, environment, model input, and audit while Rust remains the descriptor authority. Bookmark tests do not prove App Sandbox enforcement or child sandbox-extension inheritance. |
 | Add a no-import Wasmi compute runtime before broader third-party execution | Treat subprocess grants as sufficient containment, enable WASI, or wait for an OS sandbox | A deliberately small `jarvis_json_v1` ABI can provide useful low-risk local computation while mechanically denying guest filesystem, environment, network, clock, and process authority. Wasmi confinement is a language-runtime boundary, not an OS sandbox or plugin trust system. |
 | Auditability as an architectural requirement | Best-effort logs after the fact | Jarvis must be able to explain why it acted, what data it used, and what permissions were involved. |
 
@@ -119,6 +120,14 @@ results are local-model-only and must never be returned to a ChatGPT step.
 Emergency pause and task cancellation dominate completion and suppress late
 capability output. Deterministic `fake_*` plugins remain test fixtures and are
 not part of production inventory.
+
+The Swift app owns the production root-grant UX and durable security-scoped
+bookmark metadata. It resolves the complete bookmark set fail closed before
+each launch, retains balanced access for the supervised child lifetime, and
+sends opaque IDs plus resolved paths through a strict bounded versioned stdin
+envelope that may also carry one trusted-wake one-shot document. App-selected
+paths never enter child argv or environment. The legacy CLI root flag remains
+only as an explicit compatibility/operator surface.
 
 Installed `local_wasm` plugins are a separate compute-only runtime. They must
 hold the `wasm_compute` grant, preserve exact module-byte provenance, and export

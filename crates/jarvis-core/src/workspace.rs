@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 pub const MAX_WORKSPACE_ROOTS: usize = 8;
 pub const MAX_WORKSPACE_ROOT_ID_BYTES: usize = 32;
+pub const MAX_WORKSPACE_ROOT_PATH_BYTES: usize = 4_096;
 pub const MAX_WORKSPACE_RELATIVE_PATH_BYTES: usize = 512;
 pub const MAX_WORKSPACE_LIST_ENTRIES: usize = 200;
 pub const MAX_WORKSPACE_TEXT_BYTES: usize = 64 * 1024;
@@ -74,17 +75,22 @@ impl WorkspaceRootConfig {
                 "workspace root must use the form <id>=<absolute-path>".to_string(),
             )
         })?;
-        validate_root_id(id)?;
-        let path = PathBuf::from(path);
+        Self::new(id.to_string(), PathBuf::from(path))
+    }
+
+    pub fn new(id: String, path: PathBuf) -> JarvisResult<Self> {
+        validate_root_id(&id)?;
+        if path.as_os_str().as_encoded_bytes().len() > MAX_WORKSPACE_ROOT_PATH_BYTES {
+            return Err(JarvisError::Validation(format!(
+                "workspace root path must contain at most {MAX_WORKSPACE_ROOT_PATH_BYTES} bytes"
+            )));
+        }
         if !path.is_absolute() {
             return Err(JarvisError::Validation(
                 "workspace root path must be absolute".to_string(),
             ));
         }
-        Ok(Self {
-            id: id.to_string(),
-            path,
-        })
+        Ok(Self { id, path })
     }
 }
 
@@ -669,6 +675,8 @@ mod tests {
     fn configuration_and_cancellation_fail_closed() {
         assert!(WorkspaceRootConfig::parse("Project=/tmp").is_err());
         assert!(WorkspaceRootConfig::parse("project=relative").is_err());
+        let oversized_path = format!("/{}", "x".repeat(MAX_WORKSPACE_ROOT_PATH_BYTES));
+        assert!(WorkspaceRootConfig::parse(&format!("project={oversized_path}")).is_err());
         let (_directory, plugin) = fixture();
         let cancellation = CancellationSignal::new();
         cancellation.cancel();

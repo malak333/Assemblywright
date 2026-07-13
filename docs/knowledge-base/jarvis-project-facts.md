@@ -43,9 +43,14 @@ These notes capture durable facts for future agents working on this repository.
   fixtures: `fake_*` plugins do not appear in `/tools/model`, provider
   advertisements, or production manifest inspection. `system_status.status`
   is the bounded always-present status action. Explicit repeatable
-  `serve --workspace-root <id>=<absolute-path>` configuration adds local-only
+  app-owned security-scoped bookmark grants add local-only
   `workspace_inspect.list` and `workspace_inspect.read_text`; no configured
-  root means those tools are absent. Rust holds root descriptors, rejects
+  root means those tools are absent. Before launch, Swift resolves the complete
+  bookmark set fail closed and sends opaque IDs plus resolved paths in one
+  bounded versioned stdin envelope, never argv or environment. The legacy
+  `serve --workspace-root <id>=<absolute-path>` flag remains only for explicit
+  CLI compatibility and exposes the path in that manual process's argv. Rust
+  holds root descriptors, rejects
   traversal/symlink/hidden/credential-like/special/binary/oversized targets,
   returns bounded untrusted data, redacts content/absolute paths from audit,
   and blocks workspace results from ChatGPT continuation. This is local
@@ -53,6 +58,13 @@ These notes capture durable facts for future agents working on this repository.
   Root listing uses the explicit `@root` sentinel; empty paths are rejected.
   Runtime ceilings fail closed beyond 200 visible entries, 64 KiB per read,
   16 KiB per line, and 128 KiB cumulative tool output per task.
+  Bookmark tests cover persistence, stale refresh/failure, balanced access,
+  redacted presentation, trusted-wake coexistence, unexpected child exit,
+  bounded stdin timeout/failure force-reaping, and supervisor cleanup.
+  Cross-process CLI E2E proves app-style stdin configuration and rejects mixed,
+  malformed, or oversized startup documents. None of this proves App Sandbox,
+  sandbox-extension inheritance by the core child, same-user IPC, signing, or
+  live-device QA.
   Historical pending or approved `fake_*` approvals are preserved after
   upgrade but appear as critical `removed_fixture_approval` policy-review
   attention. The removed fixture cannot execute, and decided history is not

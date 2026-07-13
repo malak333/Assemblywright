@@ -142,10 +142,14 @@ catalog only. `jarvis tools list`, `jarvis tools model`, and
 capabilities are unavailable unless they appear there, and installed local
 plugins remain outside model-originated planning.
 Production inventory excludes the deterministic `fake_*` test fixtures. It
-always includes the bounded metadata-only `system_status.status` action. A
-repeatable explicit `jarvis serve --workspace-root <id>=<absolute-path>` option
-adds local-only `workspace_inspect.list` and `workspace_inspect.read_text` for
-that held root; without a configured root those actions are absent. Workspace
+always includes the bounded metadata-only `system_status.status` action. The
+macOS app owns durable, user-selected workspace grants as security-scoped
+bookmarks and hands their opaque IDs plus resolved paths to the supervised core
+through one bounded startup-stdin envelope. The legacy repeatable
+`jarvis serve --workspace-root <id>=<absolute-path>` operator option remains
+available for compatibility. Either route adds local-only
+`workspace_inspect.list` and `workspace_inspect.read_text` for that held root;
+without a configured root those actions are absent. Workspace
 requests accept only a root ID and relative path, reject traversal, symlinks,
 hidden/credential-like/special/binary/oversized targets, cap results, redact
 absolute paths and contents from audit, and cannot continue through ChatGPT.
@@ -154,9 +158,13 @@ empty paths remain invalid. Directories over 200 visible entries fail closed,
 text reads stop at 64
 KiB with a 16 KiB line cap, and a task cannot accumulate more than 128 KiB of
 tool output.
-The configured absolute root is local operator startup configuration and is
-visible in the launching process arguments; future app-owned root selection is
-still required before the Swift app can configure this capability itself.
+App-selected absolute roots are absent from child arguments, environment,
+health, audit, and UI presentation. The app resolves every bookmark fail closed
+before launch and retains balanced security-scope access only for the supervised
+process lifetime. Manual use of the legacy `--workspace-root` option still
+exposes the configured path in that operator-launched process's arguments.
+Repository tests do not prove App Sandbox enforcement, sandbox-extension
+inheritance by the child, same-user IPC authorization, or live-device behavior.
 For broader registered plugin manifest inspection, `jarvis plugins list`
 defaults to a compact operator-readable summary and `jarvis plugins list --json`
 prints full manifest schemas.

@@ -6,6 +6,27 @@ import UserNotifications
 @MainActor
 @Suite("Jarvis Mac app release presentation")
 struct JarvisMacAppTests {
+    @Test("Workspace grant presentation keeps the selected path hidden")
+    func workspaceGrantPresentationIsRedacted() {
+        let presentation = WorkspaceRootGrantPresentation(
+            grant: JarvisWorkspaceRootGrant(id: "root_0123456789abcdef", status: "configured")
+        )
+
+        #expect(presentation.idLine == "root_0123456789abcdef")
+        #expect(presentation.detailLine == "configured; authorized directory path hidden")
+        #expect(!presentation.detailLine.contains("/Users/"))
+    }
+
+    @Test("Workspace activation presentation never claims an external core holds app grants")
+    func workspaceActivationPresentationRequiresAppSupervision() {
+        let supervised = WorkspaceRootActivationPresentation(isAvailable: true, isAppSupervised: true)
+        let external = WorkspaceRootActivationPresentation(isAvailable: true, isAppSupervised: false)
+
+        #expect(supervised.statusMessage.contains("are active"))
+        #expect(external.statusMessage.contains("are not active"))
+        #expect(external.statusMessage.contains("Another process"))
+    }
+
     @Test("Menu bar contract preserves the stable main-window route")
     func menuBarContractPreservesMainWindowRoute() {
         #expect(JarvisMenuBarContract.mainWindowID == "jarvis-main")
