@@ -126,7 +126,8 @@ These notes capture durable facts for future agents working on this repository.
   missing, or invalid status for signed artifact paths, signed-distribution
   provenance report, live-device QA report, plugin-trust QA report, and final
   evidence bundle. The app bundle item additionally validates `Info.plist`
-  bundle id, short version, and build version against expected release metadata,
+  bundle id, short version, build version, and approved microphone/Speech
+  privacy prompt copy against expected release metadata,
   and the bundled core item validates the packaged `jarvis-cli.version` marker
   without executing the artifact path. This is read-only file/report inventory
   plus semantic validation. It does not perform signing, notarization,
@@ -447,10 +448,11 @@ requires plugin-trust `generated_at`, `review_started_at`,
   and `review_completed_at` to be UTC with
   `review_started_at <= review_completed_at <= generated_at`, requires the
   plugin-trust `review_source` to be `owner-asserted-manual-review`, requires the
-  live-device QA report's app bundle identifier/version/build metadata to match
-  the expected release, and records SHA-256 digests for the distribution zip,
-  installer package, live-device QA report, and plugin-trust QA report before
-  writing the bundle manifest.
+  live-device QA report's app bundle identifier/version/build metadata and
+  approved microphone/Speech privacy prompt copy to match the expected release,
+  and records SHA-256 digests for the distribution zip, installer package,
+  live-device QA report, and plugin-trust QA report before writing the bundle
+  manifest.
 - `./scripts/release-evidence-doctor.sh` inventories release evidence readiness
   before final bundling. `--check` reports present, missing, or invalid
   signed-artifact, live-device QA, plugin-trust QA, and final bundle evidence
@@ -1269,9 +1271,9 @@ requires plugin-trust `generated_at`, `review_started_at`,
   artifacts. Current release claims should refresh this baseline with
   `cargo run -p jarvis-cli -- release readiness --json` and
   `gh run list --branch main --workflow "Jarvis Release Local Gate" --limit 3`.
-  The latest verified main baseline at `051ec49` has hosted GitHub
-  `Release local gate` success for push run `28041417362` / job
-  `83008348690` and remains conservative with `production_ready: false`,
+  The latest verified main baseline at `c474946` has hosted GitHub
+  `Release local gate` success for push run `28122973227` / job
+  `83276912070` and remains conservative with `production_ready: false`,
   `evidence_mode_enabled: false`, `verified_feature_count: 16`, `pending_feature_count: 1`, and
   `live_voice_loop` as the pending manual feature; `/release/evidence-status`
   reports `complete: false`, three satisfied evidence rows, six missing rows,

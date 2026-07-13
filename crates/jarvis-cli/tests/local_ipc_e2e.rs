@@ -2911,7 +2911,7 @@ fn release_evidence_status_marks_present_artifacts_as_presence_only() {
     let temp_dir = tempfile::tempdir().expect("temp evidence artifacts");
     let dist_dir = write_placeholder_distribution(temp_dir.path());
     let endpoint = format!("http://{}", unused_loopback_addr());
-    let dist_dir = dist_dir.to_str().expect("dist dir utf8");
+    let dist_dir_env = dist_dir.to_str().expect("dist dir utf8");
 
     let evidence_status = run_cli_json_with_env(
         [
@@ -2920,7 +2920,7 @@ fn release_evidence_status_marks_present_artifacts_as_presence_only() {
             "--endpoint",
             endpoint.as_str(),
         ],
-        &[("JARVIS_EVIDENCE_DIST_DIR", dist_dir)],
+        &[("JARVIS_EVIDENCE_DIST_DIR", dist_dir_env)],
     );
     let items = evidence_status["items"].as_array().expect("evidence items");
 
@@ -2932,6 +2932,10 @@ fn release_evidence_status_marks_present_artifacts_as_presence_only() {
     let app_bundle_detail = app_bundle_item["detail"].as_str().expect("detail string");
     assert!(
         app_bundle_detail.contains("Info.plist bundle identifier"),
+        "{app_bundle_detail}"
+    );
+    assert!(
+        app_bundle_detail.contains("privacy prompt copy"),
         "{app_bundle_detail}"
     );
     assert!(
@@ -2982,20 +2986,20 @@ fn release_evidence_status_marks_present_artifacts_as_presence_only() {
             "--endpoint",
             endpoint.as_str(),
         ],
-        &[("JARVIS_EVIDENCE_DIST_DIR", dist_dir)],
+        &[("JARVIS_EVIDENCE_DIST_DIR", dist_dir_env)],
     );
     assert!(readable_status.contains("signed_app_bundle: present"));
-    assert!(readable_status.contains(&format!("path: {dist_dir}/Jarvis.app")));
+    assert!(readable_status.contains(&format!("path: {dist_dir_env}/Jarvis.app")));
     assert!(readable_status.contains("  detail: "));
     assert!(readable_status.contains("Info.plist bundle identifier"));
     assert!(readable_status.contains("bundled_core_executable: present"));
     assert!(readable_status.contains(&format!(
-        "path: {dist_dir}/Jarvis.app/Contents/Resources/bin/jarvis-cli"
+        "path: {dist_dir_env}/Jarvis.app/Contents/Resources/bin/jarvis-cli"
     )));
     assert!(readable_status.contains("version marker matches expected release version"));
     assert!(readable_status.contains("app_executable: present; presence-only caveat"));
     assert!(readable_status.contains("signed_app_zip: present; presence-only caveat"));
-    assert!(readable_status.contains(&format!("path: {dist_dir}/Jarvis-0.1.4.zip")));
+    assert!(readable_status.contains(&format!("path: {dist_dir_env}/Jarvis-0.1.4.zip")));
     assert!(readable_status.contains("signed_installer_package: present; presence-only caveat"));
     assert!(readable_status.contains("presence only"));
 
@@ -3037,6 +3041,10 @@ fn release_evidence_status_server_marks_present_artifacts_as_presence_only() {
     let app_bundle_detail = app_bundle_item["detail"].as_str().expect("detail string");
     assert!(
         app_bundle_detail.contains("Info.plist bundle identifier"),
+        "{app_bundle_detail}"
+    );
+    assert!(
+        app_bundle_detail.contains("privacy prompt copy"),
         "{app_bundle_detail}"
     );
     assert!(
@@ -3116,6 +3124,10 @@ fn release_evidence_status_rejects_stale_app_bundle_metadata() {
   <string>0.1.4</string>
   <key>CFBundleVersion</key>
   <string>0.1.4</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Jarvis uses microphone input only when you explicitly start local voice capture.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>Jarvis uses speech recognition only to turn your spoken command into a local assistant request.</string>
 </dict>
 </plist>
 "#,
@@ -3123,7 +3135,7 @@ fn release_evidence_status_rejects_stale_app_bundle_metadata() {
     .expect("write stale Info.plist");
 
     let endpoint = format!("http://{}", unused_loopback_addr());
-    let dist_dir = dist_dir.to_str().expect("dist dir utf8");
+    let dist_dir_env = dist_dir.to_str().expect("dist dir utf8");
     let evidence_status = run_cli_json_with_env(
         [
             "release",
@@ -3131,7 +3143,7 @@ fn release_evidence_status_rejects_stale_app_bundle_metadata() {
             "--endpoint",
             endpoint.as_str(),
         ],
-        &[("JARVIS_EVIDENCE_DIST_DIR", dist_dir)],
+        &[("JARVIS_EVIDENCE_DIST_DIR", dist_dir_env)],
     );
     assert_eq!(evidence_status["complete"], false);
     assert_eq!(evidence_status["invalid_count"], 1);
@@ -3146,6 +3158,94 @@ fn release_evidence_status_rejects_stale_app_bundle_metadata() {
         .as_str()
         .expect("detail")
         .contains("CFBundleIdentifier mismatch"));
+
+    fs::write(
+        dist_dir.join("Jarvis.app/Contents/Info.plist"),
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>com.nobiletechnology.jarvis</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.1.4</string>
+  <key>CFBundleVersion</key>
+  <string>0.1.4</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Jarvis microphone fixture</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>Jarvis uses speech recognition only to turn your spoken command into a local assistant request.</string>
+</dict>
+</plist>
+"#,
+    )
+    .expect("write stale privacy Info.plist");
+
+    let evidence_status = run_cli_json_with_env(
+        [
+            "release",
+            "evidence-status",
+            "--endpoint",
+            endpoint.as_str(),
+        ],
+        &[("JARVIS_EVIDENCE_DIST_DIR", dist_dir_env)],
+    );
+    assert_eq!(evidence_status["complete"], false);
+    assert_eq!(evidence_status["invalid_count"], 1);
+    let app_bundle = evidence_status["items"]
+        .as_array()
+        .expect("evidence items")
+        .iter()
+        .find(|item| item["key"] == "signed_app_bundle")
+        .expect("app bundle item");
+    assert_eq!(app_bundle["status"], "invalid");
+    assert!(app_bundle["detail"]
+        .as_str()
+        .expect("detail")
+        .contains("NSMicrophoneUsageDescription mismatch"));
+
+    fs::write(
+        dist_dir.join("Jarvis.app/Contents/Info.plist"),
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>com.nobiletechnology.jarvis</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.1.4</string>
+  <key>CFBundleVersion</key>
+  <string>0.1.4</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Jarvis uses microphone input only when you explicitly start local voice capture.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>Jarvis speech fixture</string>
+</dict>
+</plist>
+"#,
+    )
+    .expect("write stale Speech privacy Info.plist");
+
+    let evidence_status = run_cli_json_with_env(
+        [
+            "release",
+            "evidence-status",
+            "--endpoint",
+            endpoint.as_str(),
+        ],
+        &[("JARVIS_EVIDENCE_DIST_DIR", dist_dir_env)],
+    );
+    assert_eq!(evidence_status["complete"], false);
+    assert_eq!(evidence_status["invalid_count"], 1);
+    let app_bundle = evidence_status["items"]
+        .as_array()
+        .expect("evidence items")
+        .iter()
+        .find(|item| item["key"] == "signed_app_bundle")
+        .expect("app bundle item");
+    assert_eq!(app_bundle["status"], "invalid");
+    assert!(app_bundle["detail"]
+        .as_str()
+        .expect("detail")
+        .contains("NSSpeechRecognitionUsageDescription mismatch"));
 }
 
 #[test]
@@ -8987,6 +9087,10 @@ fn write_placeholder_distribution(root: &Path) -> std::path::PathBuf {
   <string>0.1.4</string>
   <key>CFBundleVersion</key>
   <string>0.1.4</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Jarvis uses microphone input only when you explicitly start local voice capture.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>Jarvis uses speech recognition only to turn your spoken command into a local assistant request.</string>
 </dict>
 </plist>
 "#,

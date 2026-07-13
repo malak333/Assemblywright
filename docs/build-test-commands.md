@@ -127,8 +127,9 @@ cargo run -p jarvis-cli -- release readiness
 
 Evidence-aware readiness only accepts release reports that pass
 `release evidence-status` semantic checks. The app bundle item checks
-`Contents/Info.plist` for the expected bundle ID, short version, and build
-version before it can count as present, and the bundled core item checks the
+`Contents/Info.plist` for the expected bundle ID, short version, build
+version, and approved microphone/Speech privacy prompt copy before it can count
+as present, and the bundled core item checks the
 packaged `Contents/Resources/bin/jarvis-cli.version` marker without executing
 the artifact path. Missing or stale bundled-core markers should be remediated
 by rerunning `./scripts/package-distribution.sh --unsigned-launch-check` for
