@@ -28,12 +28,68 @@ contracts, not hints.
 
 Jarvis plugins are executable capabilities behind an explicit manifest and the
 same policy engine used for built-in tools. The implemented local plugin
-boundary supports first-party Rust modules and local subprocess plugins over
-JSON stdin/stdout. The stable commitment is the manifest, local provenance
+boundary supports first-party Rust modules, local subprocess plugins over JSON
+stdin/stdout, and `local_wasm` compute plugins under the no-import
+`jarvis_json_v1` ABI. The stable commitment is the manifest, local provenance
 snapshot, optional trusted-key publisher signature verification,
-manifest-level network host declarations, and audit contract; marketplace,
-WASM, OS-level network sandboxing, host-level egress enforcement, and
-malware-analysis trust remain target architecture.
+manifest-level network host declarations, and audit contract. Marketplace
+distribution of WASM, OS-level network sandboxing, host-level egress enforcement, and
+malware-analysis trust remain target architecture; the narrow local Wasmi
+compute runtime described below is implemented.
+
+## Local WASM Compute Runtime
+
+`local_wasm` is intentionally narrower than `local_subprocess`. A manifest
+points at one module under its canonical source root and declares
+`abi: jarvis_json_v1`. The module must export linear `memory`,
+`jarvis_alloc`, and `jarvis_run`; it may not import anything. In particular,
+Jarvis does not link WASI or expose environment, filesystem, network, clock,
+randomness, process, host-function, or application-memory APIs. Request and
+response values are bounded UTF-8 JSON and must match the action schemas.
+
+The enforced ceilings are 4 MiB per module, 256 KiB per request, 1 MiB per
+output, 16 MiB linear memory, zero table elements, and 10 million Wasmi fuel
+units per invocation.
+Only `low` risk, non-proactive actions with compute-only scope, no memory/model
+access, and `network_access.mode: none` may receive the `wasm_compute` grant.
+Emergency pause, cooperative cancellation, timeout, malformed pointers or
+lengths, traps, fuel exhaustion, invalid UTF-8/JSON, and schema failures all
+fail closed before output is accepted.
+
+Callers may attach a unique `cancellation_id` to an installed-plugin run and
+request cancellation through `POST /runtime/cancellations/:id`. The Wasmi
+runner checks that shared cancellation state before compilation, between fuel
+slices, and before accepting output. Only a registered run activated
+immediately before runtime entry accepts a cancellation request; registration
+alone is not reported as cancellation. The registry is capped at 128 concurrent IDs and an RAII
+guard consumes each ID on every exit path. Output acceptance atomically
+finalizes the ID and returns its cancellation state, so a later request cannot
+claim to have cancelled an already-published completion. The legacy subprocess path cannot stop
+already-issued external effects; it only discards a late result after observed
+cancellation, so it remains outside the stronger Wasmi confinement claim.
+
+The install snapshot binds the exact module bytes, not merely a path or source
+tree label. Schema v12 migrates existing installed-plugin rows without
+granting execution and adds the WASM grant/runtime metadata needed to preserve
+that binding across restart. Installed-record and run inspection expose only
+redacted `runtime_kind`, `wasm_confinement_enforced`, and
+`os_sandbox_enforced` state. They never expose module bytes, local paths,
+hashes, input/output bodies, or raw Wasmi errors.
+
+Wasmi provides language-level guest confinement. It is not a macOS OS sandbox,
+same-user/process IPC isolation, publisher identity, marketplace approval,
+malware analysis, signing/notarization, or live-device evidence. The existing
+subprocess runner remains a separate repository-locked execution path and
+reports `os_sandbox_enforced: false` until a real OS policy proves otherwise.
+
+"Repository-locked" describes state authority, not lock lifetime. The runner
+snapshots and revalidates the installed record and current artifact provenance
+under the repository mutex, releases that mutex before subprocess spawn or
+Wasmi compile/instantiate/invoke, and reacquires repository access only to
+persist redacted audit evidence. It checks emergency pause/cancellation after
+unlock and again before output or completion-audit acceptance. Long-running
+guest code therefore cannot monopolize SQLite access, and a late result cannot
+win a pause/cancel race.
 
 ## Manifest Fields
 
@@ -43,7 +99,8 @@ Each plugin manifest must declare:
 - Name, version, author or source.
 - Source type. Local installation accepts only `local_development` or
   `third_party` metadata, or `local_subprocess` for the constrained executable
-  subprocess boundary; installed metadata cannot claim `first_party`.
+  subprocess boundary, or `local_wasm` for the compute-only Wasmi boundary;
+  installed metadata cannot claim `first_party`.
 - Absolute `source_path` for local installation metadata. The manifest file
   must be a readable file under that canonical directory.
 - Local installs capture an install-time provenance snapshot with canonical
@@ -71,6 +128,9 @@ Each plugin manifest must declare:
   under `source_path`, optional argument array, and `stdin: json` /
   `stdout: json`. Jarvis starts the command directly and never interpolates it
   through a shell.
+- `local_wasm` manifests must declare a module below `source_path`,
+  `abi: jarvis_json_v1`, no network declaration, and compute-only actions. The
+  module's exact bytes are captured and verified with install provenance.
 - Capabilities provided.
 - Required permission scopes.
 - Risk tier for each action.
@@ -146,6 +206,8 @@ to explain what happened:
   still blocks actions outside the current grant. `metadata_only` can never
   execute. Enablement also requires the local provenance snapshot to verify as
   `matches_install_snapshot`.
+  `wasm_compute` is separate from both subprocess grants and authorizes only a
+  validated `local_wasm` module/action pair. No grant is a superset of another.
 - Installed plugin run requests go through an explicit fail-closed runner
   boundary. The boundary revalidates the stored manifest/version metadata,
   checks the requested action is declared, validates input schema, verifies the
@@ -189,6 +251,14 @@ to explain what happened:
   interpreter resolution plus `JARVIS_PLUGIN_ID`, `JARVIS_PLUGIN_ACTION`, and
   `JARVIS_PLUGIN_SOURCE_PATH`. This prevents app/core secrets from reaching
   subprocess plugins by default; it is still not a full OS sandbox.
+- Enabled WASM execution is limited to `local_wasm` manifests with
+  `wasm_compute`. The runner revalidates source/runtime/action/grant, exact-byte
+  provenance, the no-import ABI, schemas, compute-only permissions, and all
+  byte/memory/fuel ceilings before accepting output. It never falls back to the
+  subprocess runner. Dry-run validates contract and provenance without
+  compiling or invoking the module. Cancellation, timeout, emergency pause,
+  and fuel exhaustion suppress late results and record redacted failure
+  evidence.
 - Publisher signature verification uses
   `/plugins/installed/:id/publisher/signature/verify` or
   `jarvis plugins verify-publisher-signature`. It fails closed until local
@@ -262,3 +332,11 @@ contract testing. Release verification should keep covering:
   validation, contract-only dry-run evidence, constrained subprocess execution
   evidence, publisher-origin/signature verification evidence, and durable audit
   evidence.
+- `local_wasm` install/restart/run coverage proves schema-v12 migration,
+  `wasm_compute` grant separation, exact-byte provenance, required exports,
+  import/WASI rejection, module/request/output/memory/fuel ceilings,
+  low-risk compute-only policy, JSON/schema validation, dry-run nonexecution,
+  pause/cancel/timeout/fuel fail-closed behavior, and redacted inspection/audit.
+- Swift decoding/presentation tests distinguish `WASM confined • no imports •
+  no filesystem • no network` from `local subprocess • not OS sandboxed`
+  without adding plugin execution controls.

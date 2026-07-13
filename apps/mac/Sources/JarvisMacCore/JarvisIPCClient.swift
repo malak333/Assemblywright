@@ -1065,10 +1065,49 @@ public struct JarvisInstalledPluginRecord: Decodable, Equatable, Identifiable, S
     public var provenance: JarvisInstalledPluginProvenance
     public var executionEnabled: Bool
     public var executionGrant: String
+    /// Redacted runtime metadata only. Older cores may omit these additive
+    /// fields, so presentation must derive a conservative runtime label and
+    /// treat every missing enforcement claim as false.
+    public var runtimeKind: String?
+    public var wasmConfinementEnforced: Bool?
+    public var osSandboxEnforced: Bool?
     public var installedAt: String
 
     public var isExecutable: Bool {
         executionEnabled && executionGrant != "metadata_only" && provenance.integrityStatus == "matches_install_snapshot"
+    }
+
+    public var resolvedRuntimeKind: String {
+        if let runtimeKind, !runtimeKind.isEmpty {
+            return runtimeKind
+        }
+        switch manifest.source {
+        case "local_wasm":
+            return "wasm"
+        case "local_subprocess":
+            return "subprocess"
+        default:
+            return "metadata"
+        }
+    }
+
+    public var confinementSummary: String {
+        switch resolvedRuntimeKind {
+        case "wasm":
+            return wasmConfinementEnforced == true
+                ? "WASM confined • no imports • no filesystem • no network"
+                : "WASM confinement not verified"
+        case "subprocess":
+            return osSandboxEnforced == true
+                ? "local subprocess • OS sandbox reported"
+                : "local subprocess • not OS sandboxed"
+        default:
+            return "metadata only • not executable"
+        }
+    }
+
+    public var hasEnforcedLanguageConfinement: Bool {
+        resolvedRuntimeKind == "wasm" && wasmConfinementEnforced == true
     }
 
     enum CodingKeys: String, CodingKey {
@@ -1078,6 +1117,9 @@ public struct JarvisInstalledPluginRecord: Decodable, Equatable, Identifiable, S
         case provenance
         case executionEnabled = "execution_enabled"
         case executionGrant = "execution_grant"
+        case runtimeKind = "runtime_kind"
+        case wasmConfinementEnforced = "wasm_confinement_enforced"
+        case osSandboxEnforced = "os_sandbox_enforced"
         case installedAt = "installed_at"
     }
 }

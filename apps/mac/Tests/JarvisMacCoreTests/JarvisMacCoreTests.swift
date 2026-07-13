@@ -3104,6 +3104,31 @@ struct JarvisMacCoreTests {
         #expect(model.installedPlugins.map(\.id) == ["local_runner_test"])
         #expect(model.installedPlugins.first?.provenance.needsReview == true)
         #expect(model.installedPlugins.first?.isExecutable == false)
+        #expect(model.installedPlugins.first?.resolvedRuntimeKind == "subprocess")
+        #expect(model.installedPlugins.first?.confinementSummary == "local subprocess • not OS sandboxed")
+    }
+
+    @MainActor
+    @Test("Plugin manager decodes redacted WASM confinement metadata")
+    func pluginManagerModelDecodesWasmConfinement() async throws {
+        let installed = try JSONDecoder().decode(
+            [JarvisInstalledPluginRecord].self,
+            from: installedWasmPluginJSON()
+        )
+        let client = FakeCoreClient(installedPlugins: installed)
+        let model = PluginManagerModel(client: client)
+
+        await model.refresh()
+
+        let plugin = try #require(model.installedPlugins.first)
+        #expect(plugin.manifest.source == "local_wasm")
+        #expect(plugin.executionGrant == "wasm_compute")
+        #expect(plugin.resolvedRuntimeKind == "wasm")
+        #expect(plugin.wasmConfinementEnforced == true)
+        #expect(plugin.osSandboxEnforced == false)
+        #expect(plugin.hasEnforcedLanguageConfinement)
+        #expect(plugin.confinementSummary == "WASM confined • no imports • no filesystem • no network")
+        #expect(plugin.sourcePath == nil)
     }
 
     @MainActor
@@ -5387,6 +5412,58 @@ private func installedPluginsJSON() -> Data {
             "execution_enabled": false,
             "execution_grant": "metadata_only",
             "installed_at": "2026-05-20T12:00:00Z"
+          }
+        ]
+        """.utf8
+    )
+}
+
+private func installedWasmPluginJSON() -> Data {
+    Data(
+        """
+        [
+          {
+            "id": "local_wasm_compute",
+            "manifest": {
+              "id": "local_wasm_compute",
+              "name": "Local WASM Compute",
+              "version": "0.1.0",
+              "source": "local_wasm",
+              "author": "Jarvis Test",
+              "actions": [
+                {
+                  "name": "compute",
+                  "description": "Run bounded deterministic computation.",
+                  "permissions": ["compute"],
+                  "risk_tier": "low",
+                  "input_schema": { "type": "object" },
+                  "output_schema": { "type": "object" },
+                  "proactive": false,
+                  "memory_access": "none",
+                  "model_access": "none",
+                  "network_access": { "mode": "none" },
+                  "audit_fields": [],
+                  "timeout": { "timeout_ms": 5000, "on_timeout": "cancel" },
+                  "cancellation": "cooperative"
+                }
+              ]
+            },
+            "provenance": {
+              "provenance_schema_version": 1,
+              "capture_method": "local_manifest_snapshot",
+              "source_path_canonicalized": true,
+              "captured_at": "2026-07-13T12:00:00Z",
+              "last_verified_at": "2026-07-13T12:01:00Z",
+              "integrity_status": "matches_install_snapshot",
+              "origin_claim": "Jarvis Test",
+              "origin_claim_verified": false
+            },
+            "execution_enabled": true,
+            "execution_grant": "wasm_compute",
+            "runtime_kind": "wasm",
+            "wasm_confinement_enforced": true,
+            "os_sandbox_enforced": false,
+            "installed_at": "2026-07-13T12:00:00Z"
           }
         ]
         """.utf8

@@ -9,6 +9,7 @@ pub mod scheduler;
 pub mod storage;
 pub mod trusted_wake;
 pub mod types;
+pub mod wasm_plugin;
 pub mod workspace;
 
 pub use ipc::{
@@ -21,13 +22,13 @@ pub use ipc::{
     InstalledPluginRunResponse, IpcState, ModelToolCatalogEntry, ModelToolCatalogResponse,
     ModelToolConstraints, PermissionGrantSummary, PermissionPolicyReview,
     PermissionPolicyReviewItem, ReleaseReadinessFeature, ReleaseReadinessResponse,
-    SchedulerAttentionItem, SchedulerAttentionSummary, SchedulerBackgroundConfig,
-    SchedulerJobExecution, SchedulerRunResponse, SchedulerStaleRecoveryItem,
-    SchedulerStaleRecoveryResponse, UpdateMemoryItemRequest, DEFAULT_ACTIVITY_EVENT_INTERVAL_MS,
-    DEFAULT_ACTIVITY_EVENT_LIMIT, DEFAULT_SCHEDULER_BACKGROUND_INTERVAL_MS,
-    DEFAULT_SCHEDULER_BACKGROUND_LIMIT, DEFAULT_SCHEDULER_STALE_RECOVERY_LIMIT,
-    DEFAULT_SCHEDULER_STALE_RECOVERY_OLDER_THAN_SECONDS, MAX_ACTIVITY_EVENT_LIMIT,
-    MAX_SCHEDULER_BACKGROUND_LIMIT,
+    RuntimeCancellationResponse, SchedulerAttentionItem, SchedulerAttentionSummary,
+    SchedulerBackgroundConfig, SchedulerJobExecution, SchedulerRunResponse,
+    SchedulerStaleRecoveryItem, SchedulerStaleRecoveryResponse, UpdateMemoryItemRequest,
+    DEFAULT_ACTIVITY_EVENT_INTERVAL_MS, DEFAULT_ACTIVITY_EVENT_LIMIT,
+    DEFAULT_SCHEDULER_BACKGROUND_INTERVAL_MS, DEFAULT_SCHEDULER_BACKGROUND_LIMIT,
+    DEFAULT_SCHEDULER_STALE_RECOVERY_LIMIT, DEFAULT_SCHEDULER_STALE_RECOVERY_OLDER_THAN_SECONDS,
+    MAX_ACTIVITY_EVENT_LIMIT, MAX_SCHEDULER_BACKGROUND_LIMIT,
 };
 pub use memory_index::{
     MemoryIndexState, MemoryIndexStatus, MemoryIndexStore, MEMORY_INDEX_VERSION,
@@ -46,7 +47,7 @@ pub use plugin::{
     PluginCallStatus, PluginHost, PluginManifest, PluginNetworkAccess, PluginNetworkAccessMode,
     PluginPermission, PluginProgressEvent, PluginPublisherSignature, PluginSource,
     PluginSubprocessManifest, PluginSubprocessStream, PluginTimeout, PluginTimeoutAction,
-    StatusPlugin, SubprocessPluginExecution,
+    PluginWasmAbi, PluginWasmManifest, StatusPlugin, SubprocessPluginExecution,
 };
 pub use policy::{
     ApprovalDecision, ApprovalGrant, CapabilityScope, PermissionEngine, PolicyDecision,
@@ -81,6 +82,11 @@ pub use trusted_wake::{
 pub use types::{
     ApprovalStatus, AuditEntry, JarvisError, JarvisResult, RiskTier, Sensitivity, TaskRecord,
     TaskStatus,
+};
+pub use wasm_plugin::{
+    execute_installed_wasm_plugin, read_wasm_artifact, WasmArtifact, WasmControlState,
+    WasmPluginExecution, MAX_WASM_FUEL, MAX_WASM_MEMORY_BYTES, MAX_WASM_MODULE_BYTES,
+    MAX_WASM_OUTPUT_BYTES, MAX_WASM_REQUEST_BYTES, MAX_WASM_TABLE_ELEMENTS,
 };
 pub use workspace::{
     WorkspaceInspectPlugin, WorkspaceRootConfig, MAX_WORKSPACE_LIST_ENTRIES,

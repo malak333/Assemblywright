@@ -20,6 +20,7 @@ use crate::types::{AuditEntry, JarvisResult, Sensitivity, TaskRecord, TaskStatus
 use crate::CapabilityScope;
 
 const MAX_TASK_TOOL_OUTPUT_BYTES: usize = 128 * 1024;
+const MAX_ACTIVE_RUNTIME_CANCELLATIONS: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeConfig {
@@ -143,6 +144,39 @@ pub struct RuntimeControl {
 struct RuntimeControlState {
     emergency_paused: bool,
     cancelled_tasks: HashSet<Uuid>,
+    active_runtime_cancellations: HashSet<Uuid>,
+    started_runtime_cancellations: HashSet<Uuid>,
+    cancelled_runtime_cancellations: HashSet<Uuid>,
+}
+
+pub struct RuntimeCancellationGuard {
+    control: RuntimeControl,
+    cancellation_id: Uuid,
+    active: bool,
+}
+
+impl RuntimeCancellationGuard {
+    pub fn activate(&mut self) {
+        self.control
+            .activate_runtime_cancellation(self.cancellation_id);
+    }
+
+    pub fn finalize(mut self) -> bool {
+        let cancelled = self
+            .control
+            .finish_runtime_cancellation(self.cancellation_id);
+        self.active = false;
+        cancelled
+    }
+}
+
+impl Drop for RuntimeCancellationGuard {
+    fn drop(&mut self) {
+        if self.active {
+            self.control
+                .finish_runtime_cancellation(self.cancellation_id);
+        }
+    }
 }
 
 impl RuntimeControl {
@@ -174,6 +208,67 @@ impl RuntimeControl {
             .expect("runtime control lock poisoned")
             .cancelled_tasks
             .contains(&task_id)
+    }
+
+    pub fn register_runtime_cancellation(
+        &self,
+        cancellation_id: Uuid,
+    ) -> Option<RuntimeCancellationGuard> {
+        let mut state = self.inner.lock().expect("runtime control lock poisoned");
+        if state.active_runtime_cancellations.len() >= MAX_ACTIVE_RUNTIME_CANCELLATIONS
+            || !state.active_runtime_cancellations.insert(cancellation_id)
+        {
+            return None;
+        }
+        state
+            .cancelled_runtime_cancellations
+            .remove(&cancellation_id);
+        Some(RuntimeCancellationGuard {
+            control: self.clone(),
+            cancellation_id,
+            active: true,
+        })
+    }
+
+    pub fn cancel_runtime_execution(&self, cancellation_id: Uuid) -> bool {
+        let mut state = self.inner.lock().expect("runtime control lock poisoned");
+        if !state
+            .started_runtime_cancellations
+            .contains(&cancellation_id)
+        {
+            return false;
+        }
+        state
+            .cancelled_runtime_cancellations
+            .insert(cancellation_id);
+        true
+    }
+
+    pub fn is_runtime_cancelled(&self, cancellation_id: Uuid) -> bool {
+        self.inner
+            .lock()
+            .expect("runtime control lock poisoned")
+            .cancelled_runtime_cancellations
+            .contains(&cancellation_id)
+    }
+
+    fn activate_runtime_cancellation(&self, cancellation_id: Uuid) {
+        let mut state = self.inner.lock().expect("runtime control lock poisoned");
+        if state
+            .active_runtime_cancellations
+            .contains(&cancellation_id)
+        {
+            state.started_runtime_cancellations.insert(cancellation_id);
+        }
+    }
+
+    fn finish_runtime_cancellation(&self, cancellation_id: Uuid) -> bool {
+        let mut state = self.inner.lock().expect("runtime control lock poisoned");
+        state.active_runtime_cancellations.remove(&cancellation_id);
+        state.started_runtime_cancellations.remove(&cancellation_id);
+        state
+            .cancelled_runtime_cancellations
+            .remove(&cancellation_id)
     }
 
     fn clear_task_cancellation(&self, task_id: Uuid) {
@@ -1496,6 +1591,21 @@ mod tests {
     use serde_json::json;
     use tokio::net::TcpListener;
 
+    #[test]
+    fn runtime_cancellation_finalize_is_the_acceptance_linearization_point() {
+        let control = RuntimeControl::default();
+        let cancellation_id = Uuid::new_v4();
+        let mut guard = control
+            .register_runtime_cancellation(cancellation_id)
+            .expect("register active runtime");
+        assert!(!control.cancel_runtime_execution(cancellation_id));
+        guard.activate();
+        assert!(control.cancel_runtime_execution(cancellation_id));
+        assert!(guard.finalize());
+        assert!(!control.cancel_runtime_execution(cancellation_id));
+        assert!(!control.is_runtime_cancelled(cancellation_id));
+    }
+
     #[tokio::test]
     async fn executes_command_with_fake_local_model() {
         let runtime = ConversationRuntime::new(FakeLocalModel::default());
@@ -2359,6 +2469,7 @@ mod tests {
                 author: "Jarvis Tests".to_string(),
                 source_path: None,
                 subprocess: None,
+                wasm: None,
                 publisher_signature: None,
                 actions: vec![PluginActionManifest {
                     name: "inspect".to_string(),

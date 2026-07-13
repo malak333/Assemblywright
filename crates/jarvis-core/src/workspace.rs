@@ -318,6 +318,7 @@ impl InProcessPlugin for WorkspaceInspectPlugin {
             author: "Jarvis".to_string(),
             source_path: None,
             subprocess: None,
+            wasm: None,
             publisher_signature: None,
             actions: vec![
                 PluginActionManifest {

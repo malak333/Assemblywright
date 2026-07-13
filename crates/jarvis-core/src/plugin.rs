@@ -52,6 +52,7 @@ pub enum PluginSource {
     ThirdParty,
     LocalDevelopment,
     LocalSubprocess,
+    LocalWasm,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -416,8 +417,22 @@ pub struct PluginManifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subprocess: Option<PluginSubprocessManifest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wasm: Option<PluginWasmManifest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub publisher_signature: Option<PluginPublisherSignature>,
     pub actions: Vec<PluginActionManifest>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginWasmManifest {
+    pub module: String,
+    pub abi: PluginWasmAbi,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginWasmAbi {
+    JarvisJsonV1,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -502,6 +517,18 @@ impl PluginManifest {
                 self.id
             )));
         }
+        if self.source == PluginSource::LocalWasm && self.wasm.is_none() {
+            return Err(JarvisError::Validation(format!(
+                "{} local_wasm manifests must declare wasm",
+                self.id
+            )));
+        }
+        if self.source != PluginSource::LocalWasm && self.wasm.is_some() {
+            return Err(JarvisError::Validation(format!(
+                "{} wasm config requires local_wasm source",
+                self.id
+            )));
+        }
 
         let source_path = self.source_path.as_deref().ok_or_else(|| {
             JarvisError::Validation(format!("{} local install requires source_path", self.id))
@@ -551,6 +578,23 @@ impl PluginManifest {
         if let Some(subprocess) = &self.subprocess {
             subprocess.validate(&self.id, &canonical_source)?;
         }
+        if let Some(wasm) = &self.wasm {
+            wasm.validate(&self.id, &canonical_source)?;
+            for action in &self.actions {
+                if action.risk_tier != RiskTier::Low
+                    || action.proactive
+                    || !action.permissions.is_empty()
+                    || action.memory_access != PluginAccess::None
+                    || action.model_access != PluginAccess::None
+                    || action.network_access != PluginNetworkAccess::default()
+                {
+                    return Err(JarvisError::Validation(format!(
+                        "{}.{} local_wasm actions must be low-risk, non-proactive, permissionless, and have no memory, model, or network access",
+                        self.id, action.name
+                    )));
+                }
+            }
+        }
 
         Ok(canonical_source)
     }
@@ -580,6 +624,36 @@ impl PluginManifest {
         serde_json::to_vec(&unsigned).map_err(|err| {
             JarvisError::Validation(format!("{} publisher signature payload: {err}", self.id))
         })
+    }
+}
+
+impl PluginWasmManifest {
+    pub fn validate(&self, plugin_id: &str, source_path: &Path) -> JarvisResult<PathBuf> {
+        validate_non_empty(&self.module, "wasm module")?;
+        if self.module.contains('\0') {
+            return Err(JarvisError::Validation(format!(
+                "{plugin_id} wasm module cannot contain NUL"
+            )));
+        }
+        let module = Path::new(&self.module);
+        if module.is_absolute()
+            || module
+                .components()
+                .any(|component| matches!(component, std::path::Component::ParentDir))
+        {
+            return Err(JarvisError::Validation(format!(
+                "{plugin_id} wasm module must be a relative path without parent components"
+            )));
+        }
+        let canonical = fs::canonicalize(source_path.join(module)).map_err(|err| {
+            JarvisError::Validation(format!("{plugin_id} wasm module is not readable: {err}"))
+        })?;
+        if !canonical.starts_with(source_path) || !canonical.is_file() {
+            return Err(JarvisError::Validation(format!(
+                "{plugin_id} wasm module must be a file under source_path"
+            )));
+        }
+        Ok(canonical)
     }
 }
 
@@ -714,6 +788,10 @@ pub struct InstalledPluginProvenance {
     pub subprocess_command_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subprocess_command_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wasm_module_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wasm_module_sha256: Option<String>,
     pub captured_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_verified_at: Option<DateTime<Utc>>,
@@ -758,6 +836,8 @@ impl InstalledPluginProvenance {
             source_tree_file_count: None,
             subprocess_command_path: None,
             subprocess_command_sha256: None,
+            wasm_module_path: None,
+            wasm_module_sha256: None,
             captured_at,
             last_verified_at: None,
             integrity_status: InstalledPluginIntegrityStatus::NotVerified,
@@ -791,6 +871,8 @@ impl InstalledPluginProvenance {
             source_tree_file_count: Some(source_tree_snapshot.file_count),
             subprocess_command_path: None,
             subprocess_command_sha256: None,
+            wasm_module_path: None,
+            wasm_module_sha256: None,
             captured_at,
             last_verified_at: None,
             integrity_status: InstalledPluginIntegrityStatus::NotVerified,
@@ -809,6 +891,18 @@ impl InstalledPluginProvenance {
             validate_source_tree_required_path("subprocess command", &source_path, &command_path)?;
             provenance.subprocess_command_sha256 = Some(sha256_file(&command_path)?);
             provenance.subprocess_command_path = Some(command_path.display().to_string());
+        }
+        if manifest.source == PluginSource::LocalWasm {
+            let wasm = manifest.wasm.as_ref().ok_or_else(|| {
+                JarvisError::Validation(format!(
+                    "{} local_wasm manifests must declare wasm",
+                    manifest.id
+                ))
+            })?;
+            let module_path = wasm.validate(&manifest.id, &source_path)?;
+            validate_source_tree_required_path("wasm module", &source_path, &module_path)?;
+            provenance.wasm_module_sha256 = Some(sha256_file(&module_path)?);
+            provenance.wasm_module_path = Some(module_path.display().to_string());
         }
 
         Ok(provenance)
@@ -874,6 +968,20 @@ impl InstalledPluginProvenance {
             let command_sha = sha256_file(&command_path)
                 .map_err(|_| PluginProvenanceVerificationError::MissingFile)?;
             if command_sha != expected_sha {
+                return Err(PluginProvenanceVerificationError::Changed);
+            }
+        }
+        if let Some(expected_sha) = self.wasm_module_sha256.as_deref() {
+            let wasm = manifest
+                .wasm
+                .as_ref()
+                .ok_or(PluginProvenanceVerificationError::InvalidManifest)?;
+            let module_path = wasm
+                .validate(&manifest.id, source_path)
+                .map_err(|_| PluginProvenanceVerificationError::InvalidManifest)?;
+            let artifact = crate::read_wasm_artifact(&module_path)
+                .map_err(|_| PluginProvenanceVerificationError::MissingFile)?;
+            if artifact.sha256 != expected_sha {
                 return Err(PluginProvenanceVerificationError::Changed);
             }
         }
@@ -1086,6 +1194,7 @@ pub enum InstalledPluginExecutionGrant {
     MetadataOnly,
     SubprocessStdio,
     SubprocessStdioNetwork,
+    WasmCompute,
 }
 
 impl InstalledPluginExecutionGrant {
@@ -1094,6 +1203,7 @@ impl InstalledPluginExecutionGrant {
             Self::MetadataOnly => "metadata_only",
             Self::SubprocessStdio => "subprocess_stdio",
             Self::SubprocessStdioNetwork => "subprocess_stdio_network",
+            Self::WasmCompute => "wasm_compute",
         }
     }
 
@@ -1102,6 +1212,7 @@ impl InstalledPluginExecutionGrant {
             "metadata_only" => Ok(Self::MetadataOnly),
             "subprocess_stdio" => Ok(Self::SubprocessStdio),
             "subprocess_stdio_network" => Ok(Self::SubprocessStdioNetwork),
+            "wasm_compute" => Ok(Self::WasmCompute),
             _ => Err(JarvisError::Validation(format!(
                 "unknown installed plugin execution grant: {value}"
             ))),
@@ -2065,6 +2176,7 @@ impl InProcessPlugin for EchoPlugin {
             author: "Jarvis".to_string(),
             source_path: None,
             subprocess: None,
+            wasm: None,
             publisher_signature: None,
             actions: vec![
                 PluginActionManifest {
@@ -2146,6 +2258,7 @@ impl InProcessPlugin for StatusPlugin {
             author: "Jarvis".to_string(),
             source_path: None,
             subprocess: None,
+            wasm: None,
             publisher_signature: None,
             actions: vec![PluginActionManifest {
                 name: "status".to_string(),
@@ -2977,6 +3090,7 @@ PY
                 stdin: PluginSubprocessStream::Json,
                 stdout: PluginSubprocessStream::Json,
             }),
+            wasm: None,
             publisher_signature: None,
             actions: vec![PluginActionManifest {
                 name: "run".to_string(),
@@ -3033,6 +3147,7 @@ PY
                 author: "Jarvis".to_string(),
                 source_path: None,
                 subprocess: None,
+                wasm: None,
                 publisher_signature: None,
                 actions: vec![PluginActionManifest {
                     name: "needs_approval".to_string(),
@@ -3105,6 +3220,7 @@ PY
                 author: "Jarvis".to_string(),
                 source_path: None,
                 subprocess: None,
+                wasm: None,
                 publisher_signature: None,
                 actions: vec![PluginActionManifest {
                     name: "sleep".to_string(),
