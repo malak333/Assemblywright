@@ -188,7 +188,8 @@ public protocol JarvisCoreProcessLaunching: Sendable {
     func launch(
         executableURL: URL,
         arguments: [String],
-        environment: [String: String]
+        environment: [String: String],
+        standardInput: Data?
     ) throws -> any JarvisCoreProcess
 }
 
@@ -198,14 +199,24 @@ public struct FoundationJarvisCoreProcessLauncher: JarvisCoreProcessLaunching {
     public func launch(
         executableURL: URL,
         arguments: [String],
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        standardInput: Data? = nil
     ) throws -> any JarvisCoreProcess {
+        if let standardInput, standardInput.count > 8 * 1024 {
+            throw JarvisCoreSupervisorError.trustedWakeBootstrapTooLarge
+        }
         let process = Process()
         process.executableURL = executableURL
         process.arguments = arguments
         process.environment = environment
         process.standardOutput = Pipe()
         process.standardError = Pipe()
+        let inputPipe = standardInput.map { _ in Pipe() }
+        process.standardInput = inputPipe
+        if let standardInput, let inputPipe {
+            try inputPipe.fileHandleForWriting.write(contentsOf: standardInput)
+            try inputPipe.fileHandleForWriting.close()
+        }
         try process.run()
         return FoundationJarvisCoreProcess(process: process)
     }
@@ -238,6 +249,10 @@ public final class JarvisCoreSupervisor: ObservableObject {
     private let processLauncher: any JarvisCoreProcessLaunching
     private let credentialProvider: JarvisCoreCredentialProvider
     private var process: (any JarvisCoreProcess)?
+    private var pendingTrustedWakeBootstrap: Data?
+    private var activeEnvironmentOverrides: [String: String]
+    private var trustedWakeProvisionInFlight: Bool
+    private var lifecycleOperationInProgress: Bool
 
     public init(
         configuration: JarvisCoreSupervisorConfiguration = JarvisCoreSupervisorConfiguration(),
@@ -251,6 +266,10 @@ public final class JarvisCoreSupervisor: ObservableObject {
         self.credentialProvider = credentialProvider
         self.mode = .stopped
         self.lastHealth = nil
+        self.pendingTrustedWakeBootstrap = nil
+        self.activeEnvironmentOverrides = [:]
+        self.trustedWakeProvisionInFlight = false
+        self.lifecycleOperationInProgress = false
     }
 
     deinit {
@@ -280,9 +299,23 @@ public final class JarvisCoreSupervisor: ObservableObject {
         environmentOverrides: [String: String] = [:],
         requireMatchingConfiguration: Bool = false
     ) async {
+        guard beginLifecycleOperation() else { return }
+        defer { endLifecycleOperation() }
+        await startInternal(
+            environmentOverrides: environmentOverrides,
+            requireMatchingConfiguration: requireMatchingConfiguration,
+            skipExistingHealthCheck: false
+        )
+    }
+
+    private func startInternal(
+        environmentOverrides: [String: String],
+        requireMatchingConfiguration: Bool,
+        skipExistingHealthCheck: Bool
+    ) async {
         mode = .starting
 
-        if await refreshHealth() {
+        if !skipExistingHealthCheck, await refreshHealth() {
             if requireMatchingConfiguration,
                let lastHealth,
                !Self.health(lastHealth, matches: environmentOverrides)
@@ -312,15 +345,22 @@ public final class JarvisCoreSupervisor: ObservableObject {
             try createDatabaseDirectoryIfNeeded()
             var environment = credentialProvider.launchEnvironment(base: ProcessInfo.processInfo.environment)
             environment.merge(environmentOverrides) { _, override in override }
+            let trustedWakeBootstrap = pendingTrustedWakeBootstrap
+            var launchArguments = configuration.launchArguments
+            if trustedWakeBootstrap != nil {
+                launchArguments.append("--trusted-wake-bootstrap-stdin")
+            }
             process = try processLauncher.launch(
                 executableURL: executableURL,
-                arguments: configuration.launchArguments,
-                environment: environment
+                arguments: launchArguments,
+                environment: environment,
+                standardInput: trustedWakeBootstrap
             )
             try await waitUntilHealthy(
                 environmentOverrides: environmentOverrides,
                 requireMatchingConfiguration: requireMatchingConfiguration
             )
+            activeEnvironmentOverrides = environmentOverrides
             mode = .available
         } catch {
             process?.terminate()
@@ -329,8 +369,85 @@ public final class JarvisCoreSupervisor: ObservableObject {
         }
     }
 
+    public func provisionTrustedWake(
+        using provider: any TrustedWakeBootstrapProviding = TrustedWakeBootstrapProvider()
+    ) async throws {
+        guard !trustedWakeProvisionInFlight else {
+            throw JarvisCoreSupervisorError.trustedWakeProvisionInProgress
+        }
+        trustedWakeProvisionInFlight = true
+        defer { trustedWakeProvisionInFlight = false }
+
+        guard isAvailable, let originalProcess = process, originalProcess.isRunning else {
+            throw JarvisCoreSupervisorError.trustedWakeCoreNotAppSupervised
+        }
+        let environmentOverrides = activeEnvironmentOverrides
+
+        let bootstrap: Data?
+        do {
+            bootstrap = try await Task.detached(priority: .userInitiated) {
+                try provider.bootstrapData()
+            }.value
+        } catch {
+            throw JarvisCoreSupervisorError.trustedWakeBootstrapPreparationFailed
+        }
+        guard let bootstrap, !bootstrap.isEmpty else {
+            throw JarvisCoreSupervisorError.trustedWakeBootstrapUnavailable
+        }
+        guard bootstrap.count <= 8 * 1024 else {
+            throw JarvisCoreSupervisorError.trustedWakeBootstrapTooLarge
+        }
+        guard isAvailable,
+              let currentProcess = process,
+              currentProcess === originalProcess,
+              originalProcess.isRunning else {
+            throw JarvisCoreSupervisorError.trustedWakeCoreChangedDuringPreparation
+        }
+        guard beginLifecycleOperation() else {
+            throw JarvisCoreSupervisorError.trustedWakeLifecycleBusy
+        }
+        defer { endLifecycleOperation() }
+        guard isAvailable,
+              let lockedProcess = process,
+              lockedProcess === originalProcess,
+              originalProcess.isRunning else {
+            throw JarvisCoreSupervisorError.trustedWakeCoreChangedDuringPreparation
+        }
+
+        guard await stopInternal() else {
+            throw JarvisCoreSupervisorError.trustedWakeStopFailed
+        }
+
+        pendingTrustedWakeBootstrap = bootstrap
+        defer { pendingTrustedWakeBootstrap = nil }
+        await startInternal(
+            environmentOverrides: environmentOverrides,
+            requireMatchingConfiguration: false,
+            skipExistingHealthCheck: true
+        )
+        guard isAvailable else {
+            throw JarvisCoreSupervisorError.trustedWakeRestartFailed
+        }
+    }
+
     @discardableResult
     public func stop() async -> Bool {
+        guard beginLifecycleOperation() else { return false }
+        defer { endLifecycleOperation() }
+        return await stopInternal()
+    }
+
+    private func beginLifecycleOperation() -> Bool {
+        guard !lifecycleOperationInProgress else { return false }
+        lifecycleOperationInProgress = true
+        return true
+    }
+
+    private func endLifecycleOperation() {
+        lifecycleOperationInProgress = false
+    }
+
+    private func stopInternal() async -> Bool {
         let stoppingProcess = process
         stoppingProcess?.terminate()
         if let stoppingProcess {
@@ -339,10 +456,13 @@ public final class JarvisCoreSupervisor: ObservableObject {
                 try? await Task.sleep(nanoseconds: configuration.healthPollIntervalNanoseconds)
             }
             if stoppingProcess.isRunning {
-                mode = .degraded(reason: "jarvis core did not exit before the shutdown timeout")
+                if process === stoppingProcess {
+                    mode = .degraded(reason: "jarvis core did not exit before the shutdown timeout")
+                }
                 return false
             }
         }
+        guard process === stoppingProcess else { return false }
         process = nil
         lastHealth = nil
         mode = .stopped
@@ -422,4 +542,13 @@ public final class JarvisCoreSupervisor: ObservableObject {
 
 public enum JarvisCoreSupervisorError: Error, Equatable {
     case healthCheckTimedOut
+    case trustedWakeCoreNotAppSupervised
+    case trustedWakeProvisionInProgress
+    case trustedWakeCoreChangedDuringPreparation
+    case trustedWakeLifecycleBusy
+    case trustedWakeBootstrapPreparationFailed
+    case trustedWakeBootstrapUnavailable
+    case trustedWakeBootstrapTooLarge
+    case trustedWakeStopFailed
+    case trustedWakeRestartFailed
 }

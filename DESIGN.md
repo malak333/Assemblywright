@@ -112,6 +112,24 @@ Loads first-party and later third-party capabilities behind explicit manifests. 
 
 Runs approved proactive routines and event-driven checks. v1 jobs should be local, inspectable, cancellable, and subject to the same policy rules as reactive commands.
 
+The macOS system-wake foundation is disabled by default. Swift keeps its P-256
+private key in a device-only Keychain item. Normal app/core startup never reads
+that key. Initial provisioning is an explicit user action: bootstrap bytes are
+prepared while the current app-owned core remains healthy, then the supervisor
+performs one bounded-stdin restart and discards the one-shot bytes. The
+persisted Rust enrollment survives later normal restarts without wake
+Keychain access or bootstrap stdin. Rust verifies session/challenge,
+enrollment-generation, clock-skew, UUID-nonce, and durable-counter bindings,
+then persists visible scheduling evidence before dispatching through the normal
+proactive policy/plugin/pause funnel. Ambiguous started events are never
+automatically repeated and require explicit resolve-without-retry review. Swift
+allocates each counter above its Keychain value, current epoch milliseconds,
+and Rust's durable replay high-water so Keychain loss or a backward clock cannot
+strand an otherwise valid enrollment. Loss or mismatch of the enrollment key
+itself fails closed: initial provisioning does not authorize rotation, no
+supported recovery workflow exists yet, and manual SQLite or Keychain mutation
+is not a recovery procedure.
+
 ### Audit Log
 
 Stores an append-only record of prompts, model routes, tool calls, decisions, files touched, external actions attempted, approvals, denials, and failures.

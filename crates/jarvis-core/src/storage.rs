@@ -4,7 +4,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Row};
+use rusqlite::{
+    params, Connection, OpenFlags, OptionalExtension, Row, Transaction, TransactionBehavior,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
@@ -19,8 +21,18 @@ use crate::{
     TaskStatus, TriggerKind,
 };
 use crate::{MemoryIndexStatus, MemoryIndexStore};
+use crate::{
+    TrustedWakeAcceptedEvent, TrustedWakeAttentionItem, TrustedWakeDispatchState, TrustedWakeRule,
+};
 
-const CURRENT_SCHEMA_VERSION: i64 = 9;
+const CURRENT_SCHEMA_VERSION: i64 = 10;
+
+#[derive(Debug, Clone)]
+pub struct StoredTrustedWakeRule {
+    pub public: TrustedWakeRule,
+    pub public_key: Vec<u8>,
+    pub command: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EmergencyPauseState {
@@ -834,6 +846,672 @@ impl SqliteRepository {
         collect_rows(rows)
     }
 
+    pub fn list_scheduler_jobs_for_runtime(&self) -> JarvisResult<Vec<SchedulerJob>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT jobs.id, jobs.name, jobs.command, jobs.trigger, jobs.status,
+                        jobs.created_at, jobs.updated_at, jobs.cancelled_at, jobs.cancellation_reason
+                 FROM scheduler_jobs jobs
+                 WHERE NOT EXISTS (
+                    SELECT 1 FROM trusted_wake_events events
+                    WHERE events.scheduler_job_id = jobs.id
+                 )
+                 ORDER BY jobs.created_at ASC, jobs.id ASC",
+            )
+            .map_err(storage_error)?;
+        let rows = stmt
+            .query_map([], scheduler_job_from_row)
+            .map_err(storage_error)?;
+        collect_rows(rows)
+    }
+
+    pub fn enroll_trusted_wake_rule(
+        &self,
+        id: Uuid,
+        public_key: &[u8],
+        key_fingerprint: &str,
+        command: &str,
+        allow_rotation: bool,
+    ) -> JarvisResult<TrustedWakeRule> {
+        let now = Utc::now();
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        let existing = tx
+            .query_row(
+                "SELECT id, public_key, key_fingerprint, generation, command, enabled,
+                        highest_counter, created_at, updated_at
+                 FROM trusted_wake_rules WHERE id = ?1",
+                params![id.to_string()],
+                trusted_wake_rule_from_row,
+            )
+            .optional()
+            .map_err(storage_error)?;
+        if let Some(existing) = existing {
+            let same_material = existing.public_key == public_key && existing.command == command;
+            if !same_material && !allow_rotation {
+                return Err(JarvisError::Validation(
+                    "trusted wake key or command rotation requires explicit allow_rotation"
+                        .to_string(),
+                ));
+            }
+            if same_material {
+                append_trusted_wake_mutation_audit(
+                    &tx,
+                    "trusted_wake_bootstrap_succeeded",
+                    "supervisor bootstrap confirmed existing trusted wake enrollment",
+                    json!({
+                        "rule_id": id,
+                        "generation": existing.public.generation,
+                        "enabled": existing.public.enabled,
+                        "idempotent": true,
+                        "public_key_redacted": true,
+                        "command_redacted": true,
+                    }),
+                )?;
+                tx.commit().map_err(storage_error)?;
+                return Ok(existing.public);
+            }
+        }
+        tx
+            .execute(
+                "INSERT INTO trusted_wake_rules
+                 (id, public_key, key_fingerprint, generation, command, enabled, highest_counter, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, 1, ?4, 0, 0, ?5, ?5)
+                 ON CONFLICT(id) DO UPDATE SET
+                    public_key = excluded.public_key,
+                    key_fingerprint = excluded.key_fingerprint,
+                    generation = trusted_wake_rules.generation + 1,
+                    command = excluded.command,
+                    enabled = 0,
+                    highest_counter = 0,
+                    updated_at = excluded.updated_at",
+                params![
+                    id.to_string(),
+                    public_key,
+                    key_fingerprint,
+                    command,
+                    to_db_time(now),
+                ],
+            )
+            .map_err(storage_error)?;
+        let enrolled = tx
+            .query_row(
+                "SELECT id, public_key, key_fingerprint, generation, command, enabled,
+                        highest_counter, created_at, updated_at
+                 FROM trusted_wake_rules WHERE id = ?1",
+                params![id.to_string()],
+                trusted_wake_rule_from_row,
+            )
+            .map_err(storage_error)?;
+        append_trusted_wake_mutation_audit(
+            &tx,
+            "trusted_wake_bootstrap_succeeded",
+            "supervisor bootstrap established trusted wake enrollment disabled by default",
+            json!({
+                "rule_id": id,
+                "generation": enrolled.public.generation,
+                "enabled": enrolled.public.enabled,
+                "idempotent": false,
+                "rotation_requested": allow_rotation,
+                "public_key_redacted": true,
+                "command_redacted": true,
+            }),
+        )?;
+        tx.commit().map_err(storage_error)?;
+        Ok(enrolled.public)
+    }
+
+    pub fn set_trusted_wake_rule_enabled(
+        &self,
+        id: Uuid,
+        enabled: bool,
+        expected_generation: u64,
+    ) -> JarvisResult<TrustedWakeRule> {
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        let changed = tx
+            .execute(
+                "UPDATE trusted_wake_rules SET enabled = ?1, updated_at = ?2
+                 WHERE id = ?3 AND generation = ?4",
+                params![
+                    if enabled { 1 } else { 0 },
+                    to_db_time(Utc::now()),
+                    id.to_string(),
+                    expected_generation,
+                ],
+            )
+            .map_err(storage_error)?;
+        if changed == 0 {
+            return Err(JarvisError::Storage(format!(
+                "trusted wake rule missing or enrollment generation changed: {id}"
+            )));
+        }
+        let updated = tx
+            .query_row(
+                "SELECT id, public_key, key_fingerprint, generation, command, enabled,
+                    highest_counter, created_at, updated_at
+             FROM trusted_wake_rules WHERE id = ?1",
+                params![id.to_string()],
+                trusted_wake_rule_from_row,
+            )
+            .map_err(storage_error)?;
+        append_trusted_wake_mutation_audit(
+            &tx,
+            "trusted_wake_rule_enablement_succeeded",
+            "trusted wake rule enablement changed with generation CAS",
+            json!({ "rule_id": id, "generation": expected_generation, "enabled": enabled }),
+        )?;
+        tx.commit().map_err(storage_error)?;
+        Ok(updated.public)
+    }
+
+    pub fn get_trusted_wake_rule(&self, id: Uuid) -> JarvisResult<Option<StoredTrustedWakeRule>> {
+        self.conn
+            .query_row(
+                "SELECT id, public_key, key_fingerprint, generation, command, enabled, highest_counter,
+                        created_at, updated_at
+                 FROM trusted_wake_rules WHERE id = ?1",
+                params![id.to_string()],
+                trusted_wake_rule_from_row,
+            )
+            .optional()
+            .map_err(storage_error)
+    }
+
+    pub fn accept_trusted_wake_event(
+        &self,
+        rule: &StoredTrustedWakeRule,
+        counter: u64,
+        payload_sha256: &str,
+        session_id: Uuid,
+    ) -> JarvisResult<(TrustedWakeAcceptedEvent, SchedulerJob, bool)> {
+        let counter = i64::try_from(counter).map_err(|_| {
+            JarvisError::Validation(
+                "trusted wake counter exceeds durable storage range".to_string(),
+            )
+        })?;
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+
+        if let Some(existing) = tx
+            .query_row(
+                "SELECT id, rule_id, counter, payload_sha256, state, task_id, scheduler_job_id,
+                        received_at, updated_at
+                 FROM trusted_wake_events WHERE payload_sha256 = ?1",
+                params![payload_sha256],
+                trusted_wake_event_from_row,
+            )
+            .optional()
+            .map_err(storage_error)?
+        {
+            let duplicate_binding = tx
+                .query_row(
+                    "SELECT rule_id, rule_generation, session_id FROM trusted_wake_events
+                 WHERE payload_sha256 = ?1",
+                    params![payload_sha256],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, i64>(1)?,
+                            row.get::<_, String>(2)?,
+                        ))
+                    },
+                )
+                .map_err(storage_error)?;
+            if duplicate_binding.0 != rule.public.id.to_string()
+                || u64::try_from(duplicate_binding.1).ok() != Some(rule.public.generation)
+                || duplicate_binding.2 != session_id.to_string()
+                || !rule.public.enabled
+            {
+                return Err(JarvisError::Validation(
+                    "trusted wake retry is not eligible for the active enrollment and session"
+                        .to_string(),
+                ));
+            }
+            let job = tx
+                .query_row(
+                    "SELECT id, name, command, trigger, status, created_at, updated_at,
+                            cancelled_at, cancellation_reason
+                     FROM scheduler_jobs WHERE id = ?1",
+                    params![existing.scheduler_job_id.to_string()],
+                    scheduler_job_from_row,
+                )
+                .map_err(storage_error)?;
+            tx.commit().map_err(storage_error)?;
+            return Ok((existing, job, true));
+        }
+
+        let durable = tx
+            .query_row(
+                "SELECT enabled, highest_counter, key_fingerprint, command, generation
+                 FROM trusted_wake_rules WHERE id = ?1",
+                params![rule.public.id.to_string()],
+                |row| {
+                    Ok((
+                        row.get::<_, bool>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, i64>(4)?,
+                    ))
+                },
+            )
+            .map_err(storage_error)?;
+        if !durable.0 {
+            return Err(JarvisError::Validation(
+                "trusted wake rule is disabled".to_string(),
+            ));
+        }
+        if counter <= durable.1 {
+            return Err(JarvisError::Validation(
+                "trusted wake counter is a replay or below the durable high-water mark".to_string(),
+            ));
+        }
+        if durable.2 != rule.public.key_fingerprint
+            || durable.3 != rule.command
+            || u64::try_from(durable.4).ok() != Some(rule.public.generation)
+        {
+            return Err(JarvisError::Validation(
+                "trusted wake rule changed during verification; retry against current enrollment"
+                    .to_string(),
+            ));
+        }
+
+        let now = Utc::now();
+        let event_id = Uuid::new_v4();
+        let scheduler_job_id = Uuid::new_v4();
+        let scheduler = SchedulerJob {
+            id: scheduler_job_id,
+            name: "Trusted macOS system-wake event".to_string(),
+            command: rule.command.clone(),
+            trigger: TriggerKind::OnceAt { run_at: now },
+            status: SchedulerJobStatus::Scheduled,
+            created_at: now,
+            updated_at: now,
+            cancelled_at: None,
+            cancellation_reason: None,
+        };
+        tx.execute(
+            "INSERT INTO scheduler_jobs
+             (id, name, command, trigger, status, created_at, updated_at, cancelled_at, cancellation_reason)
+             VALUES (?1, ?2, ?3, ?4, 'scheduled', ?5, ?5, NULL, NULL)",
+            params![
+                scheduler.id.to_string(),
+                &scheduler.name,
+                &scheduler.command,
+                trigger_to_json(&scheduler.trigger)?,
+                to_db_time(now),
+            ],
+        )
+        .map_err(storage_error)?;
+        tx.execute(
+            "INSERT INTO trusted_wake_events
+             (id, rule_id, rule_generation, counter, payload_sha256, session_id, state, task_id,
+              scheduler_job_id, received_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'accepted', NULL, ?7, ?8, ?8)",
+            params![
+                event_id.to_string(),
+                rule.public.id.to_string(),
+                rule.public.generation,
+                counter,
+                payload_sha256,
+                session_id.to_string(),
+                scheduler_job_id.to_string(),
+                to_db_time(now),
+            ],
+        )
+        .map_err(storage_error)?;
+        tx.execute(
+            "UPDATE trusted_wake_rules SET highest_counter = ?1, updated_at = ?2 WHERE id = ?3",
+            params![counter, to_db_time(now), rule.public.id.to_string()],
+        )
+        .map_err(storage_error)?;
+        let audit = AuditEntry::new(
+            None,
+            "trusted_wake_event_persisted",
+            "persisted wake event and created visible proactive scheduling records",
+            json!({
+                "rule_id": rule.public.id,
+                "counter": counter,
+                "scheduler_job_id": scheduler_job_id,
+                "command_redacted": true,
+                "payload_redacted": true,
+            }),
+        );
+        tx.execute(
+            "INSERT INTO audit_entries (id, task_id, event_type, summary, payload, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                audit.id.to_string(),
+                Option::<String>::None,
+                audit.event_type,
+                audit.summary,
+                audit.payload,
+                to_db_time(audit.created_at),
+            ],
+        )
+        .map_err(storage_error)?;
+        tx.commit().map_err(storage_error)?;
+        Ok((
+            TrustedWakeAcceptedEvent {
+                id: event_id,
+                rule_id: rule.public.id,
+                counter: counter as u64,
+                payload_sha256: payload_sha256.to_string(),
+                state: TrustedWakeDispatchState::Accepted,
+                task_id: None,
+                scheduler_job_id,
+                received_at: now,
+                updated_at: now,
+            },
+            scheduler,
+            false,
+        ))
+    }
+
+    pub fn begin_trusted_wake_dispatch(
+        &self,
+        event_id: Uuid,
+        expected_generation: u64,
+    ) -> JarvisResult<bool> {
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        let now = to_db_time(Utc::now());
+        let ids = tx
+            .query_row(
+                "SELECT event.scheduler_job_id, event.state, event.rule_generation,
+                        rules.enabled, pause.paused, jobs.status, rules.generation
+                 FROM trusted_wake_events event
+                 JOIN trusted_wake_rules rules ON rules.id = event.rule_id
+                 JOIN scheduler_jobs jobs ON jobs.id = event.scheduler_job_id
+                 JOIN emergency_pause pause ON pause.id = 1
+                 WHERE event.id = ?1",
+                params![event_id.to_string()],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, bool>(3)?,
+                        row.get::<_, bool>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, i64>(6)?,
+                    ))
+                },
+            )
+            .map_err(storage_error)?;
+        if ids.1 != "accepted"
+            || u64::try_from(ids.2).ok() != Some(expected_generation)
+            || !ids.3
+            || ids.4
+            || ids.5 != "scheduled"
+            || u64::try_from(ids.6).ok() != Some(expected_generation)
+        {
+            tx.commit().map_err(storage_error)?;
+            return Ok(false);
+        }
+        let changed = tx
+            .execute(
+                "UPDATE trusted_wake_events SET state = 'dispatch_started', updated_at = ?1
+             WHERE id = ?2 AND state = 'accepted'",
+                params![&now, event_id.to_string()],
+            )
+            .map_err(storage_error)?;
+        if changed != 1 {
+            tx.commit().map_err(storage_error)?;
+            return Ok(false);
+        }
+        tx.execute(
+            "UPDATE scheduler_jobs SET status = 'running', updated_at = ?1 WHERE id = ?2",
+            params![&now, ids.0],
+        )
+        .map_err(storage_error)?;
+        tx.commit().map_err(storage_error)?;
+        Ok(true)
+    }
+
+    pub fn finish_trusted_wake_dispatch(
+        &self,
+        event_id: Uuid,
+        accepted: bool,
+        task_id: Uuid,
+    ) -> JarvisResult<TrustedWakeAcceptedEvent> {
+        let state = if accepted { "completed" } else { "blocked" };
+        let now = to_db_time(Utc::now());
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        let changed = tx
+            .execute(
+                "UPDATE trusted_wake_events SET state = ?1, task_id = ?2, updated_at = ?3
+             WHERE id = ?4 AND state = 'dispatch_started'",
+                params![state, task_id.to_string(), &now, event_id.to_string()],
+            )
+            .map_err(storage_error)?;
+        if changed != 1 {
+            return Err(JarvisError::Storage(
+                "trusted wake dispatch outcome did not match one in-progress event".to_string(),
+            ));
+        }
+        tx.commit().map_err(storage_error)?;
+        self.get_trusted_wake_event(event_id)?.ok_or_else(|| {
+            JarvisError::Storage(format!(
+                "trusted wake event missing after finish: {event_id}"
+            ))
+        })
+    }
+
+    pub fn block_trusted_wake_before_dispatch(
+        &self,
+        event_id: Uuid,
+    ) -> JarvisResult<TrustedWakeAcceptedEvent> {
+        let event = self.get_trusted_wake_event(event_id)?.ok_or_else(|| {
+            JarvisError::Storage(format!("trusted wake event not found: {event_id}"))
+        })?;
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        let now = to_db_time(Utc::now());
+        let changed = tx
+            .execute(
+                "UPDATE trusted_wake_events SET state = 'blocked', updated_at = ?1
+             WHERE id = ?2 AND state = 'accepted'",
+                params![&now, event_id.to_string()],
+            )
+            .map_err(storage_error)?;
+        if changed == 1 {
+            tx.execute(
+                "UPDATE scheduler_jobs SET status = 'failed', updated_at = ?1
+                 WHERE id = ?2 AND status = 'scheduled'",
+                params![&now, event.scheduler_job_id.to_string()],
+            )
+            .map_err(storage_error)?;
+        }
+        tx.commit().map_err(storage_error)?;
+        self.get_trusted_wake_event(event_id)?.ok_or_else(|| {
+            JarvisError::Storage(format!(
+                "trusted wake event missing after block: {event_id}"
+            ))
+        })
+    }
+
+    pub fn get_trusted_wake_event(
+        &self,
+        id: Uuid,
+    ) -> JarvisResult<Option<TrustedWakeAcceptedEvent>> {
+        self.conn
+            .query_row(
+                "SELECT id, rule_id, counter, payload_sha256, state, task_id, scheduler_job_id,
+                        received_at, updated_at
+                 FROM trusted_wake_events WHERE id = ?1",
+                params![id.to_string()],
+                trusted_wake_event_from_row,
+            )
+            .optional()
+            .map_err(storage_error)
+    }
+
+    pub fn reconcile_trusted_wake_events_on_startup(&self) -> JarvisResult<(usize, usize)> {
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        let now = to_db_time(Utc::now());
+        let accepted = tx
+            .execute(
+                "UPDATE trusted_wake_events SET state = 'blocked', updated_at = ?1
+             WHERE state = 'accepted'",
+                params![&now],
+            )
+            .map_err(storage_error)?;
+        tx.execute(
+            "UPDATE scheduler_jobs SET status = 'failed', updated_at = ?1
+             WHERE id IN (
+                SELECT scheduler_job_id FROM trusted_wake_events WHERE state = 'blocked'
+             ) AND status = 'scheduled'",
+            params![&now],
+        )
+        .map_err(storage_error)?;
+        let ambiguous = tx
+            .query_row(
+                "SELECT COUNT(*) FROM trusted_wake_events WHERE state = 'dispatch_started'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(storage_error)?;
+        for (event_type, summary, count) in [
+            (
+                "trusted_wake_startup_accepted_blocked",
+                "startup blocked previously accepted wake events without redispatch",
+                accepted,
+            ),
+            (
+                "trusted_wake_startup_ambiguous_attention_required",
+                "startup found ambiguous wake dispatches; automatic retry remains disabled",
+                usize::try_from(ambiguous).unwrap_or(usize::MAX),
+            ),
+        ] {
+            if count > 0 {
+                let audit = AuditEntry::new(
+                    None,
+                    event_type,
+                    summary,
+                    json!({
+                        "event_count": count,
+                        "command_redacted": true,
+                        "automatic_redispatch": false,
+                    }),
+                );
+                tx.execute(
+                    "INSERT INTO audit_entries (id, task_id, event_type, summary, payload, created_at)
+                     VALUES (?1, NULL, ?2, ?3, ?4, ?5)",
+                    params![audit.id.to_string(), audit.event_type, audit.summary, audit.payload, to_db_time(audit.created_at)],
+                ).map_err(storage_error)?;
+            }
+        }
+        tx.commit().map_err(storage_error)?;
+        Ok((accepted, usize::try_from(ambiguous).unwrap_or(usize::MAX)))
+    }
+
+    pub fn trusted_wake_ambiguous_count(&self) -> JarvisResult<usize> {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM trusted_wake_events WHERE state = 'dispatch_started'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(storage_error)
+            .and_then(|count| {
+                usize::try_from(count).map_err(|_| {
+                    JarvisError::Storage(
+                        "trusted wake ambiguous count exceeds platform range".to_string(),
+                    )
+                })
+            })
+    }
+
+    pub fn list_trusted_wake_attention(&self) -> JarvisResult<Vec<TrustedWakeAttentionItem>> {
+        let mut statement = self
+            .conn
+            .prepare(
+                "SELECT id, scheduler_job_id, rule_generation, state, received_at, updated_at
+             FROM trusted_wake_events WHERE state = 'dispatch_started'
+             ORDER BY updated_at ASC, id ASC LIMIT 100",
+            )
+            .map_err(storage_error)?;
+        let rows = statement
+            .query_map([], trusted_wake_attention_from_row)
+            .map_err(storage_error)?;
+        collect_rows(rows)
+    }
+
+    pub fn resolve_trusted_wake_attention(
+        &self,
+        event_id: Uuid,
+        expected_generation: u64,
+        expected_state: TrustedWakeDispatchState,
+    ) -> JarvisResult<TrustedWakeAttentionItem> {
+        if expected_state != TrustedWakeDispatchState::DispatchStarted {
+            return Err(JarvisError::Validation(
+                "only dispatch_started trusted wake events can be explicitly resolved".to_string(),
+            ));
+        }
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        let now = to_db_time(Utc::now());
+        let scheduler_job_id = tx
+            .query_row(
+                "SELECT scheduler_job_id FROM trusted_wake_events
+             WHERE id = ?1 AND rule_generation = ?2 AND state = 'dispatch_started'",
+                params![event_id.to_string(), expected_generation],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(storage_error)?
+            .ok_or_else(|| {
+                JarvisError::Validation(
+                    "trusted wake attention item changed or is no longer ambiguous".to_string(),
+                )
+            })?;
+        let changed = tx
+            .execute(
+                "UPDATE trusted_wake_events SET state = 'blocked', updated_at = ?1
+             WHERE id = ?2 AND rule_generation = ?3 AND state = 'dispatch_started'",
+                params![&now, event_id.to_string(), expected_generation],
+            )
+            .map_err(storage_error)?;
+        if changed != 1 {
+            return Err(JarvisError::Storage(
+                "trusted wake attention resolution CAS did not change one event".to_string(),
+            ));
+        }
+        tx.execute(
+            "UPDATE scheduler_jobs SET status = 'failed', updated_at = ?1
+             WHERE id = ?2 AND status = 'running'",
+            params![&now, scheduler_job_id],
+        )
+        .map_err(storage_error)?;
+        append_trusted_wake_mutation_audit(
+            &tx,
+            "trusted_wake_ambiguous_dispatch_resolved",
+            "operator resolved ambiguous trusted wake dispatch to blocked without redispatch",
+            json!({
+                "trusted_wake_event_id": event_id,
+                "scheduler_job_id": scheduler_job_id,
+                "generation": expected_generation,
+                "automatic_redispatch": false,
+                "command_redacted": true,
+            }),
+        )?;
+        let item = tx
+            .query_row(
+                "SELECT id, scheduler_job_id, rule_generation, state, received_at, updated_at
+             FROM trusted_wake_events WHERE id = ?1",
+                params![event_id.to_string()],
+                trusted_wake_attention_from_row,
+            )
+            .map_err(storage_error)?;
+        tx.commit().map_err(storage_error)?;
+        Ok(item)
+    }
+
     pub fn install_plugin_metadata(
         &self,
         installed: InstalledPlugin,
@@ -1317,6 +1995,9 @@ impl SqliteRepository {
         if version < 9 {
             self.apply_migration_9()?;
         }
+        if version < 10 {
+            self.apply_migration_10()?;
+        }
 
         let migrated = self.schema_version()?;
         if migrated != CURRENT_SCHEMA_VERSION {
@@ -1429,6 +2110,54 @@ impl SqliteRepository {
         )
         .map_err(storage_error)?;
 
+        tx.commit().map_err(storage_error)?;
+        Ok(())
+    }
+
+    fn apply_migration_10(&self) -> JarvisResult<()> {
+        let now = to_db_time(Utc::now());
+        let tx = self.conn.unchecked_transaction().map_err(storage_error)?;
+        tx.execute_batch(
+            "
+            CREATE TABLE trusted_wake_rules (
+                id TEXT PRIMARY KEY NOT NULL,
+                public_key BLOB NOT NULL,
+                key_fingerprint TEXT NOT NULL,
+                generation INTEGER NOT NULL DEFAULT 1 CHECK (generation > 0),
+                command TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
+                highest_counter INTEGER NOT NULL DEFAULT 0 CHECK (highest_counter >= 0),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE trusted_wake_events (
+                id TEXT PRIMARY KEY NOT NULL,
+                rule_id TEXT NOT NULL REFERENCES trusted_wake_rules(id) ON DELETE CASCADE,
+                rule_generation INTEGER NOT NULL CHECK (rule_generation > 0),
+                counter INTEGER NOT NULL CHECK (counter > 0),
+                payload_sha256 TEXT NOT NULL UNIQUE,
+                session_id TEXT NOT NULL,
+                state TEXT NOT NULL CHECK (state IN (
+                    'accepted', 'dispatch_started', 'completed', 'blocked', 'failed'
+                )),
+                task_id TEXT NULL REFERENCES tasks(id) ON DELETE SET NULL,
+                scheduler_job_id TEXT NOT NULL REFERENCES scheduler_jobs(id) ON DELETE RESTRICT,
+                received_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(rule_id, rule_generation, counter)
+            );
+            CREATE INDEX idx_trusted_wake_events_rule_counter
+                ON trusted_wake_events (rule_id, counter);
+            CREATE INDEX idx_trusted_wake_events_state_updated
+                ON trusted_wake_events (state, updated_at);
+            ",
+        )
+        .map_err(storage_error)?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+            params![10, now],
+        )
+        .map_err(storage_error)?;
         tx.commit().map_err(storage_error)?;
         Ok(())
     }
@@ -2103,6 +2832,128 @@ fn scheduler_job_from_row(row: &Row<'_>) -> rusqlite::Result<SchedulerJob> {
     })
 }
 
+fn trusted_wake_rule_from_row(row: &Row<'_>) -> rusqlite::Result<StoredTrustedWakeRule> {
+    let generation = row.get::<_, i64>(3)?;
+    let highest_counter = row.get::<_, i64>(6)?;
+    Ok(StoredTrustedWakeRule {
+        public: TrustedWakeRule {
+            id: parse_uuid(&row.get::<_, String>(0)?)?,
+            enabled: row.get::<_, i64>(5)? != 0,
+            key_fingerprint: row.get(2)?,
+            generation: u64::try_from(generation).map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    3,
+                    rusqlite::types::Type::Integer,
+                    Box::new(error),
+                )
+            })?,
+            highest_counter: u64::try_from(highest_counter).map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    6,
+                    rusqlite::types::Type::Integer,
+                    Box::new(error),
+                )
+            })?,
+            created_at: parse_db_time(&row.get::<_, String>(7)?)?,
+            updated_at: parse_db_time(&row.get::<_, String>(8)?)?,
+        },
+        public_key: row.get(1)?,
+        command: row.get(4)?,
+    })
+}
+
+fn trusted_wake_event_from_row(row: &Row<'_>) -> rusqlite::Result<TrustedWakeAcceptedEvent> {
+    let counter = row.get::<_, i64>(2)?;
+    let state = match row.get::<_, String>(4)?.as_str() {
+        "accepted" => TrustedWakeDispatchState::Accepted,
+        "dispatch_started" => TrustedWakeDispatchState::DispatchStarted,
+        "completed" => TrustedWakeDispatchState::Completed,
+        "blocked" => TrustedWakeDispatchState::Blocked,
+        "failed" => TrustedWakeDispatchState::Failed,
+        value => {
+            return Err(rusqlite::Error::FromSqlConversionFailure(
+                4,
+                rusqlite::types::Type::Text,
+                format!("invalid trusted wake state: {value}").into(),
+            ))
+        }
+    };
+    Ok(TrustedWakeAcceptedEvent {
+        id: parse_uuid(&row.get::<_, String>(0)?)?,
+        rule_id: parse_uuid(&row.get::<_, String>(1)?)?,
+        counter: u64::try_from(counter).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                2,
+                rusqlite::types::Type::Integer,
+                Box::new(error),
+            )
+        })?,
+        payload_sha256: row.get(3)?,
+        state,
+        task_id: row
+            .get::<_, Option<String>>(5)?
+            .map(|value| parse_uuid(&value))
+            .transpose()?,
+        scheduler_job_id: parse_uuid(&row.get::<_, String>(6)?)?,
+        received_at: parse_db_time(&row.get::<_, String>(7)?)?,
+        updated_at: parse_db_time(&row.get::<_, String>(8)?)?,
+    })
+}
+
+fn trusted_wake_attention_from_row(row: &Row<'_>) -> rusqlite::Result<TrustedWakeAttentionItem> {
+    let generation = row.get::<_, i64>(2)?;
+    let state = match row.get::<_, String>(3)?.as_str() {
+        "accepted" => TrustedWakeDispatchState::Accepted,
+        "dispatch_started" => TrustedWakeDispatchState::DispatchStarted,
+        "completed" => TrustedWakeDispatchState::Completed,
+        "blocked" => TrustedWakeDispatchState::Blocked,
+        "failed" => TrustedWakeDispatchState::Failed,
+        value => {
+            return Err(rusqlite::Error::FromSqlConversionFailure(
+                3,
+                rusqlite::types::Type::Text,
+                format!("invalid trusted wake state: {value}").into(),
+            ))
+        }
+    };
+    Ok(TrustedWakeAttentionItem {
+        event_id: parse_uuid(&row.get::<_, String>(0)?)?,
+        scheduler_job_id: parse_uuid(&row.get::<_, String>(1)?)?,
+        rule_generation: u64::try_from(generation).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                2,
+                rusqlite::types::Type::Integer,
+                Box::new(error),
+            )
+        })?,
+        state,
+        received_at: parse_db_time(&row.get::<_, String>(4)?)?,
+        updated_at: parse_db_time(&row.get::<_, String>(5)?)?,
+    })
+}
+
+fn append_trusted_wake_mutation_audit(
+    tx: &Transaction<'_>,
+    event_type: &str,
+    summary: &str,
+    payload: serde_json::Value,
+) -> JarvisResult<()> {
+    let audit = AuditEntry::new(None, event_type, summary, payload);
+    tx.execute(
+        "INSERT INTO audit_entries (id, task_id, event_type, summary, payload, created_at)
+         VALUES (?1, NULL, ?2, ?3, ?4, ?5)",
+        params![
+            audit.id.to_string(),
+            audit.event_type,
+            audit.summary,
+            audit.payload,
+            to_db_time(audit.created_at),
+        ],
+    )
+    .map_err(storage_error)?;
+    Ok(())
+}
+
 fn installed_plugin_from_row(row: &Row<'_>) -> rusqlite::Result<InstalledPluginRecord> {
     let manifest_json: String = row.get(1)?;
     let manifest = serde_json::from_str::<PluginManifest>(&manifest_json).map_err(|err| {
@@ -2436,7 +3287,7 @@ mod tests {
                     );
                 }
 
-                if fixture_version == 8 {
+                if fixture_version >= 8 {
                     assert_eq!(plugin.provenance.capture_method, "fixture_v8");
                     assert_eq!(
                         plugin.provenance.integrity_status,
@@ -2490,7 +3341,9 @@ mod tests {
                 DROP TRIGGER model_route_records_no_delete;
                 DROP TRIGGER model_route_records_no_update;
                 DROP TABLE model_route_records;
-                DELETE FROM schema_migrations WHERE version IN (7, 8, 9);
+                DROP TABLE trusted_wake_events;
+                DROP TABLE trusted_wake_rules;
+                DELETE FROM schema_migrations WHERE version IN (7, 8, 9, 10);
                 ",
             )
             .unwrap();
@@ -2557,7 +3410,9 @@ mod tests {
                 DROP TRIGGER model_route_records_no_delete;
                 DROP TRIGGER model_route_records_no_update;
                 DROP TABLE model_route_records;
-                DELETE FROM schema_migrations WHERE version IN (7, 8, 9);
+                DROP TABLE trusted_wake_events;
+                DROP TABLE trusted_wake_rules;
+                DELETE FROM schema_migrations WHERE version IN (7, 8, 9, 10);
                 ",
             )
             .unwrap();
@@ -2990,6 +3845,7 @@ mod tests {
                 6 => repo.apply_migration_6().unwrap(),
                 7 => repo.apply_migration_7().unwrap(),
                 8 => repo.apply_migration_8().unwrap(),
+                9 => repo.apply_migration_9().unwrap(),
                 _ => unreachable!("unsupported fixture version"),
             }
         }
@@ -3173,7 +4029,7 @@ mod tests {
                     )
                     .unwrap();
             }
-            8 => {
+            8 | 9 => {
                 let provenance = InstalledPluginProvenance {
                     provenance_schema_version: 1,
                     capture_method: "fixture_v8".to_string(),

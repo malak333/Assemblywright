@@ -63,6 +63,19 @@ release requirements, not optional UX guidance.
   actions must also be manifest-opted-in for proactive execution with
   `proactive_run`; non-opted-in scheduled plugin actions fail closed before side
   effects execute.
+- Trusted macOS system-wake rules are disabled by default and use explicit,
+  generation-bound enablement. Only public P-256 key material crosses bounded
+  supervisor stdin during explicit initial provisioning; normal app/core
+  startup does not read the wake Keychain items. Bootstrap preparation must
+  succeed before the app-owned healthy core is stopped, and the one-shot bytes
+  are discarded after the single restart attempt. The device-only Keychain private key never enters argv,
+  environment, logs, diagnostics, or SQLite. Invalid signature, session,
+  generation, replay counter, UUID nonce, clock skew, input bounds, emergency
+  pause, or proactive policy state fails closed. Generic scheduler restoration
+  excludes trusted wake jobs, and ambiguous started events never redispatch.
+  Swift counter allocation must advance past both its Keychain counter and the
+  Rust rule's durable replay high-water; overflow fails closed. Ambiguous
+  events require an explicit generation/state-bound resolve-without-retry action.
 - Diagnostics exports must redact credentials, command bodies, scheduler
   commands, audit payloads, memory values, raw cancellation reasons, and other
   sensitive payloads.

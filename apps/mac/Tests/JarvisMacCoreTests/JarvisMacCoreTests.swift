@@ -5352,6 +5352,517 @@ private func commandResponseJSON(input: String) -> Data {
     )
 }
 
+@Suite("Trusted wake contracts")
+struct TrustedWakeContractsTests {
+    @Test("Counter recovers after Keychain loss from Rust durable high-water")
+    func counterRecoversAfterKeychainLoss() throws {
+        let counter = try nextTrustedWakeCounter(
+            persisted: nil,
+            epochMilliseconds: 12,
+            durableHighWater: 41
+        )
+        #expect(counter == 42)
+    }
+
+    @Test("Counter remains monotonic when wall clock moves backward")
+    func counterRecoversFromBackwardClock() throws {
+        let counter = try nextTrustedWakeCounter(
+            persisted: 90,
+            epochMilliseconds: 12,
+            durableHighWater: 80
+        )
+        #expect(counter == 91)
+    }
+
+    @Test("Counter exhaustion fails closed")
+    func counterExhaustionFailsClosed() {
+        do {
+            _ = try nextTrustedWakeCounter(
+                persisted: UInt64.max,
+                epochMilliseconds: 12,
+                durableHighWater: 80
+            )
+            Issue.record("Expected persisted counter exhaustion to fail closed")
+        } catch TrustedWakeError.counterExhausted {
+            // Expected.
+        } catch {
+            Issue.record("Unexpected persisted counter error: \(error)")
+        }
+
+        do {
+            _ = try nextTrustedWakeCounter(
+                persisted: 90,
+                epochMilliseconds: 12,
+                durableHighWater: UInt64.max
+            )
+            Issue.record("Expected durable high-water exhaustion to fail closed")
+        } catch TrustedWakeError.counterExhausted {
+            // Expected.
+        } catch {
+            Issue.record("Unexpected durable high-water error: \(error)")
+        }
+    }
+
+    @Test("Rust status timestamps decode and model uses injected signer once")
+    @MainActor
+    func modelUsesInjectedSigner() async throws {
+        let client = FakeCoreClient()
+        let model = TrustedWakeModel(client: client, signer: FakeTrustedWakeSigner())
+        await model.refresh()
+        #expect(model.status?.rule?.createdAt == "2026-07-13T10:00:00.123456Z")
+        await model.handleSystemWake()
+        #expect(client.trustedWakeSubmitCount == 1)
+        #expect(model.lastEvent?.state == "completed")
+    }
+
+    @Test("Model runs explicit provision action and reports restart degradation truthfully")
+    @MainActor
+    func modelProvisionActionAndFailureCopy() async {
+        let called = MutableFlag(false)
+        let successful = TrustedWakeModel(
+            client: FakeCoreClient(),
+            signer: FakeTrustedWakeSigner(),
+            provision: { called.value = true }
+        )
+        await successful.provision()
+        #expect(called.value)
+        #expect(successful.status?.rule != nil)
+        #expect(successful.errorMessage == nil)
+
+        let failed = TrustedWakeModel(
+            client: FakeCoreClient(),
+            signer: FakeTrustedWakeSigner(),
+            provision: { throw JarvisCoreSupervisorError.trustedWakeRestartFailed }
+        )
+        await failed.provision()
+        #expect(failed.errorMessage?.contains("supervisor may be degraded") == true)
+        #expect(failed.errorMessage?.contains("existing core was preserved") != true)
+    }
+
+    @Test("Model exposes and explicitly resolves ambiguous dispatch without retry")
+    @MainActor
+    func modelResolvesAmbiguousDispatchWithoutRetry() async {
+        let item = JarvisTrustedWakeAttentionItem(
+            eventId: UUID(uuidString: "00000000-0000-4000-8000-000000000331")!,
+            schedulerJobId: UUID(uuidString: "00000000-0000-4000-8000-000000000332")!,
+            ruleGeneration: 7,
+            state: "dispatch_started",
+            receivedAt: "2026-07-13T10:00:00Z",
+            updatedAt: "2026-07-13T10:00:01Z"
+        )
+        let client = FakeCoreClient(trustedWakeAttentionItems: [item])
+        let model = TrustedWakeModel(client: client, signer: FakeTrustedWakeSigner())
+
+        await model.refresh()
+        #expect(model.attentionItems == [item])
+        await model.resolve(item)
+
+        #expect(client.trustedWakeResolutionRequests.count == 1)
+        #expect(client.trustedWakeResolutionRequests[0].id == item.eventId)
+        #expect(client.trustedWakeResolutionRequests[0].request.expectedGeneration == 7)
+        #expect(client.trustedWakeResolutionRequests[0].request.expectedState == "dispatch_started")
+        #expect(model.attentionItems.isEmpty)
+        #expect(client.trustedWakeSubmitCount == 0)
+    }
+
+    @Test("Normal startup omits Keychain and explicit provision restarts once with stdin")
+    @MainActor
+    func supervisorUsesOneShotBootstrapStdin() async throws {
+        let bootstrap = Data("{\"public_key_x963_b64\":\"public-only\"}".utf8)
+        let launcher = FakeProcessLauncher()
+        let client = FakeCoreClient(healthResults: [
+            .failure(URLError(.cannotConnectToHost)),
+            .success(sampleHealth()),
+            .failure(URLError(.cannotConnectToHost)),
+            .success(sampleHealth()),
+            .failure(URLError(.cannotConnectToHost)),
+            .success(sampleHealth()),
+        ])
+        let supervisor = JarvisCoreSupervisor(
+            configuration: JarvisCoreSupervisorConfiguration(
+                executableURL: URL(fileURLWithPath: "/tmp/jarvis-cli"),
+                databaseURL: URL(fileURLWithPath: "/tmp/jarvis.sqlite")
+            ),
+            client: client,
+            processLauncher: launcher
+        )
+        await supervisor.start(environmentOverrides: ["JARVIS_LOCAL_MODEL": "fake-local-model"])
+        #expect(launcher.launches.count == 1)
+        #expect(!launcher.launches[0].arguments.contains("--trusted-wake-bootstrap-stdin"))
+        #expect(launcher.launches[0].standardInput == nil)
+
+        try await supervisor.provisionTrustedWake(using: FakeBootstrapProvider(result: .success(bootstrap)))
+        #expect(launcher.launches.count == 2)
+        #expect(launcher.launches[1].arguments.contains("--trusted-wake-bootstrap-stdin"))
+        #expect(launcher.launches[1].standardInput == bootstrap)
+        #expect(!launcher.launches[1].arguments.joined().contains("public-only"))
+        #expect(launcher.launches[1].environment["JARVIS_LOCAL_MODEL"] == "fake-local-model")
+
+        let stopped = await supervisor.stop()
+        #expect(stopped)
+        await supervisor.start()
+        #expect(launcher.launches.count == 3)
+        #expect(!launcher.launches[2].arguments.contains("--trusted-wake-bootstrap-stdin"))
+        #expect(launcher.launches[2].standardInput == nil)
+    }
+
+    @Test("Bootstrap preparation failure preserves the running supervised core")
+    @MainActor
+    func failedProvisionPreservesRunningCore() async {
+        let launcher = FakeProcessLauncher()
+        let client = FakeCoreClient(healthResults: [
+            .failure(URLError(.cannotConnectToHost)),
+            .success(sampleHealth()),
+        ])
+        let supervisor = JarvisCoreSupervisor(
+            configuration: JarvisCoreSupervisorConfiguration(
+                executableURL: URL(fileURLWithPath: "/tmp/jarvis-cli"),
+                databaseURL: URL(fileURLWithPath: "/tmp/jarvis.sqlite")
+            ),
+            client: client,
+            processLauncher: launcher
+        )
+        await supervisor.start()
+
+        do {
+            try await supervisor.provisionTrustedWake(
+                using: FakeBootstrapProvider(result: .failure(.unavailable))
+            )
+            Issue.record("Expected bootstrap error")
+        } catch JarvisCoreSupervisorError.trustedWakeBootstrapPreparationFailed {
+            // Expected.
+        } catch {
+            Issue.record("Unexpected bootstrap error: \(error)")
+        }
+        #expect(supervisor.mode == .available)
+        #expect(launcher.launches.count == 1)
+        #expect(launcher.processes[0].isRunning)
+
+        do {
+            try await supervisor.provisionTrustedWake(
+                using: FakeBootstrapProvider(result: .success(nil))
+            )
+            Issue.record("Expected nil bootstrap to fail closed")
+        } catch JarvisCoreSupervisorError.trustedWakeBootstrapUnavailable {
+            // Expected.
+        } catch {
+            Issue.record("Unexpected nil bootstrap error: \(error)")
+        }
+        #expect(supervisor.mode == .available)
+        #expect(launcher.launches.count == 1)
+        #expect(launcher.processes[0].isRunning)
+
+        do {
+            try await supervisor.provisionTrustedWake(
+                using: FakeBootstrapProvider(result: .success(Data(repeating: 1, count: 8 * 1024 + 1)))
+            )
+            Issue.record("Expected oversized bootstrap to fail closed")
+        } catch JarvisCoreSupervisorError.trustedWakeBootstrapTooLarge {
+            // Expected.
+        } catch {
+            Issue.record("Unexpected oversized bootstrap error: \(error)")
+        }
+        #expect(supervisor.mode == .available)
+        #expect(launcher.launches.count == 1)
+        #expect(launcher.processes[0].isRunning)
+    }
+
+    @Test("Stop failure prevents provisioning relaunch")
+    @MainActor
+    func stopFailurePreventsProvisionRelaunch() async {
+        let launcher = DelayedStopProcessLauncher(runningChecksAfterTerminate: 10_000)
+        let client = FakeCoreClient(healthResults: [
+            .failure(URLError(.cannotConnectToHost)),
+            .success(sampleHealth()),
+        ])
+        let supervisor = JarvisCoreSupervisor(
+            configuration: JarvisCoreSupervisorConfiguration(
+                executableURL: URL(fileURLWithPath: "/tmp/jarvis-cli"),
+                databaseURL: URL(fileURLWithPath: "/tmp/jarvis.sqlite"),
+                startupTimeoutSeconds: 0.002,
+                healthPollIntervalNanoseconds: 100_000
+            ),
+            client: client,
+            processLauncher: launcher
+        )
+        await supervisor.start()
+
+        do {
+            try await supervisor.provisionTrustedWake(
+                using: FakeBootstrapProvider(result: .success(Data("public".utf8)))
+            )
+            Issue.record("Expected stop timeout")
+        } catch JarvisCoreSupervisorError.trustedWakeStopFailed {
+            // Expected.
+        } catch {
+            Issue.record("Unexpected stop failure: \(error)")
+        }
+        #expect(launcher.launchCount == 1)
+        #expect(launcher.process.terminateCalled)
+        if case .degraded = supervisor.mode {
+            // Expected.
+        } else {
+            Issue.record("Expected degraded supervisor after stop failure")
+        }
+    }
+
+    @Test("Provision restart failure is visible and does not loop")
+    @MainActor
+    func restartFailureIsVisibleAndDoesNotLoop() async {
+        var healthResults: [Result<JarvisHealth, Error>] = [
+            .failure(URLError(.cannotConnectToHost)),
+            .success(sampleHealth()),
+        ]
+        for _ in 0 ..< 50 {
+            healthResults.append(.failure(URLError(.cannotConnectToHost)))
+        }
+        let launcher = FakeProcessLauncher()
+        let supervisor = JarvisCoreSupervisor(
+            configuration: JarvisCoreSupervisorConfiguration(
+                executableURL: URL(fileURLWithPath: "/tmp/jarvis-cli"),
+                databaseURL: URL(fileURLWithPath: "/tmp/jarvis.sqlite"),
+                startupTimeoutSeconds: 0.003,
+                healthPollIntervalNanoseconds: 100_000
+            ),
+            client: FakeCoreClient(healthResults: healthResults),
+            processLauncher: launcher
+        )
+        await supervisor.start()
+
+        do {
+            try await supervisor.provisionTrustedWake(
+                using: FakeBootstrapProvider(result: .success(Data("public".utf8)))
+            )
+            Issue.record("Expected restart failure")
+        } catch JarvisCoreSupervisorError.trustedWakeRestartFailed {
+            // Expected.
+        } catch {
+            Issue.record("Unexpected restart error: \(error)")
+        }
+        #expect(launcher.launches.count == 2)
+        #expect(!launcher.processes[0].isRunning)
+        #expect(!launcher.processes[1].isRunning)
+        if case .degraded = supervisor.mode {
+            // Expected.
+        } else {
+            Issue.record("Expected degraded supervisor after restart failure")
+        }
+    }
+
+    @Test("Concurrent provision is single-flight")
+    @MainActor
+    func concurrentProvisionIsRejected() async {
+        let provider = ControlledBootstrapProvider(data: Data("public".utf8))
+        let launcher = FakeProcessLauncher()
+        let supervisor = JarvisCoreSupervisor(
+            configuration: JarvisCoreSupervisorConfiguration(
+                executableURL: URL(fileURLWithPath: "/tmp/jarvis-cli"),
+                databaseURL: URL(fileURLWithPath: "/tmp/jarvis.sqlite")
+            ),
+            client: FakeCoreClient(healthResults: [
+                .failure(URLError(.cannotConnectToHost)),
+                .success(sampleHealth()),
+                .failure(URLError(.cannotConnectToHost)),
+                .success(sampleHealth()),
+            ]),
+            processLauncher: launcher
+        )
+        await supervisor.start()
+        let first = Task { @MainActor in
+            try await supervisor.provisionTrustedWake(using: provider)
+        }
+        await Task.yield()
+        #expect(provider.waitUntilStarted())
+
+        do {
+            try await supervisor.provisionTrustedWake(
+                using: FakeBootstrapProvider(result: .success(Data("other".utf8)))
+            )
+            Issue.record("Expected concurrent provision rejection")
+        } catch JarvisCoreSupervisorError.trustedWakeProvisionInProgress {
+            // Expected.
+        } catch {
+            Issue.record("Unexpected concurrent provision error: \(error)")
+        }
+        #expect(launcher.launches.count == 1)
+        #expect(launcher.processes[0].isRunning)
+
+        provider.resume()
+        do {
+            try await first.value
+        } catch {
+            Issue.record("First provision unexpectedly failed: \(error)")
+        }
+        #expect(launcher.launches.count == 2)
+    }
+
+    @Test("Provision preparation never stops a replacement core")
+    @MainActor
+    func provisionRevalidatesOriginalProcessIdentity() async {
+        let provider = ControlledBootstrapProvider(data: Data("public".utf8))
+        let launcher = FakeProcessLauncher()
+        let supervisor = JarvisCoreSupervisor(
+            configuration: JarvisCoreSupervisorConfiguration(
+                executableURL: URL(fileURLWithPath: "/tmp/jarvis-cli"),
+                databaseURL: URL(fileURLWithPath: "/tmp/jarvis.sqlite")
+            ),
+            client: FakeCoreClient(healthResults: [
+                .failure(URLError(.cannotConnectToHost)),
+                .success(sampleHealth()),
+                .failure(URLError(.cannotConnectToHost)),
+                .success(sampleHealth()),
+            ]),
+            processLauncher: launcher
+        )
+        await supervisor.start()
+        let provision = Task { @MainActor in
+            try await supervisor.provisionTrustedWake(using: provider)
+        }
+        await Task.yield()
+        #expect(provider.waitUntilStarted())
+
+        let stopped = await supervisor.stop()
+        #expect(stopped)
+        await supervisor.start()
+        #expect(launcher.launches.count == 2)
+        let replacement = launcher.processes[1]
+        #expect(replacement.isRunning)
+
+        provider.resume()
+        do {
+            try await provision.value
+            Issue.record("Expected process identity revalidation failure")
+        } catch JarvisCoreSupervisorError.trustedWakeCoreChangedDuringPreparation {
+            // Expected.
+        } catch {
+            Issue.record("Unexpected identity revalidation error: \(error)")
+        }
+        #expect(launcher.launches.count == 2)
+        #expect(replacement.isRunning)
+        #expect(supervisor.mode == .available)
+    }
+
+    @Test("Provision stop serializes concurrent start and stop")
+    @MainActor
+    func provisionStopSerializesLifecycleMutations() async {
+        let launcher = ControlledLifecycleProcessLauncher()
+        let supervisor = JarvisCoreSupervisor(
+            configuration: JarvisCoreSupervisorConfiguration(
+                executableURL: URL(fileURLWithPath: "/tmp/jarvis-cli"),
+                databaseURL: URL(fileURLWithPath: "/tmp/jarvis.sqlite"),
+                startupTimeoutSeconds: 1,
+                healthPollIntervalNanoseconds: 1_000_000
+            ),
+            client: FakeCoreClient(healthResults: [
+                .failure(URLError(.cannotConnectToHost)),
+                .success(sampleHealth()),
+                .failure(URLError(.cannotConnectToHost)),
+                .success(sampleHealth()),
+            ]),
+            processLauncher: launcher
+        )
+        await supervisor.start()
+        let provision = Task { @MainActor in
+            try await supervisor.provisionTrustedWake(
+                using: FakeBootstrapProvider(result: .success(Data("public".utf8)))
+            )
+        }
+
+        for _ in 0 ..< 100 where !launcher.firstProcess.terminateCalled {
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        #expect(launcher.firstProcess.terminateCalled)
+
+        await supervisor.start(environmentOverrides: ["JARVIS_LOCAL_MODEL": "must-not-launch"])
+        let concurrentStop = await supervisor.stop()
+        #expect(!concurrentStop)
+        #expect(launcher.launchCount == 1)
+
+        launcher.firstProcess.allowExit()
+        do {
+            try await provision.value
+        } catch {
+            Issue.record("Provision unexpectedly failed: \(error)")
+        }
+
+        #expect(launcher.launchCount == 2)
+        #expect(launcher.secondProcess?.isRunning == true)
+        #expect(supervisor.mode == .available)
+    }
+
+    @Test("Foundation launcher delivers exact stdin bytes and closes EOF")
+    func foundationLauncherClosesBootstrapStdin() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "jarvis-bootstrap-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let received = directory.appending(path: "received.bin")
+        let eofMarker = directory.appending(path: "eof.txt")
+        let bootstrap = Data([0, 1, 2, 10, 13, 127, 255])
+        let process = try FoundationJarvisCoreProcessLauncher().launch(
+            executableURL: URL(fileURLWithPath: "/bin/sh"),
+            arguments: [
+                "-c",
+                "cat > \"$1\"; printf eof > \"$2\"",
+                "jarvis-bootstrap-test",
+                received.path,
+                eofMarker.path,
+            ],
+            environment: ProcessInfo.processInfo.environment,
+            standardInput: bootstrap
+        )
+        defer { process.terminate() }
+
+        for _ in 0 ..< 100 where !FileManager.default.fileExists(atPath: eofMarker.path) {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(try Data(contentsOf: received) == bootstrap)
+        #expect(try String(contentsOf: eofMarker, encoding: .utf8) == "eof")
+    }
+}
+
+private struct FakeTrustedWakeSigner: TrustedWakeEnvelopeSigning {
+    func envelope(
+        status _: JarvisTrustedWakeStatus,
+        occurredAt _: Date
+    ) throws -> JarvisTrustedWakeEnvelope {
+        JarvisTrustedWakeEnvelope(payloadBase64: "bounded-payload", signatureDERBase64: "bounded-signature")
+    }
+}
+
+private enum BootstrapTestError: Error {
+    case unavailable
+}
+
+private final class ControlledBootstrapProvider: TrustedWakeBootstrapProviding, @unchecked Sendable {
+    private let data: Data
+    private let started = DispatchSemaphore(value: 0)
+    private let release = DispatchSemaphore(value: 0)
+
+    init(data: Data) {
+        self.data = data
+    }
+
+    func bootstrapData() throws -> Data? {
+        started.signal()
+        release.wait()
+        return data
+    }
+
+    func waitUntilStarted() -> Bool {
+        started.wait(timeout: .now() + 2) == .success
+    }
+
+    func resume() {
+        release.signal()
+    }
+}
+
+private struct FakeBootstrapProvider: TrustedWakeBootstrapProviding {
+    var result: Result<Data?, BootstrapTestError>
+    func bootstrapData() throws -> Data? { try result.get() }
+}
+
 private final class FakeProcess: JarvisCoreProcess, @unchecked Sendable {
     private(set) var isRunning = true
 
@@ -5365,17 +5876,27 @@ private final class FakeProcessLauncher: JarvisCoreProcessLaunching, @unchecked 
         var executableURL: URL
         var arguments: [String]
         var environment: [String: String]
+        var standardInput: Data?
     }
 
     private(set) var launches: [Launch] = []
+    private(set) var processes: [FakeProcess] = []
 
     func launch(
         executableURL: URL,
         arguments: [String],
-        environment: [String: String]
+        environment: [String: String],
+        standardInput: Data?
     ) throws -> any JarvisCoreProcess {
-        launches.append(Launch(executableURL: executableURL, arguments: arguments, environment: environment))
-        return FakeProcess()
+        launches.append(Launch(
+            executableURL: executableURL,
+            arguments: arguments,
+            environment: environment,
+            standardInput: standardInput
+        ))
+        let process = FakeProcess()
+        processes.append(process)
+        return process
     }
 }
 
@@ -5410,9 +5931,48 @@ private final class DelayedStopProcessLauncher: JarvisCoreProcessLaunching, @unc
     func launch(
         executableURL: URL,
         arguments: [String],
-        environment: [String: String]
+        environment: [String: String],
+        standardInput _: Data?
     ) throws -> any JarvisCoreProcess {
         launchCount += 1
+        return process
+    }
+}
+
+private final class ControlledLifecycleProcess: JarvisCoreProcess, @unchecked Sendable {
+    private(set) var terminateCalled = false
+    private var exitAllowed = false
+
+    var isRunning: Bool {
+        !terminateCalled || !exitAllowed
+    }
+
+    func terminate() {
+        terminateCalled = true
+    }
+
+    func allowExit() {
+        exitAllowed = true
+    }
+}
+
+private final class ControlledLifecycleProcessLauncher: JarvisCoreProcessLaunching, @unchecked Sendable {
+    let firstProcess = ControlledLifecycleProcess()
+    private(set) var secondProcess: FakeProcess?
+    private(set) var launchCount = 0
+
+    func launch(
+        executableURL _: URL,
+        arguments _: [String],
+        environment _: [String: String],
+        standardInput _: Data?
+    ) throws -> any JarvisCoreProcess {
+        launchCount += 1
+        if launchCount == 1 {
+            return firstProcess
+        }
+        let process = FakeProcess()
+        secondProcess = process
         return process
     }
 }
@@ -5616,6 +6176,9 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     private(set) var updatedMemoryRequests: [(id: UUID, request: JarvisMemoryMutationRequest)]
     private(set) var runDueSchedulerLimits: [Int]
     private(set) var recoverStaleSchedulerRequests: [(olderThanSeconds: UInt64, limit: Int)]
+    private(set) var trustedWakeSubmitCount = 0
+    private(set) var trustedWakeResolutionRequests: [(id: UUID, request: JarvisTrustedWakeResolutionRequest)] = []
+    private var trustedWakeAttentionItems: [JarvisTrustedWakeAttentionItem]
 
     init(
         healthResults: [Result<JarvisHealth, Error>] = [.success(sampleHealth())],
@@ -5638,7 +6201,8 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         schedulerJobs: [JarvisSchedulerJob] = [],
         memoryItems: [JarvisMemoryItem] = [],
         memoryRetentionPlan: JarvisMemoryRetentionPlan? = nil,
-        permissionGrantSummary: JarvisPermissionGrantSummary? = nil
+        permissionGrantSummary: JarvisPermissionGrantSummary? = nil,
+        trustedWakeAttentionItems: [JarvisTrustedWakeAttentionItem] = []
     ) {
         self.healthResults = healthResults
         self.tasks = tasks
@@ -5662,6 +6226,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         self.memoryItems = memoryItems
         self.memoryRetentionPlanResult = memoryRetentionPlan
         self.permissionGrantSummaryResult = permissionGrantSummary
+        self.trustedWakeAttentionItems = trustedWakeAttentionItems
         self.approvalDecisions = []
         self.approvalExecutions = []
         self.includeDeletedMemoryRequests = []
@@ -6047,6 +6612,82 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         return try JSONDecoder().decode(
             JarvisSchedulerStaleRecoveryResponse.self,
             from: fakeSchedulerRecoverStaleJSON(id: id)
+        )
+    }
+
+    func trustedWakeStatus() async throws -> JarvisTrustedWakeStatus {
+        try JSONDecoder().decode(
+            JarvisTrustedWakeStatus.self,
+            from: Data(
+                """
+                {
+                  "schema_version": 1,
+                  "session_id": "00000000-0000-4000-8000-000000000111",
+                  "challenge": "challenge",
+                  "rule": {
+                    "id": "4a617276-6973-4000-8000-000000000010",
+                    "enabled": true,
+                    "key_fingerprint": "redacted-fingerprint",
+                    "generation": 1,
+                    "highest_counter": 4,
+                    "created_at": "2026-07-13T10:00:00.123456Z",
+                    "updated_at": "2026-07-13T10:00:01Z"
+                  },
+                  "attention_required": false,
+                  "ambiguous_dispatch_count": 0,
+                  "proof_boundary": "local contract only"
+                }
+                """.utf8
+            )
+        )
+    }
+
+    func trustedWakeAttention() async throws -> [JarvisTrustedWakeAttentionItem] {
+        trustedWakeAttentionItems
+    }
+
+    func resolveTrustedWakeAttention(
+        id: UUID,
+        request: JarvisTrustedWakeResolutionRequest
+    ) async throws -> JarvisTrustedWakeAttentionItem {
+        trustedWakeResolutionRequests.append((id: id, request: request))
+        guard let index = trustedWakeAttentionItems.firstIndex(where: { $0.eventId == id }) else {
+            throw URLError(.fileDoesNotExist)
+        }
+        var item = trustedWakeAttentionItems.remove(at: index)
+        item.state = "blocked"
+        return item
+    }
+
+    func setTrustedWakeEnabled(
+        _ request: JarvisTrustedWakeRuleEnablement
+    ) async throws -> JarvisTrustedWakeRule {
+        throw URLError(.unsupportedURL)
+    }
+
+    func submitTrustedWake(
+        _ envelope: JarvisTrustedWakeEnvelope
+    ) async throws -> JarvisTrustedWakeEventResponse {
+        trustedWakeSubmitCount += 1
+        return try JSONDecoder().decode(
+            JarvisTrustedWakeEventResponse.self,
+            from: Data(
+                """
+                {
+                  "event": {
+                    "id": "00000000-0000-4000-8000-000000000222",
+                    "rule_id": "4a617276-6973-4000-8000-000000000010",
+                    "counter": 5,
+                    "state": "completed",
+                    "task_id": "00000000-0000-4000-8000-000000000223",
+                    "scheduler_job_id": "00000000-0000-4000-8000-000000000224"
+                  },
+                  "idempotent_retry": false,
+                  "execution": null,
+                  "proof_boundary": "local contract only"
+                }
+                """.utf8
+            )
         )
     }
 

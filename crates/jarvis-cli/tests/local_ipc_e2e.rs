@@ -10,11 +10,34 @@ use std::time::Duration;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use ed25519_dalek::{Signer, SigningKey};
 use jarvis_core::SqliteRepository;
+use p256::ecdsa::{Signature as P256Signature, SigningKey as P256SigningKey};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
 fn jarvis_cli_bin() -> PathBuf {
+    static STABLE_BIN: OnceLock<PathBuf> = OnceLock::new();
+    STABLE_BIN
+        .get_or_init(|| {
+            let source = resolve_jarvis_cli_bin();
+            let destination = std::env::current_exe()
+                .expect("current E2E executable path")
+                .parent()
+                .expect("current E2E executable directory")
+                .join(format!("jarvis-e2e-bin-{}", std::process::id()));
+            fs::copy(&source, &destination).unwrap_or_else(|error| {
+                panic!(
+                    "copy stable Jarvis CLI E2E binary from {} to {}: {error}",
+                    source.display(),
+                    destination.display()
+                )
+            });
+            destination
+        })
+        .clone()
+}
+
+fn resolve_jarvis_cli_bin() -> PathBuf {
     let cargo_bin = PathBuf::from(env!("CARGO_BIN_EXE_jarvis"));
     if cargo_bin.is_file() {
         return cargo_bin;
@@ -6725,7 +6748,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
 
     let diagnostics = run_cli_json(["diagnostics", "export", "--endpoint", endpoint.as_str()]);
     assert_eq!(diagnostics["repository_backed"], true);
-    assert_eq!(diagnostics["schema_version"], 9);
+    assert_eq!(diagnostics["schema_version"], 10);
     assert_eq!(
         diagnostics["health"]["contract"]["name"],
         "jarvis.local-ipc"
@@ -7878,6 +7901,84 @@ fn cli_smoke_command_is_release_gate_compatible() {
     );
 }
 
+#[test]
+fn trusted_wake_cross_process_is_disabled_signed_idempotent_and_redacted() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("wake.sqlite");
+    let signing_key = P256SigningKey::from_bytes((&[13_u8; 32]).into()).unwrap();
+    let public_key = signing_key.verifying_key().to_encoded_point(false);
+    let bootstrap = json!({
+        "rule_id": "4a617276-6973-4000-8000-000000000010",
+        "public_key_x963_b64": BASE64_STANDARD.encode(public_key.as_bytes()),
+        "command": "trusted wake cross process local check",
+        "allow_rotation": false,
+    });
+    let mut server = JarvisServer::start_with_trusted_wake_bootstrap(&db_path, &bootstrap);
+    let endpoint = server.endpoint();
+    let status: Value =
+        serde_json::from_str(&request(&endpoint, "GET", "/system-wake/status", None).unwrap())
+            .unwrap();
+    assert_eq!(status["rule"]["enabled"], false);
+    let generation = status["rule"]["generation"].as_u64().unwrap();
+    let enable = json!({ "enabled": true, "expected_generation": generation });
+    request(
+        &endpoint,
+        "POST",
+        "/system-wake/rule",
+        Some(&enable.to_string()),
+    )
+    .unwrap();
+    let payload = json!({
+        "schema_version": 1,
+        "rule_id": "4a617276-6973-4000-8000-000000000010",
+        "rule_generation": generation,
+        "session_id": status["session_id"],
+        "challenge": status["challenge"],
+        "counter": 1,
+        "occurred_at": chrono::Utc::now(),
+        "nonce": "00000000-0000-4000-8000-000000000333",
+    });
+    let bytes = serde_json::to_vec(&payload).unwrap();
+    let signature: P256Signature = signing_key.sign(&bytes);
+    let envelope = json!({
+        "payload_b64": BASE64_STANDARD.encode(&bytes),
+        "signature_der_b64": BASE64_STANDARD.encode(signature.to_der().as_bytes()),
+    });
+    let first: Value = serde_json::from_str(
+        &request(
+            &endpoint,
+            "POST",
+            "/system-wake/events",
+            Some(&envelope.to_string()),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(first["event"]["state"], "completed");
+    assert_eq!(first["idempotent_retry"], false);
+    let retry: Value = serde_json::from_str(
+        &request(
+            &endpoint,
+            "POST",
+            "/system-wake/events",
+            Some(&envelope.to_string()),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(retry["event"]["id"], first["event"]["id"]);
+    assert_eq!(retry["idempotent_retry"], true);
+    assert!(retry["execution"].is_null());
+    let tasks: Value =
+        serde_json::from_str(&request(&endpoint, "GET", "/tasks", None).unwrap()).unwrap();
+    assert_eq!(tasks.as_array().unwrap().len(), 1);
+    let audit = request(&endpoint, "GET", "/audit", None).unwrap();
+    assert!(!audit.contains("signature_der_b64"));
+    assert!(!audit.contains("payload_b64"));
+    assert!(!audit.contains("trusted wake cross process local check"));
+    server.stop();
+}
+
 struct JarvisServer {
     child: Option<Child>,
     endpoint: String,
@@ -7885,6 +7986,40 @@ struct JarvisServer {
 }
 
 impl JarvisServer {
+    fn start_with_trusted_wake_bootstrap(db_path: &Path, bootstrap: &Value) -> Self {
+        let _startup_guard = jarvis_server_startup_lock().lock().expect("startup lock");
+        let bind = unused_loopback_addr();
+        let endpoint = format!("http://{bind}");
+        let temp_dir = tempfile::tempdir().expect("server temp dir");
+        let mut child = Command::new(jarvis_cli_bin())
+            .args([
+                "serve",
+                "--bind",
+                &bind.to_string(),
+                "--db-path",
+                db_path.to_str().expect("db path"),
+                "--trusted-wake-bootstrap-stdin",
+            ])
+            .current_dir(temp_dir.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("start bootstrapped jarvis serve");
+        child
+            .stdin
+            .take()
+            .expect("bootstrap stdin")
+            .write_all(serde_json::to_string(bootstrap).unwrap().as_bytes())
+            .expect("write bootstrap");
+        let mut server = Self {
+            child: Some(child),
+            endpoint,
+            _temp_dir: temp_dir,
+        };
+        server.wait_until_healthy();
+        server
+    }
     fn start(db_path: &Path) -> Self {
         Self::start_inner(db_path, None, None)
     }

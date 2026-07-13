@@ -1145,3 +1145,14 @@ and degraded supervisor states to conservative menu status and enabled-action
 behavior. This is Swift scene/model contract coverage. It does not prove macOS
 menu rendering, window reopening through Finder/LaunchServices, or live
 lifecycle actions in a signed installed app; record those in manual release QA.
+
+### Trusted system-wake foundation
+
+```bash
+cargo test -p jarvis-core trusted_wake -- --nocapture
+cargo test -p jarvis-cli --test local_ipc_e2e trusted_wake -- --nocapture
+swift test --disable-sandbox --package-path apps/mac --filter TrustedWake
+```
+
+These prove bounded local contracts only, not Apple attestation, OS wake
+provenance, background launch, same-user IPC, exactly-once effects, or live QA.

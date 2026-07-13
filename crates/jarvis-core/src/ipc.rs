@@ -27,6 +27,7 @@ use crate::storage::{
     EmergencyPauseState as StoredEmergencyPauseState, MemoryClassificationSummary, NewMemoryItem,
     NewPendingApproval, PendingApproval, SqliteRepository,
 };
+use crate::trusted_wake::{decode_public_key, validate_command, verify_envelope};
 use crate::{
     execute_installed_subprocess_plugin, plugin_permission_scopes, ApprovalDecision, ApprovalGrant,
     ApprovalStatus, AuditEntry, CapabilityScope, ConversationRuntime, InstalledPlugin,
@@ -37,6 +38,12 @@ use crate::{
     RuntimeCommandRequest, RuntimeCommandStore, RuntimeConfig, RuntimeControl, RuntimeStep,
     Scheduler, SchedulerJob, SchedulerJobSpec, SchedulerJobStatus, Sensitivity, TaskRecord,
     TaskStatus, TriggerKind,
+};
+use crate::{
+    TrustedWakeAcceptedEvent, TrustedWakeAttentionItem, TrustedWakeEnvelope,
+    TrustedWakeResolutionRequest, TrustedWakeRule, TrustedWakeRuleEnablement,
+    TrustedWakeRuleEnrollment, TrustedWakeSessionStatus, TRUSTED_WAKE_RULE_ID,
+    TRUSTED_WAKE_SCHEMA_VERSION,
 };
 
 pub const IPC_CONTRACT_VERSION: u16 = 1;
@@ -634,6 +641,14 @@ pub struct SchedulerJobExecution {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrustedWakeEventResponse {
+    pub event: TrustedWakeAcceptedEvent,
+    pub idempotent_retry: bool,
+    pub execution: Option<SchedulerJobExecution>,
+    pub proof_boundary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SchedulerAttentionSummary {
     pub generated_at: DateTime<Utc>,
     pub emergency_paused: bool,
@@ -930,6 +945,8 @@ pub struct IpcState {
     emergency_pause: Arc<Mutex<EmergencyPauseState>>,
     repository: Option<Arc<Mutex<SqliteRepository>>>,
     provider_config: ProviderConfig,
+    trusted_wake_session_id: Uuid,
+    trusted_wake_challenge: String,
 }
 
 impl Default for IpcState {
@@ -952,6 +969,12 @@ impl IpcState {
             emergency_pause: Arc::new(Mutex::new(EmergencyPauseState::default())),
             repository: None,
             provider_config,
+            trusted_wake_session_id: Uuid::new_v4(),
+            trusted_wake_challenge: format!(
+                "{}{}",
+                Uuid::new_v4().simple(),
+                Uuid::new_v4().simple()
+            ),
         }
     }
 
@@ -963,8 +986,9 @@ impl IpcState {
         repository: SqliteRepository,
         provider_config: ProviderConfig,
     ) -> JarvisResult<Self> {
+        repository.reconcile_trusted_wake_events_on_startup()?;
         let stored_pause = repository.emergency_pause_state()?;
-        let stored_scheduler_jobs = repository.list_scheduler_jobs()?;
+        let stored_scheduler_jobs = repository.list_scheduler_jobs_for_runtime()?;
         let scheduler = Scheduler::with_jobs(stored_scheduler_jobs);
         if stored_pause.paused {
             let control = RuntimeControl::default();
@@ -979,6 +1003,12 @@ impl IpcState {
                 ))),
                 repository: Some(Arc::new(Mutex::new(repository))),
                 provider_config,
+                trusted_wake_session_id: Uuid::new_v4(),
+                trusted_wake_challenge: format!(
+                    "{}{}",
+                    Uuid::new_v4().simple(),
+                    Uuid::new_v4().simple()
+                ),
             })
         } else {
             Ok(Self {
@@ -991,6 +1021,12 @@ impl IpcState {
                 ))),
                 repository: Some(Arc::new(Mutex::new(repository))),
                 provider_config,
+                trusted_wake_session_id: Uuid::new_v4(),
+                trusted_wake_challenge: format!(
+                    "{}{}",
+                    Uuid::new_v4().simple(),
+                    Uuid::new_v4().simple()
+                ),
             })
         }
     }
@@ -1022,6 +1058,8 @@ impl IpcState {
                 "/scheduler/jobs".to_string(),
                 "/scheduler/attention".to_string(),
                 "/scheduler/jobs/:id".to_string(),
+                "/system-wake/status".to_string(),
+                "/system-wake/attention".to_string(),
                 "/activity/summary".to_string(),
                 "/activity/events".to_string(),
                 "/model-routes".to_string(),
@@ -2578,13 +2616,13 @@ impl IpcState {
         let reason = reason.into();
         let reason_present = !reason.trim().is_empty();
         let stored_pause = self.persist_pause(true, Some(&reason))?;
+        self.runtime_control.emergency_pause();
         let cancelled_jobs = self
             .scheduler
             .cancel_active_jobs(format!("emergency pause: {reason}"));
         for job in &cancelled_jobs {
             self.persist_scheduler_job(job)?;
         }
-        self.runtime_control.emergency_pause();
         let paused_at = stored_pause
             .as_ref()
             .map(|pause| pause.updated_at)
@@ -2709,6 +2747,382 @@ impl IpcState {
             .into_iter()
             .find(|job| job.id == id)
             .ok_or_else(|| JarvisError::Storage(format!("scheduler job not found: {id}")))
+    }
+
+    pub fn bootstrap_trusted_wake_rule(
+        &self,
+        enrollment: TrustedWakeRuleEnrollment,
+    ) -> JarvisResult<TrustedWakeRule> {
+        self.append_scheduler_audit_entry(
+            None,
+            "trusted_wake_bootstrap_attempted",
+            "supervisor bootstrap attempted trusted wake public-key enrollment",
+            json!({
+                "rule_id": enrollment.rule_id,
+                "public_key_redacted": true,
+                "command_redacted": true,
+            }),
+        )?;
+        let result = (|| {
+            if enrollment.rule_id != TRUSTED_WAKE_RULE_ID {
+                return Err(JarvisError::Validation(
+                    "trusted wake bootstrap rule id is not recognized".to_string(),
+                ));
+            }
+            let (public_key, fingerprint) = decode_public_key(&enrollment.public_key_x963_b64)?;
+            let command = validate_command(&enrollment.command)?;
+            self.using_repository(|repository| {
+                repository.enroll_trusted_wake_rule(
+                    enrollment.rule_id,
+                    &public_key,
+                    &fingerprint,
+                    &command,
+                    enrollment.allow_rotation,
+                )
+            })
+        })();
+        if result.is_err() {
+            let _ = self.append_scheduler_audit_entry(
+                None,
+                "trusted_wake_bootstrap_failed",
+                "supervisor bootstrap failed closed without trusted wake enrollment",
+                json!({
+                    "rule_id": enrollment.rule_id,
+                    "public_key_redacted": true,
+                    "command_redacted": true,
+                    "rotation_requested": enrollment.allow_rotation,
+                    "error_present": true,
+                }),
+            );
+        }
+        result
+    }
+
+    pub fn trusted_wake_status(&self) -> JarvisResult<TrustedWakeSessionStatus> {
+        let rule = self.using_repository(|repository| {
+            repository
+                .get_trusted_wake_rule(TRUSTED_WAKE_RULE_ID)
+                .map(|value| value.map(|stored| stored.public))
+        })?;
+        let ambiguous_dispatch_count =
+            self.using_repository(SqliteRepository::trusted_wake_ambiguous_count)?;
+        Ok(TrustedWakeSessionStatus {
+            schema_version: TRUSTED_WAKE_SCHEMA_VERSION,
+            session_id: self.trusted_wake_session_id,
+            challenge: self.trusted_wake_challenge.clone(),
+            rule,
+            attention_required: ambiguous_dispatch_count > 0,
+            ambiguous_dispatch_count,
+            proof_boundary: "Enrolled-key possession, active-core session binding, bounded clock skew, and durable replay high-water only. There is no supported enrollment-key rotation or key-loss/mismatch recovery workflow; manual SQLite or Keychain mutation is unsupported. This is not Apple attestation, OS wake provenance, same-user isolation, background launch, exactly-once effects, live-device evidence, or production readiness.".to_string(),
+        })
+    }
+
+    pub fn set_trusted_wake_enabled(
+        &self,
+        request: TrustedWakeRuleEnablement,
+    ) -> JarvisResult<TrustedWakeRule> {
+        self.append_scheduler_audit_entry(
+            None,
+            "trusted_wake_rule_enablement_attempted",
+            "operator explicitly changed trusted wake rule enablement",
+            json!({ "rule_id": TRUSTED_WAKE_RULE_ID, "enabled": request.enabled, "expected_generation": request.expected_generation }),
+        )?;
+        let result = self.using_repository(|repository| {
+            repository.set_trusted_wake_rule_enabled(
+                TRUSTED_WAKE_RULE_ID,
+                request.enabled,
+                request.expected_generation,
+            )
+        });
+        if result.is_err() {
+            let _ = self.append_scheduler_audit_entry(
+                None,
+                "trusted_wake_rule_enablement_failed",
+                "trusted wake rule enablement failed closed",
+                json!({
+                    "rule_id": TRUSTED_WAKE_RULE_ID,
+                    "enabled": request.enabled,
+                    "expected_generation": request.expected_generation,
+                    "error_present": true,
+                }),
+            );
+        }
+        result
+    }
+
+    pub fn trusted_wake_attention(&self) -> JarvisResult<Vec<TrustedWakeAttentionItem>> {
+        self.using_repository(SqliteRepository::list_trusted_wake_attention)
+    }
+
+    pub fn resolve_trusted_wake_attention(
+        &self,
+        event_id: Uuid,
+        request: TrustedWakeResolutionRequest,
+    ) -> JarvisResult<TrustedWakeAttentionItem> {
+        self.append_scheduler_audit_entry(
+            None,
+            "trusted_wake_ambiguous_resolution_attempted",
+            "operator attempted explicit no-redispatch resolution of ambiguous wake event",
+            json!({
+                "trusted_wake_event_id": event_id,
+                "expected_generation": request.expected_generation,
+                "expected_state": request.expected_state,
+                "command_redacted": true,
+            }),
+        )?;
+        self.using_repository(|repository| {
+            repository.resolve_trusted_wake_attention(
+                event_id,
+                request.expected_generation,
+                request.expected_state,
+            )
+        })
+    }
+
+    pub async fn accept_trusted_wake_envelope(
+        &self,
+        envelope: TrustedWakeEnvelope,
+    ) -> JarvisResult<TrustedWakeEventResponse> {
+        let rule = self
+            .using_repository(|repository| repository.get_trusted_wake_rule(TRUSTED_WAKE_RULE_ID))?
+            .ok_or_else(|| {
+                JarvisError::Validation("trusted wake rule is not enrolled".to_string())
+            })?;
+        if !rule.public.enabled {
+            return Err(JarvisError::Validation(
+                "trusted wake rule is disabled".to_string(),
+            ));
+        }
+        let verified = verify_envelope(
+            &envelope,
+            &rule.public_key,
+            self.trusted_wake_session_id,
+            &self.trusted_wake_challenge,
+            Utc::now(),
+        )?;
+        if verified.payload.rule_id != TRUSTED_WAKE_RULE_ID {
+            return Err(JarvisError::Validation(
+                "trusted wake payload rule id is not enrolled".to_string(),
+            ));
+        }
+        if verified.payload.rule_generation != rule.public.generation {
+            return Err(JarvisError::Validation(
+                "trusted wake payload does not match the current enrollment generation".to_string(),
+            ));
+        }
+        self.append_scheduler_audit_entry(
+            None,
+            "trusted_wake_envelope_verified",
+            "verified bounded P-256 wake envelope against active session and enrolled key",
+            json!({
+                "rule_id": verified.payload.rule_id,
+                "counter": verified.payload.counter,
+                "signature_verified": true,
+                "session_bound": true,
+                "payload_redacted": true,
+                "signature_redacted": true,
+            }),
+        )?;
+        let (event, job, idempotent_retry) = self.using_repository(|repository| {
+            repository.accept_trusted_wake_event(
+                &rule,
+                verified.payload.counter,
+                &verified.payload_sha256,
+                self.trusted_wake_session_id,
+            )
+        })?;
+        if idempotent_retry && event.state != crate::TrustedWakeDispatchState::Accepted {
+            return Ok(TrustedWakeEventResponse {
+                event,
+                idempotent_retry: true,
+                execution: None,
+                proof_boundary: "Exact signed-envelope retry is idempotent and never redispatches a started or terminal event.".to_string(),
+            });
+        }
+        self.append_scheduler_audit_entry(
+            None,
+            "trusted_wake_dispatch_intent",
+            "trusted wake event is entering the existing proactive scheduler and policy funnel",
+            json!({
+                "trusted_wake_event_id": event.id,
+                "scheduler_job_id": job.id,
+                "command_redacted": true,
+            }),
+        )?;
+        let began = self.using_repository(|repository| {
+            repository.begin_trusted_wake_dispatch(event.id, rule.public.generation)
+        })?;
+        if !began {
+            let event = self.using_repository(|repository| {
+                repository.block_trusted_wake_before_dispatch(event.id)
+            })?;
+            let actually_blocked = event.state == crate::TrustedWakeDispatchState::Blocked;
+            if actually_blocked {
+                self.append_scheduler_audit_entry(
+                    None,
+                    "trusted_wake_dispatch_precheck_blocked",
+                    "trusted wake dispatch failed closed before entering proactive execution",
+                    json!({
+                        "trusted_wake_event_id": event.id,
+                        "scheduler_job_id": event.scheduler_job_id,
+                        "command_redacted": true,
+                    }),
+                )?;
+            }
+            return Ok(TrustedWakeEventResponse {
+                event,
+                idempotent_retry: !actually_blocked,
+                execution: None,
+                proof_boundary: "A persisted dispatch-start marker prevents automatic replay after ambiguous interruption.".to_string(),
+            });
+        }
+        let running = match self.scheduler.restore_claimed_running(job.clone()) {
+            Ok(running) => running,
+            Err(error) => {
+                self.append_scheduler_audit_entry(
+                    None,
+                    "trusted_wake_dispatch_ambiguous_attention_required",
+                    "trusted wake dispatch claim persisted but runtime handoff failed; automatic retry is disabled",
+                    json!({
+                        "trusted_wake_event_id": event.id,
+                        "scheduler_job_id": job.id,
+                        "error_present": true,
+                        "command_redacted": true,
+                    }),
+                )?;
+                return Err(error);
+            }
+        };
+        let execution = match self.execute_trusted_wake_running_job(running).await {
+            Ok(execution) => execution,
+            Err(error) => {
+                self.append_scheduler_audit_entry(
+                    None,
+                    "trusted_wake_dispatch_ambiguous_attention_required",
+                    "trusted wake dispatch started but its result is ambiguous; automatic retry is disabled",
+                    json!({
+                        "trusted_wake_event_id": event.id,
+                        "scheduler_job_id": job.id,
+                        "error_present": true,
+                        "command_redacted": true,
+                    }),
+                )?;
+                return Err(error);
+            }
+        };
+        let event = self.using_repository(|repository| {
+            repository.finish_trusted_wake_dispatch(event.id, execution.accepted, execution.task.id)
+        })?;
+        self.append_scheduler_audit_entry(
+            Some(execution.task.id),
+            if execution.accepted {
+                "trusted_wake_dispatch_completed"
+            } else {
+                "trusted_wake_dispatch_blocked"
+            },
+            if execution.accepted {
+                "trusted wake dispatch completed through proactive policy funnel"
+            } else {
+                "trusted wake dispatch failed closed through proactive policy funnel"
+            },
+            json!({
+                "trusted_wake_event_id": event.id,
+                "scheduler_job_id": event.scheduler_job_id,
+                "accepted": execution.accepted,
+                "command_redacted": true,
+            }),
+        )?;
+        Ok(TrustedWakeEventResponse {
+            event,
+            idempotent_retry,
+            execution: Some(execution),
+            proof_boundary: "Repository-backed local dispatch only; ambiguous started events are never automatically repeated.".to_string(),
+        })
+    }
+
+    async fn execute_trusted_wake_running_job(
+        &self,
+        running: SchedulerJob,
+    ) -> JarvisResult<SchedulerJobExecution> {
+        let checked_at = Utc::now();
+        self.append_scheduler_audit_entry(
+            None,
+            "scheduler_job_due",
+            "scheduler selected trusted wake job for execution",
+            json!({
+                "checked_at": checked_at,
+                "scheduler_job_id": running.id,
+                "scheduler_job_name": running.name,
+                "trigger": running.trigger,
+                "job_status": running.status,
+            }),
+        )?;
+        let policy_audit =
+            self.append_scheduler_proactive_policy_audit(&running, true, checked_at)?;
+        let command_response = self
+            .submit_command(CommandRequest {
+                input: running.command.clone(),
+                session_id: None,
+                context: json!({
+                    "surface": "trusted_system_wake",
+                    "scheduler_job_id": running.id,
+                    "scheduler_job_name": running.name,
+                    "trigger": running.trigger,
+                    "sensitivity": "workspace",
+                    "trusted_wake_event": true,
+                }),
+                dry_run: false,
+                proactive: true,
+                sensitivity: Some(Sensitivity::Workspace),
+            })
+            .await?;
+        let mut audit_entries = vec![policy_audit];
+        self.append_scheduler_execution_audit(
+            "scheduler_job_started",
+            "scheduler started trusted wake command",
+            &running,
+            &command_response,
+            &mut audit_entries,
+        )?;
+        let final_job = if command_response.accepted {
+            self.complete_scheduler_job(running.id)?
+        } else {
+            self.fail_scheduler_job(running.id)?
+        };
+        self.append_scheduler_execution_audit(
+            if command_response.accepted {
+                "scheduler_job_completed"
+            } else {
+                "scheduler_job_failed"
+            },
+            "scheduler finished trusted wake command",
+            &final_job,
+            &command_response,
+            &mut audit_entries,
+        )?;
+        if !command_response.accepted {
+            let pause_response = self.pause(format!(
+                "trusted wake scheduler job {} did not complete accepted task",
+                final_job.id
+            ))?;
+            audit_entries.push(self.append_scheduler_audit_entry(
+                Some(command_response.task.id),
+                "scheduler_fail_closed_emergency_pause",
+                "scheduler activated emergency pause after trusted wake job failed closed",
+                json!({
+                    "scheduler_job_id": final_job.id,
+                    "accepted": false,
+                    "cancelled_scheduler_jobs": pause_response.cancelled_scheduler_jobs,
+                }),
+            )?);
+        }
+        Ok(SchedulerJobExecution {
+            job: final_job,
+            task: command_response.task,
+            accepted: command_response.accepted,
+            message: command_response.message,
+            audit_entries,
+        })
     }
 
     pub async fn run_due_scheduler_jobs(&self, limit: usize) -> JarvisResult<SchedulerRunResponse> {
@@ -3586,6 +4000,14 @@ pub fn router(state: IpcState) -> Router {
             "/scheduler/jobs/:id",
             get(get_scheduler_job).delete(cancel_scheduler_job),
         )
+        .route("/system-wake/status", get(trusted_wake_status))
+        .route("/system-wake/attention", get(trusted_wake_attention))
+        .route("/system-wake/rule", post(set_trusted_wake_rule_enabled))
+        .route("/system-wake/events", post(accept_trusted_wake_event))
+        .route(
+            "/system-wake/events/:id/resolve",
+            post(resolve_trusted_wake_attention),
+        )
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
@@ -4439,6 +4861,56 @@ async fn cancel_scheduler_job(
         .map_err(error_response)
 }
 
+async fn trusted_wake_status(
+    State(state): State<IpcState>,
+) -> Result<Json<TrustedWakeSessionStatus>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .trusted_wake_status()
+        .map(Json)
+        .map_err(error_response)
+}
+
+async fn trusted_wake_attention(
+    State(state): State<IpcState>,
+) -> Result<Json<Vec<TrustedWakeAttentionItem>>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .trusted_wake_attention()
+        .map(Json)
+        .map_err(error_response)
+}
+
+async fn resolve_trusted_wake_attention(
+    State(state): State<IpcState>,
+    Path(id): Path<Uuid>,
+    Json(request): Json<TrustedWakeResolutionRequest>,
+) -> Result<Json<TrustedWakeAttentionItem>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .resolve_trusted_wake_attention(id, request)
+        .map(Json)
+        .map_err(error_response)
+}
+
+async fn set_trusted_wake_rule_enabled(
+    State(state): State<IpcState>,
+    Json(request): Json<TrustedWakeRuleEnablement>,
+) -> Result<Json<TrustedWakeRule>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .set_trusted_wake_enabled(request)
+        .map(Json)
+        .map_err(error_response)
+}
+
+async fn accept_trusted_wake_event(
+    State(state): State<IpcState>,
+    Json(envelope): Json<TrustedWakeEnvelope>,
+) -> Result<Json<TrustedWakeEventResponse>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .accept_trusted_wake_envelope(envelope)
+        .await
+        .map(Json)
+        .map_err(error_response)
+}
+
 fn contract_endpoints() -> Vec<ContractEndpoint> {
     vec![
         endpoint("GET", "/health", false, true),
@@ -4513,6 +4985,11 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
         endpoint("POST", "/scheduler/recover-stale", false, false),
         endpoint("GET", "/scheduler/jobs/:id", false, false),
         endpoint("DELETE", "/scheduler/jobs/:id", false, false),
+        endpoint("GET", "/system-wake/status", true, true),
+        endpoint("GET", "/system-wake/attention", true, true),
+        endpoint("POST", "/system-wake/rule", true, false),
+        endpoint("POST", "/system-wake/events", true, false),
+        endpoint("POST", "/system-wake/events/:id/resolve", true, false),
     ]
 }
 
@@ -6562,6 +7039,12 @@ fn contract_features() -> Vec<ContractFeature> {
             "implemented",
             "Repository-backed scheduler jobs expose redacted `/scheduler/attention` due/running/failed handoff, explicit run-due execution, background loop tests, and CLI IPC E2E.",
             "Visibility and app-notification handoff only; scheduler attention does not grant proactive plugin execution, and live OS notification delivery remains a manual release gate.",
+        ),
+        feature(
+            "trusted_macos_system_wake",
+            "implemented",
+            "A disabled-by-default schema-v10 wake rule accepts bounded P-256 envelopes from the app Keychain key, binds them to core session and enrollment generation, persists replay high-water and dispatch intent, and enters the existing proactive policy funnel.",
+            "Enrolled-key possession and local restart-safe replay governance only; not Apple attestation, OS wake provenance, same-user isolation, background launch reliability, exactly-once side effects, live-device QA, or production readiness.",
         ),
         feature(
             "scheduler_trigger_policy_review",
@@ -11834,7 +12317,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .expect("diagnostics export");
         assert_eq!(export.health.status, "ok");
         assert!(export.repository_backed);
-        assert_eq!(export.schema_version, Some(9));
+        assert_eq!(export.schema_version, Some(10));
         assert_eq!(export.task_count, Some(1));
         assert!(export.audit_entry_count.unwrap_or_default() >= 2);
         assert_eq!(export.model_route_record_count, Some(1));
@@ -12052,5 +12535,207 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             jobs[0].cancellation_reason.as_deref(),
             Some("emergency pause: maintenance window")
         );
+    }
+
+    #[tokio::test]
+    async fn trusted_wake_is_disabled_generation_bound_idempotent_and_pause_safe() {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        use p256::ecdsa::{signature::Signer, Signature, SigningKey};
+
+        let state = IpcState::with_repository(SqliteRepository::in_memory().unwrap()).unwrap();
+        let signing_key = SigningKey::from_bytes((&[11_u8; 32]).into()).unwrap();
+        let public_key = signing_key.verifying_key().to_encoded_point(false);
+        let enrolled = state
+            .bootstrap_trusted_wake_rule(TrustedWakeRuleEnrollment {
+                rule_id: TRUSTED_WAKE_RULE_ID,
+                public_key_x963_b64: STANDARD.encode(public_key.as_bytes()),
+                command: "trusted wake local check".to_string(),
+                allow_rotation: false,
+            })
+            .unwrap();
+        assert!(!enrolled.enabled);
+
+        let sign = |counter: u64, status: &TrustedWakeSessionStatus| {
+            let payload = crate::TrustedWakePayload {
+                schema_version: 1,
+                rule_id: TRUSTED_WAKE_RULE_ID,
+                rule_generation: status.rule.as_ref().unwrap().generation,
+                session_id: status.session_id,
+                challenge: status.challenge.clone(),
+                counter,
+                occurred_at: Utc::now(),
+                nonce: Uuid::new_v4().to_string(),
+            };
+            let bytes = serde_json::to_vec(&payload).unwrap();
+            let signature: Signature = signing_key.sign(&bytes);
+            TrustedWakeEnvelope {
+                payload_b64: STANDARD.encode(bytes),
+                signature_der_b64: STANDARD.encode(signature.to_der().as_bytes()),
+            }
+        };
+        let disabled_status = state.trusted_wake_status().unwrap();
+        assert!(disabled_status
+            .proof_boundary
+            .contains("no supported enrollment-key rotation"));
+        assert!(disabled_status
+            .proof_boundary
+            .contains("manual SQLite or Keychain mutation is unsupported"));
+        assert!(state
+            .accept_trusted_wake_envelope(sign(1, &disabled_status))
+            .await
+            .is_err());
+        state
+            .set_trusted_wake_enabled(TrustedWakeRuleEnablement {
+                enabled: true,
+                expected_generation: enrolled.generation,
+            })
+            .unwrap();
+        assert!(state
+            .set_trusted_wake_enabled(TrustedWakeRuleEnablement {
+                enabled: false,
+                expected_generation: enrolled.generation + 1,
+            })
+            .is_err());
+
+        let status = state.trusted_wake_status().unwrap();
+        let envelope = sign(1, &status);
+        let first = state
+            .accept_trusted_wake_envelope(envelope.clone())
+            .await
+            .unwrap();
+        assert!(first.execution.as_ref().unwrap().accepted);
+        assert!(first.event.task_id.is_some());
+        let retry = state.accept_trusted_wake_envelope(envelope).await.unwrap();
+        assert!(retry.idempotent_retry);
+        assert!(retry.execution.is_none());
+        assert_eq!(retry.event.id, first.event.id);
+        assert_eq!(
+            state
+                .using_repository(SqliteRepository::list_tasks)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        state.pause("test pause").unwrap();
+        let paused = state
+            .accept_trusted_wake_envelope(sign(2, &status))
+            .await
+            .unwrap();
+        assert_eq!(paused.event.state, crate::TrustedWakeDispatchState::Blocked);
+        assert!(paused.execution.is_none());
+        assert_eq!(
+            state
+                .using_repository(SqliteRepository::list_tasks)
+                .unwrap()
+                .len(),
+            1
+        );
+        let audit = serde_json::to_string(
+            &state
+                .using_repository(|repository| repository.list_audit_entries(None))
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(!audit.contains("signature_der_b64"));
+        assert!(!audit.contains("payload_b64"));
+        assert!(!audit.contains("trusted wake local check"));
+
+        state.resume().unwrap();
+        let concurrent_envelope = sign(3, &status);
+        let (left, right) = tokio::join!(
+            state.accept_trusted_wake_envelope(concurrent_envelope.clone()),
+            state.accept_trusted_wake_envelope(concurrent_envelope),
+        );
+        let left = left.unwrap();
+        let right = right.unwrap();
+        assert_eq!(left.event.id, right.event.id);
+        assert_eq!(
+            usize::from(left.execution.is_some()) + usize::from(right.execution.is_some()),
+            1
+        );
+        assert_eq!(
+            state
+                .using_repository(SqliteRepository::list_tasks)
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn trusted_wake_restart_blocks_unclaimed_and_surfaces_started_attention() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("wake-restart.sqlite");
+        let repository = SqliteRepository::open(&database).unwrap();
+        let enrolled = repository
+            .enroll_trusted_wake_rule(
+                TRUSTED_WAKE_RULE_ID,
+                &[4_u8; 65],
+                "fingerprint",
+                "restart check",
+                false,
+            )
+            .unwrap();
+        repository
+            .set_trusted_wake_rule_enabled(TRUSTED_WAKE_RULE_ID, true, enrolled.generation)
+            .unwrap();
+        let rule = repository
+            .get_trusted_wake_rule(TRUSTED_WAKE_RULE_ID)
+            .unwrap()
+            .unwrap();
+        let (accepted, _, _) = repository
+            .accept_trusted_wake_event(&rule, 1, "11", Uuid::new_v4())
+            .unwrap();
+        drop(repository);
+
+        let state = IpcState::with_repository(SqliteRepository::open(&database).unwrap()).unwrap();
+        let blocked = state
+            .using_repository(|repository| repository.get_trusted_wake_event(accepted.id))
+            .unwrap()
+            .unwrap();
+        assert_eq!(blocked.state, crate::TrustedWakeDispatchState::Blocked);
+        assert!(state.scheduler.list().is_empty());
+        drop(state);
+
+        let repository = SqliteRepository::open(&database).unwrap();
+        let rule = repository
+            .get_trusted_wake_rule(TRUSTED_WAKE_RULE_ID)
+            .unwrap()
+            .unwrap();
+        let (started, _, _) = repository
+            .accept_trusted_wake_event(&rule, 2, "22", Uuid::new_v4())
+            .unwrap();
+        assert!(repository
+            .begin_trusted_wake_dispatch(started.id, rule.public.generation)
+            .unwrap());
+        drop(repository);
+
+        let restarted =
+            IpcState::with_repository(SqliteRepository::open(&database).unwrap()).unwrap();
+        let status = restarted.trusted_wake_status().unwrap();
+        assert!(status.attention_required);
+        assert_eq!(status.ambiguous_dispatch_count, 1);
+        assert!(restarted.scheduler.list().is_empty());
+        let audits = restarted
+            .using_repository(|repository| repository.list_audit_entries(None))
+            .unwrap();
+        assert!(audits.iter().any(|entry| {
+            entry.event_type == "trusted_wake_startup_ambiguous_attention_required"
+        }));
+        let attention = restarted.trusted_wake_attention().unwrap();
+        assert_eq!(attention.len(), 1);
+        let resolved = restarted
+            .resolve_trusted_wake_attention(
+                attention[0].event_id,
+                TrustedWakeResolutionRequest {
+                    expected_generation: attention[0].rule_generation,
+                    expected_state: crate::TrustedWakeDispatchState::DispatchStarted,
+                },
+            )
+            .unwrap();
+        assert_eq!(resolved.state, crate::TrustedWakeDispatchState::Blocked);
+        assert!(restarted.trusted_wake_attention().unwrap().is_empty());
+        assert!(!restarted.trusted_wake_status().unwrap().attention_required);
     }
 }

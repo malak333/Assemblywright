@@ -74,6 +74,128 @@ public final class ReleaseReadinessModel: ObservableObject {
 }
 
 @MainActor
+public final class TrustedWakeModel: ObservableObject {
+    @Published public private(set) var status: JarvisTrustedWakeStatus?
+    @Published public private(set) var lastEvent: JarvisTrustedWakeEvent?
+    @Published public private(set) var attentionItems: [JarvisTrustedWakeAttentionItem] = []
+    @Published public private(set) var isWorking = false
+    @Published public private(set) var errorMessage: String?
+
+    private let client: any JarvisCoreClient
+    private let signer: any TrustedWakeEnvelopeSigning
+    private let provisionAction: (@MainActor () async throws -> Void)?
+
+    public init(
+        client: any JarvisCoreClient = JarvisIPCClient(),
+        signer: any TrustedWakeEnvelopeSigning = TrustedWakeEnvelopeSigner(),
+        provision: (@MainActor () async throws -> Void)? = nil
+    ) {
+        self.client = client
+        self.signer = signer
+        self.provisionAction = provision
+    }
+
+    public func refresh() async {
+        isWorking = true
+        defer { isWorking = false }
+        do {
+            status = try await client.trustedWakeStatus()
+            attentionItems = try await client.trustedWakeAttention()
+            errorMessage = nil
+        } catch {
+            errorMessage = "Trusted wake is unavailable: \(error)"
+        }
+    }
+
+    public func resolve(_ item: JarvisTrustedWakeAttentionItem) async {
+        guard !isWorking else { return }
+        isWorking = true
+        defer { isWorking = false }
+        do {
+            _ = try await client.resolveTrustedWakeAttention(
+                id: item.eventId,
+                request: JarvisTrustedWakeResolutionRequest(
+                    expectedGeneration: item.ruleGeneration,
+                    expectedState: "dispatch_started"
+                )
+            )
+            status = try await client.trustedWakeStatus()
+            attentionItems = try await client.trustedWakeAttention()
+            errorMessage = nil
+        } catch {
+            errorMessage = "Trusted wake resolution failed closed: \(error)"
+        }
+    }
+
+    public func provision() async {
+        guard !isWorking else { return }
+        guard status?.rule == nil else {
+            errorMessage = "Trusted wake is already provisioned."
+            return
+        }
+        guard let provisionAction else {
+            errorMessage = "Trusted wake provisioning is unavailable in this app context."
+            return
+        }
+        isWorking = true
+        defer { isWorking = false }
+        do {
+            try await provisionAction()
+            status = try await client.trustedWakeStatus()
+            attentionItems = try await client.trustedWakeAttention()
+            errorMessage = nil
+        } catch JarvisCoreSupervisorError.trustedWakeBootstrapPreparationFailed,
+                JarvisCoreSupervisorError.trustedWakeBootstrapUnavailable,
+                JarvisCoreSupervisorError.trustedWakeBootstrapTooLarge,
+                JarvisCoreSupervisorError.trustedWakeCoreNotAppSupervised,
+                JarvisCoreSupervisorError.trustedWakeProvisionInProgress,
+                JarvisCoreSupervisorError.trustedWakeLifecycleBusy {
+            errorMessage = "Trusted wake bootstrap was not prepared, so the current core was left running and wake automation remains unavailable."
+        } catch JarvisCoreSupervisorError.trustedWakeCoreChangedDuringPreparation {
+            errorMessage = "Trusted wake provisioning was cancelled because the supervised core changed during bootstrap preparation; Jarvis did not stop or restart the replacement core."
+        } catch {
+            errorMessage = "Trusted wake provisioning failed closed during stop or restart; the supervisor may be degraded and wake automation remains unavailable: \(error)"
+        }
+    }
+
+    public func setEnabled(_ enabled: Bool) async {
+        guard let generation = status?.rule?.generation else {
+            errorMessage = "Trusted wake must be enrolled with the explicit Provision action first."
+            return
+        }
+        isWorking = true
+        defer { isWorking = false }
+        do {
+            _ = try await client.setTrustedWakeEnabled(
+                JarvisTrustedWakeRuleEnablement(enabled: enabled, expectedGeneration: generation)
+            )
+            status = try await client.trustedWakeStatus()
+            errorMessage = nil
+        } catch {
+            errorMessage = "Trusted wake enablement failed closed: \(error)"
+        }
+    }
+
+    public func handleSystemWake() async {
+        guard !isWorking else { return }
+        isWorking = true
+        defer { isWorking = false }
+        do {
+            let freshStatus = try await client.trustedWakeStatus()
+            status = freshStatus
+            guard freshStatus.rule?.enabled == true else { return }
+            let envelope = try signer.envelope(status: freshStatus)
+            let response = try await client.submitTrustedWake(envelope)
+            lastEvent = response.event
+            status = try await client.trustedWakeStatus()
+            errorMessage = nil
+        } catch {
+            errorMessage = "Trusted wake event failed closed: \(error)"
+        }
+    }
+}
+
+@MainActor
 public final class MemoryManagerModel: ObservableObject {
     @Published public private(set) var items: [JarvisMemoryItem]
     @Published public private(set) var classification: JarvisMemoryClassificationSummary?

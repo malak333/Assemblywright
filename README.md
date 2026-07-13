@@ -15,6 +15,19 @@ IPC surface with compatibility policy plus feature proof/boundary metadata,
 repository-backed activity summary and activity event stream, conservative
 release-readiness inspection, read-only release runbook IPC surfaces, and CLI smoke paths for the Swift shell
 and local packaged app proof.
+
+Trusted macOS system-wake events are a disabled-by-default local foundation.
+Swift stores a P-256 private key and monotonic counter in device-only Keychain
+items. Normal startup does not touch that Keychain material; an explicit
+Provision action prepares only the public key while the current supervised core
+keeps running, then performs one bounded-stdin restart. Swift signs
+session/challenge/generation-bound wake payloads. Counter allocation also
+advances past Rust's durable replay high-water to recover safely from Keychain
+counter loss or a backward wall clock. Rust schema v10 persists
+replay and dispatch state before using the existing proactive scheduler,
+policy, plugin, and emergency-pause funnel. This is not Apple attestation, OS
+wake provenance, background launch, same-user IPC, exactly-once effects,
+live-device QA, or production readiness.
 It also includes the buildable Swift/SwiftUI Mac shell under
 `apps/mac`, with a tested IPC client, command-console state model,
 activity/audit panel with current progress summary, memory
