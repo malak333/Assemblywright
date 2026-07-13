@@ -19,6 +19,8 @@ use crate::storage::SqliteRepository;
 use crate::types::{AuditEntry, JarvisResult, Sensitivity, TaskRecord, TaskStatus};
 use crate::CapabilityScope;
 
+const MAX_TASK_TOOL_OUTPUT_BYTES: usize = 128 * 1024;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeConfig {
     pub max_steps: u32,
@@ -62,6 +64,12 @@ pub struct CommandRequest {
     pub session_id: Uuid,
     pub input: String,
     pub sensitivity: Sensitivity,
+    #[serde(default)]
+    pub dry_run: bool,
+    #[serde(default)]
+    pub proactive: bool,
+    #[serde(default)]
+    pub expected_workspace_request: Option<serde_json::Value>,
 }
 
 impl CommandRequest {
@@ -70,6 +78,9 @@ impl CommandRequest {
             session_id: Uuid::new_v4(),
             input: input.into(),
             sensitivity: Sensitivity::Personal,
+            dry_run: false,
+            proactive: false,
+            expected_workspace_request: None,
         }
     }
 
@@ -80,6 +91,24 @@ impl CommandRequest {
 
     pub fn with_sensitivity(mut self, sensitivity: Sensitivity) -> Self {
         self.sensitivity = sensitivity;
+        self
+    }
+
+    pub fn with_dry_run(mut self, dry_run: bool) -> Self {
+        self.dry_run = dry_run;
+        self
+    }
+
+    pub fn with_proactive(mut self, proactive: bool) -> Self {
+        self.proactive = proactive;
+        self
+    }
+
+    pub fn with_expected_workspace_request(
+        mut self,
+        expected_workspace_request: Option<serde_json::Value>,
+    ) -> Self {
+        self.expected_workspace_request = expected_workspace_request;
         self
     }
 }
@@ -526,7 +555,11 @@ where
                 user_input: task.user_input.clone(),
                 step_index,
                 tool_results: tool_results.clone(),
-                first_party_tools: self.registered_first_party_model_tools(),
+                first_party_tools: self.registered_first_party_model_tools_for_provider(
+                    route_evidence
+                        .as_ref()
+                        .and_then(|record| record.selected_provider),
+                ),
             };
             let execution_route = route_evidence
                 .as_ref()
@@ -643,9 +676,20 @@ where
 
             let step_tool_results = match self.execute_tool_plan(
                 &mut task,
-                request.sensitivity,
-                step_index,
-                &model_response.tool_requests,
+                ToolPlanContext {
+                    sensitivity: request.sensitivity,
+                    step_index,
+                    tool_requests: &model_response.tool_requests,
+                    selected_provider: route_evidence
+                        .as_ref()
+                        .and_then(|record| record.selected_provider),
+                    dry_run: request.dry_run,
+                    proactive: request.proactive,
+                    expected_workspace_request: request.expected_workspace_request.as_ref(),
+                    prior_tool_output_bytes: serde_json::to_vec(&tool_results)
+                        .map(|encoded| encoded.len())
+                        .unwrap_or(MAX_TASK_TOOL_OUTPUT_BYTES + 1),
+                },
                 &mut audit_entries,
             )? {
                 ToolPlanOutcome::Completed(results) => results,
@@ -669,6 +713,25 @@ where
                     ));
                 }
                 ToolPlanOutcome::Blocked(results, message) => {
+                    tool_results.extend(results.clone());
+                    let step = RuntimeStep {
+                        index: step_index,
+                        message: model_response.message,
+                        complete: false,
+                        tool_results: results,
+                    };
+                    self.hooks.model_step_completed(&task, &step);
+                    steps.push(step);
+                    return Ok(self.finish(
+                        task,
+                        message,
+                        route,
+                        route_evidence,
+                        steps,
+                        audit_entries,
+                    ));
+                }
+                ToolPlanOutcome::Cancelled(results, message) => {
                     tool_results.extend(results.clone());
                     let step = RuntimeStep {
                         index: step_index,
@@ -759,11 +822,19 @@ where
     fn execute_tool_plan(
         &self,
         task: &mut TaskRecord,
-        sensitivity: Sensitivity,
-        step_index: u32,
-        tool_requests: &[ModelToolRequest],
+        context: ToolPlanContext<'_>,
         audit_entries: &mut Vec<AuditEntry>,
     ) -> JarvisResult<ToolPlanOutcome> {
+        let ToolPlanContext {
+            sensitivity,
+            step_index,
+            tool_requests,
+            selected_provider,
+            dry_run,
+            proactive,
+            expected_workspace_request,
+            prior_tool_output_bytes,
+        } = context;
         if tool_requests.is_empty() {
             return Ok(ToolPlanOutcome::Completed(Vec::new()));
         }
@@ -790,11 +861,18 @@ where
         }
 
         let mut results = Vec::new();
+        let mut tool_output_bytes = prior_tool_output_bytes;
         for (tool_index, tool_request) in tool_requests.iter().enumerate() {
-            let manifest = match self.validate_tool_request(task.id, step_index, tool_request) {
+            let manifest = match self.validate_tool_request(
+                task.id,
+                step_index,
+                tool_request,
+                selected_provider,
+            ) {
                 Ok(manifest) => manifest,
                 Err(error) => {
-                    let registered_tools = self.registered_first_party_tool_names();
+                    let registered_tools =
+                        self.registered_first_party_tool_names_for_provider(selected_provider);
                     let guidance = tool_rejection_message(&error, &registered_tools);
                     self.record_audit(
                         audit_entries,
@@ -807,7 +885,16 @@ where
                                 "tool_index": tool_index,
                                 "plugin_id": tool_request.plugin_id,
                                 "action": tool_request.action,
-                                "error": error.to_string(),
+                                "error": if tool_request.plugin_id == "workspace_inspect" {
+                                    "workspace request rejected".to_string()
+                                } else {
+                                    error.to_string()
+                                },
+                                "audit_summary": if tool_request.plugin_id == "workspace_inspect" {
+                                    crate::workspace::audit_request_summary(&tool_request.input)
+                                } else {
+                                    serde_json::Value::Null
+                                },
                                 "registered_tools": registered_tools,
                             }),
                         ),
@@ -821,6 +908,46 @@ where
                     continue;
                 }
             };
+            if tool_request.plugin_id == "workspace_inspect" {
+                if let Some(expected) = expected_workspace_request {
+                    let actual = crate::workspace::audit_request_summary(&tool_request.input);
+                    if actual["root_id"] != expected["root_id"]
+                        || actual["relative_path"] != expected["relative_path"]
+                    {
+                        let error = crate::JarvisError::PolicyBlocked(
+                            "workspace tool request does not match the explicit command authority"
+                                .to_string(),
+                        );
+                        let registered_tools =
+                            self.registered_first_party_tool_names_for_provider(selected_provider);
+                        let guidance = tool_rejection_message(&error, &registered_tools);
+                        self.record_audit(
+                            audit_entries,
+                            AuditEntry::new(
+                                Some(task.id),
+                                "tool_request_rejected",
+                                "model-planned workspace request differed from explicit authority",
+                                json!({
+                                    "step_index": step_index,
+                                    "tool_index": tool_index,
+                                    "plugin_id": tool_request.plugin_id,
+                                    "action": tool_request.action,
+                                    "error": "workspace request authority mismatch",
+                                    "audit_summary": actual,
+                                    "expected_request_redacted": true,
+                                }),
+                            ),
+                        )?;
+                        results.push(model_tool_rejection_result(
+                            tool_request,
+                            &error,
+                            &registered_tools,
+                            &guidance,
+                        ));
+                        continue;
+                    }
+                }
+            }
             let action = manifest
                 .action(&tool_request.action)
                 .expect("validate_tool_request confirmed action exists");
@@ -842,14 +969,47 @@ where
                 ),
             )?;
 
-            let call_result = match self.plugin_host.execute(
+            if dry_run {
+                let result = ModelToolResult {
+                    plugin_id: tool_request.plugin_id.clone(),
+                    action: tool_request.action.clone(),
+                    status: "dry_run".to_string(),
+                    output: json!({"dry_run": true, "side_effect_executed": false}),
+                };
+                self.record_audit(
+                    audit_entries,
+                    AuditEntry::new(
+                        Some(task.id),
+                        "tool_dry_run",
+                        "dry run skipped model-planned capability execution",
+                        json!({
+                            "step_index": step_index,
+                            "tool_index": tool_index,
+                            "plugin_id": tool_request.plugin_id,
+                            "action": tool_request.action,
+                            "side_effect_executed": false,
+                            "audit_summary": if tool_request.plugin_id == "workspace_inspect" {
+                                crate::workspace::audit_request_summary(&tool_request.input)
+                            } else {
+                                serde_json::Value::Null
+                            },
+                        }),
+                    ),
+                )?;
+                results.push(result);
+                continue;
+            }
+
+            let call_result = match self.plugin_host.execute_cancellable(
                 PluginCallRequest::reactive(
                     tool_request.plugin_id.clone(),
                     tool_request.action.clone(),
                     tool_request.input.clone(),
                 )
                 .with_granted_scopes(granted_scopes)
-                .with_sensitivity(sensitivity),
+                .with_sensitivity(sensitivity)
+                .with_proactive(proactive),
+                || self.control.is_emergency_paused() || self.control.is_task_cancelled(task.id),
             ) {
                 Ok(result) => result,
                 Err(error) => {
@@ -870,7 +1030,16 @@ where
                                 "tool_index": tool_index,
                                 "plugin_id": tool_request.plugin_id,
                                 "action": tool_request.action,
-                                "error": error.to_string(),
+                                "error": if tool_request.plugin_id == "workspace_inspect" {
+                                    "workspace execution blocked".to_string()
+                                } else {
+                                    error.to_string()
+                                },
+                                "audit_summary": if tool_request.plugin_id == "workspace_inspect" {
+                                    crate::workspace::audit_request_summary(&tool_request.input)
+                                } else {
+                                    serde_json::Value::Null
+                                },
                             }),
                         ),
                     )?;
@@ -882,11 +1051,75 @@ where
             };
 
             let result = model_tool_result(&call_result);
+            let result_bytes = serde_json::to_vec(&result)
+                .map(|encoded| encoded.len())
+                .unwrap_or(MAX_TASK_TOOL_OUTPUT_BYTES + 1);
+            tool_output_bytes = tool_output_bytes.saturating_add(result_bytes);
+            if tool_output_bytes > MAX_TASK_TOOL_OUTPUT_BYTES {
+                self.update_task_status(task, TaskStatus::Failed)?;
+                self.record_audit(
+                    audit_entries,
+                    AuditEntry::new(
+                        Some(task.id),
+                        "tool_output_budget_exceeded",
+                        "model-planned tool output exceeded the per-task continuation budget",
+                        json!({
+                            "step_index": step_index,
+                            "tool_index": tool_index,
+                            "plugin_id": call_result.metadata.plugin_id,
+                            "action": call_result.metadata.action,
+                            "max_task_tool_output_bytes": MAX_TASK_TOOL_OUTPUT_BYTES,
+                            "output_exposed_to_model": false,
+                            "audit_summary": call_result.metadata.audit_summary,
+                        }),
+                    ),
+                )?;
+                return Ok(ToolPlanOutcome::Blocked(
+                    results,
+                    "Command failed because tool output exceeded the bounded continuation budget."
+                        .to_string(),
+                ));
+            }
             self.record_audit(
                 audit_entries,
                 tool_result_audit_entry(task.id, step_index, tool_index, &call_result),
             )?;
             results.push(result);
+
+            if call_result.status == PluginCallStatus::Cancelled {
+                let emergency_paused = self.control.is_emergency_paused();
+                if !emergency_paused {
+                    self.control.clear_task_cancellation(task.id);
+                }
+                self.update_task_status(task, TaskStatus::Cancelled)?;
+                self.record_audit(
+                    audit_entries,
+                    AuditEntry::new(
+                        Some(task.id),
+                        if emergency_paused {
+                            "emergency_pause_cancelled"
+                        } else {
+                            "task_cancelled"
+                        },
+                        "in-process capability was cancelled before output exposure",
+                        json!({
+                            "step_index": step_index,
+                            "tool_index": tool_index,
+                            "plugin_id": tool_request.plugin_id,
+                            "action": tool_request.action,
+                            "partial_output_discarded": true,
+                        }),
+                    ),
+                )?;
+                return Ok(ToolPlanOutcome::Cancelled(
+                    results,
+                    if emergency_paused {
+                        "Command cancelled because emergency pause was activated.".to_string()
+                    } else {
+                        "Command cancelled.".to_string()
+                    },
+                ));
+            }
 
             if call_result.status == PluginCallStatus::ApprovalRequired {
                 self.update_task_status(task, TaskStatus::WaitingForApproval)?;
@@ -905,6 +1138,7 @@ where
         task_id: Uuid,
         step_index: u32,
         request: &ModelToolRequest,
+        selected_provider: Option<crate::router::ModelProvider>,
     ) -> JarvisResult<crate::PluginManifest> {
         if request.plugin_id.trim().is_empty() {
             return Err(crate::JarvisError::Validation(
@@ -923,6 +1157,13 @@ where
         }
 
         let manifest = self.plugin_host.manifest(&request.plugin_id)?;
+        if request.plugin_id == "workspace_inspect"
+            && selected_provider == Some(crate::router::ModelProvider::ChatGpt)
+        {
+            return Err(crate::JarvisError::PolicyBlocked(
+                "workspace inspection is restricted to local-model routes".to_string(),
+            ));
+        }
         if manifest.source != PluginSource::FirstParty {
             return Err(crate::JarvisError::PolicyBlocked(
                 "runtime only executes first-party model-planned tools".to_string(),
@@ -945,20 +1186,30 @@ where
         Ok(manifest)
     }
 
-    fn registered_first_party_tool_names(&self) -> Vec<String> {
-        self.registered_first_party_model_tools()
+    fn registered_first_party_tool_names_for_provider(
+        &self,
+        selected_provider: Option<crate::router::ModelProvider>,
+    ) -> Vec<String> {
+        self.registered_first_party_model_tools_for_provider(selected_provider)
             .into_iter()
             .map(|tool| format!("{}.{}", tool.plugin_id, tool.action))
             .collect()
     }
 
-    fn registered_first_party_model_tools(&self) -> Vec<crate::model::ModelToolDefinition> {
+    fn registered_first_party_model_tools_for_provider(
+        &self,
+        selected_provider: Option<crate::router::ModelProvider>,
+    ) -> Vec<crate::model::ModelToolDefinition> {
         model_tool_definitions_from_manifests(
             self.plugin_host
                 .manifests()
                 .unwrap_or_default()
                 .into_iter()
-                .filter(|manifest| manifest.source == PluginSource::FirstParty),
+                .filter(|manifest| manifest.source == PluginSource::FirstParty)
+                .filter(|manifest| {
+                    manifest.id != "workspace_inspect"
+                        || selected_provider != Some(crate::router::ModelProvider::ChatGpt)
+                }),
         )
     }
 
@@ -1078,6 +1329,7 @@ fn tool_result_audit_entry(
             "approval_required": result.metadata.approval_required,
             "approval_status": result.metadata.approval_status,
             "risk_tier": result.metadata.risk_tier,
+            "audit_summary": result.metadata.audit_summary,
         }),
     )
 }
@@ -1203,10 +1455,22 @@ fn route_audit_entry(task_id: Uuid, record: &ModelRouteRecord) -> AuditEntry {
     )
 }
 
+struct ToolPlanContext<'a> {
+    sensitivity: Sensitivity,
+    step_index: u32,
+    tool_requests: &'a [ModelToolRequest],
+    selected_provider: Option<crate::router::ModelProvider>,
+    dry_run: bool,
+    proactive: bool,
+    expected_workspace_request: Option<&'a serde_json::Value>,
+    prior_tool_output_bytes: usize,
+}
+
 enum ToolPlanOutcome {
     Completed(Vec<ModelToolResult>),
     WaitingForApproval(Vec<ModelToolResult>, String),
     Blocked(Vec<ModelToolResult>, String),
+    Cancelled(Vec<ModelToolResult>, String),
 }
 
 #[cfg(test)]
@@ -1565,7 +1829,8 @@ mod tests {
     async fn executes_model_planned_first_party_tool_call() {
         let runtime = ConversationRuntime::new(FakeLocalModel::default().with_tool_request(
             ModelToolRequest::new("fake_echo", "echo", json!({ "message": "from plan" })),
-        ));
+        ))
+        .with_plugin_host(PluginHost::with_test_fixtures().expect("test fixtures"));
 
         let response = runtime
             .execute_command(CommandRequest::new("use echo tool"))
@@ -1596,7 +1861,8 @@ mod tests {
 
     #[tokio::test]
     async fn feeds_tool_results_back_into_next_model_step() {
-        let runtime = ConversationRuntime::new(ToolAwareModel);
+        let runtime = ConversationRuntime::new(ToolAwareModel)
+            .with_plugin_host(PluginHost::with_test_fixtures().expect("test fixtures"));
 
         let response = runtime
             .execute_command(CommandRequest::new("inspect tool result"))
@@ -1611,7 +1877,8 @@ mod tests {
 
     #[tokio::test]
     async fn provider_originated_tool_request_executes_first_party_tool_and_feeds_result() {
-        let runtime = ConversationRuntime::new(ProviderEnvelopeToolModel);
+        let runtime = ConversationRuntime::new(ProviderEnvelopeToolModel)
+            .with_plugin_host(PluginHost::with_test_fixtures().expect("test fixtures"));
 
         let response = runtime
             .execute_command(CommandRequest::new("provider envelope tool"))
@@ -1636,7 +1903,8 @@ mod tests {
     async fn private_model_planned_tool_call_waits_for_approval_before_execution() {
         let runtime = ConversationRuntime::new(FakeLocalModel::default().with_tool_request(
             ModelToolRequest::new("fake_echo", "echo", json!({ "message": "private" })),
-        ));
+        ))
+        .with_plugin_host(PluginHost::with_test_fixtures().expect("test fixtures"));
 
         let response = runtime
             .execute_command(
@@ -1665,7 +1933,8 @@ mod tests {
     async fn rejects_invalid_model_planned_tool_request_before_execution() {
         let runtime = ConversationRuntime::new(FakeLocalModel::default().with_tool_request(
             ModelToolRequest::new("fake_echo", "echo", json!("not an object")),
-        ));
+        ))
+        .with_plugin_host(PluginHost::with_test_fixtures().expect("test fixtures"));
 
         let response = runtime
             .execute_command(CommandRequest::new("use malformed tool"))
@@ -1703,7 +1972,8 @@ mod tests {
                 "status",
                 json!({}),
             )),
-        );
+        )
+        .with_plugin_host(PluginHost::with_test_fixtures().expect("test fixtures"));
 
         let response = runtime
             .execute_command(CommandRequest::new("use invented status tool"))
@@ -1748,7 +2018,8 @@ mod tests {
                 "list",
                 json!({}),
             )),
-        );
+        )
+        .with_plugin_host(PluginHost::with_test_fixtures().expect("test fixtures"));
 
         let response = runtime
             .execute_command(CommandRequest::new("use invented status action"))

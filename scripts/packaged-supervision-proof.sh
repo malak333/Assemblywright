@@ -93,7 +93,7 @@ run env JARVIS_MAC_CORE_EXECUTABLE="$BUNDLED_CORE" swift test --package-path app
 
 start_packaged_core
 
-COMMAND_OUTPUT="$("$BUNDLED_CORE" command --json "plugin echo packaged-layout smoke" --endpoint "$ENDPOINT")"
+COMMAND_OUTPUT="$("$BUNDLED_CORE" command --json "status" --endpoint "$ENDPOINT")"
 require_output_contains "packaged command" "$COMMAND_OUTPUT" '"accepted":true'
 require_output_contains "packaged command" "$COMMAND_OUTPUT" '"status":"completed"'
 require_output_contains "packaged command" "$COMMAND_OUTPUT" '"event_type":"plugin_completed"'
@@ -110,7 +110,7 @@ require_output_contains "packaged diagnostics" "$DIAGNOSTICS_OUTPUT" '"task_coun
 PAUSE_OUTPUT="$("$BUNDLED_CORE" pause --endpoint "$ENDPOINT" --reason "packaged-layout smoke")"
 require_output_contains "packaged pause" "$PAUSE_OUTPUT" '"paused":true'
 
-BLOCKED_OUTPUT="$("$BUNDLED_CORE" command --json "plugin echo blocked by packaged-layout pause" --endpoint "$ENDPOINT" --dry-run)"
+BLOCKED_OUTPUT="$("$BUNDLED_CORE" command --json "status" --endpoint "$ENDPOINT" --dry-run)"
 require_output_contains "packaged blocked command" "$BLOCKED_OUTPUT" '"accepted":false'
 require_output_contains "packaged blocked command" "$BLOCKED_OUTPUT" '"status":"blocked"'
 

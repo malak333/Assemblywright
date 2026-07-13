@@ -631,6 +631,13 @@ stage or when a PR needs focused evidence for one ownership slice.
   end-goal production diagram.
 - Current-vs-target implementation phase table is current.
 - Plugin contract is current.
+- Production first-party inventory excludes `fake_*`, and configured-root
+  workspace list/read coverage proves no-follow containment, secret/type/size
+  denials, local-model-only results, cancellation/pause dominance, and
+  metadata-only audit. No-root startup proves the workspace tools are absent.
+- Upgraded repositories with unresolved historical `fake_*` approvals expose
+  critical `removed_fixture_approval` policy-review attention; the removed
+  fixture action remains unexecutable and history is not silently deleted.
 - Safety rules are current.
 - Build/test commands are current.
 - Knowledge-base notes capture durable workflow and proof-boundary facts.

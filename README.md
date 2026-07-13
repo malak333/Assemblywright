@@ -141,6 +141,22 @@ catalog only. `jarvis tools list`, `jarvis tools model`, and
 `jarvis tools catalog` all print that same catalog. Chrome/browser-extension
 capabilities are unavailable unless they appear there, and installed local
 plugins remain outside model-originated planning.
+Production inventory excludes the deterministic `fake_*` test fixtures. It
+always includes the bounded metadata-only `system_status.status` action. A
+repeatable explicit `jarvis serve --workspace-root <id>=<absolute-path>` option
+adds local-only `workspace_inspect.list` and `workspace_inspect.read_text` for
+that held root; without a configured root those actions are absent. Workspace
+requests accept only a root ID and relative path, reject traversal, symlinks,
+hidden/credential-like/special/binary/oversized targets, cap results, redact
+absolute paths and contents from audit, and cannot continue through ChatGPT.
+Directory listing uses the explicit `@root` sentinel for the configured root;
+empty paths remain invalid. Directories over 200 visible entries fail closed,
+text reads stop at 64
+KiB with a 16 KiB line cap, and a task cannot accumulate more than 128 KiB of
+tool output.
+The configured absolute root is local operator startup configuration and is
+visible in the launching process arguments; future app-owned root selection is
+still required before the Swift app can configure this capability itself.
 For broader registered plugin manifest inspection, `jarvis plugins list`
 defaults to a compact operator-readable summary and `jarvis plugins list --json`
 prints full manifest schemas.

@@ -22,7 +22,6 @@ use uuid::Uuid;
 
 use futures_util::StreamExt as FuturesStreamExt;
 
-use crate::model::{model_tool_definitions_from_manifests, ModelToolDefinition};
 use crate::storage::{
     EmergencyPauseState as StoredEmergencyPauseState, MemoryClassificationSummary, NewMemoryItem,
     NewPendingApproval, PendingApproval, SqliteRepository,
@@ -283,8 +282,27 @@ pub struct ContractResponse {
 pub struct ModelToolCatalogResponse {
     pub generated_at: DateTime<Utc>,
     pub source: String,
-    pub tools: Vec<ModelToolDefinition>,
+    pub tools: Vec<ModelToolCatalogEntry>,
     pub proof_boundary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelToolCatalogEntry {
+    pub plugin_id: String,
+    pub action: String,
+    pub description: String,
+    pub risk_tier: crate::RiskTier,
+    pub scopes: Vec<String>,
+    pub proactive: bool,
+    pub constraints: ModelToolConstraints,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelToolConstraints {
+    pub read_only: bool,
+    pub bounded: bool,
+    pub no_network: bool,
+    pub local_model_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -950,6 +968,7 @@ pub struct IpcState {
     emergency_pause: Arc<Mutex<EmergencyPauseState>>,
     repository: Option<Arc<Mutex<SqliteRepository>>>,
     provider_config: ProviderConfig,
+    plugin_host: PluginHost,
     trusted_wake_session_id: Uuid,
     trusted_wake_challenge: String,
 }
@@ -965,8 +984,31 @@ impl IpcState {
         Self::with_provider_config(ProviderConfig::default())
     }
 
+    #[cfg(test)]
+    fn with_test_fixtures() -> Self {
+        let mut state = Self::new();
+        state.plugin_host = PluginHost::with_test_fixtures().expect("test plugin fixtures");
+        state
+    }
+
+    #[cfg(test)]
+    fn with_repository_and_test_fixtures(repository: SqliteRepository) -> JarvisResult<Self> {
+        let mut state = Self::with_repository(repository)?;
+        state.plugin_host = PluginHost::with_test_fixtures()?;
+        Ok(state)
+    }
+
     pub fn with_provider_config(provider_config: ProviderConfig) -> Self {
-        Self {
+        Self::with_provider_config_and_workspace_roots(provider_config, Vec::new())
+            .expect("first-party plugin manifests must validate")
+    }
+
+    pub fn with_provider_config_and_workspace_roots(
+        provider_config: ProviderConfig,
+        workspace_roots: Vec<crate::WorkspaceRootConfig>,
+    ) -> JarvisResult<Self> {
+        let plugin_host = PluginHost::with_workspace_roots(workspace_roots)?;
+        Ok(Self {
             version: env!("CARGO_PKG_VERSION").to_string(),
             started_at: Utc::now(),
             scheduler: Scheduler::new(),
@@ -974,13 +1016,14 @@ impl IpcState {
             emergency_pause: Arc::new(Mutex::new(EmergencyPauseState::default())),
             repository: None,
             provider_config,
+            plugin_host,
             trusted_wake_session_id: Uuid::new_v4(),
             trusted_wake_challenge: format!(
                 "{}{}",
                 Uuid::new_v4().simple(),
                 Uuid::new_v4().simple()
             ),
-        }
+        })
     }
 
     pub fn with_repository(repository: SqliteRepository) -> JarvisResult<Self> {
@@ -991,6 +1034,15 @@ impl IpcState {
         repository: SqliteRepository,
         provider_config: ProviderConfig,
     ) -> JarvisResult<Self> {
+        Self::with_repository_provider_and_workspace_roots(repository, provider_config, Vec::new())
+    }
+
+    pub fn with_repository_provider_and_workspace_roots(
+        repository: SqliteRepository,
+        provider_config: ProviderConfig,
+        workspace_roots: Vec<crate::WorkspaceRootConfig>,
+    ) -> JarvisResult<Self> {
+        let plugin_host = PluginHost::with_workspace_roots(workspace_roots)?;
         repository.reconcile_trusted_wake_events_on_startup()?;
         let stored_pause = repository.emergency_pause_state()?;
         let stored_scheduler_jobs = repository.list_scheduler_jobs_for_runtime()?;
@@ -1008,6 +1060,7 @@ impl IpcState {
                 ))),
                 repository: Some(Arc::new(Mutex::new(repository))),
                 provider_config,
+                plugin_host,
                 trusted_wake_session_id: Uuid::new_v4(),
                 trusted_wake_challenge: format!(
                     "{}{}",
@@ -1026,6 +1079,7 @@ impl IpcState {
                 ))),
                 repository: Some(Arc::new(Mutex::new(repository))),
                 provider_config,
+                plugin_host,
                 trusted_wake_session_id: Uuid::new_v4(),
                 trusted_wake_challenge: format!(
                     "{}{}",
@@ -1082,7 +1136,7 @@ impl IpcState {
     }
 
     pub fn model_tool_catalog(&self) -> JarvisResult<ModelToolCatalogResponse> {
-        registered_first_party_model_tool_catalog()
+        registered_first_party_model_tool_catalog(&self.plugin_host)
     }
 
     pub fn health(&self) -> HealthResponse {
@@ -1469,6 +1523,23 @@ impl IpcState {
                 });
             }
 
+            for approval in approvals.iter().filter(|approval| {
+                matches!(approval.status, ApprovalStatus::Pending | ApprovalStatus::Approved)
+                    && approval.action.starts_with("fake_")
+            }) {
+                items.push(PermissionPolicyReviewItem {
+                    item_type: "removed_fixture_approval".to_string(),
+                    severity: "critical".to_string(),
+                    title: "Removed test-fixture approval cannot execute".to_string(),
+                    detail: "A legacy test-fixture approval remains in durable history; deny or retire it because production capability inventory no longer registers fake actions"
+                        .to_string(),
+                    approval_id: Some(approval.id),
+                    plugin_id: None,
+                    memory_id: None,
+                    action: Some(approval.action.clone()),
+                });
+            }
+
             let executable_installed_plugin_count = installed_plugins
                 .iter()
                 .filter(|plugin| plugin.execution_enabled)
@@ -1803,8 +1874,7 @@ impl IpcState {
             )));
         }
 
-        let host = PluginHost::with_first_party_plugins()?;
-        let manifest = host.manifest(&plugin_request.plugin_id)?;
+        let manifest = self.plugin_host.manifest(&plugin_request.plugin_id)?;
         let action = manifest.action(&plugin_request.action).ok_or_else(|| {
             JarvisError::Plugin(format!(
                 "plugin {} does not declare action {}",
@@ -1845,12 +1915,15 @@ impl IpcState {
             )));
         }
 
-        let result = host.execute(plugin_request)?;
+        let result = self.plugin_host.execute_cancellable(plugin_request, || {
+            self.runtime_control.is_emergency_paused()
+                || self.runtime_control.is_task_cancelled(task.id)
+        })?;
         let completed = result.status == PluginCallStatus::Completed;
-        let task_status = if completed {
-            TaskStatus::Completed
-        } else {
-            TaskStatus::Failed
+        let task_status = match result.status {
+            PluginCallStatus::Completed => TaskStatus::Completed,
+            PluginCallStatus::Cancelled => TaskStatus::Cancelled,
+            _ => TaskStatus::Failed,
         };
 
         let mut audit_entries = Vec::new();
@@ -1889,6 +1962,7 @@ impl IpcState {
                 "proactive": result.metadata.proactive,
                 "timeout_ms": result.metadata.timeout_ms,
                 "side_effect_executed": completed,
+                "audit_summary": result.metadata.audit_summary,
             }),
         );
         let execution_audit = AuditEntry::new(
@@ -1936,6 +2010,16 @@ impl IpcState {
             ));
         }
 
+        if let Some(alias_request) = first_party_plugin_request(&request.input) {
+            self.plugin_host.manifest(&alias_request.plugin_id)?;
+            if alias_request.plugin_id == "workspace_inspect" && !self.provider_config.local.enabled
+            {
+                return Err(JarvisError::PolicyBlocked(
+                    "workspace inspection requires an enabled local-model route".to_string(),
+                ));
+            }
+        }
+
         let command_store = self.command_store();
         let model = RoutedModelExecutor::from_config(&self.provider_config)?;
         let runtime = ConversationRuntime::with_storage_parts(
@@ -1944,22 +2028,56 @@ impl IpcState {
             model,
             crate::NoopRuntimeHooks,
             command_store.clone(),
-        );
+        )
+        .with_plugin_host(self.plugin_host.clone());
         let sensitivity = request
             .sensitivity
             .or_else(|| sensitivity_from_context(&request.context))
             .unwrap_or(Sensitivity::Personal);
+        let expected_workspace_request = first_party_plugin_request(&request.input)
+            .filter(|alias| alias.plugin_id == "workspace_inspect")
+            .map(|alias| crate::workspace::audit_request_summary(&alias.input));
         let runtime_response = runtime
             .execute_command(
                 RuntimeCommandRequest::new(request.input.clone())
                     .with_session_id(request.session_id.unwrap_or_else(Uuid::new_v4))
-                    .with_sensitivity(sensitivity),
+                    .with_sensitivity(sensitivity)
+                    .with_dry_run(request.dry_run)
+                    .with_proactive(request.proactive)
+                    .with_expected_workspace_request(expected_workspace_request),
             )
             .await?;
 
+        let local_model_route = runtime_response
+            .route
+            .as_ref()
+            .is_some_and(|route| route.provider == crate::ModelProvider::Local);
+        let direct_alias = first_party_plugin_request(&request.input);
+        let alias_already_executed = direct_alias.as_ref().is_some_and(|alias| {
+            let matching_result = runtime_response
+                .tool_results
+                .iter()
+                .any(|result| result.plugin_id == alias.plugin_id && result.action == alias.action);
+            if !matching_result {
+                return false;
+            }
+            if alias.plugin_id != "workspace_inspect" {
+                return true;
+            }
+            let expected = crate::workspace::audit_request_summary(&alias.input);
+            runtime_response.audit_entries.iter().any(|entry| {
+                matches!(
+                    entry.event_type.as_str(),
+                    "tool_execution_result" | "tool_dry_run"
+                ) && entry.payload["plugin_id"] == alias.plugin_id
+                    && entry.payload["action"] == alias.action
+                    && entry.payload["audit_summary"]["root_id"] == expected["root_id"]
+                    && entry.payload["audit_summary"]["relative_path"] == expected["relative_path"]
+            })
+        });
         let mut audit_entries = runtime_response.audit_entries;
         let mut task = runtime_response.task;
-        let plugin_dispatch = if task.status == TaskStatus::Completed {
+        let plugin_dispatch = if task.status == TaskStatus::Completed && !alias_already_executed {
             self.maybe_execute_first_party_plugin(
                 &mut task,
                 FirstPartyPluginDispatchContext {
@@ -1967,6 +2085,7 @@ impl IpcState {
                     sensitivity,
                     dry_run: request.dry_run,
                     proactive: request.proactive,
+                    local_model_route,
                     audit_entries: &mut audit_entries,
                     command_store: &command_store,
                 },
@@ -2019,8 +2138,17 @@ impl IpcState {
         let Some(mut plugin_request) = first_party_plugin_request(context.input) else {
             return Ok(PluginDispatch::default());
         };
-        let host = PluginHost::with_first_party_plugins()?;
-        let manifest = host.manifest(&plugin_request.plugin_id)?;
+        if plugin_request.plugin_id == "workspace_inspect" && !context.local_model_route {
+            return Err(JarvisError::PolicyBlocked(
+                "workspace inspection is restricted to local-model routes".to_string(),
+            ));
+        }
+        let request_audit_summary = if plugin_request.plugin_id == "workspace_inspect" {
+            crate::workspace::audit_request_summary(&plugin_request.input)
+        } else {
+            serde_json::Value::Null
+        };
+        let manifest = self.plugin_host.manifest(&plugin_request.plugin_id)?;
         let action = manifest.action(&plugin_request.action).ok_or_else(|| {
             JarvisError::Plugin(format!(
                 "plugin {} does not declare action {}",
@@ -2058,6 +2186,7 @@ impl IpcState {
                 "missing_scopes": policy.missing_scopes,
                 "dry_run": context.dry_run,
                 "proactive": context.proactive,
+                "audit_summary": request_audit_summary,
             }),
         );
         context.command_store.append_audit_entry(&policy_audit)?;
@@ -2106,6 +2235,7 @@ impl IpcState {
                     "action": plugin_request.action,
                     "approval_status": plugin_request.approval_status,
                     "proactive": context.proactive,
+                    "audit_summary": request_audit_summary,
                 }),
             );
             context.command_store.append_audit_entry(&dry_run_audit)?;
@@ -2113,7 +2243,10 @@ impl IpcState {
             return Ok(PluginDispatch::default());
         }
 
-        let result = match host.execute(plugin_request) {
+        let result = match self.plugin_host.execute_cancellable(plugin_request, || {
+            self.runtime_control.is_emergency_paused()
+                || self.runtime_control.is_task_cancelled(task.id)
+        }) {
             Ok(result) => result,
             Err(error) => {
                 let status = if matches!(error, JarvisError::PolicyBlocked(_)) {
@@ -2129,7 +2262,12 @@ impl IpcState {
                     json!({
                         "plugin_id": manifest.id,
                         "action": action.name,
-                        "error": error.to_string(),
+                        "error": if manifest.id == "workspace_inspect" {
+                            "workspace execution blocked".to_string()
+                        } else {
+                            error.to_string()
+                        },
+                        "audit_summary": request_audit_summary,
                         "proactive": context.proactive,
                         "side_effect_executed": false,
                     }),
@@ -2150,6 +2288,18 @@ impl IpcState {
             PluginCallStatus::Cancelled => "plugin_cancelled",
             PluginCallStatus::Failed => "plugin_failed",
         };
+        match result.status {
+            PluginCallStatus::Completed => {}
+            PluginCallStatus::ApprovalRequired => context
+                .command_store
+                .update_task_status(task, TaskStatus::WaitingForApproval)?,
+            PluginCallStatus::Cancelled => context
+                .command_store
+                .update_task_status(task, TaskStatus::Cancelled)?,
+            PluginCallStatus::TimedOut | PluginCallStatus::Failed => context
+                .command_store
+                .update_task_status(task, TaskStatus::Failed)?,
+        }
         let plugin_audit = AuditEntry::new(
             Some(task.id),
             event_type,
@@ -2162,6 +2312,7 @@ impl IpcState {
                 "approval_status": result.metadata.approval_status,
                 "proactive": result.metadata.proactive,
                 "timeout_ms": result.metadata.timeout_ms,
+                "audit_summary": result.metadata.audit_summary,
             }),
         );
         context.command_store.append_audit_entry(&plugin_audit)?;
@@ -3705,6 +3856,7 @@ struct FirstPartyPluginDispatchContext<'a> {
     sensitivity: Sensitivity,
     dry_run: bool,
     proactive: bool,
+    local_model_route: bool,
     audit_entries: &'a mut Vec<AuditEntry>,
     command_store: &'a SharedCommandStore,
 }
@@ -3961,6 +4113,7 @@ fn default_decided_by() -> String {
 
 fn first_party_plugin_request(input: &str) -> Option<PluginCallRequest> {
     let trimmed = input.trim();
+    #[cfg(test)]
     if let Some(message) = trimmed.strip_prefix("plugin approval echo ") {
         return Some(PluginCallRequest::reactive(
             "fake_echo",
@@ -3968,7 +4121,7 @@ fn first_party_plugin_request(input: &str) -> Option<PluginCallRequest> {
             json!({ "message": message.trim() }),
         ));
     }
-
+    #[cfg(test)]
     if let Some(message) = trimmed.strip_prefix("plugin echo ") {
         return Some(PluginCallRequest::reactive(
             "fake_echo",
@@ -3976,16 +4129,34 @@ fn first_party_plugin_request(input: &str) -> Option<PluginCallRequest> {
             json!({ "message": message.trim() }),
         ));
     }
+    if let Some(arguments) = trimmed.strip_prefix("workspace list ") {
+        let mut parts = arguments.splitn(2, ' ');
+        let root_id = parts.next()?.trim();
+        let path = parts.next().unwrap_or("@root").trim();
+        return Some(PluginCallRequest::reactive(
+            "workspace_inspect",
+            "list",
+            json!({ "root_id": root_id, "path": path }),
+        ));
+    }
+    if let Some(arguments) = trimmed.strip_prefix("workspace read ") {
+        let (root_id, path) = arguments.split_once(' ')?;
+        return Some(PluginCallRequest::reactive(
+            "workspace_inspect",
+            "read_text",
+            json!({ "root_id": root_id.trim(), "path": path.trim() }),
+        ));
+    }
 
     if matches!(
         trimmed,
         "plugin status" | "core status" | "jarvis status" | "status"
     ) {
-        return Some(PluginCallRequest::reactive(
-            "fake_status",
-            "status",
-            json!({}),
-        ));
+        #[cfg(test)]
+        let plugin_id = "fake_status";
+        #[cfg(not(test))]
+        let plugin_id = "system_status";
+        return Some(PluginCallRequest::reactive(plugin_id, "status", json!({})));
     }
 
     None
@@ -4780,33 +4951,78 @@ async fn execute_approved_approval(
 }
 
 async fn list_plugin_manifests(
-    State(_state): State<IpcState>,
+    State(state): State<IpcState>,
 ) -> Result<Json<Vec<PluginManifest>>, (StatusCode, Json<ErrorResponse>)> {
-    PluginHost::with_first_party_plugins()
-        .and_then(|host| host.manifests())
+    state
+        .plugin_host
+        .manifests()
         .map(Json)
         .map_err(error_response)
 }
 
 async fn get_plugin_manifest(
-    State(_state): State<IpcState>,
+    State(state): State<IpcState>,
     Path(id): Path<String>,
 ) -> Result<Json<PluginManifest>, (StatusCode, Json<ErrorResponse>)> {
-    PluginHost::with_first_party_plugins()
-        .and_then(|host| host.manifest(&id))
+    state
+        .plugin_host
+        .manifest(&id)
         .map(Json)
         .map_err(error_response)
 }
 
-fn registered_first_party_model_tool_catalog() -> JarvisResult<ModelToolCatalogResponse> {
-    let host = PluginHost::with_first_party_plugins()?;
-    let tools = model_tool_definitions_from_manifests(host.manifests()?);
+fn registered_first_party_model_tool_catalog(
+    host: &PluginHost,
+) -> JarvisResult<ModelToolCatalogResponse> {
+    let manifests = host.manifests()?;
+    let mut tools = Vec::new();
+    for manifest in manifests
+        .into_iter()
+        .filter(|manifest| manifest.source == PluginSource::FirstParty)
+    {
+        for action in manifest.actions {
+            let mut scopes = action
+                .permissions
+                .iter()
+                .filter_map(|permission| {
+                    serde_json::to_value(permission)
+                        .ok()
+                        .and_then(|value| value.as_str().map(ToOwned::to_owned))
+                })
+                .collect::<Vec<_>>();
+            scopes.sort();
+            scopes.dedup();
+            tools.push(ModelToolCatalogEntry {
+                plugin_id: manifest.id.clone(),
+                action: action.name,
+                description: action.description,
+                risk_tier: action.risk_tier,
+                scopes,
+                proactive: action.proactive,
+                constraints: ModelToolConstraints {
+                    read_only: !action.permissions.iter().any(|permission| {
+                        matches!(
+                            permission,
+                            crate::PluginPermission::WriteWorkspace
+                                | crate::PluginPermission::WriteMemory
+                        )
+                    }),
+                    bounded: true,
+                    no_network: action.network_access.mode == crate::PluginNetworkAccessMode::None,
+                    local_model_only: manifest.id == "workspace_inspect",
+                },
+            });
+        }
+    }
+    tools.sort_by(|left, right| {
+        (&left.plugin_id, &left.action).cmp(&(&right.plugin_id, &right.action))
+    });
     Ok(ModelToolCatalogResponse {
         generated_at: Utc::now(),
         source: "registered_first_party_plugins".to_string(),
         tools,
         proof_boundary:
-            "Read-only model-tool catalog derived from validated first-party plugin manifests only; installed plugins, local paths, subprocess configuration, provenance hashes, audit payloads, memory values, and provider route context are excluded."
+            "Read-only model-tool catalog derived from the exact configured first-party plugin host; workspace root identifiers and paths, input schemas, installed plugins, subprocess configuration, provenance hashes, audit payloads, memory values, outputs, and provider route context are excluded."
                 .to_string(),
     })
 }
@@ -11173,7 +11389,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
     #[tokio::test]
     async fn permission_policy_review_summarizes_pending_approvals() {
         let repository = SqliteRepository::in_memory().unwrap();
-        let state = IpcState::with_repository(repository).expect("state");
+        let state = IpcState::with_repository_and_test_fixtures(repository).expect("state");
         let response = state
             .submit_command(CommandRequest {
                 input: "plugin approval echo review me".to_string(),
@@ -11190,20 +11406,24 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let review = state.permission_policy_review().expect("policy review");
         assert_eq!(review.status, "review_required");
         assert_eq!(review.high_risk_pending_count, 1);
-        assert_eq!(review.review_item_count, 1);
-        assert_eq!(review.items[0].item_type, "pending_approval");
-        assert_eq!(review.items[0].severity, "high");
-        assert_eq!(
-            review.items[0].action.as_deref(),
-            Some("fake_echo.approval_echo")
-        );
+        assert_eq!(review.review_item_count, 2);
+        let pending = review
+            .items
+            .iter()
+            .find(|item| item.item_type == "pending_approval")
+            .expect("pending review item");
+        assert_eq!(pending.severity, "high");
+        assert_eq!(pending.action.as_deref(), Some("fake_echo.approval_echo"));
+        assert!(review.items.iter().any(
+            |item| item.item_type == "removed_fixture_approval" && item.severity == "critical"
+        ));
         assert!(review.side_effects_require_approval);
     }
 
     #[tokio::test]
     async fn approved_first_party_action_executes_with_audit_evidence() {
         let repository = SqliteRepository::in_memory().unwrap();
-        let state = IpcState::with_repository(repository).expect("state");
+        let state = IpcState::with_repository_and_test_fixtures(repository).expect("state");
         let response = state
             .submit_command(CommandRequest {
                 input: "plugin approval echo review me".to_string(),
@@ -11263,7 +11483,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
     #[tokio::test]
     async fn pending_first_party_action_cannot_execute_without_approval_grant() {
         let repository = SqliteRepository::in_memory().unwrap();
-        let state = IpcState::with_repository(repository).expect("state");
+        let state = IpcState::with_repository_and_test_fixtures(repository).expect("state");
         state
             .submit_command(CommandRequest {
                 input: "plugin approval echo wait".to_string(),
@@ -11492,7 +11712,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
 
     #[tokio::test]
     async fn command_schema_executes_first_party_plugin_with_policy_audit() {
-        let state = IpcState::new();
+        let state = IpcState::with_test_fixtures();
         let response = state
             .submit_command(CommandRequest {
                 input: "plugin echo hello from ipc".to_string(),
@@ -11524,7 +11744,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
 
     #[tokio::test]
     async fn command_dry_run_skips_first_party_plugin_execution() {
-        let state = IpcState::new();
+        let state = IpcState::with_test_fixtures();
         let response = state
             .submit_command(CommandRequest {
                 input: "plugin echo dry run".to_string(),
@@ -11551,7 +11771,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("jarvis.sqlite");
         let repository = SqliteRepository::open(&db_path).unwrap();
-        let state = IpcState::with_repository(repository).expect("state");
+        let state = IpcState::with_repository_and_test_fixtures(repository).expect("state");
 
         let response = state
             .submit_command(CommandRequest {
@@ -11591,7 +11811,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
     #[tokio::test]
     async fn repository_backed_state_endpoints_expose_tasks_and_audit() {
         let repository = SqliteRepository::in_memory().unwrap();
-        let state = IpcState::with_repository(repository).expect("state");
+        let state = IpcState::with_repository_and_test_fixtures(repository).expect("state");
         let response = state
             .submit_command(CommandRequest {
                 input: "plugin echo inspect state".to_string(),
@@ -11938,7 +12158,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         repository
             .upsert_scheduler_job(&interval_job)
             .expect("persist interval");
-        let state = IpcState::with_repository(repository).expect("state");
+        let state = IpcState::with_repository_and_test_fixtures(repository).expect("state");
         let manual = state
             .schedule_scheduler_job(SchedulerJobSpec {
                 name: "manual status".to_string(),
@@ -12040,7 +12260,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
     #[tokio::test]
     async fn scheduler_proactive_policy_audit_matches_policy_review_classification() {
         let repository = SqliteRepository::in_memory().unwrap();
-        let state = IpcState::with_repository(repository).expect("state");
+        let state = IpcState::with_repository_and_test_fixtures(repository).expect("state");
         let job = state
             .schedule_scheduler_job(SchedulerJobSpec {
                 name: "classified scheduled job".to_string(),
@@ -12094,7 +12314,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
     #[tokio::test]
     async fn run_due_scheduler_jobs_blocks_non_proactive_plugin_actions() {
         let repository = SqliteRepository::in_memory().unwrap();
-        let state = IpcState::with_repository(repository).expect("state");
+        let state = IpcState::with_repository_and_test_fixtures(repository).expect("state");
         let job = state
             .schedule_scheduler_job(SchedulerJobSpec {
                 name: "non proactive echo".to_string(),
@@ -12280,7 +12500,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
     #[tokio::test]
     async fn background_scheduler_loop_runs_due_jobs_with_bounded_ticks() {
         let repository = SqliteRepository::in_memory().unwrap();
-        let state = IpcState::with_repository(repository).expect("state");
+        let state = IpcState::with_repository_and_test_fixtures(repository).expect("state");
         let first = state
             .schedule_scheduler_job(SchedulerJobSpec {
                 name: "first background job".to_string(),
@@ -12378,7 +12598,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("jarvis.sqlite");
         let repository = SqliteRepository::open(&db_path).unwrap();
-        let state = IpcState::with_repository(repository).expect("state");
+        let state = IpcState::with_repository_and_test_fixtures(repository).expect("state");
 
         let approval_job = state
             .schedule_scheduler_job(SchedulerJobSpec {
@@ -12554,16 +12774,19 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .await
             .expect("plugin manifests");
 
-        assert!(manifests.iter().any(|manifest| manifest.id == "fake_echo"));
+        assert_eq!(manifests.len(), 1);
         assert!(manifests
             .iter()
-            .any(|manifest| manifest.id == "fake_status"));
+            .any(|manifest| manifest.id == "system_status"));
+        assert!(!manifests
+            .iter()
+            .any(|manifest| manifest.id.starts_with("fake_")));
 
         let Json(manifest) =
-            get_plugin_manifest(State(IpcState::new()), Path("fake_echo".to_string()))
+            get_plugin_manifest(State(IpcState::new()), Path("system_status".to_string()))
                 .await
-                .expect("fake_echo manifest");
-        assert_eq!(manifest.id, "fake_echo");
+                .expect("system_status manifest");
+        assert_eq!(manifest.id, "system_status");
     }
 
     #[tokio::test]
@@ -12576,11 +12799,18 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert!(catalog
             .tools
             .iter()
-            .any(|tool| tool.plugin_id == "fake_echo" && tool.action == "echo"));
-        assert!(catalog
+            .any(|tool| tool.plugin_id == "system_status" && tool.action == "status"));
+        assert!(!catalog
             .tools
             .iter()
-            .any(|tool| tool.plugin_id == "fake_status" && tool.action == "status"));
+            .any(|tool| tool.plugin_id.starts_with("fake_")));
+        assert!(!catalog
+            .tools
+            .iter()
+            .any(|tool| tool.plugin_id == "workspace_inspect"));
+        assert!(catalog.tools[0].constraints.read_only);
+        assert!(catalog.tools[0].constraints.bounded);
+        assert!(catalog.tools[0].constraints.no_network);
         assert!(catalog.proof_boundary.contains("installed plugins"));
 
         let encoded_tools = serde_json::to_string(&catalog.tools).expect("catalog tools JSON");
@@ -12588,6 +12818,38 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert!(!encoded_tools.contains("provenance"));
         assert!(!encoded_tools.contains("subprocess"));
         assert!(!encoded_tools.contains("manifest_sha256"));
+    }
+
+    #[tokio::test]
+    async fn configured_catalog_adds_workspace_tools_without_paths_or_fake_inventory() {
+        let directory = tempfile::tempdir().expect("workspace fixture");
+        let absolute_path = directory.path().to_string_lossy().to_string();
+        let state = IpcState::with_provider_config_and_workspace_roots(
+            ProviderConfig::default(),
+            vec![crate::WorkspaceRootConfig {
+                id: "project".to_string(),
+                path: directory.path().to_path_buf(),
+            }],
+        )
+        .expect("configured state");
+        let catalog = state.model_tool_catalog().expect("catalog");
+
+        assert_eq!(catalog.tools.len(), 3);
+        assert!(catalog.tools.iter().any(|tool| {
+            tool.plugin_id == "workspace_inspect"
+                && tool.action == "list"
+                && tool.constraints.local_model_only
+        }));
+        assert!(catalog.tools.iter().any(|tool| {
+            tool.plugin_id == "workspace_inspect"
+                && tool.action == "read_text"
+                && tool.constraints.local_model_only
+        }));
+        let encoded = serde_json::to_string(&catalog).expect("catalog JSON");
+        assert!(!encoded.contains(&absolute_path));
+        assert!(!encoded.contains("project"));
+        assert!(!encoded.contains("fake_"));
+        assert!(!encoded.contains("input_schema"));
     }
 
     #[tokio::test]

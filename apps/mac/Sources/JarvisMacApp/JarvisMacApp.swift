@@ -1186,6 +1186,39 @@ struct PluginManagerView: View {
             refresh: { await model.refresh() }
         ) {
             List {
+                if let warning = model.modelToolCatalogWarning {
+                    Section("Production capabilities") {
+                        Text(warning)
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .textSelection(.enabled)
+                    }
+                }
+
+                if !model.modelTools.isEmpty {
+                    Section("Production capabilities") {
+                        ForEach(model.modelTools) { tool in
+                            VStack(alignment: .leading, spacing: 5) {
+                                HStack {
+                                    Text(tool.id)
+                                        .font(.subheadline)
+                                    Spacer()
+                                    Text(tool.constraints.operatorBadge)
+                                        .font(.caption2)
+                                        .foregroundStyle(tool.constraints.hasProductionReadOnlyBoundary ? .green : .orange)
+                                }
+                                Text(tool.description)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Text("risk \(tool.riskTier) | scopes \(tool.scopes.joined(separator: ", ")) | proactive \(tool.proactive ? "yes" : "no")")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                }
+
                 if let warning = model.installedRegistryWarning {
                     Section("Installed") {
                         Text(warning)
@@ -1250,6 +1283,7 @@ struct PluginManagerView: View {
         let executable = plugin.isExecutable ? "executable" : "not executable"
         return "\(plugin.provenance.integrityStatus) | \(origin) | \(originReview) | \(executable)"
     }
+
 }
 
 struct SchedulerJobsView: View {

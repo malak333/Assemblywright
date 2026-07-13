@@ -20,6 +20,17 @@ require_output_contains() {
   fi
 }
 
+require_output_omits() {
+  local label="$1"
+  local output="$2"
+  local forbidden="$3"
+  if [[ "$output" == *"$forbidden"* ]]; then
+    printf 'error: %s unexpectedly included %q\n' "$label" "$forbidden" >&2
+    printf '%s\n%s\n%s\n' "--- $label output ---" "$output" "--- end $label output ---" >&2
+    exit 1
+  fi
+}
+
 json_string_field() {
   local field="$1"
   local output="$2"
@@ -114,9 +125,10 @@ run cargo build -p jarvis-cli
 start_server "initial"
 
 PLUGIN_LIST_OUTPUT="$("$JARVIS" plugins list --json --endpoint "$ENDPOINT")"
-require_output_contains "plugin manifest list" "$PLUGIN_LIST_OUTPUT" '"id":"fake_echo"'
+require_output_contains "plugin manifest list" "$PLUGIN_LIST_OUTPUT" '"id":"system_status"'
+require_output_omits "plugin manifest list" "$PLUGIN_LIST_OUTPUT" '"id":"fake_'
 
-COMMAND_OUTPUT="$("$JARVIS" command --json "plugin echo release operator qa smoke" --endpoint "$ENDPOINT")"
+COMMAND_OUTPUT="$("$JARVIS" command --json "status" --endpoint "$ENDPOINT")"
 require_output_contains "operator QA command" "$COMMAND_OUTPUT" '"accepted":true'
 require_output_contains "operator QA command" "$COMMAND_OUTPUT" '"status":"completed"'
 require_output_contains "operator QA command" "$COMMAND_OUTPUT" '"event_type":"plugin_completed"'
@@ -164,9 +176,13 @@ require_output_contains "operator QA scheduler attention" "$SCHEDULER_ATTENTION_
 require_output_contains "operator QA scheduler attention" "$SCHEDULER_ATTENTION_OUTPUT" '"notification_reason"'
 
 SCHEDULER_RUN_OUTPUT="$("$JARVIS" scheduler run-due --limit 4 --endpoint "$ENDPOINT")"
-require_output_contains "operator QA scheduler run" "$SCHEDULER_RUN_OUTPUT" '"accepted":true'
-require_output_contains "operator QA scheduler run" "$SCHEDULER_RUN_OUTPUT" '"event_type":"scheduler_job_completed"'
+require_output_contains "operator QA scheduler run" "$SCHEDULER_RUN_OUTPUT" '"accepted":false'
+require_output_contains "operator QA scheduler run" "$SCHEDULER_RUN_OUTPUT" '"event_type":"scheduler_job_failed"'
 require_output_contains "operator QA scheduler run" "$SCHEDULER_RUN_OUTPUT" '"event_type":"scheduler_proactive_policy_checked"'
+require_output_contains "operator QA scheduler run" "$SCHEDULER_RUN_OUTPUT" '"event_type":"scheduler_fail_closed_emergency_pause"'
+
+SCHEDULER_RESUME_OUTPUT="$("$JARVIS" resume --endpoint "$ENDPOINT")"
+require_output_contains "operator QA scheduler fail-closed resume" "$SCHEDULER_RESUME_OUTPUT" '"paused":false'
 
 ACTIVITY_OUTPUT="$("$JARVIS" activity summary --json --endpoint "$ENDPOINT")"
 require_output_contains "operator QA activity summary" "$ACTIVITY_OUTPUT" '"active_task_count":0'
@@ -186,7 +202,7 @@ require_output_contains "operator QA diagnostics" "$DIAGNOSTICS_OUTPUT" '"redact
 PAUSE_OUTPUT="$("$JARVIS" pause --endpoint "$ENDPOINT" --reason "release operator QA smoke")"
 require_output_contains "operator QA pause" "$PAUSE_OUTPUT" '"paused":true'
 
-BLOCKED_OUTPUT="$("$JARVIS" command --json "plugin echo blocked by release operator QA smoke" --endpoint "$ENDPOINT" --dry-run)"
+BLOCKED_OUTPUT="$("$JARVIS" command --json "status" --endpoint "$ENDPOINT" --dry-run)"
 require_output_contains "operator QA blocked command" "$BLOCKED_OUTPUT" '"accepted":false'
 require_output_contains "operator QA blocked command" "$BLOCKED_OUTPUT" '"status":"blocked"'
 
@@ -207,7 +223,7 @@ RESTART_TASKS_OUTPUT="$("$JARVIS" tasks list --json --endpoint "$ENDPOINT")"
 require_output_contains "operator QA restart tasks" "$RESTART_TASKS_OUTPUT" '"status":"completed"'
 
 RESTART_SCHEDULER_OUTPUT="$("$JARVIS" scheduler list --endpoint "$ENDPOINT")"
-require_output_contains "operator QA restart scheduler" "$RESTART_SCHEDULER_OUTPUT" '"status":"completed"'
+require_output_contains "operator QA restart scheduler" "$RESTART_SCHEDULER_OUTPUT" '"status":"failed"'
 
 RESTART_DIAGNOSTICS_OUTPUT="$("$JARVIS" diagnostics export --endpoint "$ENDPOINT")"
 require_output_contains "operator QA restart diagnostics" "$RESTART_DIAGNOSTICS_OUTPUT" '"repository_backed":true'

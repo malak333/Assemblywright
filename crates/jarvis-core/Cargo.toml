@@ -17,6 +17,7 @@ ed25519-dalek.workspace = true
 futures-util.workspace = true
 p256.workspace = true
 rusqlite.workspace = true
+rustix.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

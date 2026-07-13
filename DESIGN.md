@@ -108,6 +108,17 @@ Combines capability scopes with risk tiers. It decides whether an action can run
 
 Loads first-party and later third-party capabilities behind explicit manifests. Tools declare permissions, risk class, input schema, output schema, audit behavior, timeout behavior, and cancellation behavior.
 
+The first production-useful local capability is bounded workspace inspection.
+It is absent unless the operator explicitly configures an allowlisted root;
+model input selects only that opaque root identifier and a validated relative
+path. Rust anchors traversal to an already-open directory descriptor, refuses
+symlinks and secret/hidden/special/binary paths, caps listing and UTF-8 text
+output, and audits metadata rather than file contents or absolute paths. These
+results are local-model-only and must never be returned to a ChatGPT step.
+Emergency pause and task cancellation dominate completion and suppress late
+capability output. Deterministic `fake_*` plugins remain test fixtures and are
+not part of production inventory.
+
 ### Scheduler And Trigger Engine
 
 Runs approved proactive routines and event-driven checks. v1 jobs should be local, inspectable, cancellable, and subject to the same policy rules as reactive commands.
