@@ -125,10 +125,25 @@ proactive policy/plugin/pause funnel. Ambiguous started events are never
 automatically repeated and require explicit resolve-without-retry review. Swift
 allocates each counter above its Keychain value, current epoch milliseconds,
 and Rust's durable replay high-water so Keychain loss or a backward clock cannot
-strand an otherwise valid enrollment. Loss or mismatch of the enrollment key
-itself fails closed: initial provisioning does not authorize rotation, no
-supported recovery workflow exists yet, and manual SQLite or Keychain mutation
-is not a recovery procedure.
+strand an otherwise valid enrollment. Explicit key control is a separate
+two-step workflow. Normal rotation requires an active-session, domain-separated
+signature from the enrolled key. Lost-key recovery deliberately omits old-key
+proof but requires a stronger destructive confirmation; because the IPC route
+is unauthenticated loopback, that phrase is accident prevention, not user,
+device, or ownership authentication. In one immediate transaction Rust rejects
+ambiguous dispatch, blocks accepted old-generation work, disables the rule,
+advances generation, resets replay high-water, and stores only a short-lived
+one-shot grant hash plus staged-key fingerprint. A single supervised stdin
+restart can consume that grant and install the new public key disabled. Swift
+keeps the old active key until status proves the candidate fingerprint and
+target generation, and journals explicit resume/cancel reconciliation. The
+workflow never auto-enables, rolls back, or retries. Manual SQLite or Keychain
+mutation is not a recovery procedure. Prepare documents, signed proofs, and
+returned one-time grant tokens are secret-bearing transport: they use bounded
+stdin or in-process IPC and must flow directly into trusted device-only
+Keychain journal code. That code constructs the distinct install document for
+supervised stdin; the raw prepare response is not install input. Neither form
+may enter argv, terminal output, shell history, logs, or intermediate files.
 
 ### Audit Log
 

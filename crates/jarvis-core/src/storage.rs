@@ -15,17 +15,19 @@ use crate::router::{
     ModelProvider as RouteModelProvider, ModelRouteRecord, RouteEvidence, RouteOutcome,
 };
 use crate::{
+    trusted_wake::TRUSTED_WAKE_KEY_GRANT_TTL_SECONDS, TrustedWakeAcceptedEvent,
+    TrustedWakeAttentionItem, TrustedWakeDispatchState, TrustedWakeKeyControlMode,
+    TrustedWakePendingKeyControl, TrustedWakeRule,
+};
+use crate::{
     ApprovalStatus, AuditEntry, CapabilityScope, InstalledPlugin, InstalledPluginExecutionGrant,
     InstalledPluginIntegrityStatus, InstalledPluginProvenance, JarvisError, JarvisResult,
     PluginManifest, RiskTier, SchedulerJob, SchedulerJobStatus, Sensitivity, TaskRecord,
     TaskStatus, TriggerKind,
 };
 use crate::{MemoryIndexStatus, MemoryIndexStore};
-use crate::{
-    TrustedWakeAcceptedEvent, TrustedWakeAttentionItem, TrustedWakeDispatchState, TrustedWakeRule,
-};
 
-const CURRENT_SCHEMA_VERSION: i64 = 10;
+const CURRENT_SCHEMA_VERSION: i64 = 11;
 
 #[derive(Debug, Clone)]
 pub struct StoredTrustedWakeRule {
@@ -872,7 +874,7 @@ impl SqliteRepository {
         public_key: &[u8],
         key_fingerprint: &str,
         command: &str,
-        allow_rotation: bool,
+        _allow_rotation: bool,
     ) -> JarvisResult<TrustedWakeRule> {
         let now = Utc::now();
         let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
@@ -889,9 +891,9 @@ impl SqliteRepository {
             .map_err(storage_error)?;
         if let Some(existing) = existing {
             let same_material = existing.public_key == public_key && existing.command == command;
-            if !same_material && !allow_rotation {
+            if !same_material {
                 return Err(JarvisError::Validation(
-                    "trusted wake key or command rotation requires explicit allow_rotation"
+                    "trusted wake bootstrap cannot mutate an existing enrollment; use the explicit key-control prepare/install workflow"
                         .to_string(),
                 ));
             }
@@ -917,15 +919,7 @@ impl SqliteRepository {
             .execute(
                 "INSERT INTO trusted_wake_rules
                  (id, public_key, key_fingerprint, generation, command, enabled, highest_counter, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, 1, ?4, 0, 0, ?5, ?5)
-                 ON CONFLICT(id) DO UPDATE SET
-                    public_key = excluded.public_key,
-                    key_fingerprint = excluded.key_fingerprint,
-                    generation = trusted_wake_rules.generation + 1,
-                    command = excluded.command,
-                    enabled = 0,
-                    highest_counter = 0,
-                    updated_at = excluded.updated_at",
+                 VALUES (?1, ?2, ?3, 1, ?4, 0, 0, ?5, ?5)",
                 params![
                     id.to_string(),
                     public_key,
@@ -953,7 +947,7 @@ impl SqliteRepository {
                 "generation": enrolled.public.generation,
                 "enabled": enrolled.public.enabled,
                 "idempotent": false,
-                "rotation_requested": allow_rotation,
+                "rotation_requested": false,
                 "public_key_redacted": true,
                 "command_redacted": true,
             }),
@@ -970,6 +964,24 @@ impl SqliteRepository {
     ) -> JarvisResult<TrustedWakeRule> {
         let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
             .map_err(storage_error)?;
+        if enabled {
+            let pending: Option<i64> = tx
+                .query_row(
+                    "SELECT 1 FROM trusted_wake_key_grants
+                     WHERE rule_id = ?1 AND consumed_at IS NULL AND cancelled_at IS NULL
+                       AND expired_at IS NULL",
+                    params![id.to_string()],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(storage_error)?;
+            if pending.is_some() {
+                return Err(JarvisError::Validation(
+                    "trusted wake rule cannot be enabled while a key-control grant is pending"
+                        .to_string(),
+                ));
+            }
+        }
         let changed = tx
             .execute(
                 "UPDATE trusted_wake_rules SET enabled = ?1, updated_at = ?2
@@ -1017,6 +1029,379 @@ impl SqliteRepository {
             )
             .optional()
             .map_err(storage_error)
+    }
+
+    pub fn trusted_wake_pending_key_control(
+        &self,
+        id: Uuid,
+    ) -> JarvisResult<Option<TrustedWakePendingKeyControl>> {
+        self.conn
+            .query_row(
+                "SELECT operation, source_generation, target_generation, old_fingerprint,
+                        new_fingerprint, expires_at, created_at
+                 FROM trusted_wake_key_grants
+                 WHERE rule_id = ?1 AND consumed_at IS NULL AND cancelled_at IS NULL
+                   AND expired_at IS NULL",
+                params![id.to_string()],
+                trusted_wake_pending_key_control_from_row,
+            )
+            .optional()
+            .map_err(storage_error)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_trusted_wake_key_control(
+        &self,
+        id: Uuid,
+        operation: TrustedWakeKeyControlMode,
+        expected_generation: u64,
+        expected_fingerprint: &str,
+        new_fingerprint: &str,
+        grant_token_hash: &str,
+        expires_at: DateTime<Utc>,
+    ) -> JarvisResult<(TrustedWakePendingKeyControl, usize)> {
+        let target_generation = expected_generation.checked_add(1).ok_or_else(|| {
+            JarvisError::Validation("trusted wake enrollment generation is exhausted".to_string())
+        })?;
+        let now = Utc::now();
+        if expires_at <= now
+            || expires_at > now + chrono::Duration::seconds(TRUSTED_WAKE_KEY_GRANT_TTL_SECONDS)
+        {
+            return Err(JarvisError::Validation(
+                "trusted wake key-control grant expiry is outside the fixed short-lived window"
+                    .to_string(),
+            ));
+        }
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        let current: Option<(i64, String)> = tx
+            .query_row(
+                "SELECT generation, key_fingerprint FROM trusted_wake_rules WHERE id = ?1",
+                params![id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(storage_error)?;
+        let Some((generation, fingerprint)) = current else {
+            return Err(JarvisError::Validation(
+                "trusted wake rule is not enrolled".to_string(),
+            ));
+        };
+        if u64::try_from(generation).ok() != Some(expected_generation)
+            || fingerprint != expected_fingerprint
+        {
+            return Err(JarvisError::Validation(
+                "trusted wake key-control generation or fingerprint changed".to_string(),
+            ));
+        }
+        let ambiguous: i64 = tx
+            .query_row(
+                "SELECT COUNT(*) FROM trusted_wake_events
+                 WHERE rule_id = ?1 AND state = 'dispatch_started'",
+                params![id.to_string()],
+                |row| row.get(0),
+            )
+            .map_err(storage_error)?;
+        if ambiguous != 0 {
+            return Err(JarvisError::Validation(
+                "trusted wake key control rejects ambiguous dispatches; resolve them without retry first"
+                    .to_string(),
+            ));
+        }
+        let expired = tx
+            .execute(
+                "UPDATE trusted_wake_key_grants SET expired_at = ?2
+             WHERE rule_id = ?1 AND consumed_at IS NULL AND cancelled_at IS NULL
+               AND expired_at IS NULL AND expires_at <= ?2",
+                params![id.to_string(), to_db_time(now)],
+            )
+            .map_err(storage_error)?;
+        if expired > 0 {
+            append_trusted_wake_mutation_audit(
+                &tx,
+                "trusted_wake_key_control_expired",
+                "expired trusted wake one-shot key grant was retired before a new prepare",
+                json!({
+                    "rule_id": id,
+                    "expired_grant_count": expired,
+                    "grant_token_redacted": true,
+                    "fingerprints_redacted": true,
+                    "rule_enabled": false,
+                }),
+            )?;
+        }
+        let active_grant: Option<i64> = tx
+            .query_row(
+                "SELECT 1 FROM trusted_wake_key_grants
+                 WHERE rule_id = ?1 AND consumed_at IS NULL AND cancelled_at IS NULL
+                   AND expired_at IS NULL",
+                params![id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(storage_error)?;
+        if active_grant.is_some() {
+            return Err(JarvisError::Validation(
+                "trusted wake key control already has a pending one-shot grant".to_string(),
+            ));
+        }
+
+        let blocked = tx
+            .execute(
+                "UPDATE trusted_wake_events SET state = 'blocked', updated_at = ?1
+                 WHERE rule_id = ?2 AND rule_generation = ?3 AND state = 'accepted'",
+                params![to_db_time(now), id.to_string(), expected_generation],
+            )
+            .map_err(storage_error)?;
+        tx.execute(
+            "UPDATE scheduler_jobs SET status = 'cancelled', cancelled_at = ?1,
+                    cancellation_reason = 'trusted wake enrollment key changed', updated_at = ?1
+             WHERE id IN (
+                SELECT scheduler_job_id FROM trusted_wake_events
+                WHERE rule_id = ?2 AND rule_generation = ?3 AND state = 'blocked'
+             ) AND status = 'scheduled'",
+            params![to_db_time(now), id.to_string(), expected_generation],
+        )
+        .map_err(storage_error)?;
+        let changed = tx
+            .execute(
+                "UPDATE trusted_wake_rules SET enabled = 0, generation = ?1,
+                        highest_counter = 0, updated_at = ?2
+                 WHERE id = ?3 AND generation = ?4 AND key_fingerprint = ?5",
+                params![
+                    target_generation,
+                    to_db_time(now),
+                    id.to_string(),
+                    expected_generation,
+                    expected_fingerprint,
+                ],
+            )
+            .map_err(storage_error)?;
+        if changed != 1 {
+            return Err(JarvisError::Validation(
+                "trusted wake key-control CAS did not change one rule".to_string(),
+            ));
+        }
+        tx.execute(
+            "INSERT INTO trusted_wake_key_grants
+             (id, rule_id, operation, source_generation, target_generation, old_fingerprint,
+              new_fingerprint, token_hash, expires_at, created_at, consumed_at, cancelled_at, expired_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, NULL, NULL)",
+            params![
+                Uuid::new_v4().to_string(),
+                id.to_string(),
+                operation.as_str(),
+                expected_generation,
+                target_generation,
+                expected_fingerprint,
+                new_fingerprint,
+                grant_token_hash,
+                to_db_time(expires_at),
+                to_db_time(now),
+            ],
+        )
+        .map_err(storage_error)?;
+        append_trusted_wake_mutation_audit(
+            &tx,
+            "trusted_wake_key_control_prepared",
+            "operator prepared a one-shot trusted wake key change; rule disabled and old accepted work blocked",
+            json!({
+                "rule_id": id,
+                "operation": operation.as_str(),
+                "source_generation": expected_generation,
+                "target_generation": target_generation,
+                "blocked_accepted_count": blocked,
+                "old_fingerprint_redacted": true,
+                "new_fingerprint_redacted": true,
+                "grant_token_redacted": true,
+                "rule_enabled": false,
+            }),
+        )?;
+        tx.commit().map_err(storage_error)?;
+        Ok((
+            TrustedWakePendingKeyControl {
+                operation,
+                source_generation: expected_generation,
+                target_generation,
+                old_fingerprint: expected_fingerprint.to_string(),
+                new_fingerprint: new_fingerprint.to_string(),
+                expires_at,
+                created_at: now,
+            },
+            blocked,
+        ))
+    }
+
+    pub fn consume_trusted_wake_key_control(
+        &self,
+        id: Uuid,
+        target_generation: u64,
+        new_public_key: &[u8],
+        new_fingerprint: &str,
+        grant_token_hash: &str,
+    ) -> JarvisResult<TrustedWakeRule> {
+        let now = Utc::now();
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        let grant: Option<(String, i64, String, String, String)> = tx
+            .query_row(
+                "SELECT operation, target_generation, new_fingerprint, expires_at, old_fingerprint
+                 FROM trusted_wake_key_grants
+                 WHERE rule_id = ?1 AND token_hash = ?2
+                   AND consumed_at IS NULL AND cancelled_at IS NULL AND expired_at IS NULL",
+                params![id.to_string(), grant_token_hash],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(storage_error)?;
+        let Some((
+            operation,
+            stored_generation,
+            stored_fingerprint,
+            stored_expiry,
+            old_fingerprint,
+        )) = grant
+        else {
+            return Err(JarvisError::Validation(
+                "trusted wake one-shot key-control grant is missing or already consumed"
+                    .to_string(),
+            ));
+        };
+        if u64::try_from(stored_generation).ok() != Some(target_generation)
+            || stored_fingerprint != new_fingerprint
+            || parse_db_time(&stored_expiry).map_err(storage_error)? <= now
+        {
+            return Err(JarvisError::Validation(
+                "trusted wake one-shot key-control grant bindings are invalid or expired"
+                    .to_string(),
+            ));
+        }
+        let changed = tx
+            .execute(
+                "UPDATE trusted_wake_rules SET public_key = ?1, key_fingerprint = ?2,
+                        enabled = 0, highest_counter = 0, updated_at = ?3
+                 WHERE id = ?4 AND generation = ?5 AND enabled = 0 AND key_fingerprint = ?6",
+                params![
+                    new_public_key,
+                    new_fingerprint,
+                    to_db_time(now),
+                    id.to_string(),
+                    target_generation,
+                    old_fingerprint,
+                ],
+            )
+            .map_err(storage_error)?;
+        if changed != 1 {
+            return Err(JarvisError::Validation(
+                "trusted wake staged key install did not match the disabled target generation"
+                    .to_string(),
+            ));
+        }
+        let consumed = tx
+            .execute(
+                "UPDATE trusted_wake_key_grants SET consumed_at = ?1
+                 WHERE rule_id = ?2 AND token_hash = ?3
+                   AND consumed_at IS NULL AND cancelled_at IS NULL AND expired_at IS NULL",
+                params![to_db_time(now), id.to_string(), grant_token_hash],
+            )
+            .map_err(storage_error)?;
+        if consumed != 1 {
+            return Err(JarvisError::Validation(
+                "trusted wake one-shot grant consumption CAS failed".to_string(),
+            ));
+        }
+        append_trusted_wake_mutation_audit(
+            &tx,
+            "trusted_wake_key_control_installed",
+            "supervised one-shot restart installed the staged trusted wake public key disabled",
+            json!({
+                "rule_id": id,
+                "operation": operation,
+                "target_generation": target_generation,
+                "public_key_redacted": true,
+                "fingerprint_redacted": true,
+                "grant_token_redacted": true,
+                "rule_enabled": false,
+            }),
+        )?;
+        let rule = tx
+            .query_row(
+                "SELECT id, public_key, key_fingerprint, generation, command, enabled,
+                        highest_counter, created_at, updated_at
+                 FROM trusted_wake_rules WHERE id = ?1",
+                params![id.to_string()],
+                trusted_wake_rule_from_row,
+            )
+            .map_err(storage_error)?;
+        tx.commit().map_err(storage_error)?;
+        Ok(rule.public)
+    }
+
+    pub fn cancel_trusted_wake_key_control(
+        &self,
+        id: Uuid,
+        expected_generation: u64,
+        expected_fingerprint: &str,
+    ) -> JarvisResult<TrustedWakeRule> {
+        let now = Utc::now();
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        let changed = tx
+            .execute(
+                "UPDATE trusted_wake_key_grants SET cancelled_at = ?1
+                 WHERE rule_id = ?2 AND target_generation = ?3
+                   AND old_fingerprint = ?4 AND consumed_at IS NULL AND cancelled_at IS NULL
+                   AND expired_at IS NULL",
+                params![
+                    to_db_time(now),
+                    id.to_string(),
+                    expected_generation,
+                    expected_fingerprint,
+                ],
+            )
+            .map_err(storage_error)?;
+        if changed != 1 {
+            return Err(JarvisError::Validation(
+                "trusted wake pending key change is missing or changed".to_string(),
+            ));
+        }
+        let rule = tx
+            .query_row(
+                "SELECT id, public_key, key_fingerprint, generation, command, enabled,
+                        highest_counter, created_at, updated_at
+                 FROM trusted_wake_rules
+                 WHERE id = ?1 AND generation = ?2 AND key_fingerprint = ?3 AND enabled = 0",
+                params![id.to_string(), expected_generation, expected_fingerprint],
+                trusted_wake_rule_from_row,
+            )
+            .optional()
+            .map_err(storage_error)?
+            .ok_or_else(|| {
+                JarvisError::Validation(
+                    "trusted wake cancel-reset rule CAS failed; rule remains disabled".to_string(),
+                )
+            })?;
+        append_trusted_wake_mutation_audit(
+            &tx,
+            "trusted_wake_key_control_cancelled",
+            "operator cancelled the pending trusted wake key grant; rule remains disabled",
+            json!({
+                "rule_id": id,
+                "generation": expected_generation,
+                "fingerprint_redacted": true,
+                "rule_enabled": false,
+            }),
+        )?;
+        tx.commit().map_err(storage_error)?;
+        Ok(rule.public)
     }
 
     pub fn accept_trusted_wake_event(
@@ -1998,6 +2383,9 @@ impl SqliteRepository {
         if version < 10 {
             self.apply_migration_10()?;
         }
+        if version < 11 {
+            self.apply_migration_11()?;
+        }
 
         let migrated = self.schema_version()?;
         if migrated != CURRENT_SCHEMA_VERSION {
@@ -2156,6 +2544,46 @@ impl SqliteRepository {
         tx.execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
             params![10, now],
+        )
+        .map_err(storage_error)?;
+        tx.commit().map_err(storage_error)?;
+        Ok(())
+    }
+
+    fn apply_migration_11(&self) -> JarvisResult<()> {
+        let now = to_db_time(Utc::now());
+        let tx = self.conn.unchecked_transaction().map_err(storage_error)?;
+        tx.execute_batch(
+            "
+            CREATE TABLE trusted_wake_key_grants (
+                id TEXT PRIMARY KEY NOT NULL,
+                rule_id TEXT NOT NULL REFERENCES trusted_wake_rules(id) ON DELETE CASCADE,
+                operation TEXT NOT NULL CHECK (operation IN ('rotate', 'recover')),
+                source_generation INTEGER NOT NULL CHECK (source_generation > 0),
+                target_generation INTEGER NOT NULL CHECK (target_generation > source_generation),
+                old_fingerprint TEXT NOT NULL,
+                new_fingerprint TEXT NOT NULL,
+                token_hash TEXT NOT NULL UNIQUE,
+                expires_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                consumed_at TEXT NULL,
+                cancelled_at TEXT NULL,
+                expired_at TEXT NULL,
+                CHECK (
+                    (consumed_at IS NOT NULL) + (cancelled_at IS NOT NULL) + (expired_at IS NOT NULL) <= 1
+                )
+            );
+            CREATE INDEX idx_trusted_wake_key_grants_expiry
+                ON trusted_wake_key_grants (expires_at);
+            CREATE UNIQUE INDEX idx_trusted_wake_key_grants_one_active
+                ON trusted_wake_key_grants (rule_id)
+                WHERE consumed_at IS NULL AND cancelled_at IS NULL AND expired_at IS NULL;
+            ",
+        )
+        .map_err(storage_error)?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+            params![11, now],
         )
         .map_err(storage_error)?;
         tx.commit().map_err(storage_error)?;
@@ -2862,6 +3290,45 @@ fn trusted_wake_rule_from_row(row: &Row<'_>) -> rusqlite::Result<StoredTrustedWa
     })
 }
 
+fn trusted_wake_pending_key_control_from_row(
+    row: &Row<'_>,
+) -> rusqlite::Result<TrustedWakePendingKeyControl> {
+    let operation = match row.get::<_, String>(0)?.as_str() {
+        "rotate" => TrustedWakeKeyControlMode::Rotate,
+        "recover" => TrustedWakeKeyControlMode::Recover,
+        value => {
+            return Err(rusqlite::Error::FromSqlConversionFailure(
+                0,
+                rusqlite::types::Type::Text,
+                format!("invalid trusted wake key-control operation: {value}").into(),
+            ))
+        }
+    };
+    let source_generation = row.get::<_, i64>(1)?;
+    let target_generation = row.get::<_, i64>(2)?;
+    Ok(TrustedWakePendingKeyControl {
+        operation,
+        source_generation: u64::try_from(source_generation).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                1,
+                rusqlite::types::Type::Integer,
+                Box::new(error),
+            )
+        })?,
+        target_generation: u64::try_from(target_generation).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                2,
+                rusqlite::types::Type::Integer,
+                Box::new(error),
+            )
+        })?,
+        old_fingerprint: row.get(3)?,
+        new_fingerprint: row.get(4)?,
+        expires_at: parse_db_time(&row.get::<_, String>(5)?)?,
+        created_at: parse_db_time(&row.get::<_, String>(6)?)?,
+    })
+}
+
 fn trusted_wake_event_from_row(row: &Row<'_>) -> rusqlite::Result<TrustedWakeAcceptedEvent> {
     let counter = row.get::<_, i64>(2)?;
     let state = match row.get::<_, String>(4)?.as_str() {
@@ -3341,9 +3808,10 @@ mod tests {
                 DROP TRIGGER model_route_records_no_delete;
                 DROP TRIGGER model_route_records_no_update;
                 DROP TABLE model_route_records;
+                DROP TABLE trusted_wake_key_grants;
                 DROP TABLE trusted_wake_events;
                 DROP TABLE trusted_wake_rules;
-                DELETE FROM schema_migrations WHERE version IN (7, 8, 9, 10);
+                DELETE FROM schema_migrations WHERE version IN (7, 8, 9, 10, 11);
                 ",
             )
             .unwrap();
@@ -3410,9 +3878,10 @@ mod tests {
                 DROP TRIGGER model_route_records_no_delete;
                 DROP TRIGGER model_route_records_no_update;
                 DROP TABLE model_route_records;
+                DROP TABLE trusted_wake_key_grants;
                 DROP TABLE trusted_wake_events;
                 DROP TABLE trusted_wake_rules;
-                DELETE FROM schema_migrations WHERE version IN (7, 8, 9, 10);
+                DELETE FROM schema_migrations WHERE version IN (7, 8, 9, 10, 11);
                 ",
             )
             .unwrap();
@@ -3846,6 +4315,7 @@ mod tests {
                 7 => repo.apply_migration_7().unwrap(),
                 8 => repo.apply_migration_8().unwrap(),
                 9 => repo.apply_migration_9().unwrap(),
+                10 => repo.apply_migration_10().unwrap(),
                 _ => unreachable!("unsupported fixture version"),
             }
         }
@@ -4029,7 +4499,7 @@ mod tests {
                     )
                     .unwrap();
             }
-            8 | 9 => {
+            8..=10 => {
                 let provenance = InstalledPluginProvenance {
                     provenance_schema_version: 1,
                     capture_method: "fixture_v8".to_string(),
@@ -4269,5 +4739,54 @@ mod tests {
             .as_os_str()
             .as_encoded_bytes()
             .ends_with(b".memory-index.json"));
+    }
+
+    #[test]
+    fn expired_trusted_wake_grant_blocks_enable_until_reprepare_retires_it_with_history() {
+        let repo = SqliteRepository::in_memory().unwrap();
+        let id = crate::TRUSTED_WAKE_RULE_ID;
+        let enrolled = repo
+            .enroll_trusted_wake_rule(id, &[4_u8; 65], "old-fingerprint", "wake", false)
+            .unwrap();
+        let (first, _) = repo
+            .prepare_trusted_wake_key_control(
+                id,
+                TrustedWakeKeyControlMode::Recover,
+                enrolled.generation,
+                &enrolled.key_fingerprint,
+                "first-new-fingerprint",
+                "first-token-hash",
+                Utc::now() + chrono::Duration::seconds(299),
+            )
+            .unwrap();
+        repo.raw_connection()
+            .execute(
+                "UPDATE trusted_wake_key_grants SET expires_at = ?1 WHERE rule_id = ?2",
+                params![to_db_time(Utc::now()), id.to_string()],
+            )
+            .unwrap();
+        assert!(repo
+            .set_trusted_wake_rule_enabled(id, true, first.target_generation)
+            .unwrap_err()
+            .to_string()
+            .contains("key-control grant is pending"));
+
+        let (replacement, _) = repo
+            .prepare_trusted_wake_key_control(
+                id,
+                TrustedWakeKeyControlMode::Recover,
+                first.target_generation,
+                &enrolled.key_fingerprint,
+                "second-new-fingerprint",
+                "second-token-hash",
+                Utc::now() + chrono::Duration::seconds(299),
+            )
+            .unwrap();
+        assert_eq!(replacement.target_generation, first.target_generation + 1);
+        assert!(repo
+            .list_audit_entries(None)
+            .unwrap()
+            .iter()
+            .any(|entry| entry.event_type == "trusted_wake_key_control_expired"));
     }
 }

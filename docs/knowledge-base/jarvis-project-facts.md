@@ -1460,7 +1460,7 @@ requires plugin-trust `generated_at`, `review_started_at`,
   explicit grant state beyond `metadata_only`, policy checks,
   timeout/cancellation behavior, and E2E audit coverage.
 
-- Schema v10 adds a disabled-by-default trusted macOS system-wake rule. Swift
+- Schema v11 adds a disabled-by-default trusted macOS system-wake rule. Swift
   stores its P-256 private key and monotonic counter in device-only Keychain
   items. Normal startup never obtains those wake credentials. Explicit initial
   provisioning prepares only the public key while the current app-owned core
@@ -1478,6 +1478,45 @@ requires plugin-trust `generated_at`, `review_started_at`,
   rollback recovers without weakening replay protection. Ambiguous dispatches
   are visible in Swift and can only be resolved explicitly without retry. This is
   enrolled-key possession, not Apple attestation or OS-wake provenance. The
-  explicit initial bootstrap always sets `allow_rotation: false`; authenticated
-  enrollment-key rotation and key-loss/mismatch recovery remain a production
-  blocker. Manual SQLite or Keychain mutation is not a supported workaround.
+  explicit initial bootstrap always sets `allow_rotation: false`; the core now
+  permanently rejects bootstrap mutation of an existing key or command.
+- Supported key control is explicitly two-step. `rotate` requires an old-key,
+  active-session, domain-separated P-256 proof binding the source generation,
+  old fingerprint, candidate fingerprint, exact confirmation, timestamp, and
+  nonce. `recover` intentionally has no old-key proof and requires the stronger
+  `RECOVER LOST TRUSTED WAKE KEY AND BLOCK PENDING WORK` phrase. Because the
+  route is unauthenticated loopback, this is local operator accident prevention,
+  not authorization, device authentication, ownership proof, or same-user/
+  process isolation.
+- Prepare uses one SQLite IMMEDIATE transaction and CAS to reject ambiguous
+  dispatch, block accepted old-generation work, cancel its scheduled handoff,
+  disable the rule, increment generation, reset high-water, persist only a
+  short-lived one-shot token hash plus new fingerprint, and append redacted
+  audit. Pending or expired-unretired grants quarantine enablement. Expired
+  history is retained and audited when an explicit replacement prepare retires
+  it.
+- The Swift key ring stages a candidate while retaining the active key, journals
+  source/target generations, old/new fingerprints, expiry, and the returned
+  one-shot token in device-only Keychain, and uses one explicit supervised
+  `--trusted-wake-key-control-stdin` restart. Rust atomically validates and
+  consumes the grant, installs only the staged public key, and leaves the rule
+  disabled. Swift promotes the candidate only after status proves target
+  generation plus candidate fingerprint. Journal-first cleanup converges after
+  install/cancel crashes; unjournaled staged candidates are safely discarded.
+  Expired or near-expiry grants never stop the healthy core. There is no
+  automatic retry, rollback, or enablement. Manual SQLite or Keychain mutation
+  is not a supported workaround. CLI prepare accepts one maximum 8192-byte JSON
+  document only through `--document-stdin`; proof, candidate, confirmation, and
+  token fields never enter argv. Its response token is a secret and must flow
+  directly into trusted device-only Keychain journal code, which constructs the
+  distinct supervised install document. The raw response is not install stdin;
+  neither form may enter terminal output, shell history, logs, or files.
+- Focused proof lanes are `cargo test -p jarvis-core trusted_wake -- --nocapture`,
+  `cargo test -p jarvis-cli --test local_ipc_e2e trusted_wake -- --nocapture`,
+  and `swift test --disable-sandbox --package-path apps/mac --filter TrustedWake`.
+  They cover adversarial proof bindings, signed rotation, destructive recovery,
+  legacy bypass rejection, wrong key, token replay, old signature rejection,
+  grant expiry/quarantine, crash reconciliation, lifecycle serialization, and
+  audit redaction. They do not prove Apple attestation, OS provenance,
+  background launch, same-user/process isolation, live-device behavior, or
+  production readiness.

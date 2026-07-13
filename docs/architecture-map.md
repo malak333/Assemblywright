@@ -11,8 +11,17 @@ flowchart LR
   N["Normal app/core startup: no wake Keychain or bootstrap stdin"] --> R
   UP["Explicit user Provision"] --> BP["Prepare public bootstrap while app-owned core stays healthy"]
   BP --> B["One-shot bounded supervisor stdin plus EOF"]
-  B --> R["Persisted Rust schema v10 enrollment survives restart"]
-  B --> KR["Key loss or mismatch: fail closed; rotation/recovery unsupported"]
+  B --> R["Persisted Rust schema v11 enrollment survives restart"]
+  R --> KC["Explicit Rotate or stronger-warning Recover"]
+  CLI["CLI prepare: one bounded JSON stdin document; no secret argv"] --> KC
+  KC --> OP["Rotate: old-key session/domain proof; Recover: unauthenticated local accident prevention"]
+  OP --> TX["IMMEDIATE CAS: reject ambiguity, block accepted work, disable, generation plus one, reset counter"]
+  TX --> G["Short-lived one-shot grant hash plus candidate fingerprint"]
+  G --> J["One-time token flows directly to Swift device-only Keychain journal"]
+  J --> SI["Explicit one-shot supervised install/resume stdin"]
+  SI --> DI["Atomic grant consume and candidate public key installed disabled"]
+  DI --> RP["Status fingerprint/generation proof promotes candidate; explicit enable remains separate"]
+  J --> CR["Explicit cancel/reset or crash reconciliation; no automatic retry/rollback"]
   S --> I["/system-wake/events"]
   I --> V["Signature, session, generation, replay, skew checks"]
   R --> V
@@ -30,17 +39,18 @@ flowchart LR
   O["Verified background OS event source"] --> AT["Apple-backed attestation and same-user IPC"]
   AT --> E["Signed and notarized app event broker"]
   E --> F["Durable exactly-once-aware coordinator"]
-  E --> RK["Authenticated enrollment-key rotation and loss recovery"]
+  E --> RK["Apple/device-authenticated enrollment-key rotation and loss recovery"]
   F --> P["Policy, confinement, emergency pause"]
   F --> AR["Operator ambiguity review and explicit terminal resolution"]
   P --> EV["Owner-recorded live-device release evidence"]
 ```
 
-The current slice does not claim Apple attestation, OS wake provenance,
-same-user isolation, background launch, exactly-once side effects, live-device
-QA, or production readiness. It also has no supported enrollment-key rotation
-or key-loss/mismatch recovery workflow; manual SQLite or Keychain mutation is
-not a recovery procedure.
+The current slice supports explicit local rotation and lost-key recovery, but
+recovery confirmation is only accident prevention on unauthenticated loopback.
+It does not claim authorization, device authentication, ownership proof, Apple
+attestation, OS wake provenance, same-user/process isolation, background
+launch, exactly-once side effects, live-device QA, or production readiness.
+Manual SQLite or Keychain mutation is not a recovery procedure.
 
 Jarvis is a local-first macOS assistant foundation. The current repository
 contains a Rust workspace with the core contracts, loopback IPC server,

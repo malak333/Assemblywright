@@ -5403,6 +5403,214 @@ struct TrustedWakeContractsTests {
         }
     }
 
+    @Test("Key-control reconciliation converges after install, cancel, and expiry")
+    func keyControlReconciliationDecisions() throws {
+        let installed = try fakeTrustedWakeStatus(
+            generation: 2,
+            fingerprint: "new-fingerprint",
+            pendingJSON: "null"
+        )
+        #expect(trustedWakeKeyReconcileDisposition(
+            rule: installed.rule,
+            pending: installed.pendingKeyControl,
+            targetGeneration: 2,
+            oldFingerprint: "old-fingerprint",
+            newFingerprint: "new-fingerprint"
+        ) == .promoteCandidate)
+        let cancelled = try fakeTrustedWakeStatus(
+            generation: 2,
+            fingerprint: "old-fingerprint",
+            pendingJSON: "null"
+        )
+        #expect(trustedWakeKeyReconcileDisposition(
+            rule: cancelled.rule,
+            pending: cancelled.pendingKeyControl,
+            targetGeneration: 2,
+            oldFingerprint: "old-fingerprint",
+            newFingerprint: "new-fingerprint"
+        ) == .clearConfirmedCancel)
+        let pending = try fakeTrustedWakeStatus(
+            generation: 2,
+            fingerprint: "old-fingerprint",
+            pendingJSON: fakePendingKeyControlJSON(expiresAt: "2026-07-13T12:05:00Z")
+        )
+        #expect(trustedWakeKeyReconcileDisposition(
+            rule: pending.rule,
+            pending: pending.pendingKeyControl,
+            targetGeneration: 2,
+            oldFingerprint: "old-fingerprint",
+            newFingerprint: "new-fingerprint"
+        ) == .wait)
+        let parser = ISO8601DateFormatter()
+        let boundary = parser.date(from: "2026-07-13T12:00:00Z")!
+        #expect(trustedWakeGrantIsExpired("2026-07-13T12:00:00Z", now: boundary))
+        #expect(!trustedWakeGrantHasMinimumValidity(
+            "2026-07-13T08:00:00-04:00",
+            minimumValiditySeconds: 0,
+            now: boundary
+        ))
+        #expect(trustedWakeGrantHasMinimumValidity(
+            "2026-07-13T12:00:00.500Z",
+            minimumValiditySeconds: 0,
+            now: boundary
+        ))
+        #expect(!trustedWakeGrantHasMinimumValidity(
+            "2026-07-13T12:00:05Z",
+            minimumValiditySeconds: 7,
+            now: boundary
+        ))
+        #expect(!trustedWakeGrantHasMinimumValidity(
+            "not-a-date",
+            minimumValiditySeconds: 0,
+            now: boundary
+        ))
+        #expect(trustedWakeGrantIsExpired("not-a-date"))
+    }
+
+    @Test("Expired resume preserves the healthy core")
+    @MainActor
+    func expiredResumeDoesNotRestartCore() async throws {
+        let expired = try fakeTrustedWakeStatus(
+            generation: 2,
+            fingerprint: "old-fingerprint",
+            pendingJSON: fakePendingKeyControlJSON(expiresAt: "2020-01-01T00:00:00Z")
+        )
+        let restarted = MutableFlag(false)
+        let model = TrustedWakeModel(
+            client: FakeCoreClient(trustedWakeStatusResults: [.success(expired)]),
+            signer: FakeTrustedWakeSigner(),
+            keyRing: RecordingTrustedWakeKeyRing(),
+            installKeyControl: { restarted.value = true }
+        )
+        await model.resumeKeyControl()
+        #expect(!restarted.value)
+        #expect(model.errorMessage?.contains("expired") == true)
+        #expect(model.errorMessage?.contains("did not stop the healthy core") == true)
+    }
+
+    @Test("Resume reconciles a completed install before requiring a pending grant")
+    @MainActor
+    func resumeReconcilesCompletedInstallFirst() async throws {
+        let installed = try fakeTrustedWakeStatus(
+            generation: 2,
+            fingerprint: "new-fingerprint",
+            pendingJSON: "null"
+        )
+        let restarted = MutableFlag(false)
+        let model = TrustedWakeModel(
+            client: FakeCoreClient(trustedWakeStatusResults: [.success(installed)]),
+            signer: FakeTrustedWakeSigner(),
+            keyRing: ReconciledTrustedWakeKeyRing(),
+            installKeyControl: { restarted.value = true }
+        )
+
+        await model.resumeKeyControl()
+
+        #expect(!restarted.value)
+        #expect(model.status?.rule?.generation == 2)
+        #expect(model.errorMessage == nil)
+        #expect(model.keyControlMessage?.contains("journal reconciled") == true)
+    }
+
+    @Test("Durable prepare failure refreshes pending actions without retrying install")
+    @MainActor
+    func durablePrepareFailureExposesPendingActions() async throws {
+        let active = try fakeTrustedWakeStatus(
+            generation: 1,
+            fingerprint: "old-fingerprint",
+            pendingJSON: "null"
+        )
+        let pending = try fakeTrustedWakeStatus(
+            generation: 2,
+            fingerprint: "old-fingerprint",
+            pendingJSON: fakePendingKeyControlJSON(expiresAt: "2099-07-13T12:05:00Z")
+        )
+        let client = FakeCoreClient(
+            trustedWakeStatusResults: [.success(active), .success(pending)],
+            trustedWakePrepareResult: .success(try fakeTrustedWakePrepareResponse())
+        )
+        let model = TrustedWakeModel(
+            client: client,
+            signer: FakeTrustedWakeSigner(),
+            keyRing: RecordingTrustedWakeKeyRing(),
+            installKeyControl: { throw JarvisCoreSupervisorError.trustedWakeRestartFailed }
+        )
+
+        await model.beginKeyControl(
+            operation: .recover,
+            confirmation: jarvisTrustedWakeRecoverConfirmation
+        )
+
+        #expect(model.status?.pendingKeyControl != nil)
+        #expect(model.errorMessage?.contains("durable journal") == true)
+        #expect(model.errorMessage?.contains("Resume or Cancel/reset") == true)
+    }
+
+    @Test("Refresh cannot delete a candidate between stage and journal persist")
+    @MainActor
+    func refreshDoesNotRaceKeyControlStage() async {
+        let keyRing = ControlledTrustedWakeKeyRing()
+        let model = TrustedWakeModel(
+            client: FakeCoreClient(),
+            signer: FakeTrustedWakeSigner(),
+            keyRing: keyRing,
+            installKeyControl: {}
+        )
+        let control = Task { @MainActor in
+            await model.beginKeyControl(
+                operation: .recover,
+                confirmation: jarvisTrustedWakeRecoverConfirmation
+            )
+        }
+        for _ in 0 ..< 100 where !keyRing.didStageStart {
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        #expect(keyRing.didStageStart)
+        await model.refresh()
+        #expect(keyRing.reconcileCount == 0)
+        #expect(keyRing.discardCount == 0)
+        keyRing.resumeStage()
+        await control.value
+        #expect(keyRing.discardCount == 1)
+    }
+
+    @Test("Journal persist and server cancel failure retains staged state for cancel-reset")
+    @MainActor
+    func persistFailureWithoutConfirmedCancelRetainsCandidate() async throws {
+        let active = try fakeTrustedWakeStatus(
+            generation: 1,
+            fingerprint: "old-fingerprint",
+            pendingJSON: "null"
+        )
+        let pending = try fakeTrustedWakeStatus(
+            generation: 2,
+            fingerprint: "old-fingerprint",
+            pendingJSON: fakePendingKeyControlJSON(expiresAt: "2099-07-13T12:05:00Z")
+        )
+        let keyRing = FailingPersistTrustedWakeKeyRing()
+        let restarted = MutableFlag(false)
+        let client = FakeCoreClient(
+            trustedWakeStatusResults: [.success(active), .success(pending)],
+            trustedWakePrepareResult: .success(try fakeTrustedWakePrepareResponse()),
+            trustedWakeCancelResults: [.failure(URLError(.cannotConnectToHost))]
+        )
+        let model = TrustedWakeModel(
+            client: client,
+            signer: FakeTrustedWakeSigner(),
+            keyRing: keyRing,
+            installKeyControl: { restarted.value = true }
+        )
+        await model.beginKeyControl(
+            operation: .recover,
+            confirmation: jarvisTrustedWakeRecoverConfirmation
+        )
+        #expect(!restarted.value)
+        #expect(keyRing.cancelLocalCount == 0)
+        #expect(model.status?.pendingKeyControl != nil)
+        #expect(model.errorMessage?.contains("cancel could not be confirmed") == true)
+        #expect(model.errorMessage?.contains("Resume is unavailable") == true)
+    }
+
     @Test("Rust status timestamps decode and model uses injected signer once")
     @MainActor
     func modelUsesInjectedSigner() async throws {
@@ -5819,6 +6027,205 @@ struct TrustedWakeContractsTests {
         #expect(try Data(contentsOf: received) == bootstrap)
         #expect(try String(contentsOf: eofMarker, encoding: .utf8) == "eof")
     }
+
+    @Test("Key-control install uses one supervised stdin restart and preserves environment")
+    @MainActor
+    func keyControlInstallIsOneShotAndSerialized() async throws {
+        let launcher = FakeProcessLauncher()
+        let supervisor = JarvisCoreSupervisor(
+            configuration: JarvisCoreSupervisorConfiguration(
+                executableURL: URL(fileURLWithPath: "/tmp/jarvis-cli"),
+                databaseURL: URL(fileURLWithPath: "/tmp/jarvis.sqlite")
+            ),
+            client: FakeCoreClient(healthResults: [
+                .failure(URLError(.cannotConnectToHost)),
+                .success(sampleHealth()),
+                .failure(URLError(.cannotConnectToHost)),
+                .success(sampleHealth()),
+            ]),
+            processLauncher: launcher
+        )
+        await supervisor.start(environmentOverrides: ["JARVIS_LOCAL_MODEL": "selected-model"])
+        let document = Data("one-shot-key-control".utf8)
+        try await supervisor.installTrustedWakeKeyControl(
+            using: FakeKeyControlInstallProvider(result: .success(document))
+        )
+        #expect(launcher.launches.count == 2)
+        #expect(launcher.launches[1].arguments.contains("--trusted-wake-key-control-stdin"))
+        #expect(!launcher.launches[1].arguments.contains("--trusted-wake-bootstrap-stdin"))
+        #expect(launcher.launches[1].standardInput == document)
+        #expect(launcher.launches[1].environment["JARVIS_LOCAL_MODEL"] == "selected-model")
+    }
+
+    @Test("Near-expiry or Keychain preparation failure preserves the healthy core")
+    @MainActor
+    func keyControlPreparationFailurePreservesCore() async {
+        let launcher = FakeProcessLauncher()
+        let supervisor = JarvisCoreSupervisor(
+            configuration: JarvisCoreSupervisorConfiguration(
+                executableURL: URL(fileURLWithPath: "/tmp/jarvis-cli"),
+                databaseURL: URL(fileURLWithPath: "/tmp/jarvis.sqlite"),
+                startupTimeoutSeconds: 2
+            ),
+            client: FakeCoreClient(healthResults: [
+                .failure(URLError(.cannotConnectToHost)),
+                .success(sampleHealth()),
+            ]),
+            processLauncher: launcher
+        )
+        await supervisor.start()
+        let provider = RejectingKeyControlInstallProvider()
+        do {
+            try await supervisor.installTrustedWakeKeyControl(using: provider)
+            Issue.record("Expected key-control preparation failure")
+        } catch JarvisCoreSupervisorError.trustedWakeKeyControlPreparationFailed {
+            // Expected.
+        } catch {
+            Issue.record("Unexpected key-control preparation error: \(error)")
+        }
+        #expect(provider.minimumValiditySeconds == 7)
+        #expect(launcher.launches.count == 1)
+        #expect(launcher.processes[0].isRunning)
+        #expect(!launcher.processes[0].terminateCalled)
+    }
+
+    @Test("Key-control preparation never stops a replacement core")
+    @MainActor
+    func keyControlRevalidatesProcessIdentity() async {
+        let provider = ControlledKeyControlInstallProvider(data: Data("install".utf8))
+        let launcher = FakeProcessLauncher()
+        let supervisor = JarvisCoreSupervisor(
+            configuration: JarvisCoreSupervisorConfiguration(
+                executableURL: URL(fileURLWithPath: "/tmp/jarvis-cli"),
+                databaseURL: URL(fileURLWithPath: "/tmp/jarvis.sqlite")
+            ),
+            client: FakeCoreClient(healthResults: [
+                .failure(URLError(.cannotConnectToHost)), .success(sampleHealth()),
+                .failure(URLError(.cannotConnectToHost)), .success(sampleHealth()),
+            ]),
+            processLauncher: launcher
+        )
+        await supervisor.start()
+        let install = Task { @MainActor in
+            try await supervisor.installTrustedWakeKeyControl(using: provider)
+        }
+        for _ in 0 ..< 100 where !provider.didStart {
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        #expect(provider.didStart)
+        #expect(await supervisor.stop())
+        await supervisor.start()
+        let replacement = launcher.processes[1]
+        provider.resume()
+        do {
+            try await install.value
+            Issue.record("Expected process identity failure")
+        } catch JarvisCoreSupervisorError.trustedWakeCoreChangedDuringPreparation {
+            // Expected.
+        } catch {
+            Issue.record("Unexpected identity error: \(error)")
+        }
+        #expect(launcher.launches.count == 2)
+        #expect(replacement.isRunning)
+    }
+
+    @Test("Key-control stop failure prevents relaunch")
+    @MainActor
+    func keyControlStopFailurePreventsRelaunch() async {
+        let launcher = DelayedStopProcessLauncher(runningChecksAfterTerminate: 10_000)
+        let supervisor = JarvisCoreSupervisor(
+            configuration: JarvisCoreSupervisorConfiguration(
+                executableURL: URL(fileURLWithPath: "/tmp/jarvis-cli"),
+                databaseURL: URL(fileURLWithPath: "/tmp/jarvis.sqlite"),
+                startupTimeoutSeconds: 0.002,
+                healthPollIntervalNanoseconds: 100_000
+            ),
+            client: FakeCoreClient(healthResults: [
+                .failure(URLError(.cannotConnectToHost)), .success(sampleHealth()),
+            ]),
+            processLauncher: launcher
+        )
+        await supervisor.start()
+        do {
+            try await supervisor.installTrustedWakeKeyControl(
+                using: FakeKeyControlInstallProvider(result: .success(Data("install".utf8)))
+            )
+            Issue.record("Expected stop failure")
+        } catch JarvisCoreSupervisorError.trustedWakeStopFailed {
+            // Expected.
+        } catch {
+            Issue.record("Unexpected stop error: \(error)")
+        }
+        #expect(launcher.launchCount == 1)
+    }
+
+    @Test("Key-control restart failure is visible and never retries")
+    @MainActor
+    func keyControlRestartFailureDoesNotRetry() async {
+        var results: [Result<JarvisHealth, Error>] = [
+            .failure(URLError(.cannotConnectToHost)), .success(sampleHealth()),
+        ]
+        for _ in 0 ..< 50 { results.append(.failure(URLError(.cannotConnectToHost))) }
+        let launcher = FakeProcessLauncher()
+        let supervisor = JarvisCoreSupervisor(
+            configuration: JarvisCoreSupervisorConfiguration(
+                executableURL: URL(fileURLWithPath: "/tmp/jarvis-cli"),
+                databaseURL: URL(fileURLWithPath: "/tmp/jarvis.sqlite"),
+                startupTimeoutSeconds: 0.003,
+                healthPollIntervalNanoseconds: 100_000
+            ),
+            client: FakeCoreClient(healthResults: results),
+            processLauncher: launcher
+        )
+        await supervisor.start()
+        do {
+            try await supervisor.installTrustedWakeKeyControl(
+                using: FakeKeyControlInstallProvider(result: .success(Data("install".utf8)))
+            )
+            Issue.record("Expected restart failure")
+        } catch JarvisCoreSupervisorError.trustedWakeRestartFailed {
+            // Expected.
+        } catch {
+            Issue.record("Unexpected restart error: \(error)")
+        }
+        #expect(launcher.launches.count == 2)
+        #expect(!launcher.processes[1].isRunning)
+    }
+
+    @Test("Key-control stop serializes concurrent lifecycle mutations")
+    @MainActor
+    func keyControlSerializesLifecycleMutations() async {
+        let launcher = ControlledLifecycleProcessLauncher()
+        let supervisor = JarvisCoreSupervisor(
+            configuration: JarvisCoreSupervisorConfiguration(
+                executableURL: URL(fileURLWithPath: "/tmp/jarvis-cli"),
+                databaseURL: URL(fileURLWithPath: "/tmp/jarvis.sqlite"),
+                startupTimeoutSeconds: 1,
+                healthPollIntervalNanoseconds: 1_000_000
+            ),
+            client: FakeCoreClient(healthResults: [
+                .failure(URLError(.cannotConnectToHost)), .success(sampleHealth()),
+                .failure(URLError(.cannotConnectToHost)), .success(sampleHealth()),
+            ]),
+            processLauncher: launcher
+        )
+        await supervisor.start()
+        let install = Task { @MainActor in
+            try await supervisor.installTrustedWakeKeyControl(
+                using: FakeKeyControlInstallProvider(result: .success(Data("install".utf8)))
+            )
+        }
+        for _ in 0 ..< 100 where !launcher.firstProcess.terminateCalled {
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        await supervisor.start(environmentOverrides: ["JARVIS_LOCAL_MODEL": "must-not-launch"])
+        #expect(!(await supervisor.stop()))
+        #expect(launcher.launchCount == 1)
+        launcher.firstProcess.allowExit()
+        do { try await install.value } catch { Issue.record("Install failed: \(error)") }
+        #expect(launcher.launchCount == 2)
+        #expect(launcher.secondProcess?.isRunning == true)
+    }
 }
 
 private struct FakeTrustedWakeSigner: TrustedWakeEnvelopeSigning {
@@ -5827,6 +6234,161 @@ private struct FakeTrustedWakeSigner: TrustedWakeEnvelopeSigning {
         occurredAt _: Date
     ) throws -> JarvisTrustedWakeEnvelope {
         JarvisTrustedWakeEnvelope(payloadBase64: "bounded-payload", signatureDERBase64: "bounded-signature")
+    }
+}
+
+private func fakePendingKeyControlJSON(expiresAt: String) -> String {
+    """
+    {
+      "operation": "recover",
+      "source_generation": 1,
+      "target_generation": 2,
+      "old_fingerprint": "old-fingerprint",
+      "new_fingerprint": "new-fingerprint",
+      "expires_at": "\(expiresAt)",
+      "created_at": "2026-07-13T12:00:00Z"
+    }
+    """
+}
+
+private func fakeTrustedWakeStatus(
+    generation: UInt64,
+    fingerprint: String,
+    pendingJSON: String
+) throws -> JarvisTrustedWakeStatus {
+    try JSONDecoder().decode(
+        JarvisTrustedWakeStatus.self,
+        from: Data(
+            """
+            {
+              "schema_version": 1,
+              "session_id": "00000000-0000-4000-8000-000000000111",
+              "challenge": "challenge",
+              "rule": {
+                "id": "4a617276-6973-4000-8000-000000000010",
+                "enabled": false,
+                "key_fingerprint": "\(fingerprint)",
+                "generation": \(generation),
+                "highest_counter": 0,
+                "created_at": "2026-07-13T10:00:00Z",
+                "updated_at": "2026-07-13T10:00:01Z"
+              },
+              "attention_required": false,
+              "ambiguous_dispatch_count": 0,
+              "pending_key_control": \(pendingJSON),
+              "proof_boundary": "local explicit control only"
+            }
+            """.utf8
+        )
+    )
+}
+
+private func fakeTrustedWakePrepareResponse() throws -> JarvisTrustedWakeKeyControlPrepareResponse {
+    try JSONDecoder().decode(
+        JarvisTrustedWakeKeyControlPrepareResponse.self,
+        from: Data(
+            """
+            {
+              "pending": \(fakePendingKeyControlJSON(expiresAt: "2099-07-13T12:05:00Z")),
+              "grant_token": "bounded-one-shot-token",
+              "blocked_accepted_count": 0,
+              "proof_boundary": "local explicit control only"
+            }
+            """.utf8
+        )
+    )
+}
+
+private class RecordingTrustedWakeKeyRing: TrustedWakeKeyRingManaging, @unchecked Sendable {
+    private let lock = NSLock()
+    private(set) var reconcileCount = 0
+    private(set) var discardCount = 0
+    private(set) var cancelLocalCount = 0
+
+    func stage(
+        operation _: JarvisTrustedWakeKeyControlOperation,
+        status _: JarvisTrustedWakeStatus,
+        confirmation _: String
+    ) throws -> JarvisTrustedWakeKeyControlPrepareRequest {
+        return try JSONDecoder().decode(
+            JarvisTrustedWakeKeyControlPrepareRequest.self,
+            from: Data(
+                """
+                {
+                  "operation": "recover",
+                  "expected_generation": 1,
+                  "expected_fingerprint": "old-fingerprint",
+                  "new_public_key_x963_b64": "candidate-public",
+                  "confirmation": "RECOVER LOST TRUSTED WAKE KEY AND BLOCK PENDING WORK",
+                  "proof": null
+                }
+                """.utf8
+            )
+        )
+    }
+
+    func persist(response _: JarvisTrustedWakeKeyControlPrepareResponse) throws {}
+    func installData(minimumValiditySeconds _: TimeInterval) throws -> Data? { Data("install".utf8) }
+
+    func reconcile(status _: JarvisTrustedWakeStatus) throws -> Bool {
+        lock.lock()
+        reconcileCount += 1
+        lock.unlock()
+        return false
+    }
+
+    func discardUnjournaledCandidate() throws {
+        lock.lock()
+        discardCount += 1
+        lock.unlock()
+    }
+
+    func cancelLocalPending() throws {
+        lock.lock()
+        cancelLocalCount += 1
+        lock.unlock()
+    }
+}
+
+private final class FailingPersistTrustedWakeKeyRing: RecordingTrustedWakeKeyRing, @unchecked Sendable {
+    override func persist(response _: JarvisTrustedWakeKeyControlPrepareResponse) throws {
+        throw BootstrapTestError.unavailable
+    }
+}
+
+private final class ReconciledTrustedWakeKeyRing: RecordingTrustedWakeKeyRing, @unchecked Sendable {
+    override func reconcile(status _: JarvisTrustedWakeStatus) throws -> Bool { true }
+}
+
+private final class ControlledTrustedWakeKeyRing: RecordingTrustedWakeKeyRing, @unchecked Sendable {
+    private let stateLock = NSLock()
+    private var stageStarted = false
+    private let release = DispatchSemaphore(value: 0)
+
+    override func stage(
+        operation: JarvisTrustedWakeKeyControlOperation,
+        status: JarvisTrustedWakeStatus,
+        confirmation: String
+    ) throws -> JarvisTrustedWakeKeyControlPrepareRequest {
+        stateLock.lock()
+        stageStarted = true
+        stateLock.unlock()
+        release.wait()
+        return try super.stage(
+            operation: operation,
+            status: status,
+            confirmation: confirmation
+        )
+    }
+
+    var didStageStart: Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return stageStarted
+    }
+
+    func resumeStage() {
+        release.signal()
     }
 }
 
@@ -5863,10 +6425,51 @@ private struct FakeBootstrapProvider: TrustedWakeBootstrapProviding {
     func bootstrapData() throws -> Data? { try result.get() }
 }
 
+private struct FakeKeyControlInstallProvider: TrustedWakeKeyControlInstallProviding {
+    var result: Result<Data?, BootstrapTestError>
+    func installData(minimumValiditySeconds _: TimeInterval) throws -> Data? { try result.get() }
+}
+
+private final class RejectingKeyControlInstallProvider: TrustedWakeKeyControlInstallProviding, @unchecked Sendable {
+    private(set) var minimumValiditySeconds: TimeInterval?
+
+    func installData(minimumValiditySeconds: TimeInterval) throws -> Data? {
+        self.minimumValiditySeconds = minimumValiditySeconds
+        throw BootstrapTestError.unavailable
+    }
+}
+
+private final class ControlledKeyControlInstallProvider: TrustedWakeKeyControlInstallProviding, @unchecked Sendable {
+    private let data: Data
+    private let lock = NSLock()
+    private var started = false
+    private let release = DispatchSemaphore(value: 0)
+
+    init(data: Data) { self.data = data }
+
+    func installData(minimumValiditySeconds _: TimeInterval) throws -> Data? {
+        lock.lock()
+        started = true
+        lock.unlock()
+        release.wait()
+        return data
+    }
+
+    var didStart: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return started
+    }
+
+    func resume() { release.signal() }
+}
+
 private final class FakeProcess: JarvisCoreProcess, @unchecked Sendable {
     private(set) var isRunning = true
+    private(set) var terminateCalled = false
 
     func terminate() {
+        terminateCalled = true
         isRunning = false
     }
 }
@@ -6179,6 +6782,9 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     private(set) var trustedWakeSubmitCount = 0
     private(set) var trustedWakeResolutionRequests: [(id: UUID, request: JarvisTrustedWakeResolutionRequest)] = []
     private var trustedWakeAttentionItems: [JarvisTrustedWakeAttentionItem]
+    private var trustedWakeStatusResults: [Result<JarvisTrustedWakeStatus, Error>]
+    private var trustedWakePrepareResult: Result<JarvisTrustedWakeKeyControlPrepareResponse, Error>?
+    private var trustedWakeCancelResults: [Result<JarvisTrustedWakeRule, Error>]
 
     init(
         healthResults: [Result<JarvisHealth, Error>] = [.success(sampleHealth())],
@@ -6202,7 +6808,10 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         memoryItems: [JarvisMemoryItem] = [],
         memoryRetentionPlan: JarvisMemoryRetentionPlan? = nil,
         permissionGrantSummary: JarvisPermissionGrantSummary? = nil,
-        trustedWakeAttentionItems: [JarvisTrustedWakeAttentionItem] = []
+        trustedWakeAttentionItems: [JarvisTrustedWakeAttentionItem] = [],
+        trustedWakeStatusResults: [Result<JarvisTrustedWakeStatus, Error>] = [],
+        trustedWakePrepareResult: Result<JarvisTrustedWakeKeyControlPrepareResponse, Error>? = nil,
+        trustedWakeCancelResults: [Result<JarvisTrustedWakeRule, Error>] = []
     ) {
         self.healthResults = healthResults
         self.tasks = tasks
@@ -6227,6 +6836,9 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         self.memoryRetentionPlanResult = memoryRetentionPlan
         self.permissionGrantSummaryResult = permissionGrantSummary
         self.trustedWakeAttentionItems = trustedWakeAttentionItems
+        self.trustedWakeStatusResults = trustedWakeStatusResults
+        self.trustedWakePrepareResult = trustedWakePrepareResult
+        self.trustedWakeCancelResults = trustedWakeCancelResults
         self.approvalDecisions = []
         self.approvalExecutions = []
         self.includeDeletedMemoryRequests = []
@@ -6616,7 +7228,10 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     }
 
     func trustedWakeStatus() async throws -> JarvisTrustedWakeStatus {
-        try JSONDecoder().decode(
+        if !trustedWakeStatusResults.isEmpty {
+            return try trustedWakeStatusResults.removeFirst().get()
+        }
+        return try JSONDecoder().decode(
             JarvisTrustedWakeStatus.self,
             from: Data(
                 """
@@ -6662,6 +7277,22 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     func setTrustedWakeEnabled(
         _ request: JarvisTrustedWakeRuleEnablement
     ) async throws -> JarvisTrustedWakeRule {
+        throw URLError(.unsupportedURL)
+    }
+
+    func prepareTrustedWakeKeyControl(
+        _ request: JarvisTrustedWakeKeyControlPrepareRequest
+    ) async throws -> JarvisTrustedWakeKeyControlPrepareResponse {
+        if let trustedWakePrepareResult { return try trustedWakePrepareResult.get() }
+        throw URLError(.unsupportedURL)
+    }
+
+    func cancelTrustedWakeKeyControl(
+        _ request: JarvisTrustedWakeKeyControlCancelRequest
+    ) async throws -> JarvisTrustedWakeRule {
+        if !trustedWakeCancelResults.isEmpty {
+            return try trustedWakeCancelResults.removeFirst().get()
+        }
         throw URLError(.unsupportedURL)
     }
 

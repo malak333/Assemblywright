@@ -1154,5 +1154,26 @@ cargo test -p jarvis-cli --test local_ipc_e2e trusted_wake -- --nocapture
 swift test --disable-sandbox --package-path apps/mac --filter TrustedWake
 ```
 
-These prove bounded local contracts only, not Apple attestation, OS wake
-provenance, background launch, same-user IPC, exactly-once effects, or live QA.
+The focused lanes include signed rotate and destructive recover cross-process
+E2E, legacy-bootstrap bypass rejection, wrong-key/token-replay/old-signature
+rejection, one-shot disabled install, grant expiry and quarantine, Swift
+Keychain journal reconciliation, near-expiry preservation of a healthy core,
+and supervisor lifecycle serialization. The CLI exposes read-only inspection
+through `system-wake status`, prepare through `system-wake key-prepare`, and
+cancel/reset through `system-wake key-cancel`; supervised install/resume uses
+`serve --trusted-wake-key-control-stdin` with bounded stdin and EOF.
+`key-prepare` requires `--document-stdin` and accepts the entire JSON document
+through a maximum 8192-byte stdin payload; it exposes no proof, key,
+confirmation, or token argv options. Its JSON response contains a short-lived
+one-time `grant_token` secret. The supported app path immediately persists the
+grant in its device-only Keychain journal, constructs the distinct install
+document, and passes that document through supervised stdin. A manual caller
+must equivalently use a trusted in-memory or device-only journal transformer to
+construct the install document; the raw prepare response is not install stdin.
+Never display it in a terminal or place prepare/proof/token material in shell
+history, logs, command arguments, or intermediate files.
+
+These prove bounded local contracts only. Recovery confirmation is accident
+prevention on unauthenticated loopback, not authorization or authentication;
+the tests do not prove Apple attestation, OS wake provenance, background
+launch, same-user/process isolation, exactly-once effects, or live QA.

@@ -263,9 +263,23 @@ stage or when a PR needs focused evidence for one ownership slice.
   Confirm replay-counter recovery from Keychain loss/backward clock, overflow
   failure, restart reconciliation, ambiguous-dispatch visibility, and explicit
   resolve-without-retry evidence.
-  Treat enrollment-key loss/mismatch rotation and recovery as a pending
-  production blocker. The current app bootstrap intentionally does not request
-  rotation, and manual SQLite or Keychain mutation is not supported recovery.
+  Confirm legacy bootstrap cannot mutate an existing enrollment. Confirm
+  normal rotation requires old-key session/domain proof, recovery renders and
+  requires its stronger exact warning, prepare blocks ambiguous/accepted work
+  and quarantines enablement, install consumes one grant and remains disabled,
+  expired/near-expiry grants preserve the healthy core, token replay/wrong key/
+  old signatures fail, and Swift journal promotion/cancel/crash reconciliation
+  preserves the old active key until fingerprint/generation proof. Confirm no
+  raw private key, grant token, public-key bytes, or signed proof reaches audit.
+  Confirm `key-prepare` exposes only bounded document stdin, has no proof/key/
+  confirmation/token argv, and warns that its one-time token response must flow
+  directly to trusted device-only journal code. Confirm that code constructs a
+  distinct install document and neither form reaches terminal, history, logs,
+  or files.
+  Recovery is an unauthenticated loopback operator path; its phrase is accident
+  prevention, not authorization, device authentication, ownership proof, or
+  same-user/process isolation. Manual SQLite or Keychain mutation is not
+  supported recovery.
   Do not treat this as Apple attestation, OS provenance, background-launch,
   exactly-once, live-device, or production evidence.
 - Confirm scheduler due-job execution fails closed by activating emergency

@@ -80,30 +80,196 @@ public final class TrustedWakeModel: ObservableObject {
     @Published public private(set) var attentionItems: [JarvisTrustedWakeAttentionItem] = []
     @Published public private(set) var isWorking = false
     @Published public private(set) var errorMessage: String?
+    @Published public private(set) var keyControlMessage: String?
 
     private let client: any JarvisCoreClient
     private let signer: any TrustedWakeEnvelopeSigning
     private let provisionAction: (@MainActor () async throws -> Void)?
+    private let installKeyControlAction: (@MainActor () async throws -> Void)?
+    private let keyRing: any TrustedWakeKeyRingManaging
 
     public init(
         client: any JarvisCoreClient = JarvisIPCClient(),
         signer: any TrustedWakeEnvelopeSigning = TrustedWakeEnvelopeSigner(),
-        provision: (@MainActor () async throws -> Void)? = nil
+        keyRing: any TrustedWakeKeyRingManaging = TrustedWakeKeyRing(),
+        provision: (@MainActor () async throws -> Void)? = nil,
+        installKeyControl: (@MainActor () async throws -> Void)? = nil
     ) {
         self.client = client
         self.signer = signer
+        self.keyRing = keyRing
         self.provisionAction = provision
+        self.installKeyControlAction = installKeyControl
     }
 
     public func refresh() async {
+        guard !isWorking else { return }
         isWorking = true
         defer { isWorking = false }
         do {
-            status = try await client.trustedWakeStatus()
+            let freshStatus = try await client.trustedWakeStatus()
+            _ = try await Task.detached(priority: .utility) {
+                try self.keyRing.reconcile(status: freshStatus)
+            }.value
+            try await Task.detached(priority: .utility) {
+                try self.keyRing.discardUnjournaledCandidate()
+            }.value
+            status = freshStatus
             attentionItems = try await client.trustedWakeAttention()
             errorMessage = nil
         } catch {
             errorMessage = "Trusted wake is unavailable: \(error)"
+        }
+    }
+
+    public func beginKeyControl(
+        operation: JarvisTrustedWakeKeyControlOperation,
+        confirmation: String
+    ) async {
+        guard !isWorking else { return }
+        guard let installKeyControlAction else {
+            errorMessage = "Trusted wake key control is unavailable in this app context."
+            return
+        }
+        isWorking = true
+        defer { isWorking = false }
+        var serverPrepared: JarvisTrustedWakeKeyControlPrepareResponse?
+        var journalPersisted = false
+        var requiresCancelReset = false
+        do {
+            let freshStatus = try await client.trustedWakeStatus()
+            guard freshStatus.rule != nil else {
+                throw TrustedWakeError.invalidKey
+            }
+            let request = try await Task.detached(priority: .userInitiated) {
+                try self.keyRing.stage(
+                    operation: operation,
+                    status: freshStatus,
+                    confirmation: confirmation
+                )
+            }.value
+            let prepared = try await client.prepareTrustedWakeKeyControl(request)
+            serverPrepared = prepared
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try self.keyRing.persist(response: prepared)
+                }.value
+                journalPersisted = true
+            } catch {
+                do {
+                    _ = try await client.cancelTrustedWakeKeyControl(
+                        JarvisTrustedWakeKeyControlCancelRequest(
+                            expectedGeneration: prepared.pending.targetGeneration,
+                            expectedFingerprint: prepared.pending.oldFingerprint,
+                            confirmation: jarvisTrustedWakeCancelConfirmation
+                        )
+                    )
+                    try await Task.detached(priority: .utility) {
+                        try self.keyRing.cancelLocalPending()
+                    }.value
+                } catch {
+                    requiresCancelReset = true
+                    status = try? await client.trustedWakeStatus()
+                }
+                throw error
+            }
+            try await installKeyControlAction()
+            let installedStatus = try await client.trustedWakeStatus()
+            let promoted = try await Task.detached(priority: .userInitiated) {
+                try self.keyRing.reconcile(status: installedStatus)
+            }.value
+            guard promoted else { throw TrustedWakeError.keyControlJournalMismatch }
+            status = installedStatus
+            attentionItems = try await client.trustedWakeAttention()
+            keyControlMessage = "Trusted wake key installed at generation \(prepared.pending.targetGeneration) and remains disabled until explicitly enabled."
+            errorMessage = nil
+        } catch {
+            if serverPrepared == nil {
+                try? await Task.detached(priority: .utility) {
+                    try self.keyRing.discardUnjournaledCandidate()
+                }.value
+            }
+            if journalPersisted,
+               let pendingStatus = try? await client.trustedWakeStatus() {
+                status = pendingStatus
+            }
+            if requiresCancelReset {
+                errorMessage = "Trusted wake key control failed before a journal was persisted and server cancel could not be confirmed. The healthy core was not restarted; retain the staged state and use explicit cancel/reset. Resume is unavailable: \(error)"
+            } else if journalPersisted {
+                errorMessage = "Trusted wake key control failed closed after the durable journal was persisted. No automatic retry will occur; use explicit Resume or Cancel/reset: \(error)"
+            } else {
+                errorMessage = "Trusted wake key control failed before restart; the current healthy core was preserved and no resumable journal remains: \(error)"
+            }
+        }
+    }
+
+    public func resumeKeyControl() async {
+        guard !isWorking else { return }
+        guard let installKeyControlAction else {
+            errorMessage = "Trusted wake key-control resume is unavailable in this app context."
+            return
+        }
+        isWorking = true
+        defer { isWorking = false }
+        do {
+            let freshStatus = try await client.trustedWakeStatus()
+            let reconciled = try await Task.detached(priority: .userInitiated) {
+                try self.keyRing.reconcile(status: freshStatus)
+            }.value
+            if reconciled {
+                status = freshStatus
+                keyControlMessage = "Trusted wake key-control journal reconciled; the rule remains disabled."
+                errorMessage = nil
+                return
+            }
+            guard let pending = freshStatus.pendingKeyControl else {
+                errorMessage = "No pending trusted wake key-control grant is available to resume."
+                return
+            }
+            guard !trustedWakeGrantIsExpired(pending.expiresAt) else {
+                errorMessage = "The pending one-shot grant expired. Cancel/reset it or prepare a new change; Jarvis did not stop the healthy core."
+                return
+            }
+            try await installKeyControlAction()
+            let installedStatus = try await client.trustedWakeStatus()
+            guard try await Task.detached(priority: .userInitiated, operation: {
+                try self.keyRing.reconcile(status: installedStatus)
+            }).value else {
+                throw TrustedWakeError.keyControlJournalMismatch
+            }
+            status = installedStatus
+            keyControlMessage = "Pending trusted wake key install reconciled; the rule remains disabled."
+            errorMessage = nil
+        } catch {
+            errorMessage = "Trusted wake key-control resume failed closed without automatic retry: \(error)"
+        }
+    }
+
+    public func cancelKeyControl(confirmation: String) async {
+        guard !isWorking else { return }
+        guard confirmation == jarvisTrustedWakeCancelConfirmation,
+              let pending = status?.pendingKeyControl else {
+            errorMessage = "The exact cancel-reset confirmation and a pending grant are required."
+            return
+        }
+        isWorking = true
+        defer { isWorking = false }
+        do {
+            _ = try await client.cancelTrustedWakeKeyControl(
+                JarvisTrustedWakeKeyControlCancelRequest(
+                    expectedGeneration: pending.targetGeneration,
+                    expectedFingerprint: pending.oldFingerprint,
+                    confirmation: confirmation
+                )
+            )
+            try await Task.detached(priority: .utility) {
+                try self.keyRing.cancelLocalPending()
+            }.value
+            status = try await client.trustedWakeStatus()
+            keyControlMessage = "Pending trusted wake key change cancelled; the advanced generation remains disabled."
+            errorMessage = nil
+        } catch {
+            errorMessage = "Trusted wake cancel-reset failed closed: \(error)"
         }
     }
 
@@ -159,6 +325,7 @@ public final class TrustedWakeModel: ObservableObject {
     }
 
     public func setEnabled(_ enabled: Bool) async {
+        guard !isWorking else { return }
         guard let generation = status?.rule?.generation else {
             errorMessage = "Trusted wake must be enrolled with the explicit Provision action first."
             return
