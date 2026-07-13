@@ -6,6 +6,40 @@ import UserNotifications
 @MainActor
 @Suite("Jarvis Mac app release presentation")
 struct JarvisMacAppTests {
+    @Test("Menu bar contract preserves the stable main-window route")
+    func menuBarContractPreservesMainWindowRoute() {
+        #expect(JarvisMenuBarContract.mainWindowID == "jarvis-main")
+        #expect(JarvisMenuBarContract.title == "Jarvis")
+    }
+
+    @Test("Menu bar presentation maps every supervisor lifecycle state")
+    func menuBarPresentationMapsSupervisorLifecycle() {
+        let stopped = JarvisMenuBarPresentation(mode: .stopped)
+        let starting = JarvisMenuBarPresentation(mode: .starting)
+        let available = JarvisMenuBarPresentation(mode: .available)
+        let degraded = JarvisMenuBarPresentation(mode: .degraded(reason: "health check failed"))
+
+        #expect(stopped.statusLine == "Core stopped")
+        #expect(stopped.systemImage == "circle")
+        #expect(stopped.canStartCore)
+        #expect(!stopped.canStopCore)
+
+        #expect(starting.statusLine == "Core starting")
+        #expect(starting.systemImage == "circle.dotted")
+        #expect(!starting.canStartCore)
+        #expect(!starting.canStopCore)
+
+        #expect(available.statusLine == "Core available")
+        #expect(available.systemImage == "checkmark.circle.fill")
+        #expect(!available.canStartCore)
+        #expect(available.canStopCore)
+
+        #expect(degraded.statusLine == "Core degraded")
+        #expect(degraded.systemImage == "exclamationmark.triangle.fill")
+        #expect(!degraded.canStartCore)
+        #expect(degraded.canStopCore)
+    }
+
     @Test("Model tab presentation gates start and download around installed state")
     func modelTabPresentationGatesStartAndDownloadAroundInstalledState() {
         let missingModel = ModelConfigurationPresentation(

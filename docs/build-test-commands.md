@@ -1116,3 +1116,20 @@ and the verification commands above. Each feature phase should name the E2E or
 focused integration coverage it relies on; when a phase changes behavior and no
 such coverage exists, adding coverage is part of the phase rather than a
 follow-up readiness claim.
+
+### Native menu-bar presence
+
+The Swift shell includes a native `MenuBarExtra` that shares the existing
+`JarvisCoreSupervisor`, command console, and model configuration state. Its
+stable `jarvis-main` scene route reopens the existing window instead of
+creating a second shell or core owner. Run the Swift package contract gate:
+
+```bash
+swift test --package-path apps/mac
+```
+
+`JarvisMacAppTests` pins the scene route and maps stopped, starting, available,
+and degraded supervisor states to conservative menu status and enabled-action
+behavior. This is Swift scene/model contract coverage. It does not prove macOS
+menu rendering, window reopening through Finder/LaunchServices, or live
+lifecycle actions in a signed installed app; record those in manual release QA.

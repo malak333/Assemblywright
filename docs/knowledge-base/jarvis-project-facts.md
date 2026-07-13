@@ -1406,6 +1406,13 @@ requires plugin-trust `generated_at`, `review_started_at`,
   `release-external-handoff.sh` boundary phrases represented in
   `docs/build-test-commands.md`, `docs/release-checklist.md`,
   `docs/architecture-map.md`, and this KB.
+- The Swift shell now has native menu-bar presence through `MenuBarExtra`. The
+  menu and main window share one `JarvisCoreSupervisor`, `CommandConsoleModel`,
+  and `ModelConfigurationModel`; `jarvis-main` is the stable scene identifier
+  used to reopen the existing shell. Menu actions expose only open, health
+  refresh, supervised core start/stop, and quit. Swift contract tests pin the
+  scene ID and all supervisor-state presentations, while signed installed-app
+  rendering and window-reopen behavior remain manual Finder/LaunchServices QA.
 
 ## Safety Guardrails
 
