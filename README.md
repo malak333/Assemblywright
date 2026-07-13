@@ -6,6 +6,8 @@ primitives, policy-gated first-party plugin commands, bounded model-planned
 first-party tool orchestration, strict provider response envelopes for
 first-party tool requests, local-first model routing evidence, opt-in
 Ollama-compatible local HTTP and ChatGPT/OpenAI-compatible provider boundaries,
+bounded Ollama-native NDJSON transport streaming with terminal-frame
+quarantine and in-flight cancellation,
 structured provider-failure responses with route/audit evidence, plugin
 contracts, metadata-only local plugin installation, local plugin
 provenance snapshots, scheduler state, redacted diagnostics export, a loopback
@@ -81,6 +83,14 @@ fail closed before policy checks or tool execution, then feed registered-tool
 guidance back to the model as rejected tool results for bounded recovery. Mixed
 prose plus JSON `tool_requests` is treated as malformed provider output instead
 of a normal answer.
+The Ollama adapter requests `stream:true`, caps the HTTP body and assembled
+response, accepts LF/CRLF NDJSON across arbitrary byte boundaries, and requires
+one terminal `done:true` frame. Partial text and JSON-looking tool envelopes
+stay private to the adapter until the terminal stream and full envelope
+validate; cancellation drops the active request and discards partial state.
+Activity and Swift surfaces receive redacted byte/character metadata only after
+that validation. This is native transport streaming, not partial assistant
+transcript rendering or raw-token UI streaming.
 The macOS Model tab exposes separate approved cloud routes for `OpenAI API` and
 `Codex account`: both disable the local provider for the app-supervised core
 and keep `JARVIS_CHATGPT_REQUIRES_APPROVAL=true`. `OpenAI API` stores the

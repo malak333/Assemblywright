@@ -307,6 +307,14 @@ stage or when a PR needs focused evidence for one ownership slice.
   expose only sequence and byte/character counts with `content_redacted: true`
   through `/activity/events`, and do not expose raw model chunk text on safe
   inspection streams.
+- Confirm Ollama requests native NDJSON streaming, rejects malformed, empty,
+  oversized, unterminated, duplicate-terminal, post-terminal, and provider-error
+  streams, handles split UTF-8 plus LF/CRLF frames, and exposes no partial text
+  or tool envelope before terminal validation. Confirm emergency pause/task
+  cancellation drops the active transport and wins a completion race before
+  model audit or first-party tool execution. Swift must keep transcript output
+  final-only and label post-validation transport counts as redacted metadata,
+  not live token rendering.
 - Confirm persistent audit entries remain append-only in SQLite tests.
 - Confirm route, policy, approval, action, and failure evidence stay covered
   before claiming an end-to-end assistant release. The current command path

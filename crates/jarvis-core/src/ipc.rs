@@ -561,6 +561,8 @@ pub struct ActivityProgressEvent {
     pub final_chunk: Option<bool>,
     #[serde(default)]
     pub content_redacted: Option<bool>,
+    #[serde(default)]
+    pub provider_native: Option<bool>,
     pub stderr_redacted: bool,
 }
 
@@ -3745,20 +3747,14 @@ async fn activity_events(
             let events = match stream_state.activity_summary() {
                 Ok(summary) => {
                     let mut events = vec![Event::default().event("activity_summary").data(
-                        serde_json::to_string(&summary).unwrap_or_else(|error| {
-                            json!({
-                                "error": format!("serialize activity summary: {error}")
-                            })
-                            .to_string()
+                        serde_json::to_string(&summary).unwrap_or_else(|_| {
+                            json!({ "error": "activity summary unavailable" }).to_string()
                         }),
                     )];
                     for progress in activity_progress_events_from_summary(&summary) {
                         events.push(Event::default().event("activity_progress").data(
-                            serde_json::to_string(&progress).unwrap_or_else(|error| {
-                                json!({
-                                    "error": format!("serialize activity progress: {error}")
-                                })
-                                .to_string()
+                            serde_json::to_string(&progress).unwrap_or_else(|_| {
+                                json!({ "error": "activity progress unavailable" }).to_string()
                             }),
                         ));
                     }
@@ -3766,13 +3762,20 @@ async fn activity_events(
                 }
                 Err(error) => vec![Event::default()
                     .event("activity_error")
-                    .data(json!({ "error": error.to_string() }).to_string())],
+                    .data(redacted_activity_error_payload(&error))],
             };
             tokio_stream::iter(events.into_iter().map(Ok))
         },
     );
 
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+fn redacted_activity_error_payload(_error: &JarvisError) -> String {
+    json!({
+        "error": "activity stream unavailable; inspect redacted audit evidence"
+    })
+    .to_string()
 }
 
 fn activity_progress_events_from_summary(summary: &ActivitySummary) -> Vec<ActivityProgressEvent> {
@@ -3937,6 +3940,9 @@ fn activity_progress_event_from_audit(entry: &AuditEntry) -> Option<ActivityProg
         char_count,
         final_chunk,
         content_redacted,
+        provider_native: payload
+            .get("provider_native")
+            .and_then(serde_json::Value::as_bool),
         stderr_redacted: payload
             .get("stderr_redacted")
             .and_then(serde_json::Value::as_bool)
@@ -6543,7 +6549,13 @@ fn contract_features() -> Vec<ContractFeature> {
             "activity_events",
             "implemented",
             "Repository-backed `/activity/events` exposes bounded redacted task metadata, audit event batches, redacted installed-plugin progress, model-step progress, and model-output chunk metadata frames and is covered by CLI IPC E2E plus Swift decoding tests.",
-            "This is bounded state polling over SSE from audit evidence; activity recent tasks omit command bodies, model-output chunks expose counts with content_redacted:true rather than raw token text, and this is not provider-native raw token streaming or unbounded plugin-internal progress streaming.",
+            "This is bounded state polling over SSE from completed audit evidence; activity recent tasks omit command bodies, model-output chunks expose counts with content_redacted:true rather than raw token text, and the Swift client buffers each bounded watch response rather than rendering live tokens.",
+        ),
+        feature(
+            "ollama_native_transport_streaming",
+            "implemented",
+            "The Ollama adapter requests native NDJSON streaming, enforces byte/response/metadata limits and a terminal done frame, supports in-flight runtime cancellation, then parses the quarantined final response before any audit or tool-plan exposure.",
+            "Transport progress metadata only after terminal validation; no partial raw text or tool envelope reaches IPC, Swift transcript, audit, or execution, and this is not raw-token UI streaming or production-readiness proof.",
         ),
         feature(
             "scheduler_attention",
@@ -11003,6 +11015,17 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
 
         let Json(all_entries) = list_audit_entries(State(state)).await.expect("audit");
         assert_eq!(all_entries.len(), entries.len());
+    }
+
+    #[test]
+    fn activity_stream_error_payload_discards_raw_storage_details() {
+        let payload = redacted_activity_error_payload(&JarvisError::Storage(
+            "sentinel-secret at /Users/private/jarvis.sqlite".to_string(),
+        ));
+
+        assert!(payload.contains("activity stream unavailable"));
+        assert!(!payload.contains("sentinel-secret"));
+        assert!(!payload.contains("/Users/private"));
     }
 
     #[tokio::test]
