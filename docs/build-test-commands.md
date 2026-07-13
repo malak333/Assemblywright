@@ -500,6 +500,8 @@ cargo run -p jarvis-cli -- plugins verify-publisher-signature <plugin-id> --trus
 cargo run -p jarvis-cli -- memory list
 cargo run -p jarvis-cli -- memory classification --include-deleted
 cargo run -p jarvis-cli -- memory retention-plan
+cargo run -p jarvis-cli -- memory index-status
+cargo run -p jarvis-cli -- memory index-rebuild
 cargo run -p jarvis-cli -- memory create workflow release-gate "run local gate before PR" --provenance "manual note" --sensitivity workspace
 cargo run -p jarvis-cli -- memory restore <memory-id>
 cargo run -p jarvis-cli -- scheduler attention
@@ -515,6 +517,9 @@ review items include category/key and
 sensitivity only; memory values stay out of policy review and diagnostics
 export. `jarvis diagnostics export` exposes aggregate active, unreviewed, and
 sensitive memory counts when repository backing is enabled.
+`jarvis memory index-status` reports only projection state and counts;
+`jarvis memory index-rebuild` atomically replaces the versioned local manifest
+from active SQLite records. Neither command performs retrieval or model routing.
 `jarvis release readiness` is read-only and summarizes implemented feature
 proofs, pending feature boundaries, recommended verification commands, and
 manual production blockers. The default CLI output is operator-readable and

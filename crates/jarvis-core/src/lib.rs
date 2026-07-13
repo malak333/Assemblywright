@@ -1,4 +1,5 @@
 pub mod ipc;
+pub mod memory_index;
 pub mod model;
 pub mod plugin;
 pub mod policy;
@@ -24,6 +25,9 @@ pub use ipc::{
     DEFAULT_SCHEDULER_BACKGROUND_INTERVAL_MS, DEFAULT_SCHEDULER_BACKGROUND_LIMIT,
     DEFAULT_SCHEDULER_STALE_RECOVERY_LIMIT, DEFAULT_SCHEDULER_STALE_RECOVERY_OLDER_THAN_SECONDS,
     MAX_ACTIVITY_EVENT_LIMIT, MAX_SCHEDULER_BACKGROUND_LIMIT,
+};
+pub use memory_index::{
+    MemoryIndexState, MemoryIndexStatus, MemoryIndexStore, MEMORY_INDEX_VERSION,
 };
 pub use model::{
     redact_url_credentials, ChatGptAuthMode, ChatGptHttpModel, ChatGptProviderConfig,

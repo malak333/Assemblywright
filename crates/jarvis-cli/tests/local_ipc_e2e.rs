@@ -6422,6 +6422,30 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_eq!(memory["sensitivity"], "workspace");
     let memory_id = memory["id"].as_str().expect("memory id").to_string();
 
+    let missing_index = run_cli_json(["memory", "index-status", "--endpoint", endpoint.as_str()]);
+    assert_eq!(missing_index["state"], "missing");
+    assert_eq!(missing_index["missing_entry_count"], 1);
+    let rebuilt_index = run_cli_json(["memory", "index-rebuild", "--endpoint", endpoint.as_str()]);
+    assert_eq!(rebuilt_index["state"], "current");
+    assert_eq!(rebuilt_index["current_entry_count"], 1);
+    let rebuilt_encoded = serde_json::to_string(&rebuilt_index).unwrap();
+    assert!(!rebuilt_encoded.contains("persisted through jarvis-cli serve"));
+    assert!(!rebuilt_encoded.contains(&memory_id));
+    assert!(!rebuilt_encoded.contains("content_sha256"));
+    let index_audit = run_cli_json(["tasks", "audit", "--json", "--endpoint", endpoint.as_str()]);
+    assert_array_contains(&index_audit, "event_type", "memory_index_rebuilt");
+    let index_audit_encoded = serde_json::to_string(&index_audit).unwrap();
+    assert!(!index_audit_encoded.contains("persisted through jarvis-cli serve"));
+    assert!(!index_audit_encoded.contains("memory-index.json"));
+    let index_path = db_path.with_file_name("jarvis-e2e.sqlite.memory-index.json");
+    fs::write(&index_path, b"corrupt-index-artifact").expect("corrupt memory index fixture");
+    let corrupt_index = run_cli_json(["memory", "index-status", "--endpoint", endpoint.as_str()]);
+    assert_eq!(corrupt_index["state"], "corrupt");
+    assert_eq!(
+        run_cli_json(["memory", "index-rebuild", "--endpoint", endpoint.as_str(),])["state"],
+        "current"
+    );
+
     let fetched_memory = run_cli_json([
         "memory",
         "get",
@@ -6448,6 +6472,9 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         endpoint.as_str(),
     ]);
     assert_eq!(updated_memory["value"], "updated through jarvis-cli e2e");
+    let stale_index = run_cli_json(["memory", "index-status", "--endpoint", endpoint.as_str()]);
+    assert_eq!(stale_index["state"], "stale");
+    assert_eq!(stale_index["stale_entry_count"], 1);
 
     let reviewed_memory = run_cli_json([
         "memory",
@@ -7029,6 +7056,13 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         run_cli_json(["memory", "list", "--endpoint", restarted_endpoint.as_str()]);
     assert_array_contains(&persisted_memory, "id", &memory_id);
     assert_array_contains(&persisted_memory, "key", "ipc-contract");
+    let persisted_index = run_cli_json([
+        "memory",
+        "index-status",
+        "--endpoint",
+        restarted_endpoint.as_str(),
+    ]);
+    assert_eq!(persisted_index["state"], "stale");
 
     let persisted_scheduler = run_cli_json([
         "scheduler",
@@ -7081,6 +7115,21 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         restarted_endpoint.as_str(),
     ]);
     assert!(deleted_memory["deleted_at"].is_string());
+    let deleted_projection = run_cli_json([
+        "memory",
+        "index-status",
+        "--endpoint",
+        restarted_endpoint.as_str(),
+    ]);
+    assert_eq!(deleted_projection["deleted_projection_count"], 1);
+    let rebuilt_after_delete = run_cli_json([
+        "memory",
+        "index-rebuild",
+        "--endpoint",
+        restarted_endpoint.as_str(),
+    ]);
+    assert_eq!(rebuilt_after_delete["state"], "current");
+    assert_eq!(rebuilt_after_delete["indexed_entry_count"], 0);
 
     let deleted_memory_list = run_cli_json([
         "memory",
@@ -7104,6 +7153,14 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     ]);
     assert_eq!(restored_memory["id"], memory_id);
     assert!(restored_memory["deleted_at"].is_null());
+    let restored_index = run_cli_json([
+        "memory",
+        "index-status",
+        "--endpoint",
+        restarted_endpoint.as_str(),
+    ]);
+    assert_eq!(restored_index["state"], "stale");
+    assert_eq!(restored_index["missing_entry_count"], 1);
 
     let active_memory_after_restore =
         run_cli_json(["memory", "list", "--endpoint", restarted_endpoint.as_str()]);

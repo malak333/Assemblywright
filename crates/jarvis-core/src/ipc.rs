@@ -1025,6 +1025,7 @@ impl IpcState {
                 "/model-routes".to_string(),
                 "/model-routes/:id".to_string(),
                 "/memory/classification".to_string(),
+                "/memory/index/status".to_string(),
                 "/memory/retention-plan".to_string(),
                 "/permissions/grants".to_string(),
                 "/permissions/policy-review".to_string(),
@@ -3523,6 +3524,8 @@ pub fn router(state: IpcState) -> Router {
         .route("/model-routes/:id", get(get_model_route))
         .route("/memory", get(list_memory_items).post(create_memory_item))
         .route("/memory/classification", get(memory_classification_summary))
+        .route("/memory/index/status", get(memory_index_status))
+        .route("/memory/index/rebuild", post(rebuild_memory_index))
         .route("/memory/retention-plan", get(memory_retention_plan))
         .route(
             "/memory/:id",
@@ -4000,6 +4003,52 @@ async fn memory_classification_summary(
         .map_err(error_response)
 }
 
+async fn memory_index_status(
+    State(state): State<IpcState>,
+) -> Result<Json<crate::MemoryIndexStatus>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .using_repository(|repository| repository.memory_index_status())
+        .map(Json)
+        .map_err(error_response)
+}
+
+async fn rebuild_memory_index(
+    State(state): State<IpcState>,
+) -> Result<Json<crate::MemoryIndexStatus>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .using_repository(|repository| {
+            repository.append_audit_entry(&AuditEntry::new(
+                None,
+                "memory_index_rebuild_started",
+                "memory index projection rebuild requested from canonical active records",
+                json!({ "mutation_pending": true, "content_redacted": true }),
+            ))?;
+            let result = repository.rebuild_memory_index();
+            let (event_type, summary, payload) = match &result {
+                Ok(status) => (
+                    "memory_index_rebuilt",
+                    "memory index projection rebuilt from canonical active records",
+                    json!({
+                        "success": true,
+                        "state": status.state,
+                        "active_record_count": status.active_record_count,
+                        "indexed_entry_count": status.indexed_entry_count,
+                        "content_redacted": true,
+                    }),
+                ),
+                Err(_) => (
+                    "memory_index_rebuild_failed",
+                    "memory index projection rebuild failed closed",
+                    json!({ "success": false, "content_redacted": true }),
+                ),
+            };
+            repository.append_audit_entry(&AuditEntry::new(None, event_type, summary, payload))?;
+            result
+        })
+        .map(Json)
+        .map_err(error_response)
+}
+
 async fn memory_retention_plan(
     State(state): State<IpcState>,
 ) -> Result<Json<MemoryRetentionPlan>, (StatusCode, Json<ErrorResponse>)> {
@@ -4407,6 +4456,8 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
         endpoint("GET", "/model-routes/:id", true, true),
         endpoint("GET", "/memory", true, false),
         endpoint("GET", "/memory/classification", true, true),
+        endpoint("GET", "/memory/index/status", true, true),
+        endpoint("POST", "/memory/index/rebuild", true, false),
         endpoint("GET", "/memory/retention-plan", true, true),
         endpoint("POST", "/memory", true, false),
         endpoint("GET", "/memory/:id", true, false),
@@ -6516,7 +6567,13 @@ fn contract_features() -> Vec<ContractFeature> {
             "memory_policy_review",
             "implemented",
             "Unreviewed memory items and deleted sensitive retained memory appear in `/permissions/policy-review` with redacted values; `/memory/retention-plan` exposes the memory-specific redacted operator action queue; diagnostics export exposes only aggregate memory review counts.",
-            "Review visibility and retention-action planning only; no autonomous memory rewrite, purge automation, or vector-index governance claim.",
+            "Review visibility and retention-action planning only; no autonomous memory rewrite or purge automation claim.",
+        ),
+        feature(
+            "memory_index_governance",
+            "implemented",
+            "Versioned local memory-index manifests are atomically rebuilt from canonical active SQLite memory records; redacted status reports current, missing, stale, deleted, orphaned, and corrupt projection counts with Rust, CLI IPC E2E, and Swift coverage.",
+            "Governance and rebuild lifecycle only; SQLite remains canonical, and the projection is not used for semantic retrieval, model context, cloud routing, or autonomous memory rewriting.",
         ),
         feature(
             "approval_execution",

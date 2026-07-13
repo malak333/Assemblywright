@@ -2851,6 +2851,13 @@ struct JarvisMacCoreTests {
         #expect(model.retentionPlan?.candidateCount == 1)
         #expect(model.retentionPlan?.automationEnabled == false)
         #expect(model.retentionPlan?.candidates.first?.recommendedAction == "operator_purge_or_restore")
+        #expect(model.indexStatus?.state == "stale")
+        #expect(model.indexStatus?.retrievalEnabled == false)
+        #expect(model.indexStatus?.staleEntryCount == 1)
+
+        await model.rebuildIndex()
+        #expect(model.indexStatus?.state == "current")
+        #expect(model.indexStatus?.currentEntryCount == 1)
 
         await model.refresh(includeDeleted: true)
         #expect(model.includeDeleted)
@@ -5828,6 +5835,41 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
                       "unreviewed_active_count": 1
                     }
                   ]
+                }
+                """.utf8
+            )
+        )
+    }
+
+    func memoryIndexStatus() async throws -> JarvisMemoryIndexStatus {
+        try fakeMemoryIndexStatus(state: "stale")
+    }
+
+    func rebuildMemoryIndex() async throws -> JarvisMemoryIndexStatus {
+        try fakeMemoryIndexStatus(state: "current")
+    }
+
+    private func fakeMemoryIndexStatus(state: String) throws -> JarvisMemoryIndexStatus {
+        try JSONDecoder().decode(
+            JarvisMemoryIndexStatus.self,
+            from: Data(
+                """
+                {
+                  "generated_at": "2026-05-20T12:00:00Z",
+                  "state": "\(state)",
+                  "index_version": 1,
+                  "rebuilt_at": "2026-05-20T11:59:00Z",
+                  "active_record_count": 1,
+                  "indexed_entry_count": 1,
+                  "current_entry_count": \(state == "current" ? 1 : 0),
+                  "missing_entry_count": 0,
+                  "stale_entry_count": \(state == "stale" ? 1 : 0),
+                  "orphaned_entry_count": 0,
+                  "deleted_projection_count": 0,
+                  "canonical_source": "sqlite_memory_items",
+                  "retrieval_enabled": false,
+                  "redaction": "count-only",
+                  "detail": "safe status"
                 }
                 """.utf8
             )

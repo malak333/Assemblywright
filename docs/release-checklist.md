@@ -734,6 +734,9 @@ Clean-profile and manual production gates not proven by this local smoke:
 - Memory tab can create, edit mutable fields, mark reviewed, soft-delete,
   restore, include deleted items, and render the redacted retention-plan queue
   through the supervised core IPC contract.
+- Memory tab renders count-only index status and can explicitly rebuild the
+  atomic local projection from canonical SQLite records; update/delete/restore,
+  restart persistence, missing/corrupt recovery, and redaction have E2E proof.
 - Audit entry is written for the command.
 - Emergency pause stops new actions.
 - App exits cleanly and restarts with recoverable state.
