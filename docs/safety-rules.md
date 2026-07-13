@@ -29,6 +29,12 @@ release requirements, not optional UX guidance.
   cancels active non-critical tasks, and requires deliberate resume.
 - Cancellation must propagate across tasks, tool calls, scheduled jobs, and
   proactive triggers.
+- Ollama-native response streams must remain quarantined until a bounded body
+  contains one terminal `done:true` frame and the complete response envelope
+  validates. Partial text, partial JSON-looking tool envelopes, provider error
+  detail, and post-terminal frames must not reach audit, IPC, Swift transcript,
+  or tool execution. Cancellation and emergency pause must drop the active
+  transport and dominate a simultaneous model completion before exposure.
 - Degraded modes must be visible when local models, microphone access, TTS,
   ChatGPT, plugins, persistence, or IPC are unavailable.
 - Model-originated tool calls must be constrained to runtime-derived

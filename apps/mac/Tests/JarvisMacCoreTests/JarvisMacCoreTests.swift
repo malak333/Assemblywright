@@ -971,8 +971,10 @@ struct JarvisMacCoreTests {
         #expect(events[3].progress?.charCount == 42)
         #expect(events[3].progress?.finalChunk == true)
         #expect(events[3].progress?.contentRedacted == true)
+        #expect(events[3].progress?.providerNative == true)
         #expect(events.last?.event == "activity_error")
-        #expect(events.last?.error == "repository unavailable")
+        #expect(events.last?.error == "Activity stream unavailable. Inspect the redacted audit timeline.")
+        #expect(events.last?.error?.contains("repository unavailable") == false)
     }
 
     @Test("Management payloads decode memory items")
@@ -3139,6 +3141,34 @@ struct JarvisMacCoreTests {
         #expect(model.lastError == nil)
     }
 
+    @MainActor
+    @Test("Run management model deduplicates redacted provider progress by audit id")
+    func runManagementModelDeduplicatesProviderProgress() async throws {
+        let taskId = UUID()
+        let auditId = UUID()
+        let payload = """
+        {"audit_id":"\(auditId.uuidString)","task_id":"\(taskId.uuidString)","created_at":"2026-05-20T12:00:04Z","kind":"model_output","provider":"local","model":"ollama-test","sequence":0,"stage":"step_0","message":"model step 0 output chunk 0","byte_count":12,"char_count":10,"final_chunk":true,"content_redacted":true,"provider_native":true,"stderr_redacted":true}
+        """
+        let data = Data(
+            """
+            event: activity_progress
+            data: \(payload)
+
+            event: activity_progress
+            data: \(payload)
+
+            """.utf8
+        )
+        let events = try JarvisActivityEvent.parseServerSentEvents(data)
+        let model = RunManagementModel(client: FakeCoreClient(activityEvents: events))
+
+        await model.watchActivity()
+
+        #expect(model.activityEvents.count == 1)
+        #expect(model.activityEvents.first?.progress?.providerNative == true)
+        #expect(model.activityEvents.first?.progress?.contentRedacted == true)
+    }
+
     @Test("Supervisor configuration builds jarvis-cli serve arguments")
     func supervisorConfigurationBuildsLaunchArguments() {
         let databaseURL = URL(fileURLWithPath: "/tmp/jarvis-test.sqlite")
@@ -4222,7 +4252,7 @@ struct JarvisMacCoreTests {
         """
             .replacingOccurrences(of: "\n", with: "")
         let modelOutput = """
-        {"audit_id":"\(UUID().uuidString)","task_id":"\(taskId.uuidString)","created_at":"2026-05-20T12:00:04Z","kind":"model_output","provider":"local","model":"fake-local-model","sequence":0,"stage":"step_0","message":"model step 0 output chunk 0","byte_count":42,"char_count":42,"final_chunk":true,"content_redacted":true,"stderr_redacted":true}
+        {"audit_id":"\(UUID().uuidString)","task_id":"\(taskId.uuidString)","created_at":"2026-05-20T12:00:04Z","kind":"model_output","provider":"local","model":"fake-local-model","sequence":0,"stage":"step_0","message":"model step 0 output chunk 0","byte_count":42,"char_count":42,"final_chunk":true,"content_redacted":true,"provider_native":true,"stderr_redacted":true}
         """
             .replacingOccurrences(of: "\n", with: "")
         return Data(

@@ -7358,8 +7358,19 @@ fn serve_executes_ollama_provider_tool_request_envelope() {
         "event_type",
         "tool_execution_result",
     );
+    let transport_chunks = command["audit_entries"]
+        .as_array()
+        .expect("audit array")
+        .iter()
+        .filter(|entry| entry["event_type"] == "model_output_chunk")
+        .collect::<Vec<_>>();
+    assert!(!transport_chunks.is_empty());
+    assert!(transport_chunks.iter().all(|entry| {
+        entry["payload"]["provider_native"] == true && entry["payload"]["content_redacted"] == true
+    }));
     let encoded = serde_json::to_string(&command).expect("command JSON");
     assert!(!encoded.contains("JARVIS_OLLAMA_BASE_URL"));
+    assert!(!encoded.contains("partial-envelope-must-not-surface"));
 
     server.stop();
     server_thread.join().expect("ollama stub thread");
@@ -8030,6 +8041,7 @@ fn start_ollama_envelope_server() -> (String, thread::JoinHandle<()>) {
         let envelope = json!({
             "message": "provider requested status",
             "complete": false,
+            "private_transport_sentinel": "partial-envelope-must-not-surface",
             "tool_requests": [
                 {
                     "plugin_id": "fake_status",
@@ -8040,8 +8052,15 @@ fn start_ollama_envelope_server() -> (String, thread::JoinHandle<()>) {
         })
         .to_string();
         let responses = [
-            json!({ "response": envelope, "done": false }).to_string(),
-            json!({ "response": "provider saw tool result", "done": true }).to_string(),
+            format!(
+                "{}\n{}\n",
+                json!({ "response": envelope, "done": false }),
+                json!({ "response": "", "done": true })
+            ),
+            format!(
+                "{}\n",
+                json!({ "response": "provider saw tool result", "done": true })
+            ),
         ];
 
         for response in responses {
@@ -8050,6 +8069,7 @@ fn start_ollama_envelope_server() -> (String, thread::JoinHandle<()>) {
             let read = stream.read(&mut buffer).expect("read request");
             let request = String::from_utf8_lossy(&buffer[..read]);
             assert!(request.contains("POST /api/generate"), "{request}");
+            assert!(request.contains("\"stream\":true"), "{request}");
             assert!(
                 request.contains("Registered first-party tools are exactly this JSON allowlist")
             );
@@ -8073,7 +8093,7 @@ fn start_ollama_envelope_server() -> (String, thread::JoinHandle<()>) {
             assert!(request.contains("action names, command aliases, endpoints, and capability names are invalid plugin ids"));
             assert!(!request.contains("chrome_extension"), "{request}");
             let http = format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                "HTTP/1.1 200 OK\r\ncontent-type: application/x-ndjson\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
                 response.len(),
                 response
             );
@@ -8104,9 +8124,15 @@ fn start_ollama_invalid_tool_server(plugin_id: &str) -> (String, thread::JoinHan
         })
         .to_string();
         let responses = [
-            json!({ "response": envelope, "done": false }).to_string(),
-            json!({ "response": "provider recovered after tool rejection", "done": true })
-                .to_string(),
+            format!(
+                "{}\n{}\n",
+                json!({ "response": envelope, "done": false }),
+                json!({ "response": "", "done": true })
+            ),
+            format!(
+                "{}\n",
+                json!({ "response": "provider recovered after tool rejection", "done": true })
+            ),
         ];
 
         for (index, response) in responses.into_iter().enumerate() {
@@ -8115,6 +8141,7 @@ fn start_ollama_invalid_tool_server(plugin_id: &str) -> (String, thread::JoinHan
             let read = stream.read(&mut buffer).expect("read request");
             let request = String::from_utf8_lossy(&buffer[..read]);
             assert!(request.contains("POST /api/generate"), "{request}");
+            assert!(request.contains("\"stream\":true"), "{request}");
             assert!(
                 request.contains("Registered first-party tools are exactly this JSON allowlist")
             );
@@ -8130,7 +8157,7 @@ fn start_ollama_invalid_tool_server(plugin_id: &str) -> (String, thread::JoinHan
                 );
             }
             let http = format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                "HTTP/1.1 200 OK\r\ncontent-type: application/x-ndjson\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
                 response.len(),
                 response
             );
@@ -8173,10 +8200,20 @@ fn start_ollama_invalid_then_valid_tool_server() -> (String, thread::JoinHandle<
         })
         .to_string();
         let responses = [
-            json!({ "response": invalid_envelope, "done": false }).to_string(),
-            json!({ "response": valid_envelope, "done": false }).to_string(),
-            json!({ "response": "provider completed after valid status", "done": true })
-                .to_string(),
+            format!(
+                "{}\n{}\n",
+                json!({ "response": invalid_envelope, "done": false }),
+                json!({ "response": "", "done": true })
+            ),
+            format!(
+                "{}\n{}\n",
+                json!({ "response": valid_envelope, "done": false }),
+                json!({ "response": "", "done": true })
+            ),
+            format!(
+                "{}\n",
+                json!({ "response": "provider completed after valid status", "done": true })
+            ),
         ];
 
         for (index, response) in responses.into_iter().enumerate() {
@@ -8187,6 +8224,7 @@ fn start_ollama_invalid_then_valid_tool_server() -> (String, thread::JoinHandle<
             let read = stream.read(&mut buffer).expect("read request");
             let request = String::from_utf8_lossy(&buffer[..read]);
             assert!(request.contains("POST /api/generate"), "{request}");
+            assert!(request.contains("\"stream\":true"), "{request}");
             assert!(
                 request.contains("Registered first-party tools are exactly this JSON allowlist")
             );
@@ -8210,7 +8248,7 @@ fn start_ollama_invalid_then_valid_tool_server() -> (String, thread::JoinHandle<
                 _ => {}
             }
             let http = format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                "HTTP/1.1 200 OK\r\ncontent-type: application/x-ndjson\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
                 response.len(),
                 response
             );
@@ -8227,20 +8265,23 @@ fn start_ollama_mixed_tool_json_server() -> (String, thread::JoinHandle<()>) {
         .local_addr()
         .expect("ollama mixed-tool-json stub address");
     let handle = thread::spawn(move || {
-        let response = json!({
-            "response": "I can check that.\n{\"tool_requests\":[{\"plugin_id\":\"fake_status\",\"action\":\"status\",\"input\":{}}]}",
-            "done": true
-        })
-        .to_string();
+        let response = format!(
+            "{}\n",
+            json!({
+                "response": "I can check that.\n{\"tool_requests\":[{\"plugin_id\":\"fake_status\",\"action\":\"status\",\"input\":{}}]}",
+                "done": true
+            })
+        );
 
         let (mut stream, _) = listener.accept().expect("ollama request");
         let mut buffer = [0_u8; 8192];
         let read = stream.read(&mut buffer).expect("read request");
         let request = String::from_utf8_lossy(&buffer[..read]);
         assert!(request.contains("POST /api/generate"), "{request}");
+        assert!(request.contains("\"stream\":true"), "{request}");
         assert!(request.contains("one strict JSON object with no surrounding prose"));
         let http = format!(
-            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            "HTTP/1.1 200 OK\r\ncontent-type: application/x-ndjson\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
             response.len(),
             response
         );

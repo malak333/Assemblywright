@@ -520,23 +520,77 @@ where
                 ));
             }
 
-            let model_response = match self
-                .model
-                .execute_route(
-                    ModelRequest {
-                        task_id: task.id,
-                        session_id: task.session_id,
-                        user_input: task.user_input.clone(),
-                        step_index,
-                        tool_results: tool_results.clone(),
-                        first_party_tools: self.registered_first_party_model_tools(),
+            let model_request = ModelRequest {
+                task_id: task.id,
+                session_id: task.session_id,
+                user_input: task.user_input.clone(),
+                step_index,
+                tool_results: tool_results.clone(),
+                first_party_tools: self.registered_first_party_model_tools(),
+            };
+            let execution_route = route_evidence
+                .as_ref()
+                .expect("route evidence is set before execution")
+                .clone();
+            let model_result = {
+                let model_future = self.model.execute_route(model_request, &execution_route);
+                tokio::pin!(model_future);
+                loop {
+                    tokio::select! {
+                        result = &mut model_future => break Some(result),
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(25)) => {
+                            if self.control.is_emergency_paused()
+                                || self.control.is_task_cancelled(task.id)
+                            {
+                                break None;
+                            }
+                        }
+                    }
+                }
+            };
+            let model_result =
+                if self.control.is_emergency_paused() || self.control.is_task_cancelled(task.id) {
+                    None
+                } else {
+                    model_result
+                };
+            let Some(model_result) = model_result else {
+                let emergency_paused = self.control.is_emergency_paused();
+                if !emergency_paused {
+                    self.control.clear_task_cancellation(task.id);
+                }
+                self.update_task_status(&mut task, TaskStatus::Cancelled)?;
+                self.record_audit(
+                    &mut audit_entries,
+                    AuditEntry::new(
+                        Some(task.id),
+                        if emergency_paused {
+                            "emergency_pause_cancelled"
+                        } else {
+                            "task_cancelled"
+                        },
+                        "active model transport was cancelled before completion",
+                        json!({
+                            "step_index": step_index,
+                            "partial_output_discarded": true,
+                            "tool_envelope_exposed": false,
+                        }),
+                    ),
+                )?;
+                return Ok(self.finish(
+                    task,
+                    if emergency_paused {
+                        "Command cancelled because emergency pause was activated."
+                    } else {
+                        "Command cancelled."
                     },
-                    route_evidence
-                        .as_ref()
-                        .expect("route evidence is set before execution"),
-                )
-                .await
-            {
+                    route,
+                    route_evidence,
+                    steps,
+                    audit_entries,
+                ));
+            };
+            let model_response = match model_result {
                 Ok(response) => response,
                 Err(error) => {
                     self.update_task_status(&mut task, TaskStatus::Failed)?;
@@ -975,6 +1029,7 @@ fn model_output_chunk_audit_entries(
                     "byte_count": chunk.byte_count,
                     "char_count": chunk.char_count,
                     "final_chunk": chunk.final_chunk,
+                    "provider_native": chunk.provider_native,
                     "content_redacted": true,
                 }),
             )
@@ -1822,6 +1877,106 @@ mod tests {
                 .expect("audit entry")
                 .event_type,
             "emergency_pause_cancelled"
+        );
+    }
+
+    struct SlowModel;
+
+    #[async_trait::async_trait]
+    impl ModelExecutor for SlowModel {
+        async fn execute(&self, _request: ModelRequest) -> JarvisResult<ModelResponse> {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            Ok(ModelResponse {
+                route: ModelRoute::fake_local("slow model"),
+                message: "partial secret output must never surface".to_string(),
+                complete: true,
+                output_chunks: crate::model::bounded_output_chunks("partial secret output"),
+                tool_requests: vec![ModelToolRequest::new("fake_status", "status", json!({}))],
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn emergency_pause_cancels_in_flight_model_transport_and_discards_partial_state() {
+        let control = RuntimeControl::default();
+        let runtime = ConversationRuntime::with_parts(
+            RuntimeConfig::default(),
+            control.clone(),
+            SlowModel,
+            NoopRuntimeHooks,
+        );
+
+        let (response, ()) = tokio::join!(
+            runtime.execute_command(CommandRequest::new("cancel active transport")),
+            async {
+                tokio::time::sleep(std::time::Duration::from_millis(75)).await;
+                control.emergency_pause();
+            }
+        );
+        let response = response.expect("cancellation returns structured response");
+
+        assert_eq!(response.task.status, TaskStatus::Cancelled);
+        assert!(response.steps.is_empty());
+        assert!(response.tool_results.is_empty());
+        assert!(!response.message.contains("partial secret"));
+        assert!(!response
+            .audit_entries
+            .iter()
+            .any(|entry| entry.event_type == "model_output_chunk"));
+        let cancellation = response.audit_entries.last().expect("cancellation audit");
+        assert_eq!(cancellation.event_type, "emergency_pause_cancelled");
+        assert_eq!(cancellation.payload["partial_output_discarded"], true);
+        assert_eq!(cancellation.payload["tool_envelope_exposed"], false);
+    }
+
+    struct CancelBeforeReturnModel {
+        control: RuntimeControl,
+    }
+
+    #[async_trait::async_trait]
+    impl ModelExecutor for CancelBeforeReturnModel {
+        async fn execute(&self, request: ModelRequest) -> JarvisResult<ModelResponse> {
+            self.control.cancel_task(request.task_id);
+            Ok(ModelResponse {
+                route: ModelRoute::fake_local("completion cancellation race"),
+                message: "do not expose completion-race output".to_string(),
+                complete: false,
+                output_chunks: crate::model::bounded_output_chunks("hidden race output"),
+                tool_requests: vec![ModelToolRequest::new("fake_status", "status", json!({}))],
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn cancellation_dominates_a_model_completion_race_before_audit_or_tools() {
+        let control = RuntimeControl::default();
+        let runtime = ConversationRuntime::with_parts(
+            RuntimeConfig::default(),
+            control.clone(),
+            CancelBeforeReturnModel { control },
+            NoopRuntimeHooks,
+        );
+
+        let response = runtime
+            .execute_command(CommandRequest::new("race cancellation"))
+            .await
+            .expect("cancellation race returns structured response");
+
+        assert_eq!(response.task.status, TaskStatus::Cancelled);
+        assert!(response.steps.is_empty());
+        assert!(response.tool_results.is_empty());
+        assert!(!response.message.contains("completion-race"));
+        assert!(!response.audit_entries.iter().any(|entry| matches!(
+            entry.event_type.as_str(),
+            "model_step_completed" | "model_output_chunk" | "tool_plan_received"
+        )));
+        assert_eq!(
+            response
+                .audit_entries
+                .last()
+                .expect("cancel audit")
+                .event_type,
+            "task_cancelled"
         );
     }
 

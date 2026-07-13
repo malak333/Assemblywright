@@ -1419,6 +1419,16 @@ requires plugin-trust `generated_at`, `review_started_at`,
   scene ID and all supervisor-state presentations, while signed installed-app
   rendering and window-reopen behavior remain manual Finder/LaunchServices QA.
 
+- The Ollama generation path uses `stream:true` NDJSON transport with a 1 MiB
+  wire cap, 512 KiB assembled-response cap, and at most 256 redacted metadata
+  chunks. It handles split UTF-8 and LF/CRLF framing, requires one terminal
+  `done:true`, rejects malformed/error/post-terminal data, and parses tool
+  envelopes only after the complete stream validates. Runtime cancellation
+  polls the active provider future, discards partial state, and rechecks after
+  completion so cancellation wins before audit or tool execution. Swift decodes
+  deduplicated provider-native count metadata after completion; it does not show
+  raw partial text or claim live-token transcript streaming.
+
 ## Safety Guardrails
 
 - Local model routing is the default.

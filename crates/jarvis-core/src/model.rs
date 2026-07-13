@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -10,6 +11,9 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
 const MAX_CODEX_ACCOUNT_RESPONSE_BYTES: u64 = 1_048_576;
+const MAX_OLLAMA_STREAM_BYTES: usize = 1_048_576;
+const MAX_OLLAMA_RESPONSE_BYTES: usize = 524_288;
+const MAX_OLLAMA_OUTPUT_CHUNKS: usize = 256;
 const CODEX_ACCOUNT_DISABLED_FEATURES: &[&str] = &[
     "apps",
     "auth_elicitation",
@@ -397,6 +401,8 @@ pub struct ModelOutputChunk {
     pub char_count: usize,
     #[serde(default)]
     pub final_chunk: bool,
+    #[serde(default)]
+    pub provider_native: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -651,6 +657,130 @@ struct OllamaGenerateResponse {
     error: Option<String>,
 }
 
+#[derive(Debug)]
+struct OllamaStreamAccumulator {
+    pending: Vec<u8>,
+    scan_start: usize,
+    response: String,
+    output_chunks: Vec<ModelOutputChunk>,
+    stream_bytes: usize,
+    terminal_seen: bool,
+}
+
+impl OllamaStreamAccumulator {
+    fn new() -> Self {
+        Self {
+            pending: Vec::new(),
+            scan_start: 0,
+            response: String::new(),
+            output_chunks: Vec::new(),
+            stream_bytes: 0,
+            terminal_seen: false,
+        }
+    }
+
+    fn push_bytes(&mut self, bytes: &[u8]) -> JarvisResult<()> {
+        self.stream_bytes = self
+            .stream_bytes
+            .checked_add(bytes.len())
+            .ok_or_else(|| JarvisError::Model("Ollama stream byte count overflowed".to_string()))?;
+        if self.stream_bytes > MAX_OLLAMA_STREAM_BYTES {
+            return Err(JarvisError::Model(format!(
+                "Ollama stream exceeded {MAX_OLLAMA_STREAM_BYTES} bytes"
+            )));
+        }
+        self.pending.extend_from_slice(bytes);
+        let last_newline = self.pending[self.scan_start..]
+            .iter()
+            .rposition(|byte| *byte == b'\n')
+            .map(|offset| self.scan_start + offset);
+        if let Some(last_newline) = last_newline {
+            let complete = self.pending.drain(..=last_newline).collect::<Vec<_>>();
+            self.scan_start = self.pending.len();
+            for raw_line in complete.split(|byte| *byte == b'\n') {
+                let line = raw_line.strip_suffix(b"\r").unwrap_or(raw_line);
+                self.push_line(line)?;
+            }
+        } else {
+            self.scan_start = self.pending.len();
+        }
+        Ok(())
+    }
+
+    fn finish(mut self) -> JarvisResult<(String, Vec<ModelOutputChunk>)> {
+        if !self.pending.is_empty() {
+            let line = std::mem::take(&mut self.pending);
+            self.scan_start = 0;
+            self.push_line(&line)?;
+        }
+        if !self.terminal_seen {
+            return Err(JarvisError::Model(
+                "Ollama stream ended before a terminal done frame".to_string(),
+            ));
+        }
+        if self.response.trim().is_empty() {
+            return Err(JarvisError::Model(
+                "Ollama stream returned an empty response".to_string(),
+            ));
+        }
+        if let Some(last) = self.output_chunks.last_mut() {
+            last.final_chunk = true;
+        }
+        Ok((self.response, self.output_chunks))
+    }
+
+    fn push_line(&mut self, line: &[u8]) -> JarvisResult<()> {
+        if line.iter().all(u8::is_ascii_whitespace) {
+            return Ok(());
+        }
+        if self.terminal_seen {
+            return Err(JarvisError::Model(
+                "Ollama stream contained data after its terminal frame".to_string(),
+            ));
+        }
+        let frame: OllamaGenerateResponse = serde_json::from_slice(line).map_err(|_| {
+            JarvisError::Model("Ollama stream contained invalid NDJSON".to_string())
+        })?;
+        if frame.error.is_some() {
+            return Err(JarvisError::Model(
+                "Ollama stream reported a provider error".to_string(),
+            ));
+        }
+        if let Some(fragment) = frame.response {
+            if !fragment.is_empty() {
+                let next_len =
+                    self.response
+                        .len()
+                        .checked_add(fragment.len())
+                        .ok_or_else(|| {
+                            JarvisError::Model("Ollama response byte count overflowed".to_string())
+                        })?;
+                if next_len > MAX_OLLAMA_RESPONSE_BYTES {
+                    return Err(JarvisError::Model(format!(
+                        "Ollama response exceeded {MAX_OLLAMA_RESPONSE_BYTES} bytes"
+                    )));
+                }
+                let char_count = fragment.chars().count();
+                if self.output_chunks.len() < MAX_OLLAMA_OUTPUT_CHUNKS {
+                    self.output_chunks.push(ModelOutputChunk {
+                        sequence: self.output_chunks.len() as u64,
+                        byte_count: fragment.len(),
+                        char_count,
+                        final_chunk: false,
+                        provider_native: true,
+                    });
+                } else if let Some(last) = self.output_chunks.last_mut() {
+                    last.byte_count = last.byte_count.saturating_add(fragment.len());
+                    last.char_count = last.char_count.saturating_add(char_count);
+                }
+                self.response.push_str(&fragment);
+            }
+        }
+        self.terminal_seen = frame.done.unwrap_or(false);
+        Ok(())
+    }
+}
+
 #[async_trait]
 impl ModelExecutor for OllamaHttpModel {
     async fn execute(&self, request: ModelRequest) -> JarvisResult<ModelResponse> {
@@ -662,7 +792,7 @@ impl ModelExecutor for OllamaHttpModel {
             .json(&json!({
                 "model": self.model,
                 "prompt": prompt,
-                "stream": false,
+                "stream": true,
             }))
             .send()
             .await
@@ -685,36 +815,34 @@ impl ModelExecutor for OllamaHttpModel {
             ));
         }
 
-        let body = response
-            .json::<OllamaGenerateResponse>()
-            .await
-            .map_err(|error| {
+        let mut stream = response.bytes_stream();
+        let mut accumulator = OllamaStreamAccumulator::new();
+        while let Some(bytes) = stream.next().await {
+            let bytes = bytes.map_err(|error| {
                 ollama_error(
-                    "provider returned invalid JSON",
+                    "provider stream failed",
                     &self.safe_endpoint(),
                     self.timeout,
                     Some(error.to_string()),
                 )
             })?;
-
-        if let Some(error) = body.error {
-            return Err(ollama_error(
-                "provider returned an error",
+            accumulator.push_bytes(&bytes).map_err(|error| {
+                ollama_error(
+                    "provider returned an invalid bounded stream",
+                    &self.safe_endpoint(),
+                    self.timeout,
+                    Some(error.to_string()),
+                )
+            })?;
+        }
+        let (raw_message, output_chunks) = accumulator.finish().map_err(|error| {
+            ollama_error(
+                "provider returned an invalid bounded stream",
                 &self.safe_endpoint(),
                 self.timeout,
-                Some(error),
-            ));
-        }
-
-        let raw_message = body.response.unwrap_or_default();
-        if raw_message.trim().is_empty() {
-            return Err(ollama_error(
-                "provider returned an empty response",
-                &self.safe_endpoint(),
-                self.timeout,
-                None,
-            ));
-        }
+                Some(error.to_string()),
+            )
+        })?;
         let envelope = parse_provider_response_envelope(&raw_message).map_err(|error| {
             ollama_error(
                 "provider returned an invalid tool-call envelope",
@@ -732,9 +860,9 @@ impl ModelExecutor for OllamaHttpModel {
                     self.safe_endpoint()
                 ),
             ),
-            output_chunks: bounded_output_chunks(&envelope.message),
+            output_chunks,
             message: envelope.message,
-            complete: body.done.unwrap_or(envelope.complete),
+            complete: envelope.complete,
             tool_requests: envelope.tool_requests,
         })
     }
@@ -1256,6 +1384,7 @@ pub fn bounded_output_chunks(message: &str) -> Vec<ModelOutputChunk> {
             byte_count: text.len(),
             char_count: slice.len(),
             final_chunk: false,
+            provider_native: false,
         });
     }
     if let Some(last) = chunks.last_mut() {
@@ -1665,6 +1794,9 @@ fn redact_obvious_secrets(input: &str) -> String {
     input
         .split_whitespace()
         .map(|token| {
+            if (token.contains("http://") || token.contains("https://")) && token.contains('@') {
+                return "[REDACTED_URL]".to_string();
+            }
             let normalized = token
                 .trim_matches(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-')
                 .to_ascii_lowercase();
@@ -1919,11 +2051,145 @@ mod tests {
         assert!(!tools.to_string().contains("fake_echo__echo"));
     }
 
+    #[test]
+    fn ollama_stream_parser_handles_split_utf8_and_crlf_without_exposing_content() {
+        let first = json!({ "response": "hello ", "done": false }).to_string();
+        let second = json!({ "response": "🌍", "done": false }).to_string();
+        let terminal = json!({ "response": "", "done": true }).to_string();
+        let wire = format!("{first}\r\n{second}\n{terminal}\n").into_bytes();
+        let emoji = wire
+            .windows("🌍".len())
+            .position(|window| window == "🌍".as_bytes())
+            .expect("emoji bytes");
+
+        let mut parser = OllamaStreamAccumulator::new();
+        parser.push_bytes(&wire[..emoji + 1]).expect("first split");
+        parser.push_bytes(&wire[emoji + 1..]).expect("second split");
+        let (message, chunks) = parser.finish().expect("terminal stream");
+
+        assert_eq!(message, "hello 🌍");
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[1].byte_count, "🌍".len());
+        assert_eq!(chunks[1].char_count, 1);
+        assert!(chunks[1].final_chunk);
+        assert!(chunks.iter().all(|chunk| chunk.provider_native));
+    }
+
+    #[test]
+    fn ollama_stream_parser_fails_closed_for_incomplete_or_post_terminal_frames() {
+        let partial = format!("{}\n", json!({ "response": "partial", "done": false }));
+        let mut incomplete = OllamaStreamAccumulator::new();
+        incomplete
+            .push_bytes(partial.as_bytes())
+            .expect("partial frame parses");
+        assert!(incomplete
+            .finish()
+            .expect_err("missing terminal")
+            .to_string()
+            .contains("terminal"));
+
+        let wire = format!(
+            "{}\n{}\n",
+            json!({ "response": "complete", "done": true }),
+            json!({ "response": "unexpected", "done": true })
+        );
+        let mut post_terminal = OllamaStreamAccumulator::new();
+        let error = post_terminal
+            .push_bytes(wire.as_bytes())
+            .expect_err("post-terminal frame must fail");
+        assert!(error.to_string().contains("after its terminal"));
+    }
+
+    #[test]
+    fn ollama_stream_parser_enforces_byte_limit_and_bounds_metadata_before_exposure() {
+        let mut oversized = OllamaStreamAccumulator::new();
+        let error = oversized
+            .push_bytes(&vec![b'x'; MAX_OLLAMA_STREAM_BYTES + 1])
+            .expect_err("oversized no-newline body must fail");
+        assert!(error.to_string().contains("exceeded"));
+
+        let frame = format!("{}\n", json!({ "response": "x", "done": false }));
+        let wire = format!(
+            "{}{}\n",
+            frame.repeat(MAX_OLLAMA_OUTPUT_CHUNKS + 256),
+            json!({ "response": "", "done": true })
+        );
+        let mut many_frames = OllamaStreamAccumulator::new();
+        many_frames
+            .push_bytes(wire.as_bytes())
+            .expect("normal token-sized frames remain valid under the byte cap");
+        let (message, chunks) = many_frames.finish().expect("terminal many-frame stream");
+        assert_eq!(message.len(), MAX_OLLAMA_OUTPUT_CHUNKS + 256);
+        assert_eq!(chunks.len(), MAX_OLLAMA_OUTPUT_CHUNKS);
+        assert_eq!(
+            chunks.iter().map(|chunk| chunk.byte_count).sum::<usize>(),
+            message.len()
+        );
+    }
+
+    #[test]
+    fn ollama_stream_parser_handles_near_wire_cap_tiny_frames_in_small_input_chunks() {
+        let empty_frame = format!("{}\n", json!({ "response": "", "done": false }));
+        let terminal = format!("{}\n", json!({ "response": "ok", "done": true }));
+        let frame_count = (MAX_OLLAMA_STREAM_BYTES - terminal.len()) / empty_frame.len();
+        let wire = format!("{}{}", empty_frame.repeat(frame_count), terminal);
+        assert!(wire.len() <= MAX_OLLAMA_STREAM_BYTES);
+        assert!(wire.len() > MAX_OLLAMA_STREAM_BYTES - empty_frame.len());
+        assert!(frame_count > 128);
+
+        let mut parser = OllamaStreamAccumulator::new();
+        for fragment in wire.as_bytes().chunks(17) {
+            parser
+                .push_bytes(fragment)
+                .expect("fragmented near-cap stream remains bounded and linear");
+        }
+        let (message, chunks) = parser.finish().expect("terminal near-cap stream");
+
+        assert_eq!(message, "ok");
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].byte_count, 2);
+        assert!(chunks[0].final_chunk);
+    }
+
+    #[test]
+    fn ollama_stream_parser_rejects_malformed_empty_and_error_frames() {
+        for (wire, expected) in [
+            ("not-json\n", "invalid NDJSON"),
+            ("{\"response\":\"\",\"done\":true}\n", "empty response"),
+            (
+                "{\"error\":\"sk-secret provider detail\",\"done\":true}\n",
+                "provider error",
+            ),
+        ] {
+            let mut parser = OllamaStreamAccumulator::new();
+            let result = parser
+                .push_bytes(wire.as_bytes())
+                .and_then(|_| parser.finish());
+            let message = result.expect_err("stream must fail closed").to_string();
+            assert!(message.contains(expected), "{message}");
+            assert!(!message.contains("sk-secret"));
+        }
+    }
+
+    #[test]
+    fn ollama_transport_errors_redact_non_keyword_url_credentials() {
+        let error = ollama_error(
+            "request failed",
+            "http://127.0.0.1:11434",
+            Duration::from_secs(1),
+            Some("connection to http://alice:hunter2@localhost:11434 failed".to_string()),
+        );
+        let message = error.to_string();
+        assert!(message.contains("[REDACTED_URL]"));
+        assert!(!message.contains("alice"));
+        assert!(!message.contains("hunter2"));
+    }
+
     #[tokio::test]
-    async fn ollama_http_provider_posts_non_streaming_generate_request() {
-        async fn generate(Json(body): Json<Value>) -> Json<Value> {
+    async fn ollama_http_provider_consumes_bounded_native_generate_stream() {
+        async fn generate(Json(body): Json<Value>) -> String {
             assert_eq!(body["model"], "test-local-model");
-            assert_eq!(body["stream"], false);
+            assert_eq!(body["stream"], true);
             let prompt = body["prompt"].as_str().expect("prompt");
             assert!(prompt.contains("hello local"));
             assert!(prompt.contains("Registered first-party tools are exactly this JSON allowlist"));
@@ -1934,7 +2200,12 @@ mod tests {
             assert!(prompt.contains("action names, command aliases, endpoints, and capability names are invalid plugin ids"));
             assert!(prompt.contains("one strict JSON object with no surrounding prose"));
             assert!(prompt.contains("<registered plugin_id>"));
-            Json(json!({ "response": "local answer", "done": true }))
+            format!(
+                "{}\n{}\n{}\n",
+                json!({ "response": "local ", "done": false }),
+                json!({ "response": "answer", "done": false }),
+                json!({ "response": "", "done": true })
+            )
         }
 
         let app = Router::new().route("/api/generate", post(generate));
@@ -1969,13 +2240,22 @@ mod tests {
         assert_eq!(response.route.model, "test-local-model");
         assert_eq!(response.route.provider, ModelProvider::Local);
         assert!(!response.route.reason.contains("hello local"));
+        assert_eq!(response.output_chunks.len(), 2);
+        assert!(response
+            .output_chunks
+            .iter()
+            .all(|chunk| chunk.provider_native));
+        assert!(!response.output_chunks[0].final_chunk);
+        assert!(response.output_chunks[1].final_chunk);
     }
 
     #[tokio::test]
     async fn ollama_http_provider_parses_tool_request_envelope() {
-        async fn generate() -> Json<Value> {
-            Json(json!({
-                "response": json!({
+        async fn generate() -> String {
+            format!(
+                "{}\n{}\n",
+                json!({
+                    "response": json!({
                     "message": "checking local status",
                     "complete": false,
                     "tool_requests": [
@@ -1985,9 +2265,11 @@ mod tests {
                             "input": {}
                         }
                     ]
-                }).to_string(),
-                "done": false
-            }))
+                    }).to_string(),
+                    "done": false
+                }),
+                json!({ "response": "", "done": true })
+            )
         }
 
         let app = Router::new().route("/api/generate", post(generate));
@@ -2024,6 +2306,8 @@ mod tests {
         assert_eq!(response.tool_requests[0].plugin_id, "fake_status");
         assert_eq!(response.tool_requests[0].action, "status");
         assert_eq!(response.tool_requests[0].input, json!({}));
+        assert_eq!(response.output_chunks.len(), 1);
+        assert!(response.output_chunks[0].provider_native);
     }
 
     #[tokio::test]
@@ -2070,9 +2354,9 @@ mod tests {
 
     #[tokio::test]
     async fn ollama_http_provider_enforces_configured_timeout() {
-        async fn generate() -> Json<Value> {
+        async fn generate() -> String {
             tokio::time::sleep(Duration::from_millis(200)).await;
-            Json(json!({ "response": "late answer", "done": true }))
+            format!("{}\n", json!({ "response": "late answer", "done": true }))
         }
 
         let app = Router::new().route("/api/generate", post(generate));
@@ -2105,6 +2389,72 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("timeout_ms=10"));
         assert!(!message.contains("timeout body should not leak"));
+    }
+
+    #[tokio::test]
+    async fn ollama_http_provider_times_out_a_stalled_partial_stream_without_exposure() {
+        async fn generate() -> axum::response::Response {
+            let stream = futures_util::stream::unfold(0_u8, |state| async move {
+                match state {
+                    0 => Some((
+                        Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(format!(
+                            "{}\n",
+                            json!({
+                                "response": "partial-stream-secret",
+                                "done": false
+                            })
+                        ))),
+                        1,
+                    )),
+                    1 => {
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        Some((
+                            Ok(axum::body::Bytes::from(format!(
+                                "{}\n",
+                                json!({ "response": "", "done": true })
+                            ))),
+                            2,
+                        ))
+                    }
+                    _ => None,
+                }
+            });
+            axum::response::Response::builder()
+                .header("content-type", "application/x-ndjson")
+                .body(axum::body::Body::from_stream(stream))
+                .expect("stream response")
+        }
+
+        let app = Router::new().route("/api/generate", post(generate));
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let address = listener.local_addr().expect("address");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("test server");
+        });
+        let model = OllamaHttpModel::from_config(&LocalModelConfig {
+            enabled: true,
+            provider: LocalModelProviderKind::Ollama,
+            model: "test-local-model".to_string(),
+            base_url: Some(format!("http://{address}")),
+            timeout_ms: 40,
+        })
+        .expect("ollama model");
+
+        let error = model
+            .execute(ModelRequest {
+                task_id: uuid::Uuid::new_v4(),
+                session_id: uuid::Uuid::new_v4(),
+                user_input: "stall test".to_string(),
+                step_index: 0,
+                tool_results: Vec::new(),
+                first_party_tools: default_first_party_model_tools(),
+            })
+            .await
+            .expect_err("partial stream must time out");
+
+        let message = error.to_string();
+        assert!(message.contains("timeout_ms=40"), "{message}");
+        assert!(!message.contains("partial-stream-secret"));
     }
 
     #[tokio::test]

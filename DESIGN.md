@@ -323,6 +323,14 @@ redacted scheduler attention handoff, scheduler trigger policy-review items,
 adapter-backed scheduler notification controls for due, failed, and
 emergency-pause-blocked attention items,
 and core supervision abstractions.
+The opt-in Ollama adapter uses native NDJSON response transport with bounded
+body, assembled-response, and metadata budgets. It quarantines all fragments
+until a terminal `done:true` frame and the final response/tool envelope validate.
+Runtime cancellation or emergency pause drops the in-flight provider future,
+discards partial state, and wins a completion race before audit or tool
+execution. Swift keeps the assistant transcript final-only and can inspect only
+redacted post-validation transport metadata; raw-token UI streaming remains an
+end-goal capability.
 Installed plugin publisher-origin claims can be operator-pinned after local
 provenance matches the install snapshot and the supplied trusted origin exactly
 matches the manifest author claim. Signed manifests can also be verified with

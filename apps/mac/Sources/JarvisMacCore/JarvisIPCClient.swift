@@ -575,6 +575,7 @@ public struct JarvisActivityProgressEvent: Decodable, Equatable, Sendable {
     public var charCount: Int?
     public var finalChunk: Bool?
     public var contentRedacted: Bool?
+    public var providerNative: Bool?
     public var stderrRedacted: Bool
 
     enum CodingKeys: String, CodingKey {
@@ -594,6 +595,7 @@ public struct JarvisActivityProgressEvent: Decodable, Equatable, Sendable {
         case charCount = "char_count"
         case finalChunk = "final_chunk"
         case contentRedacted = "content_redacted"
+        case providerNative = "provider_native"
         case stderrRedacted = "stderr_redacted"
     }
 }
@@ -637,13 +639,13 @@ public struct JarvisActivityEvent: Equatable, Identifiable, Sendable {
                         error: nil
                     )
                 case "activity_error":
-                    let body = try decoder.decode(JarvisActivityEventError.self, from: payload)
+                    _ = try decoder.decode(JarvisActivityEventError.self, from: payload)
                     return JarvisActivityEvent(
                         sequence: index,
                         event: event,
                         summary: nil,
                         progress: nil,
-                        error: body.error
+                        error: "Activity stream unavailable. Inspect the redacted audit timeline."
                     )
                 default:
                     return JarvisActivityEvent(
@@ -651,7 +653,7 @@ public struct JarvisActivityEvent: Equatable, Identifiable, Sendable {
                         event: event,
                         summary: nil,
                         progress: nil,
-                        error: String(decoding: payload, as: UTF8.self)
+                        error: "Unsupported activity event was discarded."
                     )
                 }
             }

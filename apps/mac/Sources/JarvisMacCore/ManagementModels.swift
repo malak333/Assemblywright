@@ -416,7 +416,11 @@ public final class RunManagementModel: ObservableObject {
                 maxEvents: maxEvents,
                 intervalMilliseconds: intervalMilliseconds
             )
-            self.activityEvents = events
+            var seenAuditIds = Set<UUID>()
+            self.activityEvents = events.filter { event in
+                guard let auditId = event.progress?.auditId else { return true }
+                return seenAuditIds.insert(auditId).inserted
+            }
             if let latest = events.compactMap(\.summary).last {
                 self.activitySummary = latest
             }

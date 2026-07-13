@@ -1817,8 +1817,11 @@ struct RunActivityEventView: View {
         let sequence = progress.sequence.map { " #\($0)" } ?? ""
         if progress.kind == "model_output" {
             let byteCount = progress.byteCount.map { ", \($0) bytes" } ?? ""
+            let charCount = progress.charCount.map { ", \($0) chars" } ?? ""
             let redacted = progress.contentRedacted == true ? ", redacted" : ""
-            return "\(source)\(sequence) output chunk\(byteCount)\(redacted)"
+            let transport = progress.providerNative == true ? " native transport" : " output"
+            let terminal = progress.finalChunk == true ? ", terminal" : ""
+            return "\(source)\(sequence)\(transport) chunk metadata\(byteCount)\(charCount)\(terminal)\(redacted)"
         }
         return "\(source)\(sequence) \(stage): \(message)"
     }

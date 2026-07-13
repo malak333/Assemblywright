@@ -459,13 +459,19 @@ JSON frames. Jarvis exposes only parsed sequence/stage/message progress events
 and `installed_plugin_progress` audit entries. Model execution also emits
 model-step completion/failure audit evidence, and model-output chunk metadata.
 `/activity/events` projects these as redacted `activity_progress` frames; raw
-stderr and raw model chunk text remain redacted, and these frames are not
-provider-native raw token streaming.
+stderr and raw model chunk text remain redacted. Ollama generation consumes the
+provider's native NDJSON transport with byte/response/metadata limits,
+terminal-frame validation, and in-flight runtime cancellation. Chunk metadata
+is persisted and shown only after the complete stream and any tool envelope
+validate; the bounded Swift watch buffers SSE evidence and does not render live
+tokens or partial assistant transcript rows.
 
 Focused checks for the activity-progress and external handoff snapshot surface:
 
 ```sh
 cargo test -p jarvis-core repository_backed_state_endpoints_expose_tasks_and_audit -- --nocapture
+cargo test -p jarvis-core model::tests::ollama -- --nocapture
+cargo test -p jarvis-core runtime::tests::cancellation_dominates_a_model_completion_race_before_audit_or_tools -- --nocapture
 cargo test -p jarvis-cli --test local_ipc_e2e release_external_handoff_snapshots_match_live_runbook_commands -- --nocapture
 swift test --package-path apps/mac --filter JarvisMacCoreTests/parsesActivityEventStream
 ./scripts/release-external-handoff.sh --self-test
