@@ -8,6 +8,7 @@ struct JarvisMacApp: App {
     @StateObject private var console: CommandConsoleModel
     @StateObject private var memory: MemoryManagerModel
     @StateObject private var plugins: PluginManagerModel
+    @StateObject private var workspaceRoots: JarvisWorkspaceRootBookmarkCoordinator
     @StateObject private var approvals: ApprovalManagementModel
     @StateObject private var runs: RunManagementModel
     @StateObject private var scheduler: SchedulerModel
@@ -26,14 +27,17 @@ struct JarvisMacApp: App {
         let client = JarvisIPCClient(endpoint: configuration.endpoint)
         let console = CommandConsoleModel(client: client)
         let voice = VoiceStateModel()
+        let workspaceRoots = JarvisWorkspaceRootBookmarkCoordinator()
         let supervisor = JarvisCoreSupervisor(
             configuration: configuration,
-            client: client
+            client: client,
+            workspaceRootProvider: workspaceRoots
         )
         _supervisor = StateObject(wrappedValue: supervisor)
         _console = StateObject(wrappedValue: console)
         _memory = StateObject(wrappedValue: MemoryManagerModel(client: client))
         _plugins = StateObject(wrappedValue: PluginManagerModel(client: client))
+        _workspaceRoots = StateObject(wrappedValue: workspaceRoots)
         _approvals = StateObject(wrappedValue: ApprovalManagementModel(client: client))
         _runs = StateObject(wrappedValue: RunManagementModel(client: client))
         _scheduler = StateObject(wrappedValue: SchedulerModel(client: client))
@@ -89,6 +93,7 @@ struct JarvisMacApp: App {
                 console: console,
                 memory: memory,
                 plugins: plugins,
+                workspaceRoots: workspaceRoots,
                 approvals: approvals,
                 runs: runs,
                 scheduler: scheduler,
@@ -160,6 +165,7 @@ struct JarvisShellView: View {
     @ObservedObject var console: CommandConsoleModel
     @ObservedObject var memory: MemoryManagerModel
     @ObservedObject var plugins: PluginManagerModel
+    @ObservedObject var workspaceRoots: JarvisWorkspaceRootBookmarkCoordinator
     @ObservedObject var approvals: ApprovalManagementModel
     @ObservedObject var runs: RunManagementModel
     @ObservedObject var scheduler: SchedulerModel
@@ -187,7 +193,12 @@ struct JarvisShellView: View {
                     .tabItem { Text("Model") }
                 MemoryManagerView(model: memory)
                     .tabItem { Text("Memory") }
-                PluginManagerView(model: plugins)
+                PluginManagerView(
+                    model: plugins,
+                    workspaceRoots: workspaceRoots,
+                    supervisor: supervisor,
+                    modelConfiguration: modelConfiguration
+                )
                     .tabItem { Text("Plugins") }
                 ApprovalCenterView(model: approvals)
                     .tabItem { Text("Approvals") }
@@ -1177,6 +1188,11 @@ struct MemoryRetentionPlanView: View {
 
 struct PluginManagerView: View {
     @ObservedObject var model: PluginManagerModel
+    @ObservedObject var workspaceRoots: JarvisWorkspaceRootBookmarkCoordinator
+    @ObservedObject var supervisor: JarvisCoreSupervisor
+    @ObservedObject var modelConfiguration: ModelConfigurationModel
+    @State private var workspaceStatus: String?
+    @State private var workspaceOperationInProgress = false
 
     var body: some View {
         ManagementListView(
@@ -1186,6 +1202,46 @@ struct PluginManagerView: View {
             refresh: { await model.refresh() }
         ) {
             List {
+                Section("Workspace roots") {
+                    ForEach(workspaceRoots.grants) { grant in
+                        let presentation = WorkspaceRootGrantPresentation(grant: grant)
+                        HStack {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(presentation.idLine)
+                                    .font(.subheadline)
+                                Text(presentation.detailLine)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("Remove", role: .destructive) {
+                                Task { await removeWorkspaceRoot(grant.id) }
+                            }
+                            .disabled(workspaceOperationInProgress)
+                        }
+                    }
+
+                    HStack {
+                        Button("Add Folder") { addWorkspaceRoot() }
+                            .disabled(workspaceOperationInProgress || workspaceRoots.grants.count >= 8)
+                        Button("Restart Core") {
+                            Task { await restartCoreForWorkspaceRoots() }
+                        }
+                        .disabled(workspaceOperationInProgress || supervisor.mode == .starting)
+                        Spacer()
+                    }
+
+                    Text("Folder paths and bookmark bytes stay hidden. Changes take effect only after the app-supervised core restarts; removing a grant restarts immediately to revoke the held descriptor.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    if let status = workspaceStatus ?? workspaceRoots.lastError {
+                        Text(status)
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                            .textSelection(.enabled)
+                    }
+                }
+
                 if let warning = model.modelToolCatalogWarning {
                     Section("Production capabilities") {
                         Text(warning)
@@ -1286,6 +1342,73 @@ struct PluginManagerView: View {
         return "\(plugin.provenance.integrityStatus) | \(origin) | \(originReview) | \(executable)"
     }
 
+    private func addWorkspaceRoot() {
+        let panel = NSOpenPanel()
+        panel.title = "Authorize a workspace folder"
+        panel.prompt = "Authorize"
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let grant = try workspaceRoots.addRoot(url)
+            workspaceStatus = "Grant \(grant.id) stored. Restart the core to activate it."
+        } catch {
+            workspaceStatus = String(describing: error)
+        }
+    }
+
+    private func removeWorkspaceRoot(_ id: String) async {
+        workspaceOperationInProgress = true
+        defer { workspaceOperationInProgress = false }
+        if supervisor.isAvailable, !supervisor.isSupervisingCoreProcess {
+            workspaceStatus = "Another process owns the core endpoint. Stop it before changing app-owned workspace authority."
+            return
+        }
+        guard await supervisor.stop() else {
+            workspaceStatus = "The supervised core did not stop, so the workspace grant was not removed."
+            return
+        }
+        do {
+            try workspaceRoots.removeRoot(id: id)
+        } catch {
+            workspaceStatus = String(describing: error)
+            return
+        }
+        await startCoreForWorkspaceRoots()
+    }
+
+    private func restartCoreForWorkspaceRoots(manageWorkingState: Bool = true) async {
+        if manageWorkingState { workspaceOperationInProgress = true }
+        defer {
+            if manageWorkingState { workspaceOperationInProgress = false }
+        }
+        if supervisor.isAvailable, !supervisor.isSupervisingCoreProcess {
+            workspaceStatus = "Another process owns the core endpoint. Stop it before applying app-owned workspace grants."
+            return
+        }
+        guard await supervisor.stop() else {
+            workspaceStatus = "The supervised core did not stop; workspace authority was not relaunched."
+            return
+        }
+        await startCoreForWorkspaceRoots()
+    }
+
+    private func startCoreForWorkspaceRoots() async {
+        await supervisor.start(
+            environmentOverrides: modelConfiguration.launchEnvironmentOverrides,
+            requireMatchingConfiguration: true
+        )
+        if supervisor.isAvailable {
+            workspaceStatus = WorkspaceRootActivationPresentation(
+                isAvailable: true,
+                isAppSupervised: supervisor.isSupervisingCoreProcess
+            ).statusMessage
+        } else if case let .degraded(reason) = supervisor.mode {
+            workspaceStatus = reason
+        }
+    }
 }
 
 struct SchedulerJobsView: View {
@@ -1472,6 +1595,31 @@ struct SchedulerJobsView: View {
             return "once at \(runAt)"
         case let .interval(everySeconds):
             return "every \(everySeconds)s"
+        }
+    }
+
+}
+
+struct WorkspaceRootGrantPresentation: Equatable {
+    let idLine: String
+    let detailLine: String
+
+    init(grant: JarvisWorkspaceRootGrant) {
+        idLine = grant.id
+        detailLine = "\(grant.status); authorized directory path hidden"
+    }
+}
+
+struct WorkspaceRootActivationPresentation: Equatable {
+    let statusMessage: String
+
+    init(isAvailable: Bool, isAppSupervised: Bool) {
+        if isAvailable, isAppSupervised {
+            statusMessage = "Workspace grants are active for the current supervised core."
+        } else if isAvailable {
+            statusMessage = "Another process owns the core endpoint; app-owned workspace grants are not active there."
+        } else {
+            statusMessage = "Workspace grants are not active because the core is unavailable."
         }
     }
 }

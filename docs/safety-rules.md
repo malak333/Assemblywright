@@ -60,6 +60,18 @@ release requirements, not optional UX guidance.
   held root; other inputs are non-empty normal relative paths. The enforced
   ceilings are 200 listed entries, 64 KiB per UTF-8 read, 16 KiB per line, and
   128 KiB cumulative tool output per task.
+- App-owned workspace grants must persist bookmark bytes and opaque IDs, never
+  present stored or resolved absolute paths, and resolve the complete set before
+  launching the core. Stale-unrecoverable, inaccessible, duplicate,
+  non-directory, malformed, or oversized grants fail the launch atomically.
+  Resolved paths travel only in the bounded versioned startup-stdin envelope;
+  they must not enter argv, environment, health, diagnostics, audit, or errors.
+  Startup delivery runs off the main actor under a hard timeout; failure or
+  timeout force-terminates and reaps the child. Security-scope access is
+  balanced across stop, launch failure, unexpected child exit, replacement,
+  and deinitialization. This is capability-lifecycle discipline, not proof of
+  App Sandbox enforcement, child sandbox-extension inheritance, or IPC caller
+  identity.
 - Installed `local_wasm` execution is allowed only for validated low-risk,
   non-proactive compute actions with no memory, model, filesystem, environment,
   process, clock, or network authority and the explicit `wasm_compute` grant.

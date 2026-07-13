@@ -6,6 +6,7 @@ pub mod policy;
 pub mod router;
 pub mod runtime;
 pub mod scheduler;
+pub mod startup;
 pub mod storage;
 pub mod trusted_wake;
 pub mod types;
@@ -63,6 +64,10 @@ pub use runtime::{
     RuntimeConfig, RuntimeControl, RuntimeHooks, RuntimeStep,
 };
 pub use scheduler::{Scheduler, SchedulerJob, SchedulerJobSpec, SchedulerJobStatus, TriggerKind};
+pub use startup::{
+    ServeStartupConfig, TrustedWakeStartupDocument, MAX_SERVE_STARTUP_CONFIG_BYTES,
+    SERVE_STARTUP_CONFIG_VERSION,
+};
 pub use storage::{
     EmergencyPauseState, InstalledPluginRecord, MemoryItem, NewMemoryItem, NewPendingApproval,
     PendingApproval, SqliteRepository,
@@ -91,5 +96,5 @@ pub use wasm_plugin::{
 pub use workspace::{
     WorkspaceInspectPlugin, WorkspaceRootConfig, MAX_WORKSPACE_LIST_ENTRIES,
     MAX_WORKSPACE_RELATIVE_PATH_BYTES, MAX_WORKSPACE_ROOTS, MAX_WORKSPACE_ROOT_ID_BYTES,
-    MAX_WORKSPACE_TEXT_BYTES,
+    MAX_WORKSPACE_ROOT_PATH_BYTES, MAX_WORKSPACE_TEXT_BYTES,
 };

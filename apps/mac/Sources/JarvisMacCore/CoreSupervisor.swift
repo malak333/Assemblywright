@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 public enum JarvisCoreMode: Equatable, Sendable {
     case stopped
@@ -190,20 +191,36 @@ public protocol JarvisCoreProcessLaunching: Sendable {
         arguments: [String],
         environment: [String: String],
         standardInput: Data?
-    ) throws -> any JarvisCoreProcess
+    ) async throws -> any JarvisCoreProcess
 }
 
 public struct FoundationJarvisCoreProcessLauncher: JarvisCoreProcessLaunching {
-    public init() {}
+    public var standardInputWriteTimeoutNanoseconds: UInt64
+    private let standardInputWriter: @Sendable (FileHandle, Data) -> Bool
+
+    public init(
+        standardInputWriteTimeoutNanoseconds: UInt64 = 2_000_000_000,
+        standardInputWriter: @escaping @Sendable (FileHandle, Data) -> Bool = { handle, data in
+            do {
+                try handle.write(contentsOf: data)
+                return true
+            } catch {
+                return false
+            }
+        }
+    ) {
+        self.standardInputWriteTimeoutNanoseconds = standardInputWriteTimeoutNanoseconds
+        self.standardInputWriter = standardInputWriter
+    }
 
     public func launch(
         executableURL: URL,
         arguments: [String],
         environment: [String: String] = ProcessInfo.processInfo.environment,
         standardInput: Data? = nil
-    ) throws -> any JarvisCoreProcess {
-        if let standardInput, standardInput.count > 8 * 1024 {
-            throw JarvisCoreSupervisorError.trustedWakeBootstrapTooLarge
+    ) async throws -> any JarvisCoreProcess {
+        if let standardInput, standardInput.count > jarvisWorkspaceRootStartupEnvelopeMaximumBytes {
+            throw JarvisCoreSupervisorError.startupConfigurationTooLarge
         }
         let process = Process()
         process.executableURL = executableURL
@@ -213,11 +230,51 @@ public struct FoundationJarvisCoreProcessLauncher: JarvisCoreProcessLaunching {
         process.standardError = Pipe()
         let inputPipe = standardInput.map { _ in Pipe() }
         process.standardInput = inputPipe
-        if let standardInput, let inputPipe {
-            try inputPipe.fileHandleForWriting.write(contentsOf: standardInput)
-            try inputPipe.fileHandleForWriting.close()
-        }
         try process.run()
+        if let standardInput, let inputPipe {
+            let handle = inputPipe.fileHandleForWriting
+            let writer = standardInputWriter
+            let writeTask = Task.detached(priority: .userInitiated) {
+                writer(handle, standardInput)
+            }
+            enum DeliveryOutcome: Equatable, Sendable {
+                case written
+                case failed
+                case timedOut
+            }
+            let timeout = standardInputWriteTimeoutNanoseconds
+            let outcome = await withTaskGroup(of: DeliveryOutcome.self) { group in
+                group.addTask {
+                    await writeTask.value ? .written : .failed
+                }
+                group.addTask {
+                    do {
+                        try await Task.sleep(nanoseconds: timeout)
+                        return .timedOut
+                    } catch {
+                        return .failed
+                    }
+                }
+                let first = await group.next() ?? .failed
+                if first == .timedOut {
+                    _ = Darwin.kill(process.processIdentifier, SIGKILL)
+                    try? handle.close()
+                }
+                group.cancelAll()
+                return first
+            }
+            try? handle.close()
+            guard outcome == .written else {
+                if process.isRunning {
+                    _ = Darwin.kill(process.processIdentifier, SIGKILL)
+                }
+                process.waitUntilExit()
+                if outcome == .timedOut {
+                    throw JarvisCoreSupervisorError.startupConfigurationWriteTimedOut
+                }
+                throw JarvisCoreSupervisorError.startupConfigurationWriteFailed
+            }
+        }
         return FoundationJarvisCoreProcess(process: process)
     }
 }
@@ -248,7 +305,10 @@ public final class JarvisCoreSupervisor: ObservableObject {
     private let client: any JarvisCoreClient
     private let processLauncher: any JarvisCoreProcessLaunching
     private let credentialProvider: JarvisCoreCredentialProvider
+    private let workspaceRootProvider: any JarvisWorkspaceRootGrantProviding
     private var process: (any JarvisCoreProcess)?
+    private var processMonitorTask: Task<Void, Never>?
+    private var activeWorkspaceRootLease: JarvisWorkspaceRootAccessLease?
     private var pendingTrustedWakeBootstrap: Data?
     private var pendingTrustedWakeKeyControl: Data?
     private var activeEnvironmentOverrides: [String: String]
@@ -259,14 +319,18 @@ public final class JarvisCoreSupervisor: ObservableObject {
         configuration: JarvisCoreSupervisorConfiguration = JarvisCoreSupervisorConfiguration(),
         client: any JarvisCoreClient = JarvisIPCClient(),
         processLauncher: any JarvisCoreProcessLaunching = FoundationJarvisCoreProcessLauncher(),
-        credentialProvider: JarvisCoreCredentialProvider = JarvisCoreCredentialProvider()
+        credentialProvider: JarvisCoreCredentialProvider = JarvisCoreCredentialProvider(),
+        workspaceRootProvider: any JarvisWorkspaceRootGrantProviding = JarvisWorkspaceRootBookmarkCoordinator()
     ) {
         self.configuration = configuration
         self.client = client
         self.processLauncher = processLauncher
         self.credentialProvider = credentialProvider
+        self.workspaceRootProvider = workspaceRootProvider
         self.mode = .stopped
         self.lastHealth = nil
+        self.activeWorkspaceRootLease = nil
+        self.processMonitorTask = nil
         self.pendingTrustedWakeBootstrap = nil
         self.pendingTrustedWakeKeyControl = nil
         self.activeEnvironmentOverrides = [:]
@@ -275,7 +339,9 @@ public final class JarvisCoreSupervisor: ObservableObject {
     }
 
     deinit {
+        processMonitorTask?.cancel()
         process?.terminate()
+        activeWorkspaceRootLease?.release()
     }
 
     public var isAvailable: Bool {
@@ -283,6 +349,10 @@ public final class JarvisCoreSupervisor: ObservableObject {
             return true
         }
         return false
+    }
+
+    public var isSupervisingCoreProcess: Bool {
+        process?.isRunning == true
     }
 
     public var smokeSnapshot: JarvisCoreSupervisorSmokeSnapshot {
@@ -337,6 +407,8 @@ public final class JarvisCoreSupervisor: ObservableObject {
             )
             return
         }
+        activeWorkspaceRootLease?.release()
+        activeWorkspaceRootLease = nil
 
         guard let executableURL = configuration.executableURL else {
             mode = .degraded(reason: "jarvis core executable is not bundled or configured")
@@ -350,26 +422,44 @@ public final class JarvisCoreSupervisor: ObservableObject {
             let trustedWakeBootstrap = pendingTrustedWakeBootstrap
             let trustedWakeKeyControl = pendingTrustedWakeKeyControl
             var launchArguments = configuration.launchArguments
-            if trustedWakeBootstrap != nil {
-                launchArguments.append("--trusted-wake-bootstrap-stdin")
-            } else if trustedWakeKeyControl != nil {
-                launchArguments.append("--trusted-wake-key-control-stdin")
+            let workspaceRootLease = try workspaceRootProvider.acquireForCoreLaunch()
+            let startupInput: Data
+            do {
+                startupInput = try Self.startupConfigurationEnvelope(
+                    roots: workspaceRootLease.roots,
+                    trustedWakeBootstrap: trustedWakeBootstrap,
+                    trustedWakeKeyControl: trustedWakeKeyControl
+                )
+            } catch {
+                workspaceRootLease.release()
+                throw error
             }
-            process = try processLauncher.launch(
+            if !workspaceRootLease.roots.isEmpty || trustedWakeBootstrap != nil || trustedWakeKeyControl != nil {
+                launchArguments.append("--startup-config-stdin")
+            }
+            process = try await processLauncher.launch(
                 executableURL: executableURL,
                 arguments: launchArguments,
                 environment: environment,
-                standardInput: trustedWakeBootstrap ?? trustedWakeKeyControl
+                standardInput: startupInput.isEmpty ? nil : startupInput
             )
+            activeWorkspaceRootLease = workspaceRootLease
             try await waitUntilHealthy(
                 environmentOverrides: environmentOverrides,
                 requireMatchingConfiguration: requireMatchingConfiguration
             )
             activeEnvironmentOverrides = environmentOverrides
             mode = .available
+            if let process {
+                startProcessMonitor(for: process)
+            }
         } catch {
+            processMonitorTask?.cancel()
+            processMonitorTask = nil
             process?.terminate()
             process = nil
+            activeWorkspaceRootLease?.release()
+            activeWorkspaceRootLease = nil
             mode = .degraded(reason: String(describing: error))
         }
     }
@@ -399,7 +489,7 @@ public final class JarvisCoreSupervisor: ObservableObject {
         guard let bootstrap, !bootstrap.isEmpty else {
             throw JarvisCoreSupervisorError.trustedWakeBootstrapUnavailable
         }
-        guard bootstrap.count <= 8 * 1024 else {
+        guard bootstrap.count <= jarvisTrustedWakeStartupDocumentMaximumBytes else {
             throw JarvisCoreSupervisorError.trustedWakeBootstrapTooLarge
         }
         guard isAvailable,
@@ -462,7 +552,7 @@ public final class JarvisCoreSupervisor: ObservableObject {
         guard let document, !document.isEmpty else {
             throw JarvisCoreSupervisorError.trustedWakeKeyControlUnavailable
         }
-        guard document.count <= 8 * 1024 else {
+        guard document.count <= jarvisTrustedWakeStartupDocumentMaximumBytes else {
             throw JarvisCoreSupervisorError.trustedWakeBootstrapTooLarge
         }
         guard isAvailable,
@@ -515,6 +605,8 @@ public final class JarvisCoreSupervisor: ObservableObject {
     }
 
     private func stopInternal() async -> Bool {
+        processMonitorTask?.cancel()
+        processMonitorTask = nil
         let stoppingProcess = process
         stoppingProcess?.terminate()
         if let stoppingProcess {
@@ -531,6 +623,8 @@ public final class JarvisCoreSupervisor: ObservableObject {
         }
         guard process === stoppingProcess else { return false }
         process = nil
+        activeWorkspaceRootLease?.release()
+        activeWorkspaceRootLease = nil
         lastHealth = nil
         mode = .stopped
         return true
@@ -544,11 +638,36 @@ public final class JarvisCoreSupervisor: ObservableObject {
             return true
         } catch {
             lastHealth = nil
-            if process?.isRunning == true {
+            if let process, !process.isRunning {
+                handleUnexpectedProcessExit(process)
+            } else if process?.isRunning == true {
                 mode = .degraded(reason: "jarvis core is running but health is unavailable: \(error)")
             }
             return false
         }
+    }
+
+    private func startProcessMonitor(for monitoredProcess: any JarvisCoreProcess) {
+        processMonitorTask?.cancel()
+        let interval = configuration.healthPollIntervalNanoseconds
+        processMonitorTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled, monitoredProcess.isRunning {
+                try? await Task.sleep(nanoseconds: interval)
+            }
+            guard !Task.isCancelled else { return }
+            self?.handleUnexpectedProcessExit(monitoredProcess)
+        }
+    }
+
+    private func handleUnexpectedProcessExit(_ exitedProcess: any JarvisCoreProcess) {
+        guard process === exitedProcess else { return }
+        processMonitorTask?.cancel()
+        processMonitorTask = nil
+        process = nil
+        activeWorkspaceRootLease?.release()
+        activeWorkspaceRootLease = nil
+        lastHealth = nil
+        mode = .degraded(reason: "the app-supervised Jarvis core exited unexpectedly")
     }
 
     private func waitUntilHealthy(
@@ -572,6 +691,44 @@ public final class JarvisCoreSupervisor: ObservableObject {
         guard let databaseURL = configuration.databaseURL else { return }
         let directory = databaseURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+
+    private static func startupConfigurationEnvelope(
+        roots: [JarvisWorkspaceRootLaunchRoot],
+        trustedWakeBootstrap: Data?,
+        trustedWakeKeyControl: Data?
+    ) throws -> Data {
+        guard trustedWakeBootstrap == nil || trustedWakeKeyControl == nil else {
+            throw JarvisCoreSupervisorError.startupConfigurationInvalid
+        }
+        guard !roots.isEmpty || trustedWakeBootstrap != nil || trustedWakeKeyControl != nil else {
+            return Data()
+        }
+
+        var envelope: [String: Any] = [
+            "version": 1,
+            "workspace_roots": roots.map { ["id": $0.id, "path": $0.path] }
+        ]
+        if let document = trustedWakeBootstrap ?? trustedWakeKeyControl {
+            guard document.count <= jarvisTrustedWakeStartupDocumentMaximumBytes else {
+                throw JarvisCoreSupervisorError.trustedWakeBootstrapTooLarge
+            }
+            let value: Any
+            do {
+                value = try JSONSerialization.jsonObject(with: document, options: [.fragmentsAllowed])
+            } catch {
+                throw JarvisCoreSupervisorError.startupConfigurationInvalid
+            }
+            envelope["trusted_wake"] = [
+                "kind": trustedWakeBootstrap == nil ? "key_control" : "bootstrap",
+                "document": value
+            ]
+        }
+        let data = try JSONSerialization.data(withJSONObject: envelope, options: [.sortedKeys])
+        guard data.count <= jarvisWorkspaceRootStartupEnvelopeMaximumBytes else {
+            throw JarvisCoreSupervisorError.startupConfigurationTooLarge
+        }
+        return data
     }
 
     private static func health(_ health: JarvisHealth, matches environment: [String: String]) -> Bool {
@@ -609,6 +766,10 @@ public final class JarvisCoreSupervisor: ObservableObject {
 
 public enum JarvisCoreSupervisorError: Error, Equatable {
     case healthCheckTimedOut
+    case startupConfigurationInvalid
+    case startupConfigurationTooLarge
+    case startupConfigurationWriteFailed
+    case startupConfigurationWriteTimedOut
     case trustedWakeCoreNotAppSupervised
     case trustedWakeProvisionInProgress
     case trustedWakeCoreChangedDuringPreparation

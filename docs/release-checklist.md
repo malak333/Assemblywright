@@ -156,6 +156,13 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   knowledge-base facts were added, and matching E2E or focused integration
   coverage exists. If coverage does not exist, add it for behavior changes or
   record the blocker before using broader readiness language.
+- For workspace grants, confirm app-selected paths are absent from child argv,
+  environment, health, UI presentation, diagnostics, and audit; malformed or
+  stale bookmarks block the complete launch; trusted-wake restarts share the
+  bounded versioned startup envelope; delivery timeout/failure force-reaps the
+  child; access is released on every stop/failure/unexpected child exit;
+  and the proof boundary still excludes App Sandbox, child sandbox-extension
+  inheritance, same-user IPC authorization, signing, and live-device QA.
 
 ## Code Gate
 
