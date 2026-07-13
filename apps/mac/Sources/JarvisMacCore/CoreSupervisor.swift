@@ -306,9 +306,11 @@ public final class JarvisCoreSupervisor: ObservableObject {
     private let processLauncher: any JarvisCoreProcessLaunching
     private let credentialProvider: JarvisCoreCredentialProvider
     private let workspaceRootProvider: any JarvisWorkspaceRootGrantProviding
+    private let ipcAuthorization: JarvisIPCSessionAuthorization
     private var process: (any JarvisCoreProcess)?
     private var processMonitorTask: Task<Void, Never>?
     private var activeWorkspaceRootLease: JarvisWorkspaceRootAccessLease?
+    private var activeIPCAuthorizationGeneration: UInt64?
     private var pendingTrustedWakeBootstrap: Data?
     private var pendingTrustedWakeKeyControl: Data?
     private var activeEnvironmentOverrides: [String: String]
@@ -320,16 +322,19 @@ public final class JarvisCoreSupervisor: ObservableObject {
         client: any JarvisCoreClient = JarvisIPCClient(),
         processLauncher: any JarvisCoreProcessLaunching = FoundationJarvisCoreProcessLauncher(),
         credentialProvider: JarvisCoreCredentialProvider = JarvisCoreCredentialProvider(),
-        workspaceRootProvider: any JarvisWorkspaceRootGrantProviding = JarvisWorkspaceRootBookmarkCoordinator()
+        workspaceRootProvider: any JarvisWorkspaceRootGrantProviding = JarvisWorkspaceRootBookmarkCoordinator(),
+        ipcAuthorization: JarvisIPCSessionAuthorization = JarvisIPCSessionAuthorization()
     ) {
         self.configuration = configuration
         self.client = client
         self.processLauncher = processLauncher
         self.credentialProvider = credentialProvider
         self.workspaceRootProvider = workspaceRootProvider
+        self.ipcAuthorization = ipcAuthorization
         self.mode = .stopped
         self.lastHealth = nil
         self.activeWorkspaceRootLease = nil
+        self.activeIPCAuthorizationGeneration = nil
         self.processMonitorTask = nil
         self.pendingTrustedWakeBootstrap = nil
         self.pendingTrustedWakeKeyControl = nil
@@ -342,6 +347,9 @@ public final class JarvisCoreSupervisor: ObservableObject {
         processMonitorTask?.cancel()
         process?.terminate()
         activeWorkspaceRootLease?.release()
+        if let generation = activeIPCAuthorizationGeneration {
+            ipcAuthorization.clear(generation: generation)
+        }
     }
 
     public var isAvailable: Bool {
@@ -409,32 +417,55 @@ public final class JarvisCoreSupervisor: ObservableObject {
         }
         activeWorkspaceRootLease?.release()
         activeWorkspaceRootLease = nil
+        if let generation = activeIPCAuthorizationGeneration {
+            ipcAuthorization.clear(generation: generation)
+            activeIPCAuthorizationGeneration = nil
+        }
 
         guard let executableURL = configuration.executableURL else {
             mode = .degraded(reason: "jarvis core executable is not bundled or configured")
             return
         }
 
+        var launchAuthorization: JarvisIPCLaunchAuthorization?
         do {
             try createDatabaseDirectoryIfNeeded()
             var environment = credentialProvider.launchEnvironment(base: ProcessInfo.processInfo.environment)
             environment.merge(environmentOverrides) { _, override in override }
+            environment.removeValue(forKey: "JARVIS_IPC_TOKEN_FILE")
+            environment.removeValue(forKey: "JARVIS_MAC_IPC_AUTH_FILE")
             let trustedWakeBootstrap = pendingTrustedWakeBootstrap
             let trustedWakeKeyControl = pendingTrustedWakeKeyControl
             var launchArguments = configuration.launchArguments
+            if ipcAuthorization.mode == .appSupervised {
+                guard JarvisIPCSessionAuthorization.isStrictLoopbackEndpoint(configuration.endpoint.baseURL),
+                      let bindURL = URL(string: "http://\(configuration.bindAddress)"),
+                      JarvisIPCSessionAuthorization.isStrictLoopbackEndpoint(bindURL) else {
+                    throw JarvisIPCAuthorizationError.nonLoopbackEndpoint
+                }
+            }
             let workspaceRootLease = try workspaceRootProvider.acquireForCoreLaunch()
+            launchAuthorization = try ipcAuthorization.rotateForLaunch()
             let startupInput: Data
             do {
                 startupInput = try Self.startupConfigurationEnvelope(
                     roots: workspaceRootLease.roots,
                     trustedWakeBootstrap: trustedWakeBootstrap,
-                    trustedWakeKeyControl: trustedWakeKeyControl
+                    trustedWakeKeyControl: trustedWakeKeyControl,
+                    ipcAuthorization: launchAuthorization
                 )
             } catch {
                 workspaceRootLease.release()
+                if let generation = launchAuthorization?.generation {
+                    ipcAuthorization.clear(generation: generation)
+                }
                 throw error
             }
-            if !workspaceRootLease.roots.isEmpty || trustedWakeBootstrap != nil || trustedWakeKeyControl != nil {
+            if !workspaceRootLease.roots.isEmpty
+                || trustedWakeBootstrap != nil
+                || trustedWakeKeyControl != nil
+                || launchAuthorization != nil
+            {
                 launchArguments.append("--startup-config-stdin")
             }
             process = try await processLauncher.launch(
@@ -444,6 +475,7 @@ public final class JarvisCoreSupervisor: ObservableObject {
                 standardInput: startupInput.isEmpty ? nil : startupInput
             )
             activeWorkspaceRootLease = workspaceRootLease
+            activeIPCAuthorizationGeneration = launchAuthorization?.generation
             try await waitUntilHealthy(
                 environmentOverrides: environmentOverrides,
                 requireMatchingConfiguration: requireMatchingConfiguration
@@ -460,6 +492,10 @@ public final class JarvisCoreSupervisor: ObservableObject {
             process = nil
             activeWorkspaceRootLease?.release()
             activeWorkspaceRootLease = nil
+            if let generation = launchAuthorization?.generation ?? activeIPCAuthorizationGeneration {
+                ipcAuthorization.clear(generation: generation)
+            }
+            activeIPCAuthorizationGeneration = nil
             mode = .degraded(reason: String(describing: error))
         }
     }
@@ -625,6 +661,10 @@ public final class JarvisCoreSupervisor: ObservableObject {
         process = nil
         activeWorkspaceRootLease?.release()
         activeWorkspaceRootLease = nil
+        if let generation = activeIPCAuthorizationGeneration {
+            ipcAuthorization.clear(generation: generation)
+            activeIPCAuthorizationGeneration = nil
+        }
         lastHealth = nil
         mode = .stopped
         return true
@@ -666,6 +706,10 @@ public final class JarvisCoreSupervisor: ObservableObject {
         process = nil
         activeWorkspaceRootLease?.release()
         activeWorkspaceRootLease = nil
+        if let generation = activeIPCAuthorizationGeneration {
+            ipcAuthorization.clear(generation: generation)
+            activeIPCAuthorizationGeneration = nil
+        }
         lastHealth = nil
         mode = .degraded(reason: "the app-supervised Jarvis core exited unexpectedly")
     }
@@ -676,7 +720,11 @@ public final class JarvisCoreSupervisor: ObservableObject {
     ) async throws {
         let deadline = Date().addingTimeInterval(configuration.startupTimeoutSeconds)
         repeat {
+            guard process?.isRunning == true else {
+                throw JarvisCoreSupervisorError.launchedProcessExited
+            }
             if await refreshHealth(),
+               process?.isRunning == true,
                !requireMatchingConfiguration || lastHealth.map({ Self.health($0, matches: environmentOverrides) }) == true
             {
                 return
@@ -696,12 +744,16 @@ public final class JarvisCoreSupervisor: ObservableObject {
     private static func startupConfigurationEnvelope(
         roots: [JarvisWorkspaceRootLaunchRoot],
         trustedWakeBootstrap: Data?,
-        trustedWakeKeyControl: Data?
+        trustedWakeKeyControl: Data?,
+        ipcAuthorization: JarvisIPCLaunchAuthorization?
     ) throws -> Data {
         guard trustedWakeBootstrap == nil || trustedWakeKeyControl == nil else {
             throw JarvisCoreSupervisorError.startupConfigurationInvalid
         }
-        guard !roots.isEmpty || trustedWakeBootstrap != nil || trustedWakeKeyControl != nil else {
+        guard !roots.isEmpty
+            || trustedWakeBootstrap != nil
+            || trustedWakeKeyControl != nil
+            || ipcAuthorization != nil else {
             return Data()
         }
 
@@ -722,6 +774,13 @@ public final class JarvisCoreSupervisor: ObservableObject {
             envelope["trusted_wake"] = [
                 "kind": trustedWakeBootstrap == nil ? "key_control" : "bootstrap",
                 "document": value
+            ]
+        }
+        if let ipcAuthorization {
+            envelope["ipc_auth"] = [
+                "scheme": "bearer",
+                "token": ipcAuthorization.token,
+                "generation": ipcAuthorization.generation
             ]
         }
         let data = try JSONSerialization.data(withJSONObject: envelope, options: [.sortedKeys])
@@ -766,6 +825,7 @@ public final class JarvisCoreSupervisor: ObservableObject {
 
 public enum JarvisCoreSupervisorError: Error, Equatable {
     case healthCheckTimedOut
+    case launchedProcessExited
     case startupConfigurationInvalid
     case startupConfigurationTooLarge
     case startupConfigurationWriteFailed

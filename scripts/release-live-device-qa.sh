@@ -499,8 +499,9 @@ write_env_template() {
 # app has been installed into a clean macOS profile and launched through Finder
 # or LaunchServices.
 #
-# Set JARVIS_RELEASE_CORE_ENDPOINT to the running release core endpoint, then
-# capture the command evidence ID from that same endpoint:
+# Set JARVIS_RELEASE_CORE_ENDPOINT to the running release core endpoint and
+# JARVIS_IPC_TOKEN_FILE to the app-owned handoff file, source this template,
+# then capture the command evidence ID from that same authenticated endpoint:
 #   cargo run -p jarvis-cli -- command "status check" --endpoint "\${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}" --json
 # Use the returned task ID as JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:<uuid>",
 # or use an audit ID from task-associated command/audit evidence as "audit:<uuid>".
@@ -521,6 +522,7 @@ write_env_template() {
 JARVIS_QA_INSTALLED_APP_PATH="/Applications/Jarvis.app"
 JARVIS_QA_REPORT_PATH="target/release-live-device-qa-report.json"
 JARVIS_RELEASE_CORE_ENDPOINT="" # release core endpoint used for command evidence and external readiness checks
+JARVIS_IPC_TOKEN_FILE="\$HOME/Library/Application Support/Jarvis/ipc-session-auth.json" # path only; never copy the bearer value into this template
 JARVIS_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.jarvis"
 JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION"
 
@@ -672,6 +674,7 @@ PLIST
   require_file_contains "live QA env template" "$fixture_template" 'JARVIS_QA_EXPECTED_COMMAND_TEXT=""'
   require_file_contains "live QA env template" "$fixture_template" 'JARVIS_QA_OBSERVED_COMMAND_TEXT=""'
   require_file_contains "live QA env template" "$fixture_template" 'JARVIS_RELEASE_CORE_ENDPOINT=""'
+  require_file_contains "live QA env template" "$fixture_template" 'JARVIS_IPC_TOKEN_FILE="$HOME/Library/Application Support/Jarvis/ipc-session-auth.json"'
   require_file_contains "live QA env template" "$fixture_template" './scripts/release-live-device-qa.sh --assert-complete'
   require_file_contains "live QA env template" "$fixture_template" 'cargo run -p jarvis-cli -- command "status check" --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}" --json'
   require_file_contains "live QA env template" "$fixture_template" 'JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:<uuid>"'

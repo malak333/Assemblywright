@@ -1005,6 +1005,8 @@ Next release evidence commands:
   JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_APPLE_ID='apple-id@example.com' JARVIS_NOTARYTOOL_TEAM_ID='TEAMID1234' JARVIS_NOTARYTOOL_PASSWORD='app-specific-password' ./scripts/package-distribution.sh
   ./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env
   Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' in target/release-live-device-qa.env
+  Confirm JARVIS_IPC_TOKEN_FILE points to the app-owned ipc-session-auth.json path, then source the template before IPC commands
+  set -a && source target/release-live-device-qa.env && set +a
   cargo run -p jarvis-cli -- command "status check" --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}" --json
   record the returned task ID as JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid>' or a task-associated audit ID as 'audit:<uuid>'
   set -a && source target/release-live-device-qa.env && set +a
@@ -1098,6 +1100,7 @@ run_unsigned_launch_check() {
   ENDPOINT="http://127.0.0.1:$PORT"
   CLEAN_HOME="$LAUNCH_TMP_DIR/home"
   APP_DB="$CLEAN_HOME/Library/Application Support/Jarvis/jarvis.sqlite"
+  APP_IPC_AUTH_FILE="$CLEAN_HOME/Library/Application Support/Jarvis/ipc-session-auth.json"
   APP_LOG="$LAUNCH_TMP_DIR/JarvisMacApp.log"
   mkdir -p "$CLEAN_HOME"
 
@@ -1125,6 +1128,7 @@ run_unsigned_launch_check() {
     JARVIS_MAC_CORE_BIND_ADDRESS="127.0.0.1:$PORT" \
     JARVIS_MAC_CORE_ENDPOINT="$ENDPOINT" \
     JARVIS_MAC_CORE_DATABASE="$APP_DB" \
+    JARVIS_MAC_IPC_AUTH_FILE="$APP_IPC_AUTH_FILE" \
     "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME" >"$APP_LOG" 2>&1 &
   APP_PID="$!"
 
@@ -1136,7 +1140,7 @@ run_unsigned_launch_check() {
       exit 1
     fi
 
-    if HEALTH_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" health --endpoint "$ENDPOINT" 2>/dev/null)"; then
+    if HEALTH_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" --ipc-token-file "$APP_IPC_AUTH_FILE" health --endpoint "$ENDPOINT" 2>/dev/null)"; then
       require_output_contains "release app health" "$HEALTH_OUTPUT" "jarvis-core: ok"
       require_output_contains "release app health" "$HEALTH_OUTPUT" "runtime: routed-fake-local-model+first-party-plugins"
       break
@@ -1150,28 +1154,33 @@ run_unsigned_launch_check() {
     exit 1
   fi
 
-  COMMAND_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" command --json "status" --endpoint "$ENDPOINT")"
+  if [[ ! -f "$APP_IPC_AUTH_FILE" ]] || [[ "$(stat -f '%Lp' "$APP_IPC_AUTH_FILE")" != "600" ]]; then
+    printf 'error: app-owned IPC authentication file is missing or not mode 0600\n' >&2
+    exit 1
+  fi
+
+  COMMAND_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" --ipc-token-file "$APP_IPC_AUTH_FILE" command --json "status" --endpoint "$ENDPOINT")"
   require_output_contains "release app command" "$COMMAND_OUTPUT" '"accepted":true'
   require_output_contains "release app command" "$COMMAND_OUTPUT" '"status":"completed"'
   require_output_contains "release app command" "$COMMAND_OUTPUT" '"event_type":"plugin_completed"'
 
-  AUDIT_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" tasks audit --json --endpoint "$ENDPOINT")"
+  AUDIT_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" --ipc-token-file "$APP_IPC_AUTH_FILE" tasks audit --json --endpoint "$ENDPOINT")"
   require_output_contains "release app audit" "$AUDIT_OUTPUT" '"event_type":"plugin_completed"'
   require_output_contains "release app audit" "$AUDIT_OUTPUT" '"event_type":"task_completed"'
 
-  DIAGNOSTICS_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" diagnostics export --endpoint "$ENDPOINT")"
+  DIAGNOSTICS_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" --ipc-token-file "$APP_IPC_AUTH_FILE" diagnostics export --endpoint "$ENDPOINT")"
   require_output_contains "release app diagnostics" "$DIAGNOSTICS_OUTPUT" '"repository_backed":true'
   require_output_contains "release app diagnostics" "$DIAGNOSTICS_OUTPUT" '"task_count":1'
   require_output_contains "release app diagnostics" "$DIAGNOSTICS_OUTPUT" '"redaction":"diagnostics export omits command bodies'
 
-  PAUSE_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" pause --endpoint "$ENDPOINT" --reason "unsigned distribution launch smoke")"
+  PAUSE_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" --ipc-token-file "$APP_IPC_AUTH_FILE" pause --endpoint "$ENDPOINT" --reason "unsigned distribution launch smoke")"
   require_output_contains "release app pause" "$PAUSE_OUTPUT" '"paused":true'
 
-  BLOCKED_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" command --json "status" --endpoint "$ENDPOINT" --dry-run)"
+  BLOCKED_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" --ipc-token-file "$APP_IPC_AUTH_FILE" command --json "status" --endpoint "$ENDPOINT" --dry-run)"
   require_output_contains "release app blocked command" "$BLOCKED_OUTPUT" '"accepted":false'
   require_output_contains "release app blocked command" "$BLOCKED_OUTPUT" '"status":"blocked"'
 
-  RESUME_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" resume --endpoint "$ENDPOINT")"
+  RESUME_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" --ipc-token-file "$APP_IPC_AUTH_FILE" resume --endpoint "$ENDPOINT")"
   require_output_contains "release app resume" "$RESUME_OUTPUT" '"paused":false'
 
   if [[ ! -s "$APP_DB" ]]; then
@@ -1184,7 +1193,7 @@ run_unsigned_launch_check() {
   printf 'Pkg: %s\n' "$PKG_PATH"
   printf 'Signing: %s\n' "$SIGNING_STATUS"
   printf 'Clean HOME database: %s\n' "$APP_DB"
-  printf 'Proof boundary: release-built app executable, bundled core, unsigned installer payload structure, isolated HOME launch, command/audit/diagnostics/pause smoke, and optional ad-hoc signing only; no Developer ID signing, notarization, stapling, /Applications install, Finder/LaunchServices validation, live microphone/Speech validation, spoken transcript handoff, live audio-output validation, App Store validation, or manual QA.\n'
+  printf 'Proof boundary: release-built app executable, bundled core, unsigned installer payload structure, isolated HOME launch, app-supervised bearer-authenticated command/audit/diagnostics/pause smoke with an owner-only CLI handoff file, and optional ad-hoc signing only; no OS identity proof, same-user/process isolation, Developer ID signing, notarization, stapling, /Applications install, Finder/LaunchServices validation, live microphone/Speech validation, spoken transcript handoff, live audio-output validation, App Store validation, or manual QA.\n'
 }
 
 if [[ "$UNSIGNED_STRUCTURE_CHECK" == true ]]; then

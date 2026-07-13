@@ -14,13 +14,14 @@ pub mod wasm_plugin;
 pub mod workspace;
 
 pub use ipc::{
-    router, serve, serve_listener, ApprovalDecisionRequest, ApprovalExecutionResponse,
-    ApprovalStatusCount, CommandRequest, CommandResponse, CreateMemoryItemRequest,
-    CreateSchedulerJobRequest, EmergencyPauseRequest, EmergencyPauseResponse, ErrorResponse,
-    HealthResponse, InstallPluginRequest, InstalledPluginExecutionRequest,
-    InstalledPluginGrantSurface, InstalledPluginPublisherSignatureVerificationRequest,
+    router, router_with_auth, serve, serve_listener, serve_listener_with_auth, serve_with_auth,
+    ApprovalDecisionRequest, ApprovalExecutionResponse, ApprovalStatusCount, CommandRequest,
+    CommandResponse, CreateMemoryItemRequest, CreateSchedulerJobRequest, EmergencyPauseRequest,
+    EmergencyPauseResponse, ErrorResponse, HealthResponse, InstallPluginRequest,
+    InstalledPluginExecutionRequest, InstalledPluginGrantSurface,
+    InstalledPluginPublisherSignatureVerificationRequest,
     InstalledPluginPublisherVerificationRequest, InstalledPluginRunRequest,
-    InstalledPluginRunResponse, IpcState, ModelToolCatalogEntry, ModelToolCatalogResponse,
+    InstalledPluginRunResponse, IpcAuth, IpcState, ModelToolCatalogEntry, ModelToolCatalogResponse,
     ModelToolConstraints, PermissionGrantSummary, PermissionPolicyReview,
     PermissionPolicyReviewItem, ReleaseReadinessFeature, ReleaseReadinessResponse,
     RuntimeCancellationResponse, SchedulerAttentionItem, SchedulerAttentionSummary,
@@ -29,7 +30,8 @@ pub use ipc::{
     DEFAULT_ACTIVITY_EVENT_INTERVAL_MS, DEFAULT_ACTIVITY_EVENT_LIMIT,
     DEFAULT_SCHEDULER_BACKGROUND_INTERVAL_MS, DEFAULT_SCHEDULER_BACKGROUND_LIMIT,
     DEFAULT_SCHEDULER_STALE_RECOVERY_LIMIT, DEFAULT_SCHEDULER_STALE_RECOVERY_OLDER_THAN_SECONDS,
-    MAX_ACTIVITY_EVENT_LIMIT, MAX_SCHEDULER_BACKGROUND_LIMIT,
+    IPC_BEARER_TOKEN_BYTES, IPC_BEARER_TOKEN_LENGTH, MAX_ACTIVITY_EVENT_LIMIT,
+    MAX_SCHEDULER_BACKGROUND_LIMIT,
 };
 pub use memory_index::{
     MemoryIndexState, MemoryIndexStatus, MemoryIndexStore, MEMORY_INDEX_VERSION,

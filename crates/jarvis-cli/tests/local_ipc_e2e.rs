@@ -3481,6 +3481,7 @@ fn release_live_device_runbook_summarizes_next_operator_steps() {
             "./scripts/release-live-device-qa.sh --check",
             "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env",
             "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' in target/release-live-device-qa.env before collecting command evidence",
+            "Confirm JARVIS_IPC_TOKEN_FILE points to the app-owned ipc-session-auth.json path, then source target/release-live-device-qa.env before IPC commands",
             "cargo run -p jarvis-cli -- command \"status check\" --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\" --json",
             "Record the returned task ID as JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid>' or a task-associated audit ID as 'audit:<uuid>' in target/release-live-device-qa.env",
             "set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete",
@@ -3622,6 +3623,7 @@ fn release_signed_distribution_runbook_summarizes_next_operator_steps() {
             "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh",
             "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_APPLE_ID='apple-id@example.com' JARVIS_NOTARYTOOL_TEAM_ID='TEAMID1234' JARVIS_NOTARYTOOL_PASSWORD='app-specific-password' ./scripts/package-distribution.sh",
             "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks",
+            "Export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks",
             "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"",
             "./scripts/release-evidence-doctor.sh --check",
             "cargo run -p jarvis-cli -- release live-device-runbook",
@@ -3741,6 +3743,7 @@ fn release_plugin_trust_runbook_summarizes_next_operator_steps() {
             "./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env",
             "set -a && source target/release-plugin-trust-qa.env && set +a && ./scripts/release-plugin-trust-qa.sh --assert-complete",
             "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks",
+            "Export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks",
             "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"",
             "./scripts/release-evidence-doctor.sh --check",
             "./scripts/release-evidence-bundle.sh --check",
@@ -3878,6 +3881,7 @@ fn release_evidence_bundle_runbook_summarizes_next_operator_steps() {
             "./scripts/release-evidence-doctor.sh --check",
             "./scripts/release-evidence-doctor.sh --assert-complete",
             "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks",
+            "Export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks",
             "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"",
             "Start or restart the core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external",
             "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"",
@@ -7741,6 +7745,193 @@ fn serve_startup_config_is_strict_preopen_and_keeps_workspace_paths_off_argv() {
     let error = run_startup_config_failure(&oversized_db, &[], &oversized);
     assert!(error.contains("at most 65536 bytes"), "{error}");
     assert!(!oversized_db.exists());
+
+    let external_dir = tempfile::tempdir().unwrap();
+    let external_db = external_dir.path().join("must-not-open.sqlite");
+    let authenticated = json!({
+        "version": 1,
+        "ipc_auth": {
+            "scheme": "bearer",
+            "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "generation": 1
+        }
+    })
+    .to_string();
+    let error = run_startup_config_failure_at_bind(
+        &external_db,
+        "0.0.0.0:0",
+        &[],
+        authenticated.as_bytes(),
+    );
+    assert!(
+        error.contains("authenticated IPC must bind to a loopback address"),
+        "{error}"
+    );
+    assert!(!external_db.exists());
+}
+
+#[test]
+fn app_supervised_ipc_auth_is_fail_closed_and_cli_token_file_is_safe() {
+    const TOKEN: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    const WRONG_TOKEN: &str = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+
+    let temp = tempfile::tempdir().expect("auth db dir");
+    let db_path = temp.path().join("jarvis.sqlite");
+    let server = JarvisServer::start_authenticated(&db_path, TOKEN, 9);
+    let endpoint = server.endpoint();
+    server.assert_process_argv_excludes(TOKEN);
+
+    let command_body = json!({
+        "input": "must not run",
+        "context": {},
+        "dry_run": true,
+        "proactive": false
+    })
+    .to_string();
+    for headers in [
+        Vec::<&str>::new(),
+        vec![WRONG_TOKEN],
+        vec!["Basic abc"],
+        vec!["bearer AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"],
+        vec![
+            "Bearer AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "Bearer AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ],
+    ] {
+        let error = request_with_authorization_headers(
+            &endpoint,
+            "POST",
+            "/commands",
+            Some(&command_body),
+            &headers,
+        )
+        .expect_err("unauthenticated request must fail");
+        assert!(error.contains("401 Unauthorized"), "{error}");
+        assert!(error.contains("www-authenticate: Bearer"), "{error}");
+        assert!(error.contains("{\"error\":\"unauthorized\"}"), "{error}");
+        assert!(!error.contains(TOKEN), "{error}");
+    }
+
+    let bearer = format!("Bearer {TOKEN}");
+    let health = request_with_authorization_headers(&endpoint, "GET", "/health", None, &[&bearer])
+        .expect("authenticated health");
+    assert_eq!(
+        serde_json::from_str::<Value>(&health).unwrap()["status"],
+        "ok"
+    );
+    let tasks = request_with_authorization_headers(&endpoint, "GET", "/tasks", None, &[&bearer])
+        .expect("authenticated tasks");
+    assert_eq!(serde_json::from_str::<Value>(&tasks).unwrap(), json!([]));
+    let audit = request_with_authorization_headers(&endpoint, "GET", "/audit", None, &[&bearer])
+        .expect("authenticated audit");
+    assert_eq!(serde_json::from_str::<Value>(&audit).unwrap(), json!([]));
+    let diagnostics = request_with_authorization_headers(
+        &endpoint,
+        "GET",
+        "/diagnostics/export",
+        None,
+        &[&bearer],
+    )
+    .expect("authenticated diagnostics");
+    assert!(!diagnostics.contains(TOKEN));
+
+    let token_file = temp.path().join("ipc-token.json");
+    fs::write(
+        &token_file,
+        json!({"version":1,"scheme":"bearer","token":TOKEN,"generation":9}).to_string(),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&token_file, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let output = Command::new(jarvis_cli_bin())
+        .args([
+            "--ipc-token-file",
+            token_file.to_str().unwrap(),
+            "health",
+            "--endpoint",
+            &endpoint,
+        ])
+        .output()
+        .expect("authenticated CLI health");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("jarvis-core: ok"));
+    let external = Command::new(jarvis_cli_bin())
+        .args([
+            "--ipc-token-file",
+            token_file.to_str().unwrap(),
+            "health",
+            "--endpoint",
+            "http://192.0.2.10:7787",
+        ])
+        .output()
+        .expect("reject non-loopback authenticated endpoint");
+    assert!(!external.status.success());
+    assert!(String::from_utf8_lossy(&external.stderr).contains("only to a loopback endpoint"));
+    assert!(!String::from_utf8_lossy(&external.stderr).contains(TOKEN));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&token_file, fs::Permissions::from_mode(0o644)).unwrap();
+        let insecure = Command::new(jarvis_cli_bin())
+            .args([
+                "--ipc-token-file",
+                token_file.to_str().unwrap(),
+                "health",
+                "--endpoint",
+                &endpoint,
+            ])
+            .output()
+            .expect("reject insecure IPC token file");
+        assert!(!insecure.status.success());
+        assert!(!String::from_utf8_lossy(&insecure.stderr).contains(TOKEN));
+
+        fs::set_permissions(&token_file, fs::Permissions::from_mode(0o600)).unwrap();
+        let symlink_file = temp.path().join("ipc-token-link.json");
+        symlink(&token_file, &symlink_file).unwrap();
+        let symlinked = Command::new(jarvis_cli_bin())
+            .args([
+                "--ipc-token-file",
+                symlink_file.to_str().unwrap(),
+                "health",
+                "--endpoint",
+                &endpoint,
+            ])
+            .output()
+            .expect("reject symlink IPC token file");
+        assert!(!symlinked.status.success());
+        assert!(!String::from_utf8_lossy(&symlinked.stderr).contains(TOKEN));
+
+        let hardlink_file = temp.path().join("ipc-token-hardlink.json");
+        fs::hard_link(&token_file, &hardlink_file).unwrap();
+        let hardlinked = Command::new(jarvis_cli_bin())
+            .args([
+                "--ipc-token-file",
+                token_file.to_str().unwrap(),
+                "health",
+                "--endpoint",
+                &endpoint,
+            ])
+            .output()
+            .expect("reject multiply linked IPC token file");
+        assert!(!hardlinked.status.success());
+        assert!(!String::from_utf8_lossy(&hardlinked.stderr).contains(TOKEN));
+    }
+
+    let legacy_temp = tempfile::tempdir().expect("legacy auth db dir");
+    let legacy = JarvisServer::start(&legacy_temp.path().join("jarvis.sqlite"));
+    assert!(request(&legacy.endpoint(), "GET", "/health", None).is_ok());
+    let rejected =
+        request_with_authorization_headers(&legacy.endpoint(), "GET", "/health", None, &[&bearer])
+            .expect_err("legacy mode must reject authorization headers");
+    assert!(rejected.contains("401 Unauthorized"), "{rejected}");
 }
 
 #[test]
@@ -8902,6 +9093,7 @@ fn assert_key_control_start_fails(db_path: &Path, document: &Value) {
 struct JarvisServer {
     child: Option<Child>,
     endpoint: String,
+    auth_token: Option<String>,
     _temp_dir: TempDir,
 }
 
@@ -8946,6 +9138,7 @@ impl JarvisServer {
         let mut server = Self {
             child: Some(child),
             endpoint,
+            auth_token: None,
             _temp_dir: temp_dir,
         };
         server.wait_until_healthy();
@@ -8981,6 +9174,7 @@ impl JarvisServer {
         let mut server = Self {
             child: Some(child),
             endpoint,
+            auth_token: None,
             _temp_dir: temp_dir,
         };
         server.wait_until_healthy();
@@ -9021,6 +9215,7 @@ impl JarvisServer {
         let mut server = Self {
             child: Some(child),
             endpoint,
+            auth_token: None,
             _temp_dir: temp_dir,
         };
         server.wait_until_healthy();
@@ -9028,6 +9223,49 @@ impl JarvisServer {
     }
     fn start(db_path: &Path) -> Self {
         Self::start_inner(db_path, None, None)
+    }
+
+    fn start_authenticated(db_path: &Path, token: &str, generation: u64) -> Self {
+        let _startup_guard = jarvis_server_startup_lock()
+            .lock()
+            .expect("lock jarvis server startup");
+        let bind = unused_loopback_addr();
+        let endpoint = format!("http://{bind}");
+        let temp_dir = tempfile::tempdir().expect("server temp dir");
+        let input = json!({
+            "version": 1,
+            "ipc_auth": {"scheme": "bearer", "token": token, "generation": generation}
+        })
+        .to_string();
+        let mut child = Command::new(jarvis_cli_bin())
+            .args([
+                "serve",
+                "--bind",
+                &bind.to_string(),
+                "--db-path",
+                db_path.to_str().expect("db path"),
+                "--startup-config-stdin",
+            ])
+            .current_dir(temp_dir.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("start authenticated jarvis serve");
+        child
+            .stdin
+            .take()
+            .expect("startup configuration stdin")
+            .write_all(input.as_bytes())
+            .expect("write authenticated startup configuration");
+        let mut server = Self {
+            child: Some(child),
+            endpoint,
+            auth_token: Some(token.to_string()),
+            _temp_dir: temp_dir,
+        };
+        server.wait_until_healthy();
+        server
     }
 
     fn start_with_background(db_path: &Path, interval_ms: u64, limit: usize) -> Self {
@@ -9155,6 +9393,7 @@ impl JarvisServer {
         let mut server = Self {
             child: Some(child),
             endpoint,
+            auth_token: None,
             _temp_dir: temp_dir,
         };
         server.wait_until_healthy();
@@ -9187,7 +9426,19 @@ impl JarvisServer {
                 panic!("jarvis serve exited before health check: {status}");
             }
 
-            match request(&self.endpoint, "GET", "/health", None) {
+            let auth_headers = self
+                .auth_token
+                .as_deref()
+                .map(|token| vec![format!("Bearer {token}")])
+                .unwrap_or_default();
+            let auth_headers = auth_headers.iter().map(String::as_str).collect::<Vec<_>>();
+            match request_with_authorization_headers(
+                &self.endpoint,
+                "GET",
+                "/health",
+                None,
+                &auth_headers,
+            ) {
                 Ok(response) => {
                     let health: Value = serde_json::from_str(&response).expect("health JSON");
                     assert_eq!(health["status"], "ok");
@@ -9260,11 +9511,20 @@ fn assert_legacy_workspace_startup_succeeds(db_path: &Path, root_id: &str, works
 
 fn run_startup_config_failure(db_path: &Path, extra_args: &[&str], input: &[u8]) -> String {
     let bind = unused_loopback_addr();
+    run_startup_config_failure_at_bind(db_path, &bind.to_string(), extra_args, input)
+}
+
+fn run_startup_config_failure_at_bind(
+    db_path: &Path,
+    bind: &str,
+    extra_args: &[&str],
+    input: &[u8],
+) -> String {
     let mut command = Command::new(jarvis_cli_bin());
     command.args([
         "serve",
         "--bind",
-        &bind.to_string(),
+        bind,
         "--db-path",
         db_path.to_str().expect("db path"),
         "--startup-config-stdin",
@@ -10828,6 +11088,16 @@ fn assert_array_lacks(value: &Value, field: &str, expected: &str) {
 }
 
 fn request(endpoint: &str, method: &str, path: &str, body: Option<&str>) -> Result<String, String> {
+    request_with_authorization_headers(endpoint, method, path, body, &[])
+}
+
+fn request_with_authorization_headers(
+    endpoint: &str,
+    method: &str,
+    path: &str,
+    body: Option<&str>,
+    authorization_values: &[&str],
+) -> Result<String, String> {
     let target = endpoint
         .strip_prefix("http://")
         .ok_or_else(|| format!("only http:// endpoints are supported: {endpoint}"))?;
@@ -10839,8 +11109,12 @@ fn request(endpoint: &str, method: &str, path: &str, body: Option<&str>) -> Resu
         .ok_or_else(|| format!("could not resolve endpoint: {endpoint}"))?;
     let mut stream = TcpStream::connect(address).map_err(|error| error.to_string())?;
     let body = body.unwrap_or("");
+    let authorization_headers = authorization_values
+        .iter()
+        .map(|value| format!("Authorization: {value}\r\n"))
+        .collect::<String>();
     let request = format!(
-        "{method} {path} HTTP/1.1\r\nHost: {host_port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "{method} {path} HTTP/1.1\r\nHost: {host_port}\r\n{authorization_headers}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
 

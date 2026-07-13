@@ -72,6 +72,25 @@ release requirements, not optional UX guidance.
   and deinitialization. This is capability-lifecycle discipline, not proof of
   App Sandbox enforcement, child sandbox-extension inheritance, or IPC caller
   identity.
+- Every app-supervised core launch must rotate a 32-byte IPC bearer credential,
+  send it only in the bounded startup-stdin envelope, and require exactly one
+  valid Authorization header on every route, including health, activity
+  streams, release inspection, and trusted-wake control. The shared Swift
+  client must fail locally while its managed credential is unavailable. Launch
+  failure, stop, replacement, and observed child exit clear the matching
+  generation. The explicit CLI handoff file must be a bounded, no-follow,
+  single-link, owner-matched regular file with no group/other permissions; the
+  token must not enter argv, environment, logs, audit, diagnostics, or UI.
+  Managed clients must reject every destination that does not resolve strictly
+  to loopback before connecting or attaching a bearer, and authenticated serving
+  must reject non-loopback bind addresses.
+  Legacy explicitly unauthenticated servers reject any supplied Authorization
+  header so an app-supervised client cannot silently downgrade. The supervisor
+  removes the client-only `JARVIS_IPC_TOKEN_FILE` path from the child server's
+  environment. This is bearer-
+  possession authentication, not device authentication, ownership proof, OS
+  identity, same-user/process isolation, App Sandbox enforcement, or host-level
+  egress control.
 - Installed `local_wasm` execution is allowed only for validated low-risk,
   non-proactive compute actions with no memory, model, filesystem, environment,
   process, clock, or network authority and the explicit `wasm_compute` grant.

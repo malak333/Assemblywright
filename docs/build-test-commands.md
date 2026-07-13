@@ -117,6 +117,31 @@ offline ephemeral `jarvis smoke` check, or use read-only fallback inspection
 commands such as `jarvis release readiness`, `jarvis plugins list`, and
 `jarvis tools list`, instead of returning a raw connection-refused error.
 
+The packaged app supervises an authenticated core. To inspect that live core
+from the bundled or development CLI, opt in to the app-owned owner-only handoff
+file (the global option may appear before or after the subcommand):
+
+```sh
+cargo run -p jarvis-cli -- --ipc-token-file \
+  "$HOME/Library/Application Support/Jarvis/ipc-session-auth.json" \
+  health --endpoint http://127.0.0.1:7787
+```
+
+The CLI opens the file no-follow, requires a bounded single-link regular file
+owned by the current user with mode no broader than `0600`, validates the strict
+versioned JSON document, rejects any resolved non-loopback endpoint, and sends
+only the bearer header. Do not print, copy,
+or pass the credential through argv or environment. A manually started legacy
+`jarvis serve` remains explicitly unauthenticated and rejects any Authorization
+header.
+
+The unsigned distribution launch lane supplies an absolute
+`JARVIS_MAC_IPC_AUTH_FILE` path inside its temporary profile because macOS
+Application Support discovery is not redirected by a synthetic `HOME`. The app
+uses that path only for its owner-only handoff file, and the supervisor removes
+the override from the child server environment. Normal packaged launches use
+the standard Application Support location.
+
 `jarvis smoke` starts an ephemeral loopback server and verifies the currently
 implemented foundation surfaces: health, command execution, pause blocking,
 resume, plugin manifest listing, and repository-backed task plus explicit
@@ -943,7 +968,8 @@ restart, and manual QA steps. `--write-template target/release-live-device-qa.en
 writes a sourceable checklist for the release operator to fill on the validated
 machine, with `JARVIS_QA_EXPECTED_VERSION` materialized from the canonical
 Rust package release version at generation time. The template also includes a
-single sourceable `JARVIS_RELEASE_CORE_ENDPOINT` value, the release-core
+single sourceable `JARVIS_RELEASE_CORE_ENDPOINT` value, the app-owned
+`JARVIS_IPC_TOKEN_FILE` path (never the bearer value), the release-core
 `jarvis command ... --json` evidence capture that reuses that endpoint, the
 `JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:<uuid>"`/`"audit:<uuid>"` rule, and
 the external evidence-mode `release evidence-status` and `release readiness`
@@ -1220,6 +1246,7 @@ Never display it in a terminal or place prepare/proof/token material in shell
 history, logs, command arguments, or intermediate files.
 
 These prove bounded local contracts only. Recovery confirmation is accident
-prevention on unauthenticated loopback, not authorization or authentication;
+prevention after bearer possession in the packaged app (or on an explicitly
+unauthenticated legacy server), not device or OS-identity authentication;
 the tests do not prove Apple attestation, OS wake provenance, background
 launch, same-user/process isolation, exactly-once effects, or live QA.

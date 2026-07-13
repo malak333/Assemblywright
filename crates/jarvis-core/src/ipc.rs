@@ -6,11 +6,15 @@ use std::path::{Path as FsPath, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration as StdDuration;
 
-use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::extract::{Path, Query, Request, State};
+use axum::http::{header, HeaderMap, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine as _;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -62,6 +66,8 @@ pub const MAX_SCHEDULER_BACKGROUND_LIMIT: usize = 64;
 pub const DEFAULT_ACTIVITY_EVENT_INTERVAL_MS: u64 = 1_000;
 pub const DEFAULT_ACTIVITY_EVENT_LIMIT: usize = 3;
 pub const MAX_ACTIVITY_EVENT_LIMIT: usize = 50;
+pub const IPC_BEARER_TOKEN_LENGTH: usize = 43;
+pub const IPC_BEARER_TOKEN_BYTES: usize = 32;
 const EXPECTED_MICROPHONE_USAGE_DESCRIPTION: &str =
     "Jarvis uses microphone input only when you explicitly start local voice capture.";
 const EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION: &str =
@@ -3344,7 +3350,7 @@ impl IpcState {
             attention_required: ambiguous_dispatch_count > 0,
             ambiguous_dispatch_count,
             pending_key_control,
-            proof_boundary: "Local explicit enrolled-key rotation and stronger-warning lost-key recovery use generation/fingerprint CAS, a short-lived one-shot grant, disabled install, and redacted audit only. Recovery confirmation prevents operator accidents on an unauthenticated loopback route; it is not authorization, device authentication, or ownership proof, and same-user/process isolation is not enforced. This is not Apple attestation, OS wake provenance, background launch, exactly-once effects, live-device evidence, or production readiness.".to_string(),
+            proof_boundary: "Local explicit enrolled-key rotation and stronger-warning lost-key recovery use generation/fingerprint CAS, a short-lived one-shot grant, disabled install, and redacted audit only. The packaged app requires per-launch bearer possession while an explicit legacy server does not; recovery confirmation remains operator accident prevention, not device authentication, OS identity, or ownership proof, and same-user/process isolation is not enforced. This is not Apple attestation, OS wake provenance, background launch, exactly-once effects, live-device evidence, or production readiness.".to_string(),
         })
     }
 
@@ -4574,7 +4580,109 @@ fn validate_installed_plugin_record(record: &InstalledPluginRecord) -> JarvisRes
     Ok(())
 }
 
+#[derive(Clone)]
+pub struct IpcAuth {
+    expected_digest: [u8; 32],
+    generation: u64,
+}
+
+impl IpcAuth {
+    pub fn new(token: &str, generation: u64) -> JarvisResult<Self> {
+        if generation == 0 {
+            return Err(JarvisError::Validation(
+                "IPC authentication generation must be greater than zero".to_string(),
+            ));
+        }
+        if token.len() != IPC_BEARER_TOKEN_LENGTH
+            || !token
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+        {
+            return Err(JarvisError::Validation(
+                "IPC bearer token must be 43 base64url characters".to_string(),
+            ));
+        }
+        let decoded = URL_SAFE_NO_PAD.decode(token).map_err(|_| {
+            JarvisError::Validation(
+                "IPC bearer token must encode exactly 32 random bytes".to_string(),
+            )
+        })?;
+        if decoded.len() != IPC_BEARER_TOKEN_BYTES {
+            return Err(JarvisError::Validation(
+                "IPC bearer token must encode exactly 32 random bytes".to_string(),
+            ));
+        }
+        Ok(Self {
+            expected_digest: Sha256::digest(token.as_bytes()).into(),
+            generation,
+        })
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    fn accepts(&self, candidate: &str) -> bool {
+        let candidate_digest: [u8; 32] = Sha256::digest(candidate.as_bytes()).into();
+        constant_time_digest_eq(&self.expected_digest, &candidate_digest)
+    }
+}
+
+fn constant_time_digest_eq(expected: &[u8; 32], candidate: &[u8; 32]) -> bool {
+    expected
+        .iter()
+        .zip(candidate)
+        .fold(0_u8, |difference, (left, right)| {
+            difference | (left ^ right)
+        })
+        == 0
+}
+
+#[derive(Clone)]
+struct IpcAuthMiddlewareState(Option<IpcAuth>);
+
+fn request_has_exact_bearer(headers: &HeaderMap, auth: &IpcAuth) -> bool {
+    let mut values = headers.get_all(header::AUTHORIZATION).iter();
+    let Some(value) = values.next() else {
+        return false;
+    };
+    if values.next().is_some() {
+        return false;
+    }
+    let Ok(value) = value.to_str() else {
+        return false;
+    };
+    let Some(candidate) = value.strip_prefix("Bearer ") else {
+        return false;
+    };
+    candidate.len() == IPC_BEARER_TOKEN_LENGTH && auth.accepts(candidate)
+}
+
+async fn enforce_ipc_auth(
+    State(auth): State<IpcAuthMiddlewareState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let authorized = match auth.0.as_ref() {
+        Some(auth) => request_has_exact_bearer(request.headers(), auth),
+        None => !request.headers().contains_key(header::AUTHORIZATION),
+    };
+    if authorized {
+        return next.run(request).await;
+    }
+    (
+        StatusCode::UNAUTHORIZED,
+        [(header::WWW_AUTHENTICATE, "Bearer")],
+        Json(json!({"error":"unauthorized"})),
+    )
+        .into_response()
+}
+
 pub fn router(state: IpcState) -> Router {
+    router_with_auth(state, None)
+}
+
+pub fn router_with_auth(state: IpcState, auth: Option<IpcAuth>) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/contract", get(contract))
@@ -4686,6 +4794,10 @@ pub fn router(state: IpcState) -> Router {
             "/system-wake/events/:id/resolve",
             post(resolve_trusted_wake_attention),
         )
+        .layer(middleware::from_fn_with_state(
+            IpcAuthMiddlewareState(auth),
+            enforce_ipc_auth,
+        ))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
@@ -4695,8 +4807,35 @@ pub async fn serve(bind: SocketAddr, state: IpcState) -> anyhow::Result<()> {
     serve_listener(listener, state).await
 }
 
+pub async fn serve_with_auth(
+    bind: SocketAddr,
+    state: IpcState,
+    auth: IpcAuth,
+) -> anyhow::Result<()> {
+    require_authenticated_loopback(bind)?;
+    let listener = TcpListener::bind(bind).await?;
+    serve_listener_with_auth(listener, state, auth).await
+}
+
 pub async fn serve_listener(listener: TcpListener, state: IpcState) -> anyhow::Result<()> {
     axum::serve(listener, router(state)).await?;
+    Ok(())
+}
+
+pub async fn serve_listener_with_auth(
+    listener: TcpListener,
+    state: IpcState,
+    auth: IpcAuth,
+) -> anyhow::Result<()> {
+    require_authenticated_loopback(listener.local_addr()?)?;
+    axum::serve(listener, router_with_auth(state, Some(auth))).await?;
+    Ok(())
+}
+
+fn require_authenticated_loopback(address: SocketAddr) -> anyhow::Result<()> {
+    if !address.ip().is_loopback() {
+        anyhow::bail!("authenticated IPC must bind to a loopback address");
+    }
     Ok(())
 }
 
@@ -5844,6 +5983,8 @@ fn release_live_device_runbook_from(
                 .to_string(),
             "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' in target/release-live-device-qa.env before collecting command evidence"
                 .to_string(),
+            "Confirm JARVIS_IPC_TOKEN_FILE points to the app-owned ipc-session-auth.json path, then source target/release-live-device-qa.env before IPC commands"
+                .to_string(),
             "cargo run -p jarvis-cli -- command \"status check\" --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\" --json"
                 .to_string(),
             "Record the returned task ID as JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid>' or a task-associated audit ID as 'audit:<uuid>' in target/release-live-device-qa.env"
@@ -5905,6 +6046,8 @@ fn release_signed_distribution_runbook_from(
                 .to_string(),
             "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks"
                 .to_string(),
+            "Export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks"
+                .to_string(),
             "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
                 .to_string(),
             "./scripts/release-evidence-doctor.sh --check".to_string(),
@@ -5948,6 +6091,8 @@ fn release_plugin_trust_runbook_from(
             "set -a && source target/release-plugin-trust-qa.env && set +a && ./scripts/release-plugin-trust-qa.sh --assert-complete"
                 .to_string(),
             "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks"
+                .to_string(),
+            "Export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks"
                 .to_string(),
             "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
                 .to_string(),
@@ -6010,6 +6155,8 @@ fn release_evidence_bundle_runbook_from(
             "./scripts/release-evidence-doctor.sh --check".to_string(),
             "./scripts/release-evidence-doctor.sh --assert-complete".to_string(),
             "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks"
+                .to_string(),
+            "Export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks"
                 .to_string(),
             "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
                 .to_string(),
@@ -7773,6 +7920,12 @@ fn release_verification_commands() -> Vec<String> {
 fn contract_features() -> Vec<ContractFeature> {
     vec![
         feature(
+            "app_supervised_ipc_auth",
+            "implemented",
+            "App-supervised launches rotate a 32-byte bearer credential through strict bounded startup stdin, Swift requires it on every request, Rust protects the whole router with constant-time digest comparison, managed clients reject non-loopback destinations before exposure, authenticated serving rejects non-loopback binds, and the CLI supports a bounded owner-only token-file handoff. Swift lifecycle tests, Rust cross-process E2E, and the unsigned distribution launch smoke cover the boundary.",
+            "Possession-based loopback authentication only; this does not prove OS identity, device authentication, same-user/process isolation, App Sandbox enforcement, host-level egress policy, signing/notarization, or live-device behavior. Explicit legacy servers remain unauthenticated but reject any Authorization header.",
+        ),
+        feature(
             "repository_state",
             "implemented",
             "SQLite-backed task, audit, model-route, memory, scheduler, approval, and installed-plugin state is covered by Rust unit tests and local IPC E2E.",
@@ -7800,7 +7953,7 @@ fn contract_features() -> Vec<ContractFeature> {
             "trusted_macos_system_wake",
             "implemented",
             "A disabled-by-default schema-v11 wake rule accepts bounded P-256 envelopes, supports old-key-signed rotation plus explicit stronger-warning lost-key recovery through short-lived one-shot grants, persists replay/dispatch evidence, and enters the existing proactive policy funnel.",
-            "Local enrolled-key possession and explicit key control only. Recovery confirmation is accident prevention on unauthenticated loopback, not authorization, device authentication, ownership proof, or same-user/process isolation; no Apple attestation, OS wake provenance, background launch reliability, exactly-once side effects, live-device QA, or production readiness is claimed.",
+            "Local enrolled-key possession and explicit key control only. The packaged app requires per-launch bearer possession while an explicit legacy server does not; recovery confirmation remains accident prevention, not device authentication, OS identity, ownership proof, or same-user/process isolation; no Apple attestation, OS wake provenance, background launch reliability, exactly-once side effects, live-device QA, or production readiness is claimed.",
         ),
         feature(
             "scheduler_trigger_policy_review",
@@ -7842,7 +7995,7 @@ fn contract_features() -> Vec<ContractFeature> {
             "installed_plugin_execution",
             "implemented",
             "Local subprocess plugins retain explicit source-matched grants and bounded JSON streams with os_sandbox_enforced:false audit evidence. Compute-only local_wasm plugins require wasm_compute, exact current artifact provenance, no imports/WASI/filesystem/network/environment, fixed module/request/output/memory/fuel limits, and pause-dominant resumable execution. Repository locks are released before either untrusted runtime starts and reacquired only for redacted audit persistence.",
-            "Wasmi supplies language-level confinement for low-risk compute-only modules, not an OS process sandbox, marketplace approval, malware analysis, publisher reputation, same-user IPC authorization, or host-level egress proof. Legacy subprocess audit remains os_sandbox_enforced:false.",
+            "Wasmi supplies language-level confinement for low-risk compute-only modules, not an OS process sandbox, marketplace approval, malware analysis, publisher reputation, same-user/process IPC isolation, or host-level egress proof. Legacy subprocess audit remains os_sandbox_enforced:false.",
         ),
         feature(
             "wasm_plugin_confinement",
@@ -7877,8 +8030,8 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "unsigned_distribution_launch",
             "implemented",
-            "`package-distribution.sh --unsigned-launch-check` builds the release app layout, creates an unsigned installer payload, launches the release-built app executable with isolated HOME, and verifies bundled-core IPC smoke.",
-            "Unsigned distribution-layout proof only; not Developer ID signing, notarization, stapling, /Applications install, Finder/LaunchServices validation, live device validation, App Store review, or manual QA.",
+            "`package-distribution.sh --unsigned-launch-check` builds the release app layout, creates an unsigned installer payload, launches the release-built app executable with isolated HOME, verifies the owner-only app credential file, and performs bearer-authenticated bundled-core IPC smoke through the explicit CLI handoff.",
+            "Unsigned distribution-layout and bearer-possession proof only; not OS identity, same-user/process isolation, Developer ID signing, notarization, stapling, /Applications install, Finder/LaunchServices validation, live device validation, App Store review, or manual QA.",
         ),
         feature(
             "release_evidence_status",
@@ -7995,6 +8148,57 @@ mod tests {
     use crate::InstalledPluginProvenance;
 
     static RELEASE_EVIDENCE_ARTIFACT_FIXTURE_LOCK: Mutex<()> = Mutex::new(());
+
+    const TEST_IPC_TOKEN: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+    #[test]
+    fn ipc_auth_requires_one_exact_bearer_header() {
+        let auth = IpcAuth::new(TEST_IPC_TOKEN, 1).unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            format!("Bearer {TEST_IPC_TOKEN}").parse().unwrap(),
+        );
+        assert!(request_has_exact_bearer(&headers, &auth));
+
+        for malformed in [
+            TEST_IPC_TOKEN.to_string(),
+            format!("bearer {TEST_IPC_TOKEN}"),
+            format!("Bearer  {TEST_IPC_TOKEN}"),
+            format!("Bearer {}", "B".repeat(43)),
+        ] {
+            headers.insert(header::AUTHORIZATION, malformed.parse().unwrap());
+            assert!(!request_has_exact_bearer(&headers, &auth), "{malformed}");
+        }
+
+        headers.insert(
+            header::AUTHORIZATION,
+            format!("Bearer {TEST_IPC_TOKEN}").parse().unwrap(),
+        );
+        headers.append(
+            header::AUTHORIZATION,
+            format!("Bearer {TEST_IPC_TOKEN}").parse().unwrap(),
+        );
+        assert!(!request_has_exact_bearer(&headers, &auth));
+    }
+
+    #[test]
+    fn ipc_auth_rejects_invalid_tokens_and_tracks_non_secret_generation() {
+        assert!(IpcAuth::new("short", 1).is_err());
+        assert!(IpcAuth::new(TEST_IPC_TOKEN, 0).is_err());
+        let auth = IpcAuth::new(TEST_IPC_TOKEN, 42).unwrap();
+        assert_eq!(auth.generation(), 42);
+        assert!(auth.accepts(TEST_IPC_TOKEN));
+        assert!(!auth.accepts("BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"));
+    }
+
+    #[test]
+    fn authenticated_ipc_bind_is_strictly_loopback() {
+        assert!(require_authenticated_loopback("127.0.0.1:7787".parse().unwrap()).is_ok());
+        assert!(require_authenticated_loopback("[::1]:7787".parse().unwrap()).is_ok());
+        assert!(require_authenticated_loopback("0.0.0.0:7787".parse().unwrap()).is_err());
+        assert!(require_authenticated_loopback("192.0.2.10:7787".parse().unwrap()).is_err());
+    }
 
     fn command_index(commands: &[String], expected: &str) -> usize {
         commands
@@ -8289,6 +8493,12 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .contains("local Rust/CLI foundation"));
         assert!(readiness.verified_feature_count > 0);
         assert!(readiness.pending_feature_count > 0);
+        assert!(readiness
+            .implemented_features
+            .iter()
+            .any(|feature| feature.key == "app_supervised_ipc_auth"
+                && feature.proof.contains("whole router")
+                && feature.boundary.contains("same-user/process isolation")));
         assert!(readiness
             .implemented_features
             .iter()

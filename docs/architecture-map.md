@@ -1,5 +1,45 @@
 # Architecture Map
 
+## App/Core IPC authentication slice
+
+Current implementation:
+
+```mermaid
+flowchart LR
+  A["JarvisMacApp"] --> R["Per-launch 32-byte secure random token"]
+  R --> S["Shared generation-bound Swift authorization state"]
+  S --> C["JarvisIPCClient adds one Bearer header to every route"]
+  S --> E["Bounded strict startup-stdin envelope"]
+  S --> F["Owner-only 0600 CLI handoff file"]
+  E --> M["Rust whole-router authentication middleware"]
+  C --> M
+  F --> L["Explicit jarvis --ipc-token-file client"]
+  L --> M
+  B["Strict loopback destination and bind checks"] --> C
+  B --> M
+  M --> X["Constant-time digest comparison or generic 401"]
+  P["Stop, launch failure, replacement, observed exit"] --> G["Generation-bound credential and file clear"]
+```
+
+Production end goal:
+
+```mermaid
+flowchart LR
+  A["Signed and notarized Jarvis.app"] --> B["Apple-backed app and child identity"]
+  B --> T["Authenticated local transport with verified peer credentials"]
+  T --> D["Same-user and intended-process authorization"]
+  D --> K["Device-bound secret lifecycle and rotation"]
+  D --> O["Host-enforced sandbox and egress policy"]
+  K --> E["Owner-recorded clean-profile and live-device evidence"]
+  O --> E
+```
+
+The current slice proves possession of an app-generated launch credential,
+strict loopback destination/bind and no-downgrade behavior, whole-router enforcement, and a restrictive
+explicit CLI handoff. It does not prove OS identity, device authentication,
+same-user/process isolation, App Sandbox enforcement, host-level egress policy,
+signing/notarization, or live-device behavior.
+
 ## Trusted system-wake slice
 
 ```mermaid
@@ -45,9 +85,10 @@ flowchart LR
   P --> EV["Owner-recorded live-device release evidence"]
 ```
 
-The current slice supports explicit local rotation and lost-key recovery, but
-recovery confirmation is only accident prevention on unauthenticated loopback.
-It does not claim authorization, device authentication, ownership proof, Apple
+The current slice supports explicit local rotation and lost-key recovery. The
+packaged app route requires per-launch bearer possession while an explicit
+legacy server does not; recovery confirmation remains accident prevention in
+either mode. It does not claim device authentication, OS identity, ownership proof, Apple
 attestation, OS wake provenance, same-user/process isolation, background
 launch, exactly-once side effects, live-device QA, or production readiness.
 Manual SQLite or Keychain mutation is not a recovery procedure.
@@ -169,11 +210,16 @@ flowchart TB
     VoiceAutoSubmit --> MacCore
     SpeechOutput --> MacCore
     MacCore --> Supervisor["JarvisCoreSupervisor configured or bundled process"]
-    BookmarkResolve --> StartupEnvelope["bounded strict v1 startup stdin; roots plus optional trusted-wake document"]
+    BookmarkResolve --> StartupEnvelope["bounded strict v1 startup stdin; roots, IPC auth, plus optional trusted-wake document"]
     StartupEnvelope --> Supervisor
     Supervisor --> CLI
-    MacCore -->|"HTTP JSON on configured core URL"| IPC["jarvis-core::ipc Axum loopback server"]
-    CLI -->|"HTTP JSON on 127.0.0.1:7787 by default; text formatting stays client-side"| IPC
+    MacCore --> IPCAuthState["shared per-launch managed bearer credential"]
+    IPCAuthState -->|"one Authorization header on every request"| IPCAuth["whole-router strict auth middleware"]
+    IPCAuthState --> TokenFile["owner-only explicit CLI handoff file"]
+    TokenFile --> CLI
+    MacCore -->|"HTTP JSON on configured core URL"| IPCAuth
+    CLI -->|"authenticated app core or explicit legacy unauthenticated server"| IPCAuth
+    IPCAuth --> IPC["jarvis-core::ipc Axum loopback server"]
     E2E --> IPC
     Smoke --> IPC
 
@@ -919,8 +965,9 @@ flowchart TB
     UX --> IPCClient["versioned IPC client"]
     MacApp --> Supervisor["app-supervised core process"]
     MenuBarProd --> Supervisor
-    Supervisor --> IPCServer["jarvis-core local IPC server"]
-    IPCClient --> IPCServer
+    Supervisor --> PeerIdentity["Apple-backed authenticated transport and peer identity"]
+    IPCClient --> PeerIdentity
+    PeerIdentity --> IPCServer["jarvis-core local IPC server"]
 
     subgraph CoreProd["jarvis-core production runtime"]
         IPCServer --> RuntimeProd["ConversationRuntime with tool-call orchestration"]
@@ -1034,7 +1081,7 @@ external action, or broader production operation.
 | --- | --- | --- | --- |
 | Menu-bar presence | Native SwiftUI `MenuBarExtra` shares the existing app-owned supervisor, console, and model configuration state; it exposes a stable main-window route, conservative lifecycle status, health refresh, fail-closed start/stop availability, and quit. | Signed and installed `Jarvis.app` remains reachable after its main window closes, without creating a second core owner, and passes live Finder/LaunchServices window-reopen and lifecycle QA. | Swift scene/model contract and architecture implemented; signed installed-app GUI QA remains manual release evidence. |
 | Mac shell | Buildable Swift/SwiftUI shell with health, command transcript, pause/resume, activity/audit rendering, bounded activity event-stream watch, memory classification, redacted retention-plan review, and create/update/review/delete/restore controls, model/plugin/scheduler/diagnostics/release-readiness tabs, degraded-mode handling, and a `JarvisCoreSupervisor` abstraction for configured or bundled local core binaries. The Model tab decodes active provider/model health metadata, lists installed Ollama models from `/api/tags`, merges recommended downloadable Llama/Mistral/Phi/Gemma/Qwen options including Gemma 4, Gemma 3, Qwen3.6, Qwen3, Qwen2.5, Qwen2.5-Coder, and Qwen2.5-VL tags, shows RAM estimates from installed model size or curated pre-download estimates, pulls missing selections through `/api/pull`, starts/stops selected Ollama residency through `/api/generate` keep-alive requests, and restarts only the app-supervised core with selected model environment overrides. The Plugin tab renders first-party manifests plus redacted installed-plugin registry records with execution grant, provenance integrity, origin-review, action metadata, executable status, and redaction markers while omitting local paths, command paths, signature material, and provenance hashes; it degrades gracefully when the repository-backed installed registry is unavailable. The Scheduler tab can inspect/create/cancel jobs, request attention notifications, run due jobs through bounded `/scheduler/run-due`, and recover stale running jobs through bounded `/scheduler/recover-stale`, then refreshes jobs/attention, shows concise last-action state, and exposes delivered-notification evidence fields with reset/recapture controls without exposing scheduler command bodies. The Release tab renders `/release/readiness` blockers, external evidence-mode state, recommended commands, implemented proofs, pending features, proof boundary, `/release/evidence-status` file/report inventory plus invalid evidence details, and read-only signed-distribution/live-device/plugin-trust runbooks while preserving the explicit external-evidence production boundary; evidence rows label path, detail, and production/manual-gate context, present presence-only evidence rows show the caveat on the status line, runbook-load failures surface as warnings without hiding readiness/evidence status, and the production-ready display is fail-closed unless readiness is true, evidence status is complete, and the evidence view has no missing, invalid, stale refresh, or runbook warning state. The Voice tab gates capture behind permission state before start attempts, and the unsigned distribution launch check exercises the release-built `Jarvis.app` layout with temp-profile app-supervised core proof. | Packaged `Jarvis.app` supervises the core, owns voice/text UX, settings, memory and permission surfaces, diagnostics export, release-readiness review, and recovery states. | Shell supervision, Swift model selection/download/start/stop controls for app-supervised Ollama cores, Swift memory management including redacted retention-plan visibility, bounded activity event-stream watch, installed-plugin registry inspection surfaces, Swift scheduler run/recovery and notification evidence controls, Swift release-readiness/evidence-status/runbook inspection with runbook-load warnings, app-level Release row presentation coverage, explicit evidence-mode row coverage, voice permission-before-capture gating, and unsigned distribution launch proof implemented; Developer ID signing, notarization/stapling, signed installer validation, clean-profile /Applications install, Finder/LaunchServices launch, and manual production release QA pending. |
-| IPC boundary | Axum loopback HTTP JSON API for health, commands, task/audit/activity-summary/activity-events/model-route/memory/approval inspection and approved first-party replay execution, plugin manifests, redacted `/tools/model` model-tool catalog inspection, emergency pause, scheduler jobs, `/contract` compatibility plus feature metadata that lists implemented surfaces with proof and production boundaries, `/release/readiness` conservative readiness/blocker inspection, `/release/evidence-status` read-only artifact/report inventory plus live-device, plugin-trust, and final bundle report semantic validation, and `/release/live-device-runbook`, `/release/signed-distribution-runbook`, and `/release/plugin-trust-runbook` read-only operator runbook payloads. Diagnostics export includes aggregate unreviewed/sensitive memory counts without memory values. `jarvis health` and strict IPC commands such as command, pause/resume, scheduler, task/audit/activity/route, memory, approval, diagnostics, installed-plugin, and permission-center operations fail with operator guidance to start `jarvis serve`, run `jarvis smoke`, or use read-only fallback inspection commands when the endpoint is unavailable. `jarvis contract` emits JSON by default and also accepts `--json` for parity with other machine-readable inspection commands. `jarvis release readiness`, `jarvis release evidence-status`, and the release runbook commands keep readable defaults and accept both `--json` and `--format json` for machine-readable compatibility; readable evidence-status includes per-item paths and details for present, missing, and invalid evidence items when the structured payload provides them, and marks present presence-only artifacts on the item line. | Versioned, compatibility-tested app/core API with distribution-layout launch coverage, feature/boundary negotiation, readiness/blocker inspection, runbook inspection, and clear degraded-mode handling. | Core IPC plus compatibility, feature/boundary contract metadata, model-tool catalog inspection, release-readiness summary, evidence status, structured release runbooks, server-required unavailable guidance, explicit contract JSON CLI compatibility, and release inspection/runbook JSON flag compatibility implemented; broader production compatibility rollout depends on future contract-version bumps, deprecation entries, and client migration evidence. |
+| IPC boundary | Axum loopback HTTP JSON API protects every app-supervised route with a per-launch 32-byte bearer credential delivered only through startup stdin and compared by digest in constant time. The shared Swift client fails locally without its managed generation; lifecycle cleanup is generation-bound. The CLI can opt into a bounded, no-follow, owner-matched, owner-only JSON handoff file. Explicit legacy servers remain unauthenticated but reject any Authorization header, preventing silent managed-client downgrade. The API covers health, commands, inspection, approvals, plugins/tools, emergency pause, scheduler, compatibility metadata, release readiness/evidence/runbooks, and redacted diagnostics. | Versioned authenticated local transport with Apple-backed peer identity, same-user/intended-process authorization, device-bound secret lifecycle, compatibility-tested distribution launch, and clear degraded-mode handling. | Possession-based whole-router authentication, strict no-downgrade behavior, app/CLI handoff, lifecycle cleanup, Swift tests, Rust cross-process E2E, and distribution-layout smoke implemented. OS identity, device authentication, same-user/process isolation, App Sandbox/egress enforcement, signing/notarization, and live-device evidence remain pending. |
 | Command runtime | `ConversationRuntime` creates tasks, runs a routed `ModelExecutor` (`FakeLocalModel` by default, Ollama-compatible HTTP or ChatGPT/OpenAI-compatible HTTP when explicitly enabled), records structured audit entries including redacted model-output chunk metadata, handles pause/cancel including in-flight provider futures, enforces max steps, can persist task/audit/model-route state through `RuntimeCommandStore`, exposes repository-backed activity summaries and bounded server-sent activity events for progress visibility, derives provider-visible model tools from the registered first-party model-tool catalog, can execute bounded model-planned first-party tool calls after schema and policy checks, accepts strict provider response envelopes and native ChatGPT/OpenAI-compatible `tool_calls` for the same first-party tool path, rejects invalid model-planned plugin IDs/actions before execution with registered-tool guidance and model-visible rejected tool results for bounded recovery, rejects mixed prose plus JSON `tool_requests` as malformed provider output, and returns structured failed command responses when a selected model provider fails. | Multi-step assistant runtime with production model responses, installed plugin/tool orchestration, streaming progress, approval UI handoff, native provider function-calling where appropriate, and robust recovery. | Bounded fake-model, provider-envelope, and native OpenAI first-party tool orchestration, runtime-derived provider-visible first-party catalog plus invalid-tool fail-closed recovery guidance, opt-in local and ChatGPT provider boundaries, structured provider-failure recovery, explicit installed-plugin subprocess runner, CLI/IPC/Swift approval scaffold, pollable activity summaries, CLI plus bounded Swift activity event-stream watch, audit-backed installed subprocess, model-step, and redacted model-output chunk progress frames, and quarantined Ollama-native NDJSON transport with cancellation implemented; raw-token UI streaming and unbounded real-time plugin UI progress pending. |
 | Model routing | Local-first `ModelRouter` exists with sensitivity checks, provider-status route evidence, cloud opt-in gate, approval delegation, and redaction logic. The active `/commands` path can call a configured local provider, an opt-in OpenAI-compatible API provider with a Keychain-injected credential, or an opt-in Codex-account adapter that invokes the logged-in Codex CLI with a bounded timeout and reads only its final-message file. Health exposes the active cloud auth mode so the app can reject an already-running core with mismatched configuration. Provider text responses can return a strict JSON envelope with first-party `tool_requests`, and OpenAI-compatible responses can return native `tool_calls` using function definitions generated from the runtime's registered first-party manifests. Repository-backed command execution persists append-only SQLite model-route records and exposes redacted IPC/CLI inspection without storing route context. Provider failures keep the selected route evidence in the failed command response, and live Ollama testing has proven the opt-in local HTTP route can complete real model commands while the runtime rejects hallucinated tool IDs and can recover by feeding redacted rejection results back to the model. | Local provider integration, explicit cloud escalation through API-key or account auth, minimized cloud context, user approval where required, native tool-call support where useful, and durable route evidence in every relevant task. | Local, OpenAI API, and Codex-account provider boundaries, strict provider-envelope first-party tool requests, runtime-derived native OpenAI first-party tool-call adaptation, SQLite route recovery evidence, live Ollama route viability, invalid-tool rejection/recovery, mixed-output failure diagnostics, and structured failure-response evidence implemented with tests; broader production model operations pending. |
 | Plugins and tools | Production inventory excludes deterministic `fake_*` fixtures and uses one configured `PluginHost` for IPC inspection, provider advertisement, direct dispatch, approval replay, and runtime execution. `system_status.status` is always present. The macOS app persists user-selected roots as security-scoped bookmarks under opaque IDs, resolves the entire set fail closed, retains access for the supervised process lifetime, and sends roots through a strict bounded version-1 stdin envelope rather than argv/environment; the same envelope can carry one trusted-wake one-shot document. Rust then holds descriptor-anchored roots for local-only bounded workspace inspection. The legacy explicit CLI root flag remains for compatibility. Installed `local_wasm` plugins require `wasm_compute`, exact-byte provenance, the no-import `jarvis_json_v1` exports, low-risk compute-only policy, and hard module/request/output/memory/fuel limits; pause/cancel/timeout/fuel exhaustion fail closed. Redacted inspection and Swift presentation distinguish Wasmi confinement from `local_subprocess`, which remains not OS sandboxed. | Defense-in-depth OS sandboxing for first-party, WASM, and subprocess tools, verified child sandbox-extension inheritance, content classification, durable approval replay, publisher/marketplace/malware trust, and production model-generated tool execution. | App-owned bookmark selection, redacted grant UI, path-free supervised argv/environment, bounded startup stdin, balanced access lifetime, bounded workspace tools, and no-import Wasmi language confinement are implemented with Swift tests and cross-process E2E. OS sandbox/egress enforcement, verified child extension inheritance, same-user IPC, marketplace/publisher/malware trust, signing/notarization, and live-device QA remain pending. |

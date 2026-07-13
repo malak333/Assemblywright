@@ -89,6 +89,7 @@ Recommended next evidence commands:
   external handoff directory: ./scripts/release-external-handoff.sh --write target/release-external-handoff
   live-device template: ./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env
   live-device endpoint: set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' in target/release-live-device-qa.env
+  live-device IPC auth: confirm JARVIS_IPC_TOKEN_FILE points to the app-owned ipc-session-auth.json path, then source the live-device template before IPC commands
   live-device command evidence: cargo run -p jarvis-cli -- command "status check" --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}" --json
   live-device evidence ID: record the returned task ID as JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid>' or a task-associated audit ID as 'audit:<uuid>'
   live-device assertion: set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete

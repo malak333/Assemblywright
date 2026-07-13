@@ -264,7 +264,8 @@ claim.
 5. Run \`./scripts/release-evidence-doctor.sh --assert-complete\`.
 6. Start or restart the release core with
    \`JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external\`, export
-   \`JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>'\`, then run
+   \`JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>'\` and
+   \`JARVIS_IPC_TOKEN_FILE='<app-owned-ipc-session-auth.json>'\`, then run
    \`JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint "\${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"\`
    and \`JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint "\${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"\`.
 
@@ -306,6 +307,8 @@ Required command/evidence binding:
 
 - \`JARVIS_RELEASE_CORE_ENDPOINT\`: the same release core endpoint used for command
   capture and post-report evidence-status/readiness checks.
+- \`JARVIS_IPC_TOKEN_FILE\`: the app-owned owner-only IPC credential-file path;
+  export the path only and never copy the bearer value into handoff evidence.
 - \`JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID\`: \`task:<uuid>\` or \`audit:<uuid>\`
   returned by the live command evidence capture.
 
