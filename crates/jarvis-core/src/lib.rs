@@ -7,6 +7,7 @@ pub mod router;
 pub mod runtime;
 pub mod scheduler;
 pub mod storage;
+pub mod trusted_wake;
 pub mod types;
 
 pub use ipc::{
@@ -64,6 +65,12 @@ pub use storage::{
     PendingApproval, SqliteRepository,
 };
 pub use storage::{MemoryClassificationCount, MemoryClassificationSummary};
+pub use trusted_wake::{
+    TrustedWakeAcceptedEvent, TrustedWakeAttentionItem, TrustedWakeDispatchState,
+    TrustedWakeEnvelope, TrustedWakePayload, TrustedWakeResolutionRequest, TrustedWakeRule,
+    TrustedWakeRuleEnablement, TrustedWakeRuleEnrollment, TrustedWakeSessionStatus,
+    TRUSTED_WAKE_RULE_ID, TRUSTED_WAKE_SCHEMA_VERSION,
+};
 pub use types::{
     ApprovalStatus, AuditEntry, JarvisError, JarvisResult, RiskTier, Sensitivity, TaskRecord,
     TaskStatus,

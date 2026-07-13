@@ -12,6 +12,8 @@ struct JarvisMacApp: App {
     @StateObject private var runs: RunManagementModel
     @StateObject private var scheduler: SchedulerModel
     @StateObject private var schedulerNotifications: SchedulerNotificationModel
+    @StateObject private var trustedWake: TrustedWakeModel
+    @StateObject private var wakeCoordinator: MacSystemWakeCoordinator
     @StateObject private var diagnostics: DiagnosticsModel
     @StateObject private var releaseReadiness: ReleaseReadinessModel
     @StateObject private var voice: VoiceStateModel
@@ -24,7 +26,11 @@ struct JarvisMacApp: App {
         let client = JarvisIPCClient(endpoint: configuration.endpoint)
         let console = CommandConsoleModel(client: client)
         let voice = VoiceStateModel()
-        _supervisor = StateObject(wrappedValue: JarvisCoreSupervisor(configuration: configuration, client: client))
+        let supervisor = JarvisCoreSupervisor(
+            configuration: configuration,
+            client: client
+        )
+        _supervisor = StateObject(wrappedValue: supervisor)
         _console = StateObject(wrappedValue: console)
         _memory = StateObject(wrappedValue: MemoryManagerModel(client: client))
         _plugins = StateObject(wrappedValue: PluginManagerModel(client: client))
@@ -33,6 +39,16 @@ struct JarvisMacApp: App {
         _scheduler = StateObject(wrappedValue: SchedulerModel(client: client))
         _schedulerNotifications = StateObject(
             wrappedValue: SchedulerNotificationModel(adapter: MacSchedulerNotificationAdapter())
+        )
+        let trustedWake = TrustedWakeModel(
+            client: client,
+            provision: { try await supervisor.provisionTrustedWake() }
+        )
+        _trustedWake = StateObject(wrappedValue: trustedWake)
+        _wakeCoordinator = StateObject(
+            wrappedValue: MacSystemWakeCoordinator {
+                Task { @MainActor in await trustedWake.handleSystemWake() }
+            }
         )
         _diagnostics = StateObject(wrappedValue: DiagnosticsModel(client: client))
         _releaseReadiness = StateObject(wrappedValue: ReleaseReadinessModel(client: client))
@@ -76,6 +92,7 @@ struct JarvisMacApp: App {
                 runs: runs,
                 scheduler: scheduler,
                 schedulerNotifications: schedulerNotifications,
+                trustedWake: trustedWake,
                 diagnostics: diagnostics,
                 releaseReadiness: releaseReadiness,
                 voice: voice,
@@ -88,6 +105,7 @@ struct JarvisMacApp: App {
                     await supervisor.start(environmentOverrides: modelConfiguration.launchEnvironmentOverrides)
                     if supervisor.isAvailable {
                         await console.refreshHealth()
+                        await trustedWake.refresh()
                         modelConfiguration.applyHealth(console.health)
                     } else if case let .degraded(reason) = supervisor.mode {
                         console.markDegraded(reason)
@@ -145,6 +163,7 @@ struct JarvisShellView: View {
     @ObservedObject var runs: RunManagementModel
     @ObservedObject var scheduler: SchedulerModel
     @ObservedObject var schedulerNotifications: SchedulerNotificationModel
+    @ObservedObject var trustedWake: TrustedWakeModel
     @ObservedObject var diagnostics: DiagnosticsModel
     @ObservedObject var releaseReadiness: ReleaseReadinessModel
     @ObservedObject var voice: VoiceStateModel
@@ -175,6 +194,8 @@ struct JarvisShellView: View {
                     .tabItem { Text("Runs") }
                 SchedulerJobsView(model: scheduler, notifications: schedulerNotifications)
                     .tabItem { Text("Scheduler") }
+                TrustedWakeView(model: trustedWake)
+                    .tabItem { Text("Wake") }
                 DiagnosticsExportView(model: diagnostics)
                     .tabItem { Text("Diagnostics") }
                 ReleaseReadinessView(model: releaseReadiness)
@@ -185,6 +206,86 @@ struct JarvisShellView: View {
         }
         .frame(minWidth: 860, minHeight: 560)
     }
+}
+
+struct TrustedWakeView: View {
+    @ObservedObject var model: TrustedWakeModel
+
+    var body: some View {
+        Form {
+            Section("Trusted macOS system-wake event") {
+                Text(model.status?.rule == nil ? "Not enrolled" : (model.status?.rule?.enabled == true ? "Enabled" : "Disabled"))
+                if let rule = model.status?.rule {
+                    Text("Enrollment generation \(rule.generation); durable high-water \(rule.highestCounter)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Toggle(
+                        "Run the bounded wake rule",
+                        isOn: Binding(
+                            get: { rule.enabled },
+                            set: { enabled in Task { await model.setEnabled(enabled) } }
+                        )
+                    )
+                    .disabled(model.isWorking)
+                } else if model.status != nil {
+                    Button("Provision trusted wake") {
+                        Task { await model.provision() }
+                    }
+                    .disabled(model.isWorking)
+                }
+                if let status = model.status {
+                    Text(status.proofBoundary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if status.attentionRequired {
+                        Text("\(status.ambiguousDispatchCount) ambiguous dispatch(es) require review; Jarvis will not retry them automatically.")
+                            .foregroundStyle(.orange)
+                    }
+                }
+                Text("Key loss or enrollment-key mismatch has no supported recovery workflow in this foundation and remains a production blocker. Do not manually mutate Keychain or SQLite state.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                if let event = model.lastEvent {
+                    Text("Last wake event: \(event.state)")
+                }
+                ForEach(model.attentionItems) { item in
+                    HStack {
+                        Text("Ambiguous event \(item.eventId.uuidString)")
+                            .font(.caption)
+                        Spacer()
+                        Button("Resolve without retry") {
+                            Task { await model.resolve(item) }
+                        }
+                        .disabled(model.isWorking)
+                    }
+                }
+                if let error = model.errorMessage {
+                    Text(error).foregroundStyle(.red)
+                }
+                HStack {
+                    Button("Refresh") { Task { await model.refresh() } }
+                    Button("Execute test wake rule") { Task { await model.handleSystemWake() } }
+                        .disabled(model.status?.rule?.enabled != true || model.isWorking)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .task { await model.refresh() }
+    }
+}
+
+@MainActor
+final class MacSystemWakeCoordinator: ObservableObject {
+    private var observer: NSObjectProtocol?
+
+    init(onWake: @escaping @Sendable () -> Void) {
+        observer = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { _ in onWake() }
+    }
+
 }
 
 struct CoreStatusBanner: View {

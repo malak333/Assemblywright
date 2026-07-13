@@ -1756,6 +1756,11 @@ public protocol JarvisCoreClient: Sendable {
     func cancelSchedulerJob(id: UUID) async throws -> JarvisSchedulerJob
     func runDueSchedulerJobs(limit: Int) async throws -> JarvisSchedulerRunResponse
     func recoverStaleSchedulerJobs(olderThanSeconds: UInt64, limit: Int) async throws -> JarvisSchedulerStaleRecoveryResponse
+    func trustedWakeStatus() async throws -> JarvisTrustedWakeStatus
+    func trustedWakeAttention() async throws -> [JarvisTrustedWakeAttentionItem]
+    func resolveTrustedWakeAttention(id: UUID, request: JarvisTrustedWakeResolutionRequest) async throws -> JarvisTrustedWakeAttentionItem
+    func setTrustedWakeEnabled(_ request: JarvisTrustedWakeRuleEnablement) async throws -> JarvisTrustedWakeRule
+    func submitTrustedWake(_ envelope: JarvisTrustedWakeEnvelope) async throws -> JarvisTrustedWakeEventResponse
     func diagnosticsExport() async throws -> JarvisDiagnosticsExport
     func permissionGrantSummary() async throws -> JarvisPermissionGrantSummary
     func permissionPolicyReview() async throws -> JarvisPermissionPolicyReview
@@ -1962,6 +1967,37 @@ public final class JarvisIPCClient: JarvisCoreClient {
             method: "POST",
             body: Optional<Data>.none
         )
+    }
+
+    public func trustedWakeStatus() async throws -> JarvisTrustedWakeStatus {
+        try await send(path: "/system-wake/status", method: "GET", body: Optional<Data>.none)
+    }
+
+    public func trustedWakeAttention() async throws -> [JarvisTrustedWakeAttentionItem] {
+        try await send(path: "/system-wake/attention", method: "GET", body: Optional<Data>.none)
+    }
+
+    public func resolveTrustedWakeAttention(
+        id: UUID,
+        request: JarvisTrustedWakeResolutionRequest
+    ) async throws -> JarvisTrustedWakeAttentionItem {
+        try await send(
+            path: "/system-wake/events/\(id.uuidString)/resolve",
+            method: "POST",
+            body: encoder.encode(request)
+        )
+    }
+
+    public func setTrustedWakeEnabled(
+        _ request: JarvisTrustedWakeRuleEnablement
+    ) async throws -> JarvisTrustedWakeRule {
+        try await send(path: "/system-wake/rule", method: "POST", body: encoder.encode(request))
+    }
+
+    public func submitTrustedWake(
+        _ envelope: JarvisTrustedWakeEnvelope
+    ) async throws -> JarvisTrustedWakeEventResponse {
+        try await send(path: "/system-wake/events", method: "POST", body: encoder.encode(envelope))
     }
 
     public func diagnosticsExport() async throws -> JarvisDiagnosticsExport {

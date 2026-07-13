@@ -42,6 +42,9 @@ enum CliCommand {
         scheduler_stale_older_than_seconds: u64,
         #[arg(long, default_value_t = jarvis_core::DEFAULT_SCHEDULER_STALE_RECOVERY_LIMIT)]
         scheduler_stale_recovery_limit: usize,
+        /// Read one bounded trusted-wake public-key enrollment document from stdin before serving.
+        #[arg(long)]
+        trusted_wake_bootstrap_stdin: bool,
     },
     /// Query core health over HTTP IPC.
     Health {
@@ -101,6 +104,11 @@ enum CliCommand {
     Scheduler {
         #[command(subcommand)]
         command: SchedulerCommand,
+    },
+    /// Inspect or explicitly enable the enrolled trusted macOS system-wake rule.
+    SystemWake {
+        #[command(subcommand)]
+        command: SystemWakeCommand,
     },
     /// Export redacted local diagnostics.
     Diagnostics {
@@ -299,6 +307,32 @@ enum SchedulerCommand {
     /// Cancel a scheduler job by id.
     Cancel {
         id: String,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum SystemWakeCommand {
+    Status {
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    SetEnabled {
+        enabled: bool,
+        #[arg(long)]
+        expected_generation: u64,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    Attention {
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    Resolve {
+        event_id: String,
+        #[arg(long)]
+        expected_generation: u64,
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
@@ -647,6 +681,7 @@ async fn main() -> anyhow::Result<()> {
             scheduler_recover_stale_on_startup,
             scheduler_stale_older_than_seconds,
             scheduler_stale_recovery_limit,
+            trusted_wake_bootstrap_stdin,
         } => {
             let provider_config = jarvis_core::ProviderConfig::from_env()?;
             let state = match db_path {
@@ -661,6 +696,16 @@ async fn main() -> anyhow::Result<()> {
                 }
                 None => jarvis_core::IpcState::with_provider_config(provider_config),
             };
+            if trusted_wake_bootstrap_stdin {
+                let mut bootstrap = Vec::new();
+                std::io::stdin().take(8_193).read_to_end(&mut bootstrap)?;
+                if bootstrap.is_empty() || bootstrap.len() > 8_192 {
+                    anyhow::bail!("trusted wake bootstrap stdin must contain at most 8192 bytes");
+                }
+                let enrollment: jarvis_core::TrustedWakeRuleEnrollment =
+                    serde_json::from_slice(&bootstrap)?;
+                state.bootstrap_trusted_wake_rule(enrollment)?;
+            }
             if scheduler_recover_stale_on_startup {
                 state.recover_stale_scheduler_jobs_automatically(
                     scheduler_stale_older_than_seconds,
@@ -909,6 +954,49 @@ async fn main() -> anyhow::Result<()> {
                         "DELETE",
                         &format!("/scheduler/jobs/{id}"),
                         None
+                    )?
+                );
+            }
+        },
+        CliCommand::SystemWake { command } => match command {
+            SystemWakeCommand::Status { endpoint } => println!(
+                "{}",
+                server_required_request(&endpoint, "GET", "/system-wake/status", None)?
+            ),
+            SystemWakeCommand::SetEnabled {
+                enabled,
+                expected_generation,
+                endpoint,
+            } => {
+                let body = serde_json::to_string(&jarvis_core::TrustedWakeRuleEnablement {
+                    enabled,
+                    expected_generation,
+                })?;
+                println!(
+                    "{}",
+                    server_required_request(&endpoint, "POST", "/system-wake/rule", Some(&body),)?
+                );
+            }
+            SystemWakeCommand::Attention { endpoint } => println!(
+                "{}",
+                server_required_request(&endpoint, "GET", "/system-wake/attention", None)?
+            ),
+            SystemWakeCommand::Resolve {
+                event_id,
+                expected_generation,
+                endpoint,
+            } => {
+                let body = serde_json::to_string(&jarvis_core::TrustedWakeResolutionRequest {
+                    expected_generation,
+                    expected_state: jarvis_core::TrustedWakeDispatchState::DispatchStarted,
+                })?;
+                println!(
+                    "{}",
+                    server_required_request(
+                        &endpoint,
+                        "POST",
+                        &format!("/system-wake/events/{event_id}/resolve"),
+                        Some(&body),
                     )?
                 );
             }

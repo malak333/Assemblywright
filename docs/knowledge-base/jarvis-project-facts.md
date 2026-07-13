@@ -1459,3 +1459,25 @@ requires plugin-trust `generated_at`, `review_started_at`,
   stream needs a stronger OS-level process/network sandbox or equivalent host isolation boundary,
   explicit grant state beyond `metadata_only`, policy checks,
   timeout/cancellation behavior, and E2E audit coverage.
+
+- Schema v10 adds a disabled-by-default trusted macOS system-wake rule. Swift
+  stores its P-256 private key and monotonic counter in device-only Keychain
+  items. Normal startup never obtains those wake credentials. Explicit initial
+  provisioning prepares only the public key while the current app-owned core
+  stays running, stops only after preparation succeeds, and uses one bounded-
+  stdin restart whose bytes are then discarded. Every later normal restart
+  relies on the persisted Rust enrollment and uses neither trusted-wake
+  Keychain access nor bootstrap stdin. Swift signs active-session/challenge/
+  generation-bound wake payloads. Rust validates
+  signature, replay, nonce, skew, generation, pause, and proactive policy,
+  persists redacted scheduler/audit evidence, and writes a dispatch-start CAS
+  before the existing command funnel. Exact retries resume only a still-
+  accepted current event; started or terminal events never redispatch. The
+  signer allocates counters above the Keychain value, current epoch
+  milliseconds, and Rust's durable high-water so local counter loss or clock
+  rollback recovers without weakening replay protection. Ambiguous dispatches
+  are visible in Swift and can only be resolved explicitly without retry. This is
+  enrolled-key possession, not Apple attestation or OS-wake provenance. The
+  explicit initial bootstrap always sets `allow_rotation: false`; authenticated
+  enrollment-key rotation and key-loss/mismatch recovery remain a production
+  blocker. Manual SQLite or Keychain mutation is not a supported workaround.

@@ -134,6 +134,28 @@ impl Scheduler {
         Ok(job)
     }
 
+    pub fn restore_persisted(&self, job: SchedulerJob) {
+        self.jobs
+            .lock()
+            .expect("scheduler jobs lock poisoned")
+            .insert(job.id, job);
+    }
+
+    pub fn restore_claimed_running(&self, mut job: SchedulerJob) -> JarvisResult<SchedulerJob> {
+        if job.status != SchedulerJobStatus::Scheduled {
+            return Err(JarvisError::Validation(
+                "only scheduled jobs can be restored as claimed running".to_string(),
+            ));
+        }
+        job.status = SchedulerJobStatus::Running;
+        job.updated_at = Utc::now();
+        self.jobs
+            .lock()
+            .expect("scheduler jobs lock poisoned")
+            .insert(job.id, job.clone());
+        Ok(job)
+    }
+
     pub fn list(&self) -> Vec<SchedulerJob> {
         self.jobs
             .lock()
@@ -198,6 +220,12 @@ impl Scheduler {
         let job = jobs
             .get_mut(&id)
             .ok_or_else(|| JarvisError::Validation(format!("unknown scheduler job: {id}")))?;
+
+        if job.status != SchedulerJobStatus::Scheduled {
+            return Err(JarvisError::Validation(format!(
+                "only a scheduled job can be marked running: {id}"
+            )));
+        }
 
         if job.is_terminal() {
             return Err(JarvisError::Validation(format!(

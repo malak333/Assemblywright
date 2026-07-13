@@ -15,6 +15,7 @@ base64.workspace = true
 chrono.workspace = true
 ed25519-dalek.workspace = true
 futures-util.workspace = true
+p256.workspace = true
 rusqlite.workspace = true
 reqwest.workspace = true
 serde.workspace = true

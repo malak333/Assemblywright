@@ -1,5 +1,47 @@
 # Architecture Map
 
+## Trusted system-wake slice
+
+```mermaid
+flowchart LR
+  W["NSWorkspace didWake"] --> S["Swift P-256 signer"]
+  K["Device-only Keychain key and counter"] --> S
+  R --> H["Durable replay high-water"]
+  H --> S
+  N["Normal app/core startup: no wake Keychain or bootstrap stdin"] --> R
+  UP["Explicit user Provision"] --> BP["Prepare public bootstrap while app-owned core stays healthy"]
+  BP --> B["One-shot bounded supervisor stdin plus EOF"]
+  B --> R["Persisted Rust schema v10 enrollment survives restart"]
+  B --> KR["Key loss or mismatch: fail closed; rotation/recovery unsupported"]
+  S --> I["/system-wake/events"]
+  I --> V["Signature, session, generation, replay, skew checks"]
+  R --> V
+  V --> T["Atomic event, scheduler, redacted audit"]
+  T --> C["Durable dispatch-start CAS"]
+  C --> P["Existing proactive policy, plugin, pause funnel"]
+  C --> A["Ambiguous crash: redacted attention list, no auto-retry"]
+  A --> U["Swift review and generation/state CAS resolve-to-blocked"]
+```
+
+Production end goal:
+
+```mermaid
+flowchart LR
+  O["Verified background OS event source"] --> AT["Apple-backed attestation and same-user IPC"]
+  AT --> E["Signed and notarized app event broker"]
+  E --> F["Durable exactly-once-aware coordinator"]
+  E --> RK["Authenticated enrollment-key rotation and loss recovery"]
+  F --> P["Policy, confinement, emergency pause"]
+  F --> AR["Operator ambiguity review and explicit terminal resolution"]
+  P --> EV["Owner-recorded live-device release evidence"]
+```
+
+The current slice does not claim Apple attestation, OS wake provenance,
+same-user isolation, background launch, exactly-once side effects, live-device
+QA, or production readiness. It also has no supported enrollment-key rotation
+or key-loss/mismatch recovery workflow; manual SQLite or Keychain mutation is
+not a recovery procedure.
+
 Jarvis is a local-first macOS assistant foundation. The current repository
 contains a Rust workspace with the core contracts, loopback IPC server,
 SQLite-backed repository primitives, policy/model-routing rules, in-process

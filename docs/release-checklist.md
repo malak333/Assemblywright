@@ -252,6 +252,22 @@ stage or when a PR needs focused evidence for one ownership slice.
   raw command bodies, API keys, or unredacted endpoint credentials.
 - Confirm emergency pause blocks IPC runtime command execution and cancels
   active scheduler jobs.
+- Confirm the trusted system-wake rule is enrolled only through bounded
+  supervisor stdin after an explicit Provision action, starts disabled,
+  requires generation-bound enablement, and
+  fails closed for signature/session/replay/skew/cap/pause/policy failures.
+  Confirm ordinary app startup never reads the wake Keychain items; failed
+  bootstrap preparation leaves the app-owned core running; stop/restart failure
+  is visibly degraded; model/provider launch overrides survive the one-shot
+  restart; and bootstrap stdin closes with EOF and is not reused.
+  Confirm replay-counter recovery from Keychain loss/backward clock, overflow
+  failure, restart reconciliation, ambiguous-dispatch visibility, and explicit
+  resolve-without-retry evidence.
+  Treat enrollment-key loss/mismatch rotation and recovery as a pending
+  production blocker. The current app bootstrap intentionally does not request
+  rotation, and manual SQLite or Keychain mutation is not supported recovery.
+  Do not treat this as Apple attestation, OS provenance, background-launch,
+  exactly-once, live-device, or production evidence.
 - Confirm scheduler due-job execution fails closed by activating emergency
   pause, cancelling remaining open scheduler jobs, and recording scheduler
   audit evidence when a due command is not accepted.
