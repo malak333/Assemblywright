@@ -1645,17 +1645,25 @@ requires plugin-trust `generated_at`, `review_started_at`,
   bounded v1 startup-stdin envelope, and clears it on matching launch failure,
   stop, replacement, or observed child exit. Rust protects the complete Axum
   router, requires exactly one strict Bearer header, compares a SHA-256 digest
-  in constant time, and emits only a generic 401 challenge. The owner-only
-  `ipc-session-auth.json` file is an explicit local CLI handoff; CLI parsing is
+  in constant time, and emits only a generic 401 challenge. The app keeps the
+  bearer memory-only by default and removes any stale handoff file. Exact
+  `JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true` enables the explicitly weaker
+  owner-only `ipc-session-auth.json` local CLI handoff;
+  `JARVIS_MAC_IPC_AUTH_FILE` is an optional absolute override only in that
+  mode. CLI parsing is
   bounded, no-follow, current-owner, regular-file, single-link, and permission
   checked. A legacy unauthenticated server rejects any Authorization header to
-  prevent managed-client downgrade, and the supervisor strips the client-only
-  token-file path variable from the child server environment. Focused Rust
+  prevent managed-client downgrade, and the supervisor strips the enable flag,
+  override, and client-only token-file path from the child server environment.
+  Focused Rust
   cross-process and Swift tests prove managed clients reject non-loopback
   destinations before bearer exposure and authenticated servers reject
   non-loopback binds. The unsigned distribution launch smoke uses an absolute
-  temporary-profile auth-file override, strips it from the child, and covers the
-  packaged boundary. This proves
-  token possession and repository-owned lifecycle behavior, not OS identity,
+  temporary-profile auth-file override with explicit handoff enabled, strips
+  both app-only variables from the child, and covers the packaged boundary.
+  Regression coverage must also prove default no-file behavior, stale-file
+  cleanup, exact opt-in semantics, file lifecycle cleanup, and restart
+  invalidation. This proves token possession, no ambient default file, and
+  repository-owned lifecycle behavior, not OS identity,
   device authentication, same-user/process isolation, App Sandbox enforcement,
   signing/notarization, live-device behavior, or host-level egress control.

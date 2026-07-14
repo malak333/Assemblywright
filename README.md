@@ -174,10 +174,10 @@ process lifetime. Manual use of the legacy `--workspace-root` option still
 exposes the configured path in that operator-launched process's arguments.
 App-supervised launches also rotate a 32-byte bearer credential, deliver it in
 the same bounded startup-stdin envelope, and require it on every loopback route.
-The app writes the current credential to the owner-only
-`~/Library/Application Support/Jarvis/ipc-session-auth.json` handoff file so an
-explicit local operator can run, for example,
-`jarvis --ipc-token-file "$HOME/Library/Application Support/Jarvis/ipc-session-auth.json" health`.
+The credential stays in app/core memory by default. An explicit local operator
+may relaunch the app with `JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true` to create the
+owner-only `~/Library/Application Support/Jarvis/ipc-session-auth.json` handoff
+file and then run, for example, `jarvis --ipc-token-file "$HOME/Library/Application Support/Jarvis/ipc-session-auth.json" health`.
 The token never enters child argv, environment, audit, diagnostics, or UI. A
 managed client fails closed before sending when its credential is unavailable;
 managed Swift/CLI clients reject non-loopback endpoints before bearer exposure,

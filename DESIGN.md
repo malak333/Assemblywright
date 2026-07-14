@@ -57,7 +57,7 @@
 | macOS Keychain for secrets | Store credentials in SQLite or config files | Secrets should use the platform credential store. |
 | First-party plugins first | Third-party marketplace in v1 | The safety model and plugin contract need to prove themselves before third-party expansion. |
 | App-owned security-scoped bookmarks for workspace roots | Put root paths in app child arguments, store plain paths, or let the model select roots | Native user selection establishes an explicit local grant; opaque IDs and bounded startup stdin keep app-selected paths out of argv, environment, model input, and audit while Rust remains the descriptor authority. Bookmark tests do not prove App Sandbox enforcement or child sandbox-extension inheritance. |
-| App-supervised bearer authentication for loopback IPC | Leave every local route unauthenticated, put a token in argv/environment, or silently reuse a legacy unauthenticated core | The app rotates 32 random bytes for each supervised launch, sends them only through bounded startup stdin, shares the in-memory credential with its IPC client, and exposes a restrictive owner-only token file solely for explicit local CLI handoff. Every route is protected and a managed client without a credential fails locally. This proves possession of a launch credential, not OS identity or same-user/process isolation. |
+| App-supervised bearer authentication for loopback IPC | Leave every local route unauthenticated, persist every supervised credential by default, put a token in argv/environment, or silently reuse a legacy unauthenticated core | The app rotates 32 random bytes for each supervised launch, sends them only through bounded startup stdin, and shares the in-memory credential with its IPC client. It removes a stale handoff file and does not persist the bearer by default. Exact `JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true` explicitly enables the weaker owner-only CLI handoff file; `JARVIS_MAC_IPC_AUTH_FILE` may then select an absolute test/operator path. Neither app-only variable reaches the child. Every route is protected and a managed client without a credential fails locally. This proves possession and lifecycle of a launch credential with no ambient default file, not OS identity or same-user/process isolation. |
 | Add a no-import Wasmi compute runtime before broader third-party execution | Treat subprocess grants as sufficient containment, enable WASI, or wait for an OS sandbox | A deliberately small `jarvis_json_v1` ABI can provide useful low-risk local computation while mechanically denying guest filesystem, environment, network, clock, and process authority. Wasmi confinement is a language-runtime boundary, not an OS sandbox or plugin trust system. |
 | Auditability as an architectural requirement | Best-effort logs after the fact | Jarvis must be able to explain why it acted, what data it used, and what permissions were involved. |
 
@@ -87,7 +87,13 @@ Current v1 IPC uses loopback HTTP. App-supervised launches require a per-launch
 bearer credential on every route and reject missing, malformed, duplicate, or
 incorrect authorization. Managed clients reject non-loopback destinations
 before reading or sending the credential, and authenticated servers reject
-non-loopback binds. Explicit operator-launched legacy servers remain
+non-loopback binds. The supervised credential remains in memory by default;
+startup removes a stale handoff file. Exact
+`JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true` explicitly enables the weaker
+owner-only CLI file, with `JARVIS_MAC_IPC_AUTH_FILE` accepted only as an
+optional absolute-path override in that mode. The supervisor removes both
+app-only variables, as well as `JARVIS_IPC_TOKEN_FILE`, from the child
+environment. Explicit operator-launched legacy servers remain
 available without authentication, but reject an unexpected Authorization
 header so the managed app cannot silently downgrade to them. A future version
 can move the IPC boundary to an authenticated Unix domain socket with verified

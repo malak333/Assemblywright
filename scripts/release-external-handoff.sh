@@ -262,8 +262,9 @@ claim.
    \`set -a && source release-evidence-bundle.env && set +a\` followed by
    \`./scripts/release-evidence-bundle.sh --bundle\`.
 5. Run \`./scripts/release-evidence-doctor.sh --assert-complete\`.
-6. Start or restart the release core with
-   \`JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external\`, export
+6. Start or restart the packaged app with
+   \`JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external\` and the explicit
+   \`JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true\` operator-mode opt-in, export
    \`JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>'\` and
    \`JARVIS_IPC_TOKEN_FILE='<app-owned-ipc-session-auth.json>'\`, then run
    \`JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint "\${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"\`
@@ -307,8 +308,10 @@ Required command/evidence binding:
 
 - \`JARVIS_RELEASE_CORE_ENDPOINT\`: the same release core endpoint used for command
   capture and post-report evidence-status/readiness checks.
-- \`JARVIS_IPC_TOKEN_FILE\`: the app-owned owner-only IPC credential-file path;
-  export the path only and never copy the bearer value into handoff evidence.
+- \`JARVIS_IPC_TOKEN_FILE\`: the app-owned owner-only IPC credential-file path,
+  available only while the app is launched with the explicit
+  \`JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true\` operator-mode opt-in; export the
+  path only and never copy the bearer value into handoff evidence.
 - \`JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID\`: \`task:<uuid>\` or \`audit:<uuid>\`
   returned by the live command evidence capture.
 

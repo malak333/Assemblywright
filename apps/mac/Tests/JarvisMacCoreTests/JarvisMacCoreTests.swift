@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import Darwin
 @testable import JarvisMacCore
 
 #if canImport(AVFoundation)
@@ -5858,11 +5859,125 @@ struct WorkspaceRootBookmarkTests {
 @MainActor
 @Suite("IPC bearer authorization", .serialized)
 struct IPCBearerAuthorizationTests {
-    @Test("Launch tokens are base64url, versioned, owner-only, and generation-bound")
-    func tokenLifecycleAndPermissions() throws {
+    @Test("CLI handoff environment requires an exact opt-in and an absolute override")
+    func cliHandoffEnvironmentContract() {
+        let enableKey = JarvisIPCCLIHandoffConfiguration.enableEnvironmentKey
+        let fileKey = JarvisIPCCLIHandoffConfiguration.fileEnvironmentKey
+        let file = URL(fileURLWithPath: "/tmp/jarvis-explicit-ipc-handoff.json")
+
+        #expect(JarvisIPCCLIHandoffConfiguration.fromEnvironment([:]) == .disabled)
+        let disabledWithAbsoluteOverride = JarvisIPCCLIHandoffConfiguration.fromEnvironment([
+            enableKey: "false",
+            fileKey: file.path
+        ])
+        #expect(!disabledWithAbsoluteOverride.isEnabled)
+        #expect(disabledWithAbsoluteOverride.fileURL == nil)
+        #expect(JarvisIPCCLIHandoffConfiguration.fromEnvironment([
+            enableKey: "true",
+            fileKey: "relative.json"
+        ]) == .disabled)
+        #expect(JarvisIPCCLIHandoffConfiguration.fromEnvironment([
+            enableKey: "true",
+            fileKey: file.path
+        ]) == .enabled(fileURL: file))
+    }
+
+    @Test("Disabled handoff removes an absolute stale environment override without recreating it")
+    func disabledHandoffCleansAbsoluteStaleOverride() throws {
+        let directory = try temporaryDirectory(name: "jarvis-disabled-ipc-handoff")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appending(path: "stale-ipc-session-auth.json")
+        try Data("stale legacy bearer".utf8).write(to: file)
+        let configuration = JarvisIPCCLIHandoffConfiguration.fromEnvironment([
+            JarvisIPCCLIHandoffConfiguration.fileEnvironmentKey: file.path
+        ])
+
+        #expect(!configuration.isEnabled)
+        let authorization = JarvisIPCSessionAuthorization(
+            mode: .appSupervised,
+            cliHandoffConfiguration: configuration,
+            randomBytes: DeterministicAuthRandom().bytes
+        )
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+        _ = try authorization.rotateForLaunch()
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+    }
+
+    @Test("Disabled handoff stale cleanup never recursively removes a directory override")
+    func disabledHandoffPreservesDirectoryOverride() throws {
+        let directory = try temporaryDirectory(name: "jarvis-disabled-ipc-directory")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let override = directory.appending(path: "must-remain", directoryHint: .isDirectory)
+        let sentinel = override.appending(path: "sentinel.txt")
+        try FileManager.default.createDirectory(at: override, withIntermediateDirectories: false)
+        try Data("preserve directory contents".utf8).write(to: sentinel)
+        let configuration = JarvisIPCCLIHandoffConfiguration.fromEnvironment([
+            JarvisIPCCLIHandoffConfiguration.fileEnvironmentKey: override.path
+        ])
+
+        let authorization = JarvisIPCSessionAuthorization(
+            mode: .appSupervised,
+            cliHandoffConfiguration: configuration,
+            randomBytes: DeterministicAuthRandom().bytes
+        )
+        #expect(FileManager.default.fileExists(atPath: sentinel.path))
+        let launchValue = try authorization.rotateForLaunch()
+        let launch = try #require(launchValue)
+        #expect(FileManager.default.fileExists(atPath: sentinel.path))
+        authorization.clear(generation: launch.generation)
+        #expect(FileManager.default.fileExists(atPath: sentinel.path))
+    }
+
+    @Test("Disabled handoff stale cleanup never removes a FIFO override")
+    func disabledHandoffPreservesFIFOOverride() throws {
+        let directory = try temporaryDirectory(name: "jarvis-disabled-ipc-fifo")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fifo = directory.appending(path: "must-remain.fifo")
+        #expect(Darwin.mkfifo(fifo.path, mode_t(0o600)) == 0)
+        let configuration = JarvisIPCCLIHandoffConfiguration.fromEnvironment([
+            JarvisIPCCLIHandoffConfiguration.fileEnvironmentKey: fifo.path
+        ])
+
+        let authorization = JarvisIPCSessionAuthorization(
+            mode: .appSupervised,
+            cliHandoffConfiguration: configuration,
+            randomBytes: DeterministicAuthRandom().bytes
+        )
+        var metadata = stat()
+        #expect(Darwin.lstat(fifo.path, &metadata) == 0)
+        #expect(metadata.st_mode & S_IFMT == S_IFIFO)
+        _ = try authorization.rotateForLaunch()
+        #expect(Darwin.lstat(fifo.path, &metadata) == 0)
+        #expect(metadata.st_mode & S_IFMT == S_IFIFO)
+    }
+
+    @Test("Disabled handoff may unlink a symlink leaf but never deletes its target")
+    func disabledHandoffSymlinkCleanupPreservesTarget() throws {
+        let directory = try temporaryDirectory(name: "jarvis-disabled-ipc-symlink")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let target = directory.appending(path: "target.txt")
+        let symlink = directory.appending(path: "stale-ipc-session-auth.json")
+        try Data("target must remain".utf8).write(to: target)
+        try FileManager.default.createSymbolicLink(at: symlink, withDestinationURL: target)
+        let configuration = JarvisIPCCLIHandoffConfiguration.fromEnvironment([
+            JarvisIPCCLIHandoffConfiguration.fileEnvironmentKey: symlink.path
+        ])
+
+        _ = JarvisIPCSessionAuthorization(
+            mode: .appSupervised,
+            cliHandoffConfiguration: configuration,
+            randomBytes: DeterministicAuthRandom().bytes
+        )
+        #expect(!FileManager.default.fileExists(atPath: symlink.path))
+        #expect(try Data(contentsOf: target) == Data("target must remain".utf8))
+    }
+
+    @Test("Default supervised launch tokens rotate in memory and remove stale handoff files")
+    func inMemoryTokenLifecycleRemovesStaleHandoff() throws {
         let directory = try temporaryDirectory(name: "jarvis-ipc-auth")
         defer { try? FileManager.default.removeItem(at: directory) }
         let file = directory.appending(path: "ipc-session-auth.json")
+        try Data("stale legacy bearer".utf8).write(to: file)
         let random = DeterministicAuthRandom()
         let authorization = JarvisIPCSessionAuthorization(
             mode: .appSupervised,
@@ -5879,6 +5994,38 @@ struct IPCBearerAuthorizationTests {
         #expect(first.token.range(of: #"^[A-Za-z0-9_-]{43}$"#, options: .regularExpression) != nil)
         #expect(first.token != second.token)
         #expect(second.generation == first.generation + 1)
+        #expect(authorization.cliHandoffConfiguration == .disabled)
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+
+        authorization.clear(generation: first.generation)
+        #expect(try authorization.authorizationHeader() == second.headerValue)
+        authorization.clear(generation: second.generation)
+        #expect(authorization.activeGeneration == nil)
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+        #expect(throws: JarvisIPCAuthorizationError.credentialUnavailable) {
+            _ = try authorization.authorizationHeader()
+        }
+    }
+
+    @Test("Explicit CLI handoff remains versioned, owner-only, and generation-bound")
+    func explicitCLIHandoffLifecycleAndPermissions() throws {
+        let directory = try temporaryDirectory(name: "jarvis-ipc-cli-handoff")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appending(path: "ipc-session-auth.json")
+        let authorization = JarvisIPCSessionAuthorization(
+            mode: .appSupervised,
+            cliHandoffConfiguration: .enabled(fileURL: file),
+            randomBytes: DeterministicAuthRandom().bytes
+        )
+
+        let firstValue = try authorization.rotateForLaunch()
+        let first = try #require(firstValue)
+        let secondValue = try authorization.rotateForLaunch()
+        let second = try #require(secondValue)
+
+        #expect(authorization.cliHandoffConfiguration == .enabled(fileURL: file))
+        #expect(first.token != second.token)
+        #expect(second.generation == first.generation + 1)
         let json = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
         #expect(json["version"] as? Int == 1)
         #expect(json["scheme"] as? String == "bearer")
@@ -5891,10 +6038,43 @@ struct IPCBearerAuthorizationTests {
 
         authorization.clear(generation: first.generation)
         #expect(try authorization.authorizationHeader() == second.headerValue)
+        #expect(FileManager.default.fileExists(atPath: file.path))
         authorization.clear(generation: second.generation)
         #expect(!FileManager.default.fileExists(atPath: file.path))
         #expect(throws: JarvisIPCAuthorizationError.credentialUnavailable) {
             _ = try authorization.authorizationHeader()
+        }
+    }
+
+    @Test("Token-file write failure blocks only an explicitly enabled CLI handoff")
+    func handoffWriteFailureIsOptInOnly() throws {
+        let directory = try temporaryDirectory(name: "jarvis-ipc-handoff-failure")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let blockedParent = directory.appending(path: "not-a-directory")
+        try Data("regular file".utf8).write(to: blockedParent)
+        let unavailableFile = blockedParent.appending(path: "ipc-session-auth.json")
+
+        let inMemory = JarvisIPCSessionAuthorization(
+            mode: .appSupervised,
+            tokenFileURL: unavailableFile,
+            randomBytes: DeterministicAuthRandom().bytes
+        )
+        let launchValue = try inMemory.rotateForLaunch()
+        let launch = try #require(launchValue)
+        #expect(try inMemory.authorizationHeader() == launch.headerValue)
+        #expect(!FileManager.default.fileExists(atPath: unavailableFile.path))
+
+        let handoff = JarvisIPCSessionAuthorization(
+            mode: .appSupervised,
+            cliHandoffConfiguration: .enabled(fileURL: unavailableFile),
+            randomBytes: DeterministicAuthRandom().bytes
+        )
+        #expect(throws: JarvisIPCAuthorizationError.tokenFileUnavailable) {
+            _ = try handoff.rotateForLaunch()
+        }
+        #expect(handoff.activeGeneration == nil)
+        #expect(throws: JarvisIPCAuthorizationError.credentialUnavailable) {
+            _ = try handoff.authorizationHeader()
         }
     }
 
@@ -5996,13 +6176,17 @@ struct IPCBearerAuthorizationTests {
         )
         await supervisor.start(environmentOverrides: [
             "JARVIS_IPC_TOKEN_FILE": "/tmp/must-not-reach-server",
+            "JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF": "true",
             "JARVIS_MAC_IPC_AUTH_FILE": "/tmp/must-not-reach-server"
         ])
         let first = try ipcAuth(from: #require(launcher.launches.first?.standardInput))
         #expect(!launcher.launches[0].arguments.joined().contains(first.token))
         #expect(!launcher.launches[0].environment.description.contains(first.token))
         #expect(launcher.launches[0].environment["JARVIS_IPC_TOKEN_FILE"] == nil)
+        #expect(launcher.launches[0].environment["JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF"] == nil)
         #expect(launcher.launches[0].environment["JARVIS_MAC_IPC_AUTH_FILE"] == nil)
+        #expect(authorization.activeGeneration == first.generation)
+        #expect(!FileManager.default.fileExists(atPath: authorization.tokenFileURL.path))
         #expect(!supervisor.smokeSnapshot.summary.contains(first.token))
 
         try await supervisor.provisionTrustedWake(
@@ -6013,9 +6197,14 @@ struct IPCBearerAuthorizationTests {
         let envelope = try #require(JSONSerialization.jsonObject(with: lastInput) as? [String: Any])
         #expect(second.token != first.token)
         #expect(second.generation == first.generation + 1)
+        #expect(authorization.activeGeneration == second.generation)
+        #expect(!FileManager.default.fileExists(atPath: authorization.tokenFileURL.path))
+        #expect(launcher.launches.last?.environment["JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF"] == nil)
+        #expect(launcher.launches.last?.environment["JARVIS_MAC_IPC_AUTH_FILE"] == nil)
         #expect((envelope["trusted_wake"] as? [String: Any])?["kind"] as? String == "bootstrap")
         #expect(await supervisor.stop())
         #expect(authorization.activeGeneration == nil)
+        #expect(!FileManager.default.fileExists(atPath: authorization.tokenFileURL.path))
     }
 
     @Test("Launch failure clears bearer state and an unauthenticated legacy core cannot pass preflight")

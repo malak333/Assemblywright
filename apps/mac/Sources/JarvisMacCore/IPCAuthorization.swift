@@ -14,6 +14,48 @@ public enum JarvisIPCAuthorizationError: Error, Equatable {
     case tokenFileUnavailable
 }
 
+public struct JarvisIPCCLIHandoffConfiguration: Equatable, Sendable {
+    public static let enableEnvironmentKey = "JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF"
+    public static let fileEnvironmentKey = "JARVIS_MAC_IPC_AUTH_FILE"
+    public static let disabled = Self(isEnabled: false, fileURL: nil, staleFileURL: nil)
+
+    public let isEnabled: Bool
+    public let fileURL: URL?
+    fileprivate let staleFileURL: URL?
+
+    private init(isEnabled: Bool, fileURL: URL?, staleFileURL: URL?) {
+        self.isEnabled = isEnabled
+        self.fileURL = fileURL
+        self.staleFileURL = staleFileURL
+    }
+
+    public static func enabled(fileURL: URL? = nil) -> Self {
+        guard let fileURL else {
+            return Self(isEnabled: true, fileURL: nil, staleFileURL: nil)
+        }
+        guard fileURL.isFileURL, fileURL.path.hasPrefix("/") else {
+            return .disabled
+        }
+        return Self(isEnabled: true, fileURL: fileURL, staleFileURL: fileURL)
+    }
+
+    public static func fromEnvironment(
+        _ environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Self {
+        let configuredPath = environment[fileEnvironmentKey]
+        let absoluteFileURL = configuredPath.flatMap { path in
+            path.hasPrefix("/") ? URL(fileURLWithPath: path) : nil
+        }
+        guard environment[enableEnvironmentKey] == "true" else {
+            return Self(isEnabled: false, fileURL: nil, staleFileURL: absoluteFileURL)
+        }
+        guard configuredPath == nil || absoluteFileURL != nil else {
+            return .disabled
+        }
+        return Self(isEnabled: true, fileURL: absoluteFileURL, staleFileURL: absoluteFileURL)
+    }
+}
+
 public struct JarvisIPCLaunchAuthorization: Equatable, Sendable {
     public let token: String
     public let generation: UInt64
@@ -31,8 +73,10 @@ private struct JarvisIPCAuthFile: Codable {
 public final class JarvisIPCSessionAuthorization: @unchecked Sendable {
     public let mode: JarvisIPCAuthorizationMode
     public let tokenFileURL: URL
+    public let cliHandoffConfiguration: JarvisIPCCLIHandoffConfiguration
 
     private let lock = NSLock()
+    private let staleTokenFileURLs: [URL]
     private let randomBytes: @Sendable (Int) throws -> Data
     private var active: JarvisIPCLaunchAuthorization?
     private var nextGeneration: UInt64 = 0
@@ -40,24 +84,26 @@ public final class JarvisIPCSessionAuthorization: @unchecked Sendable {
     public init(
         mode: JarvisIPCAuthorizationMode = .explicitUnauthenticated,
         tokenFileURL: URL? = nil,
+        cliHandoffConfiguration: JarvisIPCCLIHandoffConfiguration = .disabled,
         fileManager: FileManager = .default,
         randomBytes: (@Sendable (Int) throws -> Data)? = nil
     ) {
         self.mode = mode
+        self.cliHandoffConfiguration = cliHandoffConfiguration
         self.randomBytes = randomBytes ?? Self.secureRandomBytes
-        if let tokenFileURL {
-            self.tokenFileURL = tokenFileURL
-        } else {
-            let support = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-                ?? fileManager.homeDirectoryForCurrentUser
-                    .appending(path: "Library", directoryHint: .isDirectory)
-                    .appending(path: "Application Support", directoryHint: .isDirectory)
-            self.tokenFileURL = support
-                .appending(path: "Jarvis", directoryHint: .isDirectory)
-                .appending(path: "ipc-session-auth.json")
-        }
+        let defaultTokenFileURL = Self.defaultTokenFileURL(fileManager: fileManager)
+        let legacyTokenFileURL = tokenFileURL.flatMap(Self.absoluteFileURL)
+        self.tokenFileURL = cliHandoffConfiguration.isEnabled
+            ? cliHandoffConfiguration.fileURL ?? legacyTokenFileURL ?? defaultTokenFileURL
+            : defaultTokenFileURL
+        self.staleTokenFileURLs = Array(Set([
+            defaultTokenFileURL,
+            legacyTokenFileURL,
+            cliHandoffConfiguration.staleFileURL,
+            self.tokenFileURL
+        ].compactMap { $0 }))
         if mode == .appSupervised {
-            try? fileManager.removeItem(at: self.tokenFileURL)
+            removeStaleTokenFiles()
         }
     }
 
@@ -92,17 +138,21 @@ public final class JarvisIPCSessionAuthorization: @unchecked Sendable {
         nextGeneration += 1
         let candidate = JarvisIPCLaunchAuthorization(token: token, generation: nextGeneration)
         do {
-            let file = JarvisIPCAuthFile(
-                version: 1,
-                scheme: "bearer",
-                token: token,
-                generation: candidate.generation
-            )
-            try Self.atomicWrite(JSONEncoder().encode(file), to: tokenFileURL)
+            if cliHandoffConfiguration.isEnabled {
+                let file = JarvisIPCAuthFile(
+                    version: 1,
+                    scheme: "bearer",
+                    token: token,
+                    generation: candidate.generation
+                )
+                try Self.atomicWrite(JSONEncoder().encode(file), to: tokenFileURL)
+            }
             active = candidate
             lock.unlock()
             return candidate
         } catch {
+            active = nil
+            removeStaleTokenFiles()
             lock.unlock()
             throw JarvisIPCAuthorizationError.tokenFileUnavailable
         }
@@ -116,7 +166,7 @@ public final class JarvisIPCSessionAuthorization: @unchecked Sendable {
             return
         }
         active = nil
-        try? FileManager.default.removeItem(at: tokenFileURL)
+        removeStaleTokenFiles()
         lock.unlock()
     }
 
@@ -124,7 +174,7 @@ public final class JarvisIPCSessionAuthorization: @unchecked Sendable {
         guard mode == .appSupervised else { return }
         lock.lock()
         active = nil
-        try? FileManager.default.removeItem(at: tokenFileURL)
+        removeStaleTokenFiles()
         lock.unlock()
     }
 
@@ -159,6 +209,45 @@ public final class JarvisIPCSessionAuthorization: @unchecked Sendable {
         return data
     }
 
+    private static func absoluteFileURL(_ url: URL) -> URL? {
+        guard url.isFileURL, url.path.hasPrefix("/") else { return nil }
+        return url
+    }
+
+    private static func defaultTokenFileURL(fileManager: FileManager) -> URL {
+        let support = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? fileManager.homeDirectoryForCurrentUser
+                .appending(path: "Library", directoryHint: .isDirectory)
+                .appending(path: "Application Support", directoryHint: .isDirectory)
+        return support
+            .appending(path: "Jarvis", directoryHint: .isDirectory)
+            .appending(path: "ipc-session-auth.json")
+    }
+
+    private func removeStaleTokenFiles() {
+        for url in staleTokenFileURLs {
+            Self.removeLeafIfSafe(at: url)
+        }
+    }
+
+    private static func removeLeafIfSafe(at url: URL) {
+        guard url.isFileURL, url.path.hasPrefix("/") else { return }
+        url.withUnsafeFileSystemRepresentation { path in
+            guard let path else { return }
+            var metadata = stat()
+            guard Darwin.lstat(path, &metadata) == 0 else { return }
+            let fileType = metadata.st_mode & S_IFMT
+            let isSingleLinkRegularFile = fileType == S_IFREG && metadata.st_nlink == 1
+            let isSymbolicLink = fileType == S_IFLNK
+            guard isSingleLinkRegularFile || isSymbolicLink else { return }
+
+            // unlink is deliberately the final filesystem operation. It removes
+            // a symlink leaf without following it, and fails if a raced target
+            // has become a directory rather than recursively deleting anything.
+            _ = Darwin.unlink(path)
+        }
+    }
+
     private static func atomicWrite(_ data: Data, to url: URL) throws {
         let directory = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -171,7 +260,7 @@ public final class JarvisIPCSessionAuthorization: @unchecked Sendable {
         var shouldRemoveTemporary = true
         defer {
             _ = close(descriptor)
-            if shouldRemoveTemporary { try? FileManager.default.removeItem(at: temporary) }
+            if shouldRemoveTemporary { Self.removeLeafIfSafe(at: temporary) }
         }
         try data.withUnsafeBytes { bytes in
             guard let base = bytes.baseAddress else { return }
