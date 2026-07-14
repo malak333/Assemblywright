@@ -676,8 +676,13 @@ requires plugin-trust `generated_at`, `review_started_at`,
   an operator review queue only. The same tab now renders count-only
   `/memory/index/status` and invokes explicit `/memory/index/rebuild`. The
   versioned sibling manifest is atomically rebuilt from active SQLite rows;
-  SQLite remains canonical, corrupt/stale projections fail closed, and no
-  semantic retrieval, model-context injection, autonomous purge, or rewrite is performed.
+  SQLite remains canonical and corrupt/stale projections fail closed. A
+  separate disabled-by-default command option and Swift console toggle now
+  permit bounded deterministic lexical context for selected local,
+  non-proactive routes. Only reviewed active Public/Workspace/Personal records
+  are eligible. Private/CredentialAdjacent/Restricted, cloud, proactive, and
+  non-current-index paths fail closed. Vector/embedding retrieval, autonomous
+  purge, and rewrite are not performed.
 - Repository-backed IPC exposes `/memory/classification`, and the CLI exposes
   `jarvis memory classification`, as a read-only memory corpus summary. It
   groups memory by sensitivity and category, reports active/deleted/reviewed
@@ -901,6 +906,16 @@ requires plugin-trust `generated_at`, `review_started_at`,
   `swift test --disable-sandbox --package-path apps/mac --filter "Memory retention plan decodes redacted operator actions"`
   plus the package-wide `JarvisMacCoreTests` memory manager and IPC-client
   request tests.
+- Focused bounded memory-context proof is
+  `cargo test -p jarvis-core memory_index -- --nocapture`,
+  `cargo test -p jarvis-core local_memory_context -- --nocapture`, and
+  `cargo test -p jarvis-core stale_memory_index_blocks -- --nocapture`.
+  Cross-process CLI/server/provider proof is
+  `cargo test -p jarvis-cli --test local_ipc_e2e reviewed_local_memory_context_is_bounded_redacted_and_fails_closed_cross_process -- --nocapture`;
+  it captures the Ollama request, proves reviewed eligible inclusion plus
+  unreviewed/private exclusion, response/audit redaction, stale-index blocking,
+  and proactive denial. Swift opt-in proof is
+  `swift test --disable-sandbox --package-path apps/mac --filter commandConsoleMemoryContextIsExplicitOptIn`.
 - Focused release runbook IPC/App coverage is
   `cargo test -p jarvis-core release_runbooks_expose_current_evidence_without_side_effects -- --nocapture`
   plus

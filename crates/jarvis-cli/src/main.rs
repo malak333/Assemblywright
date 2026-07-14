@@ -110,6 +110,9 @@ enum CliCommand {
         endpoint: String,
         #[arg(long)]
         dry_run: bool,
+        /// Attach bounded reviewed local memory to a local-model command.
+        #[arg(long)]
+        memory_context: bool,
         #[arg(long)]
         sensitivity: Option<String>,
         /// Print the raw JSON command response.
@@ -992,6 +995,7 @@ async fn main() -> anyhow::Result<()> {
             input,
             endpoint,
             dry_run,
+            memory_context,
             sensitivity,
             json,
         } => {
@@ -1001,6 +1005,7 @@ async fn main() -> anyhow::Result<()> {
                 context: serde_json::Value::Null,
                 dry_run,
                 proactive: false,
+                memory_context,
                 sensitivity: sensitivity.as_deref().map(parse_sensitivity).transpose()?,
             })?;
             let response = server_required_request(&endpoint, "POST", "/commands", Some(&body))?;
@@ -3074,6 +3079,7 @@ async fn run_smoke() -> anyhow::Result<()> {
         context: serde_json::json!({ "surface": "cli-smoke" }),
         dry_run: true,
         proactive: false,
+        memory_context: false,
         sensitivity: None,
     })?;
     let command = request(&endpoint, "POST", "/commands", Some(&command_body))?;

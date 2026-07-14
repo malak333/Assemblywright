@@ -494,6 +494,8 @@ pub struct CommandRequest {
     #[serde(default)]
     pub proactive: bool,
     #[serde(default)]
+    pub memory_context: bool,
+    #[serde(default)]
     pub sensitivity: Option<Sensitivity>,
 }
 
@@ -2082,6 +2084,7 @@ impl IpcState {
                     .with_sensitivity(sensitivity)
                     .with_dry_run(request.dry_run)
                     .with_proactive(request.proactive)
+                    .with_memory_context(request.memory_context)
                     .with_expected_workspace_request(expected_workspace_request),
             )
             .await?;
@@ -3728,6 +3731,7 @@ impl IpcState {
                 }),
                 dry_run: false,
                 proactive: true,
+                memory_context: false,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await?;
@@ -3840,6 +3844,7 @@ impl IpcState {
                     }),
                     dry_run: false,
                     proactive: true,
+                    memory_context: false,
                     sensitivity: Some(Sensitivity::Workspace),
                 })
                 .await?;
@@ -4273,6 +4278,23 @@ impl RuntimeCommandStore for SharedCommandStore {
                 .expect("IPC repository lock poisoned")
                 .append_model_route_record(record),
             None => crate::NoopRuntimeCommandStore.append_model_route_record(record),
+        }
+    }
+
+    fn retrieve_memory_context(
+        &self,
+        query: &str,
+        sensitivity: Sensitivity,
+        control: &mut dyn FnMut() -> crate::MemoryRetrievalControl,
+    ) -> JarvisResult<crate::MemoryRetrieval> {
+        match &self.repository {
+            Some(repository) => repository
+                .lock()
+                .expect("IPC repository lock poisoned")
+                .retrieve_memory_context_with_control(query, sensitivity, control),
+            None => {
+                crate::NoopRuntimeCommandStore.retrieve_memory_context(query, sensitivity, control)
+            }
         }
     }
 }
@@ -7977,7 +7999,13 @@ fn contract_features() -> Vec<ContractFeature> {
             "memory_index_governance",
             "implemented",
             "Versioned local memory-index manifests are atomically rebuilt from canonical active SQLite memory records; redacted status reports current, missing, stale, deleted, orphaned, and corrupt projection counts with Rust, CLI IPC E2E, and Swift coverage.",
-            "Governance and rebuild lifecycle only; SQLite remains canonical, and the projection is not used for semantic retrieval, model context, cloud routing, or autonomous memory rewriting.",
+            "SQLite remains canonical and the projection is a local rebuildable eligibility gate, not a source of memory values, cloud context, or autonomous rewriting.",
+        ),
+        feature(
+            "bounded_local_memory_retrieval",
+            "implemented",
+            "Explicit CLI and Swift opt-in can attach deterministic lexical context to a selected local non-proactive route. Retrieval requires a current index, reviewed active Public/Workspace/Personal records, strict query/item/corpus/result/context caps, pause/cancel checks, untrusted-data framing, redacted audit counts, and is covered by Rust unit, cross-process CLI/Ollama-stub, and Swift tests.",
+            "Disabled by default and local-model-only. Private, CredentialAdjacent, Restricted, unreviewed, deleted, missing/stale/corrupt, proactive, cloud, and over-budget paths fail closed. This is not vector/embedding search, automatic retrieval, autonomous memory rewrite/purge, or production relevance proof.",
         ),
         feature(
             "approval_execution",
@@ -11814,6 +11842,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 context: json!({"surface": "test"}),
                 dry_run: true,
                 proactive: false,
+                memory_context: false,
                 sensitivity: None,
             })
             .await
@@ -11889,6 +11918,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 context: json!({"surface": "test"}),
                 dry_run: false,
                 proactive: false,
+                memory_context: false,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -12006,6 +12036,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 context: json!({"surface": "test"}),
                 dry_run: false,
                 proactive: false,
+                memory_context: false,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -12040,6 +12071,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 context: json!({"surface": "test"}),
                 dry_run: false,
                 proactive: false,
+                memory_context: false,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -12100,6 +12132,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 context: json!({"surface": "test"}),
                 dry_run: false,
                 proactive: false,
+                memory_context: false,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -12329,6 +12362,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 context: json!({"surface": "test", "sensitivity": "workspace"}),
                 dry_run: false,
                 proactive: false,
+                memory_context: false,
                 sensitivity: None,
             })
             .await
@@ -12361,6 +12395,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 context: json!({"surface": "test"}),
                 dry_run: true,
                 proactive: false,
+                memory_context: false,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -12389,6 +12424,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 context: json!({"surface": "test"}),
                 dry_run: false,
                 proactive: false,
+                memory_context: false,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -12428,6 +12464,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 context: json!({"surface": "test"}),
                 dry_run: false,
                 proactive: false,
+                memory_context: false,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -13299,6 +13336,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 context: json!({"surface": "test"}),
                 dry_run: true,
                 proactive: false,
+                memory_context: false,
                 sensitivity: Some(Sensitivity::Private),
             })
             .await
@@ -13338,6 +13376,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 context: json!({ "surface": "test" }),
                 dry_run: true,
                 proactive: false,
+                memory_context: false,
                 sensitivity: Some(Sensitivity::Private),
             })
             .await
@@ -13489,6 +13528,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 context: serde_json::Value::Null,
                 dry_run: false,
                 proactive: false,
+                memory_context: false,
                 sensitivity: None,
             })
             .await
@@ -13542,6 +13582,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 context: serde_json::Value::Null,
                 dry_run: false,
                 proactive: false,
+                memory_context: false,
                 sensitivity: None,
             })
             .await

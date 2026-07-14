@@ -34,7 +34,11 @@ pub use ipc::{
     MAX_SCHEDULER_BACKGROUND_LIMIT,
 };
 pub use memory_index::{
-    MemoryIndexState, MemoryIndexStatus, MemoryIndexStore, MEMORY_INDEX_VERSION,
+    MemoryIndexState, MemoryIndexStatus, MemoryIndexStore, MemoryRetrieval, MemoryRetrievalControl,
+    MAX_MEMORY_RETRIEVAL_CONTEXT_BYTES, MAX_MEMORY_RETRIEVAL_CORPUS_BYTES,
+    MAX_MEMORY_RETRIEVAL_ITEM_BYTES, MAX_MEMORY_RETRIEVAL_QUERY_BYTES,
+    MAX_MEMORY_RETRIEVAL_QUERY_TERMS, MAX_MEMORY_RETRIEVAL_RESULTS,
+    MAX_MEMORY_RETRIEVAL_TERM_BYTES, MEMORY_INDEX_VERSION,
 };
 pub use model::{
     redact_url_credentials, ChatGptAuthMode, ChatGptHttpModel, ChatGptProviderConfig,

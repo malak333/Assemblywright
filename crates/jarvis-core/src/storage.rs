@@ -25,7 +25,10 @@ use crate::{
     PluginManifest, RiskTier, SchedulerJob, SchedulerJobStatus, Sensitivity, TaskRecord,
     TaskStatus, TriggerKind,
 };
-use crate::{MemoryIndexStatus, MemoryIndexStore};
+use crate::{
+    MemoryIndexStatus, MemoryIndexStore, MemoryRetrieval, MemoryRetrievalControl,
+    MAX_MEMORY_RETRIEVAL_CORPUS_BYTES,
+};
 
 const CURRENT_SCHEMA_VERSION: i64 = 12;
 
@@ -594,6 +597,70 @@ impl SqliteRepository {
         self.rebuild_memory_index_with_hook(|| {})
     }
 
+    pub fn retrieve_memory_context_with_control(
+        &self,
+        query: &str,
+        sensitivity: Sensitivity,
+        control: &mut dyn FnMut() -> MemoryRetrievalControl,
+    ) -> JarvisResult<MemoryRetrieval> {
+        self.retrieve_memory_context_with_control_and_hook(query, sensitivity, control, || {})
+    }
+
+    fn retrieve_memory_context_with_control_and_hook(
+        &self,
+        query: &str,
+        sensitivity: Sensitivity,
+        control: &mut dyn FnMut() -> MemoryRetrievalControl,
+        after_snapshot: impl FnOnce(),
+    ) -> JarvisResult<MemoryRetrieval> {
+        ensure_memory_retrieval_control(control())?;
+        let path = self.memory_index_path.as_ref().ok_or_else(|| {
+            JarvisError::Storage("memory index artifact path is not configured".to_string())
+        })?;
+        let data_version_before = self.sqlite_data_version()?;
+        let canonical_bytes = self
+            .conn
+            .query_row(
+                "SELECT COALESCE(SUM(
+                    length(CAST(category AS BLOB))
+                    + length(CAST(key AS BLOB))
+                    + length(CAST(value AS BLOB))
+                    + length(CAST(provenance AS BLOB))
+                 ), 0)
+                 FROM memory_items
+                 WHERE deleted_at IS NULL",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(storage_error)?;
+        let canonical_bytes = usize::try_from(canonical_bytes).map_err(|_| {
+            JarvisError::Validation(
+                "active memory corpus exceeds the retrieval byte range".to_string(),
+            )
+        })?;
+        if canonical_bytes > MAX_MEMORY_RETRIEVAL_CORPUS_BYTES {
+            return Err(JarvisError::Validation(
+                "active memory corpus exceeds the retrieval byte limit".to_string(),
+            ));
+        }
+        ensure_memory_retrieval_control(control())?;
+        let items = self.list_memory_items(false)?;
+        let retrieval = MemoryIndexStore::new(path).retrieve_with_control(
+            &items,
+            query,
+            sensitivity,
+            &mut *control,
+        )?;
+        after_snapshot();
+        if self.sqlite_data_version()? != data_version_before {
+            return Err(JarvisError::Storage(
+                "canonical memory changed during retrieval; retry".to_string(),
+            ));
+        }
+        ensure_memory_retrieval_control(control())?;
+        Ok(retrieval)
+    }
+
     fn rebuild_memory_index_with_hook(
         &self,
         after_manifest_write: impl FnOnce(),
@@ -631,7 +698,8 @@ impl SqliteRepository {
             .conn
             .execute(
                 "UPDATE memory_items
-                 SET value = ?1, provenance = ?2, sensitivity = ?3, updated_at = ?4
+                 SET value = ?1, provenance = ?2, sensitivity = ?3,
+                     reviewed_at = NULL, updated_at = ?4
                  WHERE id = ?5 AND deleted_at IS NULL",
                 params![
                     value.into(),
@@ -3679,6 +3747,18 @@ fn sensitivity_from_str(value: &str) -> rusqlite::Result<Sensitivity> {
     })
 }
 
+fn ensure_memory_retrieval_control(control: MemoryRetrievalControl) -> JarvisResult<()> {
+    match control {
+        MemoryRetrievalControl::Continue => Ok(()),
+        MemoryRetrievalControl::Cancelled => Err(JarvisError::PolicyBlocked(
+            "memory retrieval cancelled".to_string(),
+        )),
+        MemoryRetrievalControl::EmergencyPaused => Err(JarvisError::PolicyBlocked(
+            "memory retrieval blocked by emergency pause".to_string(),
+        )),
+    }
+}
+
 fn storage_error(error: rusqlite::Error) -> JarvisError {
     JarvisError::Storage(error.to_string())
 }
@@ -4782,6 +4862,57 @@ mod tests {
         let status = first.memory_index_status().unwrap();
         assert_eq!(status.state, crate::MemoryIndexState::Stale);
         assert_eq!(status.stale_entry_count, 1);
+    }
+
+    #[test]
+    fn memory_retrieval_fails_closed_when_canonical_memory_changes_during_snapshot() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("jarvis.sqlite");
+        let first = SqliteRepository::open(&db_path).unwrap();
+        let memory = first
+            .create_memory_item(NewMemoryItem {
+                category: "workflow".to_string(),
+                key: "atlas-release".to_string(),
+                value: "reviewed atlas release gate".to_string(),
+                provenance: "operator review".to_string(),
+                sensitivity: Sensitivity::Workspace,
+            })
+            .unwrap();
+        first.mark_memory_reviewed(memory.id).unwrap();
+        first.rebuild_memory_index().unwrap();
+
+        let second = SqliteRepository::open(&db_path).unwrap();
+        let mut control = || MemoryRetrievalControl::Continue;
+        let result = first.retrieve_memory_context_with_control_and_hook(
+            "prepare atlas release gate",
+            Sensitivity::Workspace,
+            &mut control,
+            || {
+                second
+                    .update_memory_item(
+                        memory.id,
+                        "changed by another connection",
+                        "concurrent writer",
+                        Sensitivity::Workspace,
+                    )
+                    .unwrap();
+            },
+        );
+
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("changed during retrieval"));
+        assert!(!error.contains("reviewed atlas release gate"));
+        assert!(!error.contains("changed by another connection"));
+        assert!(first
+            .get_memory_item(memory.id)
+            .unwrap()
+            .unwrap()
+            .reviewed_at
+            .is_none());
+        assert_eq!(
+            first.memory_index_status().unwrap().state,
+            crate::MemoryIndexState::Stale
+        );
     }
 
     #[cfg(unix)]

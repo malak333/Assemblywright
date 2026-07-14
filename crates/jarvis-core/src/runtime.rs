@@ -14,10 +14,13 @@ use crate::plugin::{
     plugin_permission_scopes, PluginCallRequest, PluginCallResult, PluginCallStatus, PluginHost,
     PluginSource,
 };
-use crate::router::{ModelRouteRecord, ModelRouteRequest, ModelRouter, RouteOutcome};
+use crate::router::{
+    ModelProvider as RouteModelProvider, ModelRouteRecord, ModelRouteRequest, ModelRouter,
+    RouteOutcome,
+};
 use crate::storage::SqliteRepository;
 use crate::types::{AuditEntry, JarvisResult, Sensitivity, TaskRecord, TaskStatus};
-use crate::CapabilityScope;
+use crate::{CapabilityScope, JarvisError, MemoryRetrieval, MemoryRetrievalControl};
 
 const MAX_TASK_TOOL_OUTPUT_BYTES: usize = 128 * 1024;
 const MAX_ACTIVE_RUNTIME_CANCELLATIONS: usize = 128;
@@ -70,6 +73,8 @@ pub struct CommandRequest {
     #[serde(default)]
     pub proactive: bool,
     #[serde(default)]
+    pub memory_context: bool,
+    #[serde(default)]
     pub expected_workspace_request: Option<serde_json::Value>,
 }
 
@@ -81,6 +86,7 @@ impl CommandRequest {
             sensitivity: Sensitivity::Personal,
             dry_run: false,
             proactive: false,
+            memory_context: false,
             expected_workspace_request: None,
         }
     }
@@ -102,6 +108,11 @@ impl CommandRequest {
 
     pub fn with_proactive(mut self, proactive: bool) -> Self {
         self.proactive = proactive;
+        self
+    }
+
+    pub fn with_memory_context(mut self, memory_context: bool) -> Self {
+        self.memory_context = memory_context;
         self
     }
 
@@ -294,6 +305,16 @@ pub trait RuntimeCommandStore {
     fn update_task_status(&self, task: &mut TaskRecord, status: TaskStatus) -> JarvisResult<()>;
     fn append_audit_entry(&self, entry: &AuditEntry) -> JarvisResult<()>;
     fn append_model_route_record(&self, record: &ModelRouteRecord) -> JarvisResult<()>;
+    fn retrieve_memory_context(
+        &self,
+        _query: &str,
+        _sensitivity: Sensitivity,
+        _control: &mut dyn FnMut() -> MemoryRetrievalControl,
+    ) -> JarvisResult<MemoryRetrieval> {
+        Err(JarvisError::Storage(
+            "memory retrieval requires repository-backed storage".to_string(),
+        ))
+    }
 }
 
 #[derive(Debug, Default)]
@@ -346,6 +367,15 @@ where
     fn append_model_route_record(&self, record: &ModelRouteRecord) -> JarvisResult<()> {
         (*self).append_model_route_record(record)
     }
+
+    fn retrieve_memory_context(
+        &self,
+        query: &str,
+        sensitivity: Sensitivity,
+        control: &mut dyn FnMut() -> MemoryRetrievalControl,
+    ) -> JarvisResult<MemoryRetrieval> {
+        (*self).retrieve_memory_context(query, sensitivity, control)
+    }
 }
 
 impl RuntimeCommandStore for SqliteRepository {
@@ -364,6 +394,15 @@ impl RuntimeCommandStore for SqliteRepository {
 
     fn append_model_route_record(&self, record: &ModelRouteRecord) -> JarvisResult<()> {
         SqliteRepository::append_model_route_record(self, record)
+    }
+
+    fn retrieve_memory_context(
+        &self,
+        query: &str,
+        sensitivity: Sensitivity,
+        control: &mut dyn FnMut() -> MemoryRetrievalControl,
+    ) -> JarvisResult<MemoryRetrieval> {
+        self.retrieve_memory_context_with_control(query, sensitivity, control)
     }
 }
 
@@ -537,6 +576,147 @@ where
             ));
         }
 
+        let memory_context = if request.memory_context {
+            if request.proactive
+                || route_record.selected_provider != Some(RouteModelProvider::Local)
+            {
+                self.update_task_status(&mut task, TaskStatus::Blocked)?;
+                self.record_audit(
+                    &mut audit_entries,
+                    AuditEntry::new(
+                        Some(task.id),
+                        "memory_context_blocked",
+                        "memory context request failed closed before retrieval",
+                        json!({
+                            "requested": true,
+                            "proactive": request.proactive,
+                            "local_route": route_record.selected_provider == Some(RouteModelProvider::Local),
+                            "retrieval_query_omitted": true,
+                            "values_redacted": true,
+                        }),
+                    ),
+                )?;
+                return Ok(self.finish(
+                    task,
+                    "Memory context is available only for explicit, non-proactive local-model commands.",
+                    None,
+                    Some(route_record),
+                    vec![],
+                    audit_entries,
+                ));
+            }
+            let mut control = || {
+                if self.control.is_emergency_paused() {
+                    MemoryRetrievalControl::EmergencyPaused
+                } else if self.control.is_task_cancelled(task.id) {
+                    MemoryRetrievalControl::Cancelled
+                } else {
+                    MemoryRetrievalControl::Continue
+                }
+            };
+            match self.command_store.retrieve_memory_context(
+                &task.user_input,
+                request.sensitivity,
+                &mut control,
+            ) {
+                Ok(retrieval) => {
+                    self.record_audit(
+                        &mut audit_entries,
+                        AuditEntry::new(
+                            Some(task.id),
+                            "memory_context_checked",
+                            "bounded local memory context was evaluated",
+                            json!({
+                                "requested": true,
+                                "attached": !retrieval.context.is_empty(),
+                                "matched_count": retrieval.matched_count,
+                                "omitted_count": retrieval.omitted_count,
+                                "context_bytes": retrieval.context.len(),
+                                "highest_sensitivity": retrieval.highest_sensitivity,
+                                "retrieval_query_omitted": true,
+                                "values_redacted": true,
+                                "identifiers_redacted": true,
+                            }),
+                        ),
+                    )?;
+                    (!retrieval.context.is_empty()).then_some(retrieval.context)
+                }
+                Err(_)
+                    if self.control.is_emergency_paused()
+                        || self.control.is_task_cancelled(task.id) =>
+                {
+                    let emergency_paused = self.control.is_emergency_paused();
+                    if !emergency_paused {
+                        self.control.clear_task_cancellation(task.id);
+                    }
+                    self.update_task_status(&mut task, TaskStatus::Cancelled)?;
+                    self.record_audit(
+                        &mut audit_entries,
+                        AuditEntry::new(
+                            Some(task.id),
+                            if emergency_paused {
+                                "emergency_pause_cancelled"
+                            } else {
+                                "task_cancelled"
+                            },
+                            "memory retrieval was cancelled before model execution",
+                            json!({
+                                "memory_context_requested": true,
+                                "retrieval_query_omitted": true,
+                                "values_redacted": true,
+                            }),
+                        ),
+                    )?;
+                    return Ok(self.finish(
+                        task,
+                        if emergency_paused {
+                            "Command cancelled because emergency pause was activated."
+                        } else {
+                            "Command cancelled."
+                        },
+                        None,
+                        Some(route_record),
+                        vec![],
+                        audit_entries,
+                    ));
+                }
+                Err(error) => {
+                    let failure_kind = match error {
+                        JarvisError::Validation(_) => "invalid_or_over_budget",
+                        JarvisError::Storage(_) => "index_unavailable_or_invalid",
+                        JarvisError::PolicyBlocked(_) => "policy_blocked",
+                        _ => "internal_failure",
+                    };
+                    self.update_task_status(&mut task, TaskStatus::Blocked)?;
+                    self.record_audit(
+                        &mut audit_entries,
+                        AuditEntry::new(
+                            Some(task.id),
+                            "memory_context_blocked",
+                            "memory context retrieval failed closed",
+                            json!({
+                                "requested": true,
+                                "failure_kind": failure_kind,
+                                "retrieval_query_omitted": true,
+                                "values_redacted": true,
+                                "identifiers_redacted": true,
+                            }),
+                        ),
+                    )?;
+                    return Ok(self.finish(
+                        task,
+                        "Memory context is unavailable; rebuild the local memory index or retry without memory context.",
+                        None,
+                        Some(route_record),
+                        vec![],
+                        audit_entries,
+                    ));
+                }
+            }
+        } else {
+            None
+        };
+
         self.update_task_status(&mut task, TaskStatus::Running)?;
         self.record_audit(
             &mut audit_entries,
@@ -650,6 +830,7 @@ where
                 user_input: task.user_input.clone(),
                 step_index,
                 tool_results: tool_results.clone(),
+                memory_context: memory_context.clone(),
                 first_party_tools: self.registered_first_party_model_tools_for_provider(
                     route_evidence
                         .as_ref()
@@ -1585,6 +1766,7 @@ mod tests {
         PluginActionManifest, PluginManifest, PluginPermission, PluginTimeout,
     };
     use crate::router::{ModelProvider as RoutedModelProvider, RouteOutcome};
+    use crate::storage::NewMemoryItem;
     use crate::types::TaskStatus;
     use axum::routing::post;
     use axum::{Json, Router};
@@ -1700,6 +1882,167 @@ mod tests {
                 .len(),
             6
         );
+    }
+
+    #[tokio::test]
+    async fn explicit_local_memory_context_injects_only_reviewed_eligible_records() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db_path = dir.path().join("jarvis.sqlite");
+        let repo = SqliteRepository::open(&db_path).expect("sqlite repository");
+        let eligible = repo
+            .create_memory_item(NewMemoryItem {
+                category: "workflow".to_string(),
+                key: "release-alpha".to_string(),
+                value: "run the alpha release gate before delivery".to_string(),
+                provenance: "operator reviewed note".to_string(),
+                sensitivity: Sensitivity::Workspace,
+            })
+            .expect("eligible memory");
+        repo.mark_memory_reviewed(eligible.id)
+            .expect("review eligible memory");
+        repo.create_memory_item(NewMemoryItem {
+            category: "workflow".to_string(),
+            key: "release-alpha-draft".to_string(),
+            value: "unreviewed alpha draft must not be injected".to_string(),
+            provenance: "unreviewed note".to_string(),
+            sensitivity: Sensitivity::Workspace,
+        })
+        .expect("unreviewed memory");
+        let private = repo
+            .create_memory_item(NewMemoryItem {
+                category: "personal".to_string(),
+                key: "release-alpha-secret".to_string(),
+                value: "private alpha value must not be injected".to_string(),
+                provenance: "private note".to_string(),
+                sensitivity: Sensitivity::Private,
+            })
+            .expect("private memory");
+        repo.mark_memory_reviewed(private.id)
+            .expect("review private memory");
+        repo.rebuild_memory_index().expect("current memory index");
+
+        let captured_contexts = Arc::new(Mutex::new(Vec::new()));
+        let runtime = ConversationRuntime::with_storage_parts(
+            RuntimeConfig::default(),
+            RuntimeControl::default(),
+            MemoryCaptureModel {
+                captured_contexts: captured_contexts.clone(),
+            },
+            NoopRuntimeHooks,
+            &repo,
+        );
+        let response = runtime
+            .execute_command(
+                CommandRequest::new("prepare alpha release delivery")
+                    .with_sensitivity(Sensitivity::Workspace)
+                    .with_memory_context(true),
+            )
+            .await
+            .expect("memory-backed command");
+
+        assert_eq!(response.task.status, TaskStatus::Completed);
+        let contexts = captured_contexts.lock().expect("captured contexts");
+        let context = contexts[0].as_deref().expect("attached context");
+        assert!(context.contains("run the alpha release gate before delivery"));
+        assert!(!context.contains("unreviewed alpha draft"));
+        assert!(!context.contains("private alpha value"));
+        let audit = response
+            .audit_entries
+            .iter()
+            .find(|entry| entry.event_type == "memory_context_checked")
+            .expect("redacted memory audit");
+        assert_eq!(audit.payload["matched_count"], 1);
+        assert_eq!(audit.payload["values_redacted"], true);
+        assert!(!audit.payload.to_string().contains("release gate"));
+    }
+
+    #[tokio::test]
+    async fn stale_memory_index_blocks_before_model_execution_without_values() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let repo =
+            SqliteRepository::open(dir.path().join("jarvis.sqlite")).expect("sqlite repository");
+        let item = repo
+            .create_memory_item(NewMemoryItem {
+                category: "workflow".to_string(),
+                key: "stale-memory".to_string(),
+                value: "stale sentinel must remain private from audit".to_string(),
+                provenance: "operator note".to_string(),
+                sensitivity: Sensitivity::Workspace,
+            })
+            .expect("memory");
+        repo.mark_memory_reviewed(item.id).expect("review memory");
+        repo.rebuild_memory_index().expect("initial index");
+        repo.update_memory_item(
+            item.id,
+            "changed stale sentinel must remain private from audit",
+            "updated operator note",
+            Sensitivity::Workspace,
+        )
+        .expect("stale canonical update");
+        let executions = Arc::new(AtomicUsize::new(0));
+        let runtime = ConversationRuntime::with_storage_parts(
+            RuntimeConfig::default(),
+            RuntimeControl::default(),
+            CountingModel {
+                executions: executions.clone(),
+            },
+            NoopRuntimeHooks,
+            &repo,
+        );
+        let response = runtime
+            .execute_command(
+                CommandRequest::new("find stale memory")
+                    .with_sensitivity(Sensitivity::Workspace)
+                    .with_memory_context(true),
+            )
+            .await
+            .expect("structured fail-closed response");
+
+        assert_eq!(response.task.status, TaskStatus::Blocked);
+        assert_eq!(executions.load(Ordering::SeqCst), 0);
+        let audit_json = serde_json::to_string(&response.audit_entries).expect("audit json");
+        assert!(audit_json.contains("memory_context_blocked"));
+        assert!(!audit_json.contains("stale sentinel"));
+    }
+
+    #[tokio::test]
+    async fn oversized_active_memory_corpus_blocks_before_model_execution() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let repo =
+            SqliteRepository::open(dir.path().join("jarvis.sqlite")).expect("sqlite repository");
+        let oversized = repo
+            .create_memory_item(NewMemoryItem {
+                category: "personal".to_string(),
+                key: "oversized-private".to_string(),
+                value: "x".repeat(crate::MAX_MEMORY_RETRIEVAL_CORPUS_BYTES + 1),
+                provenance: "oversized fixture".to_string(),
+                sensitivity: Sensitivity::Private,
+            })
+            .expect("oversized memory fixture");
+        repo.mark_memory_reviewed(oversized.id)
+            .expect("review oversized memory");
+        repo.rebuild_memory_index().expect("index fixture");
+        let executions = Arc::new(AtomicUsize::new(0));
+        let runtime = ConversationRuntime::with_storage_parts(
+            RuntimeConfig::default(),
+            RuntimeControl::default(),
+            CountingModel {
+                executions: executions.clone(),
+            },
+            NoopRuntimeHooks,
+            &repo,
+        );
+        let response = runtime
+            .execute_command(CommandRequest::new("oversized memory").with_memory_context(true))
+            .await
+            .expect("bounded failure response");
+
+        assert_eq!(response.task.status, TaskStatus::Blocked);
+        assert_eq!(executions.load(Ordering::SeqCst), 0);
+        assert!(response
+            .audit_entries
+            .iter()
+            .any(|entry| entry.event_type == "memory_context_blocked"));
     }
 
     #[tokio::test]
@@ -2411,6 +2754,27 @@ mod tests {
 
     struct CountingModel {
         executions: Arc<AtomicUsize>,
+    }
+
+    struct MemoryCaptureModel {
+        captured_contexts: Arc<Mutex<Vec<Option<String>>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl ModelExecutor for MemoryCaptureModel {
+        async fn execute(&self, request: ModelRequest) -> JarvisResult<ModelResponse> {
+            self.captured_contexts
+                .lock()
+                .expect("captured memory contexts")
+                .push(request.memory_context);
+            Ok(ModelResponse {
+                route: ModelRoute::fake_local("memory capture model"),
+                message: "captured memory context".to_string(),
+                complete: true,
+                output_chunks: Vec::new(),
+                tool_requests: Vec::new(),
+            })
+        }
     }
 
     #[async_trait::async_trait]

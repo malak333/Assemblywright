@@ -147,9 +147,10 @@ release requirements, not optional UX guidance.
   Legacy bootstrap can create or idempotently confirm an enrollment only; it
   cannot rotate a key or command. Normal key rotation requires an old-key,
   active-session, domain-separated P-256 signature. Lost-key recovery requires
-  the stronger exact destructive confirmation but is an unauthenticated local
-  operator path: the phrase prevents accidents and is not authorization,
-  device authentication, ownership proof, or same-user/process isolation.
+  the stronger exact destructive confirmation. The packaged app path also
+  requires its per-launch bearer, while an explicitly launched legacy server
+  remains unauthenticated; in either mode the phrase prevents accidents and is
+  not device authentication, ownership proof, or same-user/process isolation.
   Prepare runs in one immediate transaction, rejects ambiguous dispatch,
   blocks accepted old-generation work, disables and advances the rule, resets
   replay high-water, stores only a bounded one-shot token hash, and quarantines
@@ -167,6 +168,13 @@ release requirements, not optional UX guidance.
 - Diagnostics exports must redact credentials, command bodies, scheduler
   commands, audit payloads, memory values, raw cancellation reasons, and other
   sensitive payloads.
+- Memory context is explicit opt-in and local-model-only. Retrieval requires a
+  current canonical index, a non-proactive command, and reviewed active memory.
+  Automatic context may include only Public, Workspace, or Personal records;
+  Private, CredentialAdjacent, Restricted, unreviewed, deleted, stale,
+  corrupt, missing, oversized, or over-budget input must fail closed. Context
+  is capped at four records and 4 KiB, framed as untrusted data, never persisted
+  in route/audit evidence, and rejected by cloud adapters before transport.
 
 ## V1 Blocks
 
@@ -230,3 +238,10 @@ Safety regressions should fail release verification:
 - Diagnostics containing raw secrets.
 - Diagnostics exposing command bodies, memory values, scheduler command text,
   audit payloads, or cancellation reason text.
+- Memory retrieval running without explicit opt-in, on proactive or cloud
+  routes, against a non-current index, for unreviewed/deleted/high-sensitivity
+  records, beyond query/item/corpus/result/context caps, without pause/cancel
+  checks, with the query duplicated into retrieval-specific audit fields, or
+  with retrieved value/key/provenance/identifier/score/context leakage in
+  audit, diagnostics, route evidence, errors, or debug output. Existing
+  task/route/model-request surfaces retain their normal user-command visibility.
