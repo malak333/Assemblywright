@@ -6613,8 +6613,8 @@ struct TrustedWakeContractsTests {
         let first = Task { @MainActor in
             try await supervisor.provisionTrustedWake(using: provider)
         }
-        await Task.yield()
-        #expect(provider.waitUntilStarted())
+        let providerStarted = await provider.waitUntilStarted()
+        #expect(providerStarted)
 
         do {
             try await supervisor.provisionTrustedWake(
@@ -6660,8 +6660,8 @@ struct TrustedWakeContractsTests {
         let provision = Task { @MainActor in
             try await supervisor.provisionTrustedWake(using: provider)
         }
-        await Task.yield()
-        #expect(provider.waitUntilStarted())
+        let providerStarted = await provider.waitUntilStarted()
+        #expect(providerStarted)
 
         let stopped = await supervisor.stop()
         #expect(stopped)
@@ -7267,7 +7267,8 @@ private final class WorkspaceRootReleaseFlag: @unchecked Sendable {
 
 private final class ControlledBootstrapProvider: TrustedWakeBootstrapProviding, @unchecked Sendable {
     private let data: Data
-    private let started = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var started = false
     private let release = DispatchSemaphore(value: 0)
 
     init(data: Data) {
@@ -7275,13 +7276,22 @@ private final class ControlledBootstrapProvider: TrustedWakeBootstrapProviding, 
     }
 
     func bootstrapData() throws -> Data? {
-        started.signal()
+        lock.withLock { started = true }
         release.wait()
         return data
     }
 
-    func waitUntilStarted() -> Bool {
-        started.wait(timeout: .now() + 2) == .success
+    func waitUntilStarted() async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(5))
+        while clock.now < deadline {
+            let didStart = lock.withLock { started }
+            if didStart {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        return lock.withLock { started }
     }
 
     func resume() {

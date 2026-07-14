@@ -232,6 +232,8 @@ stage or when a PR needs focused evidence for one ownership slice.
 - `swift build --disable-sandbox --package-path apps/mac`
 - Focused supervision proof for branches that touch Swift core launch or bundle
   discovery: `./scripts/packaged-supervision-proof.sh`
+- Confirm concurrent trusted-wake provision tests use an async bounded provider
+  readiness wait and never block the main actor on a semaphore.
 - Distribution packaging preflight for branches that touch release packaging,
   signing, entitlements, or notarization:
   `./scripts/package-distribution.sh --check`
