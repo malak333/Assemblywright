@@ -581,6 +581,7 @@ cargo run -p jarvis-cli -- memory index-status
 cargo run -p jarvis-cli -- memory index-rebuild
 cargo run -p jarvis-cli -- memory create workflow release-gate "run local gate before PR" --provenance "manual note" --sensitivity workspace
 cargo run -p jarvis-cli -- memory restore <memory-id>
+cargo run -p jarvis-cli -- command "prepare the release gate" --memory-context --sensitivity workspace
 cargo run -p jarvis-cli -- scheduler attention
 cargo run -p jarvis-cli -- diagnostics export
 ```
@@ -596,7 +597,12 @@ export. `jarvis diagnostics export` exposes aggregate active, unreviewed, and
 sensitive memory counts when repository backing is enabled.
 `jarvis memory index-status` reports only projection state and counts;
 `jarvis memory index-rebuild` atomically replaces the versioned local manifest
-from active SQLite records. Neither command performs retrieval or model routing.
+from active SQLite records. They do not themselves perform retrieval or model
+routing. `jarvis command --memory-context` is a separate explicit opt-in. It
+retrieves at most four reviewed active Public/Workspace/Personal records into a
+4 KiB untrusted context only after a local, non-proactive route is selected.
+Missing/stale/corrupt projections, high-sensitivity records, cloud routes, and
+proactive requests fail closed; audit and route evidence contain counts only.
 `jarvis release readiness` is read-only and summarizes implemented feature
 proofs, pending feature boundaries, recommended verification commands, and
 manual production blockers. The default CLI output is operator-readable and
@@ -836,6 +842,11 @@ cargo test -p jarvis-core
 cargo test -p jarvis-core release_evidence_status -- --nocapture
 cargo test -p jarvis-core permission_policy_review -- --nocapture
 cargo test -p jarvis-core permission_policy_review_summarizes_unreviewed_memory_without_values -- --nocapture
+cargo test -p jarvis-core memory_index -- --nocapture
+cargo test -p jarvis-core local_memory_context -- --nocapture
+cargo test -p jarvis-core stale_memory_index_blocks -- --nocapture
+cargo test -p jarvis-cli --test local_ipc_e2e reviewed_local_memory_context_is_bounded_redacted_and_fails_closed_cross_process -- --nocapture
+swift test --disable-sandbox --package-path apps/mac --filter commandConsoleMemoryContextIsExplicitOptIn
 ./scripts/release-plugin-trust-qa.sh --self-test
 ./scripts/release-evidence-bundle.sh --self-test
 ./scripts/release-evidence-doctor.sh --self-test

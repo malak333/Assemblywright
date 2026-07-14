@@ -423,15 +423,18 @@ public struct JarvisDiagnosticSchedulerJob: Decodable, Equatable, Identifiable, 
 public struct JarvisCommandRequest: Encodable, Equatable, Sendable {
     public var input: String
     public var dryRun: Bool
+    public var memoryContext: Bool
 
-    public init(input: String, dryRun: Bool = true) {
+    public init(input: String, dryRun: Bool = true, memoryContext: Bool = false) {
         self.input = input
         self.dryRun = dryRun
+        self.memoryContext = memoryContext
     }
 
     enum CodingKeys: String, CodingKey {
         case input
         case dryRun = "dry_run"
+        case memoryContext = "memory_context"
     }
 }
 

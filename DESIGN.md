@@ -292,7 +292,17 @@ An app-owned support directory stores larger generated files, transcripts, expor
 
 ### Vector Index
 
-Memory and document retrieval can use a local vector index. The implemented governance layer keeps a versioned, atomic, rebuildable projection tied to canonical SQLite records and detects missing, stale, deleted, orphaned, or corrupt entries. SQLite remains the source of truth. Semantic/vector retrieval and model-context injection remain future work.
+Memory and document retrieval can use a local index. The implemented governance
+layer keeps a versioned, atomic, rebuildable projection tied to canonical
+SQLite records and detects missing, stale, deleted, orphaned, or corrupt
+entries. SQLite remains the source of truth. An explicit, disabled-by-default
+command option can perform bounded deterministic lexical retrieval for a
+selected local-model route. Only reviewed, active Public, Workspace, or
+Personal records are eligible; proactive and cloud routes plus Private,
+CredentialAdjacent, and Restricted records fail closed. The resulting context
+is ephemeral, capped, framed as untrusted data, and excluded from public audit
+and route evidence. Vector embeddings, approximate-nearest-neighbor search,
+automatic retrieval, and autonomous memory rewrite/purge remain future work.
 
 ### Sensitivity Labels
 

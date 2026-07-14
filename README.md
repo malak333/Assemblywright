@@ -46,7 +46,8 @@ It also includes the buildable Swift/SwiftUI Mac shell under
 `apps/mac`, with a tested IPC client, command-console state model,
 activity/audit panel with current progress summary, memory
 create/update/review/delete and restore management, memory classification
-summary, redacted memory retention-plan review, memory review counts in diagnostics and permission policy review, provenance-aware
+summary, redacted memory retention-plan review, explicit bounded local-memory
+context opt-in, memory review counts in diagnostics and permission policy review, provenance-aware
 permission/grant inspection, permission policy review items, redacted scheduler
 attention summaries for app handoff, scheduler trigger policy-review items,
 release-readiness blocker inspection,
@@ -319,10 +320,15 @@ automation disabled. The Swift Memory tab renders the same redacted plan above
 the item list. `/memory/index/status`, `/memory/index/rebuild`, the matching
 `jarvis memory index-*` commands, and the Swift Memory tab now govern an atomic,
 versioned projection manifest rebuilt only from active canonical SQLite rows.
-Public status is count-only and the projection is not used for retrieval or
-cloud context. These surfaces still do not grant broader marketplace
-trust, malware safety, autonomous memory rewriting, semantic retrieval, purge automation, or
-OS-level network sandboxing.
+Public status is count-only. `jarvis command --memory-context` and the disabled-
+by-default Swift console toggle can use the current projection as a fail-closed
+gate for deterministic local lexical retrieval. Retrieval is non-proactive and
+local-model-only, admits reviewed active Public/Workspace/Personal records,
+caps query/corpus/results/context, and frames ephemeral context as untrusted
+data. Cloud adapters reject it before transport, and audit/route evidence never
+contains memory values. These surfaces still do not grant broader marketplace
+trust, malware safety, autonomous memory rewriting, vector/semantic retrieval,
+purge automation, or OS-level network sandboxing.
 Approval grant/deny decisions remain side-effect-free. Approved first-party
 approval records require a separate one-shot `/approvals/:id/execute` or
 `jarvis approvals execute <approval-id>` replay, which verifies the original

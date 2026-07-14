@@ -672,14 +672,19 @@ struct JarvisMacCoreTests {
         #expect(entries.contains { $0.title == "plugin_completed" && $0.badge == "audit" })
     }
 
-    @Test("Command request encodes dry_run for Rust IPC")
+    @Test("Command request encodes dry_run and memory opt-in for Rust IPC")
     func encodesCommandRequest() throws {
-        let request = JarvisCommandRequest(input: "status check", dryRun: true)
+        let request = JarvisCommandRequest(
+            input: "status check",
+            dryRun: true,
+            memoryContext: true
+        )
         let data = try JSONEncoder().encode(request)
         let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
 
         #expect(json["input"] as? String == "status check")
         #expect(json["dry_run"] as? Bool == true)
+        #expect(json["memory_context"] as? Bool == true)
     }
 
     @Test("Management client methods send supported Rust IPC requests")
@@ -2124,6 +2129,23 @@ struct JarvisMacCoreTests {
         #expect(console.transcript.map(\.text) == [
             "status check",
             "local response: status check"
+        ])
+    }
+
+    @MainActor
+    @Test("Command console memory context remains off until the operator opts in")
+    func commandConsoleMemoryContextIsExplicitOptIn() async {
+        let client = FakeCoreClient()
+        let console = CommandConsoleModel(client: client)
+
+        #expect(!console.memoryContextEnabled)
+        await console.submit(input: "status without memory")
+        console.memoryContextEnabled = true
+        await console.submit(input: "status with memory")
+
+        #expect(client.submittedCommands == [
+            JarvisCommandRequest(input: "status without memory", memoryContext: false),
+            JarvisCommandRequest(input: "status with memory", memoryContext: true)
         ])
     }
 

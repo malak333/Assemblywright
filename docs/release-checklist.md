@@ -460,6 +460,18 @@ stage or when a PR needs focused evidence for one ownership slice.
   sensitive memory retained in local storage without exposing memory values, and
   diagnostics export exposes only aggregate active, unreviewed, and sensitive
   memory counts.
+- Confirm memory context remains disabled by default in CLI and Swift, and is
+  accepted only for explicit non-proactive local-model commands with a current
+  index. Reviewed active Public/Workspace/Personal records are the only eligible
+  inputs; Private, CredentialAdjacent, Restricted, unreviewed, deleted,
+  missing/stale/corrupt, and over-budget inputs fail closed before model use.
+- Confirm bounded retrieval enforces the 4 KiB query, 64-term, 128-byte-term,
+  16 KiB item, 1 MiB corpus, four-result, and 4 KiB context ceilings; checks
+  pause/cancellation; frames context as untrusted data; rejects cloud transport;
+  does not duplicate the query into retrieval-specific audit fields; and keeps
+  retrieved values, keys, provenance, IDs, scores, and context out of audit,
+  diagnostics, route evidence, errors, and debug output. Existing task, route,
+  and model-request surfaces retain their normal user-command visibility.
 - Confirm the Swift Approval Center renders permission policy review status
   alongside grant history when the IPC contract exposes the endpoint, stages
   approved-unexecuted first-party approvals for Run Approved, and hides
