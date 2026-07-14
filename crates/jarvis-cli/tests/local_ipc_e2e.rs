@@ -7648,6 +7648,335 @@ fn legacy_fixture_approvals_remain_non_executable_and_visible_after_restart() {
 }
 
 #[test]
+fn approval_decision_audit_failure_rolls_back_across_cli_ipc_and_restart() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let db_path = temp_dir
+        .path()
+        .join("jarvis-approval-decision-atomicity.sqlite");
+    let (approval_id, task_id) = {
+        let repository = SqliteRepository::open(&db_path).expect("open repository");
+        let task = repository
+            .create_task(
+                "00000000-0000-4000-8000-000000000001"
+                    .parse()
+                    .expect("session id"),
+                "status",
+            )
+            .expect("create task");
+        repository
+            .update_task_status(task.id, TaskStatus::WaitingForApproval)
+            .expect("stage task for approval");
+        let approval = repository
+            .create_pending_approval(NewPendingApproval {
+                task_id: task.id,
+                action: "system_status.status".to_string(),
+                requested_scopes: vec![CapabilityScope::PluginRun, CapabilityScope::Conversation],
+                risk_tier: RiskTier::Notify,
+                sensitivity: Sensitivity::Workspace,
+                reason: "cross-process decision atomicity proof".to_string(),
+            })
+            .expect("create approval");
+        rusqlite::Connection::open(&db_path)
+            .expect("open failure-injection connection")
+            .execute_batch(
+                "CREATE TRIGGER inject_approval_decision_audit_failure
+                 BEFORE INSERT ON audit_entries
+                 WHEN NEW.event_type = 'approval_granted'
+                 BEGIN
+                     SELECT RAISE(ABORT, 'injected approval decision audit failure');
+                 END;",
+            )
+            .expect("install audit failure injection");
+        (approval.id.to_string(), task.id.to_string())
+    };
+
+    let private_actor = "private-e2e-operator";
+    let private_reason = "private-e2e-decision-reason";
+    let mut server = JarvisServer::start(&db_path);
+    let endpoint = server.endpoint();
+    let failure = run_cli_failure_args(&[
+        "approvals",
+        "approve",
+        &approval_id,
+        "--decided-by",
+        private_actor,
+        "--reason",
+        private_reason,
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert!(failure.contains("500 Internal Server Error"), "{failure}");
+
+    let pending = run_cli_json([
+        "approvals",
+        "get",
+        &approval_id,
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(pending["status"], "pending");
+    assert!(pending["decided_at"].is_null());
+    assert!(pending["decided_by"].is_null());
+    assert!(pending["decision_reason"].is_null());
+    let execute_failure = run_cli_failure([
+        "approvals",
+        "execute",
+        &approval_id,
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert!(
+        execute_failure.contains("must be approved before execution"),
+        "{execute_failure}"
+    );
+    let audits = run_cli_json(["tasks", "audit", "--endpoint", endpoint.as_str()]);
+    assert!(!audits
+        .as_array()
+        .expect("audit array")
+        .iter()
+        .any(|entry| { entry["task_id"] == task_id && entry["event_type"] == "approval_granted" }));
+    assert!(!audits.to_string().contains(private_actor));
+    assert!(!audits.to_string().contains(private_reason));
+    server.stop();
+
+    let mut restarted = JarvisServer::start(&db_path);
+    let restarted_endpoint = restarted.endpoint();
+    let still_pending = run_cli_json([
+        "approvals",
+        "get",
+        &approval_id,
+        "--endpoint",
+        restarted_endpoint.as_str(),
+    ]);
+    assert_eq!(still_pending["status"], "pending");
+    let execute_failure = run_cli_failure([
+        "approvals",
+        "execute",
+        &approval_id,
+        "--endpoint",
+        restarted_endpoint.as_str(),
+    ]);
+    assert!(
+        execute_failure.contains("must be approved before execution"),
+        "{execute_failure}"
+    );
+    restarted.stop();
+
+    {
+        rusqlite::Connection::open(&db_path)
+            .expect("open failure-injection connection")
+            .execute_batch("DROP TRIGGER inject_approval_decision_audit_failure;")
+            .expect("remove audit failure injection");
+    }
+    let mut recovered = JarvisServer::start(&db_path);
+    let recovered_endpoint = recovered.endpoint();
+    let approved = run_cli_json([
+        "approvals",
+        "approve",
+        &approval_id,
+        "--decided-by",
+        private_actor,
+        "--reason",
+        private_reason,
+        "--endpoint",
+        recovered_endpoint.as_str(),
+    ]);
+    assert_eq!(approved["status"], "approved");
+    let audits = run_cli_json([
+        "tasks",
+        "audit",
+        "--task-id",
+        &task_id,
+        "--endpoint",
+        recovered_endpoint.as_str(),
+    ]);
+    let grant_audits = audits
+        .as_array()
+        .expect("audit array")
+        .iter()
+        .filter(|entry| entry["event_type"] == "approval_granted")
+        .collect::<Vec<_>>();
+    assert_eq!(grant_audits.len(), 1);
+    assert_eq!(
+        grant_audits[0]["payload"]["decision_metadata_redacted"],
+        true
+    );
+    assert_eq!(grant_audits[0]["payload"]["side_effect_executed"], false);
+    assert!(!audits.to_string().contains(private_actor));
+    assert!(!audits.to_string().contains(private_reason));
+    recovered.stop();
+}
+
+#[test]
+fn approved_row_without_grant_audit_cannot_claim_or_enter_plugin_across_restart() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let db_path = temp_dir.path().join("jarvis-approval-grant-chain.sqlite");
+    let (approval_id, task_id) = {
+        let repository = SqliteRepository::open(&db_path).expect("open repository");
+        let task = repository
+            .create_task(
+                "00000000-0000-4000-8000-000000000001"
+                    .parse()
+                    .expect("session id"),
+                "status",
+            )
+            .expect("create task");
+        repository
+            .update_task_status(task.id, TaskStatus::WaitingForApproval)
+            .expect("stage task for approval");
+        let approval = repository
+            .create_pending_approval(NewPendingApproval {
+                task_id: task.id,
+                action: "system_status.status".to_string(),
+                requested_scopes: vec![CapabilityScope::PluginRun, CapabilityScope::Conversation],
+                risk_tier: RiskTier::Notify,
+                sensitivity: Sensitivity::Workspace,
+                reason: "grant-chain E2E fixture".to_string(),
+            })
+            .expect("create approval");
+        let decided_at = chrono::Utc::now().to_rfc3339();
+        rusqlite::Connection::open(&db_path)
+            .expect("open fixture connection")
+            .execute(
+                "UPDATE pending_approvals
+                 SET status = 'approved', decided_at = ?1, decided_by = ?2, decision_reason = ?3
+                 WHERE id = ?4",
+                rusqlite::params![
+                    decided_at,
+                    "legacy-cli",
+                    "historical reviewed decision",
+                    approval.id.to_string(),
+                ],
+            )
+            .expect("seed historical approved row without audit");
+        (approval.id.to_string(), task.id.to_string())
+    };
+
+    for attempt in 0..2 {
+        let mut server = JarvisServer::start(&db_path);
+        let endpoint = server.endpoint();
+        let failure = run_cli_failure([
+            "approvals",
+            "execute",
+            &approval_id,
+            "--endpoint",
+            endpoint.as_str(),
+        ]);
+        assert!(
+            failure.contains("missing matching approval_granted audit evidence"),
+            "attempt {attempt}: {failure}"
+        );
+        let approval = run_cli_json([
+            "approvals",
+            "get",
+            &approval_id,
+            "--endpoint",
+            endpoint.as_str(),
+        ]);
+        assert_eq!(approval["status"], "approved");
+        let audits = run_cli_json([
+            "tasks",
+            "audit",
+            "--task-id",
+            &task_id,
+            "--endpoint",
+            endpoint.as_str(),
+        ]);
+        assert!(
+            !audits.as_array().expect("audit array").iter().any(|entry| {
+                matches!(
+                    entry["event_type"].as_str(),
+                    Some(
+                        "approval_execution_policy_evaluated"
+                            | "approval_execution_claimed"
+                            | "plugin_completed_after_approval"
+                            | "approval_executed"
+                    )
+                )
+            })
+        );
+        server.stop();
+    }
+
+    {
+        let repository = SqliteRepository::open(&db_path).expect("reopen repository");
+        let approval = repository
+            .get_pending_approval(approval_id.parse().expect("approval id"))
+            .expect("read approval")
+            .expect("approval");
+        assert!(repository
+            .get_approval_execution(approval.id)
+            .expect("execution lookup")
+            .is_none());
+        assert_eq!(
+            repository
+                .get_task(approval.task_id)
+                .expect("task lookup")
+                .expect("task")
+                .status,
+            TaskStatus::WaitingForApproval
+        );
+        repository
+            .append_audit_entry(&AuditEntry::new(
+                Some(approval.task_id),
+                "approval_granted",
+                "legacy approval decision audit",
+                json!({
+                    "approval_id": approval.id,
+                    "action": approval.action,
+                    "status": approval.status,
+                    "risk_tier": approval.risk_tier,
+                    "sensitivity": approval.sensitivity,
+                    "requested_scopes": approval.requested_scopes,
+                    "decided_by": approval.decided_by,
+                    "decision_reason": approval.decision_reason,
+                    "side_effect_executed": false,
+                }),
+            ))
+            .expect("append exact legacy grant audit");
+    }
+
+    let mut compatible = JarvisServer::start(&db_path);
+    let endpoint = compatible.endpoint();
+    let executed = run_cli_json([
+        "approvals",
+        "execute",
+        &approval_id,
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(executed["accepted"], true);
+    assert_eq!(executed["task"]["status"], "completed");
+    let audits = run_cli_json([
+        "tasks",
+        "audit",
+        "--task-id",
+        &task_id,
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(
+        audits
+            .as_array()
+            .expect("audit array")
+            .iter()
+            .filter(|entry| entry["event_type"] == "approval_execution_claimed")
+            .count(),
+        1
+    );
+    assert_eq!(
+        audits
+            .as_array()
+            .expect("audit array")
+            .iter()
+            .filter(|entry| entry["event_type"] == "approval_executed")
+            .count(),
+        1
+    );
+    compatible.stop();
+}
+
+#[test]
 fn concurrent_approved_execution_is_one_shot_across_ipc_and_restart() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let db_path = temp_dir.path().join("jarvis-approval-once.sqlite");

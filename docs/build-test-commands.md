@@ -552,10 +552,15 @@ installed WASM calls.
 Approval-required command scaffolds such as `plugin approval echo ...` fail
 closed by returning `waiting_for_approval`, persisting an inspectable pending
 approval when repository backing is enabled, and requiring a separate CLI/IPC
-grant or denial. Granting an approval records the decision but does not execute
-the side effect; approved first-party actions require an explicit
+grant or denial. Grant and denial recheck pending state and commit the decision
+plus a redacted decision audit in one immediate transaction. Audit failure
+rolls all decision fields back to pending; actor and reason remain available on
+the approval record but are absent from audit payloads, so no unaudited grant
+chain can become execution authority. Granting an approval
+does not execute the side effect; approved first-party actions require an explicit
 `jarvis approvals execute <approval-id>` replay, which verifies the original
-task, action, risk, scope, input-schema, and current-policy contract before
+task, action, risk, scope, input-schema, current-policy contract, and matching
+approval_granted audit evidence before
 schema v13 atomically creates a unique durable execution claim with redacted
 policy/claim audit evidence. Only the successful claimant invokes the plugin;
 duplicate and post-restart replay returns conflict/HTTP 409. Terminal execution
@@ -569,15 +574,26 @@ Focused one-shot approval proof:
 
 ```sh
 cargo test -p jarvis-core concurrent_approved_execution_has_exactly_one_winner -- --nocapture
+cargo test -p jarvis-core approval_decision_and_redacted_audit_commit_or_roll_back_together -- --nocapture
+cargo test -p jarvis-core approved_row_without_matching_grant_audit_cannot_be_claimed -- --nocapture
+cargo test -p jarvis-core matching_legacy_raw_metadata_grant_audit_remains_claimable -- --nocapture
 cargo test -p jarvis-core migration_13_backfills_completed_approval_execution_as_consumed -- --nocapture
+cargo test -p jarvis-cli --test local_ipc_e2e approval_decision_audit_failure_rolls_back_across_cli_ipc_and_restart -- --nocapture
+cargo test -p jarvis-cli --test local_ipc_e2e approved_row_without_grant_audit_cannot_claim_or_enter_plugin_across_restart -- --nocapture
 cargo test -p jarvis-cli --test local_ipc_e2e concurrent_approved_execution_is_one_shot_across_ipc_and_restart -- --nocapture
 swift test --disable-sandbox --package-path apps/mac --filter ApprovalManagementModel
 ```
 
-The Rust race test proves one claimant, the schema-v13 migration test proves
+The storage decision test injects audit failure for both grant and denial and
+proves whole-transaction rollback. The real-server CLI IPC test proves a
+failed grant remains pending and non-executable across restart before recovery
+creates one redacted audit. The Rust race test proves one claimant, the schema-v13 migration test proves
 historical terminal audit evidence remains consumed, the cross-process IPC E2E
 proves one HTTP winner plus durable HTTP 409 after restart, and the Swift tests
 prove duplicate-submit suppression and claimed-approval hiding after refresh.
+The authority-chain tests prove an approved row without a matching grant audit
+cannot claim or enter the plugin across restart, unrelated audits cannot be
+substituted, and the exact legacy raw-metadata audit shape remains compatible.
 `jarvis permissions grants` reads the combined local grant
 surface: approval counts/history, high-risk pending count, installed-plugin
 `metadata_only` grant records, and the invariant that side effects still

@@ -414,11 +414,17 @@ stage or when a PR needs focused evidence for one ownership slice.
   endpoints still require or use the correct repository/plugin backing and are
   covered by local smoke or focused IPC tests.
 - Confirm approval inspection and grant/deny endpoints require repository
-  backing, remain side-effect-free, and stay covered by local IPC tests.
+  backing, remain side-effect-free, and stay covered by local IPC tests. Each
+  grant or denial must use one immediate transaction to recheck pending state,
+  update the decision, and append a redacted decision audit. Injected audit
+  failure must roll all decision fields back to pending across restart, keep
+  `/execute` unauthorized, and leave no unaudited grant chain. Free-form actor
+  and reason text must stay out of the audit payload.
 - Confirm approved first-party approval execution requires a one-shot explicit
   `/approvals/:id/execute` or `jarvis approvals execute <approval-id>` call,
   verifies the original task, action, risk, scope, input-schema, and current
-  policy contract against the approval record, then uses schema v13 to
+  policy contract against the approval record, and requires matching
+  approval_granted audit evidence before it uses schema v13 to
   atomically create one unique durable execution claim with redacted
   policy/claim audit evidence before plugin invocation. Confirm only one
   claimant runs, duplicate and post-restart replay returns conflict/HTTP 409,
@@ -428,6 +434,14 @@ stage or when a PR needs focused evidence for one ownership slice.
   restart, or storage interruption after claim can leave the effect ambiguous,
   so automatic retry is forbidden; the operator must inspect audit evidence
   and create a new approval when another attempt is appropriate.
+  An approved row without matching evidence must create no durable claim or
+  policy/claim audit and must not enter the plugin, including after restart.
+  Unrelated audit substitution must fail. The exact legacy raw-metadata audit
+  shape remains compatible only when all authority and decision metadata match
+  and its timestamp is not before the decision. Current redacted evidence must
+  match actor/reason-presence booleans without raw keys; legacy evidence must
+  match exact raw actor/reason values without redaction/presence keys;
+  the claim path must never fabricate grant evidence.
 - Confirm `/permissions/grants` and `jarvis permissions grants` expose
   read-only approval history/counts plus installed-plugin grant state,
   provenance integrity status, unverified plugin counts, and the

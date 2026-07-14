@@ -180,9 +180,23 @@ release requirements, not optional UX guidance.
   approvals, denials, files touched, external actions attempted, failures, and
   final state.
 - Approval grant/deny decisions must not execute side effects. An explicit
+  immediate SQLite transaction must recheck that the approval is pending,
+  update the grant or denial, and append its redacted decision audit before
+  committing. Free-form actor and reason text remains in the approval record
+  but must not enter audit payloads. Any decision-audit persistence failure
+  rolls the entire decision back to pending so no unaudited grant chain exists.
+  An explicit
   approved first-party replay must validate the approved record, still-waiting
   task, exact action, current risk and scopes, current manifest, input schema,
-  and current policy before claiming execution authority.
+  and current policy before claiming execution authority. It must also find
+  matching `approval_granted` audit evidence for the same approval ID, task,
+  action, approved status, risk, sensitivity, scopes, and non-execution state.
+  Its timestamp must be at or after `decided_at`. Current redacted decision
+  metadata is accepted only with matching actor/reason-presence booleans and no
+  raw actor/reason keys. The prior raw-metadata audit shape is compatible only
+  without redaction/presence keys and when its actor and reason exactly match
+  the approval record. Missing, stale, or unrelated evidence must fail before policy/claim audit
+  insertion or plugin entry; the claim path must never fabricate grant evidence.
 - The claim must use an immediate SQLite transaction to insert one unique
   schema-v13 `approval_executions` row plus a redacted
   `approval_execution_claimed` audit. A claim permanently consumes that

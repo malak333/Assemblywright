@@ -372,10 +372,15 @@ data. Cloud adapters reject it before transport, and audit/route evidence never
 contains memory values. These surfaces still do not grant broader marketplace
 trust, malware safety, autonomous memory rewriting, vector/semantic retrieval,
 purge automation, or OS-level network sandboxing.
-Approval grant/deny decisions remain side-effect-free. Approved first-party
+Approval grant/deny decisions remain side-effect-free and atomically commit the
+decision with a redacted decision audit in one immediate transaction. Audit
+failure rolls the record back to pending so no unaudited grant chain can reach
+execution authority; free-form actor and reason stay out of audit payloads.
+Approved first-party
 approval records require a separate one-shot `/approvals/:id/execute` or
 `jarvis approvals execute <approval-id>` replay, which verifies the original
-task, action, risk, scopes, input schema, and current policy before schema v13
+task, action, risk, scopes, input schema, current policy, and matching
+approval_granted audit evidence before schema v13
 atomically records a unique durable execution claim and redacted claim/policy
 audit evidence. Only the claimant invokes the plugin; a duplicate or restarted
 replay fails with conflict/HTTP 409. Terminal execution state, task state, and
@@ -384,7 +389,10 @@ failure, cancellation, timeout, restart, or a persistence interruption can make
 the effect ambiguous, so automatic retry is forbidden. Inspect the audit trail
 and create a new approval when another attempt is appropriate. The Swift
 Approval Center suppresses duplicate submits and hides approvals that have
-either claim or terminal execution evidence.
+either claim or terminal execution evidence. Exact legacy raw-metadata audit
+evidence remains compatible when its approval ID, task, action, status, policy
+metadata, actor/reason, and non-execution fields match; missing or unrelated
+evidence cannot be substituted and Jarvis never fabricates a grant audit.
 
 ## Build And Test
 
