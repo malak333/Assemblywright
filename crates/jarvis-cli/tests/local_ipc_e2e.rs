@@ -10,8 +10,8 @@ use std::time::Duration;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use ed25519_dalek::{Signer, SigningKey};
 use jarvis_core::{
-    ApprovalStatus, CapabilityScope, NewMemoryItem, NewPendingApproval, RiskTier, Sensitivity,
-    SqliteRepository,
+    ApprovalStatus, AuditEntry, CapabilityScope, NewMemoryItem, NewPendingApproval, RiskTier,
+    Sensitivity, SqliteRepository, TaskStatus,
 };
 use p256::ecdsa::{Signature as P256Signature, SigningKey as P256SigningKey};
 use serde_json::{json, Value};
@@ -145,6 +145,34 @@ fn release_readiness_cli_falls_back_without_running_server() {
             .contains("os_sandbox_enforced:false"),
         "{installed_plugin_feature}"
     );
+    let ipc_auth_feature = readiness_feature(&release_readiness, "app_supervised_ipc_auth");
+    assert!(ipc_auth_feature["proof"]
+        .as_str()
+        .expect("IPC auth proof")
+        .contains("LOCAL_PEERTOKEN"));
+    assert!(ipc_auth_feature["proof"]
+        .as_str()
+        .expect("IPC auth proof")
+        .contains("same-EUID wrong-code pre-frame rejection"));
+    assert!(ipc_auth_feature["boundary"]
+        .as_str()
+        .expect("IPC auth boundary")
+        .contains("Ad-hoc exact-build"));
+    let approval_feature = readiness_feature(&release_readiness, "approval_execution");
+    assert!(approval_feature["proof"]
+        .as_str()
+        .expect("approval execution proof")
+        .contains("unique durable execution claim"));
+    assert!(approval_feature["boundary"]
+        .as_str()
+        .expect("approval execution boundary")
+        .contains("automatic retry is forbidden"));
+    let unsigned_launch_feature =
+        readiness_feature(&release_readiness, "unsigned_distribution_launch");
+    assert!(unsigned_launch_feature["proof"]
+        .as_str()
+        .expect("unsigned launch proof")
+        .contains("no TCP listener or credential handoff file"));
     assert_array_contains(
         &release_readiness["implemented_features"],
         "key",
@@ -6605,7 +6633,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
 
     let diagnostics = run_cli_json(["diagnostics", "export", "--endpoint", endpoint.as_str()]);
     assert_eq!(diagnostics["repository_backed"], true);
-    assert_eq!(diagnostics["schema_version"], 12);
+    assert_eq!(diagnostics["schema_version"], 13);
     assert_eq!(
         diagnostics["health"]["contract"]["name"],
         "jarvis.local-ipc"
@@ -7617,6 +7645,212 @@ fn legacy_fixture_approvals_remain_non_executable_and_visible_after_restart() {
         );
         server.stop();
     }
+}
+
+#[test]
+fn concurrent_approved_execution_is_one_shot_across_ipc_and_restart() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let db_path = temp_dir.path().join("jarvis-approval-once.sqlite");
+    let (approval_id, task_id, claimed_approval_id, claimed_task_id) = {
+        let repository = SqliteRepository::open(&db_path).expect("open repository");
+        let task = repository
+            .create_task(
+                "00000000-0000-4000-8000-000000000001"
+                    .parse()
+                    .expect("session id"),
+                "status",
+            )
+            .expect("create task");
+        let approval = repository
+            .create_pending_approval(NewPendingApproval {
+                task_id: task.id,
+                action: "system_status.status".to_string(),
+                requested_scopes: vec![CapabilityScope::PluginRun, CapabilityScope::Conversation],
+                risk_tier: RiskTier::Notify,
+                sensitivity: Sensitivity::Workspace,
+                reason: "cross-process one-shot proof".to_string(),
+            })
+            .expect("create approval");
+        repository
+            .update_task_status(task.id, TaskStatus::WaitingForApproval)
+            .expect("stage task for approval");
+        repository
+            .decide_pending_approval(
+                approval.id,
+                ApprovalStatus::Approved,
+                "ipc-e2e",
+                Some("reviewed".to_string()),
+            )
+            .expect("approve");
+        let claimed_task = repository
+            .create_task(
+                "00000000-0000-4000-8000-000000000002"
+                    .parse()
+                    .expect("session id"),
+                "status",
+            )
+            .expect("create claimed task");
+        let claimed_approval = repository
+            .create_pending_approval(NewPendingApproval {
+                task_id: claimed_task.id,
+                action: "system_status.status".to_string(),
+                requested_scopes: vec![CapabilityScope::PluginRun, CapabilityScope::Conversation],
+                risk_tier: RiskTier::Notify,
+                sensitivity: Sensitivity::Workspace,
+                reason: "restart ambiguity proof".to_string(),
+            })
+            .expect("create claimed approval");
+        repository
+            .update_task_status(claimed_task.id, TaskStatus::WaitingForApproval)
+            .expect("stage claimed task for approval");
+        repository
+            .decide_pending_approval(
+                claimed_approval.id,
+                ApprovalStatus::Approved,
+                "ipc-e2e",
+                Some("reviewed".to_string()),
+            )
+            .expect("approve claimed approval");
+        let execution_id = "00000000-0000-4000-8000-000000000003"
+            .parse()
+            .expect("execution id");
+        let policy_audit = AuditEntry::new(
+            Some(claimed_task.id),
+            "approval_execution_policy_evaluated",
+            "policy evaluated before simulated interruption",
+            json!({
+                "approval_id": claimed_approval.id,
+                "execution_id": execution_id,
+                "side_effect_executed": false,
+                "input_redacted": true,
+            }),
+        );
+        let claim_audit = AuditEntry::new(
+            Some(claimed_task.id),
+            "approval_execution_claimed",
+            "execution claimed before simulated interruption",
+            json!({
+                "approval_id": claimed_approval.id,
+                "execution_id": execution_id,
+                "effect_possible": true,
+                "automatic_retry_allowed": false,
+                "input_redacted": true,
+            }),
+        );
+        repository
+            .claim_approved_execution(
+                claimed_approval.id,
+                execution_id,
+                claimed_task.id,
+                &claimed_approval.action,
+                &policy_audit,
+                &claim_audit,
+            )
+            .expect("persist unresolved claim");
+        (
+            approval.id.to_string(),
+            task.id.to_string(),
+            claimed_approval.id.to_string(),
+            claimed_task.id.to_string(),
+        )
+    };
+
+    let mut server = JarvisServer::start(&db_path);
+    let endpoint = server.endpoint();
+    let claimed_path = format!("/approvals/{claimed_approval_id}/execute");
+    let claimed_error = request(&endpoint, "POST", &claimed_path, Some("{}"))
+        .expect_err("startup cannot retry an unresolved durable claim");
+    assert!(claimed_error.contains("409 Conflict"), "{claimed_error}");
+    let path = format!("/approvals/{approval_id}/execute");
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+    let mut handles = Vec::new();
+    for _ in 0..2 {
+        let endpoint = endpoint.clone();
+        let path = path.clone();
+        let barrier = barrier.clone();
+        handles.push(thread::spawn(move || {
+            barrier.wait();
+            request(&endpoint, "POST", &path, Some("{}"))
+        }));
+    }
+    barrier.wait();
+    let results = handles
+        .into_iter()
+        .map(|handle| handle.join().expect("request thread"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        results.iter().filter(|result| result.is_ok()).count(),
+        1,
+        "{results:?}"
+    );
+    let conflict = results
+        .iter()
+        .find_map(|result| result.as_ref().err())
+        .expect("one conflict response");
+    assert!(conflict.contains("409 Conflict"), "{conflict}");
+    assert!(conflict.contains("already been claimed"), "{conflict}");
+
+    let audit = run_cli_json(["tasks", "audit", "--endpoint", endpoint.as_str()]);
+    let task_audits = audit
+        .as_array()
+        .expect("audit array")
+        .iter()
+        .filter(|entry| entry["task_id"] == task_id)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        task_audits
+            .iter()
+            .filter(|entry| entry["event_type"] == "approval_execution_claimed")
+            .count(),
+        1
+    );
+    let claimed_audits = audit
+        .as_array()
+        .expect("audit array")
+        .iter()
+        .filter(|entry| entry["task_id"] == claimed_task_id)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        claimed_audits
+            .iter()
+            .filter(|entry| entry["event_type"] == "approval_execution_claimed")
+            .count(),
+        1
+    );
+    assert_eq!(
+        claimed_audits
+            .iter()
+            .filter(|entry| entry["event_type"] == "approval_executed")
+            .count(),
+        0
+    );
+    assert_eq!(
+        task_audits
+            .iter()
+            .filter(|entry| entry["event_type"] == "approval_executed")
+            .count(),
+        1
+    );
+    server.stop();
+
+    let mut restarted = JarvisServer::start(&db_path);
+    let restarted_error = request(&restarted.endpoint(), "POST", &path, Some("{}"))
+        .expect_err("restart cannot replay consumed approval");
+    assert!(
+        restarted_error.contains("409 Conflict"),
+        "{restarted_error}"
+    );
+    assert!(
+        restarted_error.contains("already been claimed"),
+        "{restarted_error}"
+    );
+    let restarted_claimed_error = request(&restarted.endpoint(), "POST", &claimed_path, Some("{}"))
+        .expect_err("restart keeps unresolved claim non-retryable");
+    assert!(
+        restarted_claimed_error.contains("409 Conflict"),
+        "{restarted_claimed_error}"
+    );
+    restarted.stop();
 }
 
 #[test]

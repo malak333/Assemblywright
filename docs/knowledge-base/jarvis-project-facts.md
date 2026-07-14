@@ -659,19 +659,31 @@ requires plugin-trust `generated_at`, `review_started_at`,
   reason, and recommended action only. Memory values and provenance strings are
   intentionally omitted, `automation_enabled` is false, and the surface does not
   purge, restore, rewrite, or otherwise mutate memory.
-- Approved first-party approval records can be explicitly executed once through
+- Approved first-party approval records can be explicitly executed through
   `/approvals/:id/execute` or `jarvis approvals execute <approval-id>`.
-  Approve/deny remains side-effect-free; execution replays only the original
-  first-party plugin command, verifies the current action and scope contract
-  against the approval record, applies an approval grant for that replay, moves
-  the task out of `waiting_for_approval` on completion, and records
-  `approval_executed` plus plugin completion audit evidence with
-  `side_effect_executed: true`.
+  Approve/deny remains side-effect-free. Before plugin entry, execution
+  validates the approved record, still-waiting task, exact action, current risk
+  and scopes, current manifest, input schema, and current policy, then uses an
+  immediate transaction to insert one
+  unique schema-v13 `approval_executions` claim and a redacted
+  `approval_execution_claimed` audit.
+- A durable execution claim permanently consumes its approval. Concurrent and
+  later attempts conflict before plugin entry. Success, failure, cancellation,
+  and timeout write terminal execution state, task state, and terminal audit
+  evidence atomically. A crash, restart, or persistence failure after claim is
+  effect-possible ambiguity, never permission to retry automatically; an
+  operator must review evidence and create a new approval for another attempt.
+- Schema-v13 migration backfill collapses any legacy raced terminal audits into
+  one deterministic consumed row per approval. Completed evidence takes
+  precedence over timed-out, cancelled, then failed evidence; the earliest and
+  latest legacy timestamps bound the migrated record. This preserves the
+  permanent replay guard without depending on SQLite row visitation order.
 - The Swift Approval Center loads pending approvals for grant/deny controls and
   approved-unexecuted approvals for a Run Approved action when the IPC contract
-  exposes `/approvals/:id/execute`. It checks the approval task audit for
-  `approval_executed` and hides records that already have execution evidence,
-  so a refresh does not invite duplicate approved replay.
+  exposes `/approvals/:id/execute`. It treats either
+  `approval_execution_claimed` or `approval_executed` as consumed authority,
+  hides claimed records after refresh/restart, and suppresses duplicate Run
+  Approved interaction while a request is active.
 - The Swift Plugin tab decodes `/plugins/installed` registry records through
   the same redacted inspection contract used by the CLI and IPC surfaces. It
   shows execution grant, provenance integrity status, origin-review state,
@@ -914,7 +926,7 @@ requires plugin-trust `generated_at`, `review_started_at`,
   `./scripts/release-evidence-doctor.sh --self-test`, `swift test
   --package-path apps/mac`, and `swift build --package-path apps/mac`.
   It also runs `./scripts/storage-migration-backup-smoke.sh` so file-backed
-  migration backup/recovery and representative schema v1-v11 fixture
+  migration backup/recovery and representative schema v1-v12 fixture
   preservation stay part of the default local release evidence.
 - Local-model proof now includes stubbed provider-envelope E2E plus live
   Ollama route viability observed during manual testing. The proof is still a
@@ -1413,7 +1425,7 @@ requires plugin-trust `generated_at`, `review_started_at`,
   app-owned local files, may include personal memory/audit/plugin metadata, and
   are not redacted diagnostics exports. Keychain secrets are not stored in
   SQLite backups.
-- Storage migration coverage includes a representative schema v1-v11 fixture
+- Storage migration coverage includes a representative schema v1-v12 fixture
   matrix that preserves task, audit, emergency-pause, memory, scheduler,
   approval, installed-plugin, plugin-provenance, and route records through the
   current schema. This is repo-owned migration proof, not installer upgrade or
@@ -1431,10 +1443,10 @@ requires plugin-trust `generated_at`, `review_started_at`,
   artifacts. Current release claims should refresh this baseline with
   `cargo run -p jarvis-cli -- release readiness --json` and
   `gh run list --branch main --workflow "Jarvis Release Local Gate" --limit 3`.
-  The latest verified main baseline at `c474946` has hosted GitHub
-  `Release local gate` success for push run `28122973227` / job
-  `83276912070` and remains conservative with `production_ready: false`,
-  `evidence_mode_enabled: false`, `verified_feature_count: 16`, `pending_feature_count: 1`, and
+  The latest verified main baseline at `042c60e` has hosted GitHub
+  `Release local gate` success for push run `29344743720` / job
+  `87125361398` and remains conservative with `production_ready: false`,
+  `evidence_mode_enabled: false`, `verified_feature_count: 23`, `pending_feature_count: 1`, and
   `live_voice_loop` as the pending manual feature; `/release/evidence-status`
   reports `complete: false`, three satisfied evidence rows, six missing rows,
   and no invalid rows. PRs #283-#324 added repo-owned clarity for voice

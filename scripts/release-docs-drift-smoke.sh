@@ -10,6 +10,7 @@ CHECKLIST="docs/release-checklist.md"
 ARCHITECTURE="docs/architecture-map.md"
 KB="docs/knowledge-base/jarvis-project-facts.md"
 README="README.md"
+CORE_IPC="crates/jarvis-core/src/ipc.rs"
 
 fail() {
   printf 'error: %s\n' "$1" >&2
@@ -44,6 +45,23 @@ require_file "$CHECKLIST"
 require_file "$ARCHITECTURE"
 require_file "$KB"
 require_file "$README"
+require_file "$CORE_IPC"
+
+for file in "$BUILD_DOCS" "$CHECKLIST" "$README"; do
+  require_text "atomic approval claim" "$file" "unique durable execution claim"
+  require_text "approval replay conflict" "$file" "conflict/HTTP 409"
+  require_text "approval ambiguous-effect boundary" "$file" "effect ambiguous"
+  require_text "approval no automatic retry boundary" "$file" "automatic retry is forbidden"
+done
+
+require_text "core app-supervised IPC audit-token proof" "$CORE_IPC" "LOCAL_PEERTOKEN"
+require_text "core app-supervised IPC Security.framework proof" "$CORE_IPC" "Security.framework designated requirement"
+require_text "core app-supervised IPC wrong-code proof" "$CORE_IPC" "same-EUID wrong-code pre-frame rejection"
+require_text "core app-supervised IPC default transport proof" "$CORE_IPC" "default owner-only Unix socket plus memory-only bearer path has no TCP listener or credential handoff file"
+forbid_text "obsolete same-EUID code-sign boundary" "$CORE_IPC" "Same-EUID plus bearer defense in depth does not prove peer PID, intended process or code-sign identity"
+forbid_text "stale schema fixture range" "$README" "schema v1-v11 fixtures"
+forbid_text "stale schema fixture range" "$BUILD_DOCS" "schema v1-v11"
+forbid_text "stale schema fixture range" "$CHECKLIST" "schema v1-v11"
 
 while IFS= read -r command; do
   require_text "build/test command docs" "$BUILD_DOCS" "$command"
@@ -78,9 +96,9 @@ require_text "architecture local gate boundary" "$ARCHITECTURE" "notarization, c
 require_text "architecture local gate boundary" "$ARCHITECTURE" "QA, plugin-trust QA, or final evidence bundling"
 require_text "architecture post-merge cleanup audit" "$ARCHITECTURE" "post-merge cleanup audit: open PRs, main workflow runs, worktrees, merged/unmerged codex branches, clean checkout"
 require_text "architecture current readiness baseline" "$ARCHITECTURE" 'latest verified main baseline'
-require_text "architecture current readiness commit" "$ARCHITECTURE" '`main` commit `c474946`'
-require_text "architecture current readiness run" "$ARCHITECTURE" '28122973227'
-require_text "architecture current readiness job" "$ARCHITECTURE" '83276912070'
+require_text "architecture current readiness commit" "$ARCHITECTURE" '`main` commit `042c60e`'
+require_text "architecture current readiness run" "$ARCHITECTURE" '29344743720'
+require_text "architecture current readiness job" "$ARCHITECTURE" '87125361398'
 require_text "architecture current readiness refresh command" "$ARCHITECTURE" 'cargo run -p jarvis-cli -- release readiness --json'
 require_text "architecture current readiness refresh command" "$ARCHITECTURE" 'gh run list --branch main --workflow "Jarvis Release Local Gate"'
 require_text "architecture microphone privacy prompt" "$ARCHITECTURE" 'Jarvis uses microphone input only when you explicitly start local voice capture.'
@@ -114,9 +132,9 @@ require_text "architecture handoff manifest self-test" "$ARCHITECTURE" "--self-t
 require_text "architecture release-local heartbeat" "$ARCHITECTURE" "release-local command heartbeat"
 require_text "architecture final bundle output collision guard" "$ARCHITECTURE" "final bundle writer must also reject"
 require_text "architecture final bundle output collision guard" "$ARCHITECTURE" "output paths that collide with signed-provenance"
-require_text "knowledge base current readiness baseline" "$KB" 'latest verified main baseline at `c474946`'
-require_text "knowledge base current readiness run" "$KB" '28122973227'
-require_text "knowledge base current readiness job" "$KB" '83276912070'
+require_text "knowledge base current readiness baseline" "$KB" 'latest verified main baseline at `042c60e`'
+require_text "knowledge base current readiness run" "$KB" '29344743720'
+require_text "knowledge base current readiness job" "$KB" '87125361398'
 require_text "knowledge base current readiness refresh command" "$KB" 'cargo run -p jarvis-cli -- release readiness --json'
 require_text "knowledge base current readiness refresh command" "$KB" 'gh run list --branch main --workflow "Jarvis Release Local Gate"'
 require_text "knowledge base microphone privacy prompt" "$KB" 'Jarvis uses microphone input only when you explicitly start local voice capture.'

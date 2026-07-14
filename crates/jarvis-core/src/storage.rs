@@ -30,7 +30,7 @@ use crate::{
     MAX_MEMORY_RETRIEVAL_CORPUS_BYTES,
 };
 
-const CURRENT_SCHEMA_VERSION: i64 = 12;
+const CURRENT_SCHEMA_VERSION: i64 = 13;
 pub(crate) const MAX_MODEL_PLANNED_WASM_CANDIDATES: usize = 64;
 
 #[derive(Debug, Clone)]
@@ -129,6 +129,27 @@ pub struct NewPendingApproval {
     pub risk_tier: RiskTier,
     pub sensitivity: Sensitivity,
     pub reason: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalExecutionState {
+    Claimed,
+    Completed,
+    Failed,
+    Cancelled,
+    TimedOut,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ApprovalExecutionRecord {
+    pub id: Uuid,
+    pub approval_id: Uuid,
+    pub task_id: Uuid,
+    pub action: String,
+    pub state: ApprovalExecutionState,
+    pub claimed_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
 }
 
 pub struct SqliteRepository {
@@ -2369,6 +2390,182 @@ impl SqliteRepository {
         })
     }
 
+    pub fn get_approval_execution(
+        &self,
+        approval_id: Uuid,
+    ) -> JarvisResult<Option<ApprovalExecutionRecord>> {
+        self.conn
+            .query_row(
+                "SELECT id, approval_id, task_id, action, state, claimed_at, finished_at
+                 FROM approval_executions
+                 WHERE approval_id = ?1",
+                params![approval_id.to_string()],
+                approval_execution_from_row,
+            )
+            .optional()
+            .map_err(storage_error)
+    }
+
+    pub fn claim_approved_execution(
+        &self,
+        approval_id: Uuid,
+        execution_id: Uuid,
+        expected_task_id: Uuid,
+        expected_action: &str,
+        policy_audit: &AuditEntry,
+        claim_audit: &AuditEntry,
+    ) -> JarvisResult<ApprovalExecutionRecord> {
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        let approval = tx
+            .query_row(
+                "SELECT id, task_id, action, requested_scopes, risk_tier, sensitivity, status, reason, requested_at, decided_at, decided_by, decision_reason
+                 FROM pending_approvals WHERE id = ?1",
+                params![approval_id.to_string()],
+                pending_approval_from_row,
+            )
+            .optional()
+            .map_err(storage_error)?
+            .ok_or_else(|| JarvisError::Storage(format!("pending approval not found: {approval_id}")))?;
+
+        if approval.status != ApprovalStatus::Approved {
+            return Err(JarvisError::Validation(format!(
+                "approval {approval_id} must be approved before execution"
+            )));
+        }
+        if approval.task_id != expected_task_id || approval.action != expected_action {
+            return Err(JarvisError::Validation(format!(
+                "approval {approval_id} no longer matches the validated task and action"
+            )));
+        }
+        if tx
+            .query_row(
+                "SELECT 1 FROM approval_executions WHERE approval_id = ?1",
+                params![approval_id.to_string()],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(storage_error)?
+            .is_some()
+        {
+            return Err(JarvisError::Conflict(format!(
+                "approval {approval_id} execution has already been claimed"
+            )));
+        }
+        let task_status = tx
+            .query_row(
+                "SELECT status FROM tasks WHERE id = ?1",
+                params![expected_task_id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(storage_error)?
+            .ok_or_else(|| JarvisError::Storage(format!("task not found: {expected_task_id}")))?;
+        let task_status = task_status_from_str(&task_status).map_err(storage_error)?;
+        if task_status != TaskStatus::WaitingForApproval {
+            return Err(JarvisError::Validation(format!(
+                "approval {approval_id} task must still be waiting for approval before execution"
+            )));
+        }
+
+        let record = ApprovalExecutionRecord {
+            id: execution_id,
+            approval_id,
+            task_id: expected_task_id,
+            action: expected_action.to_string(),
+            state: ApprovalExecutionState::Claimed,
+            claimed_at: Utc::now(),
+            finished_at: None,
+        };
+        tx.execute(
+            "INSERT INTO approval_executions
+             (id, approval_id, task_id, action, state, claimed_at, finished_at)
+             VALUES (?1, ?2, ?3, ?4, 'claimed', ?5, NULL)",
+            params![
+                record.id.to_string(),
+                record.approval_id.to_string(),
+                record.task_id.to_string(),
+                &record.action,
+                to_db_time(record.claimed_at),
+            ],
+        )
+        .map_err(storage_error)?;
+        append_audit_entry_tx(&tx, policy_audit)?;
+        append_audit_entry_tx(&tx, claim_audit)?;
+        tx.commit().map_err(storage_error)?;
+        Ok(record)
+    }
+
+    pub fn finish_approval_execution(
+        &self,
+        execution_id: Uuid,
+        state: ApprovalExecutionState,
+        task_status: TaskStatus,
+        audit_entries: &[AuditEntry],
+    ) -> JarvisResult<TaskRecord> {
+        if state == ApprovalExecutionState::Claimed {
+            return Err(JarvisError::Validation(
+                "approval execution terminal state is required".to_string(),
+            ));
+        }
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        let finished_at = Utc::now();
+        let changed = tx
+            .execute(
+                "UPDATE approval_executions
+                 SET state = ?1, finished_at = ?2
+                 WHERE id = ?3 AND state = 'claimed'",
+                params![
+                    approval_execution_state_to_str(state),
+                    to_db_time(finished_at),
+                    execution_id.to_string(),
+                ],
+            )
+            .map_err(storage_error)?;
+        if changed == 0 {
+            return Err(JarvisError::Conflict(format!(
+                "approval execution {execution_id} is not claimable"
+            )));
+        }
+        let task_id = tx
+            .query_row(
+                "SELECT task_id FROM approval_executions WHERE id = ?1",
+                params![execution_id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(storage_error)?;
+        let task_id = Uuid::parse_str(&task_id).map_err(|err| {
+            JarvisError::Storage(format!("invalid approval execution task id: {err}"))
+        })?;
+        for entry in audit_entries {
+            append_audit_entry_tx(&tx, entry)?;
+        }
+        let changed = tx
+            .execute(
+                "UPDATE tasks SET status = ?1, updated_at = ?2 WHERE id = ?3",
+                params![
+                    task_status_to_str(&task_status),
+                    to_db_time(finished_at),
+                    task_id.to_string(),
+                ],
+            )
+            .map_err(storage_error)?;
+        if changed == 0 {
+            return Err(JarvisError::Storage(format!("task not found: {task_id}")));
+        }
+        let task = tx
+            .query_row(
+                "SELECT id, session_id, user_input, status, created_at, updated_at
+                 FROM tasks WHERE id = ?1",
+                params![task_id.to_string()],
+                task_from_row,
+            )
+            .map_err(storage_error)?;
+        tx.commit().map_err(storage_error)?;
+        Ok(task)
+    }
+
     fn update_scheduler_job_status(
         &self,
         id: Uuid,
@@ -2500,6 +2697,9 @@ impl SqliteRepository {
         }
         if version < 12 {
             self.apply_migration_12()?;
+        }
+        if version < 13 {
+            self.apply_migration_13()?;
         }
 
         let migrated = self.schema_version()?;
@@ -2751,6 +2951,64 @@ impl SqliteRepository {
         tx.execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
             params![12, now],
+        )
+        .map_err(storage_error)?;
+        tx.commit().map_err(storage_error)?;
+        Ok(())
+    }
+
+    fn apply_migration_13(&self) -> JarvisResult<()> {
+        let now = to_db_time(Utc::now());
+        let tx = self.conn.unchecked_transaction().map_err(storage_error)?;
+        tx.execute_batch(
+            "
+            CREATE TABLE approval_executions (
+                id TEXT PRIMARY KEY NOT NULL,
+                approval_id TEXT NOT NULL UNIQUE REFERENCES pending_approvals(id) ON DELETE CASCADE,
+                task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                action TEXT NOT NULL,
+                state TEXT NOT NULL CHECK (state IN (
+                    'claimed', 'completed', 'failed', 'cancelled', 'timed_out'
+                )),
+                claimed_at TEXT NOT NULL,
+                finished_at TEXT NULL
+            );
+            CREATE INDEX idx_approval_executions_task_claimed
+                ON approval_executions (task_id, claimed_at);
+
+            INSERT OR IGNORE INTO approval_executions
+                (id, approval_id, task_id, action, state, claimed_at, finished_at)
+            SELECT
+                MIN(audit.id),
+                approval.id,
+                approval.task_id,
+                approval.action,
+                CASE MAX(
+                    CASE json_extract(audit.payload, '$.status')
+                        WHEN 'completed' THEN 4
+                        WHEN 'timed_out' THEN 3
+                        WHEN 'cancelled' THEN 2
+                        ELSE 1
+                    END
+                )
+                    WHEN 4 THEN 'completed'
+                    WHEN 3 THEN 'timed_out'
+                    WHEN 2 THEN 'cancelled'
+                    ELSE 'failed'
+                END,
+                MIN(audit.created_at),
+                MAX(audit.created_at)
+            FROM audit_entries audit
+            JOIN pending_approvals approval
+                ON approval.id = json_extract(audit.payload, '$.approval_id')
+            WHERE audit.event_type = 'approval_executed'
+            GROUP BY approval.id, approval.task_id, approval.action;
+            ",
+        )
+        .map_err(storage_error)?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+            params![13, now],
         )
         .map_err(storage_error)?;
         tx.commit().map_err(storage_error)?;
@@ -3351,6 +3609,38 @@ fn audit_entry_from_row(row: &Row<'_>) -> rusqlite::Result<AuditEntry> {
     })
 }
 
+fn append_audit_entry_tx(tx: &Transaction<'_>, entry: &AuditEntry) -> JarvisResult<()> {
+    tx.execute(
+        "INSERT INTO audit_entries (id, task_id, event_type, summary, payload, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            entry.id.to_string(),
+            entry.task_id.map(|id| id.to_string()),
+            entry.event_type,
+            entry.summary,
+            entry.payload,
+            to_db_time(entry.created_at),
+        ],
+    )
+    .map_err(storage_error)?;
+    Ok(())
+}
+
+fn approval_execution_from_row(row: &Row<'_>) -> rusqlite::Result<ApprovalExecutionRecord> {
+    Ok(ApprovalExecutionRecord {
+        id: parse_uuid(&row.get::<_, String>(0)?)?,
+        approval_id: parse_uuid(&row.get::<_, String>(1)?)?,
+        task_id: parse_uuid(&row.get::<_, String>(2)?)?,
+        action: row.get(3)?,
+        state: approval_execution_state_from_str(&row.get::<_, String>(4)?)?,
+        claimed_at: parse_db_time(&row.get::<_, String>(5)?)?,
+        finished_at: row
+            .get::<_, Option<String>>(6)?
+            .map(|time| parse_db_time(&time))
+            .transpose()?,
+    })
+}
+
 fn model_route_record_from_row(row: &Row<'_>) -> rusqlite::Result<ModelRouteRecord> {
     let task_id = row
         .get::<_, Option<String>>(1)?
@@ -3661,6 +3951,31 @@ fn pending_approval_from_row(row: &Row<'_>) -> rusqlite::Result<PendingApproval>
         decided_by: row.get(10)?,
         decision_reason: row.get(11)?,
     })
+}
+
+fn approval_execution_state_to_str(state: ApprovalExecutionState) -> &'static str {
+    match state {
+        ApprovalExecutionState::Claimed => "claimed",
+        ApprovalExecutionState::Completed => "completed",
+        ApprovalExecutionState::Failed => "failed",
+        ApprovalExecutionState::Cancelled => "cancelled",
+        ApprovalExecutionState::TimedOut => "timed_out",
+    }
+}
+
+fn approval_execution_state_from_str(value: &str) -> rusqlite::Result<ApprovalExecutionState> {
+    match value {
+        "claimed" => Ok(ApprovalExecutionState::Claimed),
+        "completed" => Ok(ApprovalExecutionState::Completed),
+        "failed" => Ok(ApprovalExecutionState::Failed),
+        "cancelled" => Ok(ApprovalExecutionState::Cancelled),
+        "timed_out" => Ok(ApprovalExecutionState::TimedOut),
+        _ => Err(rusqlite::Error::InvalidColumnType(
+            4,
+            "state".to_string(),
+            rusqlite::types::Type::Text,
+        )),
+    }
 }
 
 fn collect_rows<T>(rows: impl Iterator<Item = rusqlite::Result<T>>) -> JarvisResult<Vec<T>> {
@@ -4000,6 +4315,258 @@ mod tests {
     }
 
     #[test]
+    fn migration_13_backfills_completed_approval_execution_as_consumed() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("jarvis.sqlite");
+        let conn = Connection::open(&db_path).unwrap();
+        let repo = SqliteRepository {
+            conn,
+            memory_index_path: None,
+        };
+        repo.configure().unwrap();
+        repo.raw_connection()
+            .execute_batch(
+                "CREATE TABLE schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    applied_at TEXT NOT NULL
+                );",
+            )
+            .unwrap();
+        repo.apply_migration_1().unwrap();
+        repo.apply_migration_2().unwrap();
+        repo.apply_migration_3().unwrap();
+        repo.apply_migration_4().unwrap();
+        repo.apply_migration_5().unwrap();
+        repo.apply_migration_6().unwrap();
+        repo.apply_migration_7().unwrap();
+        repo.apply_migration_8().unwrap();
+        repo.apply_migration_9().unwrap();
+        repo.apply_migration_10().unwrap();
+        repo.apply_migration_11().unwrap();
+        repo.apply_migration_12().unwrap();
+
+        let task = repo.create_task(Uuid::new_v4(), "status").unwrap();
+        let approval = repo
+            .create_pending_approval(NewPendingApproval {
+                task_id: task.id,
+                action: "system_status.status".to_string(),
+                requested_scopes: vec![CapabilityScope::PluginRun, CapabilityScope::Conversation],
+                risk_tier: RiskTier::Notify,
+                sensitivity: Sensitivity::Workspace,
+                reason: "migration replay guard".to_string(),
+            })
+            .unwrap();
+        repo.decide_pending_approval(approval.id, ApprovalStatus::Approved, "test", None)
+            .unwrap();
+        repo.append_audit_entry(&AuditEntry::new(
+            Some(task.id),
+            "approval_executed",
+            "legacy raced failure evidence",
+            json!({
+                "approval_id": approval.id,
+                "action": approval.action,
+                "status": "failed",
+                "side_effect_executed": null,
+            }),
+        ))
+        .unwrap();
+        repo.append_audit_entry(&AuditEntry::new(
+            Some(task.id),
+            "approval_executed",
+            "legacy execution evidence",
+            json!({
+                "approval_id": approval.id,
+                "action": approval.action,
+                "status": "completed",
+                "side_effect_executed": true,
+            }),
+        ))
+        .unwrap();
+        drop(repo);
+
+        let migrated = SqliteRepository::open(&db_path).unwrap();
+        let execution = migrated
+            .get_approval_execution(approval.id)
+            .unwrap()
+            .expect("backfilled execution");
+        assert_eq!(execution.state, ApprovalExecutionState::Completed);
+        let execution_count = migrated
+            .raw_connection()
+            .query_row(
+                "SELECT COUNT(*) FROM approval_executions WHERE approval_id = ?1",
+                params![approval.id.to_string()],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap();
+        assert_eq!(execution_count, 1);
+        let audit = AuditEntry::new(Some(task.id), "test", "test", json!({}));
+        let error = migrated
+            .claim_approved_execution(
+                approval.id,
+                Uuid::new_v4(),
+                task.id,
+                &approval.action,
+                &audit,
+                &audit,
+            )
+            .expect_err("legacy execution remains consumed");
+        assert!(matches!(error, JarvisError::Conflict(_)));
+    }
+
+    #[test]
+    fn approval_execution_terminal_states_commit_atomically_and_never_retry() {
+        for (state, task_status, event_type) in [
+            (
+                ApprovalExecutionState::Failed,
+                TaskStatus::Failed,
+                "plugin_failed_after_approval",
+            ),
+            (
+                ApprovalExecutionState::Cancelled,
+                TaskStatus::Cancelled,
+                "plugin_cancelled_after_approval",
+            ),
+            (
+                ApprovalExecutionState::TimedOut,
+                TaskStatus::Failed,
+                "plugin_timed_out_after_approval",
+            ),
+        ] {
+            let repo = SqliteRepository::in_memory().unwrap();
+            let (task, approval, execution, policy_audit, claim_audit) =
+                claimed_approval_execution_fixture(&repo);
+            let terminal_audit = AuditEntry::new(
+                Some(task.id),
+                event_type,
+                "approval execution reached terminal state",
+                json!({
+                    "approval_id": approval.id,
+                    "execution_id": execution.id,
+                    "state": state,
+                    "effect_possible": true,
+                    "automatic_retry_allowed": false,
+                    "input_redacted": true,
+                }),
+            );
+
+            let updated_task = repo
+                .finish_approval_execution(
+                    execution.id,
+                    state,
+                    task_status.clone(),
+                    std::slice::from_ref(&terminal_audit),
+                )
+                .expect("terminalize execution");
+            assert_eq!(updated_task.status, task_status);
+            let persisted = repo
+                .get_approval_execution(approval.id)
+                .unwrap()
+                .expect("execution");
+            assert_eq!(persisted.state, state);
+            assert!(persisted.finished_at.is_some());
+            let audits = repo.list_audit_entries(Some(task.id)).unwrap();
+            assert!(audits.iter().any(|entry| {
+                entry.id == terminal_audit.id
+                    && entry.payload["effect_possible"] == true
+                    && entry.payload["automatic_retry_allowed"] == false
+            }));
+            let replay = repo
+                .claim_approved_execution(
+                    approval.id,
+                    Uuid::new_v4(),
+                    task.id,
+                    &approval.action,
+                    &policy_audit,
+                    &claim_audit,
+                )
+                .expect_err("terminal execution cannot be replayed");
+            assert!(matches!(replay, JarvisError::Conflict(_)));
+        }
+
+        let repo = SqliteRepository::in_memory().unwrap();
+        let (task, approval, execution, _policy_audit, claim_audit) =
+            claimed_approval_execution_fixture(&repo);
+        let error = repo
+            .finish_approval_execution(
+                execution.id,
+                ApprovalExecutionState::Failed,
+                TaskStatus::Failed,
+                std::slice::from_ref(&claim_audit),
+            )
+            .expect_err("duplicate audit rolls terminal transaction back");
+        assert!(matches!(error, JarvisError::Storage(_)));
+        assert_eq!(
+            repo.get_approval_execution(approval.id)
+                .unwrap()
+                .expect("execution")
+                .state,
+            ApprovalExecutionState::Claimed
+        );
+        assert_eq!(
+            repo.get_task(task.id).unwrap().unwrap().status,
+            TaskStatus::WaitingForApproval
+        );
+    }
+
+    fn claimed_approval_execution_fixture(
+        repo: &SqliteRepository,
+    ) -> (
+        TaskRecord,
+        PendingApproval,
+        ApprovalExecutionRecord,
+        AuditEntry,
+        AuditEntry,
+    ) {
+        let task = repo.create_task(Uuid::new_v4(), "status").unwrap();
+        let task = repo
+            .update_task_status(task.id, TaskStatus::WaitingForApproval)
+            .unwrap();
+        let approval = repo
+            .create_pending_approval(NewPendingApproval {
+                task_id: task.id,
+                action: "system_status.status".to_string(),
+                requested_scopes: vec![CapabilityScope::PluginRun, CapabilityScope::Conversation],
+                risk_tier: RiskTier::Notify,
+                sensitivity: Sensitivity::Workspace,
+                reason: "terminal transaction fixture".to_string(),
+            })
+            .unwrap();
+        let approval = repo
+            .decide_pending_approval(approval.id, ApprovalStatus::Approved, "test", None)
+            .unwrap();
+        let execution_id = Uuid::new_v4();
+        let policy_audit = AuditEntry::new(
+            Some(task.id),
+            "approval_execution_policy_evaluated",
+            "policy evaluated",
+            json!({"approval_id": approval.id, "input_redacted": true}),
+        );
+        let claim_audit = AuditEntry::new(
+            Some(task.id),
+            "approval_execution_claimed",
+            "execution claimed",
+            json!({
+                "approval_id": approval.id,
+                "execution_id": execution_id,
+                "effect_possible": true,
+                "automatic_retry_allowed": false,
+                "input_redacted": true,
+            }),
+        );
+        let execution = repo
+            .claim_approved_execution(
+                approval.id,
+                execution_id,
+                task.id,
+                &approval.action,
+                &policy_audit,
+                &claim_audit,
+            )
+            .unwrap();
+        (task, approval, execution, policy_audit, claim_audit)
+    }
+
+    #[test]
     fn migrating_legacy_file_database_creates_backup_snapshot() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("jarvis.sqlite");
@@ -4012,10 +4579,11 @@ mod tests {
                 DROP TRIGGER model_route_records_no_delete;
                 DROP TRIGGER model_route_records_no_update;
                 DROP TABLE model_route_records;
+                DROP TABLE approval_executions;
                 DROP TABLE trusted_wake_key_grants;
                 DROP TABLE trusted_wake_events;
                 DROP TABLE trusted_wake_rules;
-                DELETE FROM schema_migrations WHERE version IN (7, 8, 9, 10, 11, 12);
+                DELETE FROM schema_migrations WHERE version IN (7, 8, 9, 10, 11, 12, 13);
                 ",
             )
             .unwrap();
@@ -4082,10 +4650,11 @@ mod tests {
                 DROP TRIGGER model_route_records_no_delete;
                 DROP TRIGGER model_route_records_no_update;
                 DROP TABLE model_route_records;
+                DROP TABLE approval_executions;
                 DROP TABLE trusted_wake_key_grants;
                 DROP TABLE trusted_wake_events;
                 DROP TABLE trusted_wake_rules;
-                DELETE FROM schema_migrations WHERE version IN (7, 8, 9, 10, 11, 12);
+                DELETE FROM schema_migrations WHERE version IN (7, 8, 9, 10, 11, 12, 13);
                 ",
             )
             .unwrap();
@@ -4521,6 +5090,7 @@ mod tests {
                 9 => repo.apply_migration_9().unwrap(),
                 10 => repo.apply_migration_10().unwrap(),
                 11 => repo.apply_migration_11().unwrap(),
+                12 => repo.apply_migration_12().unwrap(),
                 _ => unreachable!("unsupported fixture version"),
             }
         }
@@ -4704,7 +5274,7 @@ mod tests {
                     )
                     .unwrap();
             }
-            8..=11 => {
+            8..=12 => {
                 let provenance = InstalledPluginProvenance {
                     provenance_schema_version: 1,
                     capture_method: "fixture_v8".to_string(),

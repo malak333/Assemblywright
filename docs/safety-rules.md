@@ -179,9 +179,20 @@ release requirements, not optional UX guidance.
 - Audit logs must explain model route, permission checks, tool calls,
   approvals, denials, files touched, external actions attempted, failures, and
   final state.
-- Approval grant/deny decisions must not execute side effects. Approved
-  first-party actions require a one-shot explicit replay that verifies the
-  original action and scope contract and records side-effect audit evidence.
+- Approval grant/deny decisions must not execute side effects. An explicit
+  approved first-party replay must validate the approved record, still-waiting
+  task, exact action, current risk and scopes, current manifest, input schema,
+  and current policy before claiming execution authority.
+- The claim must use an immediate SQLite transaction to insert one unique
+  schema-v13 `approval_executions` row plus a redacted
+  `approval_execution_claimed` audit. A claim permanently consumes that
+  approval; concurrent or later attempts fail closed before plugin entry.
+- Terminal approval-execution state, task state, and terminal audit evidence
+  must commit atomically. Failure, cancellation, and timeout after the claim
+  must record that an effect remains possible. A crash, restart, or persistence
+  failure that leaves a claimed execution unresolved is likewise ambiguous.
+  Jarvis must never automatically retry a claimed approval; the operator must
+  review the evidence and create a new approval for any deliberate new attempt.
 - Memory writes must have provenance, timestamp, category, sensitivity label,
   and review/delete controls.
 - Memory index artifacts are rebuildable projections, never canonical state.

@@ -27,8 +27,9 @@ use uuid::Uuid;
 use futures_util::StreamExt as FuturesStreamExt;
 
 use crate::storage::{
-    EmergencyPauseState as StoredEmergencyPauseState, MemoryClassificationSummary, NewMemoryItem,
-    NewPendingApproval, PendingApproval, SqliteRepository,
+    ApprovalExecutionState, EmergencyPauseState as StoredEmergencyPauseState,
+    MemoryClassificationSummary, NewMemoryItem, NewPendingApproval, PendingApproval,
+    SqliteRepository,
 };
 use crate::trusted_wake::{
     decode_public_key, hash_grant_token, validate_command, verify_envelope,
@@ -1882,24 +1883,6 @@ impl IpcState {
             let task = repository.get_task(approval.task_id)?.ok_or_else(|| {
                 JarvisError::Storage(format!("task not found: {}", approval.task_id))
             })?;
-            let approval_id = approval.id.to_string();
-            let already_executed =
-                repository
-                    .list_audit_entries(Some(task.id))?
-                    .iter()
-                    .any(|entry| {
-                        entry.event_type == "approval_executed"
-                            && entry
-                                .payload
-                                .get("approval_id")
-                                .and_then(serde_json::Value::as_str)
-                                == Some(approval_id.as_str())
-                    });
-            if already_executed {
-                return Err(JarvisError::Validation(format!(
-                    "approval {id} has already been executed"
-                )));
-            }
             Ok((approval, task))
         })?;
 
@@ -1929,6 +1912,18 @@ impl IpcState {
                 "approval {id} scope mismatch; the current plugin contract differs from the approval record"
             )));
         }
+        if action.risk_tier != approval.risk_tier {
+            return Err(JarvisError::Validation(format!(
+                "approval {id} risk mismatch; the current plugin contract differs from the approval record"
+            )));
+        }
+        action.input_schema.validate_value(
+            &format!(
+                "{}.{} input",
+                plugin_request.plugin_id, plugin_request.action
+            ),
+            &plugin_request.input,
+        )?;
 
         let mut granted_scopes = approval.requested_scopes.clone();
         granted_scopes.push(CapabilityScope::Conversation);
@@ -1956,19 +1951,6 @@ impl IpcState {
                 "approval {id} did not satisfy the current policy requirement"
             )));
         }
-
-        let result = self.plugin_host.execute_cancellable(plugin_request, || {
-            self.runtime_control.is_emergency_paused()
-                || self.runtime_control.is_task_cancelled(task.id)
-        })?;
-        let completed = result.status == PluginCallStatus::Completed;
-        let task_status = match result.status {
-            PluginCallStatus::Completed => TaskStatus::Completed,
-            PluginCallStatus::Cancelled => TaskStatus::Cancelled,
-            _ => TaskStatus::Failed,
-        };
-
-        let mut audit_entries = Vec::new();
         let policy_audit = AuditEntry::new(
             Some(task.id),
             "approval_execution_policy_evaluated",
@@ -1981,8 +1963,95 @@ impl IpcState {
                 "risk_tier": policy.risk_tier,
                 "approval_status": policy.approval_status,
                 "side_effect_executed": false,
+                "input_redacted": true,
             }),
         );
+        let execution_id = Uuid::new_v4();
+        let claim_audit = AuditEntry::new(
+            Some(task.id),
+            "approval_execution_claimed",
+            "approved action execution was atomically claimed before invoking the plugin",
+            json!({
+                "approval_id": approval.id,
+                "execution_id": execution_id,
+                "action": approval.action,
+                "state": "claimed",
+                "effect_possible": true,
+                "automatic_retry_allowed": false,
+                "input_redacted": true,
+            }),
+        );
+        let execution = self.using_repository(|repository| {
+            repository.claim_approved_execution(
+                approval.id,
+                execution_id,
+                task.id,
+                &approval.action,
+                &policy_audit,
+                &claim_audit,
+            )
+        })?;
+
+        let result = match self.plugin_host.execute_cancellable(plugin_request, || {
+            self.runtime_control.is_emergency_paused()
+                || self.runtime_control.is_task_cancelled(task.id)
+        }) {
+            Ok(result) => result,
+            Err(error) => {
+                let failure_audit = AuditEntry::new(
+                    Some(task.id),
+                    "plugin_failed_after_approval",
+                    "approved first-party plugin action failed after its durable claim",
+                    json!({
+                        "approval_id": approval.id,
+                        "execution_id": execution.id,
+                        "action": approval.action,
+                        "status": "failed",
+                        "error_kind": approval_execution_error_kind(&error),
+                        "effect_possible": true,
+                        "automatic_retry_allowed": false,
+                        "input_redacted": true,
+                    }),
+                );
+                let execution_audit = AuditEntry::new(
+                    Some(task.id),
+                    "approval_executed",
+                    "approved action execution reached a non-retryable terminal failure",
+                    json!({
+                        "approval_id": approval.id,
+                        "execution_id": execution.id,
+                        "action": approval.action,
+                        "status": "failed",
+                        "approval_status": approval.status,
+                        "side_effect_executed": null,
+                        "effect_possible": true,
+                        "automatic_retry_allowed": false,
+                    }),
+                );
+                self.using_repository(|repository| {
+                    repository.finish_approval_execution(
+                        execution.id,
+                        ApprovalExecutionState::Failed,
+                        TaskStatus::Failed,
+                        &[failure_audit, execution_audit],
+                    )
+                })?;
+                return Err(error);
+            }
+        };
+        let completed = result.status == PluginCallStatus::Completed;
+        let (execution_state, task_status) = match result.status {
+            PluginCallStatus::Completed => {
+                (ApprovalExecutionState::Completed, TaskStatus::Completed)
+            }
+            PluginCallStatus::Cancelled => {
+                (ApprovalExecutionState::Cancelled, TaskStatus::Cancelled)
+            }
+            PluginCallStatus::TimedOut => (ApprovalExecutionState::TimedOut, TaskStatus::Failed),
+            PluginCallStatus::ApprovalRequired | PluginCallStatus::Failed => {
+                (ApprovalExecutionState::Failed, TaskStatus::Failed)
+            }
+        };
         let plugin_event_type = match result.status {
             PluginCallStatus::Completed => "plugin_completed_after_approval",
             PluginCallStatus::ApprovalRequired => "plugin_approval_required_after_approval",
@@ -1996,6 +2065,7 @@ impl IpcState {
             "approved first-party plugin action finished",
             json!({
                 "approval_id": approval.id,
+                "execution_id": execution.id,
                 "plugin_id": result.metadata.plugin_id,
                 "action": result.metadata.action,
                 "status": result.status,
@@ -2003,31 +2073,41 @@ impl IpcState {
                 "approval_status": result.metadata.approval_status,
                 "proactive": result.metadata.proactive,
                 "timeout_ms": result.metadata.timeout_ms,
-                "side_effect_executed": completed,
+                "side_effect_executed": if completed { Some(true) } else { None },
+                "effect_possible": true,
+                "automatic_retry_allowed": false,
                 "audit_summary": result.metadata.audit_summary,
             }),
         );
         let execution_audit = AuditEntry::new(
             Some(task.id),
             "approval_executed",
-            "approved first-party plugin action execution completed",
+            "approved first-party plugin action reached a non-retryable terminal state",
             json!({
                 "approval_id": approval.id,
+                "execution_id": execution.id,
                 "action": approval.action,
                 "status": result.status,
                 "approval_status": approval.status,
-                "side_effect_executed": completed,
+                "side_effect_executed": if completed { Some(true) } else { None },
+                "effect_possible": true,
+                "automatic_retry_allowed": false,
             }),
         );
-        audit_entries.push(policy_audit.clone());
-        audit_entries.push(plugin_audit.clone());
-        audit_entries.push(execution_audit.clone());
+        let audit_entries = vec![
+            policy_audit.clone(),
+            claim_audit.clone(),
+            plugin_audit.clone(),
+            execution_audit.clone(),
+        ];
 
         let task = self.using_repository(|repository| {
-            repository.append_audit_entry(&policy_audit)?;
-            repository.append_audit_entry(&plugin_audit)?;
-            repository.append_audit_entry(&execution_audit)?;
-            repository.update_task_status(task.id, task_status)
+            repository.finish_approval_execution(
+                execution.id,
+                execution_state,
+                task_status,
+                &[plugin_audit, execution_audit.clone()],
+            )
         })?;
 
         Ok(ApprovalExecutionResponse {
@@ -8074,8 +8154,8 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "app_supervised_ipc_auth",
             "implemented",
-            "Default app supervision rotates a 32-byte bearer through strict bounded startup stdin and uses a generation-random owner-only Unix socket. Swift and Rust require the peer's current EUID, the framed client must half-close without trailing input, and Rust protects the whole router with constant-time bearer comparison. Exact CLI handoff opt-in replaces UDS with weaker authenticated loopback TCP plus a bounded owner-only token file. Swift lifecycle tests, Rust cross-process and concurrency E2E, and the unsigned distribution launch smoke cover the boundary.",
-            "Same-EUID plus bearer defense in depth does not prove peer PID, intended process or code-sign identity, same-user/process isolation, device authentication, XPC, App Sandbox enforcement, host-level egress policy, signing/notarization, or live-device behavior. Explicit CLI handoff is same-user-readable loopback compatibility; explicitly launched legacy servers remain unauthenticated but reject any Authorization header.",
+            "Default app supervision rotates a 32-byte bearer through strict bounded startup stdin and uses a generation-random owner-only Unix socket. Swift and Rust obtain LOCAL_PEERTOKEN, validate the running peer against the launch-supplied Security.framework designated requirement and current EUID before framing, require half-close without trailing input, and protect the whole router with constant-time bearer comparison. The release-built smoke proves legitimate audit-token requirement acceptance and same-EUID wrong-code pre-frame rejection. Exact CLI handoff opt-in replaces UDS with weaker authenticated loopback TCP plus a bounded owner-only token file.",
+            "Ad-hoc exact-build requirements bind the evaluated cdhash but do not prove Developer ID publisher identity. The Developer ID hardened profile still requires signed/notarized clean-profile evidence. This defense in depth is not device authentication, same-user/process isolation, XPC, App Sandbox enforcement, host-level egress policy, notarization, or live-device proof. Explicit CLI handoff is same-user-readable loopback compatibility; explicitly launched legacy servers remain unauthenticated but reject any Authorization header.",
         ),
         feature(
             "repository_state",
@@ -8140,8 +8220,8 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "approval_execution",
             "implemented",
-            "Approved first-party actions execute through `/approvals/:id/execute` after action/scope verification and are covered by Rust unit and CLI IPC E2E tests.",
-            "Explicit replay only for first-party plugin commands; grant/deny remains side-effect-free and this is not broad autonomous execution.",
+            "Approved first-party actions execute through `/approvals/:id/execute` only after current action, risk, scope, input-schema, and policy validation. Schema-v13 atomically records a unique durable execution claim plus redacted policy/claim audits before plugin invocation; terminal state, task state, and terminal audits commit together. Rust race/migration tests, cross-process CLI IPC E2E, and Swift duplicate-submit/restart tests cover the one-shot boundary.",
+            "Every durable claim permanently consumes that approval. Failure, cancellation, timeout, storage interruption, or restart after claim may leave the effect ambiguous and automatic retry is forbidden; an operator must inspect audit evidence and create a new approval when appropriate. Grant/deny remains side-effect-free, execution remains limited to explicitly approved first-party plugin commands, and this is not broad autonomous execution or distributed exactly-once delivery.",
         ),
         feature(
             "model_tool_catalog_grounding",
@@ -8194,8 +8274,8 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "unsigned_distribution_launch",
             "implemented",
-            "`package-distribution.sh --unsigned-launch-check` builds the release app layout, creates an unsigned installer payload, launches the release-built app executable with isolated HOME, verifies the owner-only app credential file, and performs bearer-authenticated bundled-core IPC smoke through the explicit CLI handoff.",
-            "Unsigned distribution-layout and bearer-possession proof only; not OS identity, same-user/process isolation, Developer ID signing, notarization, stapling, /Applications install, Finder/LaunchServices validation, live device validation, App Store review, or manual QA.",
+            "`package-distribution.sh --unsigned-launch-check` builds the release app layout, creates an unsigned installer payload, launches the release-built app executable with isolated HOME, proves the default owner-only Unix socket plus memory-only bearer path has no TCP listener or credential handoff file, validates audit-token requirements and same-EUID wrong-code pre-frame rejection, then relaunches only for the explicit authenticated TCP/token CLI compatibility check.",
+            "Unsigned distribution-layout, ad-hoc exact-build identity mechanics, and bearer-possession proof only; not Developer ID publisher identity, device authentication, App Sandbox or host-egress enforcement, signing, notarization, stapling, /Applications install, Finder/LaunchServices validation, live-device validation, App Store review, or manual QA.",
         ),
         feature(
             "release_evidence_status",
@@ -8299,6 +8379,7 @@ fn endpoint(
 fn error_response(error: JarvisError) -> (StatusCode, Json<ErrorResponse>) {
     let status = match error {
         JarvisError::Validation(_) => StatusCode::BAD_REQUEST,
+        JarvisError::Conflict(_) => StatusCode::CONFLICT,
         JarvisError::PolicyBlocked(_) => StatusCode::FORBIDDEN,
         JarvisError::ApprovalRequired(_) => StatusCode::ACCEPTED,
         JarvisError::Model(_) => StatusCode::BAD_GATEWAY,
@@ -8313,6 +8394,19 @@ fn error_response(error: JarvisError) -> (StatusCode, Json<ErrorResponse>) {
             error: error.to_string(),
         }),
     )
+}
+
+fn approval_execution_error_kind(error: &JarvisError) -> &'static str {
+    match error {
+        JarvisError::PolicyBlocked(_) => "policy_blocked",
+        JarvisError::ApprovalRequired(_) => "approval_required",
+        JarvisError::Validation(_) => "validation",
+        JarvisError::Conflict(_) => "conflict",
+        JarvisError::Storage(_) => "storage",
+        JarvisError::Plugin(_) => "plugin",
+        JarvisError::Model(_) => "model",
+        JarvisError::Other(_) => "other",
+    }
 }
 
 #[cfg(test)]
@@ -8489,6 +8583,18 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             feature.key == "scheduler_trigger_policy_review"
                 && feature.status == "implemented"
                 && feature.boundary.contains("Review visibility only")
+        }));
+        assert!(contract.features.iter().any(|feature| {
+            feature.key == "approval_execution"
+                && feature.proof.contains("unique durable execution claim")
+                && feature.boundary.contains("automatic retry is forbidden")
+        }));
+        assert!(contract.features.iter().any(|feature| {
+            feature.key == "app_supervised_ipc_auth"
+                && feature.proof.contains("LOCAL_PEERTOKEN")
+                && feature
+                    .boundary
+                    .contains("do not prove Developer ID publisher identity")
         }));
         assert!(contract.features.iter().any(|feature| {
             feature.key == "live_voice_loop" && feature.status == "pending_manual_validation"
@@ -12267,7 +12373,127 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .expect_err("approved action cannot be replayed twice");
         assert!(replay_error
             .to_string()
-            .contains("has already been executed"));
+            .contains("execution has already been claimed"));
+    }
+
+    #[tokio::test]
+    async fn concurrent_approved_execution_has_exactly_one_winner() {
+        let repository = SqliteRepository::in_memory().unwrap();
+        let state = IpcState::with_repository_and_test_fixtures(repository).expect("state");
+        state
+            .submit_command(CommandRequest {
+                input: "plugin approval echo execute once".to_string(),
+                session_id: None,
+                context: json!({"surface": "test"}),
+                dry_run: false,
+                proactive: false,
+                memory_context: false,
+                installed_wasm_tools: false,
+                sensitivity: Some(Sensitivity::Workspace),
+            })
+            .await
+            .expect("approval command");
+        let approval = state
+            .list_approvals(Some(ApprovalStatus::Pending))
+            .expect("pending approvals")
+            .into_iter()
+            .next()
+            .expect("pending approval");
+        state
+            .approve_approval(approval.id, "test".to_string(), None)
+            .expect("approve");
+
+        let barrier = Arc::new(std::sync::Barrier::new(3));
+        let mut handles = Vec::new();
+        for _ in 0..2 {
+            let state = state.clone();
+            let barrier = barrier.clone();
+            handles.push(std::thread::spawn(move || {
+                barrier.wait();
+                state.execute_approved_approval(approval.id)
+            }));
+        }
+        barrier.wait();
+        let results = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("execution thread"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| matches!(result, Err(JarvisError::Conflict(_))))
+                .count(),
+            1
+        );
+        let audits = state
+            .using_repository(|repository| repository.list_audit_entries(Some(approval.task_id)))
+            .expect("audits");
+        assert_eq!(
+            audits
+                .iter()
+                .filter(|entry| entry.event_type == "approval_execution_claimed")
+                .count(),
+            1
+        );
+        assert_eq!(
+            audits
+                .iter()
+                .filter(|entry| entry.event_type == "approval_executed")
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn terminal_task_rejects_approved_execution_without_claiming() {
+        let repository = SqliteRepository::in_memory().unwrap();
+        let state = IpcState::with_repository_and_test_fixtures(repository).expect("state");
+        state
+            .submit_command(CommandRequest {
+                input: "plugin approval echo cancelled task".to_string(),
+                session_id: None,
+                context: json!({"surface": "test"}),
+                dry_run: false,
+                proactive: false,
+                memory_context: false,
+                installed_wasm_tools: false,
+                sensitivity: Some(Sensitivity::Workspace),
+            })
+            .await
+            .expect("approval command");
+        let approval = state
+            .list_approvals(Some(ApprovalStatus::Pending))
+            .expect("pending approvals")
+            .into_iter()
+            .next()
+            .expect("pending approval");
+        state
+            .approve_approval(approval.id, "test".to_string(), None)
+            .expect("approve");
+        state
+            .using_repository(|repository| {
+                repository.update_task_status(approval.task_id, TaskStatus::Cancelled)
+            })
+            .expect("cancel task");
+
+        let error = state
+            .execute_approved_approval(approval.id)
+            .expect_err("terminal task cannot execute");
+        assert!(error
+            .to_string()
+            .contains("must still be waiting for approval"));
+        let execution = state
+            .using_repository(|repository| repository.get_approval_execution(approval.id))
+            .expect("execution lookup");
+        assert!(execution.is_none());
+        let audits = state
+            .using_repository(|repository| repository.list_audit_entries(Some(approval.task_id)))
+            .expect("audits");
+        assert!(!audits
+            .iter()
+            .any(|entry| entry.event_type == "approval_execution_claimed"));
     }
 
     #[tokio::test]
@@ -13502,7 +13728,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .expect("diagnostics export");
         assert_eq!(export.health.status, "ok");
         assert!(export.repository_backed);
-        assert_eq!(export.schema_version, Some(12));
+        assert_eq!(export.schema_version, Some(13));
         assert_eq!(export.task_count, Some(1));
         assert!(export.audit_entry_count.unwrap_or_default() >= 2);
         assert_eq!(export.model_route_record_count, Some(1));

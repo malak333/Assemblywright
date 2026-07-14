@@ -770,6 +770,7 @@ public final class ApprovalManagementModel: ObservableObject {
 
     private let client: any JarvisCoreClient
     private var pluginManifests: [JarvisPluginManifest]
+    private var executingApprovalIDs: Set<UUID>
 
     public init(client: any JarvisCoreClient = JarvisIPCClient()) {
         self.client = client
@@ -783,6 +784,7 @@ public final class ApprovalManagementModel: ObservableObject {
         self.isLoading = false
         self.lastError = nil
         self.pluginManifests = []
+        self.executingApprovalIDs = []
     }
 
     public func refresh() async {
@@ -843,6 +845,10 @@ public final class ApprovalManagementModel: ObservableObject {
             lastError = "Core does not expose approved approval execution."
             return
         }
+        guard executingApprovalIDs.insert(id).inserted else {
+            return
+        }
+        defer { executingApprovalIDs.remove(id) }
 
         await run {
             let execution = try await self.client.executeApproval(id: id)
@@ -861,6 +867,10 @@ public final class ApprovalManagementModel: ObservableObject {
                 grantSummary: self.grantSummary
             )
         }
+    }
+
+    public func isExecuting(id: UUID) -> Bool {
+        executingApprovalIDs.contains(id)
     }
 
     private func decide(
@@ -918,7 +928,8 @@ public final class ApprovalManagementModel: ObservableObject {
     private func approvalHasExecutionAudit(_ approval: JarvisPendingApproval) async throws -> Bool {
         let entries = try await client.listAuditEntries(taskId: approval.taskId)
         return entries.contains { entry in
-            guard entry.eventType == "approval_executed",
+            guard entry.eventType == "approval_executed"
+                    || entry.eventType == "approval_execution_claimed",
                   case let .object(payload)? = entry.payload,
                   case let .string(approvalId)? = payload["approval_id"] else {
                 return false
