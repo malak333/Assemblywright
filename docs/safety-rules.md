@@ -240,8 +240,12 @@ release requirements, not optional UX guidance.
   prepare response is not install stdin; neither secret-bearing form may reach
   a terminal, shell history, log, or file.
 - Diagnostics exports must redact credentials, command bodies, scheduler
-  commands, audit payloads, memory values, raw cancellation reasons, and other
-  sensitive payloads.
+  commands, audit payloads, memory values, arbitrary emergency-pause reason
+  text, raw cancellation reasons, and other sensitive payloads. The diagnostic
+  health projection may expose only `emergency_paused`,
+  `emergency_pause_updated_at`, `emergency_pause_reason_present`, and a null or
+  fixed `redacted` compatibility marker in the legacy reason field; explicit
+  health and pause-status operator surfaces retain their documented reason contract.
 - Memory context is explicit opt-in and local-model-only. Retrieval requires a
   current canonical index, a non-proactive command, and reviewed active memory.
   Automatic context may include only Public, Workspace, or Personal records;
@@ -315,7 +319,8 @@ Safety regressions should fail release verification:
 - Audit entries missing route, policy, approval, or action evidence.
 - Diagnostics containing raw secrets.
 - Diagnostics exposing command bodies, memory values, scheduler command text,
-  audit payloads, or cancellation reason text.
+  audit payloads, arbitrary emergency-pause reason text, or cancellation reason
+  text.
 - Memory retrieval running without explicit opt-in, on proactive or cloud
   routes, against a non-current index, for unreviewed/deleted/high-sensitivity
   records, beyond query/item/corpus/result/context caps, without pause/cancel

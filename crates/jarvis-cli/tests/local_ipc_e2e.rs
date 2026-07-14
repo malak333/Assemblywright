@@ -8060,6 +8060,21 @@ fn app_supervised_ipc_auth_is_fail_closed_and_cli_token_file_is_safe() {
     let audit = request_with_authorization_headers(&endpoint, "GET", "/audit", None, &[&bearer])
         .expect("authenticated audit");
     assert_eq!(serde_json::from_str::<Value>(&audit).unwrap(), json!([]));
+    const PAUSE_REASON_SENTINEL: &str = "pause-secret-sentinel-e2e-93d8f11c";
+    let pause_body = json!({"reason": PAUSE_REASON_SENTINEL}).to_string();
+    let pause = request_with_authorization_headers(
+        &endpoint,
+        "POST",
+        "/emergency-pause",
+        Some(&pause_body),
+        &[&bearer],
+    )
+    .expect("authenticated pause");
+    assert!(pause.contains(PAUSE_REASON_SENTINEL));
+    let paused_health =
+        request_with_authorization_headers(&endpoint, "GET", "/health", None, &[&bearer])
+            .expect("authenticated paused health");
+    assert!(paused_health.contains(PAUSE_REASON_SENTINEL));
     let diagnostics = request_with_authorization_headers(
         &endpoint,
         "GET",
@@ -8069,6 +8084,19 @@ fn app_supervised_ipc_auth_is_fail_closed_and_cli_token_file_is_safe() {
     )
     .expect("authenticated diagnostics");
     assert!(!diagnostics.contains(TOKEN));
+    assert!(!diagnostics.contains(PAUSE_REASON_SENTINEL));
+    let diagnostics_json: Value = serde_json::from_str(&diagnostics).unwrap();
+    assert_eq!(diagnostics_json["health"]["emergency_paused"], true);
+    assert_eq!(
+        diagnostics_json["health"]["emergency_pause_reason_present"],
+        true
+    );
+    assert_eq!(
+        diagnostics_json["health"]["emergency_pause_reason"],
+        "redacted"
+    );
+    request_with_authorization_headers(&endpoint, "DELETE", "/emergency-pause", None, &[&bearer])
+        .expect("authenticated resume");
 
     let token_file = temp.path().join("ipc-token.json");
     fs::write(

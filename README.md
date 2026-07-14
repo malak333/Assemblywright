@@ -666,6 +666,13 @@ details, while `--json` preserves the raw IPC payload. Task, route, and
 activity summary commands plus registered plugin/tool inspection default to
 operator-readable text; use `--json` or `JARVIS_CLI_JSON=1` for exact IPC
 payloads, including stored task input and full plugin schemas.
+The diagnostics health projection is intentionally distinct from `/health`:
+it exposes pause state, update time, and `emergency_pause_reason_present`, but
+the legacy reason field is only null or the fixed `redacted` compatibility
+marker, never arbitrary emergency-pause reason text. Explicit health, pause, and
+pause-status commands retain that reason for deliberate operator inspection and
+must not be handled as shareable diagnostics exports. Core sentinel tests,
+real-server CLI E2E, and Swift decode/presentation tests enforce the split.
 Evidence-status items report present/missing/invalid inventory. Artifact paths
 are presence-only checks except the app bundle, whose `Info.plist` bundle id,
 short version, and build version must match the expected release metadata. JSON

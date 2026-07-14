@@ -414,7 +414,7 @@ pub struct HealthResponse {
 pub struct DiagnosticsExport {
     pub generated_at: DateTime<Utc>,
     pub redaction: String,
-    pub health: HealthResponse,
+    pub health: DiagnosticHealthResponse,
     pub scheduler_jobs: Vec<DiagnosticSchedulerJob>,
     pub repository_backed: bool,
     pub schema_version: Option<i64>,
@@ -424,6 +424,62 @@ pub struct DiagnosticsExport {
     pub active_memory_item_count: Option<usize>,
     pub unreviewed_memory_item_count: Option<usize>,
     pub sensitive_memory_item_count: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiagnosticHealthResponse {
+    pub status: String,
+    pub version: String,
+    pub contract: ContractMetadata,
+    pub started_at: DateTime<Utc>,
+    pub emergency_paused: bool,
+    pub emergency_pause_reason: Option<DiagnosticRedactionMarker>,
+    pub emergency_pause_reason_present: bool,
+    pub emergency_pause_updated_at: Option<DateTime<Utc>>,
+    pub scheduler_jobs: usize,
+    pub command_runtime: String,
+    pub local_model_provider: LocalModelProviderKind,
+    pub local_model: String,
+    pub local_endpoint_configured: bool,
+    pub chatgpt_enabled: bool,
+    pub chatgpt_auth_mode: crate::ChatGptAuthMode,
+    pub chatgpt_model: String,
+    pub chatgpt_requires_approval: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticRedactionMarker {
+    Redacted,
+}
+
+impl From<HealthResponse> for DiagnosticHealthResponse {
+    fn from(health: HealthResponse) -> Self {
+        let emergency_pause_reason_present = health
+            .emergency_pause_reason
+            .as_deref()
+            .is_some_and(|reason| !reason.trim().is_empty());
+        Self {
+            status: health.status,
+            version: health.version,
+            contract: health.contract,
+            started_at: health.started_at,
+            emergency_paused: health.emergency_paused,
+            emergency_pause_reason: emergency_pause_reason_present
+                .then_some(DiagnosticRedactionMarker::Redacted),
+            emergency_pause_reason_present,
+            emergency_pause_updated_at: health.emergency_pause_updated_at,
+            scheduler_jobs: health.scheduler_jobs,
+            command_runtime: health.command_runtime,
+            local_model_provider: health.local_model_provider,
+            local_model: health.local_model,
+            local_endpoint_configured: health.local_endpoint_configured,
+            chatgpt_enabled: health.chatgpt_enabled,
+            chatgpt_auth_mode: health.chatgpt_auth_mode,
+            chatgpt_model: health.chatgpt_model,
+            chatgpt_requires_approval: health.chatgpt_requires_approval,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1326,9 +1382,9 @@ impl IpcState {
         Ok(DiagnosticsExport {
             generated_at: Utc::now(),
             redaction:
-                "diagnostics export omits command bodies, scheduler commands, model route contexts, audit payloads, memory values, and cancellation reason text"
+                "diagnostics export omits command bodies, scheduler commands, model route contexts, audit payloads, memory values, emergency-pause reason text, and cancellation reason text"
                     .to_string(),
-            health: self.health(),
+            health: DiagnosticHealthResponse::from(self.health()),
             scheduler_jobs: self
                 .scheduler
                 .list()
@@ -13722,6 +13778,13 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             })
             .await
             .expect("command");
+        let pause_reason = "pause-secret-sentinel-7f73b255";
+        state.pause(pause_reason).expect("pause");
+        assert_eq!(
+            state.health().emergency_pause_reason.as_deref(),
+            Some(pause_reason),
+            "the explicit health operator surface retains its documented reason contract"
+        );
 
         let Json(export) = diagnostics_export(State(state))
             .await
@@ -13737,11 +13800,17 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert_eq!(export.sensitive_memory_item_count, Some(1));
         assert_eq!(export.scheduler_jobs.len(), 1);
         assert!(export.redaction.contains("omits command bodies"));
+        assert!(export.health.emergency_paused);
+        assert!(export.health.emergency_pause_reason_present);
 
         let encoded = serde_json::to_string(&export).unwrap();
         assert!(!encoded.contains("private command body"));
         assert!(!encoded.contains("do not redact scheduler command"));
         assert!(!encoded.contains("diagnostic memory value should stay out"));
+        assert!(!encoded.contains(pause_reason));
+        let encoded: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(encoded["health"]["emergency_pause_reason"], "redacted");
+        assert_eq!(encoded["health"]["emergency_pause_reason_present"], true);
     }
 
     #[tokio::test]

@@ -54,6 +54,12 @@ for file in "$BUILD_DOCS" "$CHECKLIST" "$README"; do
   require_text "approval no automatic retry boundary" "$file" "automatic retry is forbidden"
 done
 
+for file in "$BUILD_DOCS" "$CHECKLIST" "$ARCHITECTURE" "$KB" "$README"; do
+  require_text "diagnostics pause-reason redaction contract" "$file" "emergency_pause_reason_present"
+done
+require_text "core diagnostics pause-reason redaction contract" "$CORE_IPC" "emergency_pause_reason_present"
+forbid_text "core stale diagnostics redaction statement" "$CORE_IPC" "memory values, and cancellation reason text"
+
 require_text "core app-supervised IPC audit-token proof" "$CORE_IPC" "LOCAL_PEERTOKEN"
 require_text "core app-supervised IPC Security.framework proof" "$CORE_IPC" "Security.framework designated requirement"
 require_text "core app-supervised IPC wrong-code proof" "$CORE_IPC" "same-EUID wrong-code pre-frame rejection"

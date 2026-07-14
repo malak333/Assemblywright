@@ -685,7 +685,11 @@ retention actions while keeping purge/rewrite automation out of scope. Memory
 review items include category/key and
 sensitivity only; memory values stay out of policy review and diagnostics
 export. `jarvis diagnostics export` exposes aggregate active, unreviewed, and
-sensitive memory counts when repository backing is enabled.
+sensitive memory counts when repository backing is enabled. Its dedicated
+health projection exposes `emergency_pause_reason_present` rather than arbitrary
+emergency-pause reason text and limits the legacy reason field to null or the
+fixed `redacted` compatibility marker; `/health`, pause, and pause-status remain
+explicit operator surfaces with their existing reason contract.
 `jarvis memory index-status` reports only projection state and counts;
 `jarvis memory index-rebuild` atomically replaces the versioned local manifest
 from active SQLite records. They do not themselves perform retrieval or model
@@ -942,6 +946,8 @@ swift test --disable-sandbox --package-path apps/mac --filter commandConsoleMemo
 ./scripts/release-evidence-bundle.sh --self-test
 ./scripts/release-evidence-doctor.sh --self-test
 cargo test -p jarvis-core diagnostics_export_is_redacted_and_counts_repository_state -- --nocapture
+cargo test -p jarvis-cli --test local_ipc_e2e app_supervised_ipc_auth_is_fail_closed_and_cli_token_file_is_safe -- --nocapture
+swift test --disable-sandbox --package-path apps/mac --filter 'JarvisMacCoreTests.JarvisMacCoreTests/decodesDiagnosticsExport'
 cargo test -p jarvis-core release_runbooks_expose_current_evidence_without_side_effects -- --nocapture
 cargo test -p jarvis-cli --test local_ipc_e2e release_evidence_bundle_runbook_summarizes_next_operator_steps -- --nocapture
 cargo test -p jarvis-cli --test local_ipc_e2e release_runbook_ipc_endpoints_emit_normalized_core_json -- --nocapture
