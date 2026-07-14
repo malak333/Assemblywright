@@ -100,6 +100,12 @@ release requirements, not optional UX guidance.
   child exit clear the matching generation. Cleanup may remove only the
   validated socket leaf; wrong-type, unsafe, or changed paths must fail without
   recursive deletion.
+- Exact release-smoke mode may emit only a fixed non-secret success marker, and
+  only after the app-owned Swift client completes authenticated health,
+  dry-run command, task/audit inspection, diagnostics, pause, blocked-command,
+  and resume verification over the default UDS. Any failure must suppress the
+  marker, and cleanup after a successful pause must make a bounded best-effort
+  resume attempt so the test path does not intentionally strand durable pause.
 - Only exact `JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true` may select the explicitly
   weaker authenticated loopback TCP and owner-only token-file compatibility
   path. `JARVIS_MAC_IPC_AUTH_FILE` may select an absolute override only in that

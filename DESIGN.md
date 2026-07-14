@@ -404,6 +404,11 @@ Version and test shared schemas between Swift and Rust. Cross-process coverage
 must exercise the default UDS launch with peer-EUID and bearer enforcement,
 strict framed request/response decoding, existing-route parity, bounds and
 cleanup, restart invalidation, and the explicit TCP/token compatibility path.
+The release-built app lane must also traverse authenticated health, dry-run
+command, task/audit inspection, diagnostics, pause, blocked-command, and resume
+through the app-owned Swift client on the default UDS before emitting a fixed
+non-secret success marker. Failures suppress success and post-pause cleanup
+makes a bounded best-effort resume attempt.
 Breaking the app/core API should fail loudly.
 
 ### Voice Loop Tests

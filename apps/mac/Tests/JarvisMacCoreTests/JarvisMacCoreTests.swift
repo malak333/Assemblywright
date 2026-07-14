@@ -5584,6 +5584,149 @@ private func commandResponseJSON(input: String, status: String = "completed") ->
     )
 }
 
+private func releaseSmokeBlockedCommandResponseJSON(input: String) -> Data {
+    let taskId = UUID()
+    let sessionId = UUID()
+    let auditId = UUID()
+    return Data(
+        """
+        {
+          "accepted": false,
+          "task": {
+            "id": "\(taskId.uuidString)",
+            "session_id": "\(sessionId.uuidString)",
+            "user_input": "\(input)",
+            "status": "blocked",
+            "created_at": "2026-07-14T12:00:00Z",
+            "updated_at": "2026-07-14T12:00:01Z"
+          },
+          "audit_entry": {
+            "id": "\(auditId.uuidString)",
+            "task_id": "\(taskId.uuidString)",
+            "event_type": "emergency_pause_blocked",
+            "summary": "emergency pause blocked command execution",
+            "payload": { "emergency_paused": true },
+            "created_at": "2026-07-14T12:00:01Z"
+          },
+          "audit_entries": [],
+          "route": null,
+          "steps": [],
+          "plugin_results": [],
+          "message": "Emergency pause is active; command execution is blocked."
+        }
+        """.utf8
+    )
+}
+
+private func releaseSmokePauseResponse(paused: Bool, reason: String?) -> JarvisPauseResponse {
+    JarvisPauseResponse(
+        paused: paused,
+        reason: reason,
+        pausedAt: paused ? "2026-07-14T12:00:02Z" : nil,
+        resumedAt: paused ? nil : "2026-07-14T12:00:03Z",
+        cancelledSchedulerJobs: 0
+    )
+}
+
+@Suite("Release smoke probe", .serialized)
+struct ReleaseSmokeProbeTests {
+    @Test("Probe verifies the complete route sequence before returning its fixed marker")
+    func verifiesCompleteSequence() async throws {
+        let client = FakeCoreClient(releaseSmokeMode: true)
+
+        let result = try await JarvisReleaseSmokeProbe(
+            client: client,
+            timeout: .seconds(2)
+        ).run()
+
+        #expect(result == JarvisReleaseSmokeProbe.successLine)
+        #expect(result == "Jarvis release smoke: default supervised Unix IPC route sequence verified")
+        #expect(client.releaseSmokeCalls == [
+            "health",
+            "submitInitial",
+            "task",
+            "listTasks",
+            "taskAudit",
+            "diagnostics",
+            "pause",
+            "pauseStatusPaused",
+            "submitPaused",
+            "resume",
+            "pauseStatusResumed"
+        ])
+        #expect(client.submittedCommands == [
+            JarvisCommandRequest(
+                input: "Jarvis release smoke deterministic dry-run check.",
+                dryRun: true
+            ),
+            JarvisCommandRequest(
+                input: "Jarvis release smoke deterministic dry-run check.",
+                dryRun: true
+            )
+        ])
+    }
+
+    @Test("Probe returns no success marker when a representative read step fails")
+    func failsClosedWithoutMarker() async {
+        let client = FakeCoreClient(
+            releaseSmokeMode: true,
+            releaseSmokeFailureCall: "diagnostics"
+        )
+        var success: String?
+
+        do {
+            success = try await JarvisReleaseSmokeProbe(
+                client: client,
+                timeout: .seconds(2)
+            ).run()
+        } catch {
+            // Expected: errors are deliberately not converted into output text.
+        }
+
+        #expect(success == nil)
+        #expect(client.releaseSmokeCalls == [
+            "health",
+            "submitInitial",
+            "task",
+            "listTasks",
+            "taskAudit",
+            "diagnostics"
+        ])
+    }
+
+    @Test("Probe best-effort resumes when a post-pause step fails")
+    func resumesAfterPostPauseFailure() async {
+        let client = FakeCoreClient(
+            releaseSmokeMode: true,
+            releaseSmokeFailureCall: "submitPaused"
+        )
+        var success: String?
+
+        do {
+            success = try await JarvisReleaseSmokeProbe(
+                client: client,
+                timeout: .seconds(2)
+            ).run()
+        } catch {
+            // Expected: cleanup must run before the error escapes.
+        }
+
+        #expect(success == nil)
+        #expect(client.releaseSmokeCalls == [
+            "health",
+            "submitInitial",
+            "task",
+            "listTasks",
+            "taskAudit",
+            "diagnostics",
+            "pause",
+            "pauseStatusPaused",
+            "submitPaused",
+            "resume"
+        ])
+    }
+}
+
 @MainActor
 @Suite("Workspace root bookmarks", .serialized)
 struct WorkspaceRootBookmarkTests {
@@ -5812,9 +5955,11 @@ struct WorkspaceRootBookmarkTests {
     @Test("Foundation launcher bounds a child that does not consume startup stdin")
     func foundationLauncherTimesOutBlockedStartupInput() async {
         let launcher = FoundationJarvisCoreProcessLauncher(
-            standardInputWriteTimeoutNanoseconds: 1_000_000,
+            // Swift Testing runs suites concurrently in CI. Keep enough separation
+            // that scheduler jitter cannot let the synthetic writer beat the timer.
+            standardInputWriteTimeoutNanoseconds: 50_000_000,
             standardInputWriter: { _, _ in
-                Thread.sleep(forTimeInterval: 0.02)
+                Thread.sleep(forTimeInterval: 2)
                 return true
             }
         )
@@ -8240,6 +8385,10 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     private var trustedWakeStatusResults: [Result<JarvisTrustedWakeStatus, Error>]
     private var trustedWakePrepareResult: Result<JarvisTrustedWakeKeyControlPrepareResponse, Error>?
     private var trustedWakeCancelResults: [Result<JarvisTrustedWakeRule, Error>]
+    private let releaseSmokeMode: Bool
+    private let releaseSmokeFailureCall: String?
+    private var releaseSmokePaused: Bool
+    private(set) var releaseSmokeCalls: [String]
 
     init(
         healthResults: [Result<JarvisHealth, Error>] = [.success(sampleHealth())],
@@ -8269,7 +8418,9 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         trustedWakeAttentionItems: [JarvisTrustedWakeAttentionItem] = [],
         trustedWakeStatusResults: [Result<JarvisTrustedWakeStatus, Error>] = [],
         trustedWakePrepareResult: Result<JarvisTrustedWakeKeyControlPrepareResponse, Error>? = nil,
-        trustedWakeCancelResults: [Result<JarvisTrustedWakeRule, Error>] = []
+        trustedWakeCancelResults: [Result<JarvisTrustedWakeRule, Error>] = [],
+        releaseSmokeMode: Bool = false,
+        releaseSmokeFailureCall: String? = nil
     ) {
         self.healthResults = healthResults
         self.tasks = tasks
@@ -8300,6 +8451,10 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         self.trustedWakeStatusResults = trustedWakeStatusResults
         self.trustedWakePrepareResult = trustedWakePrepareResult
         self.trustedWakeCancelResults = trustedWakeCancelResults
+        self.releaseSmokeMode = releaseSmokeMode
+        self.releaseSmokeFailureCall = releaseSmokeFailureCall
+        self.releaseSmokePaused = false
+        self.releaseSmokeCalls = []
         self.approvalDecisions = []
         self.approvalExecutions = []
         self.includeDeletedMemoryRequests = []
@@ -8310,6 +8465,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     }
 
     func health() async throws -> JarvisHealth {
+        try recordReleaseSmokeCall("health")
         guard !healthResults.isEmpty else {
             return sampleHealth()
         }
@@ -8394,33 +8550,61 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
 
     func submit(_ command: JarvisCommandRequest) async throws -> JarvisCommandResponse {
         submittedCommands.append(command)
-        return try JSONDecoder().decode(
+        let call = releaseSmokePaused ? "submitPaused" : "submitInitial"
+        try recordReleaseSmokeCall(call)
+        let response = try JSONDecoder().decode(
             JarvisCommandResponse.self,
-            from: commandResponseJSON(input: command.input, status: commandStatus)
+            from: releaseSmokePaused
+                ? releaseSmokeBlockedCommandResponseJSON(input: command.input)
+                : commandResponseJSON(input: command.input, status: commandStatus)
         )
+        if releaseSmokeMode {
+            tasks.append(response.task)
+            auditEntries.append(response.auditEntry)
+            auditEntries.append(contentsOf: response.auditEntries)
+        }
+        return response
     }
 
     func pause(reason: String) async throws -> JarvisPauseResponse {
-        throw URLError(.unsupportedURL)
+        guard releaseSmokeMode else { throw URLError(.unsupportedURL) }
+        try recordReleaseSmokeCall("pause")
+        releaseSmokePaused = true
+        return releaseSmokePauseResponse(paused: true, reason: reason)
     }
 
     func resume() async throws -> JarvisPauseResponse {
-        throw URLError(.unsupportedURL)
+        guard releaseSmokeMode else { throw URLError(.unsupportedURL) }
+        try recordReleaseSmokeCall("resume")
+        releaseSmokePaused = false
+        return releaseSmokePauseResponse(paused: false, reason: nil)
     }
 
     func pauseStatus() async throws -> JarvisPauseResponse {
-        throw URLError(.unsupportedURL)
+        guard releaseSmokeMode else { throw URLError(.unsupportedURL) }
+        try recordReleaseSmokeCall(releaseSmokePaused ? "pauseStatusPaused" : "pauseStatusResumed")
+        return releaseSmokePauseResponse(
+            paused: releaseSmokePaused,
+            reason: releaseSmokePaused ? "release smoke" : nil
+        )
     }
 
     func listTasks() async throws -> [JarvisTask] {
-        tasks
+        try recordReleaseSmokeCall("listTasks")
+        return tasks
     }
 
     func task(id: UUID) async throws -> JarvisTask {
-        throw URLError(.unsupportedURL)
+        guard releaseSmokeMode else { throw URLError(.unsupportedURL) }
+        try recordReleaseSmokeCall("task")
+        guard let task = tasks.first(where: { $0.id == id }) else {
+            throw URLError(.fileDoesNotExist)
+        }
+        return task
     }
 
     func listAuditEntries(taskId: UUID?) async throws -> [JarvisAuditEntry] {
+        try recordReleaseSmokeCall("taskAudit")
         if let taskId {
             return auditEntries.filter { $0.taskId == taskId }
         }
@@ -8868,7 +9052,16 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     }
 
     func diagnosticsExport() async throws -> JarvisDiagnosticsExport {
-        try JSONDecoder().decode(JarvisDiagnosticsExport.self, from: diagnosticsJSON())
+        try recordReleaseSmokeCall("diagnostics")
+        return try JSONDecoder().decode(JarvisDiagnosticsExport.self, from: diagnosticsJSON())
+    }
+
+    private func recordReleaseSmokeCall(_ call: String) throws {
+        guard releaseSmokeMode else { return }
+        releaseSmokeCalls.append(call)
+        if releaseSmokeFailureCall == call {
+            throw URLError(.cannotConnectToHost)
+        }
     }
 
     func permissionGrantSummary() async throws -> JarvisPermissionGrantSummary {

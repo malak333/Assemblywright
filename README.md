@@ -478,9 +478,11 @@ and inspects the package payload for the app executable, bundled core, and
 `Info.plist`.
 The unsigned launch check additionally launches the release-built app
 executable with an isolated temporary HOME, requires a non-secret app-only
-marker emitted only after authenticated supervised health succeeds, and verifies
-socket cleanup plus command, audit, diagnostics, pause/block/resume behavior, and SQLite
-state through the bundled core. It is also part of the default
+marker emitted only after the Swift client completes authenticated health,
+dry-run command, task/audit inspection, diagnostics, pause, blocked-command,
+and resume checks over the default UDS, and verifies the resulting SQLite state
+before socket cleanup. A separate explicit compatibility relaunch preserves the
+loopback TCP/token CLI lane. It is also part of the default
 `./scripts/release-local.sh` local release gate so distribution-layout launch
 regressions fail the standard proof path.
 The full `package-distribution.sh` lane owns Developer ID signing,
