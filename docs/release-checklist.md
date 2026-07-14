@@ -162,7 +162,7 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   bounded versioned startup envelope; delivery timeout/failure force-reaps the
   child; access is released on every stop/failure/unexpected child exit;
   and the proof boundary still excludes App Sandbox, child sandbox-extension
-  inheritance, same-user IPC authorization, signing, and live-device QA.
+  inheritance, same-user/process IPC isolation, signing, and live-device QA.
 
 ## Code Gate
 
@@ -283,8 +283,10 @@ stage or when a PR needs focused evidence for one ownership slice.
   directly to trusted device-only journal code. Confirm that code constructs a
   distinct install document and neither form reaches terminal, history, logs,
   or files.
-  Recovery is an unauthenticated loopback operator path; its phrase is accident
-  prevention, not authorization, device authentication, ownership proof, or
+  In the packaged app, recovery crosses the app-supervised bearer-authenticated
+  loopback boundary; with an explicitly operator-launched legacy server it is
+  unauthenticated. In either case the phrase is destructive-action accident
+  prevention, not device authentication, ownership proof, OS identity, or
   same-user/process isolation. Manual SQLite or Keychain mutation is not
   supported recovery.
   Do not treat this as Apple attestation, OS provenance, background-launch,
@@ -749,7 +751,8 @@ Clean-profile and manual production gates not proven by this local smoke:
   fill the generated template, source it, and rerun with `--assert-complete`.
   The generated template materializes `JARVIS_QA_EXPECTED_VERSION` from the
   canonical Rust package release version instead of leaving a shell placeholder,
-  includes one sourceable `JARVIS_RELEASE_CORE_ENDPOINT`, and embeds the
+  includes one sourceable `JARVIS_RELEASE_CORE_ENDPOINT` plus the app-owned
+  `JARVIS_IPC_TOKEN_FILE` path, and embeds the
   release-core command evidence capture plus the post-report external
   evidence-mode `release evidence-status` and `release readiness` checks
   against that same endpoint.
@@ -871,8 +874,11 @@ Distribution packaging gate:
 - Run `./scripts/package-distribution.sh --unsigned-launch-check` when a
   packaging change should prove the release-built `Jarvis.app` executable can
   supervise its bundled core from an isolated HOME. This also validates the
-  unsigned package metadata. Treat it as local launch and IPC evidence only; it
-  still does not prove signing, notarization, stapling, installation,
+  unsigned package metadata. Confirm the app-owned IPC credential file is mode
+  `0600`, all smoke calls use `--ipc-token-file`, missing/wrong/duplicate
+  credentials fail closed, and no credential appears in output. Treat it as
+  local launch and possession-authenticated IPC evidence only; it still does
+  not prove OS identity, same-user/process isolation, signing, notarization, stapling, installation,
   Finder/LaunchServices, live device, or manual QA.
 - Confirm `jarvis --version` reports the canonical release version and that
   `release-evidence-doctor.sh` / `release-evidence-bundle.sh` accept the

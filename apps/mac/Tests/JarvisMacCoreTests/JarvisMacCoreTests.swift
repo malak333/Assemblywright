@@ -5782,6 +5782,232 @@ struct WorkspaceRootBookmarkTests {
     }
 }
 
+@MainActor
+@Suite("IPC bearer authorization", .serialized)
+struct IPCBearerAuthorizationTests {
+    @Test("Launch tokens are base64url, versioned, owner-only, and generation-bound")
+    func tokenLifecycleAndPermissions() throws {
+        let directory = try temporaryDirectory(name: "jarvis-ipc-auth")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appending(path: "ipc-session-auth.json")
+        let random = DeterministicAuthRandom()
+        let authorization = JarvisIPCSessionAuthorization(
+            mode: .appSupervised,
+            tokenFileURL: file,
+            randomBytes: random.bytes
+        )
+
+        let firstValue = try authorization.rotateForLaunch()
+        let first = try #require(firstValue)
+        let secondValue = try authorization.rotateForLaunch()
+        let second = try #require(secondValue)
+
+        #expect(first.token.count == 43)
+        #expect(first.token.range(of: #"^[A-Za-z0-9_-]{43}$"#, options: .regularExpression) != nil)
+        #expect(first.token != second.token)
+        #expect(second.generation == first.generation + 1)
+        let json = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        #expect(json["version"] as? Int == 1)
+        #expect(json["scheme"] as? String == "bearer")
+        #expect(json["token"] as? String == second.token)
+        #expect((json["generation"] as? NSNumber)?.uint64Value == second.generation)
+        let fileMode = try #require(FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? NSNumber)
+        let directoryMode = try #require(FileManager.default.attributesOfItem(atPath: directory.path)[.posixPermissions] as? NSNumber)
+        #expect(fileMode.intValue & 0o777 == 0o600)
+        #expect(directoryMode.intValue & 0o777 == 0o700)
+
+        authorization.clear(generation: first.generation)
+        #expect(try authorization.authorizationHeader() == second.headerValue)
+        authorization.clear(generation: second.generation)
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+        #expect(throws: JarvisIPCAuthorizationError.credentialUnavailable) {
+            _ = try authorization.authorizationHeader()
+        }
+    }
+
+    @Test("Client requires a supervised token and sends it on JSON and SSE requests")
+    func clientHeadersAndMissingToken() async throws {
+        let directory = try temporaryDirectory(name: "jarvis-ipc-client-auth")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let authorization = JarvisIPCSessionAuthorization(
+            mode: .appSupervised,
+            tokenFileURL: directory.appending(path: "auth.json"),
+            randomBytes: DeterministicAuthRandom().bytes
+        )
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [IPCURLProtocol.self]
+        let client = JarvisIPCClient(
+            endpoint: JarvisEndpoint(baseURL: URL(string: "http://127.0.0.1:7787")!),
+            session: URLSession(configuration: configuration),
+            authorization: authorization
+        )
+        var headers: [String?] = []
+        IPCURLProtocol.handler = { request in
+            headers.append(request.value(forHTTPHeaderField: "Authorization"))
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            if request.url?.path == "/health" {
+                return (response, Data(#"{"status":"ok","version":"0.1.0","emergency_paused":false,"scheduler_jobs":0,"command_runtime":"test"}"#.utf8))
+            }
+            return (response, Data())
+        }
+        defer { IPCURLProtocol.handler = nil }
+
+        do {
+            _ = try await client.health()
+            Issue.record("Expected a missing-token failure")
+        } catch JarvisIPCAuthorizationError.credentialUnavailable {
+            // Expected before any URL loading.
+        }
+        #expect(headers.isEmpty)
+
+        let grantValue = try authorization.rotateForLaunch()
+        let grant = try #require(grantValue)
+        _ = try await client.health()
+        _ = try await client.activityEvents(maxEvents: 1, intervalMilliseconds: 100)
+        #expect(headers == [grant.headerValue, grant.headerValue])
+
+        let externalClient = JarvisIPCClient(
+            endpoint: JarvisEndpoint(baseURL: URL(string: "http://192.0.2.10:7787")!),
+            session: URLSession(configuration: configuration),
+            authorization: authorization
+        )
+        do {
+            _ = try await externalClient.health()
+            Issue.record("Expected managed authorization to reject a non-loopback endpoint")
+        } catch JarvisIPCAuthorizationError.nonLoopbackEndpoint {
+            // Expected before URL loading or bearer exposure.
+        }
+        #expect(headers == [grant.headerValue, grant.headerValue])
+    }
+
+    @Test("Explicit unauthenticated compatibility client omits the header")
+    func explicitUnauthenticatedClientOmitsHeader() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [IPCURLProtocol.self]
+        let client = JarvisIPCClient(session: URLSession(configuration: configuration))
+        var header: String?
+        IPCURLProtocol.handler = { request in
+            header = request.value(forHTTPHeaderField: "Authorization")
+            return (
+                HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                Data(#"{"status":"ok","version":"0.1.0","emergency_paused":false,"scheduler_jobs":0,"command_runtime":"test"}"#.utf8)
+            )
+        }
+        defer { IPCURLProtocol.handler = nil }
+
+        _ = try await client.health()
+        #expect(header == nil)
+    }
+
+    @Test("Supervisor rotates bearer auth through trusted-wake restart without leaking it")
+    func supervisorEnvelopeRotationAndTrustedWake() async throws {
+        let directory = try temporaryDirectory(name: "jarvis-supervisor-auth")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let authorization = JarvisIPCSessionAuthorization(
+            mode: .appSupervised,
+            tokenFileURL: directory.appending(path: "auth.json"),
+            randomBytes: DeterministicAuthRandom().bytes
+        )
+        let launcher = FakeProcessLauncher()
+        let supervisor = JarvisCoreSupervisor(
+            configuration: JarvisCoreSupervisorConfiguration(
+                executableURL: URL(fileURLWithPath: "/tmp/jarvis-cli"), databaseURL: nil
+            ),
+            client: FakeCoreClient(healthResults: [
+                .failure(URLError(.cannotConnectToHost)), .success(sampleHealth()),
+                .failure(URLError(.cannotConnectToHost)), .success(sampleHealth())
+            ]),
+            processLauncher: launcher,
+            workspaceRootProvider: FakeWorkspaceRootGrantProvider(roots: []),
+            ipcAuthorization: authorization
+        )
+        await supervisor.start(environmentOverrides: [
+            "JARVIS_IPC_TOKEN_FILE": "/tmp/must-not-reach-server",
+            "JARVIS_MAC_IPC_AUTH_FILE": "/tmp/must-not-reach-server"
+        ])
+        let first = try ipcAuth(from: #require(launcher.launches.first?.standardInput))
+        #expect(!launcher.launches[0].arguments.joined().contains(first.token))
+        #expect(!launcher.launches[0].environment.description.contains(first.token))
+        #expect(launcher.launches[0].environment["JARVIS_IPC_TOKEN_FILE"] == nil)
+        #expect(launcher.launches[0].environment["JARVIS_MAC_IPC_AUTH_FILE"] == nil)
+        #expect(!supervisor.smokeSnapshot.summary.contains(first.token))
+
+        try await supervisor.provisionTrustedWake(
+            using: FakeBootstrapProvider(result: .success(Data(#"{"public_key_x963_b64":"public-only"}"#.utf8)))
+        )
+        let lastInput = try #require(launcher.launches.last?.standardInput)
+        let second = try ipcAuth(from: lastInput)
+        let envelope = try #require(JSONSerialization.jsonObject(with: lastInput) as? [String: Any])
+        #expect(second.token != first.token)
+        #expect(second.generation == first.generation + 1)
+        #expect((envelope["trusted_wake"] as? [String: Any])?["kind"] as? String == "bootstrap")
+        #expect(await supervisor.stop())
+        #expect(authorization.activeGeneration == nil)
+    }
+
+    @Test("Launch failure clears bearer state and an unauthenticated legacy core cannot pass preflight")
+    func launchFailureAndLegacyCoreFailClosed() async throws {
+        let directory = try temporaryDirectory(name: "jarvis-auth-failure")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let authorization = JarvisIPCSessionAuthorization(
+            mode: .appSupervised,
+            tokenFileURL: directory.appending(path: "auth.json"),
+            randomBytes: DeterministicAuthRandom().bytes
+        )
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [IPCURLProtocol.self]
+        var networkRequests = 0
+        IPCURLProtocol.handler = { request in
+            networkRequests += 1
+            return (
+                HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                Data(#"{"status":"ok","version":"0.1.0","emergency_paused":false,"scheduler_jobs":0,"command_runtime":"legacy"}"#.utf8)
+            )
+        }
+        defer { IPCURLProtocol.handler = nil }
+        let client = JarvisIPCClient(session: URLSession(configuration: configuration), authorization: authorization)
+        let supervisor = JarvisCoreSupervisor(
+            configuration: JarvisCoreSupervisorConfiguration(
+                executableURL: URL(fileURLWithPath: "/tmp/jarvis-cli"), databaseURL: nil
+            ),
+            client: client,
+            processLauncher: FailingProcessLauncher(),
+            workspaceRootProvider: FakeWorkspaceRootGrantProvider(roots: []),
+            ipcAuthorization: authorization
+        )
+
+        await supervisor.start()
+
+        #expect(networkRequests == 0)
+        #expect(authorization.activeGeneration == nil)
+        #expect(!FileManager.default.fileExists(atPath: authorization.tokenFileURL.path))
+        #expect(!supervisor.isAvailable)
+
+        let externalAuthorization = JarvisIPCSessionAuthorization(
+            mode: .appSupervised,
+            tokenFileURL: directory.appending(path: "external-auth.json"),
+            randomBytes: DeterministicAuthRandom().bytes
+        )
+        let externalLauncher = FakeProcessLauncher()
+        let externalSupervisor = JarvisCoreSupervisor(
+            configuration: JarvisCoreSupervisorConfiguration(
+                endpoint: JarvisEndpoint(baseURL: URL(string: "http://192.0.2.10:7787")!),
+                bindAddress: "0.0.0.0:7787",
+                executableURL: URL(fileURLWithPath: "/tmp/jarvis-cli"),
+                databaseURL: nil
+            ),
+            client: FakeCoreClient(healthResults: [.failure(URLError(.cannotConnectToHost))]),
+            processLauncher: externalLauncher,
+            workspaceRootProvider: FakeWorkspaceRootGrantProvider(roots: []),
+            ipcAuthorization: externalAuthorization
+        )
+        await externalSupervisor.start()
+        #expect(externalLauncher.launches.isEmpty)
+        #expect(externalAuthorization.activeGeneration == nil)
+        #expect(!FileManager.default.fileExists(atPath: externalAuthorization.tokenFileURL.path))
+    }
+}
+
 @Suite("Trusted wake contracts")
 struct TrustedWakeContractsTests {
     @Test("Counter recovers after Keychain loss from Rust durable high-water")
@@ -6833,6 +7059,28 @@ private final class ControlledTrustedWakeKeyRing: RecordingTrustedWakeKeyRing, @
 
 private enum BootstrapTestError: Error {
     case unavailable
+}
+
+private final class DeterministicAuthRandom: @unchecked Sendable {
+    private let lock = NSLock()
+    private var seed: UInt8 = 0
+
+    func bytes(count: Int) throws -> Data {
+        lock.lock()
+        seed &+= 1
+        let value = seed
+        lock.unlock()
+        return Data(repeating: value, count: count)
+    }
+}
+
+private func ipcAuth(from envelopeData: Data) throws -> (token: String, generation: UInt64) {
+    let envelope = try #require(JSONSerialization.jsonObject(with: envelopeData) as? [String: Any])
+    let auth = try #require(envelope["ipc_auth"] as? [String: Any])
+    let token = try #require(auth["token"] as? String)
+    let generation = try #require((auth["generation"] as? NSNumber)?.uint64Value)
+    #expect(auth["scheme"] as? String == "bearer")
+    return (token, generation)
 }
 
 private enum TestWorkspaceRootError: Error {

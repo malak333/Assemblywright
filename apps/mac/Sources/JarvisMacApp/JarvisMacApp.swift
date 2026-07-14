@@ -24,14 +24,24 @@ struct JarvisMacApp: App {
 
     init() {
         let configuration = JarvisCoreSupervisorConfiguration()
-        let client = JarvisIPCClient(endpoint: configuration.endpoint)
+        let authFileURL = ProcessInfo.processInfo.environment["JARVIS_MAC_IPC_AUTH_FILE"]
+            .flatMap { $0.hasPrefix("/") ? URL(fileURLWithPath: $0) : nil }
+        let ipcAuthorization = JarvisIPCSessionAuthorization(
+            mode: .appSupervised,
+            tokenFileURL: authFileURL
+        )
+        let client = JarvisIPCClient(
+            endpoint: configuration.endpoint,
+            authorization: ipcAuthorization
+        )
         let console = CommandConsoleModel(client: client)
         let voice = VoiceStateModel()
         let workspaceRoots = JarvisWorkspaceRootBookmarkCoordinator()
         let supervisor = JarvisCoreSupervisor(
             configuration: configuration,
             client: client,
-            workspaceRootProvider: workspaceRoots
+            workspaceRootProvider: workspaceRoots,
+            ipcAuthorization: ipcAuthorization
         )
         _supervisor = StateObject(wrappedValue: supervisor)
         _console = StateObject(wrappedValue: console)
@@ -300,7 +310,7 @@ struct TrustedWakeView: View {
                                 || model.status?.pendingKeyControl != nil
                         )
                     }
-                    Text("Rotate requires the currently enrolled private key. Recovery does not prove old-key possession: the exact phrase is destructive-action accident prevention on an unauthenticated loopback route, not authorization, device authentication, ownership proof, or same-user/process isolation.")
+                    Text("Rotate requires the currently enrolled private key. Recovery does not prove old-key possession: the packaged app requires its per-launch bearer while an explicit legacy server does not, and the exact phrase remains destructive-action accident prevention, not device authentication, OS identity, ownership proof, or same-user/process isolation.")
                         .font(.caption)
                         .foregroundStyle(.orange)
                 }

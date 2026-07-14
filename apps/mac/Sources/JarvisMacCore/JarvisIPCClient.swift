@@ -1881,12 +1881,18 @@ public protocol JarvisCoreClient: Sendable {
 public final class JarvisIPCClient: JarvisCoreClient {
     private let endpoint: JarvisEndpoint
     private let session: URLSession
+    private let authorization: JarvisIPCSessionAuthorization
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
 
-    public init(endpoint: JarvisEndpoint = JarvisEndpoint(), session: URLSession = .shared) {
+    public init(
+        endpoint: JarvisEndpoint = JarvisEndpoint(),
+        session: URLSession = .shared,
+        authorization: JarvisIPCSessionAuthorization = JarvisIPCSessionAuthorization()
+    ) {
         self.endpoint = endpoint
         self.session = session
+        self.authorization = authorization
         self.encoder = JSONEncoder()
         self.decoder = JSONDecoder()
     }
@@ -1967,6 +1973,7 @@ public final class JarvisIPCClient: JarvisCoreClient {
         var request = URLRequest(url: endpoint.url(path: path))
         request.httpMethod = "GET"
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        try authorize(&request)
 
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
@@ -1974,7 +1981,7 @@ public final class JarvisIPCClient: JarvisCoreClient {
         }
 
         guard (200..<300).contains(http.statusCode) else {
-            throw JarvisIPCError.httpStatus(http.statusCode, String(decoding: data, as: UTF8.self))
+            throw JarvisIPCError.httpStatus(http.statusCode, Self.safeErrorBody(data, statusCode: http.statusCode))
         }
 
         return try JarvisActivityEvent.parseServerSentEvents(data)
@@ -2178,6 +2185,7 @@ public final class JarvisIPCClient: JarvisCoreClient {
         var request = URLRequest(url: endpoint.url(path: path))
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        try authorize(&request)
 
         if let body {
             request.httpBody = body
@@ -2190,9 +2198,28 @@ public final class JarvisIPCClient: JarvisCoreClient {
         }
 
         guard (200..<300).contains(http.statusCode) else {
-            throw JarvisIPCError.httpStatus(http.statusCode, String(decoding: data, as: UTF8.self))
+            throw JarvisIPCError.httpStatus(http.statusCode, Self.safeErrorBody(data, statusCode: http.statusCode))
         }
 
         return try decoder.decode(Response.self, from: data)
+    }
+
+    private func authorize(_ request: inout URLRequest) throws {
+        if authorization.mode == .appSupervised {
+            guard let url = request.url,
+                  JarvisIPCSessionAuthorization.isStrictLoopbackEndpoint(url) else {
+                throw JarvisIPCAuthorizationError.nonLoopbackEndpoint
+            }
+        }
+        if let header = try authorization.authorizationHeader() {
+            request.setValue(header, forHTTPHeaderField: "Authorization")
+        }
+    }
+
+    private static func safeErrorBody(_ data: Data, statusCode: Int) -> String {
+        if statusCode == 401 || statusCode == 403 {
+            return "local IPC authorization failed"
+        }
+        return String(decoding: data, as: UTF8.self)
     }
 }

@@ -30,8 +30,10 @@ wake provenance, background launch, same-user IPC, exactly-once effects,
 live-device QA, or production readiness.
 Explicit normal key rotation requires an old-key, session-bound,
 domain-separated P-256 proof. Explicit lost-key recovery uses a stronger typed
-warning but no old-key proof; on unauthenticated loopback it is operator
-accident prevention, not authorization or ownership authentication. Both use a
+warning but no old-key proof. The packaged app route requires its per-launch
+bearer while an explicit legacy server does not; in either mode the phrase is
+operator accident prevention, not device, OS-identity, or ownership
+authentication. Both use a
 short-lived one-shot grant, a single supervised stdin restart, staged Keychain
 material, durable crash reconciliation, and a disabled new enrollment that
 must be enabled separately. Secret-bearing prepare JSON is accepted by the CLI
@@ -163,8 +165,21 @@ health, audit, and UI presentation. The app resolves every bookmark fail closed
 before launch and retains balanced security-scope access only for the supervised
 process lifetime. Manual use of the legacy `--workspace-root` option still
 exposes the configured path in that operator-launched process's arguments.
-Repository tests do not prove App Sandbox enforcement, sandbox-extension
-inheritance by the child, same-user IPC authorization, or live-device behavior.
+App-supervised launches also rotate a 32-byte bearer credential, deliver it in
+the same bounded startup-stdin envelope, and require it on every loopback route.
+The app writes the current credential to the owner-only
+`~/Library/Application Support/Jarvis/ipc-session-auth.json` handoff file so an
+explicit local operator can run, for example,
+`jarvis --ipc-token-file "$HOME/Library/Application Support/Jarvis/ipc-session-auth.json" health`.
+The token never enters child argv, environment, audit, diagnostics, or UI. A
+managed client fails closed before sending when its credential is unavailable;
+managed Swift/CLI clients reject non-loopback endpoints before bearer exposure,
+and an authenticated core rejects non-loopback binds;
+an explicitly unauthenticated legacy server rejects any Authorization header,
+preventing silent managed-client downgrade. Repository tests prove possession-
+based loopback authentication and restrictive file handling, not App Sandbox
+enforcement, sandbox-extension inheritance by the child, OS identity,
+same-user/process isolation, or live-device behavior.
 For broader registered plugin manifest inspection, `jarvis plugins list`
 defaults to a compact operator-readable summary and `jarvis plugins list --json`
 prints full manifest schemas.

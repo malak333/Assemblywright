@@ -1417,7 +1417,8 @@ requires plugin-trust `generated_at`, `review_started_at`,
   Swift decode tests, and the live-device shell self-test cover this guidance
   without claiming live-device QA was performed.
 - The live-device QA env template now carries one
-  `JARVIS_RELEASE_CORE_ENDPOINT` value that the command-evidence capture and
+  `JARVIS_RELEASE_CORE_ENDPOINT` value plus the app-owned
+  `JARVIS_IPC_TOKEN_FILE` path that the command-evidence capture and
   post-report external evidence-status/readiness checks reuse. CLI fallback and
   IPC live-device runbooks pin the same sourceable endpoint handoff so
   operators do not collect `task:<uuid>`/`audit:<uuid>` evidence from one core
@@ -1553,10 +1554,10 @@ requires plugin-trust `generated_at`, `review_started_at`,
   active-session, domain-separated P-256 proof binding the source generation,
   old fingerprint, candidate fingerprint, exact confirmation, timestamp, and
   nonce. `recover` intentionally has no old-key proof and requires the stronger
-  `RECOVER LOST TRUSTED WAKE KEY AND BLOCK PENDING WORK` phrase. Because the
-  route is unauthenticated loopback, this is local operator accident prevention,
-  not authorization, device authentication, ownership proof, or same-user/
-  process isolation.
+  `RECOVER LOST TRUSTED WAKE KEY AND BLOCK PENDING WORK` phrase. The packaged
+  app route requires its per-launch bearer while an explicit legacy server does
+  not; in either mode this is local operator accident prevention, not device
+  authentication, OS identity, ownership proof, or same-user/process isolation.
 - Prepare uses one SQLite IMMEDIATE transaction and CAS to reject ambiguous
   dispatch, block accepted old-generation work, cancel its scheduled handoff,
   disable the rule, increment generation, reset high-water, persist only a
@@ -1589,3 +1590,23 @@ requires plugin-trust `generated_at`, `review_started_at`,
   audit redaction. They do not prove Apple attestation, OS provenance,
   background launch, same-user/process isolation, live-device behavior, or
   production readiness.
+- App-supervised loopback IPC is bearer-authenticated end to end. Swift rotates
+  32 random bytes per launch, shares a generation-bound in-memory credential
+  between `JarvisCoreSupervisor` and `JarvisIPCClient`, delivers it only in the
+  bounded v1 startup-stdin envelope, and clears it on matching launch failure,
+  stop, replacement, or observed child exit. Rust protects the complete Axum
+  router, requires exactly one strict Bearer header, compares a SHA-256 digest
+  in constant time, and emits only a generic 401 challenge. The owner-only
+  `ipc-session-auth.json` file is an explicit local CLI handoff; CLI parsing is
+  bounded, no-follow, current-owner, regular-file, single-link, and permission
+  checked. A legacy unauthenticated server rejects any Authorization header to
+  prevent managed-client downgrade, and the supervisor strips the client-only
+  token-file path variable from the child server environment. Focused Rust
+  cross-process and Swift tests prove managed clients reject non-loopback
+  destinations before bearer exposure and authenticated servers reject
+  non-loopback binds. The unsigned distribution launch smoke uses an absolute
+  temporary-profile auth-file override, strips it from the child, and covers the
+  packaged boundary. This proves
+  token possession and repository-owned lifecycle behavior, not OS identity,
+  device authentication, same-user/process isolation, App Sandbox enforcement,
+  signing/notarization, live-device behavior, or host-level egress control.

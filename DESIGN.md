@@ -57,6 +57,7 @@
 | macOS Keychain for secrets | Store credentials in SQLite or config files | Secrets should use the platform credential store. |
 | First-party plugins first | Third-party marketplace in v1 | The safety model and plugin contract need to prove themselves before third-party expansion. |
 | App-owned security-scoped bookmarks for workspace roots | Put root paths in app child arguments, store plain paths, or let the model select roots | Native user selection establishes an explicit local grant; opaque IDs and bounded startup stdin keep app-selected paths out of argv, environment, model input, and audit while Rust remains the descriptor authority. Bookmark tests do not prove App Sandbox enforcement or child sandbox-extension inheritance. |
+| App-supervised bearer authentication for loopback IPC | Leave every local route unauthenticated, put a token in argv/environment, or silently reuse a legacy unauthenticated core | The app rotates 32 random bytes for each supervised launch, sends them only through bounded startup stdin, shares the in-memory credential with its IPC client, and exposes a restrictive owner-only token file solely for explicit local CLI handoff. Every route is protected and a managed client without a credential fails locally. This proves possession of a launch credential, not OS identity or same-user/process isolation. |
 | Add a no-import Wasmi compute runtime before broader third-party execution | Treat subprocess grants as sufficient containment, enable WASI, or wait for an OS sandbox | A deliberately small `jarvis_json_v1` ABI can provide useful low-risk local computation while mechanically denying guest filesystem, environment, network, clock, and process authority. Wasmi confinement is a language-runtime boundary, not an OS sandbox or plugin trust system. |
 | Auditability as an architectural requirement | Best-effort logs after the fact | Jarvis must be able to explain why it acted, what data it used, and what permissions were involved. |
 
@@ -82,9 +83,16 @@ defined by the release checklist.
 
 `jarvis-core` is a Rust local service started and supervised by the Swift app. It owns durable execution: task planning, model routing, memory reads and writes, plugin execution, scheduled jobs, event triggers, risk policy evaluation, and audit logging.
 
-Current v1 IPC uses loopback HTTP. A future version can move the IPC boundary
-to a Unix domain socket, or move the core into a LaunchAgent if stronger
-background execution is needed.
+Current v1 IPC uses loopback HTTP. App-supervised launches require a per-launch
+bearer credential on every route and reject missing, malformed, duplicate, or
+incorrect authorization. Managed clients reject non-loopback destinations
+before reading or sending the credential, and authenticated servers reject
+non-loopback binds. Explicit operator-launched legacy servers remain
+available without authentication, but reject an unexpected Authorization
+header so the managed app cannot silently downgrade to them. A future version
+can move the IPC boundary to an authenticated Unix domain socket with verified
+peer identity, or move the core into a LaunchAgent if stronger background
+execution is needed.
 
 Primary design rule: Swift should not become the agent brain, and Rust should not become the Mac UX layer.
 
@@ -175,9 +183,10 @@ and Rust's durable replay high-water so Keychain loss or a backward clock cannot
 strand an otherwise valid enrollment. Explicit key control is a separate
 two-step workflow. Normal rotation requires an active-session, domain-separated
 signature from the enrolled key. Lost-key recovery deliberately omits old-key
-proof but requires a stronger destructive confirmation; because the IPC route
-is unauthenticated loopback, that phrase is accident prevention, not user,
-device, or ownership authentication. In one immediate transaction Rust rejects
+proof but requires a stronger destructive confirmation. App-supervised IPC
+requires bearer possession while an explicitly operator-launched legacy route
+does not; in either mode that phrase is accident prevention, not user, device,
+OS-identity, or ownership authentication. In one immediate transaction Rust rejects
 ambiguous dispatch, blocks accepted old-generation work, disables the rule,
 advances generation, resets replay high-water, and stores only a short-lived
 one-shot grant hash plus staged-key fingerprint. A single supervised stdin

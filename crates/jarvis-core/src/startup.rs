@@ -1,6 +1,6 @@
 use crate::{
-    JarvisError, JarvisResult, TrustedWakeKeyControlInstallDocument, TrustedWakeRuleEnrollment,
-    WorkspaceRootConfig,
+    IpcAuth, JarvisError, JarvisResult, TrustedWakeKeyControlInstallDocument,
+    TrustedWakeRuleEnrollment, WorkspaceRootConfig,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -14,6 +14,7 @@ const MAX_TRUSTED_WAKE_STARTUP_DOCUMENT_BYTES: usize = 8 * 1024;
 pub struct ServeStartupConfig {
     pub workspace_roots: Vec<WorkspaceRootConfig>,
     pub trusted_wake: Option<TrustedWakeStartupDocument>,
+    pub ipc_auth: Option<IpcAuth>,
 }
 
 pub enum TrustedWakeStartupDocument {
@@ -29,6 +30,22 @@ struct ServeStartupConfigWire {
     workspace_roots: Vec<WorkspaceRootWire>,
     #[serde(default)]
     trusted_wake: Option<TrustedWakeWire>,
+    #[serde(default)]
+    ipc_auth: Option<IpcAuthWire>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IpcAuthWire {
+    scheme: IpcAuthScheme,
+    token: String,
+    generation: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum IpcAuthScheme {
+    Bearer,
 }
 
 #[derive(Deserialize)]
@@ -67,9 +84,10 @@ impl ServeStartupConfig {
                 "startup configuration version must be {SERVE_STARTUP_CONFIG_VERSION}"
             )));
         }
-        if wire.workspace_roots.is_empty() && wire.trusted_wake.is_none() {
+        if wire.workspace_roots.is_empty() && wire.trusted_wake.is_none() && wire.ipc_auth.is_none()
+        {
             return Err(JarvisError::Validation(
-                "startup configuration must contain workspace roots or trusted wake input"
+                "startup configuration must contain workspace roots, trusted wake input, or IPC authentication"
                     .to_string(),
             ));
         }
@@ -98,9 +116,16 @@ impl ServeStartupConfig {
             workspace_roots.push(config);
         }
         let trusted_wake = wire.trusted_wake.map(parse_trusted_wake).transpose()?;
+        let ipc_auth = wire
+            .ipc_auth
+            .map(|auth| match auth.scheme {
+                IpcAuthScheme::Bearer => IpcAuth::new(&auth.token, auth.generation),
+            })
+            .transpose()?;
         Ok(Self {
             workspace_roots,
             trusted_wake,
+            ipc_auth,
         })
     }
 }
@@ -142,6 +167,33 @@ mod tests {
         let parsed = ServeStartupConfig::parse(document.to_string().as_bytes()).unwrap();
         assert_eq!(parsed.workspace_roots.len(), 1);
         assert!(parsed.trusted_wake.is_none());
+        assert!(parsed.ipc_auth.is_none());
+    }
+
+    #[test]
+    fn auth_only_startup_config_accepts_strict_base64url_bearer() {
+        let document = json!({
+            "version": 1,
+            "ipc_auth": {
+                "scheme": "bearer",
+                "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "generation": 7
+            }
+        });
+        let parsed = ServeStartupConfig::parse(document.to_string().as_bytes()).unwrap();
+        assert_eq!(parsed.ipc_auth.unwrap().generation(), 7);
+    }
+
+    #[test]
+    fn startup_config_rejects_invalid_or_non_strict_ipc_auth() {
+        for invalid in [
+            json!({"version":1,"ipc_auth":{"scheme":"basic","token":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","generation":1}}),
+            json!({"version":1,"ipc_auth":{"scheme":"bearer","token":"short","generation":1}}),
+            json!({"version":1,"ipc_auth":{"scheme":"bearer","token":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","generation":0}}),
+            json!({"version":1,"ipc_auth":{"scheme":"bearer","token":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","generation":1,"extra":true}}),
+        ] {
+            assert!(ServeStartupConfig::parse(invalid.to_string().as_bytes()).is_err());
+        }
     }
 
     #[test]

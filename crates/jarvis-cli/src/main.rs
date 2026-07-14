@@ -2,7 +2,10 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::net::ToSocketAddrs;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine as _;
 use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand, ValueEnum};
 use jarvis_core::{
@@ -13,13 +16,34 @@ use jarvis_core::{
 };
 use tokio::net::TcpListener;
 
+const MAX_IPC_TOKEN_FILE_BYTES: usize = 1024;
+static IPC_BEARER_TOKEN: OnceLock<String> = OnceLock::new();
+
 #[derive(Debug, Parser)]
 #[command(name = "jarvis")]
 #[command(about = "Local-first Jarvis core CLI")]
 #[command(version = env!("CARGO_PKG_VERSION"))]
 struct Cli {
+    /// Read IPC bearer credentials from a bounded owner-only JSON file.
+    #[arg(long, global = true, env = "JARVIS_IPC_TOKEN_FILE")]
+    ipc_token_file: Option<PathBuf>,
     #[command(subcommand)]
     command: CliCommand,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IpcTokenFile {
+    version: u16,
+    scheme: IpcTokenScheme,
+    token: String,
+    generation: u64,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum IpcTokenScheme {
+    Bearer,
 }
 
 #[derive(Debug, Subcommand)]
@@ -712,7 +736,20 @@ enum PermissionsCommand {
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_env_filter("info").init();
 
-    match Cli::parse().command {
+    let cli = Cli::parse();
+    if cli.ipc_token_file.is_some()
+        && matches!(&cli.command, CliCommand::Serve { .. } | CliCommand::Smoke)
+    {
+        anyhow::bail!("--ipc-token-file is a client option and cannot be used with serve or smoke");
+    }
+    if let Some(path) = cli.ipc_token_file.as_deref() {
+        let token = read_ipc_token_file(path)?;
+        IPC_BEARER_TOKEN
+            .set(token)
+            .map_err(|_| anyhow::anyhow!("IPC bearer credentials were already configured"))?;
+    }
+
+    match cli.command {
         CliCommand::Serve {
             bind,
             db_path,
@@ -742,13 +779,13 @@ async fn main() -> anyhow::Result<()> {
                 );
             }
 
-            let (workspace_roots, trusted_wake) = if startup_config_stdin {
+            let (workspace_roots, trusted_wake, ipc_auth) = if startup_config_stdin {
                 let mut bytes = Vec::new();
                 std::io::stdin()
                     .take((jarvis_core::MAX_SERVE_STARTUP_CONFIG_BYTES + 1) as u64)
                     .read_to_end(&mut bytes)?;
                 let config = jarvis_core::ServeStartupConfig::parse(&bytes)?;
-                (config.workspace_roots, config.trusted_wake)
+                (config.workspace_roots, config.trusted_wake, config.ipc_auth)
             } else {
                 let workspace_roots = workspace_roots
                     .iter()
@@ -783,8 +820,13 @@ async fn main() -> anyhow::Result<()> {
                 } else {
                     None
                 };
-                (workspace_roots, trusted_wake)
+                (workspace_roots, trusted_wake, None)
             };
+
+            let bind = bind.parse::<std::net::SocketAddr>()?;
+            if ipc_auth.is_some() && !bind.ip().is_loopback() {
+                anyhow::bail!("authenticated IPC must bind to a loopback address");
+            }
 
             let provider_config = jarvis_core::ProviderConfig::from_env()?;
             let state = match db_path {
@@ -828,7 +870,10 @@ async fn main() -> anyhow::Result<()> {
             } else {
                 None
             };
-            jarvis_core::serve(bind.parse()?, state).await?;
+            match ipc_auth {
+                Some(auth) => jarvis_core::serve_with_auth(bind, state, auth).await?,
+                None => jarvis_core::serve(bind, state).await?,
+            }
         }
         CliCommand::Health { endpoint } => {
             let response = server_required_request(&endpoint, "GET", "/health", None)?;
@@ -1642,19 +1687,77 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn read_ipc_token_file(path: &std::path::Path) -> anyhow::Result<String> {
+    use rustix::fs::{fstat, open, FileType, Mode, OFlags};
+
+    let descriptor = open(
+        path,
+        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+        Mode::empty(),
+    )
+    .map_err(|_| anyhow::anyhow!("IPC token file could not be opened safely"))?;
+    let stat = fstat(&descriptor)
+        .map_err(|_| anyhow::anyhow!("IPC token file could not be inspected safely"))?;
+    if !FileType::from_raw_mode(stat.st_mode).is_file()
+        || stat.st_uid != rustix::process::getuid().as_raw()
+        || stat.st_mode & 0o077 != 0
+        || stat.st_nlink != 1
+        || stat.st_size < 0
+        || stat.st_size as usize > MAX_IPC_TOKEN_FILE_BYTES
+    {
+        anyhow::bail!("IPC token file must be one bounded, owner-only, owner-matched regular file");
+    }
+    let mut bytes = Vec::with_capacity(stat.st_size as usize);
+    std::fs::File::from(descriptor)
+        .take((MAX_IPC_TOKEN_FILE_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)?;
+    if bytes.is_empty() || bytes.len() > MAX_IPC_TOKEN_FILE_BYTES {
+        anyhow::bail!("IPC token file is empty or exceeds its size limit");
+    }
+    let document: IpcTokenFile =
+        serde_json::from_slice(&bytes).map_err(|_| anyhow::anyhow!("IPC token file is invalid"))?;
+    if document.version != 1 || document.generation == 0 {
+        anyhow::bail!("IPC token file version or generation is invalid");
+    }
+    match document.scheme {
+        IpcTokenScheme::Bearer => {}
+    }
+    if document.token.len() != jarvis_core::IPC_BEARER_TOKEN_LENGTH
+        || !document
+            .token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+        || URL_SAFE_NO_PAD
+            .decode(&document.token)
+            .map(|decoded| decoded.len() != jarvis_core::IPC_BEARER_TOKEN_BYTES)
+            .unwrap_or(true)
+    {
+        anyhow::bail!("IPC token file contains invalid bearer credentials");
+    }
+    Ok(document.token)
+}
+
 fn request(endpoint: &str, method: &str, path: &str, body: Option<&str>) -> anyhow::Result<String> {
     let target = endpoint
         .strip_prefix("http://")
         .ok_or_else(|| anyhow::anyhow!("only http:// endpoints are supported"))?;
     let host_port = target.trim_end_matches('/');
-    let address = host_port
-        .to_socket_addrs()?
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("could not resolve endpoint: {endpoint}"))?;
+    let addresses = host_port.to_socket_addrs()?.collect::<Vec<_>>();
+    if addresses.is_empty() {
+        anyhow::bail!("could not resolve endpoint: {endpoint}");
+    }
+    if IPC_BEARER_TOKEN.get().is_some() && addresses.iter().any(|value| !value.ip().is_loopback()) {
+        anyhow::bail!("authenticated IPC credentials may be sent only to a loopback endpoint");
+    }
+    let address = addresses[0];
     let mut stream = TcpStream::connect(address)?;
     let body = body.unwrap_or("");
+    let authorization = IPC_BEARER_TOKEN
+        .get()
+        .map(|token| format!("Authorization: Bearer {token}\r\n"))
+        .unwrap_or_default();
     let request = format!(
-        "{method} {path} HTTP/1.1\r\nHost: {host_port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "{method} {path} HTTP/1.1\r\nHost: {host_port}\r\n{authorization}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
 
@@ -2429,6 +2532,7 @@ fn release_live_device_runbook_json(
             "./scripts/release-live-device-qa.sh --check",
             "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env",
             "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' in target/release-live-device-qa.env before collecting command evidence",
+            "Confirm JARVIS_IPC_TOKEN_FILE points to the app-owned ipc-session-auth.json path, then source target/release-live-device-qa.env before IPC commands",
             "cargo run -p jarvis-cli -- command \"status check\" --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\" --json",
             "Record the returned task ID as JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid>' or a task-associated audit ID as 'audit:<uuid>' in target/release-live-device-qa.env",
             "set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete",
@@ -2493,6 +2597,7 @@ fn format_release_live_device_runbook(
         "- ./scripts/release-live-device-qa.sh --check".to_string(),
         "- ./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env".to_string(),
         "- Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' in target/release-live-device-qa.env before collecting command evidence".to_string(),
+        "- Confirm JARVIS_IPC_TOKEN_FILE points to the app-owned ipc-session-auth.json path, then source target/release-live-device-qa.env before IPC commands".to_string(),
         "- cargo run -p jarvis-cli -- command \"status check\" --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\" --json".to_string(),
         "- Record the returned task ID as JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid>' or a task-associated audit ID as 'audit:<uuid>' in target/release-live-device-qa.env".to_string(),
         "- set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete".to_string(),
@@ -2552,6 +2657,7 @@ fn release_signed_distribution_runbook_json(
             "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh",
             "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_APPLE_ID='apple-id@example.com' JARVIS_NOTARYTOOL_TEAM_ID='TEAMID1234' JARVIS_NOTARYTOOL_PASSWORD='app-specific-password' ./scripts/package-distribution.sh",
             "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks",
+            "Export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks",
             "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"",
             "./scripts/release-evidence-doctor.sh --check",
             "cargo run -p jarvis-cli -- release live-device-runbook"
@@ -2623,6 +2729,7 @@ fn format_release_signed_distribution_runbook(
         "- JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh".to_string(),
         "- JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_APPLE_ID='apple-id@example.com' JARVIS_NOTARYTOOL_TEAM_ID='TEAMID1234' JARVIS_NOTARYTOOL_PASSWORD='app-specific-password' ./scripts/package-distribution.sh".to_string(),
         "- Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks".to_string(),
+        "- Export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks".to_string(),
         "- JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"".to_string(),
         "- ./scripts/release-evidence-doctor.sh --check".to_string(),
         "- cargo run -p jarvis-cli -- release live-device-runbook".to_string(),
@@ -2663,6 +2770,7 @@ fn release_plugin_trust_runbook_json(
             "./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env",
             "set -a && source target/release-plugin-trust-qa.env && set +a && ./scripts/release-plugin-trust-qa.sh --assert-complete",
             "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks",
+            "Export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks",
             "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"",
             "./scripts/release-evidence-doctor.sh --check",
             "./scripts/release-evidence-bundle.sh --check",
@@ -2725,6 +2833,7 @@ fn format_release_plugin_trust_runbook(
         "- ./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env".to_string(),
         "- set -a && source target/release-plugin-trust-qa.env && set +a && ./scripts/release-plugin-trust-qa.sh --assert-complete".to_string(),
         "- Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks".to_string(),
+        "- Export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks".to_string(),
         "- JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"".to_string(),
         "- ./scripts/release-evidence-doctor.sh --check".to_string(),
         "- ./scripts/release-evidence-bundle.sh --check".to_string(),
@@ -2795,6 +2904,7 @@ fn release_evidence_bundle_runbook_json(
             "./scripts/release-evidence-doctor.sh --check",
             "./scripts/release-evidence-doctor.sh --assert-complete",
             "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks",
+            "Export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks",
             "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"",
             "Start or restart the core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external",
             "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
@@ -2864,6 +2974,7 @@ fn format_release_evidence_bundle_runbook(
         "- ./scripts/release-evidence-doctor.sh --check".to_string(),
         "- ./scripts/release-evidence-doctor.sh --assert-complete".to_string(),
         "- Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks".to_string(),
+        "- Export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks".to_string(),
         "- JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"".to_string(),
         "- Start or restart the core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external".to_string(),
         "- JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"".to_string(),
