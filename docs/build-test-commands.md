@@ -128,10 +128,13 @@ commands such as `jarvis release readiness`, `jarvis plugins list`, and
 
 The packaged app defaults to a generation-random Unix domain socket with a
 fresh in-memory bearer. The strict startup document carries
-`ipc_transport:{kind:"unix_socket_v1",socket_path:"/absolute/path.sock"}` and
-the bearer. The runtime directory is current-owner `0700`, the socket is
-`0600`, and both peers require the connected peer's `getpeereid` EUID to equal
-their current EUID. One four-byte big-endian length frames one strict bounded
+`ipc_transport:{kind:"unix_socket_peer_identity_v1",socket_path:
+"/absolute/path.sock",peer_code_requirement:"...",peer_identity_profile:
+"adhoc_exact|developer_id_hardened"}` and the bearer. The runtime directory is
+current-owner `0700` and the socket is `0600`. Both peers use
+`LOCAL_PEERTOKEN` plus Security.framework dynamic-code validation against the
+expected designated requirement before framing, and also require the connected
+peer's `getpeereid` EUID to equal their current EUID. One four-byte big-endian length frames one strict bounded
 JSON request, a required client write-half close, and one response per connection;
 all existing routes still require the bearer. Frame/body/hard-deadline/concurrency
 bounds and leaf-only cleanup fail
@@ -184,7 +187,8 @@ cargo test -p jarvis-cli --test local_ipc_e2e -- --nocapture
 ```
 
 Coverage must prove default UDS cross-process route parity, successful real-peer
-checks plus negative EUID comparison, bearer failure, strict frame/schema/base64
+audit-token/designated-requirement checks plus same-EUID wrong-code rejection
+before framing, negative EUID comparison, bearer failure, strict frame/schema/base64
 and trailing-input decoding, frame/body hard deadlines and configured concurrency
 bounds, socket path/mode/owner validation,
 generation cleanup and restart invalidation. The distribution lane must prove
@@ -193,9 +197,10 @@ diagnostics, pause/block/resume over that same default UDS, persist the expected
 task/audit state, and finish durably resumed before teardown. It must separately prove that the
 exact opt-in selects loopback TCP, creates and lifecycle-clears the hardened
 file, accepts only an absolute override, strips app-only variables from the
-child, and preserves no-downgrade behavior. These lanes do not prove peer PID,
-intended process or code-sign identity, device authentication, XPC, App
-Sandbox, signing/notarization, or live-device behavior.
+child, and preserves no-downgrade behavior. The unsigned/ad-hoc lane verifies
+stable identifiers and exact-build cdhash mechanics but not Developer ID
+publisher identity. These lanes do not prove device authentication, XPC, App
+Sandbox, notarization, or live-device behavior.
 
 `jarvis smoke` starts an ephemeral loopback server and verifies the currently
 implemented foundation surfaces: health, command execution, pause blocking,

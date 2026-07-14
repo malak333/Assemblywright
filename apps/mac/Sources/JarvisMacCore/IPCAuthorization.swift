@@ -15,6 +15,7 @@ public enum JarvisIPCAuthorizationError: Error, Equatable {
     case unixSocketUnavailable
     case unixSocketPathInvalid
     case unixSocketParentUnsafe
+    case peerIdentityUnavailable
 }
 
 public enum JarvisIPCTransportMode: Equatable, Sendable {
@@ -110,6 +111,7 @@ public final class JarvisIPCSessionAuthorization: @unchecked Sendable {
     private let socketIdentifier: @Sendable () throws -> String
     private var active: JarvisIPCLaunchAuthorization?
     private var activeSocket: JarvisIPCActiveUnixSocket?
+    private var activePeerIdentityPolicy: (generation: UInt64, policy: JarvisIPCPeerIdentityPolicy)?
     private var nextGeneration: UInt64 = 0
 
     public init(
@@ -149,6 +151,7 @@ public final class JarvisIPCSessionAuthorization: @unchecked Sendable {
             cliHandoffConfiguration.staleFileURL,
             self.tokenFileURL
         ].compactMap { $0 }))
+        self.activePeerIdentityPolicy = nil
         if mode == .appSupervised {
             removeStaleTokenFiles()
         }
@@ -162,8 +165,13 @@ public final class JarvisIPCSessionAuthorization: @unchecked Sendable {
         return active.headerValue
     }
 
-    public func rotateForLaunch() throws -> JarvisIPCLaunchAuthorization? {
+    public func rotateForLaunch(
+        peerIdentityPolicy: JarvisIPCPeerIdentityPolicy? = nil
+    ) throws -> JarvisIPCLaunchAuthorization? {
         guard mode == .appSupervised else { return nil }
+        guard transportMode != .unixSocket || peerIdentityPolicy != nil else {
+            throw JarvisIPCAuthorizationError.peerIdentityUnavailable
+        }
         let bytes: Data
         do {
             bytes = try randomBytes(32)
@@ -195,10 +203,14 @@ public final class JarvisIPCSessionAuthorization: @unchecked Sendable {
                 try Self.atomicWrite(JSONEncoder().encode(file), to: tokenFileURL)
             }
             active = candidate
+            activePeerIdentityPolicy = peerIdentityPolicy.map {
+                (generation: candidate.generation, policy: $0)
+            }
             lock.unlock()
             return candidate
         } catch {
             active = nil
+            activePeerIdentityPolicy = nil
             removeStaleTokenFiles()
             lock.unlock()
             throw JarvisIPCAuthorizationError.tokenFileUnavailable
@@ -280,6 +292,18 @@ public final class JarvisIPCSessionAuthorization: @unchecked Sendable {
         return activeSocket.descriptor.socketURL
     }
 
+    public func activeUnixPeerIdentityPolicy() throws -> JarvisIPCPeerIdentityPolicy? {
+        guard mode == .appSupervised, transportMode == .unixSocket else { return nil }
+        lock.lock()
+        defer { lock.unlock() }
+        guard let active,
+              let activePeerIdentityPolicy,
+              activePeerIdentityPolicy.generation == active.generation else {
+            throw JarvisIPCAuthorizationError.peerIdentityUnavailable
+        }
+        return activePeerIdentityPolicy.policy
+    }
+
     public func clear(generation: UInt64) {
         guard mode == .appSupervised else { return }
         lock.lock()
@@ -288,6 +312,7 @@ public final class JarvisIPCSessionAuthorization: @unchecked Sendable {
             return
         }
         active = nil
+        activePeerIdentityPolicy = nil
         cleanupActiveSocketLocked()
         removeStaleTokenFiles()
         lock.unlock()
@@ -297,6 +322,7 @@ public final class JarvisIPCSessionAuthorization: @unchecked Sendable {
         guard mode == .appSupervised else { return }
         lock.lock()
         active = nil
+        activePeerIdentityPolicy = nil
         cleanupActiveSocketLocked()
         removeStaleTokenFiles()
         lock.unlock()

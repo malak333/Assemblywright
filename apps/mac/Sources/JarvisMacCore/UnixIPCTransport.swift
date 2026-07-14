@@ -60,9 +60,17 @@ public struct DarwinJarvisUnixSocketTransport: JarvisUnixSocketRequesting {
     public static let maximumResponseFrameBytes = 12 * 1024 * 1024
     public static let maximumResponseBodyBytes = 8 * 1024 * 1024
     public var timeoutSeconds: Int
+    private let peerIdentityPolicy: @Sendable () throws -> JarvisIPCPeerIdentityPolicy?
+    private let peerIdentityVerifier: any JarvisUnixPeerIdentityVerifying
 
-    public init(timeoutSeconds: Int = 300) {
+    public init(
+        timeoutSeconds: Int = 300,
+        peerIdentityPolicy: @escaping @Sendable () throws -> JarvisIPCPeerIdentityPolicy? = { nil },
+        peerIdentityVerifier: any JarvisUnixPeerIdentityVerifying = SecurityJarvisUnixPeerIdentityVerifier()
+    ) {
         self.timeoutSeconds = min(max(timeoutSeconds, 1), 300)
+        self.peerIdentityPolicy = peerIdentityPolicy
+        self.peerIdentityVerifier = peerIdentityVerifier
     }
 
     static func validatePeerUID(_ peerUID: uid_t, currentEUID: uid_t) throws {
@@ -78,7 +86,9 @@ public struct DarwinJarvisUnixSocketTransport: JarvisUnixSocketRequesting {
         let operation = JarvisUnixSocketOperation(
             request: request,
             socketURL: socketURL,
-            timeoutSeconds: timeoutSeconds
+            timeoutSeconds: timeoutSeconds,
+            peerIdentityPolicy: peerIdentityPolicy,
+            peerIdentityVerifier: peerIdentityVerifier
         )
         return try await withTaskCancellationHandler {
             try await Task.detached(priority: .userInitiated) {
@@ -94,13 +104,23 @@ private final class JarvisUnixSocketOperation: @unchecked Sendable {
     private let request: JarvisIPCTransportRequest
     private let socketURL: URL
     private let deadlineNanoseconds: UInt64
+    private let peerIdentityPolicy: @Sendable () throws -> JarvisIPCPeerIdentityPolicy?
+    private let peerIdentityVerifier: any JarvisUnixPeerIdentityVerifying
     private let lock = NSLock()
     private var descriptor: Int32 = -1
     private var cancelled = false
 
-    init(request: JarvisIPCTransportRequest, socketURL: URL, timeoutSeconds: Int) {
+    init(
+        request: JarvisIPCTransportRequest,
+        socketURL: URL,
+        timeoutSeconds: Int,
+        peerIdentityPolicy: @escaping @Sendable () throws -> JarvisIPCPeerIdentityPolicy?,
+        peerIdentityVerifier: any JarvisUnixPeerIdentityVerifying
+    ) {
         self.request = request
         self.socketURL = socketURL
+        self.peerIdentityPolicy = peerIdentityPolicy
+        self.peerIdentityVerifier = peerIdentityVerifier
         let timeoutNanoseconds = UInt64(timeoutSeconds) * 1_000_000_000
         let now = DispatchTime.now().uptimeNanoseconds
         let (deadline, overflowed) = now.addingReportingOverflow(timeoutNanoseconds)
@@ -234,6 +254,14 @@ private final class JarvisUnixSocketOperation: @unchecked Sendable {
             peerUID,
             currentEUID: Darwin.geteuid()
         )
+        guard let policy = try peerIdentityPolicy() else {
+            throw JarvisUnixSocketTransportError.peerIdentityUnavailable
+        }
+        do {
+            try peerIdentityVerifier.verifyPeer(on: socketDescriptor, policy: policy)
+        } catch {
+            throw JarvisUnixSocketTransportError.peerIdentityUnavailable
+        }
     }
 
     private func writeAll(_ data: Data, to socketDescriptor: Int32) throws {

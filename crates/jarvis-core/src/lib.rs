@@ -1,5 +1,7 @@
 pub mod ipc;
 pub mod ipc_transport;
+#[cfg(target_os = "macos")]
+mod macos_code_identity;
 pub mod memory_index;
 pub mod model;
 pub mod plugin;
@@ -35,11 +37,12 @@ pub use ipc::{
     MAX_SCHEDULER_BACKGROUND_LIMIT,
 };
 pub use ipc_transport::{
-    serve_unix_socket, MAX_UNIX_IPC_CONNECTIONS, MAX_UNIX_IPC_PATH_AND_QUERY_BYTES,
-    MAX_UNIX_IPC_REQUEST_BODY_BYTES, MAX_UNIX_IPC_REQUEST_FRAME_BYTES,
-    MAX_UNIX_IPC_REQUEST_HEADER_VALUE_BYTES, MAX_UNIX_IPC_RESPONSE_BODY_BYTES,
-    MAX_UNIX_IPC_RESPONSE_CONTENT_TYPE_BYTES, MAX_UNIX_IPC_RESPONSE_FRAME_BYTES,
-    UNIX_IPC_DISPATCH_TIMEOUT_SECONDS, UNIX_IPC_FRAME_VERSION, UNIX_IPC_READ_TIMEOUT_SECONDS,
+    serve_unix_socket, serve_unix_socket_with_peer_identity, MAX_UNIX_IPC_CONNECTIONS,
+    MAX_UNIX_IPC_PATH_AND_QUERY_BYTES, MAX_UNIX_IPC_REQUEST_BODY_BYTES,
+    MAX_UNIX_IPC_REQUEST_FRAME_BYTES, MAX_UNIX_IPC_REQUEST_HEADER_VALUE_BYTES,
+    MAX_UNIX_IPC_RESPONSE_BODY_BYTES, MAX_UNIX_IPC_RESPONSE_CONTENT_TYPE_BYTES,
+    MAX_UNIX_IPC_RESPONSE_FRAME_BYTES, UNIX_IPC_DISPATCH_TIMEOUT_SECONDS, UNIX_IPC_FRAME_VERSION,
+    UNIX_IPC_PEER_IDENTITY_TIMEOUT_SECONDS, UNIX_IPC_READ_TIMEOUT_SECONDS,
     UNIX_IPC_WRITE_TIMEOUT_SECONDS,
 };
 pub use memory_index::{
@@ -80,8 +83,9 @@ pub use runtime::{
 };
 pub use scheduler::{Scheduler, SchedulerJob, SchedulerJobSpec, SchedulerJobStatus, TriggerKind};
 pub use startup::{
-    validate_unix_socket_path, ServeIpcTransport, ServeStartupConfig, TrustedWakeStartupDocument,
-    MAX_SERVE_STARTUP_CONFIG_BYTES, MAX_UNIX_SOCKET_PATH_BYTES, SERVE_STARTUP_CONFIG_VERSION,
+    validate_unix_socket_path, PeerIdentityProfile, ServeIpcTransport, ServeStartupConfig,
+    TrustedWakeStartupDocument, MAX_PEER_CODE_REQUIREMENT_BYTES, MAX_SERVE_STARTUP_CONFIG_BYTES,
+    MAX_UNIX_SOCKET_PATH_BYTES, SERVE_STARTUP_CONFIG_VERSION,
 };
 pub use storage::{
     EmergencyPauseState, InstalledPluginRecord, MemoryItem, NewMemoryItem, NewPendingApproval,

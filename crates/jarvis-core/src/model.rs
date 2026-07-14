@@ -2987,7 +2987,10 @@ printf '{"type":"done"}\n'
             api_key: None,
             codex_executable: executable.to_string_lossy().to_string(),
             requires_approval: true,
-            timeout_ms: 2_000,
+            // This fixture exercises adapter success, not timeout behavior. Keep
+            // enough separation from parallel CI scheduler contention that the
+            // synthetic shell process can be spawned and reaped deterministically.
+            timeout_ms: 10_000,
         };
         let model = CodexAccountModel::from_config(&config).expect("codex account model");
         let route = test_chatgpt_route(&config, "workspace context");
@@ -3055,7 +3058,9 @@ done
             api_key: None,
             codex_executable: executable.to_string_lossy().to_string(),
             requires_approval: true,
-            timeout_ms: 2_000,
+            // This fixture exercises the output cap, not timeout behavior. A
+            // wider bound prevents parallel CI load from masking the assertion.
+            timeout_ms: 10_000,
         };
         let model = CodexAccountModel::from_config(&config).expect("codex account model");
         let route = test_chatgpt_route(&config, "workspace context");

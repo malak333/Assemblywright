@@ -2,6 +2,38 @@
 
 These notes capture durable facts for future agents working on this repository.
 
+## Apple Peer Identity Boundary
+
+- Default app-supervised IPC uses `unix_socket_peer_identity_v1`. Its strict
+  startup transport contains the bounded absolute `socket_path`, nonempty
+  maximum-4096-byte `peer_code_requirement`, and exact
+  `peer_identity_profile` (`adhoc_exact` or `developer_id_hardened`). The bearer
+  remains a separate startup-stdin value.
+- Both Swift and Rust use `LOCAL_PEERTOKEN` and Security.framework dynamic-code
+  validation before request framing, retain `getpeereid` current-EUID checks,
+  and still require the per-launch bearer. PID/path lookup is not an identity
+  authority. Missing tokens, malformed requirements, wrong code, mixed
+  profiles, and unsigned peers fail closed.
+- Package signing keeps the app identifier at
+  fixed `com.nobiletechnology.jarvis` identifier and explicitly assigns the
+  bundled core `com.nobiletechnology.jarvis.core`; package bundle-ID overrides
+  are rejected because they cannot satisfy the fixed identity policy. Never
+  rely on codesign's hash-derived identifier for the bare core Mach-O.
+- An ad-hoc designated requirement is exact-build cdhash evidence without a
+  TeamIdentifier. The unsigned launch lane therefore proves identity mechanics
+  by accepting the legitimate Swift client and closing/resetting a same-EUID
+  wrong-code Python connection before it receives a framed `401`; it does not
+  prove publisher trust. The `developer_id_hardened` profile separately
+  requires Apple-generic Developer ID Application leaf/intermediate certificate
+  extensions, stable IDs, the same nonempty team, and hardened-runtime flags;
+  ordinary Apple Development signatures do not satisfy that profile. Developer ID signing,
+  notarization, clean-profile/Finder launch, device authentication, App Sandbox,
+  and live-device QA remain external or owner-recorded evidence.
+- Synthetic subprocess tests that exercise Codex adapter success or output
+  limits use a wide timeout margin so parallel release-gate scheduler load
+  cannot turn a functional assertion into an unrelated timeout failure;
+  dedicated timeout tests retain their intentionally narrow bounds.
+
 ## Repository And Scope
 
 - The repository is public at `https://github.com/malak333/Jarvis`.
@@ -1052,8 +1084,9 @@ requires plugin-trust `generated_at`, `review_started_at`,
   and requires the app-owned Swift client to verify health, dry-run command,
   task/audit inspection, diagnostics, pause/block/resume, and durable SQLite
   state over the default app-supervised UDS before emitting a fixed non-secret
-  marker. Failures suppress the marker and post-pause cleanup attempts a bounded
-  resume. A separate explicit relaunch keeps the weaker TCP/token CLI
+  marker. It also requires stable app/core code identifiers and closes/resets a
+  same-EUID wrong-code Python peer before any framed response. Failures suppress
+  the marker and post-pause cleanup attempts a bounded resume. A separate explicit relaunch keeps the weaker TCP/token CLI
   compatibility path tested. The CLI exposes `jarvis --version`, and the
   packaging/evidence scripts require the bundled `jarvis-cli --version` output
   to match the expected release version before local artifact evidence can pass.
@@ -1648,15 +1681,19 @@ requires plugin-trust `generated_at`, `review_started_at`,
   not prove Apple attestation, OS provenance,
   background launch, same-user/process isolation, live-device behavior, or
   production readiness.
-- App-supervised IPC defaults to Unix-domain transport with same-EUID and bearer
-  defense in depth. Swift rotates 32 random bytes and a generation-random socket
-  leaf per launch, shares that state between `JarvisCoreSupervisor` and
-  `JarvisIPCClient`, and sends `ipc_transport:{kind:"unix_socket_v1",
-  socket_path:"/absolute/path.sock"}` plus the bearer only in bounded startup
+- App-supervised IPC defaults to Unix-domain transport with audit-token code
+  identity, same-EUID, and bearer defense in depth. Swift rotates 32 random
+  bytes and a generation-random socket leaf per launch, shares that state
+  between `JarvisCoreSupervisor` and `JarvisIPCClient`, and sends
+  `ipc_transport:{kind:"unix_socket_peer_identity_v1",socket_path:
+  "/absolute/path.sock",peer_code_requirement:"...",peer_identity_profile:
+  "adhoc_exact|developer_id_hardened"}` plus the bearer only in bounded startup
   stdin. The runtime directory is current-owner `0700`, the socket is `0600`,
-  and both peers require the connected peer's `getpeereid` EUID to equal their
-  current EUID. Rust still protects the complete router with exactly one strict
-  Bearer value and constant-time digest comparison.
+  and both peers retrieve `LOCAL_PEERTOKEN`, validate dynamic code against the
+  designated requirement before framing, and require the connected peer's
+  `getpeereid` EUID to equal their current EUID. Rust still protects the
+  complete router with exactly one strict Bearer value and constant-time digest
+  comparison.
 - The UDS wire contract is one four-byte big-endian length plus one exact,
   versioned JSON request, a required client write-half close, and one framed
   response per connection. Requests admit only GET,
@@ -1678,10 +1715,12 @@ requires plugin-trust `generated_at`, `review_started_at`,
   after the Swift supervisor completes authenticated health and then verifies
   child exit plus socket cleanup. Cross-process Rust,
   Swift, and packaged-layout coverage must prove default route parity,
-  same-EUID rejection, bearer rejection, strict framing and bounds, socket
+  audit-token requirement acceptance, same-EUID wrong-code pre-frame rejection,
+  bearer rejection, strict framing and bounds, socket
   ownership/modes/path bounds, lifecycle cleanup/restart invalidation, and the
-  explicit compatibility path. This proves bounded local transport, same-EUID
-  checks, bearer possession, and repository-owned lifecycle. Same EUID is not
-  same PID or intended process; the slice does not prove peer/code-sign
+  explicit compatibility path. This proves bounded local transport, designated-
+  requirement checks for the evaluated signature profile, same-EUID checks,
+  bearer possession, and repository-owned lifecycle. The ad-hoc profile proves
+  only exact-build cdhash mechanics; it does not prove Developer ID publisher
   identity, device authentication, XPC, App Sandbox/egress enforcement,
-  signing/notarization, or live-device behavior.
+  notarization, or live-device behavior.

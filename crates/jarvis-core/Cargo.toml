@@ -36,3 +36,6 @@ wasmi.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 wat.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation-sys.workspace = true

@@ -175,12 +175,23 @@ process lifetime. Manual use of the legacy `--workspace-root` option still
 exposes the configured path in that operator-launched process's arguments.
 App-supervised launches also rotate a 32-byte bearer and default to a
 generation-random Unix domain socket. The bounded startup-stdin envelope carries
-both the bearer and
-`ipc_transport:{kind:"unix_socket_v1",socket_path:"/absolute/path.sock"}`;
-neither enters child argv or environment. The app-owned runtime directory is
-current-owner `0700`, the socket is `0600`, and both Swift and Rust reject a
-peer whose `getpeereid` EUID differs from their current EUID. Every route still
-requires the bearer.
+both the bearer and `ipc_transport:{kind:"unix_socket_peer_identity_v1",
+socket_path:"/absolute/path.sock",peer_code_requirement:"...",
+peer_identity_profile:"adhoc_exact|developer_id_hardened"}`; neither enters
+child argv or environment. The app-owned runtime directory is current-owner
+`0700` and the socket is `0600`. Both Swift and Rust obtain the connected
+peer's audit token with `LOCAL_PEERTOKEN`, validate its running code through
+Security.framework against the expected designated requirement, and retain the
+current-EUID check. Rust performs identity checks before reading a frame, and
+every route still requires the bearer.
+
+Distribution packaging gives the bundled core the stable code identifier
+`com.nobiletechnology.jarvis.core`; the app keeps the fixed
+`com.nobiletechnology.jarvis` bundle identifier. Alternate package identifiers
+are rejected. Ad-hoc `cdhash` requirements bind only the exact local
+build and do not establish publisher trust. Developer ID mode requires the
+stable app/core identifiers, Apple-generic anchored Developer ID Application
+requirements, the same nonempty team identifier, and hardened-runtime flags.
 
 The UDS protocol allows one four-byte big-endian length plus one strict,
 versioned JSON request per connection, followed by a required client write-half
@@ -199,10 +210,11 @@ only in this mode. An operator can then run, for example,
 The token never enters child argv, environment, audit, diagnostics, or UI.
 Loopback clients and servers retain strict loopback checks, and an explicitly
 unauthenticated legacy server rejects any Authorization header. Repository
-tests prove bounded transport, same-EUID checks, bearer possession, route
-parity, cleanup, and compatibility behavior. They do not prove peer PID,
-intended process or code-sign identity, device authentication, XPC, App
-Sandbox, signing/notarization, or live-device behavior.
+tests prove bounded transport, audit-token requirement enforcement, same-EUID
+checks, bearer possession, route parity, cleanup, and compatibility behavior.
+The ad-hoc lane proves exact-build identity mechanics only. It does not prove
+Developer ID publisher identity, device authentication, XPC, App Sandbox,
+notarization, or live-device behavior.
 For broader registered plugin manifest inspection, `jarvis plugins list`
 defaults to a compact operator-readable summary and `jarvis plugins list --json`
 prints full manifest schemas.
@@ -481,8 +493,12 @@ executable with an isolated temporary HOME, requires a non-secret app-only
 marker emitted only after the Swift client completes authenticated health,
 dry-run command, task/audit inspection, diagnostics, pause, blocked-command,
 and resume checks over the default UDS, and verifies the resulting SQLite state
-before socket cleanup. A separate explicit compatibility relaunch preserves the
-loopback TCP/token CLI lane. It is also part of the default
+before socket cleanup. While that UDS is live, a same-EUID Python process with
+the wrong code identity sends a valid-shaped request and must be closed or reset
+before it can receive a framed `401`; the legitimate Swift route must remain
+healthy. The ad-hoc app/core identifiers and designated requirements are also
+checked. A separate explicit compatibility relaunch preserves the loopback
+TCP/token CLI lane. It is also part of the default
 `./scripts/release-local.sh` local release gate so distribution-layout launch
 regressions fail the standard proof path.
 The full `package-distribution.sh` lane owns Developer ID signing,
@@ -493,8 +509,11 @@ notary submission IDs/log paths, staple validation output, Gatekeeper
 assessment output, bundled core `jarvis --version` output, and artifact
 SHA-256 digests for the signed zip/pkg, plus the bundled
 `Contents/Resources/bin/jarvis-cli` path and SHA-256 digest. It
-still does not replace clean-profile installer run, Finder launch, App Store
-validation, or live microphone/Speech/audio-output validation.
+also asserts the stable app/core code identifiers. This static signed-artifact
+evidence does not by itself exercise the Developer ID peer-identity route and
+still does not replace notarization outcome, clean-profile installer run,
+Finder launch, App Store validation, or live microphone/Speech/audio-output
+validation.
 For those live checks, `./scripts/release-live-device-qa.sh --check` prints the
 required manual runbook and is part of the default local release gate.
 `cargo run -p jarvis-cli -- release signed-distribution-runbook` summarizes the

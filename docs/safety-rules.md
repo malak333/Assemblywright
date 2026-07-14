@@ -81,11 +81,17 @@ release requirements, not optional UX guidance.
 - Every app-supervised core launch must rotate a 32-byte IPC bearer credential
   and default to a generation-random Unix domain socket. The strict v1 startup
   envelope is the only authority channel: it carries the bearer and
-  `ipc_transport:{kind:"unix_socket_v1",socket_path:"/absolute/path.sock"}`;
-  neither may enter argv or child environment. The runtime directory must be a
+  `ipc_transport:{kind:"unix_socket_peer_identity_v1",socket_path:
+  "/absolute/path.sock",peer_code_requirement:"...",peer_identity_profile:
+  "adhoc_exact|developer_id_hardened"}`; none may enter argv or child
+  environment. The requirement must be nonempty, at most 4096 bytes, and free
+  of NUL. The runtime directory must be a
   current-owner `0700` directory, the socket must be `0600`, and its absolute
-  path must fit the platform socket-path bound. Both peers must use
-  `getpeereid` and reject an EUID other than their current EUID. Every route,
+  path must fit the platform socket-path bound. Both peers must retrieve
+  `LOCAL_PEERTOKEN`, resolve the running peer through Security.framework, and
+  reject it before frame parsing unless it satisfies the expected designated
+  requirement. Both must also use `getpeereid` and reject an EUID other than
+  their current EUID. Every route,
   including health, activity, release, and trusted-wake control, must also
   require the launch bearer; peer EUID is defense in depth, not a bearer
   replacement.
@@ -100,6 +106,17 @@ release requirements, not optional UX guidance.
   child exit clear the matching generation. Cleanup may remove only the
   validated socket leaf; wrong-type, unsafe, or changed paths must fail without
   recursive deletion.
+- `adhoc_exact` may accept only an exact cdhash designated requirement for the
+  current build; it is local mechanics evidence, not publisher trust.
+  `developer_id_hardened` must require Apple-generic anchored Developer ID
+  Application leaf/intermediate certificate extensions, stable app/core
+  identifiers, the same nonempty team identifier, and hardened-runtime
+  CodeDirectory flags. Unsigned,
+  malformed, mixed-profile, missing-audit-token, or wrong-code peers fail
+  closed. Packaging must sign the bundled core with the stable
+  `com.nobiletechnology.jarvis.core` identifier. Alternate package bundle
+  identifiers are rejected because they cannot satisfy the fixed production
+  code-identity contract.
 - Exact release-smoke mode may emit only a fixed non-secret success marker, and
   only after the app-owned Swift client completes authenticated health,
   dry-run command, task/audit inspection, diagnostics, pause, blocked-command,
@@ -116,12 +133,13 @@ release requirements, not optional UX guidance.
   TCP serving must reject non-loopback binds. Legacy explicitly unauthenticated
   servers reject any Authorization header so a managed client cannot silently
   downgrade.
-- These controls prove bounded local transport, same-EUID peer checks, bearer
-  possession, and launch lifecycle. Same EUID is not same PID or intended
-  process identity, and another process running as the user can read an
+- These controls prove bounded local transport, audit-token-bound designated-
+  requirement checks, same-EUID checks, bearer possession, and launch lifecycle
+  for the evaluated signature profile. Another process running as the user can read an
   explicitly enabled handoff file while it exists. They do not prove peer PID,
-  code-sign identity, device authentication, XPC, ownership, App Sandbox,
-  host-level egress control, signing/notarization, or live-device behavior.
+  device authentication, XPC, ownership, App Sandbox, host-level egress
+  control, notarization, or live-device behavior; ad-hoc evidence specifically
+  does not prove Developer ID publisher identity.
 - Installed `local_wasm` execution is allowed only for validated low-risk,
   non-proactive compute actions with no memory, model, filesystem, environment,
   process, clock, or network authority and the explicit `wasm_compute` grant.

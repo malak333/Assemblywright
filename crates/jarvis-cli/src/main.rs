@@ -835,7 +835,10 @@ async fn main() -> anyhow::Result<()> {
             };
 
             let tcp_bind = match &ipc_transport {
-                Some(jarvis_core::ServeIpcTransport::UnixSocketV1 { .. }) => {
+                Some(
+                    jarvis_core::ServeIpcTransport::UnixSocketV1 { .. }
+                    | jarvis_core::ServeIpcTransport::UnixSocketPeerIdentityV1 { .. },
+                ) => {
                     if bind != "127.0.0.1:7787" {
                         anyhow::bail!(
                             "--bind cannot be combined with startup Unix-socket transport"
@@ -900,6 +903,23 @@ async fn main() -> anyhow::Result<()> {
                         anyhow::anyhow!("startup Unix-socket transport requires IPC authentication")
                     })?;
                     jarvis_core::serve_unix_socket(socket_path, state, auth).await?;
+                }
+                Some(jarvis_core::ServeIpcTransport::UnixSocketPeerIdentityV1 {
+                    socket_path,
+                    peer_code_requirement,
+                    peer_identity_profile,
+                }) => {
+                    let auth = ipc_auth.ok_or_else(|| {
+                        anyhow::anyhow!("startup Unix-socket transport requires IPC authentication")
+                    })?;
+                    jarvis_core::serve_unix_socket_with_peer_identity(
+                        socket_path,
+                        state,
+                        auth,
+                        &peer_code_requirement,
+                        peer_identity_profile,
+                    )
+                    .await?;
                 }
                 None => {
                     let bind = tcp_bind.expect("TCP bind was prevalidated");

@@ -7952,12 +7952,15 @@ fn app_supervised_unix_ipc_routes_authenticated_core_requests_without_tcp_argv()
         .expect("secure Unix IPC parent");
     let socket_path = socket_parent.join("core.sock");
     let database_path = temporary.path().join("jarvis.sqlite");
+    let peer_code_requirement = current_process_designated_requirement();
     let startup = json!({
         "version": 1,
         "ipc_auth": {"scheme": "bearer", "token": TOKEN, "generation": 11},
         "ipc_transport": {
-            "kind": "unix_socket_v1",
-            "socket_path": socket_path
+            "kind": "unix_socket_peer_identity_v1",
+            "socket_path": socket_path,
+            "peer_code_requirement": peer_code_requirement,
+            "peer_identity_profile": "adhoc_exact"
         }
     })
     .to_string();
@@ -8058,6 +8061,54 @@ fn app_supervised_unix_ipc_routes_authenticated_core_requests_without_tcp_argv()
         serde_json::from_slice(&response).expect("decode Unix IPC response")
     };
 
+    let wrong_code_probe = r#"
+import json
+import socket
+import struct
+import sys
+
+request = json.dumps({
+    "version": 1,
+    "method": "GET",
+    "path": "/health",
+    "authorization": None,
+    "accept": "application/json",
+    "content_type": "application/json",
+    "body_base64": "",
+}, separators=(",", ":")).encode("utf-8")
+peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+peer.settimeout(5)
+peer.connect(sys.argv[1])
+try:
+    try:
+        peer.sendall(struct.pack(">I", len(request)) + request)
+        peer.shutdown(socket.SHUT_WR)
+    except (BrokenPipeError, ConnectionResetError):
+        pass
+    try:
+        prefix = peer.recv(4)
+    except (BrokenPipeError, ConnectionResetError):
+        prefix = b""
+finally:
+    peer.close()
+if prefix:
+    raise SystemExit("wrong-code peer received a framed response")
+"#;
+    let wrong_code = Command::new("/usr/bin/python3")
+        .args([
+            "-c",
+            wrong_code_probe,
+            socket_path.to_str().expect("Unix socket path"),
+        ])
+        .output()
+        .expect("run same-EUID wrong-code Unix IPC probe");
+    assert!(
+        wrong_code.status.success(),
+        "wrong-code probe failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&wrong_code.stdout),
+        String::from_utf8_lossy(&wrong_code.stderr)
+    );
+
     let unauthorized = send(request("GET", "/health", None, Value::Null));
     assert_eq!(unauthorized["status"], 401);
     let authorization = Some(format!("Bearer {TOKEN}"));
@@ -8102,6 +8153,39 @@ fn app_supervised_unix_ipc_routes_authenticated_core_requests_without_tcp_argv()
 
     child.kill().expect("stop Unix IPC server");
     child.wait().expect("reap Unix IPC server");
+}
+
+fn current_process_designated_requirement() -> String {
+    let executable = std::env::current_exe().expect("current test executable path");
+    let output = Command::new("codesign")
+        .args([
+            "-d",
+            "-r-",
+            executable.to_str().expect("test executable UTF-8 path"),
+        ])
+        .output()
+        .expect("inspect current test executable designated requirement");
+    assert!(
+        output.status.success(),
+        "codesign requirement inspection failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let requirement = combined
+        .split_once("designated =>")
+        .and_then(|(_, requirement)| requirement.lines().next())
+        .map(str::trim)
+        .filter(|requirement| !requirement.is_empty())
+        .unwrap_or_else(|| {
+            panic!("codesign output must contain a designated requirement: {combined}")
+        });
+    assert!(requirement.len() <= 4096);
+    assert!(!requirement.contains('\0'));
+    requirement.to_string()
 }
 
 #[test]

@@ -1,4 +1,8 @@
-use crate::{router_with_auth, validate_unix_socket_path, IpcAuth, IpcState};
+#[cfg(target_os = "macos")]
+use crate::macos_code_identity::{CompiledPeerRequirement, PeerAuditToken};
+#[cfg(target_os = "macos")]
+use crate::startup::validate_peer_code_requirement;
+use crate::{router_with_auth, validate_unix_socket_path, IpcAuth, IpcState, PeerIdentityProfile};
 use anyhow::{anyhow, bail, Context};
 use axum::body::{to_bytes, Body};
 use axum::http::{header, HeaderValue, Method, Request, Uri};
@@ -33,9 +37,12 @@ pub const MAX_UNIX_IPC_PATH_AND_QUERY_BYTES: usize = 8 * 1024;
 pub const MAX_UNIX_IPC_REQUEST_HEADER_VALUE_BYTES: usize = 1024;
 pub const MAX_UNIX_IPC_RESPONSE_CONTENT_TYPE_BYTES: usize = 256;
 pub const UNIX_IPC_READ_TIMEOUT_SECONDS: u64 = 10;
+pub const UNIX_IPC_PEER_IDENTITY_TIMEOUT_SECONDS: u64 = 10;
 pub const UNIX_IPC_DISPATCH_TIMEOUT_SECONDS: u64 = 300;
 pub const UNIX_IPC_WRITE_TIMEOUT_SECONDS: u64 = 10;
 const UNIX_IPC_READ_TIMEOUT: Duration = Duration::from_secs(UNIX_IPC_READ_TIMEOUT_SECONDS);
+const UNIX_IPC_PEER_IDENTITY_TIMEOUT: Duration =
+    Duration::from_secs(UNIX_IPC_PEER_IDENTITY_TIMEOUT_SECONDS);
 const UNIX_IPC_DISPATCH_TIMEOUT: Duration = Duration::from_secs(UNIX_IPC_DISPATCH_TIMEOUT_SECONDS);
 const UNIX_IPC_WRITE_TIMEOUT: Duration = Duration::from_secs(UNIX_IPC_WRITE_TIMEOUT_SECONDS);
 
@@ -106,16 +113,58 @@ pub async fn serve_unix_socket(
         socket_path.as_ref(),
         state,
         auth,
+        #[cfg(target_os = "macos")]
+        None,
         #[cfg(test)]
         None,
     )
     .await
 }
 
+/// Serves authenticated local IPC only after the connected process passes an
+/// Apple audit-token-bound code requirement. The requirement is compiled
+/// before the socket path is bound, so malformed policy fails startup closed.
+#[cfg(target_os = "macos")]
+pub async fn serve_unix_socket_with_peer_identity(
+    socket_path: impl AsRef<Path>,
+    state: IpcState,
+    auth: IpcAuth,
+    peer_code_requirement: &str,
+    peer_identity_profile: PeerIdentityProfile,
+) -> anyhow::Result<()> {
+    validate_peer_code_requirement(peer_code_requirement, peer_identity_profile)
+        .map_err(anyhow::Error::new)?;
+    let requirement = Arc::new(CompiledPeerRequirement::compile(
+        peer_code_requirement,
+        peer_identity_profile,
+    )?);
+    serve_unix_socket_inner(
+        socket_path.as_ref(),
+        state,
+        auth,
+        Some(requirement),
+        #[cfg(test)]
+        None,
+    )
+    .await
+}
+
+#[cfg(not(target_os = "macos"))]
+pub async fn serve_unix_socket_with_peer_identity(
+    _socket_path: impl AsRef<Path>,
+    _state: IpcState,
+    _auth: IpcAuth,
+    _peer_code_requirement: &str,
+    _peer_identity_profile: PeerIdentityProfile,
+) -> anyhow::Result<()> {
+    bail!("Apple peer code identity verification is supported only on macOS")
+}
+
 async fn serve_unix_socket_inner(
     socket_path: &Path,
     state: IpcState,
     auth: IpcAuth,
+    #[cfg(target_os = "macos")] peer_requirement: Option<Arc<CompiledPeerRequirement>>,
     #[cfg(test)] accepted_connections: Option<Arc<AtomicUsize>>,
 ) -> anyhow::Result<()> {
     let (listener, _cleanup) = bind_secure_unix_listener(socket_path)?;
@@ -145,9 +194,18 @@ async fn serve_unix_socket_inner(
             accepted_connections.fetch_add(1, Ordering::SeqCst);
         }
         let app = app.clone();
+        #[cfg(target_os = "macos")]
+        let peer_requirement = peer_requirement.clone();
         tokio::spawn(async move {
             let _permit = permit;
-            if let Err(error) = handle_connection(stream, app).await {
+            if let Err(error) = handle_connection(
+                stream,
+                app,
+                #[cfg(target_os = "macos")]
+                peer_requirement,
+            )
+            .await
+            {
                 tracing::warn!(error = %error, "rejected Unix IPC connection");
             }
         });
@@ -218,8 +276,23 @@ fn bind_secure_unix_listener(
     Ok((listener, cleanup))
 }
 
-async fn handle_connection(mut stream: UnixStream, app: Router) -> anyhow::Result<()> {
+async fn handle_connection(
+    mut stream: UnixStream,
+    app: Router,
+    #[cfg(target_os = "macos")] peer_requirement: Option<Arc<CompiledPeerRequirement>>,
+) -> anyhow::Result<()> {
     require_current_euid_peer(&stream)?;
+    #[cfg(target_os = "macos")]
+    if let Some(requirement) = peer_requirement {
+        let token = require_peer_audit_token(&stream)?;
+        timeout(
+            UNIX_IPC_PEER_IDENTITY_TIMEOUT,
+            tokio::task::spawn_blocking(move || requirement.verify(token)),
+        )
+        .await
+        .map_err(|_| anyhow!("Unix IPC peer code identity validation timed out"))?
+        .map_err(|_| anyhow!("Unix IPC peer code identity validation worker failed"))??;
+    }
     let request_frame = read_frame(&mut stream, MAX_UNIX_IPC_REQUEST_FRAME_BYTES).await?;
     require_client_write_eof(&mut stream).await?;
     let response = dispatch_frame(&request_frame, app).await?;
@@ -250,6 +323,30 @@ fn validate_peer_euid(peer_uid: libc::uid_t, current_euid: libc::uid_t) -> anyho
         bail!("Unix IPC peer effective UID does not match the server");
     }
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn require_peer_audit_token(stream: &UnixStream) -> anyhow::Result<PeerAuditToken> {
+    let mut token = [0_u32; 8];
+    let expected_length = std::mem::size_of_val(&token);
+    let mut actual_length = libc::socklen_t::try_from(expected_length)
+        .expect("Apple audit token length fits socklen_t");
+    let result = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_LOCAL,
+            libc::LOCAL_PEERTOKEN,
+            token.as_mut_ptr().cast::<libc::c_void>(),
+            &mut actual_length,
+        )
+    };
+    if result != 0 {
+        return Err(io::Error::last_os_error()).context("Unix IPC peer audit token unavailable");
+    }
+    if actual_length as usize != expected_length {
+        bail!("Unix IPC peer audit token has an invalid length");
+    }
+    Ok(token)
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -569,6 +666,54 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[tokio::test]
+    async fn peer_code_identity_is_checked_before_any_frame_read() {
+        let (_client, server) = UnixStream::pair().expect("socket pair");
+        let requirement = Arc::new(
+            CompiledPeerRequirement::compile(
+                "identifier \"com.example.jarvis.never\"",
+                PeerIdentityProfile::AdhocExact,
+            )
+            .expect("compile rejecting requirement"),
+        );
+        let result = timeout(
+            Duration::from_secs(2),
+            handle_connection(
+                server,
+                router_with_auth(
+                    IpcState::new(),
+                    Some(IpcAuth::new(TEST_TOKEN, 1).expect("auth")),
+                ),
+                Some(requirement),
+            ),
+        )
+        .await
+        .expect("identity rejection must precede the ten-second frame timeout")
+        .expect_err("reject mismatched peer code identity");
+        assert!(result.to_string().contains("OSStatus"), "{result}");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn local_peer_token_resolves_to_current_valid_code() {
+        let (_client, server) = UnixStream::pair().expect("socket pair");
+        let token = require_peer_audit_token(&server).expect("retrieve peer audit token");
+        CompiledPeerRequirement::compile("true", PeerIdentityProfile::AdhocExact)
+            .expect("compile accepting requirement")
+            .verify(token)
+            .expect("validate current process from audit token");
+        let hardened_error =
+            CompiledPeerRequirement::compile("true", PeerIdentityProfile::DeveloperIdHardened)
+                .expect("compile hardened requirement")
+                .verify(token)
+                .expect_err("linker-signed test binary must not satisfy hardened profile");
+        assert!(
+            hardened_error.to_string().contains("hardened runtime"),
+            "{hardened_error}"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
     async fn unix_socket_routes_one_framed_request_and_cleans_known_leaf() {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let parent = temporary.path().join("ipc");
@@ -666,6 +811,7 @@ mod tests {
                 &server_path,
                 IpcState::new(),
                 IpcAuth::new(TEST_TOKEN, 1).expect("auth"),
+                None,
                 Some(server_accepted_connections),
             )
             .await

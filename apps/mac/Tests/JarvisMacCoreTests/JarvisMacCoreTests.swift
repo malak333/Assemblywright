@@ -6446,7 +6446,8 @@ struct IPCBearerAuthorizationTests {
             ]),
             processLauncher: udsLauncher,
             workspaceRootProvider: FakeWorkspaceRootGrantProvider(roots: []),
-            ipcAuthorization: udsAuthorization
+            ipcAuthorization: udsAuthorization,
+            peerIdentityPolicyProvider: FakePeerIdentityPolicyProvider()
         )
 
         await udsSupervisor.start(environmentOverrides: [
@@ -6460,8 +6461,10 @@ struct IPCBearerAuthorizationTests {
             JSONSerialization.jsonObject(with: udsInput) as? [String: Any]
         )
         let udsTransport = try #require(udsEnvelope["ipc_transport"] as? [String: String])
-        #expect(udsTransport["kind"] == JarvisIPCUnixSocketDescriptor.kind)
+        #expect(udsTransport["kind"] == JarvisIPCPeerIdentityPolicy.kind)
         #expect(udsTransport["socket_path"]?.hasSuffix("/run/core-udsselection.sock") == true)
+        #expect(udsTransport["peer_identity_profile"] == JarvisIPCPeerIdentityProfile.adhocExact.rawValue)
+        #expect(udsTransport["peer_code_requirement"] == samplePeerIdentityPolicy().peerCodeRequirement)
         #expect(udsEnvelope["ipc_auth"] != nil)
         #expect(udsLaunch.environment["JARVIS_IPC_TOKEN_FILE"] == nil)
         #expect(udsLaunch.environment[JarvisCoreSupervisor.releaseSmokeEnvironmentKey] == nil)
@@ -6500,6 +6503,58 @@ struct IPCBearerAuthorizationTests {
         #expect(!FileManager.default.fileExists(atPath: try #require(enabled.fileURL).path))
     }
 
+    @Test("UDS identity policy is generation-bound and missing policy fails closed")
+    func unixSocketPeerIdentityPolicyLifecycle() throws {
+        let directory = try shortUnixTestDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let authorization = makeUnixSocketAuthorization(
+            socketDirectoryURL: directory.appending(path: "run"),
+            tokenFileRoot: directory,
+            socketIdentifier: { "policy" }
+        )
+
+        #expect(throws: JarvisIPCAuthorizationError.peerIdentityUnavailable) {
+            _ = try authorization.rotateForLaunch()
+        }
+        let policy = samplePeerIdentityPolicy()
+        let launch = try #require(
+            try authorization.rotateForLaunch(peerIdentityPolicy: policy)
+        )
+        #expect(try authorization.activeUnixPeerIdentityPolicy() == policy)
+        authorization.clear(generation: launch.generation)
+        #expect(throws: JarvisIPCAuthorizationError.peerIdentityUnavailable) {
+            _ = try authorization.activeUnixPeerIdentityPolicy()
+        }
+    }
+
+    @Test("Supervisor degrades before launch when UDS identity policy is unavailable")
+    func supervisorPeerIdentityPolicyFailure() async throws {
+        let directory = try shortUnixTestDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let authorization = makeUnixSocketAuthorization(
+            socketDirectoryURL: directory.appending(path: "run"),
+            tokenFileRoot: directory,
+            socketIdentifier: { "policy-failure" }
+        )
+        let launcher = FakeProcessLauncher()
+        let supervisor = JarvisCoreSupervisor(
+            configuration: JarvisCoreSupervisorConfiguration(
+                executableURL: URL(fileURLWithPath: "/tmp/jarvis-cli"), databaseURL: nil
+            ),
+            client: FakeCoreClient(healthResults: [.failure(URLError(.cannotConnectToHost))]),
+            processLauncher: launcher,
+            workspaceRootProvider: FakeWorkspaceRootGrantProvider(roots: []),
+            ipcAuthorization: authorization,
+            peerIdentityPolicyProvider: FakePeerIdentityPolicyProvider(shouldFail: true)
+        )
+
+        await supervisor.start()
+
+        #expect(launcher.launches.isEmpty)
+        #expect(authorization.activeGeneration == nil)
+        #expect(!supervisor.isAvailable)
+    }
+
     @Test("UDS run directory rejects symlink, file, and permissive preexisting state")
     func unixSocketDirectorySafety() throws {
         let root = try shortUnixTestDirectory()
@@ -6535,7 +6590,9 @@ struct IPCBearerAuthorizationTests {
             tokenFileRoot: root,
             socketIdentifier: { "collision" }
         )
-        let collisionLaunchValue = try collisionAuthorization.rotateForLaunch()
+        let collisionLaunchValue = try collisionAuthorization.rotateForLaunch(
+            peerIdentityPolicy: samplePeerIdentityPolicy()
+        )
         let collisionLaunch = try #require(collisionLaunchValue)
         #expect(throws: JarvisIPCAuthorizationError.unixSocketPathInvalid) {
             _ = try collisionAuthorization.prepareUnixSocketForLaunch(
@@ -6553,7 +6610,9 @@ struct IPCBearerAuthorizationTests {
             tokenFileRoot: root,
             socketIdentifier: { "bounded" }
         )
-        let longLaunchValue = try longAuthorization.rotateForLaunch()
+        let longLaunchValue = try longAuthorization.rotateForLaunch(
+            peerIdentityPolicy: samplePeerIdentityPolicy()
+        )
         let longLaunch = try #require(longLaunchValue)
         #expect(throws: JarvisIPCAuthorizationError.unixSocketPathInvalid) {
             _ = try longAuthorization.prepareUnixSocketForLaunch(
@@ -6571,7 +6630,9 @@ struct IPCBearerAuthorizationTests {
             tokenFileRoot: root,
             socketIdentifier: { "identity" }
         )
-        let launchValue = try authorization.rotateForLaunch()
+        let launchValue = try authorization.rotateForLaunch(
+            peerIdentityPolicy: samplePeerIdentityPolicy()
+        )
         let launch = try #require(launchValue)
         let descriptorValue = try authorization.prepareUnixSocketForLaunch(
             generation: launch.generation
@@ -6592,6 +6653,77 @@ struct IPCBearerAuthorizationTests {
 
 @Suite("Unix IPC transport", .serialized)
 struct UnixIPCTransportTests {
+    @Test("Peer identity validation completes before the first frame byte")
+    func peerIdentityPrecedesFraming() async throws {
+        let root = try shortUnixTestDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let verifier = ControlledUnixPeerIdentityVerifier()
+        let prematureByte = LockedTestValue(false)
+        let server = try UnixSocketTestServer(
+            socketURL: root.appending(path: "identity-order.sock"),
+            handler: { descriptor in
+                _ = verifier.started.wait(timeout: .now() + 2)
+                var byte: UInt8 = 0
+                let received = Darwin.recv(descriptor, &byte, 1, MSG_DONTWAIT)
+                prematureByte.set(received > 0)
+                verifier.proceed.signal()
+                guard (try? readUnixTestFrame(descriptor)) != nil else { return }
+                try? writeUnixTestFrame(
+                    descriptor,
+                    Data(#"{"version":1,"status":200,"content_type":null,"body_base64":""}"#.utf8)
+                )
+            }
+        )
+        defer { withExtendedLifetime(server) {} }
+        let transport = DarwinJarvisUnixSocketTransport(
+            timeoutSeconds: 2,
+            peerIdentityPolicy: { samplePeerIdentityPolicy() },
+            peerIdentityVerifier: verifier
+        )
+
+        _ = try await transport.send(
+            JarvisIPCTransportRequest(
+                method: "GET", path: "/health", authorization: "Bearer token"
+            ),
+            to: server.socketURL
+        )
+
+        #expect(!prematureByte.value)
+    }
+
+    @Test("Missing or rejected peer identity closes without sending a frame")
+    func peerIdentityFailureSendsNoFrame() async throws {
+        let root = try shortUnixTestDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let receivedBytes = LockedTestValue<Int?>(nil)
+        let server = try UnixSocketTestServer(
+            socketURL: root.appending(path: "identity-reject.sock"),
+            handler: { descriptor in
+                var byte: UInt8 = 0
+                receivedBytes.set(Darwin.read(descriptor, &byte, 1))
+            }
+        )
+        defer { withExtendedLifetime(server) {} }
+        let request = JarvisIPCTransportRequest(
+            method: "GET", path: "/health", authorization: "Bearer token"
+        )
+        let rejected = DarwinJarvisUnixSocketTransport(
+            timeoutSeconds: 2,
+            peerIdentityPolicy: { samplePeerIdentityPolicy() },
+            peerIdentityVerifier: RejectingUnixPeerIdentityVerifier()
+        )
+
+        await #expect(throws: JarvisUnixSocketTransportError.peerIdentityUnavailable) {
+            _ = try await rejected.send(request, to: server.socketURL)
+        }
+        try await waitForUnixTestServerAccept(server)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while receivedBytes.value == nil, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(receivedBytes.value == 0)
+    }
+
     @Test("Wire request is strict and padded while a valid response decodes")
     func strictWireRoundTrip() async throws {
         let root = try shortUnixTestDirectory()
@@ -6608,7 +6740,7 @@ struct UnixIPCTransportTests {
             }
         )
         defer { withExtendedLifetime(server) {} }
-        let response = try await DarwinJarvisUnixSocketTransport(timeoutSeconds: 2).send(
+        let response = try await testUnixSocketTransport(timeoutSeconds: 2).send(
             JarvisIPCTransportRequest(
                 method: "POST",
                 path: "/commands?dry_run=true",
@@ -6655,7 +6787,7 @@ struct UnixIPCTransportTests {
         )
         defer { withExtendedLifetime(malformed) {} }
         await #expect(throws: JarvisUnixSocketTransportError.invalidResponse) {
-            _ = try await DarwinJarvisUnixSocketTransport(timeoutSeconds: 2)
+            _ = try await testUnixSocketTransport(timeoutSeconds: 2)
                 .send(request, to: malformed.socketURL)
         }
 
@@ -6673,7 +6805,7 @@ struct UnixIPCTransportTests {
         )
         defer { withExtendedLifetime(oversized) {} }
         await #expect(throws: JarvisUnixSocketTransportError.frameTooLarge) {
-            _ = try await DarwinJarvisUnixSocketTransport(timeoutSeconds: 2)
+            _ = try await testUnixSocketTransport(timeoutSeconds: 2)
                 .send(request, to: oversized.socketURL)
         }
 
@@ -6683,7 +6815,7 @@ struct UnixIPCTransportTests {
         )
         defer { withExtendedLifetime(eof) {} }
         await #expect(throws: JarvisUnixSocketTransportError.readFailed) {
-            _ = try await DarwinJarvisUnixSocketTransport(timeoutSeconds: 2)
+            _ = try await testUnixSocketTransport(timeoutSeconds: 2)
                 .send(request, to: eof.socketURL)
         }
     }
@@ -6699,7 +6831,7 @@ struct UnixIPCTransportTests {
             count: DarwinJarvisUnixSocketTransport.maximumRequestBodyBytes + 1
         )
         await #expect(throws: JarvisUnixSocketTransportError.invalidRequest) {
-            _ = try await DarwinJarvisUnixSocketTransport(timeoutSeconds: 2).send(
+            _ = try await testUnixSocketTransport(timeoutSeconds: 2).send(
                 JarvisIPCTransportRequest(
                     method: "POST", path: "/commands", authorization: "Bearer token", body: body
                 ),
@@ -6744,7 +6876,7 @@ struct UnixIPCTransportTests {
         let clock = ContinuousClock()
         let started = clock.now
         await #expect(throws: JarvisUnixSocketTransportError.timedOut) {
-            _ = try await DarwinJarvisUnixSocketTransport(timeoutSeconds: 1).send(
+            _ = try await testUnixSocketTransport(timeoutSeconds: 1).send(
                 JarvisIPCTransportRequest(
                     method: "GET", path: "/health", authorization: "Bearer token"
                 ),
@@ -6769,7 +6901,7 @@ struct UnixIPCTransportTests {
         )
         defer { withExtendedLifetime(server) {} }
         let task = Task {
-            try await DarwinJarvisUnixSocketTransport(timeoutSeconds: 30).send(
+            try await testUnixSocketTransport(timeoutSeconds: 30).send(
                 JarvisIPCTransportRequest(
                     method: "GET", path: "/health", authorization: "Bearer token"
                 ),
@@ -9347,6 +9479,68 @@ private func makeUnixSocketAuthorization(
     )
 }
 
+private func samplePeerIdentityPolicy() -> JarvisIPCPeerIdentityPolicy {
+    JarvisIPCPeerIdentityPolicy(
+        profile: .adhocExact,
+        peerCodeRequirement: "identifier \"com.nobiletechnology.jarvis\"",
+        coreCodeRequirement: "identifier \"com.nobiletechnology.jarvis.core\"",
+        expectedCoreCDHash: Data(repeating: 0x42, count: 20),
+        expectedCoreExecutableURL: URL(fileURLWithPath: "/tmp/jarvis-cli")
+    )
+}
+
+private struct FakePeerIdentityPolicyProvider: JarvisIPCPeerIdentityPolicyProviding {
+    var shouldFail = false
+
+    func policy(forCoreExecutable executableURL: URL) throws -> JarvisIPCPeerIdentityPolicy {
+        if shouldFail {
+            throw JarvisIPCPeerIdentityError.unavailable
+        }
+        return samplePeerIdentityPolicy()
+    }
+}
+
+private struct AcceptingUnixPeerIdentityVerifier: JarvisUnixPeerIdentityVerifying {
+    func verifyPeer(
+        on socketDescriptor: Int32,
+        policy: JarvisIPCPeerIdentityPolicy
+    ) throws {}
+}
+
+private struct RejectingUnixPeerIdentityVerifier: JarvisUnixPeerIdentityVerifying {
+    func verifyPeer(
+        on socketDescriptor: Int32,
+        policy: JarvisIPCPeerIdentityPolicy
+    ) throws {
+        throw JarvisIPCPeerIdentityError.peerCodeInvalid
+    }
+}
+
+private final class ControlledUnixPeerIdentityVerifier: JarvisUnixPeerIdentityVerifying,
+    @unchecked Sendable
+{
+    let started = DispatchSemaphore(value: 0)
+    let proceed = DispatchSemaphore(value: 0)
+
+    func verifyPeer(
+        on socketDescriptor: Int32,
+        policy: JarvisIPCPeerIdentityPolicy
+    ) throws {
+        started.signal()
+        guard proceed.wait(timeout: .now() + 2) == .success else {
+            throw JarvisIPCPeerIdentityError.peerCodeUnavailable
+        }
+    }
+}
+
+private func testUnixSocketTransport(timeoutSeconds: Int) -> DarwinJarvisUnixSocketTransport {
+    DarwinJarvisUnixSocketTransport(
+        timeoutSeconds: timeoutSeconds,
+        peerIdentityPolicy: { samplePeerIdentityPolicy() },
+        peerIdentityVerifier: AcceptingUnixPeerIdentityVerifier()
+    )
+}
+
 private func shortUnixTestDirectory() throws -> URL {
     let suffix = UUID().uuidString.prefix(8).lowercased()
     let directory = URL(fileURLWithPath: "/tmp/juds-\(suffix)", isDirectory: true)
@@ -9367,7 +9561,9 @@ private func assertUnsafeUnixSocketDirectory(
         tokenFileRoot: tokenFileRoot,
         socketIdentifier: { "unsafe" }
     )
-    let launchValue = try authorization.rotateForLaunch()
+    let launchValue = try authorization.rotateForLaunch(
+        peerIdentityPolicy: samplePeerIdentityPolicy()
+    )
     let launch = try #require(launchValue)
     #expect(throws: JarvisIPCAuthorizationError.unixSocketParentUnsafe) {
         _ = try authorization.prepareUnixSocketForLaunch(generation: launch.generation)

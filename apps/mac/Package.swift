@@ -12,7 +12,10 @@ let package = Package(
         .executable(name: "JarvisMacApp", targets: ["JarvisMacApp"])
     ],
     targets: [
-        .target(name: "JarvisMacCore"),
+        .target(
+            name: "JarvisMacCore",
+            linkerSettings: [.linkedFramework("Security")]
+        ),
         .executableTarget(
             name: "JarvisMacApp",
             dependencies: ["JarvisMacCore"]
