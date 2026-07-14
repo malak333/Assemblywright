@@ -969,6 +969,11 @@ requires plugin-trust `generated_at`, `review_started_at`,
   and no coverage exists, add the coverage or record the blocker. Docs-only
   phases should at least preserve the architecture diagrams, release checklist,
   build/test commands, and KB proof-boundary notes.
+- Synthetic timeout tests that compete a blocking detached writer against a
+  cooperative Swift task timer need a wide timing separation because Swift
+  Testing runs suites concurrently in hosted CI. Keep the injected writer delay
+  materially longer than the timeout so scheduler jitter cannot turn the
+  expected timeout into a false successful write.
 - Do not describe Jarvis as a finished desktop assistant based on the local
   unsigned distribution launch proof alone. Broader readiness still needs Developer ID
   signing/notarization/stapling evidence, clean-profile install and Finder
@@ -1044,10 +1049,12 @@ requires plugin-trust `generated_at`, `review_started_at`,
   `/Applications` install location metadata. Its `--unsigned-launch-check` mode
   is part of `./scripts/release-local.sh`, validates the same package metadata,
   launches the release-built app executable with an isolated temporary HOME,
-  verifies the bundled core over the default app-supervised UDS transport, and
-  checks command, audit,
-  diagnostics, pause/block/resume, and SQLite state through the release app
-  layout. The CLI exposes `jarvis --version`, and the
+  and requires the app-owned Swift client to verify health, dry-run command,
+  task/audit inspection, diagnostics, pause/block/resume, and durable SQLite
+  state over the default app-supervised UDS before emitting a fixed non-secret
+  marker. Failures suppress the marker and post-pause cleanup attempts a bounded
+  resume. A separate explicit relaunch keeps the weaker TCP/token CLI
+  compatibility path tested. The CLI exposes `jarvis --version`, and the
   packaging/evidence scripts require the bundled `jarvis-cli --version` output
   to match the expected release version before local artifact evidence can pass.
   Full mode requires the owner's Developer ID

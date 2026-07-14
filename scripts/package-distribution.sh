@@ -1069,6 +1069,7 @@ run_unsigned_launch_check() {
   require_command curl
   require_command lsof
   require_command pgrep
+  require_command sqlite3
   build_app_bundle
 
   SIGNING_STATUS="not attempted"
@@ -1183,7 +1184,7 @@ run_unsigned_launch_check() {
   APP_PID="$!"
 
   DEFAULT_IPC_SOCKET=""
-  DEFAULT_SUPERVISED_HEALTH_VERIFIED=false
+  DEFAULT_ROUTE_SEQUENCE_VERIFIED=false
   for _ in {1..60}; do
     if ! kill -0 "$APP_PID" 2>/dev/null; then
       printf 'error: release app exited before the memory-only core became reachable; app log follows\n' >&2
@@ -1197,10 +1198,10 @@ run_unsigned_launch_check() {
       fail "default app launch unexpectedly exposed loopback TCP IPC"
     fi
     DEFAULT_IPC_SOCKET="$(find "$APP_IPC_RUN_DIR" -maxdepth 1 -type s -print -quit 2>/dev/null || true)"
-    if grep -Fq "Jarvis release smoke: authenticated supervised core health verified" "$APP_LOG"; then
-      DEFAULT_SUPERVISED_HEALTH_VERIFIED=true
+    if grep -Fq "Jarvis release smoke: default supervised Unix IPC route sequence verified" "$APP_LOG"; then
+      DEFAULT_ROUTE_SEQUENCE_VERIFIED=true
     fi
-    if [[ -n "$DEFAULT_IPC_SOCKET" ]] && [[ "$DEFAULT_SUPERVISED_HEALTH_VERIFIED" == true ]]; then
+    if [[ -n "$DEFAULT_IPC_SOCKET" ]] && [[ "$DEFAULT_ROUTE_SEQUENCE_VERIFIED" == true ]]; then
       break
     fi
     sleep 0.25
@@ -1211,8 +1212,8 @@ run_unsigned_launch_check() {
     cat "$APP_LOG" >&2 || true
     exit 1
   fi
-  if [[ "$DEFAULT_SUPERVISED_HEALTH_VERIFIED" != true ]]; then
-    printf 'error: release app did not complete an authenticated Swift-to-Rust health request; app log follows\n' >&2
+  if [[ "$DEFAULT_ROUTE_SEQUENCE_VERIFIED" != true ]]; then
+    printf 'error: release app did not complete the authenticated Swift-to-Rust default Unix IPC route sequence; app log follows\n' >&2
     cat "$APP_LOG" >&2 || true
     exit 1
   fi
@@ -1224,6 +1225,16 @@ run_unsigned_launch_check() {
     fail "default app launch exposed loopback TCP IPC after Unix socket startup"
   fi
   [[ ! -e "$APP_IPC_AUTH_FILE" ]] || fail "default app launch persisted an IPC credential"
+  DEFAULT_TASK_COUNT="$(sqlite3 "$APP_DB" "SELECT COUNT(*) FROM tasks;")"
+  DEFAULT_BLOCKED_TASK_COUNT="$(sqlite3 "$APP_DB" "SELECT COUNT(*) FROM tasks WHERE status = 'blocked';")"
+  DEFAULT_PAUSE_AUDIT_COUNT="$(sqlite3 "$APP_DB" "SELECT COUNT(*) FROM audit_entries WHERE event_type = 'emergency_pause_activated';")"
+  DEFAULT_BLOCK_AUDIT_COUNT="$(sqlite3 "$APP_DB" "SELECT COUNT(*) FROM audit_entries WHERE event_type = 'emergency_pause_blocked';")"
+  DEFAULT_PAUSE_STATE="$(sqlite3 "$APP_DB" "SELECT paused FROM emergency_pause WHERE id = 1;")"
+  (( DEFAULT_TASK_COUNT >= 2 )) || fail "default Unix IPC route sequence did not persist both command tasks"
+  (( DEFAULT_BLOCKED_TASK_COUNT >= 1 )) || fail "default Unix IPC route sequence did not persist an emergency-pause-blocked task"
+  (( DEFAULT_PAUSE_AUDIT_COUNT >= 1 )) || fail "default Unix IPC route sequence did not persist pause audit evidence"
+  (( DEFAULT_BLOCK_AUDIT_COUNT >= 1 )) || fail "default Unix IPC route sequence did not persist blocked-command audit evidence"
+  [[ "$DEFAULT_PAUSE_STATE" == "0" ]] || fail "default Unix IPC route sequence did not leave the durable emergency pause resumed"
   stop_launch || fail "release app or supervised core did not exit cleanly"
   [[ ! -e "$DEFAULT_IPC_SOCKET" ]] || fail "default app supervised Unix socket was not cleaned up"
 
@@ -1277,7 +1288,7 @@ run_unsigned_launch_check() {
 
   DIAGNOSTICS_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" --ipc-token-file "$APP_IPC_AUTH_FILE" diagnostics export --endpoint "$ENDPOINT")"
   require_output_contains "release app diagnostics" "$DIAGNOSTICS_OUTPUT" '"repository_backed":true'
-  require_output_contains "release app diagnostics" "$DIAGNOSTICS_OUTPUT" '"task_count":1'
+  require_output_contains "release app diagnostics" "$DIAGNOSTICS_OUTPUT" '"task_count":3'
   require_output_contains "release app diagnostics" "$DIAGNOSTICS_OUTPUT" '"redaction":"diagnostics export omits command bodies'
 
   PAUSE_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" --ipc-token-file "$APP_IPC_AUTH_FILE" pause --endpoint "$ENDPOINT" --reason "unsigned distribution launch smoke")"
@@ -1300,7 +1311,7 @@ run_unsigned_launch_check() {
   printf 'Pkg: %s\n' "$PKG_PATH"
   printf 'Signing: %s\n' "$SIGNING_STATUS"
   printf 'Clean HOME database: %s\n' "$APP_DB"
-  printf 'Proof boundary: release-built app executable, bundled core, unsigned installer payload structure, isolated HOME default owner-only Unix socket plus memory-only bearer launch with no TCP listener or CLI file, explicit owner-only loopback TCP CLI handoff relaunch, command/audit/diagnostics/pause smoke, and optional ad-hoc signing only; peer-EUID checks do not prove intended process or code identity, and this lane does not prove Developer ID signing, notarization, stapling, /Applications install, Finder/LaunchServices validation, live microphone/Speech validation, spoken transcript handoff, live audio-output validation, App Store validation, or manual QA.\n'
+  printf 'Proof boundary: release-built app executable, bundled core, unsigned installer payload structure, isolated HOME default owner-only Unix socket plus memory-only bearer launch with no TCP listener or CLI file, authenticated Swift-client health/command/task/audit/diagnostics/pause/block/resume route sequence with durable state checks, explicit owner-only loopback TCP CLI handoff relaunch, and optional ad-hoc signing only; peer-EUID checks do not prove intended process or code identity, and this lane does not prove Developer ID signing, notarization, stapling, /Applications install, Finder/LaunchServices validation, live microphone/Speech validation, spoken transcript handoff, live audio-output validation, App Store validation, or manual QA.\n'
 }
 
 if [[ "$UNSIGNED_STRUCTURE_CHECK" == true ]]; then

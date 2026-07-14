@@ -168,8 +168,11 @@ removes `JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF`, `JARVIS_MAC_IPC_AUTH_FILE`,
 launches use UDS and do not create a handoff file or TCP listener.
 The unsigned launch lane sets exact `JARVIS_MAC_RELEASE_SMOKE=true` only on the
 app and requires its non-secret readiness line, which is emitted only after the
-Swift supervisor completes an authenticated health request. The variable never
-reaches the core.
+Swift client completes authenticated health, dry-run command, task and audit
+inspection, diagnostics, pause, blocked-command, and resume checks through the
+default UDS. Failure at any step suppresses success and best-effort resume
+cleanup prevents the smoke from intentionally leaving the core paused. The
+variable never reaches the core.
 
 Focused regression and E2E proof for this boundary:
 
@@ -184,7 +187,10 @@ Coverage must prove default UDS cross-process route parity, successful real-peer
 checks plus negative EUID comparison, bearer failure, strict frame/schema/base64
 and trailing-input decoding, frame/body hard deadlines and configured concurrency
 bounds, socket path/mode/owner validation,
-generation cleanup and restart invalidation. It must separately prove that the
+generation cleanup and restart invalidation. The distribution lane must prove
+the release-built app and Swift client traverse health, command, task/audit,
+diagnostics, pause/block/resume over that same default UDS, persist the expected
+task/audit state, and finish durably resumed before teardown. It must separately prove that the
 exact opt-in selects loopback TCP, creates and lifecycle-clears the hardened
 file, accepts only an absolute override, strips app-only variables from the
 child, and preserves no-downgrade behavior. These lanes do not prove peer PID,

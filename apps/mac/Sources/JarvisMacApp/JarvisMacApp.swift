@@ -21,6 +21,7 @@ struct JarvisMacApp: App {
     @StateObject private var voiceAdapter: VoiceAdapterStateModel
     @StateObject private var speechOutput: SpeechOutputStateModel
     @StateObject private var modelConfiguration: ModelConfigurationModel
+    private let releaseSmokeProbe: JarvisReleaseSmokeProbe
 
     init() {
         let configuration = JarvisCoreSupervisorConfiguration()
@@ -37,6 +38,12 @@ struct JarvisMacApp: App {
             endpoint: configuration.endpoint,
             authorization: ipcAuthorization
         )
+        let releaseSmokeClient = JarvisIPCClient(
+            endpoint: configuration.endpoint,
+            authorization: ipcAuthorization,
+            unixSocketTransport: DarwinJarvisUnixSocketTransport(timeoutSeconds: 10)
+        )
+        releaseSmokeProbe = JarvisReleaseSmokeProbe(client: releaseSmokeClient)
         let console = CommandConsoleModel(client: client)
         let voice = VoiceStateModel()
         let workspaceRoots = JarvisWorkspaceRootBookmarkCoordinator()
@@ -124,9 +131,11 @@ struct JarvisMacApp: App {
                     await supervisor.start(environmentOverrides: modelConfiguration.launchEnvironmentOverrides)
                     if supervisor.isAvailable {
                         if ProcessInfo.processInfo.environment[JarvisCoreSupervisor.releaseSmokeEnvironmentKey] == "true" {
-                            try? FileHandle.standardOutput.write(
-                                contentsOf: Data("Jarvis release smoke: authenticated supervised core health verified\n".utf8)
-                            )
+                            if let successLine = try? await releaseSmokeProbe.run() {
+                                try? FileHandle.standardOutput.write(
+                                    contentsOf: Data("\(successLine)\n".utf8)
+                                )
+                            }
                         }
                         await console.refreshHealth()
                         await trustedWake.refresh()

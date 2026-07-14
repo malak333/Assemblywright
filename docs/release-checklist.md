@@ -736,8 +736,10 @@ stage or when a PR needs focused evidence for one ownership slice.
   distribution counterpart: it builds release Rust/Swift artifacts, assembles
   `target/distribution/Jarvis.app`, creates an unsigned installer payload,
   launches the app executable from that release layout with an isolated HOME,
-  and verifies bundled-core health, command, audit, diagnostics, emergency
-  pause, blocked command, resume, and SQLite state. It is still not Developer
+  and verifies that the app-owned Swift client completes bundled-core health,
+  dry-run command, task/audit inspection, diagnostics, emergency pause, blocked
+  command, and resume over the default UDS before a separate explicit TCP/token
+  compatibility relaunch. It also verifies SQLite state. It is still not Developer
   ID signing, notarization, stapling, /Applications installation,
   Finder/LaunchServices validation, live device validation, or manual QA.
 
@@ -781,8 +783,9 @@ Current local gate:
 - The command builds release Rust/Swift artifacts, assembles the
   distribution-shaped `Jarvis.app`, creates an unsigned installer payload,
   launches the app executable with isolated endpoint and database environment,
-  and verifies health, command, audit, diagnostics, emergency pause, blocked
-  command, pause status, resume, bundled-core version alignment, and
+  and verifies health, dry-run command, task/audit inspection, diagnostics,
+  emergency pause, blocked command, pause status, and resume through the
+  app-owned Swift client on default UDS, plus bundled-core version alignment and
   temp-profile SQLite state.
 - `./scripts/packaged-app-release-smoke.sh` is a deprecated compatibility
   wrapper that delegates to the unsigned distribution launch check.
@@ -953,8 +956,11 @@ Distribution packaging gate:
   unsigned package metadata. Confirm the default lane uses a `0700` owner-only
   run directory, `0600` generation-random socket, same-EUID peer checks, the
   per-launch bearer, no credential handoff file or TCP listener, and cleanup of
-  only the validated socket leaf. Require the non-secret app readiness line that
-  is emitted only after authenticated supervisor health, then require the
+  only the validated socket leaf. Require the non-secret app readiness line only
+  after the Swift client completes authenticated health, dry-run command,
+  task/audit inspection, diagnostics, pause, blocked-command, and resumed-state
+  verification over that UDS. Confirm failures suppress the line and a
+  post-pause failure makes a bounded best-effort resume attempt. Then require the
   supervised child to exit and its socket to disappear before the compatibility
   relaunch. Treat it as local launch and bounded
   UDS/bearer evidence only; it still does not prove peer PID or code identity,
