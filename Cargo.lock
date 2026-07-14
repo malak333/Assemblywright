@@ -994,6 +994,7 @@ dependencies = [
  "axum",
  "base64",
  "chrono",
+ "core-foundation-sys",
  "ed25519-dalek",
  "futures-util",
  "libc",

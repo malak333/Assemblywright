@@ -7,7 +7,8 @@ export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-$ROOT_DIR/target/clan
 mkdir -p "$CLANG_MODULE_CACHE_PATH"
 
 VERSION="${JARVIS_PACKAGE_VERSION_OVERRIDE:-$("$ROOT_DIR/scripts/release-version.sh")}"
-BUNDLE_ID="${JARVIS_BUNDLE_ID:-com.nobiletechnology.jarvis}"
+BUNDLE_ID="com.nobiletechnology.jarvis"
+CORE_CODE_ID="${BUNDLE_ID}.core"
 APP_NAME="Jarvis"
 APP_EXECUTABLE_NAME="JarvisMacApp"
 CORE_EXECUTABLE_NAME="jarvis-cli"
@@ -48,7 +49,6 @@ Required for notarization, choose one:
   JARVIS_NOTARYTOOL_PASSWORD       App-specific password
 
 Optional:
-  JARVIS_BUNDLE_ID                 Defaults to com.nobiletechnology.jarvis
   JARVIS_DISTRIBUTION_DIR          Defaults to target/distribution
   JARVIS_SIGNED_PROVENANCE_PATH    Defaults to target/distribution/Jarvis-<version>-signed-provenance.json
 
@@ -82,6 +82,10 @@ fail() {
   printf 'error: %s\n' "$1" >&2
   exit 1
 }
+
+if [[ -n "${JARVIS_BUNDLE_ID:-}" && "$JARVIS_BUNDLE_ID" != "$BUNDLE_ID" ]]; then
+  fail "JARVIS_BUNDLE_ID overrides are unsupported; Jarvis code identity requires the fixed $BUNDLE_ID app identifier"
+fi
 
 require_output_contains() {
   local label="$1"
@@ -274,6 +278,22 @@ assert_bundled_core_no_audio_input_entitlement() {
   fi
 }
 
+assert_code_identifier() {
+  local label="$1"
+  local path="$2"
+  local expected_identifier="$3"
+  local output
+  output="$(codesign -dv --verbose=4 "$path" 2>&1)"
+  require_output_contains "$label code identifier" "$output" "Identifier=$expected_identifier"
+}
+
+assert_app_core_code_identifiers() {
+  local label="$1"
+  assert_code_identifier "$label app" "$APP_PATH" "$BUNDLE_ID"
+  assert_code_identifier "$label app executable" "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME" "$BUNDLE_ID"
+  assert_code_identifier "$label bundled core" "$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" "$CORE_CODE_ID"
+}
+
 write_signed_distribution_provenance() {
   local generated_at
   local zip_sha
@@ -328,10 +348,13 @@ write_signed_distribution_provenance() {
   require_output_contains "Developer ID Installer identity" "$JARVIS_DEVELOPER_ID_INSTALLER" "Developer ID Installer: "
   require_output_contains "app bundle codesign evidence" "$app_codesign" "Authority=Developer ID Application: "
   require_output_contains "app bundle configured codesign identity" "$app_codesign" "Authority=$JARVIS_DEVELOPER_ID_APPLICATION"
+  require_output_contains "app bundle stable code identifier" "$app_codesign" "Identifier=$BUNDLE_ID"
   require_output_contains "bundled core codesign evidence" "$core_codesign" "Authority=Developer ID Application: "
   require_output_contains "bundled core configured codesign identity" "$core_codesign" "Authority=$JARVIS_DEVELOPER_ID_APPLICATION"
+  require_output_contains "bundled core stable code identifier" "$core_codesign" "Identifier=$CORE_CODE_ID"
   require_output_contains "app executable codesign evidence" "$app_executable_codesign" "Authority=Developer ID Application: "
   require_output_contains "app executable configured codesign identity" "$app_executable_codesign" "Authority=$JARVIS_DEVELOPER_ID_APPLICATION"
+  require_output_contains "app executable stable code identifier" "$app_executable_codesign" "Identifier=$BUNDLE_ID"
   require_output_contains "installer package signature evidence" "$pkg_signature" "Developer ID Installer: "
   require_output_contains "installer package configured signature identity" "$pkg_signature" "$JARVIS_DEVELOPER_ID_INSTALLER"
   require_uuid "app zip notary submission id" "$zip_submission_id"
@@ -538,6 +561,12 @@ if [[ "$CHECK_GUIDANCE_SELF_TEST" == true ]]; then
   require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "./scripts/release-evidence-doctor.sh --assert-complete"
   require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "Proof boundary: packaging prerequisite check only"
   require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "no app was signed"
+  OVERRIDE_OUTPUT=""
+  if OVERRIDE_OUTPUT="$(JARVIS_BUNDLE_ID=com.example.jarvis "$0" --check 2>&1)"; then
+    printf '%s\n' "$OVERRIDE_OUTPUT" >&2
+    fail "package check guidance self-test expected a non-production bundle identifier to fail"
+  fi
+  require_output_contains "package bundle identifier self-test" "$OVERRIDE_OUTPUT" "JARVIS_BUNDLE_ID overrides are unsupported"
   printf '\nJarvis package check guidance self-test: ok\n'
   printf 'Proof boundary: package --check guidance only; no app was built, signed, notarized, stapled, installed, launched, or manually validated.\n'
   exit 0
@@ -667,7 +696,11 @@ LOG
 
   cat >"$stub_dir/codesign" <<'SH'
 #!/usr/bin/env bash
-printf 'Executable=/fixture\nAuthority=Developer ID Application: Jarvis QA Fixture\n'
+identifier="${JARVIS_PACKAGE_STUB_BUNDLE_ID:?}"
+if [[ "${*: -1}" == *"/jarvis-cli" ]]; then
+  identifier="${identifier}.core"
+fi
+printf 'Executable=/fixture\nIdentifier=%s\nAuthority=Developer ID Application: Jarvis QA Fixture\n' "$identifier"
 SH
   cat >"$stub_dir/pkgutil" <<'SH'
 #!/usr/bin/env bash
@@ -693,6 +726,7 @@ SH
   chmod 755 "$stub_dir/codesign" "$stub_dir/pkgutil" "$stub_dir/xcrun" "$stub_dir/spctl"
 
   PATH="$stub_dir:$PATH" \
+    JARVIS_PACKAGE_STUB_BUNDLE_ID="$BUNDLE_ID" \
     JARVIS_PACKAGE_STUB_VERSION="$VERSION" \
     JARVIS_DEVELOPER_ID_APPLICATION="Developer ID Application: Jarvis QA Fixture" \
     JARVIS_DEVELOPER_ID_INSTALLER="Developer ID Installer: Jarvis QA Fixture" \
@@ -739,6 +773,7 @@ for key, value in data["validation_flags"].items():
 PY
 
   output="$(PATH="$stub_dir:$PATH" \
+    JARVIS_PACKAGE_STUB_BUNDLE_ID="$BUNDLE_ID" \
     JARVIS_PACKAGE_STUB_VERSION="$VERSION" \
     JARVIS_PACKAGE_STUB_GATEKEEPER_MODE=negated \
     JARVIS_DEVELOPER_ID_APPLICATION="Developer ID Application: Jarvis QA Fixture" \
@@ -761,6 +796,7 @@ with zipfile.ZipFile(zip_path, "w") as archive:
     archive.writestr("payload/Jarvis.app/Contents/Info.plist", "")
 PY
   output="$(PATH="$stub_dir:$PATH" \
+    JARVIS_PACKAGE_STUB_BUNDLE_ID="$BUNDLE_ID" \
     JARVIS_PACKAGE_STUB_VERSION="$VERSION" \
     JARVIS_DEVELOPER_ID_APPLICATION="Developer ID Application: Jarvis QA Fixture" \
     JARVIS_DEVELOPER_ID_INSTALLER="Developer ID Installer: Jarvis QA Fixture" \
@@ -797,6 +833,7 @@ with zipfile.ZipFile(zip_path, "w") as archive:
         archive.writestr(name, data)
 PY
   output="$(PATH="$stub_dir:$PATH" \
+    JARVIS_PACKAGE_STUB_BUNDLE_ID="$BUNDLE_ID" \
     JARVIS_PACKAGE_STUB_VERSION="$VERSION" \
     JARVIS_DEVELOPER_ID_APPLICATION="Developer ID Application: Jarvis QA Fixture" \
     JARVIS_DEVELOPER_ID_INSTALLER="Developer ID Installer: Jarvis QA Fixture" \
@@ -822,6 +859,7 @@ status: Accepted
 LOG
   output=""
   output="$(PATH="$stub_dir:$PATH" \
+    JARVIS_PACKAGE_STUB_BUNDLE_ID="$BUNDLE_ID" \
     JARVIS_PACKAGE_STUB_VERSION="$VERSION" \
     JARVIS_DEVELOPER_ID_APPLICATION="Developer ID Application: Jarvis QA Fixture" \
     JARVIS_DEVELOPER_ID_INSTALLER="Developer ID Installer: Jarvis QA Fixture" \
@@ -834,6 +872,7 @@ status: Rejected
 LOG
   set +e
   output="$(PATH="$stub_dir:$PATH" \
+    JARVIS_PACKAGE_STUB_BUNDLE_ID="$BUNDLE_ID" \
     JARVIS_PACKAGE_STUB_VERSION="$VERSION" \
     JARVIS_DEVELOPER_ID_APPLICATION="Developer ID Application: Jarvis QA Fixture" \
     JARVIS_DEVELOPER_ID_INSTALLER="Developer ID Installer: Jarvis QA Fixture" \
@@ -1034,10 +1073,11 @@ run_unsigned_structure_check() {
 
   SIGNING_STATUS="not attempted"
   if command -v codesign >/dev/null 2>&1; then
-    run codesign --force --sign - --entitlements "$CORE_ENTITLEMENTS" "$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
+    run codesign --force --sign - --identifier "$CORE_CODE_ID" --entitlements "$CORE_ENTITLEMENTS" "$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
     run codesign --force --sign - --entitlements "$ENTITLEMENTS" "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME"
     run codesign --force --sign - --entitlements "$ENTITLEMENTS" "$APP_PATH"
     run codesign --verify --deep --strict "$APP_PATH"
+    assert_app_core_code_identifiers "unsigned structure"
     assert_app_audio_input_entitlement "unsigned structure app"
     assert_bundled_core_no_audio_input_entitlement "unsigned structure bundled core"
     SIGNING_STATUS="ad-hoc signed with codesign -"
@@ -1066,22 +1106,21 @@ run_unsigned_structure_check() {
 }
 
 run_unsigned_launch_check() {
+  require_command codesign
   require_command curl
   require_command lsof
   require_command pgrep
   require_command sqlite3
   build_app_bundle
 
-  SIGNING_STATUS="not attempted"
-  if command -v codesign >/dev/null 2>&1; then
-    run codesign --force --sign - --entitlements "$CORE_ENTITLEMENTS" "$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
-    run codesign --force --sign - --entitlements "$ENTITLEMENTS" "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME"
-    run codesign --force --sign - --entitlements "$ENTITLEMENTS" "$APP_PATH"
-    run codesign --verify --deep --strict "$APP_PATH"
-    assert_app_audio_input_entitlement "unsigned launch app"
-    assert_bundled_core_no_audio_input_entitlement "unsigned launch bundled core"
-    SIGNING_STATUS="ad-hoc signed with codesign -"
-  fi
+  run codesign --force --sign - --identifier "$CORE_CODE_ID" --entitlements "$CORE_ENTITLEMENTS" "$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
+  run codesign --force --sign - --entitlements "$ENTITLEMENTS" "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME"
+  run codesign --force --sign - --entitlements "$ENTITLEMENTS" "$APP_PATH"
+  run codesign --verify --deep --strict "$APP_PATH"
+  assert_app_core_code_identifiers "unsigned launch"
+  assert_app_audio_input_entitlement "unsigned launch app"
+  assert_bundled_core_no_audio_input_entitlement "unsigned launch bundled core"
+  SIGNING_STATUS="ad-hoc signed with codesign -"
 
   PKG_PATH="$DIST_DIR/$APP_NAME-$VERSION-unsigned-launch.pkg"
   rm -f "$PKG_PATH"
@@ -1225,6 +1264,48 @@ run_unsigned_launch_check() {
     fail "default app launch exposed loopback TCP IPC after Unix socket startup"
   fi
   [[ ! -e "$APP_IPC_AUTH_FILE" ]] || fail "default app launch persisted an IPC credential"
+  python3 - "$DEFAULT_IPC_SOCKET" <<'PY'
+import json
+import socket
+import struct
+import sys
+
+socket_path = sys.argv[1]
+request = json.dumps(
+    {
+        "version": 1,
+        "method": "GET",
+        "path": "/health",
+        "authorization": None,
+        "accept": "application/json",
+        "content_type": "application/json",
+        "body_base64": "",
+    },
+    separators=(",", ":"),
+).encode("utf-8")
+
+peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+peer.settimeout(5)
+peer.connect(socket_path)
+try:
+    try:
+        peer.sendall(struct.pack(">I", len(request)) + request)
+        peer.shutdown(socket.SHUT_WR)
+    except (BrokenPipeError, ConnectionResetError):
+        pass
+    try:
+        response_prefix = peer.recv(4)
+    except (BrokenPipeError, ConnectionResetError):
+        response_prefix = b""
+finally:
+    peer.close()
+
+if response_prefix:
+    raise SystemExit(
+        "same-EUID wrong-code peer received a framed response instead of being rejected before request decoding"
+    )
+PY
+  kill -0 "$APP_PID" 2>/dev/null || fail "same-EUID wrong-code rejection destabilized the legitimate supervised app/core route"
   DEFAULT_TASK_COUNT="$(sqlite3 "$APP_DB" "SELECT COUNT(*) FROM tasks;")"
   DEFAULT_BLOCKED_TASK_COUNT="$(sqlite3 "$APP_DB" "SELECT COUNT(*) FROM tasks WHERE status = 'blocked';")"
   DEFAULT_PAUSE_AUDIT_COUNT="$(sqlite3 "$APP_DB" "SELECT COUNT(*) FROM audit_entries WHERE event_type = 'emergency_pause_activated';")"
@@ -1311,7 +1392,7 @@ run_unsigned_launch_check() {
   printf 'Pkg: %s\n' "$PKG_PATH"
   printf 'Signing: %s\n' "$SIGNING_STATUS"
   printf 'Clean HOME database: %s\n' "$APP_DB"
-  printf 'Proof boundary: release-built app executable, bundled core, unsigned installer payload structure, isolated HOME default owner-only Unix socket plus memory-only bearer launch with no TCP listener or CLI file, authenticated Swift-client health/command/task/audit/diagnostics/pause/block/resume route sequence with durable state checks, explicit owner-only loopback TCP CLI handoff relaunch, and optional ad-hoc signing only; peer-EUID checks do not prove intended process or code identity, and this lane does not prove Developer ID signing, notarization, stapling, /Applications install, Finder/LaunchServices validation, live microphone/Speech validation, spoken transcript handoff, live audio-output validation, App Store validation, or manual QA.\n'
+  printf 'Proof boundary: release-built app executable, bundled core, stable ad-hoc app/core identifiers, exact-build audit-token designated-requirement acceptance plus same-EUID wrong-code pre-frame rejection, unsigned installer payload structure, isolated HOME default owner-only Unix socket plus memory-only bearer launch with no TCP listener or CLI file, authenticated Swift-client health/command/task/audit/diagnostics/pause/block/resume route sequence with durable state checks, and explicit owner-only loopback TCP CLI handoff relaunch. Ad-hoc cdhash evidence does not prove Developer ID publisher identity, and this lane does not prove Developer ID signing, notarization, stapling, /Applications install, Finder/LaunchServices validation, device authentication, App Sandbox, live microphone/Speech validation, spoken transcript handoff, live audio-output validation, App Store validation, or manual QA.\n'
 }
 
 if [[ "$UNSIGNED_STRUCTURE_CHECK" == true ]]; then
@@ -1344,6 +1425,7 @@ PKG_NOTARY_LOG="$NOTARY_LOG_DIR/$APP_NAME-$VERSION-installer-pkg-notarytool.log"
 mkdir -p "$NOTARY_LOG_DIR"
 
 run codesign --force --timestamp --options runtime \
+  --identifier "$CORE_CODE_ID" \
   --entitlements "$CORE_ENTITLEMENTS" \
   --sign "$JARVIS_DEVELOPER_ID_APPLICATION" \
   "$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
@@ -1356,6 +1438,7 @@ run codesign --force --timestamp --options runtime \
   --sign "$JARVIS_DEVELOPER_ID_APPLICATION" \
   "$APP_PATH"
 run codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+assert_app_core_code_identifiers "signed distribution"
 assert_app_audio_input_entitlement "signed app"
 assert_bundled_core_no_audio_input_entitlement "signed bundled core"
 

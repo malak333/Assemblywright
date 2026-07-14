@@ -13,6 +13,7 @@ pub const SERVE_STARTUP_CONFIG_VERSION: u16 = 1;
 pub const MAX_SERVE_STARTUP_CONFIG_BYTES: usize = 64 * 1024;
 /// macOS `sockaddr_un.sun_path` has 104 bytes including its trailing NUL.
 pub const MAX_UNIX_SOCKET_PATH_BYTES: usize = 103;
+pub const MAX_PEER_CODE_REQUIREMENT_BYTES: usize = 4 * 1024;
 const MAX_TRUSTED_WAKE_STARTUP_DOCUMENT_BYTES: usize = 8 * 1024;
 
 pub struct ServeStartupConfig {
@@ -24,8 +25,24 @@ pub struct ServeStartupConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ServeIpcTransport {
-    UnixSocketV1 { socket_path: PathBuf },
+    UnixSocketV1 {
+        socket_path: PathBuf,
+    },
+    UnixSocketPeerIdentityV1 {
+        socket_path: PathBuf,
+        peer_code_requirement: String,
+        peer_identity_profile: PeerIdentityProfile,
+    },
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PeerIdentityProfile {
+    AdhocExact,
+    DeveloperIdHardened,
+}
+
+const DEVELOPER_ID_APP_REQUIREMENT_PREFIX: &str = "anchor apple generic and identifier \"com.nobiletechnology.jarvis\" and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = \"";
 
 pub enum TrustedWakeStartupDocument {
     Bootstrap(TrustedWakeRuleEnrollment),
@@ -65,12 +82,17 @@ enum IpcAuthScheme {
 struct IpcTransportWire {
     kind: IpcTransportKind,
     socket_path: String,
+    #[serde(default)]
+    peer_code_requirement: Option<String>,
+    #[serde(default)]
+    peer_identity_profile: Option<PeerIdentityProfile>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum IpcTransportKind {
     UnixSocketV1,
+    UnixSocketPeerIdentityV1,
 }
 
 #[derive(Deserialize)]
@@ -166,13 +188,96 @@ impl ServeStartupConfig {
 }
 
 fn parse_ipc_transport(wire: IpcTransportWire) -> JarvisResult<ServeIpcTransport> {
+    let socket_path = PathBuf::from(wire.socket_path);
+    validate_unix_socket_path(&socket_path)?;
     match wire.kind {
         IpcTransportKind::UnixSocketV1 => {
-            let socket_path = PathBuf::from(wire.socket_path);
-            validate_unix_socket_path(&socket_path)?;
+            if wire.peer_code_requirement.is_some() || wire.peer_identity_profile.is_some() {
+                return Err(JarvisError::Validation(
+                    "legacy Unix-socket IPC does not accept peer identity configuration"
+                        .to_string(),
+                ));
+            }
             Ok(ServeIpcTransport::UnixSocketV1 { socket_path })
         }
+        IpcTransportKind::UnixSocketPeerIdentityV1 => {
+            let peer_code_requirement = wire.peer_code_requirement.ok_or_else(|| {
+                JarvisError::Validation(
+                    "peer-identity Unix-socket IPC requires a code requirement".to_string(),
+                )
+            })?;
+            let peer_identity_profile = wire.peer_identity_profile.ok_or_else(|| {
+                JarvisError::Validation(
+                    "peer-identity Unix-socket IPC requires an identity profile".to_string(),
+                )
+            })?;
+            if peer_code_requirement.is_empty()
+                || peer_code_requirement.len() > MAX_PEER_CODE_REQUIREMENT_BYTES
+                || peer_code_requirement.as_bytes().contains(&0)
+            {
+                return Err(JarvisError::Validation(format!(
+                    "peer code requirement must contain 1 to {MAX_PEER_CODE_REQUIREMENT_BYTES} bytes without NUL"
+                )));
+            }
+            validate_peer_code_requirement(&peer_code_requirement, peer_identity_profile)?;
+            Ok(ServeIpcTransport::UnixSocketPeerIdentityV1 {
+                socket_path,
+                peer_code_requirement,
+                peer_identity_profile,
+            })
+        }
     }
+}
+
+pub(crate) fn validate_peer_code_requirement(
+    requirement: &str,
+    profile: PeerIdentityProfile,
+) -> JarvisResult<()> {
+    let valid = match profile {
+        PeerIdentityProfile::AdhocExact => is_exact_adhoc_requirement(requirement),
+        PeerIdentityProfile::DeveloperIdHardened => requirement
+            .strip_prefix(DEVELOPER_ID_APP_REQUIREMENT_PREFIX)
+            .and_then(|value| value.strip_suffix('"'))
+            .is_some_and(is_valid_team_identifier),
+    };
+    if !valid {
+        return Err(JarvisError::Validation(
+            "peer code requirement does not match its identity profile".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn is_exact_adhoc_requirement(requirement: &str) -> bool {
+    if let Some(hash) = requirement
+        .strip_prefix("cdhash H\"")
+        .and_then(|value| value.strip_suffix('"'))
+    {
+        return is_valid_cdhash(hash);
+    }
+    let Some(rest) = requirement.strip_prefix("identifier \"") else {
+        return false;
+    };
+    let Some((identifier, hash)) = rest.split_once("\" and cdhash H\"") else {
+        return false;
+    };
+    !identifier.is_empty()
+        && identifier.len() <= 256
+        && identifier
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+        && hash.strip_suffix('"').is_some_and(is_valid_cdhash)
+}
+
+fn is_valid_cdhash(hash: &str) -> bool {
+    matches!(hash.len(), 40 | 64) && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn is_valid_team_identifier(team: &str) -> bool {
+    team.len() == 10
+        && team
+            .bytes()
+            .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
 }
 
 pub fn validate_unix_socket_path(socket_path: &std::path::Path) -> JarvisResult<()> {
@@ -270,6 +375,107 @@ mod tests {
                 socket_path: PathBuf::from("/tmp/jarvis-owned/core.sock")
             })
         );
+    }
+
+    #[test]
+    fn startup_config_accepts_strict_peer_identity_unix_transport() {
+        let developer_requirement = concat!(
+            "anchor apple generic and identifier \"com.nobiletechnology.jarvis\" ",
+            "and certificate 1[field.1.2.840.113635.100.6.2.6] exists ",
+            "and certificate leaf[field.1.2.840.113635.100.6.1.13] exists ",
+            "and certificate leaf[subject.OU] = \"AB12CD34EF\""
+        );
+        let document = json!({
+            "version": 1,
+            "ipc_auth": {
+                "scheme": "bearer",
+                "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "generation": 7
+            },
+            "ipc_transport": {
+                "kind": "unix_socket_peer_identity_v1",
+                "socket_path": "/tmp/jarvis-owned/core.sock",
+                "peer_code_requirement": developer_requirement,
+                "peer_identity_profile": "developer_id_hardened"
+            }
+        });
+        let parsed = ServeStartupConfig::parse(document.to_string().as_bytes()).unwrap();
+        assert_eq!(
+            parsed.ipc_transport,
+            Some(ServeIpcTransport::UnixSocketPeerIdentityV1 {
+                socket_path: PathBuf::from("/tmp/jarvis-owned/core.sock"),
+                peer_code_requirement: developer_requirement.to_string(),
+                peer_identity_profile: PeerIdentityProfile::DeveloperIdHardened,
+            })
+        );
+    }
+
+    #[test]
+    fn startup_config_rejects_incomplete_or_unbounded_peer_identity_transport() {
+        let auth = json!({
+            "scheme":"bearer",
+            "token":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "generation":1
+        });
+        for transport in [
+            json!({"kind":"unix_socket_peer_identity_v1","socket_path":"/tmp/core.sock","peer_identity_profile":"adhoc_exact"}),
+            json!({"kind":"unix_socket_peer_identity_v1","socket_path":"/tmp/core.sock","peer_code_requirement":"true"}),
+            json!({"kind":"unix_socket_peer_identity_v1","socket_path":"/tmp/core.sock","peer_code_requirement":"true","peer_identity_profile":"adhoc_exact"}),
+            json!({"kind":"unix_socket_peer_identity_v1","socket_path":"/tmp/core.sock","peer_code_requirement":"anchor apple generic and identifier \"com.nobiletechnology.jarvis\" and certificate leaf[subject.OU] = \"AB12CD34EF\"","peer_identity_profile":"developer_id_hardened"}),
+            json!({"kind":"unix_socket_peer_identity_v1","socket_path":"/tmp/core.sock","peer_code_requirement":"","peer_identity_profile":"adhoc_exact"}),
+            json!({"kind":"unix_socket_peer_identity_v1","socket_path":"/tmp/core.sock","peer_code_requirement":"true","peer_identity_profile":"unknown"}),
+            json!({"kind":"unix_socket_v1","socket_path":"/tmp/core.sock","peer_code_requirement":"true","peer_identity_profile":"adhoc_exact"}),
+        ] {
+            let invalid = json!({"version":1,"ipc_auth":auth.clone(),"ipc_transport":transport});
+            assert!(ServeStartupConfig::parse(invalid.to_string().as_bytes()).is_err());
+        }
+
+        let oversized = "x".repeat(MAX_PEER_CODE_REQUIREMENT_BYTES + 1);
+        let invalid = json!({
+            "version":1,
+            "ipc_auth":auth,
+            "ipc_transport":{
+                "kind":"unix_socket_peer_identity_v1",
+                "socket_path":"/tmp/core.sock",
+                "peer_code_requirement":oversized,
+                "peer_identity_profile":"adhoc_exact"
+            }
+        });
+        assert!(ServeStartupConfig::parse(invalid.to_string().as_bytes()).is_err());
+    }
+
+    #[test]
+    fn peer_identity_profiles_require_exact_canonical_policy_shapes() {
+        for valid in [
+            "cdhash H\"0123456789abcdef0123456789abcdef01234567\"",
+            "identifier \"com.nobiletechnology.jarvis\" and cdhash H\"0123456789abcdef0123456789abcdef01234567\"",
+        ] {
+            validate_peer_code_requirement(valid, PeerIdentityProfile::AdhocExact).unwrap();
+        }
+        for invalid in [
+            "true",
+            "identifier \"com.nobiletechnology.jarvis\"",
+            "cdhash H\"short\"",
+            "cdhash H\"0123456789abcdef0123456789abcdef01234567\" or true",
+        ] {
+            assert!(
+                validate_peer_code_requirement(invalid, PeerIdentityProfile::AdhocExact).is_err()
+            );
+        }
+
+        let developer = concat!(
+            "anchor apple generic and identifier \"com.nobiletechnology.jarvis\" ",
+            "and certificate 1[field.1.2.840.113635.100.6.2.6] exists ",
+            "and certificate leaf[field.1.2.840.113635.100.6.1.13] exists ",
+            "and certificate leaf[subject.OU] = \"AB12CD34EF\""
+        );
+        validate_peer_code_requirement(developer, PeerIdentityProfile::DeveloperIdHardened)
+            .unwrap();
+        assert!(validate_peer_code_requirement(
+            "anchor apple generic and identifier \"com.nobiletechnology.jarvis\" and certificate leaf[subject.OU] = \"AB12CD34EF\"",
+            PeerIdentityProfile::DeveloperIdHardened,
+        )
+        .is_err());
     }
 
     #[test]

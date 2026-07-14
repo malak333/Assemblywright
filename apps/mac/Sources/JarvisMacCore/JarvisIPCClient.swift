@@ -1901,12 +1901,14 @@ public final class JarvisIPCClient: JarvisCoreClient {
         endpoint: JarvisEndpoint = JarvisEndpoint(),
         session: URLSession = .shared,
         authorization: JarvisIPCSessionAuthorization = JarvisIPCSessionAuthorization(),
-        unixSocketTransport: any JarvisUnixSocketRequesting = DarwinJarvisUnixSocketTransport()
+        unixSocketTransport: (any JarvisUnixSocketRequesting)? = nil
     ) {
         self.endpoint = endpoint
         self.session = session
         self.authorization = authorization
-        self.unixSocketTransport = unixSocketTransport
+        self.unixSocketTransport = unixSocketTransport ?? DarwinJarvisUnixSocketTransport(
+            peerIdentityPolicy: { try authorization.activeUnixPeerIdentityPolicy() }
+        )
         self.encoder = JSONEncoder()
         self.decoder = JSONDecoder()
     }

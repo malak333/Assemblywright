@@ -41,7 +41,10 @@ struct JarvisMacApp: App {
         let releaseSmokeClient = JarvisIPCClient(
             endpoint: configuration.endpoint,
             authorization: ipcAuthorization,
-            unixSocketTransport: DarwinJarvisUnixSocketTransport(timeoutSeconds: 10)
+            unixSocketTransport: DarwinJarvisUnixSocketTransport(
+                timeoutSeconds: 10,
+                peerIdentityPolicy: { try ipcAuthorization.activeUnixPeerIdentityPolicy() }
+            )
         )
         releaseSmokeProbe = JarvisReleaseSmokeProbe(client: releaseSmokeClient)
         let console = CommandConsoleModel(client: client)

@@ -57,7 +57,7 @@
 | macOS Keychain for secrets | Store credentials in SQLite or config files | Secrets should use the platform credential store. |
 | First-party plugins first | Third-party marketplace in v1 | The safety model and plugin contract need to prove themselves before third-party expansion. |
 | App-owned security-scoped bookmarks for workspace roots | Put root paths in app child arguments, store plain paths, or let the model select roots | Native user selection establishes an explicit local grant; opaque IDs and bounded startup stdin keep app-selected paths out of argv, environment, model input, and audit while Rust remains the descriptor authority. Bookmark tests do not prove App Sandbox enforcement or child sandbox-extension inheritance. |
-| App-supervised Unix-domain-socket IPC with same-EUID and per-launch bearer checks | Use loopback TCP by default, rely on socket filesystem permissions alone, persist every supervised credential, put transport authority in argv/environment, or silently reuse a legacy unauthenticated core | The default app launch creates an owner-only runtime directory and generation-random Unix socket, sends `ipc_transport:{kind:"unix_socket_v1",socket_path:"/absolute/path.sock"}` plus a fresh 32-byte bearer only through bounded startup stdin, and requires both current-EUID peer credentials and the bearer on every request. The strict framed JSON protocol is bounded and reuses the existing router. Exact `JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true` selects the explicitly weaker authenticated loopback TCP and owner-only token-file compatibility path; `JARVIS_MAC_IPC_AUTH_FILE` may then select an absolute operator/test path. This is local defense in depth, not PID, code-signing identity, device authentication, XPC, App Sandbox, or signed/live-device proof. |
+| App-supervised Unix-domain-socket IPC with Apple audit-token code identity, same-EUID, and per-launch bearer checks | Use loopback TCP by default, rely on socket filesystem permissions alone, persist every supervised credential, trust PID/path lookup, put transport authority in argv/environment, or silently reuse a legacy unauthenticated core | The default app launch creates an owner-only runtime directory and generation-random Unix socket, sends `ipc_transport:{kind:"unix_socket_peer_identity_v1",socket_path:"/absolute/path.sock",peer_code_requirement:"...",peer_identity_profile:"adhoc_exact|developer_id_hardened"}` plus a fresh 32-byte bearer only through bounded startup stdin, and requires `LOCAL_PEERTOKEN`/Security.framework requirement validation, current-EUID credentials, and the bearer before every request. Swift validates the connected core through the same audit-token mechanism. Exact `JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true` selects the explicitly weaker authenticated loopback TCP and owner-only token-file compatibility path. Ad-hoc requirements bind one exact build by cdhash and do not establish publisher identity; the Developer ID profile requires stable app/core identifiers, the same nonempty team, and hardened runtime. This is intended-process defense in depth, not device authentication, XPC, App Sandbox, notarization, or live-device proof. |
 | Add a no-import Wasmi compute runtime before broader third-party execution | Treat subprocess grants as sufficient containment, enable WASI, or wait for an OS sandbox | A deliberately small `jarvis_json_v1` ABI can provide useful low-risk local computation while mechanically denying guest filesystem, environment, network, clock, and process authority. Wasmi confinement is a language-runtime boundary, not an OS sandbox or plugin trust system. |
 | Auditability as an architectural requirement | Best-effort logs after the fact | Jarvis must be able to explain why it acted, what data it used, and what permissions were involved. |
 
@@ -86,11 +86,26 @@ defined by the release checklist.
 Current app-supervised IPC defaults to a Unix domain socket, not a TCP listener.
 Swift creates a current-owner `0700` runtime directory and a generation-random
 socket leaf whose absolute path fits the platform limit. The strict v1 startup
-document carries `ipc_transport:{kind:"unix_socket_v1",socket_path:"..."}` and
-the fresh 32-byte bearer; neither authority enters argv or child environment.
-Rust creates the socket as `0600`, rejects a peer whose `getpeereid` EUID does
-not match the core's current EUID, and still requires the bearer on every
-existing router path. Swift also verifies the connected core's EUID.
+document carries `ipc_transport:{kind:"unix_socket_peer_identity_v1",
+socket_path:"...",peer_code_requirement:"...",peer_identity_profile:
+"adhoc_exact|developer_id_hardened"}` and the fresh 32-byte bearer; neither
+authority enters argv or child environment. Rust retrieves `LOCAL_PEERTOKEN`
+from each accepted socket and uses Security.framework dynamic-code validation
+against the supplied designated requirement before reading a frame. It also
+requires `getpeereid` to match the current EUID and the bearer on every router
+path. Swift applies the same audit-token/requirement validation to the connected
+core before sending a request.
+
+Packaging assigns stable code identifiers `com.nobiletechnology.jarvis` and
+`com.nobiletechnology.jarvis.core`; alternate package identifiers are rejected.
+The `adhoc_exact` profile admits
+only exact cdhash designated requirements and proves local mechanics for one
+build, not publisher identity. `developer_id_hardened` additionally requires
+Apple-generic anchored Developer ID Application leaf/intermediate certificate
+extensions, the expected stable identifiers, one matching nonempty team
+identifier, and hardened-runtime flags. Missing, malformed, unsigned,
+mixed-profile, wrong-code, or invalid
+requirements fail closed.
 
 Each connection carries exactly one four-byte big-endian length followed by one
 strict JSON request, then the client half-closes its write side so trailing
@@ -110,9 +125,10 @@ of UDS. `JARVIS_MAC_IPC_AUTH_FILE` is an optional absolute override only in that
 mode. The supervisor removes both app-only variables and
 `JARVIS_IPC_TOKEN_FILE` from the child environment. Explicit operator-launched
 legacy servers remain available without authentication and reject an unexpected
-Authorization header. Same EUID is not same PID or intended process identity;
-this boundary does not prove code-sign identity, device authentication, XPC,
-App Sandbox, signing/notarization, or live-device behavior.
+Authorization header. The default UDS now proves audit-token-bound intended-code
+checks for the evaluated signature profile; the compatibility path does not.
+Repository ad-hoc evidence does not prove Developer ID publisher identity,
+device authentication, XPC, App Sandbox, notarization, or live-device behavior.
 
 Primary design rule: Swift should not become the agent brain, and Rust should not become the Mac UX layer.
 
@@ -401,14 +417,18 @@ Cover UI state, permission prompts, settings behavior, memory manager views, act
 ### IPC Contract Tests
 
 Version and test shared schemas between Swift and Rust. Cross-process coverage
-must exercise the default UDS launch with peer-EUID and bearer enforcement,
+must exercise the default UDS launch with audit-token designated-requirement,
+peer-EUID, and bearer enforcement, including same-EUID wrong-code rejection
+before request decoding,
 strict framed request/response decoding, existing-route parity, bounds and
 cleanup, restart invalidation, and the explicit TCP/token compatibility path.
 The release-built app lane must also traverse authenticated health, dry-run
 command, task/audit inspection, diagnostics, pause, blocked-command, and resume
 through the app-owned Swift client on the default UDS before emitting a fixed
 non-secret success marker. Failures suppress success and post-pause cleanup
-makes a bounded best-effort resume attempt.
+makes a bounded best-effort resume attempt. Ad-hoc coverage proves exact-build
+cdhash mechanics only; Developer ID, notarization, and live-device claims need
+their separate signed evidence lanes.
 Breaking the app/core API should fail loudly.
 
 ### Voice Loop Tests

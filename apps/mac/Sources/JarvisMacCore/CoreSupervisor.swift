@@ -317,6 +317,7 @@ public final class JarvisCoreSupervisor: ObservableObject {
     private let credentialProvider: JarvisCoreCredentialProvider
     private let workspaceRootProvider: any JarvisWorkspaceRootGrantProviding
     private let ipcAuthorization: JarvisIPCSessionAuthorization
+    private let peerIdentityPolicyProvider: any JarvisIPCPeerIdentityPolicyProviding
     private var process: (any JarvisCoreProcess)?
     private var processMonitorTask: Task<Void, Never>?
     private var activeWorkspaceRootLease: JarvisWorkspaceRootAccessLease?
@@ -333,7 +334,8 @@ public final class JarvisCoreSupervisor: ObservableObject {
         processLauncher: any JarvisCoreProcessLaunching = FoundationJarvisCoreProcessLauncher(),
         credentialProvider: JarvisCoreCredentialProvider = JarvisCoreCredentialProvider(),
         workspaceRootProvider: any JarvisWorkspaceRootGrantProviding = JarvisWorkspaceRootBookmarkCoordinator(),
-        ipcAuthorization: JarvisIPCSessionAuthorization = JarvisIPCSessionAuthorization()
+        ipcAuthorization: JarvisIPCSessionAuthorization = JarvisIPCSessionAuthorization(),
+        peerIdentityPolicyProvider: any JarvisIPCPeerIdentityPolicyProviding = SecurityJarvisIPCPeerIdentityPolicyProvider()
     ) {
         self.configuration = configuration
         self.client = client
@@ -341,6 +343,7 @@ public final class JarvisCoreSupervisor: ObservableObject {
         self.credentialProvider = credentialProvider
         self.workspaceRootProvider = workspaceRootProvider
         self.ipcAuthorization = ipcAuthorization
+        self.peerIdentityPolicyProvider = peerIdentityPolicyProvider
         self.mode = .stopped
         self.lastHealth = nil
         self.activeWorkspaceRootLease = nil
@@ -441,6 +444,7 @@ public final class JarvisCoreSupervisor: ObservableObject {
 
         var launchAuthorization: JarvisIPCLaunchAuthorization?
         var unixSocketDescriptor: JarvisIPCUnixSocketDescriptor?
+        var peerIdentityPolicy: JarvisIPCPeerIdentityPolicy?
         do {
             try createDatabaseDirectoryIfNeeded()
             var environment = credentialProvider.launchEnvironment(base: ProcessInfo.processInfo.environment)
@@ -463,21 +467,30 @@ public final class JarvisCoreSupervisor: ObservableObject {
                     throw JarvisIPCAuthorizationError.nonLoopbackEndpoint
                 }
             }
-            let workspaceRootLease = try workspaceRootProvider.acquireForCoreLaunch()
-            launchAuthorization = try ipcAuthorization.rotateForLaunch()
-            if let generation = launchAuthorization?.generation {
-                unixSocketDescriptor = try ipcAuthorization.prepareUnixSocketForLaunch(
-                    generation: generation
+            if ipcAuthorization.mode == .appSupervised,
+               ipcAuthorization.transportMode == .unixSocket {
+                peerIdentityPolicy = try peerIdentityPolicyProvider.policy(
+                    forCoreExecutable: executableURL
                 )
             }
+            let workspaceRootLease = try workspaceRootProvider.acquireForCoreLaunch()
             let startupInput: Data
             do {
+                launchAuthorization = try ipcAuthorization.rotateForLaunch(
+                    peerIdentityPolicy: peerIdentityPolicy
+                )
+                if let generation = launchAuthorization?.generation {
+                    unixSocketDescriptor = try ipcAuthorization.prepareUnixSocketForLaunch(
+                        generation: generation
+                    )
+                }
                 startupInput = try Self.startupConfigurationEnvelope(
                     roots: workspaceRootLease.roots,
                     trustedWakeBootstrap: trustedWakeBootstrap,
                     trustedWakeKeyControl: trustedWakeKeyControl,
                     ipcAuthorization: launchAuthorization,
-                    unixSocketDescriptor: unixSocketDescriptor
+                    unixSocketDescriptor: unixSocketDescriptor,
+                    peerIdentityPolicy: peerIdentityPolicy
                 )
             } catch {
                 workspaceRootLease.release()
@@ -491,6 +504,7 @@ public final class JarvisCoreSupervisor: ObservableObject {
                 || trustedWakeKeyControl != nil
                 || launchAuthorization != nil
                 || unixSocketDescriptor != nil
+                || peerIdentityPolicy != nil
             {
                 launchArguments.append("--startup-config-stdin")
             }
@@ -780,7 +794,8 @@ public final class JarvisCoreSupervisor: ObservableObject {
         trustedWakeBootstrap: Data?,
         trustedWakeKeyControl: Data?,
         ipcAuthorization: JarvisIPCLaunchAuthorization?,
-        unixSocketDescriptor: JarvisIPCUnixSocketDescriptor?
+        unixSocketDescriptor: JarvisIPCUnixSocketDescriptor?,
+        peerIdentityPolicy: JarvisIPCPeerIdentityPolicy?
     ) throws -> Data {
         guard trustedWakeBootstrap == nil || trustedWakeKeyControl == nil else {
             throw JarvisCoreSupervisorError.startupConfigurationInvalid
@@ -789,7 +804,8 @@ public final class JarvisCoreSupervisor: ObservableObject {
             || trustedWakeBootstrap != nil
             || trustedWakeKeyControl != nil
             || ipcAuthorization != nil
-            || unixSocketDescriptor != nil else {
+            || unixSocketDescriptor != nil
+            || peerIdentityPolicy != nil else {
             return Data()
         }
 
@@ -819,11 +835,18 @@ public final class JarvisCoreSupervisor: ObservableObject {
                 "generation": ipcAuthorization.generation
             ]
         }
-        if let unixSocketDescriptor {
+        if let unixSocketDescriptor, let peerIdentityPolicy {
+            guard peerIdentityPolicy.peerCodeRequirement.utf8.count <= 4 * 1024 else {
+                throw JarvisCoreSupervisorError.startupConfigurationInvalid
+            }
             envelope["ipc_transport"] = [
-                "kind": JarvisIPCUnixSocketDescriptor.kind,
-                "socket_path": unixSocketDescriptor.socketURL.path
+                "kind": JarvisIPCPeerIdentityPolicy.kind,
+                "socket_path": unixSocketDescriptor.socketURL.path,
+                "peer_code_requirement": peerIdentityPolicy.peerCodeRequirement,
+                "peer_identity_profile": peerIdentityPolicy.profile.rawValue
             ]
+        } else if unixSocketDescriptor != nil || peerIdentityPolicy != nil {
+            throw JarvisCoreSupervisorError.startupConfigurationInvalid
         }
         let data = try JSONSerialization.data(withJSONObject: envelope, options: [.sortedKeys])
         guard data.count <= jarvisWorkspaceRootStartupEnvelopeMaximumBytes else {
