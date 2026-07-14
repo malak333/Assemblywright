@@ -113,6 +113,9 @@ enum CliCommand {
         /// Attach bounded reviewed local memory to a local-model command.
         #[arg(long)]
         memory_context: bool,
+        /// Allow eligible installed compute-only WASM tools for this local-model command.
+        #[arg(long)]
+        installed_wasm_tools: bool,
         #[arg(long)]
         sensitivity: Option<String>,
         /// Print the raw JSON command response.
@@ -996,6 +999,7 @@ async fn main() -> anyhow::Result<()> {
             endpoint,
             dry_run,
             memory_context,
+            installed_wasm_tools,
             sensitivity,
             json,
         } => {
@@ -1006,6 +1010,7 @@ async fn main() -> anyhow::Result<()> {
                 dry_run,
                 proactive: false,
                 memory_context,
+                installed_wasm_tools,
                 sensitivity: sensitivity.as_deref().map(parse_sensitivity).transpose()?,
             })?;
             let response = server_required_request(&endpoint, "POST", "/commands", Some(&body))?;
@@ -3080,6 +3085,7 @@ async fn run_smoke() -> anyhow::Result<()> {
         dry_run: true,
         proactive: false,
         memory_context: false,
+        installed_wasm_tools: false,
         sensitivity: None,
     })?;
     let command = request(&endpoint, "POST", "/commands", Some(&command_body))?;

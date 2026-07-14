@@ -29,9 +29,16 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   architecture map: `/tools/model` as the redacted registered first-party
   model-tool catalog source, Ollama JSON allowlist projection,
   ChatGPT/OpenAI-compatible native tool projection, strict provider envelopes,
-  bounded tool requests, invalid-tool rejection, redacted provider failure
-  responses, and no installed-plugin or external tool execution through
-  model-planned calls.
+  bounded tool requests, invalid-tool rejection, and redacted provider failure
+  responses. `/tools/model` remains the default first-party catalog. Installed
+  model tools require the per-command default-false `installed_wasm_tools`
+  opt-in, a reactive local-model route, and current eligible `local_wasm`
+  records; cloud/proactive routes, ineligible or stale records, identifier
+  collisions, and every `local_subprocess` action remain excluded.
+- Confirm the Swift console keeps both installed-WASM advertisement and tool
+  execution disabled by default. Enabling installed tools alone remains dry-run;
+  the separate execution toggle must explicitly disable dry-run and clearly
+  applies to all model-planned tools in that console.
 - Confirm Swift Model tab behavior remains represented in docs and tests:
   streamed Ollama `/api/pull` progress, automatic `/api/tags` reload after
   download completion, `:latest` installed-model alias handling, and Start gated
@@ -351,7 +358,7 @@ stage or when a PR needs focused evidence for one ownership slice.
   streams, handles split UTF-8 plus LF/CRLF frames, and exposes no partial text
   or tool envelope before terminal validation. Confirm emergency pause/task
   cancellation drops the active transport and wins a completion race before
-  model audit or first-party tool execution. Swift must keep transcript output
+  model audit or any registered tool execution. Swift must keep transcript output
   final-only and label post-validation transport counts as redacted metadata,
   not live token rendering.
 - Confirm persistent audit entries remain append-only in SQLite tests.
@@ -365,7 +372,8 @@ stage or when a PR needs focused evidence for one ownership slice.
   CLI/IPC grant or denial decisions without executing side effects. Bounded
   fake-model first-party tool calls, strict Ollama-compatible and
   ChatGPT/OpenAI-compatible provider-envelope first-party tool requests, native
-  ChatGPT/OpenAI-compatible first-party `tool_calls`, and provider
+  ChatGPT/OpenAI-compatible first-party `tool_calls`, explicit reactive-local
+  installed WASM tool requests, and provider
   request/error behavior are covered in focused tests; selected
   provider failures must return structured failed command responses with
   redacted `model_step_failed` audit and route evidence. Malformed provider
@@ -411,6 +419,29 @@ stage or when a PR needs focused evidence for one ownership slice.
   exhaustion discard WASM output; dry-run does not compile or invoke code; and
   audit/inspection omit module bytes, paths, hashes, request/output bodies, and
   raw engine errors.
+- Confirm installed WASM model planning defaults off in IPC, CLI, and Swift and
+  is enabled only for the individual command. The runtime-derived extension
+  catalog must appear only after selection of a reactive local-model route and
+  contain only enabled `wasm_compute`, current exact-provenance, low-risk,
+  non-proactive compute actions with no memory/model/network permission or
+  imports. Cloud/proactive requests and commands without the opt-in must not
+  advertise or execute an installed model tool. Confirm deterministic catalog
+  limits of 16 actions, 1 KiB per description, 16 KiB per input schema, and
+  64 KiB combined fail closed without displacing earlier eligible actions.
+- Confirm private, credential-adjacent, and restricted model-planned installed
+  WASM requests return `approval_required`, leave the task waiting, and do not
+  enter the guest until the normal sensitivity confirmation policy is met.
+- Confirm discovery prefilters enabled `wasm_compute`, snapshots at most 64
+  candidates under the repository mutex, hashes provenance only after unlock,
+  and rechecks an unchanged record before advertisement. Confirm source-tree
+  provenance rejects more than 8,192 entries, 4,096 files, 64 levels, or 64 MiB.
+- Confirm model-planned installed WASM rejects first-party identifier
+  collisions, stale/mutated/disabled/ineligible records, and every
+  `local_subprocess` action. Repeat grant, action schema, eligibility, and exact
+  provenance validation immediately before guest entry; advertisement is not
+  execution authority. Catalog, rejection, diagnostics, progress, and audit
+  data must omit module bytes, paths, hashes, publisher material,
+  subprocess configuration, request bodies, and output bodies.
 - Confirm `cancellation_id` plus `/runtime/cancellations/:id` blocks a
   cross-process WASM run, and keep legacy subprocess late-result suppression
   distinct from prevention of already-issued effects.
@@ -431,6 +462,15 @@ stage or when a PR needs focused evidence for one ownership slice.
   same-user IPC isolation, marketplace/publisher trust, malware analysis,
   signing/notarization, or live-device validation. Those remain separate
   external release gates.
+- Preserve this feature proof boundary in `/contract`, readiness, release docs,
+  and PR evidence: disabled by default and local-model-only; eligibility is
+  limited to explicitly enabled installed `local_wasm` actions with
+  `wasm_compute`, current exact-byte provenance, low-risk non-proactive
+  compute-only schemas, and no memory, model, network, or import authority.
+  `local_subprocess` and cloud routes remain excluded. Wasmi provides
+  guest-language confinement, not OS sandboxing, marketplace/publisher trust,
+  malware analysis, same-user/process IPC isolation, signing/notarization, or
+  live-device evidence.
 - Confirm `/permissions/policy-review` and `jarvis permissions review` expose
   read-only severity-ranked review items for pending approvals, high-risk
   plugin actions, unverified provenance, and unverified origin claims without
@@ -648,8 +688,15 @@ stage or when a PR needs focused evidence for one ownership slice.
   preservation. Treat broad installer upgrade behavior as a separate
   release-candidate gate.
 - Confirm local plugin metadata install/list/get coverage remains in that E2E
-  path, and installed plugin execution coverage applies only after an explicit
-  `subprocess_stdio` grant.
+  path. Direct subprocess execution coverage applies only after an explicit
+  `subprocess_stdio` grant. Model-planned installed execution coverage applies
+  only to an explicitly opted-in reactive local route and an eligible
+  `wasm_compute` record. Cross-process Ollama-stub E2E must include successful
+  bounded execution plus default-off, subprocess exclusion, mutation denial,
+  pre-entry non-execution evidence, and redaction. Runtime unit coverage must
+  retain cloud/proactive and collision exclusion; the installed-WASM
+  confinement E2E must retain disabled, pause, cancellation, timeout, and
+  budget rejection paths.
 - For each new executable feature phase, confirm E2E coverage is either part of
   `local_ipc_e2e`, Swift package tests, a focused integration proof, or the
   implemented packaged Mac smoke lane. Docs-only changes should still name the

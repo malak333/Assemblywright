@@ -424,17 +424,25 @@ public struct JarvisCommandRequest: Encodable, Equatable, Sendable {
     public var input: String
     public var dryRun: Bool
     public var memoryContext: Bool
+    public var installedWasmTools: Bool
 
-    public init(input: String, dryRun: Bool = true, memoryContext: Bool = false) {
+    public init(
+        input: String,
+        dryRun: Bool = true,
+        memoryContext: Bool = false,
+        installedWasmTools: Bool = false
+    ) {
         self.input = input
         self.dryRun = dryRun
         self.memoryContext = memoryContext
+        self.installedWasmTools = installedWasmTools
     }
 
     enum CodingKeys: String, CodingKey {
         case input
         case dryRun = "dry_run"
         case memoryContext = "memory_context"
+        case installedWasmTools = "installed_wasm_tools"
     }
 }
 

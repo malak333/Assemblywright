@@ -31,6 +31,7 @@ use crate::{
 };
 
 const CURRENT_SCHEMA_VERSION: i64 = 12;
+pub(crate) const MAX_MODEL_PLANNED_WASM_CANDIDATES: usize = 64;
 
 #[derive(Debug, Clone)]
 pub struct StoredTrustedWakeRule {
@@ -2043,6 +2044,49 @@ impl SqliteRepository {
         collect_rows(rows)
     }
 
+    /// Snapshots a deterministic, fail-closed set before filesystem provenance
+    /// work. Callers sharing a repository mutex must release it before verifying
+    /// these records, then re-check that each accepted record is unchanged.
+    pub fn model_planned_wasm_candidates(&self) -> JarvisResult<Vec<InstalledPluginRecord>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, manifest_json, source_path, provenance_json, execution_enabled, execution_grant, installed_at
+                 FROM installed_plugins
+                 WHERE execution_enabled = 1 AND execution_grant = ?1
+                 ORDER BY id ASC
+                 LIMIT ?2",
+            )
+            .map_err(storage_error)?;
+        let rows = stmt
+            .query_map(
+                params![
+                    InstalledPluginExecutionGrant::WasmCompute.as_str(),
+                    MAX_MODEL_PLANNED_WASM_CANDIDATES as i64,
+                ],
+                installed_plugin_from_row,
+            )
+            .map_err(storage_error)?;
+        collect_rows(rows)
+    }
+
+    /// Returns only installed Wasmi manifests that are executable at the time
+    /// of advertisement. Execution repeats every check and exact-byte
+    /// provenance validation immediately before entering the guest runtime.
+    pub fn model_planned_wasm_manifests(&self) -> JarvisResult<Vec<PluginManifest>> {
+        let mut manifests = Vec::new();
+        for mut record in self.model_planned_wasm_candidates()? {
+            record.provenance = record
+                .provenance
+                .verify_snapshot(&record.manifest, Utc::now());
+            if let Some(manifest) = eligible_model_planned_wasm_manifest(record) {
+                manifests.push(manifest);
+            }
+        }
+        manifests.sort_by(|left, right| left.id.cmp(&right.id));
+        Ok(manifests)
+    }
+
     pub fn set_installed_plugin_execution(
         &self,
         id: &str,
@@ -3092,6 +3136,31 @@ impl SqliteRepository {
         tx.commit().map_err(storage_error)?;
         Ok(())
     }
+}
+
+pub(crate) fn eligible_model_planned_wasm_manifest(
+    record: InstalledPluginRecord,
+) -> Option<PluginManifest> {
+    if !record.execution_enabled
+        || record.execution_grant != InstalledPluginExecutionGrant::WasmCompute
+        || record.provenance.integrity_status
+            != InstalledPluginIntegrityStatus::MatchesInstallSnapshot
+        || record.manifest.source != crate::PluginSource::LocalWasm
+        || record.manifest.validate().is_err()
+        || record.manifest.wasm.is_none()
+    {
+        return None;
+    }
+    let mut manifest = record.manifest;
+    manifest.actions.retain(|action| {
+        action.risk_tier == RiskTier::Low
+            && !action.proactive
+            && action.permissions.is_empty()
+            && action.memory_access == crate::PluginAccess::None
+            && action.model_access == crate::PluginAccess::None
+            && action.network_access == crate::PluginNetworkAccess::default()
+    });
+    (!manifest.actions.is_empty()).then_some(manifest)
 }
 
 fn open_with_migration_backup_dir_and_hook(

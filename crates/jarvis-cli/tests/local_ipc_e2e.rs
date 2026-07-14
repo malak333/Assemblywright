@@ -8411,6 +8411,297 @@ fn serve_executes_ollama_provider_tool_request_envelope() {
 }
 
 #[test]
+fn model_planned_installed_wasm_requires_opt_in_and_revalidates_before_execution() {
+    let temp_dir = tempfile::tempdir().expect("create model-planned WASM e2e dir");
+    let db_path = temp_dir.path().join("jarvis-model-planned-wasm-e2e.sqlite");
+    let (plugin_dir, manifest_path, module_path, valid_module) =
+        write_model_planned_wasm_fixture(temp_dir.path());
+
+    let subprocess_plugin_dir = temp_dir.path().join("model-planned-subprocess-plugin");
+    fs::create_dir(&subprocess_plugin_dir).expect("create subprocess plugin dir");
+    let subprocess_plugin_dir = subprocess_plugin_dir
+        .canonicalize()
+        .expect("canonical subprocess plugin dir");
+    write_executable_plugin_script(&subprocess_plugin_dir);
+    fs::write(subprocess_plugin_dir.join("fixture-resource.txt"), "v1")
+        .expect("write subprocess fixture resource");
+    let subprocess_manifest_path = subprocess_plugin_dir.join("jarvis-plugin.json");
+    fs::write(
+        &subprocess_manifest_path,
+        json!({
+            "manifest_schema_version": 1,
+            "id": "model_planned_subprocess_e2e",
+            "name": "Model-Planned Subprocess E2E",
+            "version": "0.1.0",
+            "source": "local_subprocess",
+            "author": "Jarvis E2E",
+            "source_path": subprocess_plugin_dir.display().to_string(),
+            "subprocess": {
+                "command": "plugin-runner.py",
+                "args": [],
+                "stdin": "json",
+                "stdout": "json"
+            },
+            "actions": [{
+                "name": "inspect",
+                "description": "A subprocess action that must never be model-advertised.",
+                "permissions": ["read_workspace"],
+                "risk_tier": "low",
+                "input_schema": { "schema": {
+                    "type": "object",
+                    "properties": { "path": { "type": "string" } },
+                    "required": ["path"],
+                    "additionalProperties": false
+                }},
+                "output_schema": { "schema": {
+                    "type": "object",
+                    "properties": { "path": { "type": "string" } },
+                    "required": ["path"],
+                    "additionalProperties": true
+                }},
+                "proactive": false,
+                "memory_access": "none",
+                "model_access": "none",
+                "audit_fields": ["path"],
+                "timeout": { "timeout_ms": 5000, "on_timeout": "cancel" },
+                "cancellation": "cooperative"
+            }]
+        })
+        .to_string(),
+    )
+    .expect("write subprocess manifest");
+
+    let mut setup_server = JarvisServer::start(&db_path);
+    let setup_endpoint = setup_server.endpoint();
+    run_cli_json([
+        "plugins",
+        "install",
+        manifest_path.to_str().expect("WASM manifest path"),
+        "--endpoint",
+        setup_endpoint.as_str(),
+    ]);
+    run_cli_json([
+        "plugins",
+        "verify-installed",
+        "model_planned_wasm_e2e",
+        "--endpoint",
+        setup_endpoint.as_str(),
+    ]);
+    let enabled = run_cli_json([
+        "plugins",
+        "enable-installed",
+        "model_planned_wasm_e2e",
+        "--grant",
+        "wasm_compute",
+        "--endpoint",
+        setup_endpoint.as_str(),
+    ]);
+    assert_eq!(enabled["execution_enabled"], true);
+    assert_eq!(enabled["execution_grant"], "wasm_compute");
+
+    run_cli_json([
+        "plugins",
+        "install",
+        subprocess_manifest_path
+            .to_str()
+            .expect("subprocess manifest path"),
+        "--endpoint",
+        setup_endpoint.as_str(),
+    ]);
+    run_cli_json([
+        "plugins",
+        "verify-installed",
+        "model_planned_subprocess_e2e",
+        "--endpoint",
+        setup_endpoint.as_str(),
+    ]);
+    run_cli_json([
+        "plugins",
+        "verify-publisher",
+        "model_planned_subprocess_e2e",
+        "--trusted-origin",
+        "Jarvis E2E",
+        "--decided-by",
+        "local_ipc_e2e",
+        "--endpoint",
+        setup_endpoint.as_str(),
+    ]);
+    let subprocess_enabled = run_cli_json([
+        "plugins",
+        "enable-installed",
+        "model_planned_subprocess_e2e",
+        "--endpoint",
+        setup_endpoint.as_str(),
+    ]);
+    assert_eq!(subprocess_enabled["execution_enabled"], true);
+    assert_eq!(subprocess_enabled["execution_grant"], "subprocess_stdio");
+    setup_server.stop();
+
+    let redacted_markers = vec![
+        plugin_dir.display().to_string(),
+        subprocess_plugin_dir.display().to_string(),
+        module_path.display().to_string(),
+        "plugin.wasm".to_string(),
+        "wasm_module_sha256".to_string(),
+    ];
+    let (ollama_base_url, provider) = start_model_planned_wasm_ollama_server(
+        ModelPlannedWasmProviderMode::Execute,
+        redacted_markers.clone(),
+    );
+    let mut server = JarvisServer::start_with_env(
+        &db_path,
+        &[
+            ("JARVIS_LOCAL_MODEL_PROVIDER", "ollama"),
+            ("JARVIS_LOCAL_MODEL", "model-planned-wasm-e2e"),
+            ("JARVIS_OLLAMA_BASE_URL", ollama_base_url.as_str()),
+        ],
+    );
+    let endpoint = server.endpoint();
+    let executed = run_cli_json([
+        "command",
+        "run the explicitly enabled installed WASM compute tool",
+        "--installed-wasm-tools",
+        "--json",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(executed["task"]["status"], "completed", "{executed}");
+    assert_eq!(
+        executed["message"],
+        "provider received confined WASM output"
+    );
+    assert_eq!(
+        executed["steps"][0]["tool_results"][0]["plugin_id"],
+        "model_planned_wasm_e2e"
+    );
+    assert_eq!(
+        executed["steps"][0]["tool_results"][0]["status"],
+        "completed"
+    );
+    assert_eq!(
+        executed["steps"][0]["tool_results"][0]["output"],
+        json!({"ok": true})
+    );
+    assert_array_contains(
+        &executed["audit_entries"],
+        "event_type",
+        "tool_policy_check",
+    );
+    assert_array_contains(
+        &executed["audit_entries"],
+        "event_type",
+        "tool_execution_result",
+    );
+    assert_redacted_markers_absent(&executed, &redacted_markers);
+    let audit_after_execution = run_cli_json(["tasks", "audit", "--endpoint", endpoint.as_str()]);
+    let completed_before_fail_closed_checks =
+        installed_wasm_completion_count(&audit_after_execution, "model_planned_wasm_e2e");
+    assert_eq!(completed_before_fail_closed_checks, 1);
+    server.stop();
+    provider.join().expect("successful WASM provider");
+
+    let (ollama_base_url, provider) = start_model_planned_wasm_ollama_server(
+        ModelPlannedWasmProviderMode::RejectWithoutOptIn,
+        redacted_markers.clone(),
+    );
+    let mut server = JarvisServer::start_with_env(
+        &db_path,
+        &[
+            ("JARVIS_LOCAL_MODEL_PROVIDER", "ollama"),
+            ("JARVIS_LOCAL_MODEL", "model-planned-wasm-e2e"),
+            ("JARVIS_OLLAMA_BASE_URL", ollama_base_url.as_str()),
+        ],
+    );
+    let endpoint = server.endpoint();
+    let omitted_opt_in = run_cli_json([
+        "command",
+        "attempt an installed WASM tool without explicit opt-in",
+        "--json",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(
+        omitted_opt_in["task"]["status"], "completed",
+        "{omitted_opt_in}"
+    );
+    assert_eq!(
+        omitted_opt_in["steps"][0]["tool_results"][0]["status"],
+        "rejected"
+    );
+    assert!(
+        omitted_opt_in["steps"][0]["tool_results"][0]["output"]["error"]
+            .as_str()
+            .expect("missing opt-in rejection error")
+            .contains("not registered")
+    );
+    assert_redacted_markers_absent(&omitted_opt_in, &redacted_markers);
+    let audit_after_omitted_opt_in =
+        run_cli_json(["tasks", "audit", "--endpoint", endpoint.as_str()]);
+    assert_eq!(
+        installed_wasm_completion_count(&audit_after_omitted_opt_in, "model_planned_wasm_e2e"),
+        completed_before_fail_closed_checks
+    );
+    server.stop();
+    provider.join().expect("missing opt-in provider");
+
+    fs::write(&module_path, &valid_module).expect("restore valid WASM fixture");
+    let (ollama_base_url, provider) = start_model_planned_wasm_ollama_server(
+        ModelPlannedWasmProviderMode::MutateBeforeExecution(module_path.clone()),
+        redacted_markers.clone(),
+    );
+    let mut server = JarvisServer::start_with_env(
+        &db_path,
+        &[
+            ("JARVIS_LOCAL_MODEL_PROVIDER", "ollama"),
+            ("JARVIS_LOCAL_MODEL", "model-planned-wasm-e2e"),
+            ("JARVIS_OLLAMA_BASE_URL", ollama_base_url.as_str()),
+        ],
+    );
+    let endpoint = server.endpoint();
+    let mutated = run_cli_json([
+        "command",
+        "run the installed WASM tool while its artifact changes",
+        "--installed-wasm-tools",
+        "--json",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(mutated["task"]["status"], "completed", "{mutated}");
+    assert_eq!(
+        mutated["message"],
+        "provider received failed-closed WASM result"
+    );
+    assert_eq!(mutated["steps"][0]["tool_results"][0]["status"], "failed");
+    assert_eq!(
+        mutated["steps"][0]["tool_results"][0]["output"]["error"],
+        "installed WASM tool failed closed"
+    );
+    assert_array_contains(&mutated["audit_entries"], "event_type", "tool_policy_check");
+    assert_array_contains(
+        &mutated["audit_entries"],
+        "event_type",
+        "tool_execution_result",
+    );
+    assert_redacted_markers_absent(&mutated, &redacted_markers);
+    let audit_after_mutation = run_cli_json(["tasks", "audit", "--endpoint", endpoint.as_str()]);
+    assert_eq!(
+        installed_wasm_completion_count(&audit_after_mutation, "model_planned_wasm_e2e"),
+        completed_before_fail_closed_checks
+    );
+    let mutation_task_id = mutated["task"]["id"].as_str().expect("mutation task id");
+    assert!(audit_after_mutation
+        .as_array()
+        .expect("mutation audit array")
+        .iter()
+        .any(|entry| {
+            entry["task_id"] == mutation_task_id
+                && entry["event_type"] == "installed_plugin_execution_blocked"
+        }));
+    server.stop();
+    provider.join().expect("mutated WASM provider");
+}
+
+#[test]
 fn serve_rejects_ollama_hallucinated_tool_with_registered_tool_guidance() {
     assert_ollama_hallucinated_tool_is_rejected("status", "plugin status is not registered");
 }
@@ -9792,6 +10083,267 @@ impl Drop for JarvisServer {
     }
 }
 
+enum ModelPlannedWasmProviderMode {
+    Execute,
+    RejectWithoutOptIn,
+    MutateBeforeExecution(PathBuf),
+}
+
+fn write_model_planned_wasm_fixture(root: &Path) -> (PathBuf, PathBuf, PathBuf, Vec<u8>) {
+    let plugin_dir = root.join("model-planned-wasm-plugin");
+    fs::create_dir(&plugin_dir).expect("create model-planned WASM plugin dir");
+    let plugin_dir = plugin_dir
+        .canonicalize()
+        .expect("canonical model-planned WASM plugin dir");
+    let module_path = plugin_dir.join("plugin.wasm");
+    let output = r#"{"ok":true}"#;
+    let packed = (1024_u64 << 32) | output.len() as u64;
+    let valid_module = wat::parse_str(format!(
+        r#"(module
+            (memory (export "memory") 1)
+            (data (i32.const 1024) "{{\"ok\":true}}")
+            (func (export "jarvis_alloc") (param i32) (result i32) i32.const 0)
+            (func (export "jarvis_run") (param i32 i32) (result i64)
+                i64.const {packed}))"#
+    ))
+    .expect("compile model-planned WASM fixture");
+    fs::write(&module_path, &valid_module).expect("write model-planned WASM fixture");
+    let manifest_path = plugin_dir.join("jarvis-plugin.json");
+    fs::write(
+        &manifest_path,
+        json!({
+            "manifest_schema_version": 1,
+            "id": "model_planned_wasm_e2e",
+            "name": "Model-Planned WASM E2E",
+            "version": "0.1.0",
+            "source": "local_wasm",
+            "author": "Jarvis E2E",
+            "source_path": plugin_dir.display().to_string(),
+            "wasm": { "module": "plugin.wasm", "abi": "jarvis_json_v1" },
+            "actions": [{
+                "name": "run",
+                "description": "Return a bounded compute result.",
+                "permissions": [],
+                "risk_tier": "low",
+                "input_schema": { "schema": {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                    "additionalProperties": false
+                }},
+                "output_schema": { "schema": {
+                    "type": "object",
+                    "properties": { "ok": { "type": "boolean" } },
+                    "required": ["ok"],
+                    "additionalProperties": false
+                }},
+                "proactive": false,
+                "memory_access": "none",
+                "model_access": "none",
+                "network_access": { "mode": "none", "allowed_hosts": [] },
+                "audit_fields": [],
+                "timeout": { "timeout_ms": 5000, "on_timeout": "cancel" },
+                "cancellation": "cooperative"
+            }]
+        })
+        .to_string(),
+    )
+    .expect("write model-planned WASM manifest");
+    (plugin_dir, manifest_path, module_path, valid_module)
+}
+
+fn start_model_planned_wasm_ollama_server(
+    mode: ModelPlannedWasmProviderMode,
+    redacted_markers: Vec<String>,
+) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind model-planned WASM stub");
+    let address = listener
+        .local_addr()
+        .expect("model-planned WASM stub address");
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("first WASM provider request");
+        let first_request = read_provider_request(&mut stream, "first WASM provider request");
+        assert!(
+            first_request.contains("POST /api/generate"),
+            "{first_request}"
+        );
+        assert!(first_request.contains("\"stream\":true"), "{first_request}");
+        let wasm_catalog_entry = "\\\"plugin_id\\\":\\\"model_planned_wasm_e2e\\\"";
+        match &mode {
+            ModelPlannedWasmProviderMode::Execute
+            | ModelPlannedWasmProviderMode::MutateBeforeExecution(_) => {
+                assert!(
+                    first_request.contains(wasm_catalog_entry),
+                    "{first_request}"
+                );
+            }
+            ModelPlannedWasmProviderMode::RejectWithoutOptIn => {
+                assert!(
+                    !first_request.contains(wasm_catalog_entry),
+                    "{first_request}"
+                );
+            }
+        }
+        assert!(
+            !first_request.contains("model_planned_subprocess_e2e"),
+            "installed subprocess must remain outside the model catalog: {first_request}"
+        );
+        assert_markers_absent_from_text(&first_request, &redacted_markers);
+
+        if let ModelPlannedWasmProviderMode::MutateBeforeExecution(module_path) = &mode {
+            fs::write(
+                module_path,
+                wat::parse_str("(module)").expect("compile mutated WASM module"),
+            )
+            .expect("mutate WASM after catalog advertisement");
+        }
+
+        let envelope = json!({
+            "message": "provider requested installed WASM",
+            "complete": false,
+            "tool_requests": [{
+                "plugin_id": "model_planned_wasm_e2e",
+                "action": "run",
+                "input": {}
+            }]
+        })
+        .to_string();
+        write_provider_response(
+            &mut stream,
+            &format!("{}\n", json!({ "response": envelope, "done": true })),
+        );
+
+        let (mut stream, _) = listener.accept().expect("second WASM provider request");
+        let second_request = read_provider_request(&mut stream, "second WASM provider request");
+        assert!(
+            second_request.contains("untrusted_tool_results_v1"),
+            "{second_request}"
+        );
+        assert!(
+            second_request.contains("model_planned_wasm_e2e"),
+            "{second_request}"
+        );
+        let final_message = match mode {
+            ModelPlannedWasmProviderMode::Execute => {
+                assert!(
+                    second_request.contains("\\\"status\\\":\\\"completed\\\""),
+                    "{second_request}"
+                );
+                assert!(
+                    second_request.contains("\\\"ok\\\":true"),
+                    "{second_request}"
+                );
+                "provider received confined WASM output"
+            }
+            ModelPlannedWasmProviderMode::RejectWithoutOptIn => {
+                assert!(
+                    second_request.contains("\\\"status\\\":\\\"rejected\\\""),
+                    "{second_request}"
+                );
+                assert!(
+                    second_request.contains("not registered"),
+                    "{second_request}"
+                );
+                "provider received explicit opt-in rejection"
+            }
+            ModelPlannedWasmProviderMode::MutateBeforeExecution(_) => {
+                assert!(
+                    second_request.contains("\\\"status\\\":\\\"failed\\\""),
+                    "{second_request}"
+                );
+                assert!(
+                    second_request.contains("installed WASM tool failed closed"),
+                    "{second_request}"
+                );
+                assert!(
+                    !second_request.contains("\\\"ok\\\":true"),
+                    "{second_request}"
+                );
+                "provider received failed-closed WASM result"
+            }
+        };
+        assert_markers_absent_from_text(&second_request, &redacted_markers);
+        write_provider_response(
+            &mut stream,
+            &format!("{}\n", json!({ "response": final_message, "done": true })),
+        );
+    });
+
+    (format!("http://{address}"), handle)
+}
+
+fn read_provider_request(stream: &mut TcpStream, context: &str) -> String {
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .expect("set provider request timeout");
+    let mut request = Vec::new();
+    let mut expected_bytes = None;
+    loop {
+        let mut chunk = [0_u8; 8192];
+        let read = stream
+            .read(&mut chunk)
+            .unwrap_or_else(|error| panic!("read {context}: {error}"));
+        assert!(read > 0, "{context} ended before its body was complete");
+        request.extend_from_slice(&chunk[..read]);
+        if expected_bytes.is_none() {
+            if let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+                let header = String::from_utf8_lossy(&request[..header_end]);
+                let content_length = header
+                    .lines()
+                    .filter_map(|line| line.split_once(':'))
+                    .find_map(|(name, value)| {
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().ok())
+                            .flatten()
+                    })
+                    .expect("provider request content length");
+                expected_bytes = Some(header_end + 4 + content_length);
+            }
+        }
+        if expected_bytes.is_some_and(|expected| request.len() >= expected) {
+            break;
+        }
+    }
+    String::from_utf8(request).expect("provider request UTF-8")
+}
+
+fn write_provider_response(stream: &mut TcpStream, response: &str) {
+    let http = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: application/x-ndjson\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+        response.len(),
+        response
+    );
+    stream
+        .write_all(http.as_bytes())
+        .expect("write provider response");
+}
+
+fn assert_markers_absent_from_text(text: &str, markers: &[String]) {
+    for marker in markers {
+        assert!(
+            !text.contains(marker),
+            "sensitive marker surfaced: {marker}"
+        );
+    }
+}
+
+fn assert_redacted_markers_absent(value: &Value, markers: &[String]) {
+    let encoded = serde_json::to_string(value).expect("encode redaction subject");
+    assert_markers_absent_from_text(&encoded, markers);
+}
+
+fn installed_wasm_completion_count(audit: &Value, plugin_id: &str) -> usize {
+    audit
+        .as_array()
+        .expect("audit array")
+        .iter()
+        .filter(|entry| {
+            entry["event_type"] == "installed_plugin_wasm_completed"
+                && entry["payload"]["plugin_id"] == plugin_id
+        })
+        .count()
+}
+
 fn start_ollama_envelope_server() -> (String, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind ollama stub");
     let address = listener.local_addr().expect("ollama stub address");
@@ -9828,9 +10380,7 @@ fn start_ollama_envelope_server() -> (String, thread::JoinHandle<()>) {
             let request = String::from_utf8_lossy(&buffer[..read]);
             assert!(request.contains("POST /api/generate"), "{request}");
             assert!(request.contains("\"stream\":true"), "{request}");
-            assert!(
-                request.contains("Registered first-party tools are exactly this JSON allowlist")
-            );
+            assert!(request.contains("Registered model tools are exactly this JSON allowlist"));
             assert!(
                 request.contains("\\\"plugin_id\\\":\\\"system_status\\\""),
                 "{request}"
@@ -10041,9 +10591,7 @@ fn start_ollama_invalid_tool_server(plugin_id: &str) -> (String, thread::JoinHan
             let request = String::from_utf8_lossy(&buffer[..read]);
             assert!(request.contains("POST /api/generate"), "{request}");
             assert!(request.contains("\"stream\":true"), "{request}");
-            assert!(
-                request.contains("Registered first-party tools are exactly this JSON allowlist")
-            );
+            assert!(request.contains("Registered model tools are exactly this JSON allowlist"));
             assert!(request.contains("\\\"plugin_id\\\":\\\"system_status\\\""));
             assert!(request.contains("\\\"action\\\":\\\"status\\\""));
             assert!(request.contains("Never invent plugin_id or action values"));
@@ -10124,9 +10672,7 @@ fn start_ollama_invalid_then_valid_tool_server() -> (String, thread::JoinHandle<
             let request = String::from_utf8_lossy(&buffer[..read]);
             assert!(request.contains("POST /api/generate"), "{request}");
             assert!(request.contains("\"stream\":true"), "{request}");
-            assert!(
-                request.contains("Registered first-party tools are exactly this JSON allowlist")
-            );
+            assert!(request.contains("Registered model tools are exactly this JSON allowlist"));
             assert!(request.contains("\\\"plugin_id\\\":\\\"system_status\\\""));
             assert!(request.contains("\\\"action\\\":\\\"status\\\""));
             match index {

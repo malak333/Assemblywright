@@ -491,6 +491,14 @@ struct CommandConsoleView: View {
                 .toggleStyle(.switch)
                 .help("Opt in to bounded reviewed Public, Workspace, or Personal memory for local-model commands only.")
                 .padding(.horizontal)
+            Toggle("Execute tool actions (disable dry run)", isOn: $model.toolExecutionEnabled)
+                .toggleStyle(.switch)
+                .help("Explicitly allow model-planned tool execution from this console. When off, every tool remains dry-run only.")
+                .padding(.horizontal)
+            Toggle("Allow installed compute-only WASM tools", isOn: $model.installedWasmToolsEnabled)
+                .toggleStyle(.switch)
+                .help("Opt in for this console to eligible enabled local WASM tools on local-model commands only. Subprocess plugins stay excluded.")
+                .padding(.horizontal)
                 .padding(.bottom, 8)
         }
         .frame(minWidth: 720, minHeight: 480)
@@ -543,7 +551,12 @@ struct CommandConsoleView: View {
         let command = input
         input = ""
         Task {
-            await model.submit(input: command, memoryContext: model.memoryContextEnabled)
+            await model.submit(
+                input: command,
+                dryRun: !model.toolExecutionEnabled,
+                memoryContext: model.memoryContextEnabled,
+                installedWasmTools: model.installedWasmToolsEnabled
+            )
         }
     }
 }

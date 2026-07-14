@@ -95,14 +95,23 @@ Focused installed-WASM confinement checks:
 cargo test -p jarvis-core wasm -- --nocapture
 cargo test -p jarvis-cli --test local_ipc_e2e installed_wasm -- --nocapture
 swift test --disable-sandbox --package-path apps/mac --filter pluginManagerModelDecodesWasmConfinement
+cargo test -p jarvis-core installed_wasm_model_tools_require_opt_in_and_execute_only_on_local_route -- --nocapture
+cargo test -p jarvis-cli --test local_ipc_e2e model_planned_installed_wasm_requires_opt_in_and_revalidates_before_execution -- --nocapture
+swift test --disable-sandbox --package-path apps/mac --filter commandConsoleInstalledWasmToolsAreExplicitOptIn
 ./scripts/release-docs-drift-smoke.sh
 ```
 
 The Rust tests cover the `jarvis_json_v1` no-import ABI, `wasm_compute` grant,
 exact-byte provenance, schema-v12 migration, byte/memory/table/fuel ceilings,
 pause/cancel/timeout behavior, audit redaction, and cross-process restart. The
-Swift test covers only backward-compatible decoding and read-only redacted
-presentation. These checks prove Wasmi language-level confinement, not an OS
+model-planning checks additionally cover default-off command behavior,
+reactive-local-only advertisement, successful eligible execution, immediate
+state/provenance revalidation, mutation denial, and the Swift per-command
+opt-in. The Swift command-console test also proves execution remains a separate
+default-off operator toggle: installed schemas may be planned while dry-run is
+on, and guest entry is possible only when tool execution is explicitly enabled.
+The Swift confinement test covers only backward-compatible decoding and
+read-only redacted presentation. These checks prove Wasmi language-level confinement, not an OS
 sandbox, same-user IPC, marketplace/publisher trust, malware analysis,
 signing/notarization, or live-device behavior.
 
@@ -254,15 +263,17 @@ Ollama daemon pull a model that requires newer manifest/runtime support.
 
 Live local testing with `llama3.2` has proven this Ollama route can complete
 real model commands. Local model behavior is still model-dependent, so the
-runtime derives the provider-visible tool catalog from validated first-party
-manifests, exposes the same redacted catalog through `jarvis tools list`,
-advertises it as an Ollama JSON allowlist and ChatGPT/OpenAI-compatible native
-tool definitions, and keeps validating every model-planned tool request before
-execution.
+runtime derives the default provider-visible tool catalog from validated
+first-party manifests, exposes that redacted default through `jarvis tools
+list`, advertises it as an Ollama JSON allowlist and ChatGPT/OpenAI-compatible
+native tool definitions, and keeps validating every model-planned tool request
+before execution. A reactive local command may explicitly add eligible
+installed WASM schemas with `--installed-wasm-tools`; this never changes the
+cloud provider catalog.
 
 Provider tool troubleshooting: if Ollama or a ChatGPT/OpenAI-compatible provider
 requests `plugin_id: "status"` or `plugin_id: "chrome_extension"`, that is a
-provider hallucination, not a missing installed plugin. Inspect the exact
+provider hallucination, not a missing installed plugin. Inspect the default
 model-visible catalog with `cargo run -q -p jarvis-cli -- tools list`,
 `cargo run -q -p jarvis-cli -- tools model`, or
 `cargo run -q -p jarvis-cli -- tools catalog`. Production inventory contains
@@ -286,7 +297,9 @@ root is configured. They use only opaque root IDs plus relative paths, enforce
 descriptor-anchored no-follow traversal and hard output budgets, reject
 hidden/credential-like/symlink/special/binary/oversized targets, and are
 local-model-only. Their audit evidence contains metadata, not contents or
-absolute paths. Installed plugins remain outside model-originated planning.
+absolute paths. Installed plugins remain outside model-originated planning
+unless an individual reactive local-model command explicitly opts in to the
+eligible installed `local_wasm` subset described below.
 The cross-process workspace E2E uses the versioned startup-stdin envelope and
 checks that app-style root paths are absent from argv; a separate compatibility
 case covers the legacy flag. These commands prove bookmark/store/supervisor and
@@ -383,16 +396,20 @@ IPC transport error.
 
 Ollama-compatible and ChatGPT/OpenAI-compatible text responses may also return
 a strict JSON envelope with `message`, `complete`, and `tool_requests`.
-Accepted `tool_requests` are fed into the same bounded first-party schema,
+Accepted `tool_requests` are fed into the same bounded route-scoped schema,
 policy, approval, and audit path as fake-model tool plans; malformed envelopes
 fail with redacted diagnostics. Unknown plugin IDs, undeclared actions, and
 malformed inputs fail closed before policy check or tool execution, emit
 `tool_request_rejected` audit evidence, and are returned to the model as
 `rejected` tool results for bounded recovery. Oversized tool plans still fail
 the task. ChatGPT/OpenAI-compatible responses may also return native OpenAI
-`tool_calls` for the same runtime-derived first-party tool inventory; these
-are translated into the same bounded first-party path. This is provider tool
-compatibility, not installed-plugin orchestration.
+`tool_calls` for the runtime-derived first-party inventory; these are
+translated into the same bounded first-party path. Installed WASM definitions
+are available only to an explicitly opted-in reactive local route and are
+sorted and capped at 16 actions, 1 KiB per description, 16 KiB per input
+schema, and 64 KiB combined; they are never available to this cloud path. This
+is provider tool compatibility, not broad installed-plugin
+orchestration.
 
 For durable local task and audit state during manual inspection, pass a SQLite
 path:
@@ -479,7 +496,8 @@ first-party commands such as `status` through the policy
 engine, honors `--dry-run` for plugin execution, and can persist task/audit
 state plus redacted model-route records when configured with a
 repository-backed IPC state. It also has deterministic coverage for bounded
-model-planned first-party tool calls.
+model-planned first-party tool calls and explicit default-off reactive-local
+installed WASM calls.
 Approval-required command scaffolds such as `plugin approval echo ...` fail
 closed by returning `waiting_for_approval`, persisting an inspectable pending
 approval when repository backing is enabled, and requiring a separate CLI/IPC
@@ -1146,17 +1164,23 @@ scheduler fail-closed
 emergency pause on non-accepted due jobs, and emergency-pause blocking/resume
 surfaces.
 Runtime unit tests additionally prove bounded fake-model and provider-envelope
-first-party tool-call orchestration, including policy checks, approval stops,
-validation failures, runtime-derived provider-visible first-party inventory,
-and tool-result feedback into later model steps. Focused provider tests prove
+first-party tool-call orchestration plus default-off reactive-local installed
+WASM planning, including policy checks, approval stops, validation failures,
+route-scoped provider-visible inventory, and tool-result feedback into later
+model steps. Focused provider tests prove
 typed Ollama-compatible request/error behavior, strict
 Ollama-compatible and ChatGPT/OpenAI-compatible response-envelope parsing,
 malformed envelope redaction, and structured failed command responses for
 selected model-provider failures without requiring a live model during the
 default release gate. The cross-process local IPC E2E includes an
-Ollama-compatible stub that emits a provider tool-request envelope and proves
-the runtime advertises the registered first-party tools, executes the selected
-first-party tool, and returns the provider's final message. They do not prove
+Ollama-compatible stub that emits provider tool-request envelopes and proves
+the runtime advertises registered first-party tools, and, only with the
+per-command opt-in, eligible installed WASM schemas; executes the selected
+tool; revalidates installed state and exact provenance before guest entry; and
+returns the provider's final message. That E2E also proves default-off,
+subprocess exclusion, mutation denial, and redaction. Runtime unit coverage
+proves cloud/proactive exclusion; the installed-WASM confinement suite retains
+disabled, pause, cancellation, timeout, and budget fail-closed proof. They do not prove
 live ChatGPT service execution,
 advanced memory classification policy beyond the current summary surface, live
 microphone capture, or live audio output until those surfaces are manually

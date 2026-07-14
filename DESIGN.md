@@ -116,7 +116,7 @@ Combines capability scopes with risk tiers. It decides whether an action can run
 
 ### Tool And Plugin Host
 
-Loads first-party and later third-party capabilities behind explicit manifests. Tools declare permissions, risk class, input schema, output schema, audit behavior, timeout behavior, and cancellation behavior.
+Loads first-party and later third-party capabilities behind explicit manifests. Tools declare permissions, risk class, input schema, output schema, audit behavior, timeout behavior, and cancellation behavior. Model planning uses the registered first-party catalog by default. A reactive local-model command may explicitly opt in to a second runtime-derived catalog containing only currently executable, eligible installed `local_wasm` actions; cloud and proactive routes and every installed `local_subprocess` action remain excluded.
 
 The first production-useful local capability is bounded workspace inspection.
 It is absent unless the operator explicitly configures an allowlisted root;
@@ -159,9 +159,28 @@ then reacquires repository access only for redacted audit persistence. Pause and
 cancellation are checked after unlock and again before output or completion
 audit acceptance, preventing long-running plugins from blocking unrelated
 repository operations or publishing a late success.
+Model-catalog discovery snapshots at most 64 enabled `wasm_compute` candidates
+under the repository mutex, performs provenance work after unlock, and accepts
+only candidates whose database record remains unchanged. Source-tree provenance
+is capped at 8,192 entries, 4,096 files, 64 levels, and 64 MiB.
 Installed-plugin callers attach a unique cancellation identifier and request
 it through local IPC. Wasmi observes it between fuel slices and before output
 acceptance; legacy subprocess effects may precede late-result suppression.
+
+Installed WASM model planning is disabled by default and requires the caller to
+set the per-command `installed_wasm_tools` opt-in. The runtime advertises these
+actions only after routing selects a reactive local-model provider and only
+when the installed record is enabled with `wasm_compute`, its current exact
+module provenance matches, and every action still satisfies the low-risk,
+non-proactive, compute-only contract. It revalidates the same state immediately
+before execution and rejects identifier collisions with first-party plugins.
+The catalog exposes at most 16 actions, with a 1 KiB description, 16 KiB input
+schema, and 64 KiB combined installed-tool catalog budget. It never exposes
+module bytes, paths, hashes, publisher material, or subprocess configuration. Cloud routes,
+proactive commands, commands without the opt-in, and all `local_subprocess`
+plugins cannot advertise or execute an installed model-planned tool. The same
+`PermissionEngine` sensitivity policy applies before Wasmi entry, so private,
+credential-adjacent, and restricted commands stop for explicit confirmation.
 
 ### Scheduler And Trigger Engine
 

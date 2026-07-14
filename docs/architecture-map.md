@@ -239,7 +239,7 @@ flowchart TB
         IPC --> SchedulerApi["/scheduler/jobs"]
         IPC --> SchedulerAttention["/scheduler/attention redacted handoff"]
         IPC --> SchedulerRecovery["/scheduler/recover-stale and opt-in startup stale recovery"]
-        IPC --> ModelToolCatalog["/tools/model redacted first-party model-tool catalog"]
+        IPC --> ModelToolCatalog["/tools/model redacted default first-party model-tool catalog"]
 
         Commands --> Runtime["ConversationRuntime"]
         Runtime --> ModelExec["ModelExecutor trait"]
@@ -255,8 +255,12 @@ flowchart TB
         CloudExec --> CodexAccount["Codex account adapter"]
         CodexAccount --> CodexCLI["logged-in Codex CLI subprocess; strict no-tools/no-web config, minimized env, timeout and monitored 1 MiB response"]
         ModelExec --> ProviderEnvelope["strict JSON provider response envelope"]
-        ProviderEnvelope --> LocalToolDiscipline["local-model tool discipline: strict envelope, advertised first-party inventory, invalid-tool rejection/recovery, bounded schema/policy path"]
-        LocalToolDiscipline --> ToolPlan["bounded first-party tool requests"]
+        ProviderEnvelope --> LocalToolDiscipline["local-model tool discipline: strict envelope, runtime-derived inventory, invalid-tool rejection/recovery, bounded schema/policy path"]
+        Commands --> WasmModelOptIn["installed_wasm_tools per-command opt-in; default false"]
+        Commands --> SwiftExecutionOptIn["Swift console tool execution opt-in; default dry-run"]
+        WasmModelOptIn --> LocalWasmCatalog["reactive local route only; enabled eligible current local_wasm schemas"]
+        LocalWasmCatalog --> LocalToolDiscipline
+        LocalToolDiscipline --> ToolPlan["bounded registered or opted-in WASM tool requests"]
         LocalToolDiscipline --> ModelFailure
         Runtime --> ToolPlan
         ToolPlan --> PluginPolicy
@@ -302,6 +306,8 @@ flowchart TB
         NetworkDeclarations --> PluginPolicy
         InstalledRunner --> SubprocessRunner["local_subprocess direct Command JSON stdin/stdout runner"]
         InstalledRunner --> WasmRunner["local_wasm Wasmi jarvis_json_v1 runner"]
+        CloudExec --> CloudWasmDeny["installed WASM catalog unavailable"]
+        SubprocessRunner --> SubprocessModelDeny["never model-planned"]
         SubprocessRunner --> SafePath["canonical command under source_path, no shell interpolation"]
         SubprocessRunner --> SandboxBoundary["audit truth: subprocess_started can be true; os_sandbox_enforced remains false until real OS sandbox or egress policy exists"]
         SubprocessRunner --> ProgressFrames["bounded stderr JSON progress frames"]
@@ -370,20 +376,28 @@ can persist task, audit, and redacted append-only model-route state through
 `SqliteRepository` when the state is constructed with repository backing. It
 also records local-first `ModelRouter` evidence and can execute deterministic
 first-party plugin commands through the policy engine. The runtime supports
-bounded model-planned first-party tool calls with schema validation, policy
-checks, approval stops, and audit evidence. Ollama-compatible and
+bounded model-planned first-party tool calls plus a default-off per-command
+`installed_wasm_tools` extension for eligible installed WASM actions after a
+reactive local route is selected, with schema validation, policy checks,
+approval stops including sensitivity confirmation before guest entry, audit evidence, and deterministic 16-action / 1 KiB-description /
+16 KiB-schema / 64 KiB-catalog limits. Discovery snapshots 64 eligible-grant
+candidates under lock, hashes bounded 8,192-entry / 4,096-file / 64-level /
+64 MiB provenance after
+unlock, and rechecks unchanged registry state. Ollama-compatible and
 ChatGPT/OpenAI-compatible text responses can use a strict JSON envelope with
 `message`, `complete`, and `tool_requests`, which feeds the same bounded
 first-party tool path; ChatGPT/OpenAI-compatible responses can also return
 native OpenAI `tool_calls` for the advertised first-party tool definitions.
-The Ollama-compatible prompt advertises the exact registered first-party
-model-tool catalog as a JSON allowlist of `plugin_id`/`action` pairs, and the
-same catalog is inspectable through `/tools/model` and projected into native
-ChatGPT/OpenAI-compatible tool definitions. Invalid provider-planned plugin IDs,
+The Ollama-compatible prompt advertises the exact runtime-derived catalog as a
+JSON allowlist of `plugin_id`/`action` pairs. `/tools/model` remains the redacted
+default first-party catalog projected into ChatGPT/OpenAI-compatible tool
+definitions; eligible installed WASM schemas are added only to an opted-in
+reactive local-model request. Invalid provider-planned plugin IDs,
 undeclared actions, malformed inputs, and oversized tool plans fail closed with
 registered-tool guidance and redacted audit evidence before policy checks or
-tool execution. Plain text remains backward-compatible. This is not installed-plugin
-orchestration or broad third-party tool execution. Model-provider execution
+tool execution. Plain text remains backward-compatible. Cloud/proactive routes
+and installed subprocess plugins cannot advertise or execute installed
+model-planned tools; this is not broad third-party tool execution. Model-provider execution
 failures now stay inside
 the command contract: the runtime marks the task failed, appends
 `model_step_failed` with redacted provider diagnostics, and returns route
@@ -398,7 +412,13 @@ request, 1 MiB output, 16 MiB memory, zero table elements, and 10 million fuel c
 preserves this state across restart. Pause, cancellation, timeout, traps, and
 fuel exhaustion fail closed. Redacted installed-record/runtime fields and the
 Swift Plugin tab distinguish Wasmi language confinement from OS sandboxing and
-never expose module bytes, paths, hashes, or execution bodies. This current
+never expose module bytes, paths, hashes, or execution bodies. This branch may
+be model-planned only when the individual command opts in, routing selects a
+reactive local provider, and advertisement plus immediate pre-entry
+revalidation confirm that the enabled record remains eligible and provenance
+matching. First-party identifier collisions fail closed. The catalog never
+contains module bytes, paths, hashes, publisher material, or subprocess
+configuration. This current
 diagram does not claim same-user IPC, OS sandboxing, marketplace/publisher
 trust, malware analysis, signing/notarization, or live-device evidence.
 Both branches snapshot and revalidate installed state under the repository
@@ -790,6 +810,7 @@ sequenceDiagram
     participant Router as ModelRouter
     participant Policy as PermissionEngine
     participant Plugins as PluginHost
+    participant Wasm as Installed local_wasm runner
     participant Store as Optional SqliteRepository
 
     Client->>IPC: POST /commands
@@ -798,20 +819,30 @@ sequenceDiagram
     Runtime->>Router: select local-first route and provider evidence
     Runtime->>Store: append redacted model_route_records when configured
     Runtime->>Plugins: derive registered first-party model tool inventory
-    Runtime->>Runtime: advertise exact inventory to Ollama prompt or OpenAI tools
-    alt model envelope plans first-party tool call
-        Runtime->>Plugins: look up exact registered plugin_id and action
+    opt installed_wasm_tools and reactive local route
+        Runtime->>Store: derive enabled eligible provenance-matching WASM schemas
+        Runtime->>Runtime: merge collision-free redacted WASM catalog
+    end
+    Runtime->>Runtime: advertise exact route-scoped inventory
+    alt model envelope plans registered tool call
+        Runtime->>Runtime: look up exact first-party or opted-in WASM plugin_id and action
         alt plugin/action/input invalid
             Runtime->>Store: append tool_request_rejected when configured
             Runtime-->>Runtime: rejected tool result with registered-tool guidance
             Runtime->>Runtime: feed rejection into the next bounded model step
-        else valid first-party tool request
+        else valid registered tool request
         Runtime->>Policy: validate declared scopes, risk, sensitivity
         alt approval required or blocked
             Runtime->>Store: append approval/block audit when configured
         else allowed
-            Runtime->>Plugins: execute schema-validated first-party tool
-            Plugins-->>Runtime: tool result
+            alt eligible installed local_wasm
+                Runtime->>Store: revalidate enabled grant, schema, and exact provenance
+                Runtime->>Wasm: execute with pause, cancel, and budgets
+                Wasm-->>Runtime: bounded schema-validated result
+            else registered first-party
+                Runtime->>Plugins: execute schema-validated first-party tool
+                Plugins-->>Runtime: tool result
+            end
             Runtime->>Store: append tool result audit when configured
         end
         end
@@ -908,7 +939,9 @@ sequenceDiagram
   Installed-plugin run attempts fail closed with manifest/action validation,
   disabled execution semantics, and durable audit evidence.
 - `jarvis-core::runtime`: Command runtime scaffolding with max-step enforcement,
-  bounded model-planned first-party tool orchestration, runtime hooks, task
+  bounded model-planned first-party tool orchestration plus explicit
+  per-command, reactive-local-only eligible installed WASM orchestration,
+  runtime hooks, task
   cancellation, emergency-pause blocking/cancellation, model/tool step audit
   entries, a fake local model path, and a persistence hook for SQLite-backed
   task/audit durability.
@@ -988,6 +1021,9 @@ flowchart TB
 
         ModelRouterProd --> LocalModels["real local model providers by default"]
         ModelRouterProd --> CloudModels["cloud models only after enablement, approval, redaction, and audit"]
+        LocalModels --> LocalWasmOptInProd["explicit per-command installed WASM opt-in"]
+        LocalWasmOptInProd --> LocalWasmCatalogProd["eligible exact-provenance local_wasm; 16 actions, 1 KiB descriptions, 16 KiB schemas, 64 KiB catalog"]
+        CloudModels --> CloudWasmDenyProd["installed WASM catalog unavailable"]
         CloudModels --> OpenAIAPI["OpenAI-compatible API with Keychain credential"]
         CloudModels --> CodexAccountProd["Codex account through authenticated Codex CLI"]
         LocalModels --> NativeStreamingProd["provider-native streaming with cancellation and bounded quarantine"]
@@ -1005,6 +1041,9 @@ flowchart TB
         PluginHostProd --> ToolSandbox["declared scopes, schemas, timeouts, cancellation, future OS sandbox boundary"]
         InstalledPlugins --> WasmComputeProd["no-import WASM compute runtime with exact-byte provenance"]
         InstalledPlugins --> SubprocessProd["separate repository-locked local subprocess runtime"]
+        LocalWasmCatalogProd --> PolicyProd
+        PolicyProd --> WasmComputeProd
+        SubprocessProd --> SubprocessModelDenyProd["direct/operator execution only; never model-planned"]
         WasmComputeProd --> WasmDefenseProd["language confinement plus production OS sandbox defense in depth"]
         SubprocessProd --> ToolSandbox
         WasmDefenseProd --> ToolSandbox
@@ -1090,9 +1129,9 @@ external action, or broader production operation.
 | Menu-bar presence | Native SwiftUI `MenuBarExtra` shares the existing app-owned supervisor, console, and model configuration state; it exposes a stable main-window route, conservative lifecycle status, health refresh, fail-closed start/stop availability, and quit. | Signed and installed `Jarvis.app` remains reachable after its main window closes, without creating a second core owner, and passes live Finder/LaunchServices window-reopen and lifecycle QA. | Swift scene/model contract and architecture implemented; signed installed-app GUI QA remains manual release evidence. |
 | Mac shell | Buildable Swift/SwiftUI shell with health, command transcript, pause/resume, activity/audit rendering, bounded activity event-stream watch, memory classification, redacted retention-plan review, and create/update/review/delete/restore controls, model/plugin/scheduler/diagnostics/release-readiness tabs, degraded-mode handling, and a `JarvisCoreSupervisor` abstraction for configured or bundled local core binaries. The Model tab decodes active provider/model health metadata, lists installed Ollama models from `/api/tags`, merges recommended downloadable Llama/Mistral/Phi/Gemma/Qwen options including Gemma 4, Gemma 3, Qwen3.6, Qwen3, Qwen2.5, Qwen2.5-Coder, and Qwen2.5-VL tags, shows RAM estimates from installed model size or curated pre-download estimates, pulls missing selections through `/api/pull`, starts/stops selected Ollama residency through `/api/generate` keep-alive requests, and restarts only the app-supervised core with selected model environment overrides. The Plugin tab renders first-party manifests plus redacted installed-plugin registry records with execution grant, provenance integrity, origin-review, action metadata, executable status, and redaction markers while omitting local paths, command paths, signature material, and provenance hashes; it degrades gracefully when the repository-backed installed registry is unavailable. The Scheduler tab can inspect/create/cancel jobs, request attention notifications, run due jobs through bounded `/scheduler/run-due`, and recover stale running jobs through bounded `/scheduler/recover-stale`, then refreshes jobs/attention, shows concise last-action state, and exposes delivered-notification evidence fields with reset/recapture controls without exposing scheduler command bodies. The Release tab renders `/release/readiness` blockers, external evidence-mode state, recommended commands, implemented proofs, pending features, proof boundary, `/release/evidence-status` file/report inventory plus invalid evidence details, and read-only signed-distribution/live-device/plugin-trust runbooks while preserving the explicit external-evidence production boundary; evidence rows label path, detail, and production/manual-gate context, present presence-only evidence rows show the caveat on the status line, runbook-load failures surface as warnings without hiding readiness/evidence status, and the production-ready display is fail-closed unless readiness is true, evidence status is complete, and the evidence view has no missing, invalid, stale refresh, or runbook warning state. The Voice tab gates capture behind permission state before start attempts, and the unsigned distribution launch check exercises the release-built `Jarvis.app` layout with temp-profile app-supervised core proof. | Packaged `Jarvis.app` supervises the core, owns voice/text UX, settings, memory and permission surfaces, diagnostics export, release-readiness review, and recovery states. | Shell supervision, Swift model selection/download/start/stop controls for app-supervised Ollama cores, Swift memory management including redacted retention-plan visibility, bounded activity event-stream watch, installed-plugin registry inspection surfaces, Swift scheduler run/recovery and notification evidence controls, Swift release-readiness/evidence-status/runbook inspection with runbook-load warnings, app-level Release row presentation coverage, explicit evidence-mode row coverage, voice permission-before-capture gating, and unsigned distribution launch proof implemented; Developer ID signing, notarization/stapling, signed installer validation, clean-profile /Applications install, Finder/LaunchServices launch, and manual production release QA pending. |
 | IPC boundary | Axum loopback HTTP JSON API protects every app-supervised route with a per-launch 32-byte bearer credential delivered only through startup stdin and compared by digest in constant time. The shared Swift client fails locally without its managed generation; lifecycle cleanup is generation-bound. The CLI can opt into a bounded, no-follow, owner-matched, owner-only JSON handoff file. Explicit legacy servers remain unauthenticated but reject any Authorization header, preventing silent managed-client downgrade. The API covers health, commands, inspection, approvals, plugins/tools, emergency pause, scheduler, compatibility metadata, release readiness/evidence/runbooks, and redacted diagnostics. | Versioned authenticated local transport with Apple-backed peer identity, same-user/intended-process authorization, device-bound secret lifecycle, compatibility-tested distribution launch, and clear degraded-mode handling. | Possession-based whole-router authentication, strict no-downgrade behavior, app/CLI handoff, lifecycle cleanup, Swift tests, Rust cross-process E2E, and distribution-layout smoke implemented. OS identity, device authentication, same-user/process isolation, App Sandbox/egress enforcement, signing/notarization, and live-device evidence remain pending. |
-| Command runtime | `ConversationRuntime` creates tasks, runs a routed `ModelExecutor` (`FakeLocalModel` by default, Ollama-compatible HTTP or ChatGPT/OpenAI-compatible HTTP when explicitly enabled), records structured audit entries including redacted model-output chunk metadata, handles pause/cancel including in-flight provider futures, enforces max steps, can persist task/audit/model-route state through `RuntimeCommandStore`, exposes repository-backed activity summaries and bounded server-sent activity events for progress visibility, derives provider-visible model tools from the registered first-party model-tool catalog, can execute bounded model-planned first-party tool calls after schema and policy checks, accepts strict provider response envelopes and native ChatGPT/OpenAI-compatible `tool_calls` for the same first-party tool path, rejects invalid model-planned plugin IDs/actions before execution with registered-tool guidance and model-visible rejected tool results for bounded recovery, rejects mixed prose plus JSON `tool_requests` as malformed provider output, and returns structured failed command responses when a selected model provider fails. | Multi-step assistant runtime with production model responses, installed plugin/tool orchestration, streaming progress, approval UI handoff, native provider function-calling where appropriate, and robust recovery. | Bounded fake-model, provider-envelope, and native OpenAI first-party tool orchestration, runtime-derived provider-visible first-party catalog plus invalid-tool fail-closed recovery guidance, opt-in local and ChatGPT provider boundaries, structured provider-failure recovery, explicit installed-plugin subprocess runner, CLI/IPC/Swift approval scaffold, pollable activity summaries, CLI plus bounded Swift activity event-stream watch, audit-backed installed subprocess, model-step, and redacted model-output chunk progress frames, and quarantined Ollama-native NDJSON transport with cancellation implemented; raw-token UI streaming and unbounded real-time plugin UI progress pending. |
+| Command runtime | `ConversationRuntime` creates tasks, runs a routed `ModelExecutor` (`FakeLocalModel` by default, Ollama-compatible HTTP or ChatGPT/OpenAI-compatible HTTP when explicitly enabled), records structured audit entries including redacted model-output chunk metadata, handles pause/cancel including in-flight provider futures, enforces max steps, can persist task/audit/model-route state through `RuntimeCommandStore`, exposes repository-backed activity summaries and bounded server-sent activity events for progress visibility, derives provider-visible model tools from the registered first-party model-tool catalog, and, only when `installed_wasm_tools` is explicitly set on a reactive local-model command, adds currently eligible enabled installed `local_wasm` schemas. It executes bounded model-planned calls after schema and policy checks, repeats installed grant/eligibility/exact-provenance validation before WASM entry, accepts strict provider response envelopes and native provider `tool_calls`, rejects invalid model-planned plugin IDs/actions before execution with registered-tool guidance and model-visible rejected results, rejects mixed prose plus JSON `tool_requests`, and returns structured failed command responses when a provider fails. | Multi-step assistant runtime with production model responses, installed plugin/tool orchestration, streaming progress, approval UI handoff, native provider function-calling where appropriate, and robust recovery. | Bounded first-party orchestration and explicit default-off local-only confined WASM orchestration, runtime-derived route-scoped catalogs, invalid-tool fail-closed recovery guidance, opt-in local and ChatGPT provider boundaries, structured provider-failure recovery, direct installed-plugin runners, CLI/IPC/Swift opt-in surfaces, pollable activity summaries, audit-backed installed subprocess, model-step, and redacted model-output chunk progress frames, and quarantined Ollama-native NDJSON transport with cancellation implemented; cloud/proactive installed tools and installed subprocess model planning remain excluded, while raw-token UI streaming and unbounded real-time plugin UI progress remain pending. |
 | Model routing | Local-first `ModelRouter` exists with sensitivity checks, provider-status route evidence, cloud opt-in gate, approval delegation, and redaction logic. The active `/commands` path can call a configured local provider, an opt-in OpenAI-compatible API provider with a Keychain-injected credential, or an opt-in Codex-account adapter that invokes the logged-in Codex CLI with a bounded timeout and reads only its final-message file. Health exposes the active cloud auth mode so the app can reject an already-running core with mismatched configuration. Provider text responses can return a strict JSON envelope with first-party `tool_requests`, and OpenAI-compatible responses can return native `tool_calls` using function definitions generated from the runtime's registered first-party manifests. Repository-backed command execution persists append-only SQLite model-route records and exposes redacted IPC/CLI inspection without storing route context. Provider failures keep the selected route evidence in the failed command response, and live Ollama testing has proven the opt-in local HTTP route can complete real model commands while the runtime rejects hallucinated tool IDs and can recover by feeding redacted rejection results back to the model. | Local provider integration, explicit cloud escalation through API-key or account auth, minimized cloud context, user approval where required, native tool-call support where useful, and durable route evidence in every relevant task. | Local, OpenAI API, and Codex-account provider boundaries, strict provider-envelope first-party tool requests, runtime-derived native OpenAI first-party tool-call adaptation, SQLite route recovery evidence, live Ollama route viability, invalid-tool rejection/recovery, mixed-output failure diagnostics, and structured failure-response evidence implemented with tests; broader production model operations pending. |
-| Plugins and tools | Production inventory excludes deterministic `fake_*` fixtures and uses one configured `PluginHost` for IPC inspection, provider advertisement, direct dispatch, approval replay, and runtime execution. `system_status.status` is always present. The macOS app persists user-selected roots as security-scoped bookmarks under opaque IDs, resolves the entire set fail closed, retains access for the supervised process lifetime, and sends roots through a strict bounded version-1 stdin envelope rather than argv/environment; the same envelope can carry one trusted-wake one-shot document. Rust then holds descriptor-anchored roots for local-only bounded workspace inspection. The legacy explicit CLI root flag remains for compatibility. Installed `local_wasm` plugins require `wasm_compute`, exact-byte provenance, the no-import `jarvis_json_v1` exports, low-risk compute-only policy, and hard module/request/output/memory/fuel limits; pause/cancel/timeout/fuel exhaustion fail closed. Redacted inspection and Swift presentation distinguish Wasmi confinement from `local_subprocess`, which remains not OS sandboxed. | Defense-in-depth OS sandboxing for first-party, WASM, and subprocess tools, verified child sandbox-extension inheritance, content classification, durable approval replay, publisher/marketplace/malware trust, and production model-generated tool execution. | App-owned bookmark selection, redacted grant UI, path-free supervised argv/environment, bounded startup stdin, balanced access lifetime, bounded workspace tools, and no-import Wasmi language confinement are implemented with Swift tests and cross-process E2E. OS sandbox/egress enforcement, verified child extension inheritance, same-user IPC, marketplace/publisher/malware trust, signing/notarization, and live-device QA remain pending. |
+| Plugins and tools | Production inventory excludes deterministic `fake_*` fixtures and uses one configured `PluginHost` for default provider advertisement, direct dispatch, approval replay, and first-party runtime execution. `system_status.status` is always present. The macOS app persists user-selected roots as security-scoped bookmarks under opaque IDs and supplies them through bounded startup stdin for descriptor-anchored local-only workspace inspection. Installed `local_wasm` plugins require `wasm_compute`, exact-byte provenance, the no-import `jarvis_json_v1` exports, low-risk non-proactive compute-only policy, and hard module/request/output/memory/fuel limits; pause/cancel/timeout/fuel exhaustion fail closed. A per-command default-false opt-in exposes only eligible records to a reactive local model, with collision rejection, deterministic 16-action / 1 KiB-description / 16 KiB-schema / 64 KiB-catalog limits, and immediate pre-entry revalidation. Cloud/proactive routes and `local_subprocess` remain outside installed model planning. Redacted inspection and Swift presentation distinguish Wasmi confinement from `local_subprocess`, which remains not OS sandboxed. | Defense-in-depth OS sandboxing for first-party, WASM, and subprocess tools, verified child sandbox-extension inheritance, content classification, durable approval replay, publisher/marketplace/malware trust, and production model-generated tool execution. | App-owned bookmark selection, redacted grant UI, bounded workspace tools, no-import Wasmi language confinement, and explicit local-only installed WASM model planning are implemented with Swift tests and cross-process E2E. OS sandbox/egress enforcement, verified child extension inheritance, same-user IPC, marketplace/publisher/malware trust, signing/notarization, and live-device QA remain pending. |
 | Scheduler | Inspectable scheduler jobs with manual, one-time, interval trigger contracts, explicit run-due execution, an opt-in bounded background trigger loop on `jarvis serve --scheduler-background`, a redacted `/scheduler/attention` handoff for due, running, failed, and emergency-pause-blocked jobs, scheduler trigger items in `/permissions/policy-review` that redact command text, redacted `scheduler_proactive_policy_checked` audit evidence before due command submission, manifest-enforced proactive plugin opt-in for scheduler-originated first-party plugin calls, explicit `scheduler recover-stale` operator recovery for persisted stale `Running` jobs, opt-in startup stale-running recovery through `jarvis serve --scheduler-recover-stale-on-startup`, Swift typed IPC methods and Scheduler tab controls for bounded run-due and stale recovery, and a Swift protocol-backed notification model with macOS `UserNotifications` adapter controls for due, failed, and emergency-pause-blocked attention items, and copyable delivered-notification evidence fields with a reset path for live QA recapture. Each tick uses the same visible task/audit records, deterministic due ordering, per-tick limit, policy-review trigger classification, and fail-closed emergency-pause behavior as manual run-due. Repository-backed IPC state restores and updates jobs through SQLite. Emergency pause cancels active scheduler jobs, non-proactive scheduled plugin actions and unsafe due commands fail closed by pausing and cancelling remaining open jobs, and stale recovery marks stuck running jobs failed with redacted audit evidence. | Durable scheduler and trigger engine for approved proactive routines, persisted job state, visible task records, policy-gated execution, stale-run recovery, and OS-level app notifications. | Durable job state, explicit run-due execution, opt-in bounded background loop, redacted app handoff summary, scheduler trigger review, redacted proactive policy audit, proactive plugin opt-in enforcement, explicit and opt-in startup stale-running recovery, Swift run/recovery controls, adapter-backed Swift notification controls, concrete `UNNotificationRequest` payload tests, and app-visible delivered-notification evidence presentation plus reset/recapture controls implemented; richer production trigger policy and live OS notification validation pending. |
 | Storage and memory | SQLite migrations store tasks, audit/model-route evidence, emergency pause, canonical memory items, scheduler jobs, approvals, and plugin metadata. A versioned sibling memory-index manifest is atomically rebuilt from active canonical rows; status detects missing, stale, deleted, orphaned, corrupt, and current projections while returning counts only. CLI/IPC and Swift expose explicit status/rebuild controls. A separate disabled-by-default CLI/Swift command option performs deterministic bounded lexical retrieval only for selected local, non-proactive routes. It requires a current index, admits reviewed active Public/Workspace/Personal records, checks pause/cancel, caps query/item/corpus/results/context, frames context as untrusted data, and records only redacted counts. Cloud adapters reject local memory context before transport. | SQLite remains canonical; governed hybrid/vector retrieval may add user-visible citations and richer local ranking while retaining explicit authority, sensitivity policy, deterministic budgets, deletion/review synchronization, provenance, and fail-closed cloud separation. Keychain owns secrets. | CRUD/review/retention, rebuildable index governance, restart persistence, corruption recovery, explicit bounded local lexical context, cloud/proactive/high-sensitivity denial, Swift opt-in, Rust tests, and cross-process CLI/Ollama-stub E2E implemented. Embeddings/vector search, automatic retrieval, autonomous rewrite/purge, and production relevance evaluation remain pending. |
 | Safety and approvals | Capability scopes, risk tiers, emergency-pause fail-closed behavior, audit-required flags, and approval-required decisions exist in Rust. Repository-backed IPC persists pending approvals, supports CLI and Swift grant/deny decisions without executing side effects, and exposes an explicit approved-action execution endpoint that replays only the original first-party action after action/scope verification and records `side_effect_executed` audit evidence. The Swift Approval Center loads pending approval decisions, approved-unexecuted first-party approvals, and task audit evidence so approved records can be run once from the app and hidden after `approval_executed` evidence exists. `/permissions/grants` also exposes approval history/counts plus installed-plugin grant and provenance integrity state. `/permissions/policy-review` exposes severity-ranked pending approval, high-risk action, provenance, origin, network-access, active scheduler trigger, and memory-review items, while `/memory/retention-plan` gives memory reviewers a redacted candidate/action queue without executing deletion or rewrite. The Swift permission center renders both grant history and policy review status. | Human approval prompts, permission center, grants history, policy review, signed-publisher trust, memory review workflows, and no bypass for high-risk side effects. | Policy engine plus CLI/IPC/Swift approval decision and approved first-party one-shot replay execution surface, provenance-aware permission grant inspection, read-only policy review, scheduler trigger review, memory review visibility plus operator retention-action planning, operator-pinned publisher-origin review, trusted-key publisher-signature verification, and network-action review implemented; broader plugin marketplace and autonomous memory governance pending. |
@@ -1291,7 +1330,8 @@ erDiagram
 Current evidence supports a local foundation claim: the workspace has typed
 contracts and tested scaffolding for IPC, policy, routing, runtime, storage,
 plugins, scheduler, CLI behavior, bounded fake-model and provider-envelope
-first-party tool orchestration, local-model invalid-tool fail-closed guidance,
+first-party tool orchestration, explicit default-off reactive-local installed
+WASM model planning, local-model invalid-tool fail-closed guidance,
 release readiness/evidence-status, evidence-bundle mechanics, and a Swift
 command/management shell with runs, approvals, permissions, memory, plugin,
 scheduler, diagnostics, release, voice input/output, Keychain credential

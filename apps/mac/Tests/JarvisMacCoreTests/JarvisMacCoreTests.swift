@@ -672,12 +672,13 @@ struct JarvisMacCoreTests {
         #expect(entries.contains { $0.title == "plugin_completed" && $0.badge == "audit" })
     }
 
-    @Test("Command request encodes dry_run and memory opt-in for Rust IPC")
+    @Test("Command request encodes explicit command opt-ins for Rust IPC")
     func encodesCommandRequest() throws {
         let request = JarvisCommandRequest(
             input: "status check",
             dryRun: true,
-            memoryContext: true
+            memoryContext: true,
+            installedWasmTools: true
         )
         let data = try JSONEncoder().encode(request)
         let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -685,6 +686,7 @@ struct JarvisMacCoreTests {
         #expect(json["input"] as? String == "status check")
         #expect(json["dry_run"] as? Bool == true)
         #expect(json["memory_context"] as? Bool == true)
+        #expect(json["installed_wasm_tools"] as? Bool == true)
     }
 
     @Test("Management client methods send supported Rust IPC requests")
@@ -2147,6 +2149,55 @@ struct JarvisMacCoreTests {
             JarvisCommandRequest(input: "status without memory", memoryContext: false),
             JarvisCommandRequest(input: "status with memory", memoryContext: true)
         ])
+    }
+
+    @MainActor
+    @Test("Command console installed WASM tools remain off until the operator opts in")
+    func commandConsoleInstalledWasmToolsAreExplicitOptIn() async {
+        let client = FakeCoreClient()
+        let console = CommandConsoleModel(client: client)
+
+        #expect(!console.installedWasmToolsEnabled)
+        #expect(!console.toolExecutionEnabled)
+        await console.submit(input: "status without installed tools")
+        console.installedWasmToolsEnabled = true
+        await console.submit(
+            input: "plan with installed tools",
+            dryRun: !console.toolExecutionEnabled
+        )
+        console.toolExecutionEnabled = true
+        await console.submit(
+            input: "execute with installed tools",
+            dryRun: !console.toolExecutionEnabled
+        )
+
+        #expect(client.submittedCommands == [
+            JarvisCommandRequest(
+                input: "status without installed tools",
+                installedWasmTools: false
+            ),
+            JarvisCommandRequest(
+                input: "plan with installed tools",
+                installedWasmTools: true
+            ),
+            JarvisCommandRequest(
+                input: "execute with installed tools",
+                dryRun: false,
+                installedWasmTools: true
+            )
+        ])
+    }
+
+    @MainActor
+    @Test("A policy-blocked command does not imply emergency pause")
+    func blockedCommandDoesNotSetEmergencyPause() async {
+        let client = FakeCoreClient(commandStatus: "blocked")
+        let console = CommandConsoleModel(client: client)
+
+        await console.submit(input: "blocked installed tool request")
+
+        #expect(!console.isPaused)
+        #expect(console.transcript.last?.text == "local response: blocked installed tool request")
     }
 
     @MainActor
@@ -5492,7 +5543,7 @@ private func installedWasmPluginJSON() -> Data {
     )
 }
 
-private func commandResponseJSON(input: String) -> Data {
+private func commandResponseJSON(input: String, status: String = "completed") -> Data {
     let taskId = UUID()
     let sessionId = UUID()
     let auditId = UUID()
@@ -5504,7 +5555,7 @@ private func commandResponseJSON(input: String) -> Data {
             "id": "\(taskId.uuidString)",
             "session_id": "\(sessionId.uuidString)",
             "user_input": "\(input)",
-            "status": "completed",
+            "status": "\(status)",
             "created_at": "2026-05-20T12:00:00Z",
             "updated_at": "2026-05-20T12:00:01Z"
           },
@@ -7587,6 +7638,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     private var tasks: [JarvisTask]
     private var auditEntries: [JarvisAuditEntry]
     private var activityEvents: [JarvisActivityEvent]
+    private var commandStatus: String
     private(set) var submittedCommands: [JarvisCommandRequest]
     private var contractResponse: JarvisContractResponse?
     private var releaseReadinessResponse: JarvisReleaseReadiness?
@@ -7626,6 +7678,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         tasks: [JarvisTask] = [],
         auditEntries: [JarvisAuditEntry] = [],
         activityEvents: [JarvisActivityEvent] = [],
+        commandStatus: String = "completed",
         contractResponse: JarvisContractResponse? = nil,
         releaseReadiness: JarvisReleaseReadiness? = nil,
         releaseReadinessResults: [Result<JarvisReleaseReadiness, Error>] = [],
@@ -7654,6 +7707,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         self.tasks = tasks
         self.auditEntries = auditEntries
         self.activityEvents = activityEvents
+        self.commandStatus = commandStatus
         self.submittedCommands = []
         self.contractResponse = contractResponse
         self.releaseReadinessResponse = releaseReadiness
@@ -7772,7 +7826,10 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
 
     func submit(_ command: JarvisCommandRequest) async throws -> JarvisCommandResponse {
         submittedCommands.append(command)
-        return try JSONDecoder().decode(JarvisCommandResponse.self, from: commandResponseJSON(input: command.input))
+        return try JSONDecoder().decode(
+            JarvisCommandResponse.self,
+            from: commandResponseJSON(input: command.input, status: commandStatus)
+        )
     }
 
     func pause(reason: String) async throws -> JarvisPauseResponse {

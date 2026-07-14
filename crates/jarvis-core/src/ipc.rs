@@ -496,6 +496,8 @@ pub struct CommandRequest {
     #[serde(default)]
     pub memory_context: bool,
     #[serde(default)]
+    pub installed_wasm_tools: bool,
+    #[serde(default)]
     pub sensitivity: Option<Sensitivity>,
 }
 
@@ -2085,6 +2087,7 @@ impl IpcState {
                     .with_dry_run(request.dry_run)
                     .with_proactive(request.proactive)
                     .with_memory_context(request.memory_context)
+                    .with_installed_wasm_tools(request.installed_wasm_tools)
                     .with_expected_workspace_request(expected_workspace_request),
             )
             .await?;
@@ -2167,7 +2170,7 @@ impl IpcState {
 
     fn command_store(&self) -> SharedCommandStore {
         SharedCommandStore {
-            repository: self.repository.clone(),
+            state: self.clone(),
         }
     }
 
@@ -2377,6 +2380,15 @@ impl IpcState {
         id: &str,
         request: InstalledPluginRunRequest,
     ) -> JarvisResult<InstalledPluginRunResponse> {
+        self.run_installed_plugin_inner(id, request, None)
+    }
+
+    fn run_installed_plugin_inner(
+        &self,
+        id: &str,
+        request: InstalledPluginRunRequest,
+        model_task_id: Option<Uuid>,
+    ) -> JarvisResult<InstalledPluginRunResponse> {
         if request.action.trim().is_empty() {
             return Err(JarvisError::Validation(
                 "installed plugin action cannot be empty".to_string(),
@@ -2428,6 +2440,10 @@ impl IpcState {
             })
             .unwrap_or_default();
         let runtime_kind = installed_plugin_runtime_kind(record.manifest.source).to_string();
+        let model_planned_wasm_eligible = record.manifest.source == PluginSource::LocalWasm
+            && record.execution_enabled
+            && record.execution_grant == InstalledPluginExecutionGrant::WasmCompute
+            && action_manifest.is_some_and(model_planned_wasm_action_eligible);
 
         // For WASM, execute the exact no-follow bytes whose digest is compared
         // with install provenance. This closes the verify-then-reopen race.
@@ -2474,10 +2490,18 @@ impl IpcState {
             request
                 .cancellation_id
                 .is_some_and(|id| self.runtime_control.is_runtime_cancelled(id))
+                || model_task_id
+                    .is_some_and(|task_id| self.runtime_control.is_task_cancelled(task_id))
         };
 
         let (mut status, mut reason) = if let Err(error) = &manifest_validation {
             ("blocked".to_string(), error.to_string())
+        } else if model_task_id.is_some() && !model_planned_wasm_eligible {
+            (
+                "blocked".to_string(),
+                "model-planned installed tools require an enabled, low-risk, compute-only local_wasm action with wasm_compute grant"
+                    .to_string(),
+            )
         } else if !action_declared {
             (
                 "blocked".to_string(),
@@ -2729,6 +2753,7 @@ impl IpcState {
                 "session_id": request.session_id,
                 "cancellation_id_present": request.cancellation_id.is_some(),
                 "cancellation_requested": cancellation_observed,
+                "model_planned": model_task_id.is_some(),
             "action_requires_network_grant": action_requires_network_grant,
             "subprocess_started": runtime_kind == "subprocess" && runtime_started,
             "sandbox_process_started": false,
@@ -2803,7 +2828,7 @@ impl IpcState {
         legacy_contract.insert("contract_validated".to_string(), json!(contract_validated));
         legacy_contract.insert("side_effect_executed".to_string(), json!(runtime_started));
         let audit_entry = AuditEntry::new(
-            None,
+            model_task_id,
             event_type,
             "installed plugin run request recorded with bounded runtime evidence",
             audit_payload,
@@ -3732,6 +3757,7 @@ impl IpcState {
                 dry_run: false,
                 proactive: true,
                 memory_context: false,
+                installed_wasm_tools: false,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await?;
@@ -3845,6 +3871,7 @@ impl IpcState {
                     dry_run: false,
                     proactive: true,
                     memory_context: false,
+                    installed_wasm_tools: false,
                     sensitivity: Some(Sensitivity::Workspace),
                 })
                 .await?;
@@ -4217,7 +4244,7 @@ impl IpcState {
 
 #[derive(Clone)]
 struct SharedCommandStore {
-    repository: Option<Arc<Mutex<SqliteRepository>>>,
+    state: IpcState,
 }
 
 #[derive(Default)]
@@ -4239,7 +4266,7 @@ struct FirstPartyPluginDispatchContext<'a> {
 
 impl RuntimeCommandStore for SharedCommandStore {
     fn create_task(&self, session_id: Uuid, user_input: String) -> JarvisResult<TaskRecord> {
-        match &self.repository {
+        match &self.state.repository {
             Some(repository) => repository
                 .lock()
                 .expect("IPC repository lock poisoned")
@@ -4249,7 +4276,7 @@ impl RuntimeCommandStore for SharedCommandStore {
     }
 
     fn update_task_status(&self, task: &mut TaskRecord, status: TaskStatus) -> JarvisResult<()> {
-        match &self.repository {
+        match &self.state.repository {
             Some(repository) => {
                 *task = repository
                     .lock()
@@ -4262,7 +4289,7 @@ impl RuntimeCommandStore for SharedCommandStore {
     }
 
     fn append_audit_entry(&self, entry: &AuditEntry) -> JarvisResult<()> {
-        match &self.repository {
+        match &self.state.repository {
             Some(repository) => repository
                 .lock()
                 .expect("IPC repository lock poisoned")
@@ -4272,7 +4299,7 @@ impl RuntimeCommandStore for SharedCommandStore {
     }
 
     fn append_model_route_record(&self, record: &ModelRouteRecord) -> JarvisResult<()> {
-        match &self.repository {
+        match &self.state.repository {
             Some(repository) => repository
                 .lock()
                 .expect("IPC repository lock poisoned")
@@ -4287,7 +4314,7 @@ impl RuntimeCommandStore for SharedCommandStore {
         sensitivity: Sensitivity,
         control: &mut dyn FnMut() -> crate::MemoryRetrievalControl,
     ) -> JarvisResult<crate::MemoryRetrieval> {
-        match &self.repository {
+        match &self.state.repository {
             Some(repository) => repository
                 .lock()
                 .expect("IPC repository lock poisoned")
@@ -4296,6 +4323,109 @@ impl RuntimeCommandStore for SharedCommandStore {
                 crate::NoopRuntimeCommandStore.retrieve_memory_context(query, sensitivity, control)
             }
         }
+    }
+
+    fn model_planned_wasm_manifests(&self) -> JarvisResult<Vec<PluginManifest>> {
+        let Some(repository) = &self.state.repository else {
+            return Ok(Vec::new());
+        };
+        let candidates = repository
+            .lock()
+            .expect("IPC repository lock poisoned")
+            .model_planned_wasm_candidates()?;
+        let mut manifests = Vec::new();
+        for candidate in candidates {
+            let verified_provenance = candidate
+                .provenance
+                .verify_snapshot(&candidate.manifest, Utc::now());
+            if verified_provenance.integrity_status
+                != InstalledPluginIntegrityStatus::MatchesInstallSnapshot
+            {
+                continue;
+            }
+            let unchanged = repository
+                .lock()
+                .expect("IPC repository lock poisoned")
+                .get_installed_plugin(&candidate.id)?
+                .is_some_and(|current| current == candidate);
+            if !unchanged {
+                continue;
+            }
+            let mut verified = candidate;
+            verified.provenance = verified_provenance;
+            if let Some(manifest) = crate::storage::eligible_model_planned_wasm_manifest(verified) {
+                manifests.push(manifest);
+            }
+        }
+        manifests.sort_by(|left, right| left.id.cmp(&right.id));
+        Ok(manifests)
+    }
+
+    fn execute_model_planned_wasm(
+        &self,
+        task_id: Uuid,
+        session_id: Uuid,
+        request: &crate::ModelToolRequest,
+    ) -> JarvisResult<PluginCallResult> {
+        let response = self.state.run_installed_plugin_inner(
+            &request.plugin_id,
+            InstalledPluginRunRequest {
+                action: request.action.clone(),
+                input: request.input.clone(),
+                session_id: Some(session_id),
+                cancellation_id: Some(task_id),
+                dry_run: false,
+            },
+            Some(task_id),
+        )?;
+        let action = self.state.using_repository(|repository| {
+            repository
+                .get_installed_plugin(&request.plugin_id)?
+                .and_then(|record| record.manifest.action(&request.action).cloned())
+                .ok_or_else(|| {
+                    JarvisError::Plugin(
+                        "model-planned installed WASM action is no longer available".to_string(),
+                    )
+                })
+        })?;
+        let status = if self.state.runtime_control.is_emergency_paused()
+            || self.state.runtime_control.is_task_cancelled(task_id)
+        {
+            PluginCallStatus::Cancelled
+        } else if response.status == "completed" {
+            PluginCallStatus::Completed
+        } else {
+            PluginCallStatus::Failed
+        };
+        Ok(PluginCallResult {
+            status,
+            output: response.output.unwrap_or_else(|| {
+                json!({
+                    "completed": false,
+                    "error": "installed WASM tool failed closed",
+                })
+            }),
+            metadata: crate::PluginCallMetadata {
+                plugin_id: request.plugin_id.clone(),
+                action: request.action.clone(),
+                permissions: Vec::new(),
+                risk_tier: action.risk_tier,
+                approval_required: false,
+                approval_status: ApprovalStatus::NotRequired,
+                proactive: false,
+                memory_access: action.memory_access,
+                model_access: action.model_access,
+                timeout_ms: action.timeout.timeout_ms,
+                cancellation: action.cancellation,
+                audit_fields: action.audit_fields,
+                audit_summary: json!({
+                    "runtime_kind": "wasm",
+                    "confinement_enforced": response.wasm_confinement_enforced,
+                    "os_sandbox_enforced": false,
+                    "input_output_content_redacted": true,
+                }),
+            },
+        })
     }
 }
 
@@ -8016,8 +8146,14 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "model_tool_catalog_grounding",
             "implemented",
-            "`/tools/model` exposes the redacted registered first-party model-tool catalog, Ollama prompts use the same JSON allowlist, ChatGPT/OpenAI-compatible tool schemas are derived from the same catalog, and invalid model-planned plugin IDs/actions are rejected before policy or execution with registered-tool audit guidance and CLI IPC E2E coverage.",
-            "First-party model-tool grounding only; installed plugins are excluded from model planning, and this is not broad third-party tool execution, marketplace trust, malware analysis, or OS-level sandboxing.",
+            "`/tools/model` exposes the redacted default first-party model-tool catalog, Ollama prompts use the same per-request JSON allowlist, ChatGPT/OpenAI-compatible tool schemas are derived from that allowlist, and invalid model-planned plugin IDs/actions are rejected before policy or execution with registered-tool audit guidance and CLI IPC E2E coverage. Eligible installed local_wasm actions are added only to an explicitly opted-in local reactive command.",
+            "The default catalog remains first-party only. Installed subprocess, network, model, memory, high-risk, proactive, disabled, stale, or provenance-mismatched capabilities are excluded, and this is not broad third-party tool execution, marketplace trust, malware analysis, or OS-level sandboxing.",
+        ),
+        feature(
+            "model_planned_installed_wasm_tools",
+            "implemented",
+            "An additive installed_wasm_tools request flag, false when absent, can advertise eligible installed local_wasm compute actions only to a selected local non-proactive model route. Eligibility requires enabled execution, current exact artifact provenance, wasm_compute grant, low-risk non-proactive actions, no permissions, memory, model, or network capability, valid schemas, and the same bounded direct WASM runner with immediate pre-execution revalidation, cancellation, emergency-pause dominance, and redacted audit evidence.",
+            "Explicit opt-in is scoped to one reactive command and does not include subprocess plugins or cloud routes. Wasmi provides import-free language-level compute confinement with bounded fuel, memory, request, and output, but not an OS sandbox, publisher/marketplace trust, malware analysis, same-user/process isolation, host-level egress enforcement, signing/notarization, or live-device production evidence.",
         ),
         feature(
             "installed_plugin_execution",
@@ -8121,6 +8257,15 @@ fn feature(
 fn sha256_text(value: &str) -> String {
     let digest = Sha256::digest(value.as_bytes());
     format!("{digest:x}")
+}
+
+fn model_planned_wasm_action_eligible(action: &crate::PluginActionManifest) -> bool {
+    action.risk_tier == crate::RiskTier::Low
+        && !action.proactive
+        && action.permissions.is_empty()
+        && action.memory_access == crate::PluginAccess::None
+        && action.model_access == crate::PluginAccess::None
+        && action.network_access == crate::PluginNetworkAccess::default()
 }
 
 fn installed_plugin_grant_allows_action(
@@ -11843,6 +11988,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 dry_run: true,
                 proactive: false,
                 memory_context: false,
+                installed_wasm_tools: false,
                 sensitivity: None,
             })
             .await
@@ -11919,6 +12065,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 dry_run: false,
                 proactive: false,
                 memory_context: false,
+                installed_wasm_tools: false,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -12037,6 +12184,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 dry_run: false,
                 proactive: false,
                 memory_context: false,
+                installed_wasm_tools: false,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -12072,6 +12220,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 dry_run: false,
                 proactive: false,
                 memory_context: false,
+                installed_wasm_tools: false,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -12133,6 +12282,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 dry_run: false,
                 proactive: false,
                 memory_context: false,
+                installed_wasm_tools: false,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -12363,6 +12513,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 dry_run: false,
                 proactive: false,
                 memory_context: false,
+                installed_wasm_tools: false,
                 sensitivity: None,
             })
             .await
@@ -12396,6 +12547,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 dry_run: true,
                 proactive: false,
                 memory_context: false,
+                installed_wasm_tools: false,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -12425,6 +12577,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 dry_run: false,
                 proactive: false,
                 memory_context: false,
+                installed_wasm_tools: false,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -12465,6 +12618,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 dry_run: false,
                 proactive: false,
                 memory_context: false,
+                installed_wasm_tools: false,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -13337,6 +13491,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 dry_run: true,
                 proactive: false,
                 memory_context: false,
+                installed_wasm_tools: false,
                 sensitivity: Some(Sensitivity::Private),
             })
             .await
@@ -13377,6 +13532,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 dry_run: true,
                 proactive: false,
                 memory_context: false,
+                installed_wasm_tools: false,
                 sensitivity: Some(Sensitivity::Private),
             })
             .await
@@ -13529,6 +13685,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 dry_run: false,
                 proactive: false,
                 memory_context: false,
+                installed_wasm_tools: false,
                 sensitivity: None,
             })
             .await
@@ -13583,6 +13740,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 dry_run: false,
                 proactive: false,
                 memory_context: false,
+                installed_wasm_tools: false,
                 sensitivity: None,
             })
             .await
