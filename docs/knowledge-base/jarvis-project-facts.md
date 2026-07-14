@@ -661,9 +661,15 @@ requires plugin-trust `generated_at`, `review_started_at`,
   purge, restore, rewrite, or otherwise mutate memory.
 - Approved first-party approval records can be explicitly executed through
   `/approvals/:id/execute` or `jarvis approvals execute <approval-id>`.
-  Approve/deny remains side-effect-free. Before plugin entry, execution
+  Approve/deny remains side-effect-free. Grant and denial each use one immediate
+  transaction to recheck pending state, update the decision, and append a
+  redacted decision audit. Free-form actor and reason stay in the approval
+  record but not its audit payload. If audit insertion fails, the decision
+  rolls back to pending, including across restart, so an unaudited grant cannot
+  become execution authority. Before plugin entry, execution
   validates the approved record, still-waiting task, exact action, current risk
-  and scopes, current manifest, input schema, and current policy, then uses an
+  and scopes, current manifest, input schema, current policy, and matching
+  approval_granted audit evidence, then uses an
   immediate transaction to insert one
   unique schema-v13 `approval_executions` claim and a redacted
   `approval_execution_claimed` audit.
@@ -673,6 +679,15 @@ requires plugin-trust `generated_at`, `review_started_at`,
   evidence atomically. A crash, restart, or persistence failure after claim is
   effect-possible ambiguity, never permission to retry automatically; an
   operator must review evidence and create a new approval for another attempt.
+- Claim-time grant-chain validation accepts the current redacted decision-audit
+  shape and exact legacy raw-metadata audit evidence only when approval ID,
+  task, action, approved status, risk, sensitivity, scopes, decision metadata,
+  and `side_effect_executed:false` match and the audit timestamp is not before
+  `decided_at`. The current shape requires exact actor/reason-presence booleans
+  and no raw keys; the legacy shape requires exact raw actor/reason values and
+  no redaction/presence keys. An approved row with missing or
+  unrelated evidence creates no policy/claim audit, durable claim, or plugin
+  entry across restart, and the claim path never fabricates grant evidence.
 - Schema-v13 migration backfill collapses any legacy raced terminal audits into
   one deterministic consumed row per approval. Completed evidence takes
   precedence over timed-out, cancelled, then failed evidence; the earliest and
@@ -684,6 +699,11 @@ requires plugin-trust `generated_at`, `review_started_at`,
   `approval_execution_claimed` or `approval_executed` as consumed authority,
   hides claimed records after refresh/restart, and suppresses duplicate Run
   Approved interaction while a request is active.
+- Focused storage and real-server CLI IPC coverage injects a SQLite abort on
+  decision-audit insertion. It proves grant and denial both roll back, failed
+  grants remain pending after restart, `/execute` rejects that broken chain,
+  and recovery creates exactly one redacted grant audit without exposing actor
+  or reason text.
 - The Swift Plugin tab decodes `/plugins/installed` registry records through
   the same redacted inspection contract used by the CLI and IPC surfaces. It
   shows execution grant, provenance integrity status, origin-review state,

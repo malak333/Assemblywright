@@ -2359,8 +2359,18 @@ impl SqliteRepository {
             ));
         }
 
-        let current = self
-            .get_pending_approval(id)?
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        let current = tx
+            .query_row(
+                "SELECT id, task_id, action, requested_scopes, risk_tier, sensitivity, status, reason, requested_at, decided_at, decided_by, decision_reason
+                 FROM pending_approvals
+                 WHERE id = ?1",
+                params![id.to_string()],
+                pending_approval_from_row,
+            )
+            .optional()
+            .map_err(storage_error)?
             .ok_or_else(|| JarvisError::Storage(format!("pending approval not found: {id}")))?;
         if current.status != ApprovalStatus::Pending {
             return Err(JarvisError::Validation(format!(
@@ -2370,7 +2380,8 @@ impl SqliteRepository {
         }
 
         let decided_at = Utc::now();
-        self.conn
+        let decided_by = decided_by.into();
+        let changed = tx
             .execute(
                 "UPDATE pending_approvals
                  SET status = ?1, decided_at = ?2, decided_by = ?3, decision_reason = ?4
@@ -2378,16 +2389,55 @@ impl SqliteRepository {
                 params![
                     approval_status_to_str(status),
                     to_db_time(decided_at),
-                    decided_by.into(),
-                    decision_reason,
+                    &decided_by,
+                    &decision_reason,
                     id.to_string()
                 ],
             )
             .map_err(storage_error)?;
+        if changed != 1 {
+            return Err(JarvisError::Conflict(format!(
+                "approval decision lost its pending state: {id}"
+            )));
+        }
 
-        self.get_pending_approval(id)?.ok_or_else(|| {
-            JarvisError::Storage(format!("pending approval not found after decision: {id}"))
-        })
+        let approval = tx
+            .query_row(
+                "SELECT id, task_id, action, requested_scopes, risk_tier, sensitivity, status, reason, requested_at, decided_at, decided_by, decision_reason
+                 FROM pending_approvals
+                 WHERE id = ?1",
+                params![id.to_string()],
+                pending_approval_from_row,
+            )
+            .map_err(storage_error)?;
+        let event_type = match status {
+            ApprovalStatus::Approved => "approval_granted",
+            ApprovalStatus::Denied => "approval_denied",
+            _ => unreachable!("decision status validated above"),
+        };
+        let decision_audit = AuditEntry::new(
+            Some(approval.task_id),
+            event_type,
+            "pending approval was decided; side effect remains unexecuted until explicitly authorized",
+            json!({
+                "approval_id": approval.id,
+                "action": approval.action,
+                "status": approval.status,
+                "risk_tier": approval.risk_tier,
+                "sensitivity": approval.sensitivity,
+                "requested_scopes": approval.requested_scopes,
+                "decided_by_present": !decided_by.trim().is_empty(),
+                "decision_reason_present": decision_reason
+                    .as_deref()
+                    .is_some_and(|reason| !reason.trim().is_empty()),
+                "decision_metadata_redacted": true,
+                "side_effect_executed": false,
+            }),
+        );
+        append_audit_entry_tx(&tx, &decision_audit)?;
+        tx.commit().map_err(storage_error)?;
+
+        Ok(approval)
     }
 
     pub fn get_approval_execution(
@@ -2450,6 +2500,11 @@ impl SqliteRepository {
         {
             return Err(JarvisError::Conflict(format!(
                 "approval {approval_id} execution has already been claimed"
+            )));
+        }
+        if !approval_has_matching_grant_audit(&tx, &approval)? {
+            return Err(JarvisError::Validation(format!(
+                "approval {approval_id} is missing matching approval_granted audit evidence"
             )));
         }
         let task_status = tx
@@ -3626,6 +3681,105 @@ fn append_audit_entry_tx(tx: &Transaction<'_>, entry: &AuditEntry) -> JarvisResu
     Ok(())
 }
 
+fn approval_has_matching_grant_audit(
+    tx: &Transaction<'_>,
+    approval: &PendingApproval,
+) -> JarvisResult<bool> {
+    if approval.decided_at.is_none() || approval.decided_by.is_none() {
+        return Ok(false);
+    }
+    let mut statement = tx
+        .prepare(
+            "SELECT id, task_id, event_type, summary, payload, created_at
+             FROM audit_entries
+             WHERE task_id = ?1
+               AND event_type = 'approval_granted'
+               AND json_valid(payload) = 1
+               AND json_extract(payload, '$.approval_id') = ?2
+             ORDER BY sequence DESC",
+        )
+        .map_err(storage_error)?;
+    let entries = statement
+        .query_map(
+            params![approval.task_id.to_string(), approval.id.to_string()],
+            audit_entry_from_row,
+        )
+        .map_err(storage_error)?;
+    for entry in entries {
+        if approval_grant_audit_matches(&entry.map_err(storage_error)?, approval) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn approval_grant_audit_matches(entry: &AuditEntry, approval: &PendingApproval) -> bool {
+    let Some(decided_at) = approval.decided_at else {
+        return false;
+    };
+    if entry.task_id != Some(approval.task_id)
+        || entry.event_type != "approval_granted"
+        || entry.created_at < decided_at
+    {
+        return false;
+    }
+    let Some(payload) = entry.payload.as_object() else {
+        return false;
+    };
+    let common_metadata_matches = payload
+        .get("approval_id")
+        .and_then(serde_json::Value::as_str)
+        == Some(approval.id.to_string().as_str())
+        && payload.get("action").and_then(serde_json::Value::as_str)
+            == Some(approval.action.as_str())
+        && payload.get("status").and_then(serde_json::Value::as_str) == Some("approved")
+        && payload.get("risk_tier").and_then(serde_json::Value::as_str)
+            == Some(risk_tier_to_str(approval.risk_tier))
+        && payload
+            .get("sensitivity")
+            .and_then(serde_json::Value::as_str)
+            == Some(sensitivity_to_str(approval.sensitivity))
+        && payload.get("requested_scopes") == Some(&json!(approval.requested_scopes))
+        && payload
+            .get("side_effect_executed")
+            .and_then(serde_json::Value::as_bool)
+            == Some(false);
+    if !common_metadata_matches {
+        return false;
+    }
+
+    let decided_by_present = approval
+        .decided_by
+        .as_deref()
+        .is_some_and(|decided_by| !decided_by.trim().is_empty());
+    let decision_reason_present = approval
+        .decision_reason
+        .as_deref()
+        .is_some_and(|reason| !reason.trim().is_empty());
+    let current_redacted_shape = payload
+        .get("decision_metadata_redacted")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+        && payload
+            .get("decided_by_present")
+            .and_then(serde_json::Value::as_bool)
+            == Some(decided_by_present)
+        && payload
+            .get("decision_reason_present")
+            .and_then(serde_json::Value::as_bool)
+            == Some(decision_reason_present)
+        && !payload.contains_key("decided_by")
+        && !payload.contains_key("decision_reason");
+
+    let legacy_raw_metadata_shape = !payload.contains_key("decision_metadata_redacted")
+        && !payload.contains_key("decided_by_present")
+        && !payload.contains_key("decision_reason_present")
+        && payload.get("decided_by") == Some(&json!(approval.decided_by))
+        && payload.get("decision_reason") == Some(&json!(approval.decision_reason));
+
+    current_redacted_shape || legacy_raw_metadata_shape
+}
+
 fn approval_execution_from_row(row: &Row<'_>) -> rusqlite::Result<ApprovalExecutionRecord> {
     Ok(ApprovalExecutionRecord {
         id: parse_uuid(&row.get::<_, String>(0)?)?,
@@ -4506,6 +4660,195 @@ mod tests {
             repo.get_task(task.id).unwrap().unwrap().status,
             TaskStatus::WaitingForApproval
         );
+    }
+
+    #[test]
+    fn approved_row_without_matching_grant_audit_cannot_be_claimed() {
+        let repo = SqliteRepository::in_memory().unwrap();
+        let (task, approval) = approved_approval_without_audit_fixture(&repo);
+        let policy_audit = AuditEntry::new(
+            Some(task.id),
+            "approval_execution_policy_evaluated",
+            "policy evaluated",
+            json!({"approval_id": approval.id, "input_redacted": true}),
+        );
+        let claim_audit = AuditEntry::new(
+            Some(task.id),
+            "approval_execution_claimed",
+            "execution claimed",
+            json!({"approval_id": approval.id, "input_redacted": true}),
+        );
+
+        let error = repo
+            .claim_approved_execution(
+                approval.id,
+                Uuid::new_v4(),
+                task.id,
+                &approval.action,
+                &policy_audit,
+                &claim_audit,
+            )
+            .expect_err("approved row without grant audit must fail closed");
+        assert!(error
+            .to_string()
+            .contains("missing matching approval_granted audit evidence"));
+
+        let mut stale_matching_audit = AuditEntry::new(
+            Some(task.id),
+            "approval_granted",
+            "stale matching grant audit",
+            json!({
+                "approval_id": approval.id,
+                "action": approval.action,
+                "status": "approved",
+                "risk_tier": approval.risk_tier,
+                "sensitivity": approval.sensitivity,
+                "requested_scopes": approval.requested_scopes,
+                "decided_by_present": true,
+                "decision_reason_present": true,
+                "decision_metadata_redacted": true,
+                "side_effect_executed": false,
+            }),
+        );
+        stale_matching_audit.created_at =
+            approval.decided_at.unwrap() - chrono::Duration::seconds(1);
+        repo.append_audit_entry(&stale_matching_audit).unwrap();
+        let error = repo
+            .claim_approved_execution(
+                approval.id,
+                Uuid::new_v4(),
+                task.id,
+                &approval.action,
+                &policy_audit,
+                &claim_audit,
+            )
+            .expect_err("pre-decision grant audit cannot substitute for authority");
+        assert!(error
+            .to_string()
+            .contains("missing matching approval_granted audit evidence"));
+
+        repo.append_audit_entry(&AuditEntry::new(
+            Some(task.id),
+            "approval_granted",
+            "unrelated grant audit",
+            json!({
+                "approval_id": approval.id,
+                "action": "different.action",
+                "status": "approved",
+                "risk_tier": approval.risk_tier,
+                "sensitivity": approval.sensitivity,
+                "requested_scopes": approval.requested_scopes,
+                "decided_by_present": true,
+                "decision_reason_present": true,
+                "decision_metadata_redacted": true,
+                "side_effect_executed": false,
+            }),
+        ))
+        .unwrap();
+        let error = repo
+            .claim_approved_execution(
+                approval.id,
+                Uuid::new_v4(),
+                task.id,
+                &approval.action,
+                &policy_audit,
+                &claim_audit,
+            )
+            .expect_err("mismatched grant audit cannot substitute for authority");
+        assert!(error
+            .to_string()
+            .contains("missing matching approval_granted audit evidence"));
+        assert!(repo.get_approval_execution(approval.id).unwrap().is_none());
+        assert_eq!(
+            repo.get_task(task.id).unwrap().unwrap().status,
+            TaskStatus::WaitingForApproval
+        );
+        let audits = repo.list_audit_entries(Some(task.id)).unwrap();
+        assert!(!audits.iter().any(|entry| {
+            entry.event_type == "approval_execution_policy_evaluated"
+                || entry.event_type == "approval_execution_claimed"
+        }));
+    }
+
+    #[test]
+    fn matching_legacy_raw_metadata_grant_audit_remains_claimable() {
+        let repo = SqliteRepository::in_memory().unwrap();
+        let (task, approval) = approved_approval_without_audit_fixture(&repo);
+        repo.append_audit_entry(&AuditEntry::new(
+            Some(task.id),
+            "approval_granted",
+            "legacy approval decision audit",
+            json!({
+                "approval_id": approval.id,
+                "action": approval.action,
+                "status": approval.status,
+                "risk_tier": approval.risk_tier,
+                "sensitivity": approval.sensitivity,
+                "requested_scopes": approval.requested_scopes,
+                "decided_by": approval.decided_by,
+                "decision_reason": approval.decision_reason,
+                "side_effect_executed": false,
+            }),
+        ))
+        .unwrap();
+        let policy_audit = AuditEntry::new(
+            Some(task.id),
+            "approval_execution_policy_evaluated",
+            "policy evaluated",
+            json!({"approval_id": approval.id, "input_redacted": true}),
+        );
+        let claim_audit = AuditEntry::new(
+            Some(task.id),
+            "approval_execution_claimed",
+            "execution claimed",
+            json!({"approval_id": approval.id, "input_redacted": true}),
+        );
+
+        let execution = repo
+            .claim_approved_execution(
+                approval.id,
+                Uuid::new_v4(),
+                task.id,
+                &approval.action,
+                &policy_audit,
+                &claim_audit,
+            )
+            .expect("exact prior raw-metadata audit remains compatible");
+        assert_eq!(execution.state, ApprovalExecutionState::Claimed);
+    }
+
+    fn approved_approval_without_audit_fixture(
+        repo: &SqliteRepository,
+    ) -> (TaskRecord, PendingApproval) {
+        let task = repo.create_task(Uuid::new_v4(), "status").unwrap();
+        let task = repo
+            .update_task_status(task.id, TaskStatus::WaitingForApproval)
+            .unwrap();
+        let approval = repo
+            .create_pending_approval(NewPendingApproval {
+                task_id: task.id,
+                action: "system_status.status".to_string(),
+                requested_scopes: vec![CapabilityScope::PluginRun, CapabilityScope::Conversation],
+                risk_tier: RiskTier::Notify,
+                sensitivity: Sensitivity::Workspace,
+                reason: "legacy authority-chain fixture".to_string(),
+            })
+            .unwrap();
+        repo.raw_connection()
+            .execute(
+                "UPDATE pending_approvals
+                 SET status = 'approved', decided_at = ?1, decided_by = ?2, decision_reason = ?3
+                 WHERE id = ?4",
+                params![
+                    to_db_time(Utc::now()),
+                    "legacy-cli",
+                    "historical reviewed decision",
+                    approval.id.to_string(),
+                ],
+            )
+            .unwrap();
+        let approval = repo.get_pending_approval(approval.id).unwrap().unwrap();
+        (task, approval)
     }
 
     fn claimed_approval_execution_fixture(
@@ -5420,6 +5763,87 @@ mod tests {
         assert!(repo
             .decide_pending_approval(pending.id, ApprovalStatus::Denied, "cli", None)
             .is_err());
+    }
+
+    #[test]
+    fn approval_decision_and_redacted_audit_commit_or_roll_back_together() {
+        for (status, event_type) in [
+            (ApprovalStatus::Approved, "approval_granted"),
+            (ApprovalStatus::Denied, "approval_denied"),
+        ] {
+            let repo = SqliteRepository::in_memory().unwrap();
+            let task = repo
+                .create_task(Uuid::new_v4(), "approval decision transaction")
+                .unwrap();
+            let pending = repo
+                .create_pending_approval(NewPendingApproval {
+                    task_id: task.id,
+                    action: "system_status.status".to_string(),
+                    requested_scopes: vec![CapabilityScope::Conversation],
+                    risk_tier: RiskTier::Confirm,
+                    sensitivity: Sensitivity::Private,
+                    reason: "requires explicit confirmation".to_string(),
+                })
+                .unwrap();
+            repo.raw_connection()
+                .execute_batch(&format!(
+                    "CREATE TRIGGER inject_approval_decision_audit_failure
+                     BEFORE INSERT ON audit_entries
+                     WHEN NEW.event_type = '{event_type}'
+                     BEGIN
+                         SELECT RAISE(ABORT, 'injected approval decision audit failure');
+                     END;"
+                ))
+                .unwrap();
+
+            let error = repo
+                .decide_pending_approval(
+                    pending.id,
+                    status,
+                    "private operator identity",
+                    Some("private decision rationale".to_string()),
+                )
+                .expect_err("audit insertion failure must roll back the decision");
+            assert!(matches!(error, JarvisError::Storage(_)));
+            let rolled_back = repo.get_pending_approval(pending.id).unwrap().unwrap();
+            assert_eq!(rolled_back.status, ApprovalStatus::Pending);
+            assert!(rolled_back.decided_at.is_none());
+            assert!(rolled_back.decided_by.is_none());
+            assert!(rolled_back.decision_reason.is_none());
+            assert!(!repo
+                .list_audit_entries(Some(task.id))
+                .unwrap()
+                .iter()
+                .any(|entry| entry.event_type == event_type));
+
+            repo.raw_connection()
+                .execute_batch("DROP TRIGGER inject_approval_decision_audit_failure;")
+                .unwrap();
+            let decided = repo
+                .decide_pending_approval(
+                    pending.id,
+                    status,
+                    "private operator identity",
+                    Some("private decision rationale".to_string()),
+                )
+                .expect("decision and audit commit together");
+            assert_eq!(decided.status, status);
+            let audits = repo.list_audit_entries(Some(task.id)).unwrap();
+            let decision_audits = audits
+                .iter()
+                .filter(|entry| entry.event_type == event_type)
+                .collect::<Vec<_>>();
+            assert_eq!(decision_audits.len(), 1);
+            let audit = decision_audits[0];
+            assert_eq!(audit.payload["approval_id"], pending.id.to_string());
+            assert_eq!(audit.payload["decision_metadata_redacted"], true);
+            assert_eq!(audit.payload["decided_by_present"], true);
+            assert_eq!(audit.payload["decision_reason_present"], true);
+            assert_eq!(audit.payload["side_effect_executed"], false);
+            let serialized = serde_json::to_string(audit).unwrap();
+            assert!(!serialized.contains("private operator identity"));
+            assert!(!serialized.contains("private decision rationale"));
+        }
     }
 
     #[test]

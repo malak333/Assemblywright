@@ -975,6 +975,7 @@ dependencies = [
  "ed25519-dalek",
  "jarvis-core",
  "p256",
+ "rusqlite",
  "rustix",
  "serde",
  "serde_json",

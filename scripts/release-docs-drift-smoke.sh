@@ -48,10 +48,15 @@ require_file "$README"
 require_file "$CORE_IPC"
 
 for file in "$BUILD_DOCS" "$CHECKLIST" "$README"; do
+  require_text "atomic approval decision" "$file" "redacted decision audit"
+  require_text "approval decision rollback" "$file" "back to pending"
+  require_text "approval decision authority chain" "$file" "unaudited grant"
   require_text "atomic approval claim" "$file" "unique durable execution claim"
   require_text "approval replay conflict" "$file" "conflict/HTTP 409"
   require_text "approval ambiguous-effect boundary" "$file" "effect ambiguous"
   require_text "approval no automatic retry boundary" "$file" "automatic retry is forbidden"
+  require_text "approval grant-chain evidence" "$file" "approval_granted audit evidence"
+  require_text "approval legacy grant compatibility" "$file" "legacy raw-metadata"
 done
 
 for file in "$BUILD_DOCS" "$CHECKLIST" "$ARCHITECTURE" "$KB" "$README"; do
@@ -60,10 +65,25 @@ done
 require_text "core diagnostics pause-reason redaction contract" "$CORE_IPC" "emergency_pause_reason_present"
 forbid_text "core stale diagnostics redaction statement" "$CORE_IPC" "memory values, and cancellation reason text"
 
+for file in "$ARCHITECTURE" "$KB"; do
+  require_text "atomic approval decision" "$file" "redacted decision audit"
+  require_text "approval decision rollback" "$file" "back to pending"
+  require_text "approval decision authority chain" "$file" "unaudited grant"
+  require_text "approval grant-chain evidence" "$file" "approval_granted"
+  require_text "approval legacy grant compatibility" "$file" "legacy raw-metadata"
+done
+require_text "approval decision storage proof" "$BUILD_DOCS" "approval_decision_and_redacted_audit_commit_or_roll_back_together"
+require_text "approval decision IPC proof" "$BUILD_DOCS" "approval_decision_audit_failure_rolls_back_across_cli_ipc_and_restart"
+require_text "approval grant-chain storage proof" "$BUILD_DOCS" "approved_row_without_matching_grant_audit_cannot_be_claimed"
+require_text "approval legacy grant storage proof" "$BUILD_DOCS" "matching_legacy_raw_metadata_grant_audit_remains_claimable"
+require_text "approval grant-chain IPC proof" "$BUILD_DOCS" "approved_row_without_grant_audit_cannot_claim_or_enter_plugin_across_restart"
+
 require_text "core app-supervised IPC audit-token proof" "$CORE_IPC" "LOCAL_PEERTOKEN"
 require_text "core app-supervised IPC Security.framework proof" "$CORE_IPC" "Security.framework designated requirement"
 require_text "core app-supervised IPC wrong-code proof" "$CORE_IPC" "same-EUID wrong-code pre-frame rejection"
 require_text "core app-supervised IPC default transport proof" "$CORE_IPC" "default owner-only Unix socket plus memory-only bearer path has no TCP listener or credential handoff file"
+require_text "core approval grant-chain proof" "$CORE_IPC" "matching approval_granted audit evidence"
+require_text "core approval no-fabrication boundary" "$CORE_IPC" "never fabricates grant evidence"
 forbid_text "obsolete same-EUID code-sign boundary" "$CORE_IPC" "Same-EUID plus bearer defense in depth does not prove peer PID, intended process or code-sign identity"
 forbid_text "stale schema fixture range" "$README" "schema v1-v11 fixtures"
 forbid_text "stale schema fixture range" "$BUILD_DOCS" "schema v1-v11"

@@ -1900,29 +1900,7 @@ impl IpcState {
         reason: Option<String>,
     ) -> JarvisResult<PendingApproval> {
         self.using_repository(|repository| {
-            let approval = repository.decide_pending_approval(id, status, decided_by, reason)?;
-            let event_type = match status {
-                ApprovalStatus::Approved => "approval_granted",
-                ApprovalStatus::Denied => "approval_denied",
-                _ => "approval_decision",
-            };
-            repository.append_audit_entry(&AuditEntry::new(
-                Some(approval.task_id),
-                event_type,
-                "pending approval was decided; side effect remains unexecuted until retried with an approval grant",
-                json!({
-                    "approval_id": approval.id,
-                    "action": approval.action,
-                    "status": approval.status,
-                    "risk_tier": approval.risk_tier,
-                    "sensitivity": approval.sensitivity,
-                    "requested_scopes": approval.requested_scopes,
-                    "decided_by": approval.decided_by,
-                    "decision_reason": approval.decision_reason,
-                    "side_effect_executed": false,
-                }),
-            ))?;
-            Ok(approval)
+            repository.decide_pending_approval(id, status, decided_by, reason)
         })
     }
 
@@ -8276,8 +8254,8 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "approval_execution",
             "implemented",
-            "Approved first-party actions execute through `/approvals/:id/execute` only after current action, risk, scope, input-schema, and policy validation. Schema-v13 atomically records a unique durable execution claim plus redacted policy/claim audits before plugin invocation; terminal state, task state, and terminal audits commit together. Rust race/migration tests, cross-process CLI IPC E2E, and Swift duplicate-submit/restart tests cover the one-shot boundary.",
-            "Every durable claim permanently consumes that approval. Failure, cancellation, timeout, storage interruption, or restart after claim may leave the effect ambiguous and automatic retry is forbidden; an operator must inspect audit evidence and create a new approval when appropriate. Grant/deny remains side-effect-free, execution remains limited to explicitly approved first-party plugin commands, and this is not broad autonomous execution or distributed exactly-once delivery.",
+            "Approved first-party actions execute through `/approvals/:id/execute` only after matching approval_granted audit evidence plus current action, risk, scope, input-schema, and policy validation. Missing or unrelated grant evidence fails before claim or plugin entry; current redacted and exact legacy raw-metadata audit shapes are accepted only when their authority and decision fields match. Schema-v13 atomically records a unique durable execution claim plus redacted policy/claim audits before plugin invocation; terminal state, task state, and terminal audits commit together. Rust race/migration/grant-chain tests, cross-process CLI IPC E2E, and Swift duplicate-submit/restart tests cover the one-shot boundary.",
+            "Every durable claim permanently consumes that approval. Failure, cancellation, timeout, storage interruption, or restart after claim may leave the effect ambiguous and automatic retry is forbidden; an operator must inspect audit evidence and create a new approval when appropriate. Grant/deny remains side-effect-free, the claim path never fabricates grant evidence, execution remains limited to explicitly approved first-party plugin commands, and this is not broad autonomous execution or distributed exactly-once delivery.",
         ),
         feature(
             "model_tool_catalog_grounding",
@@ -8643,7 +8621,11 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         assert!(contract.features.iter().any(|feature| {
             feature.key == "approval_execution"
                 && feature.proof.contains("unique durable execution claim")
+                && feature
+                    .proof
+                    .contains("matching approval_granted audit evidence")
                 && feature.boundary.contains("automatic retry is forbidden")
+                && feature.boundary.contains("never fabricates grant evidence")
         }));
         assert!(contract.features.iter().any(|feature| {
             feature.key == "app_supervised_ipc_auth"
