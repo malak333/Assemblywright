@@ -8,22 +8,25 @@ Current implementation:
 flowchart LR
   A["JarvisMacApp"] --> R["Per-launch 32-byte secure random token"]
   R --> S["Shared generation-bound Swift authorization state"]
-  S --> C["JarvisIPCClient adds one Bearer header to every route"]
-  S --> E["Bounded strict startup-stdin envelope"]
-  S --> D["Default: memory-only bearer and stale-file cleanup"]
-  O["Exact JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true"] --> F["Explicit weaker owner-only 0600 CLI handoff file"]
+  S --> C["JarvisIPCClient: peer EUID plus Bearer on every route"]
+  S --> E["Bounded strict startup stdin: auth plus unix_socket_v1"]
+  E --> U["Owner 0700 run dir; random bounded socket leaf; 0600 socket"]
+  U --> P["getpeereid current-EUID checks on both peers"]
+  C --> J["4-byte BE request; required write-half close; one bounded response"]
+  J --> M["Existing whole router"]
+  P --> M
+  O["Exact JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true"] --> T["Explicit weaker authenticated loopback TCP"]
+  T --> F["Owner-only 0600 CLI handoff file"]
   V["Optional absolute JARVIS_MAC_IPC_AUTH_FILE override"] --> F
-  S -->|"explicit opt-in only"| F
-  E --> M["Rust whole-router authentication middleware"]
-  C --> M
+  S -->|"explicit opt-in replaces default UDS"| T
   F --> L["Explicit jarvis --ipc-token-file client"]
   L --> M
   O --> Z["App-only handoff settings removed from child environment"]
   V --> Z
-  B["Strict loopback destination and bind checks"] --> C
+  B["Strict loopback destination and bind checks in compatibility mode"] --> T
   B --> M
   M --> X["Constant-time digest comparison or generic 401"]
-  P["Stop, launch failure, replacement, observed exit"] --> G["Generation-bound credential and file clear"]
+  Q["Stop, launch failure, replacement, observed exit"] --> G["Generation-bound auth clear and validated leaf cleanup"]
 ```
 
 Production end goal:
@@ -40,14 +43,12 @@ flowchart LR
   O --> E
 ```
 
-The current slice proves possession and lifecycle of an app-generated launch
-credential, strict loopback destination/bind and no-downgrade behavior,
-whole-router enforcement, default memory-only handling, stale-file cleanup, and
-an explicitly enabled restrictive CLI handoff. The opt-in file is a weaker
-operator/test surface because another process running as the same user can read
-it while present. Loopback TCP does not expose a trustworthy peer UID, PID,
-audit token, or code-signing identity. This slice does not prove OS identity, device authentication,
-same-user/process isolation, App Sandbox enforcement, host-level egress policy,
+The current slice proves bounded UDS framing, current-EUID peer checks, bearer
+possession and lifecycle, whole-router parity, owner-only filesystem setup,
+fail-closed limits, validated leaf cleanup, and an explicitly enabled loopback
+TCP/token compatibility path. Same EUID is not same PID or intended process
+identity. Neither `getpeereid` nor the bearer proves code-sign identity, device
+authentication, XPC, App Sandbox enforcement, host egress policy,
 signing/notarization, or live-device behavior.
 
 ## Trusted system-wake slice
@@ -104,7 +105,8 @@ launch, exactly-once side effects, live-device QA, or production readiness.
 Manual SQLite or Keychain mutation is not a recovery procedure.
 
 Jarvis is a local-first macOS assistant foundation. The current repository
-contains a Rust workspace with the core contracts, loopback IPC server,
+contains a Rust workspace with the core contracts, default app-supervised UDS
+transport plus explicit loopback compatibility server,
 SQLite-backed repository primitives, policy/model-routing rules, in-process
 and installed-plugin contracts, scheduler persistence/recovery, release
 readiness/evidence-status, redacted diagnostics, CLI client, and a
@@ -220,21 +222,24 @@ flowchart TB
     VoiceAutoSubmit --> MacCore
     SpeechOutput --> MacCore
     MacCore --> Supervisor["JarvisCoreSupervisor configured or bundled process"]
-    BookmarkResolve --> StartupEnvelope["bounded strict v1 startup stdin; roots, IPC auth, plus optional trusted-wake document"]
+    BookmarkResolve --> StartupEnvelope["bounded strict v1 startup stdin; roots, IPC auth, unix_socket_v1 transport, plus optional trusted-wake document"]
     StartupEnvelope --> Supervisor
     Supervisor --> CLI
-    MacCore --> IPCAuthState["shared per-launch managed bearer credential; memory-only by default"]
-    IPCAuthState -->|"one Authorization header on every request"| IPCAuth["whole-router strict auth middleware"]
-    IPCAuthState --> StaleFileCleanup["default stale handoff-file cleanup"]
-    CLIHandoffOptIn["exact JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true"] --> TokenFile["explicit weaker owner-only CLI handoff file"]
+    MacCore --> IPCAuthState["shared per-launch managed bearer plus UDS generation"]
+    IPCAuthState -->|"peer EUID plus bearer on every request"| IPCAuth["whole-router strict auth middleware"]
+    IPCAuthState --> UDS["owner 0700 runtime directory and 0600 random socket leaf"]
+    UDS --> FramedIPC["bounded request; write-half EOF; trailing-byte rejection; one response"]
+    FramedIPC --> IPCAuth
+    CLIHandoffOptIn["exact JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true"] --> LoopbackCompat["explicit weaker authenticated loopback TCP"]
+    LoopbackCompat --> TokenFile["owner-only CLI handoff file"]
     CLIHandoffOverride["optional absolute JARVIS_MAC_IPC_AUTH_FILE"] --> TokenFile
-    IPCAuthState -->|"explicit opt-in only"| TokenFile
+    IPCAuthState -->|"explicit opt-in replaces UDS"| LoopbackCompat
     CLIHandoffOptIn --> ChildEnvStrip["handoff settings and token-file path absent from child environment"]
     CLIHandoffOverride --> ChildEnvStrip
     TokenFile --> CLI
-    MacCore -->|"HTTP JSON on configured core URL"| IPCAuth
-    CLI -->|"authenticated app core or explicit legacy unauthenticated server"| IPCAuth
-    IPCAuth --> IPC["jarvis-core::ipc Axum loopback server"]
+    MacCore -->|"default strict UDS; compatibility HTTP only by opt-in"| IPCAuth
+    CLI -->|"explicit authenticated compatibility or legacy server"| IPCAuth
+    IPCAuth --> IPC["jarvis-core::ipc shared router"]
     E2E --> IPC
     Smoke --> IPC
 
@@ -937,7 +942,9 @@ sequenceDiagram
 
 - `jarvis-core::types`: Stable shared records and enums for tasks, audit
   entries, sensitivity, risk, approval, task status, and errors.
-- `jarvis-core::ipc`: Axum loopback HTTP API for `/health`, `/contract`,
+- `jarvis-core::ipc`: shared router served by default over a bounded strict UDS
+  request/write-half-close/response transport, with explicit loopback HTTP compatibility, for
+  `/health`, `/contract`,
   `/commands`, `/tasks`, `/audit`, `/activity/summary`, `/activity/events`,
   `/model-routes`, `/memory`, `/approvals`, `/approvals/:id/execute`,
   `/permissions/grants`, `/permissions/policy-review`, `/plugins/manifests`,
@@ -1143,7 +1150,7 @@ external action, or broader production operation.
 | --- | --- | --- | --- |
 | Menu-bar presence | Native SwiftUI `MenuBarExtra` shares the existing app-owned supervisor, console, and model configuration state; it exposes a stable main-window route, conservative lifecycle status, health refresh, fail-closed start/stop availability, and quit. | Signed and installed `Jarvis.app` remains reachable after its main window closes, without creating a second core owner, and passes live Finder/LaunchServices window-reopen and lifecycle QA. | Swift scene/model contract and architecture implemented; signed installed-app GUI QA remains manual release evidence. |
 | Mac shell | Buildable Swift/SwiftUI shell with health, command transcript, pause/resume, activity/audit rendering, bounded activity event-stream watch, memory classification, redacted retention-plan review, and create/update/review/delete/restore controls, model/plugin/scheduler/diagnostics/release-readiness tabs, degraded-mode handling, and a `JarvisCoreSupervisor` abstraction for configured or bundled local core binaries. The Model tab decodes active provider/model health metadata, lists installed Ollama models from `/api/tags`, merges recommended downloadable Llama/Mistral/Phi/Gemma/Qwen options including Gemma 4, Gemma 3, Qwen3.6, Qwen3, Qwen2.5, Qwen2.5-Coder, and Qwen2.5-VL tags, shows RAM estimates from installed model size or curated pre-download estimates, pulls missing selections through `/api/pull`, starts/stops selected Ollama residency through `/api/generate` keep-alive requests, and restarts only the app-supervised core with selected model environment overrides. The Plugin tab renders first-party manifests plus redacted installed-plugin registry records with execution grant, provenance integrity, origin-review, action metadata, executable status, and redaction markers while omitting local paths, command paths, signature material, and provenance hashes; it degrades gracefully when the repository-backed installed registry is unavailable. The Scheduler tab can inspect/create/cancel jobs, request attention notifications, run due jobs through bounded `/scheduler/run-due`, and recover stale running jobs through bounded `/scheduler/recover-stale`, then refreshes jobs/attention, shows concise last-action state, and exposes delivered-notification evidence fields with reset/recapture controls without exposing scheduler command bodies. The Release tab renders `/release/readiness` blockers, external evidence-mode state, recommended commands, implemented proofs, pending features, proof boundary, `/release/evidence-status` file/report inventory plus invalid evidence details, and read-only signed-distribution/live-device/plugin-trust runbooks while preserving the explicit external-evidence production boundary; evidence rows label path, detail, and production/manual-gate context, present presence-only evidence rows show the caveat on the status line, runbook-load failures surface as warnings without hiding readiness/evidence status, and the production-ready display is fail-closed unless readiness is true, evidence status is complete, and the evidence view has no missing, invalid, stale refresh, or runbook warning state. The Voice tab gates capture behind permission state before start attempts, and the unsigned distribution launch check exercises the release-built `Jarvis.app` layout with temp-profile app-supervised core proof. | Packaged `Jarvis.app` supervises the core, owns voice/text UX, settings, memory and permission surfaces, diagnostics export, release-readiness review, and recovery states. | Shell supervision, Swift model selection/download/start/stop controls for app-supervised Ollama cores, Swift memory management including redacted retention-plan visibility, bounded activity event-stream watch, installed-plugin registry inspection surfaces, Swift scheduler run/recovery and notification evidence controls, Swift release-readiness/evidence-status/runbook inspection with runbook-load warnings, app-level Release row presentation coverage, explicit evidence-mode row coverage, voice permission-before-capture gating, and unsigned distribution launch proof implemented; Developer ID signing, notarization/stapling, signed installer validation, clean-profile /Applications install, Finder/LaunchServices launch, and manual production release QA pending. |
-| IPC boundary | Axum loopback HTTP JSON API protects every app-supervised route with a per-launch 32-byte bearer credential delivered only through startup stdin and compared by digest in constant time. The shared Swift client fails locally without its managed generation; lifecycle cleanup is generation-bound. The bearer is memory-only and stale handoff state is removed by default. Exact `JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true` enables the weaker bounded, no-follow, owner-matched, owner-only JSON handoff file; an absolute `JARVIS_MAC_IPC_AUTH_FILE` can override its path, and neither app-only setting reaches the child. Explicit legacy servers remain unauthenticated but reject any Authorization header, preventing silent managed-client downgrade. The API covers health, commands, inspection, approvals, plugins/tools, emergency pause, scheduler, compatibility metadata, release readiness/evidence/runbooks, and redacted diagnostics. | Versioned authenticated local transport with an XPC or equivalent Apple-backed service boundary, audit-token and code-requirement validation, same-user/intended signed-process authorization, device-bound secret lifecycle, compatibility-tested distribution launch, and clear degraded-mode handling. | Possession-based whole-router authentication, strict no-downgrade behavior, default memory-only lifecycle, explicit weaker app/CLI handoff, Swift tests, Rust cross-process E2E, and distribution-layout smoke implemented. Loopback TCP does not prove peer UID, PID, audit token, or code identity; OS identity, device authentication, same-user/process isolation, App Sandbox/egress enforcement, signing/notarization, and live-device evidence remain pending. |
+| IPC boundary | App-supervised IPC defaults to a generation-random Unix socket in a current-owner `0700` runtime directory, with the socket `0600`. Strict startup stdin carries `unix_socket_v1`, the absolute bounded socket path, and a fresh 32-byte bearer. Both peers require current-EUID `getpeereid`; one four-byte big-endian length frames one strict bounded JSON request, the client must write-half close, trailing input is rejected before one response, and every existing router path still requires the bearer. Hard deadlines, body/frame/concurrency bounds, lifecycle invalidation, and validated leaf-only cleanup fail closed. Exact `JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true` replaces UDS with weaker authenticated loopback TCP plus the bounded owner-only token file; `JARVIS_MAC_IPC_AUTH_FILE` is an absolute override only in that mode. | Versioned authenticated local transport with an XPC or equivalent Apple-backed service boundary, audit-token and code-requirement validation, same-user/intended signed-process authorization, device-bound secret lifecycle, compatibility-tested distribution launch, and clear degraded-mode handling. | Default UDS, same-EUID and bearer defense in depth, strict framing, whole-router parity, bounded cleanup, explicit TCP/token compatibility, Swift tests, Rust cross-process E2E, and distribution-layout proof implemented. Same EUID does not prove PID or intended process; peer/code identity, device authentication, XPC, App Sandbox/egress enforcement, signing/notarization, and live-device evidence remain pending. |
 | Command runtime | `ConversationRuntime` creates tasks, runs a routed `ModelExecutor` (`FakeLocalModel` by default, Ollama-compatible HTTP or ChatGPT/OpenAI-compatible HTTP when explicitly enabled), records structured audit entries including redacted model-output chunk metadata, handles pause/cancel including in-flight provider futures, enforces max steps, can persist task/audit/model-route state through `RuntimeCommandStore`, exposes repository-backed activity summaries and bounded server-sent activity events for progress visibility, derives provider-visible model tools from the registered first-party model-tool catalog, and, only when `installed_wasm_tools` is explicitly set on a reactive local-model command, adds currently eligible enabled installed `local_wasm` schemas. It executes bounded model-planned calls after schema and policy checks, repeats installed grant/eligibility/exact-provenance validation before WASM entry, accepts strict provider response envelopes and native provider `tool_calls`, rejects invalid model-planned plugin IDs/actions before execution with registered-tool guidance and model-visible rejected results, rejects mixed prose plus JSON `tool_requests`, and returns structured failed command responses when a provider fails. | Multi-step assistant runtime with production model responses, installed plugin/tool orchestration, streaming progress, approval UI handoff, native provider function-calling where appropriate, and robust recovery. | Bounded first-party orchestration and explicit default-off local-only confined WASM orchestration, runtime-derived route-scoped catalogs, invalid-tool fail-closed recovery guidance, opt-in local and ChatGPT provider boundaries, structured provider-failure recovery, direct installed-plugin runners, CLI/IPC/Swift opt-in surfaces, pollable activity summaries, audit-backed installed subprocess, model-step, and redacted model-output chunk progress frames, and quarantined Ollama-native NDJSON transport with cancellation implemented; cloud/proactive installed tools and installed subprocess model planning remain excluded, while raw-token UI streaming and unbounded real-time plugin UI progress remain pending. |
 | Model routing | Local-first `ModelRouter` exists with sensitivity checks, provider-status route evidence, cloud opt-in gate, approval delegation, and redaction logic. The active `/commands` path can call a configured local provider, an opt-in OpenAI-compatible API provider with a Keychain-injected credential, or an opt-in Codex-account adapter that invokes the logged-in Codex CLI with a bounded timeout and reads only its final-message file. Health exposes the active cloud auth mode so the app can reject an already-running core with mismatched configuration. Provider text responses can return a strict JSON envelope with first-party `tool_requests`, and OpenAI-compatible responses can return native `tool_calls` using function definitions generated from the runtime's registered first-party manifests. Repository-backed command execution persists append-only SQLite model-route records and exposes redacted IPC/CLI inspection without storing route context. Provider failures keep the selected route evidence in the failed command response, and live Ollama testing has proven the opt-in local HTTP route can complete real model commands while the runtime rejects hallucinated tool IDs and can recover by feeding redacted rejection results back to the model. | Local provider integration, explicit cloud escalation through API-key or account auth, minimized cloud context, user approval where required, native tool-call support where useful, and durable route evidence in every relevant task. | Local, OpenAI API, and Codex-account provider boundaries, strict provider-envelope first-party tool requests, runtime-derived native OpenAI first-party tool-call adaptation, SQLite route recovery evidence, live Ollama route viability, invalid-tool rejection/recovery, mixed-output failure diagnostics, and structured failure-response evidence implemented with tests; broader production model operations pending. |
 | Plugins and tools | Production inventory excludes deterministic `fake_*` fixtures and uses one configured `PluginHost` for default provider advertisement, direct dispatch, approval replay, and first-party runtime execution. `system_status.status` is always present. The macOS app persists user-selected roots as security-scoped bookmarks under opaque IDs and supplies them through bounded startup stdin for descriptor-anchored local-only workspace inspection. Installed `local_wasm` plugins require `wasm_compute`, exact-byte provenance, the no-import `jarvis_json_v1` exports, low-risk non-proactive compute-only policy, and hard module/request/output/memory/fuel limits; pause/cancel/timeout/fuel exhaustion fail closed. A per-command default-false opt-in exposes only eligible records to a reactive local model, with collision rejection, deterministic 16-action / 1 KiB-description / 16 KiB-schema / 64 KiB-catalog limits, and immediate pre-entry revalidation. Cloud/proactive routes and `local_subprocess` remain outside installed model planning. Redacted inspection and Swift presentation distinguish Wasmi confinement from `local_subprocess`, which remains not OS sandboxed. | Defense-in-depth OS sandboxing for first-party, WASM, and subprocess tools, verified child sandbox-extension inheritance, content classification, durable approval replay, publisher/marketplace/malware trust, and production model-generated tool execution. | App-owned bookmark selection, redacted grant UI, bounded workspace tools, no-import Wasmi language confinement, and explicit local-only installed WASM model planning are implemented with Swift tests and cross-process E2E. OS sandbox/egress enforcement, verified child extension inheritance, same-user IPC, marketplace/publisher/malware trust, signing/notarization, and live-device QA remain pending. |

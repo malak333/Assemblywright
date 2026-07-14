@@ -8074,8 +8074,8 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "app_supervised_ipc_auth",
             "implemented",
-            "App-supervised launches rotate a 32-byte bearer credential through strict bounded startup stdin, Swift requires it on every request, Rust protects the whole router with constant-time digest comparison, managed clients reject non-loopback destinations before exposure, authenticated serving rejects non-loopback binds, and the CLI supports a bounded owner-only token-file handoff. Swift lifecycle tests, Rust cross-process E2E, and the unsigned distribution launch smoke cover the boundary.",
-            "Possession-based loopback authentication only; this does not prove OS identity, device authentication, same-user/process isolation, App Sandbox enforcement, host-level egress policy, signing/notarization, or live-device behavior. Explicit legacy servers remain unauthenticated but reject any Authorization header.",
+            "Default app supervision rotates a 32-byte bearer through strict bounded startup stdin and uses a generation-random owner-only Unix socket. Swift and Rust require the peer's current EUID, the framed client must half-close without trailing input, and Rust protects the whole router with constant-time bearer comparison. Exact CLI handoff opt-in replaces UDS with weaker authenticated loopback TCP plus a bounded owner-only token file. Swift lifecycle tests, Rust cross-process and concurrency E2E, and the unsigned distribution launch smoke cover the boundary.",
+            "Same-EUID plus bearer defense in depth does not prove peer PID, intended process or code-sign identity, same-user/process isolation, device authentication, XPC, App Sandbox enforcement, host-level egress policy, signing/notarization, or live-device behavior. Explicit CLI handoff is same-user-readable loopback compatibility; explicitly launched legacy servers remain unauthenticated but reject any Authorization header.",
         ),
         feature(
             "repository_state",

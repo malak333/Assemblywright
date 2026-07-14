@@ -1893,17 +1893,20 @@ public final class JarvisIPCClient: JarvisCoreClient {
     private let endpoint: JarvisEndpoint
     private let session: URLSession
     private let authorization: JarvisIPCSessionAuthorization
+    private let unixSocketTransport: any JarvisUnixSocketRequesting
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
 
     public init(
         endpoint: JarvisEndpoint = JarvisEndpoint(),
         session: URLSession = .shared,
-        authorization: JarvisIPCSessionAuthorization = JarvisIPCSessionAuthorization()
+        authorization: JarvisIPCSessionAuthorization = JarvisIPCSessionAuthorization(),
+        unixSocketTransport: any JarvisUnixSocketRequesting = DarwinJarvisUnixSocketTransport()
     ) {
         self.endpoint = endpoint
         self.session = session
         self.authorization = authorization
+        self.unixSocketTransport = unixSocketTransport
         self.encoder = JSONEncoder()
         self.decoder = JSONDecoder()
     }
@@ -1981,21 +1984,20 @@ public final class JarvisIPCClient: JarvisCoreClient {
         let boundedMaxEvents = min(max(maxEvents, 1), 16)
         let boundedInterval = max(intervalMilliseconds, 100)
         let path = "/activity/events?max_events=\(boundedMaxEvents)&interval_ms=\(boundedInterval)"
-        var request = URLRequest(url: endpoint.url(path: path))
-        request.httpMethod = "GET"
-        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-        try authorize(&request)
-
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw JarvisIPCError.invalidResponse
+        let response = try await performRequest(
+            path: path,
+            method: "GET",
+            body: nil,
+            accept: "text/event-stream",
+            contentType: nil
+        )
+        guard (200..<300).contains(response.status) else {
+            throw JarvisIPCError.httpStatus(
+                response.status,
+                Self.safeErrorBody(response.body, statusCode: response.status)
+            )
         }
-
-        guard (200..<300).contains(http.statusCode) else {
-            throw JarvisIPCError.httpStatus(http.statusCode, Self.safeErrorBody(data, statusCode: http.statusCode))
-        }
-
-        return try JarvisActivityEvent.parseServerSentEvents(data)
+        return try JarvisActivityEvent.parseServerSentEvents(response.body)
     }
 
     public func listMemoryItems(includeDeleted: Bool = false) async throws -> [JarvisMemoryItem] {
@@ -2193,26 +2195,66 @@ public final class JarvisIPCClient: JarvisCoreClient {
         method: String,
         body: Data?
     ) async throws -> Response {
-        var request = URLRequest(url: endpoint.url(path: path))
-        request.httpMethod = method
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        try authorize(&request)
+        let response = try await performRequest(
+            path: path,
+            method: method,
+            body: body,
+            accept: "application/json",
+            contentType: body == nil ? nil : "application/json"
+        )
+        guard (200..<300).contains(response.status) else {
+            throw JarvisIPCError.httpStatus(
+                response.status,
+                Self.safeErrorBody(response.body, statusCode: response.status)
+            )
+        }
+        return try decoder.decode(Response.self, from: response.body)
+    }
 
-        if let body {
-            request.httpBody = body
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    private func performRequest(
+        path: String,
+        method: String,
+        body: Data?,
+        accept: String?,
+        contentType: String?
+    ) async throws -> JarvisIPCTransportResponse {
+        if authorization.transportMode == .unixSocket {
+            guard let header = try authorization.authorizationHeader(),
+                  let socketURL = try authorization.activeUnixSocketURL() else {
+                throw JarvisIPCAuthorizationError.unixSocketUnavailable
+            }
+            return try await unixSocketTransport.send(
+                JarvisIPCTransportRequest(
+                    method: method,
+                    path: path,
+                    authorization: header,
+                    accept: accept,
+                    contentType: contentType,
+                    body: body
+                ),
+                to: socketURL
+            )
         }
 
+        var request = URLRequest(url: endpoint.url(path: path))
+        request.httpMethod = method
+        if let accept { request.setValue(accept, forHTTPHeaderField: "Accept") }
+        try authorize(&request)
+        if let body {
+            request.httpBody = body
+            if let contentType {
+                request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+            }
+        }
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw JarvisIPCError.invalidResponse
         }
-
-        guard (200..<300).contains(http.statusCode) else {
-            throw JarvisIPCError.httpStatus(http.statusCode, Self.safeErrorBody(data, statusCode: http.statusCode))
-        }
-
-        return try decoder.decode(Response.self, from: data)
+        return JarvisIPCTransportResponse(
+            status: http.statusCode,
+            contentType: http.value(forHTTPHeaderField: "Content-Type"),
+            body: data
+        )
     }
 
     private func authorize(_ request: inout URLRequest) throws {

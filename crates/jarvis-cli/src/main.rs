@@ -785,13 +785,18 @@ async fn main() -> anyhow::Result<()> {
                 );
             }
 
-            let (workspace_roots, trusted_wake, ipc_auth) = if startup_config_stdin {
+            let (workspace_roots, trusted_wake, ipc_auth, ipc_transport) = if startup_config_stdin {
                 let mut bytes = Vec::new();
                 std::io::stdin()
                     .take((jarvis_core::MAX_SERVE_STARTUP_CONFIG_BYTES + 1) as u64)
                     .read_to_end(&mut bytes)?;
                 let config = jarvis_core::ServeStartupConfig::parse(&bytes)?;
-                (config.workspace_roots, config.trusted_wake, config.ipc_auth)
+                (
+                    config.workspace_roots,
+                    config.trusted_wake,
+                    config.ipc_auth,
+                    config.ipc_transport,
+                )
             } else {
                 let workspace_roots = workspace_roots
                     .iter()
@@ -826,13 +831,26 @@ async fn main() -> anyhow::Result<()> {
                 } else {
                     None
                 };
-                (workspace_roots, trusted_wake, None)
+                (workspace_roots, trusted_wake, None, None)
             };
 
-            let bind = bind.parse::<std::net::SocketAddr>()?;
-            if ipc_auth.is_some() && !bind.ip().is_loopback() {
-                anyhow::bail!("authenticated IPC must bind to a loopback address");
-            }
+            let tcp_bind = match &ipc_transport {
+                Some(jarvis_core::ServeIpcTransport::UnixSocketV1 { .. }) => {
+                    if bind != "127.0.0.1:7787" {
+                        anyhow::bail!(
+                            "--bind cannot be combined with startup Unix-socket transport"
+                        );
+                    }
+                    None
+                }
+                None => {
+                    let parsed = bind.parse::<std::net::SocketAddr>()?;
+                    if ipc_auth.is_some() && !parsed.ip().is_loopback() {
+                        anyhow::bail!("authenticated IPC must bind to a loopback address");
+                    }
+                    Some(parsed)
+                }
+            };
 
             let provider_config = jarvis_core::ProviderConfig::from_env()?;
             let state = match db_path {
@@ -876,9 +894,20 @@ async fn main() -> anyhow::Result<()> {
             } else {
                 None
             };
-            match ipc_auth {
-                Some(auth) => jarvis_core::serve_with_auth(bind, state, auth).await?,
-                None => jarvis_core::serve(bind, state).await?,
+            match ipc_transport {
+                Some(jarvis_core::ServeIpcTransport::UnixSocketV1 { socket_path }) => {
+                    let auth = ipc_auth.ok_or_else(|| {
+                        anyhow::anyhow!("startup Unix-socket transport requires IPC authentication")
+                    })?;
+                    jarvis_core::serve_unix_socket(socket_path, state, auth).await?;
+                }
+                None => {
+                    let bind = tcp_bind.expect("TCP bind was prevalidated");
+                    match ipc_auth {
+                        Some(auth) => jarvis_core::serve_with_auth(bind, state, auth).await?,
+                        None => jarvis_core::serve(bind, state).await?,
+                    }
+                }
             }
         }
         CliCommand::Health { endpoint } => {

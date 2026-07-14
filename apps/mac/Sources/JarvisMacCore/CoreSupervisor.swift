@@ -28,7 +28,10 @@ public struct JarvisCoreSupervisorSmokeSnapshot: Equatable, Sendable {
     public var summary: String {
         let executable = executablePath ?? "not configured"
         let health = lastHealthStatus.map { "\($0) / \(lastHealthRuntime ?? "unknown runtime")" } ?? "not checked"
-        return "endpoint: \(endpoint.absoluteString), executable: \(executable), health: \(health)"
+        let transport = launchArguments.contains("--bind")
+            ? "loopback TCP \(endpoint.absoluteString)"
+            : "app-supervised Unix socket"
+        return "transport: \(transport), executable: \(executable), health: \(health)"
     }
 }
 
@@ -65,8 +68,14 @@ public struct JarvisCoreSupervisorConfiguration: Equatable, Sendable {
     }
 
     public var launchArguments: [String] {
+        launchArguments(includeLoopbackBind: true)
+    }
+
+    public func launchArguments(includeLoopbackBind: Bool) -> [String] {
         var arguments = serveCommand
-        arguments.append(contentsOf: ["--bind", bindAddress])
+        if includeLoopbackBind {
+            arguments.append(contentsOf: ["--bind", bindAddress])
+        }
         if let databaseURL {
             arguments.append(contentsOf: ["--db-path", databaseURL.path])
         }
@@ -298,6 +307,7 @@ private final class FoundationJarvisCoreProcess: JarvisCoreProcess, @unchecked S
 
 @MainActor
 public final class JarvisCoreSupervisor: ObservableObject {
+    public static let releaseSmokeEnvironmentKey = "JARVIS_MAC_RELEASE_SMOKE"
     @Published public private(set) var mode: JarvisCoreMode
     @Published public private(set) var lastHealth: JarvisHealth?
 
@@ -369,7 +379,9 @@ public final class JarvisCoreSupervisor: ObservableObject {
             endpoint: configuration.endpoint.baseURL,
             executablePath: configuration.executableURL?.path,
             databasePath: configuration.databaseURL?.path,
-            launchArguments: configuration.launchArguments,
+            launchArguments: configuration.launchArguments(
+                includeLoopbackBind: ipcAuthorization.transportMode == .loopbackTCP
+            ),
             lastHealthStatus: lastHealth?.status,
             lastHealthRuntime: lastHealth?.commandRuntime
         )
@@ -428,6 +440,7 @@ public final class JarvisCoreSupervisor: ObservableObject {
         }
 
         var launchAuthorization: JarvisIPCLaunchAuthorization?
+        var unixSocketDescriptor: JarvisIPCUnixSocketDescriptor?
         do {
             try createDatabaseDirectoryIfNeeded()
             var environment = credentialProvider.launchEnvironment(base: ProcessInfo.processInfo.environment)
@@ -435,10 +448,15 @@ public final class JarvisCoreSupervisor: ObservableObject {
             environment.removeValue(forKey: "JARVIS_IPC_TOKEN_FILE")
             environment.removeValue(forKey: JarvisIPCCLIHandoffConfiguration.enableEnvironmentKey)
             environment.removeValue(forKey: JarvisIPCCLIHandoffConfiguration.fileEnvironmentKey)
+            environment.removeValue(forKey: JarvisIPCSessionAuthorization.unixSocketDirectoryEnvironmentKey)
+            environment.removeValue(forKey: Self.releaseSmokeEnvironmentKey)
             let trustedWakeBootstrap = pendingTrustedWakeBootstrap
             let trustedWakeKeyControl = pendingTrustedWakeKeyControl
-            var launchArguments = configuration.launchArguments
-            if ipcAuthorization.mode == .appSupervised {
+            let usesLoopbackTCP = ipcAuthorization.transportMode == .loopbackTCP
+            var launchArguments = configuration.launchArguments(
+                includeLoopbackBind: usesLoopbackTCP
+            )
+            if ipcAuthorization.mode == .appSupervised, usesLoopbackTCP {
                 guard JarvisIPCSessionAuthorization.isStrictLoopbackEndpoint(configuration.endpoint.baseURL),
                       let bindURL = URL(string: "http://\(configuration.bindAddress)"),
                       JarvisIPCSessionAuthorization.isStrictLoopbackEndpoint(bindURL) else {
@@ -447,13 +465,19 @@ public final class JarvisCoreSupervisor: ObservableObject {
             }
             let workspaceRootLease = try workspaceRootProvider.acquireForCoreLaunch()
             launchAuthorization = try ipcAuthorization.rotateForLaunch()
+            if let generation = launchAuthorization?.generation {
+                unixSocketDescriptor = try ipcAuthorization.prepareUnixSocketForLaunch(
+                    generation: generation
+                )
+            }
             let startupInput: Data
             do {
                 startupInput = try Self.startupConfigurationEnvelope(
                     roots: workspaceRootLease.roots,
                     trustedWakeBootstrap: trustedWakeBootstrap,
                     trustedWakeKeyControl: trustedWakeKeyControl,
-                    ipcAuthorization: launchAuthorization
+                    ipcAuthorization: launchAuthorization,
+                    unixSocketDescriptor: unixSocketDescriptor
                 )
             } catch {
                 workspaceRootLease.release()
@@ -466,6 +490,7 @@ public final class JarvisCoreSupervisor: ObservableObject {
                 || trustedWakeBootstrap != nil
                 || trustedWakeKeyControl != nil
                 || launchAuthorization != nil
+                || unixSocketDescriptor != nil
             {
                 launchArguments.append("--startup-config-stdin")
             }
@@ -481,6 +506,10 @@ public final class JarvisCoreSupervisor: ObservableObject {
                 environmentOverrides: environmentOverrides,
                 requireMatchingConfiguration: requireMatchingConfiguration
             )
+            if let generation = launchAuthorization?.generation,
+               unixSocketDescriptor != nil {
+                try ipcAuthorization.captureActiveUnixSocketIdentity(generation: generation)
+            }
             activeEnvironmentOverrides = environmentOverrides
             mode = .available
             if let process {
@@ -489,6 +518,10 @@ public final class JarvisCoreSupervisor: ObservableObject {
         } catch {
             processMonitorTask?.cancel()
             processMonitorTask = nil
+            if let generation = launchAuthorization?.generation,
+               unixSocketDescriptor != nil {
+                try? ipcAuthorization.captureActiveUnixSocketIdentity(generation: generation)
+            }
             process?.terminate()
             process = nil
             activeWorkspaceRootLease?.release()
@@ -746,7 +779,8 @@ public final class JarvisCoreSupervisor: ObservableObject {
         roots: [JarvisWorkspaceRootLaunchRoot],
         trustedWakeBootstrap: Data?,
         trustedWakeKeyControl: Data?,
-        ipcAuthorization: JarvisIPCLaunchAuthorization?
+        ipcAuthorization: JarvisIPCLaunchAuthorization?,
+        unixSocketDescriptor: JarvisIPCUnixSocketDescriptor?
     ) throws -> Data {
         guard trustedWakeBootstrap == nil || trustedWakeKeyControl == nil else {
             throw JarvisCoreSupervisorError.startupConfigurationInvalid
@@ -754,7 +788,8 @@ public final class JarvisCoreSupervisor: ObservableObject {
         guard !roots.isEmpty
             || trustedWakeBootstrap != nil
             || trustedWakeKeyControl != nil
-            || ipcAuthorization != nil else {
+            || ipcAuthorization != nil
+            || unixSocketDescriptor != nil else {
             return Data()
         }
 
@@ -782,6 +817,12 @@ public final class JarvisCoreSupervisor: ObservableObject {
                 "scheme": "bearer",
                 "token": ipcAuthorization.token,
                 "generation": ipcAuthorization.generation
+            ]
+        }
+        if let unixSocketDescriptor {
+            envelope["ipc_transport"] = [
+                "kind": JarvisIPCUnixSocketDescriptor.kind,
+                "socket_path": unixSocketDescriptor.socketURL.path
             ]
         }
         let data = try JSONSerialization.data(withJSONObject: envelope, options: [.sortedKeys])
