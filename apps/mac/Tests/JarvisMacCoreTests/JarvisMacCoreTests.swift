@@ -246,6 +246,9 @@ private final class FakeSchedulerNotificationAdapter: JarvisSchedulerNotificatio
     var authorizationResult: Result<Bool, Error>
     var deliveryResult: Result<Void, Error>
     let authorizationStatusDelayNanoseconds: UInt64
+    let authorizationStatusWaitsForRelease: Bool
+    private var authorizationStatusContinuation: CheckedContinuation<Void, Never>?
+    private(set) var authorizationStatusCheckCount: Int
     private(set) var authorizationRequestCount: Int
     private(set) var deliveredRequests: [JarvisSchedulerNotificationRequest]
 
@@ -253,21 +256,36 @@ private final class FakeSchedulerNotificationAdapter: JarvisSchedulerNotificatio
         authorizationStatus: JarvisSchedulerNotificationAuthorization = .authorized,
         authorizationResult: Result<Bool, Error> = .success(true),
         deliveryResult: Result<Void, Error> = .success(()),
-        authorizationStatusDelayNanoseconds: UInt64 = 0
+        authorizationStatusDelayNanoseconds: UInt64 = 0,
+        authorizationStatusWaitsForRelease: Bool = false
     ) {
         self.authorizationStatusResult = authorizationStatus
         self.authorizationResult = authorizationResult
         self.deliveryResult = deliveryResult
         self.authorizationStatusDelayNanoseconds = authorizationStatusDelayNanoseconds
+        self.authorizationStatusWaitsForRelease = authorizationStatusWaitsForRelease
+        self.authorizationStatusContinuation = nil
+        self.authorizationStatusCheckCount = 0
         self.authorizationRequestCount = 0
         self.deliveredRequests = []
     }
 
     func authorizationStatus() async -> JarvisSchedulerNotificationAuthorization {
-        if authorizationStatusDelayNanoseconds > 0 {
+        authorizationStatusCheckCount += 1
+        if authorizationStatusWaitsForRelease {
+            await withCheckedContinuation { continuation in
+                authorizationStatusContinuation = continuation
+            }
+        } else if authorizationStatusDelayNanoseconds > 0 {
             try? await Task.sleep(nanoseconds: authorizationStatusDelayNanoseconds)
         }
         return authorizationStatusResult
+    }
+
+    func releaseAuthorizationStatus() {
+        let continuation = authorizationStatusContinuation
+        authorizationStatusContinuation = nil
+        continuation?.resume()
     }
 
     func requestAuthorization() async throws -> Bool {
@@ -1797,8 +1815,9 @@ struct JarvisMacCoreTests {
             from: schedulerAttentionJSON(id: UUID())
         )
         let adapter = FakeSchedulerNotificationAdapter(
-            authorizationStatusDelayNanoseconds: 80_000_000
+            authorizationStatusWaitsForRelease: true
         )
+        let notifications = SchedulerNotificationModel(adapter: adapter)
         let coordinator = SchedulerAttentionCoordinator(
             scheduler: SchedulerModel(client: FakeCoreClient(
                 schedulerAttention: attention,
@@ -1806,19 +1825,27 @@ struct JarvisMacCoreTests {
                     schedulerNotificationOccurrence(jobId: attention.items[0].id)
                 ]
             )),
-            notifications: SchedulerNotificationModel(adapter: adapter),
+            notifications: notifications,
             settings: settings,
             pollInterval: .seconds(1),
             isCoreAvailable: { true }
         )
 
         coordinator.start()
-        try await Task.sleep(for: .milliseconds(10))
+        for _ in 0..<40 where adapter.authorizationStatusCheckCount == 0 {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        #expect(adapter.authorizationStatusCheckCount == 1)
+        #expect(notifications.isWorking)
         settings.update(isEnabled: false)
         coordinator.reconcile()
-        try await Task.sleep(for: .milliseconds(100))
+        adapter.releaseAuthorizationStatus()
+        for _ in 0..<40 where notifications.isWorking {
+            try await Task.sleep(for: .milliseconds(25))
+        }
 
         #expect(!coordinator.isRunning)
+        #expect(!notifications.isWorking)
         #expect(adapter.deliveredRequests.isEmpty)
     }
 
