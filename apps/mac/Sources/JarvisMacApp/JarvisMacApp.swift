@@ -27,7 +27,11 @@ struct JarvisMacApp: App {
         let cliHandoffConfiguration = JarvisIPCCLIHandoffConfiguration.fromEnvironment()
         let ipcAuthorization = JarvisIPCSessionAuthorization(
             mode: .appSupervised,
-            cliHandoffConfiguration: cliHandoffConfiguration
+            cliHandoffConfiguration: cliHandoffConfiguration,
+            transportMode: cliHandoffConfiguration.isEnabled ? .loopbackTCP : .unixSocket,
+            socketDirectoryPath: ProcessInfo.processInfo.environment[
+                JarvisIPCSessionAuthorization.unixSocketDirectoryEnvironmentKey
+            ]
         )
         let client = JarvisIPCClient(
             endpoint: configuration.endpoint,
@@ -119,6 +123,11 @@ struct JarvisMacApp: App {
                 .task {
                     await supervisor.start(environmentOverrides: modelConfiguration.launchEnvironmentOverrides)
                     if supervisor.isAvailable {
+                        if ProcessInfo.processInfo.environment[JarvisCoreSupervisor.releaseSmokeEnvironmentKey] == "true" {
+                            try? FileHandle.standardOutput.write(
+                                contentsOf: Data("Jarvis release smoke: authenticated supervised core health verified\n".utf8)
+                            )
+                        }
                         await console.refreshHealth()
                         await trustedWake.refresh()
                         modelConfiguration.applyHealth(console.health)

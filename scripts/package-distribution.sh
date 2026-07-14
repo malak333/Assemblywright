@@ -1068,6 +1068,7 @@ run_unsigned_structure_check() {
 run_unsigned_launch_check() {
   require_command curl
   require_command lsof
+  require_command pgrep
   build_app_bundle
 
   SIGNING_STATUS="not attempted"
@@ -1096,22 +1097,57 @@ run_unsigned_launch_check() {
   require_output_contains "unsigned package payload" "$PAYLOAD_OUTPUT" "Jarvis.app/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
   require_output_contains "unsigned package payload" "$PAYLOAD_OUTPUT" "Jarvis.app/Contents/Info.plist"
 
-  LAUNCH_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/jarvis-distribution-launch.XXXXXX")"
+  # Keep the isolated HOME short enough for macOS sockaddr_un.sun_path (103 bytes).
+  LAUNCH_TMP_DIR="$(mktemp -d "/tmp/jarvis-dl.XXXXXX")"
   APP_PID=""
   PORT="$(select_port)"
   ENDPOINT="http://127.0.0.1:$PORT"
-  CLEAN_HOME="$LAUNCH_TMP_DIR/home"
+  CLEAN_HOME="$LAUNCH_TMP_DIR/h"
   APP_DB="$CLEAN_HOME/Library/Application Support/Jarvis/jarvis.sqlite"
   APP_IPC_AUTH_FILE="$CLEAN_HOME/Library/Application Support/Jarvis/ipc-session-auth.json"
+  APP_IPC_RUN_DIR="$CLEAN_HOME/Library/Application Support/Jarvis/run"
   APP_LOG="$LAUNCH_TMP_DIR/JarvisMacApp-memory-only.log"
   mkdir -p "$CLEAN_HOME"
 
   stop_launch() {
+    local child_pids=()
+    if [[ -n "$APP_PID" ]]; then
+      while IFS= read -r pid; do
+        if [[ -n "$pid" ]]; then
+          child_pids+=("$pid")
+        fi
+      done < <(pgrep -P "$APP_PID" 2>/dev/null || true)
+    fi
     if [[ -n "$APP_PID" ]] && kill -0 "$APP_PID" 2>/dev/null; then
       kill "$APP_PID" 2>/dev/null || true
       wait "$APP_PID" 2>/dev/null || true
     fi
     APP_PID=""
+
+    for pid in "${child_pids[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        kill "$pid" 2>/dev/null || true
+      fi
+    done
+
+    for _ in {1..40}; do
+      local child_alive=false
+      for pid in "${child_pids[@]}"; do
+        if kill -0 "$pid" 2>/dev/null; then
+          child_alive=true
+          break
+        fi
+      done
+      if [[ "$child_alive" == false ]]; then
+        break
+      fi
+      sleep 0.1
+    done
+    for pid in "${child_pids[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        return 1
+      fi
+    done
 
     while IFS= read -r pid; do
       if [[ -n "$pid" ]]; then
@@ -1134,17 +1170,20 @@ run_unsigned_launch_check() {
   }
   trap cleanup_launch EXIT
 
-  printf '\n==> Launching release app with the default memory-only IPC credential\n'
+  printf '\n==> Launching release app with the default memory-only Unix-socket IPC credential\n'
   env \
     HOME="$CLEAN_HOME" \
     JARVIS_MAC_CORE_BIND_ADDRESS="127.0.0.1:$PORT" \
     JARVIS_MAC_CORE_ENDPOINT="$ENDPOINT" \
     JARVIS_MAC_CORE_DATABASE="$APP_DB" \
     JARVIS_MAC_IPC_AUTH_FILE="$APP_IPC_AUTH_FILE" \
+    JARVIS_MAC_IPC_SOCKET_DIRECTORY="$APP_IPC_RUN_DIR" \
+    JARVIS_MAC_RELEASE_SMOKE="true" \
     "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME" >"$APP_LOG" 2>&1 &
   APP_PID="$!"
 
-  MEMORY_ONLY_STATUS=""
+  DEFAULT_IPC_SOCKET=""
+  DEFAULT_SUPERVISED_HEALTH_VERIFIED=false
   for _ in {1..60}; do
     if ! kill -0 "$APP_PID" 2>/dev/null; then
       printf 'error: release app exited before the memory-only core became reachable; app log follows\n' >&2
@@ -1154,20 +1193,39 @@ run_unsigned_launch_check() {
     if [[ -e "$APP_IPC_AUTH_FILE" ]]; then
       fail "default app launch persisted an IPC credential without explicit CLI handoff opt-in"
     fi
-    MEMORY_ONLY_STATUS="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "$ENDPOINT/health" 2>/dev/null || true)"
-    if [[ "$MEMORY_ONLY_STATUS" == "401" ]]; then
+    if nc -z 127.0.0.1 "$PORT" >/dev/null 2>&1; then
+      fail "default app launch unexpectedly exposed loopback TCP IPC"
+    fi
+    DEFAULT_IPC_SOCKET="$(find "$APP_IPC_RUN_DIR" -maxdepth 1 -type s -print -quit 2>/dev/null || true)"
+    if grep -Fq "Jarvis release smoke: authenticated supervised core health verified" "$APP_LOG"; then
+      DEFAULT_SUPERVISED_HEALTH_VERIFIED=true
+    fi
+    if [[ -n "$DEFAULT_IPC_SOCKET" ]] && [[ "$DEFAULT_SUPERVISED_HEALTH_VERIFIED" == true ]]; then
       break
     fi
     sleep 0.25
   done
 
-  if [[ "$MEMORY_ONLY_STATUS" != "401" ]]; then
-    printf 'error: memory-only app core did not expose the authenticated 401 boundary; app log follows\n' >&2
+  if [[ -z "$DEFAULT_IPC_SOCKET" ]]; then
+    printf 'error: memory-only app core did not create its supervised Unix socket; app log follows\n' >&2
     cat "$APP_LOG" >&2 || true
     exit 1
   fi
+  if [[ "$DEFAULT_SUPERVISED_HEALTH_VERIFIED" != true ]]; then
+    printf 'error: release app did not complete an authenticated Swift-to-Rust health request; app log follows\n' >&2
+    cat "$APP_LOG" >&2 || true
+    exit 1
+  fi
+  [[ "$(stat -f '%Lp' "$APP_IPC_RUN_DIR")" == "700" ]] || fail "default app IPC run directory is not mode 0700"
+  [[ "$(stat -f '%Lp' "$DEFAULT_IPC_SOCKET")" == "600" ]] || fail "default app IPC socket is not mode 0600"
+  [[ "$(stat -f '%u' "$APP_IPC_RUN_DIR")" == "$(id -u)" ]] || fail "default app IPC run directory is not owned by the current user"
+  [[ "$(stat -f '%u' "$DEFAULT_IPC_SOCKET")" == "$(id -u)" ]] || fail "default app IPC socket is not owned by the current user"
+  if nc -z 127.0.0.1 "$PORT" >/dev/null 2>&1; then
+    fail "default app launch exposed loopback TCP IPC after Unix socket startup"
+  fi
   [[ ! -e "$APP_IPC_AUTH_FILE" ]] || fail "default app launch persisted an IPC credential"
-  stop_launch || fail "release app core did not release loopback port $PORT"
+  stop_launch || fail "release app or supervised core did not exit cleanly"
+  [[ ! -e "$DEFAULT_IPC_SOCKET" ]] || fail "default app supervised Unix socket was not cleaned up"
 
   APP_LOG="$LAUNCH_TMP_DIR/JarvisMacApp-explicit-cli-handoff.log"
   printf '\n==> Relaunching release app with explicit owner-only CLI handoff opt-in\n'
@@ -1242,7 +1300,7 @@ run_unsigned_launch_check() {
   printf 'Pkg: %s\n' "$PKG_PATH"
   printf 'Signing: %s\n' "$SIGNING_STATUS"
   printf 'Clean HOME database: %s\n' "$APP_DB"
-  printf 'Proof boundary: release-built app executable, bundled core, unsigned installer payload structure, isolated HOME default memory-only bearer launch with no CLI file, authenticated 401 denial, explicit owner-only CLI handoff relaunch, command/audit/diagnostics/pause smoke, and optional ad-hoc signing only; no OS identity proof, intended-process or same-user isolation, Developer ID signing, notarization, stapling, /Applications install, Finder/LaunchServices validation, live microphone/Speech validation, spoken transcript handoff, live audio-output validation, App Store validation, or manual QA.\n'
+  printf 'Proof boundary: release-built app executable, bundled core, unsigned installer payload structure, isolated HOME default owner-only Unix socket plus memory-only bearer launch with no TCP listener or CLI file, explicit owner-only loopback TCP CLI handoff relaunch, command/audit/diagnostics/pause smoke, and optional ad-hoc signing only; peer-EUID checks do not prove intended process or code identity, and this lane does not prove Developer ID signing, notarization, stapling, /Applications install, Finder/LaunchServices validation, live microphone/Speech validation, spoken transcript handoff, live audio-output validation, App Store validation, or manual QA.\n'
 }
 
 if [[ "$UNSIGNED_STRUCTURE_CHECK" == true ]]; then

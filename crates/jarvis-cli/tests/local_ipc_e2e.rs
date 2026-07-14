@@ -7935,6 +7935,175 @@ fn app_supervised_ipc_auth_is_fail_closed_and_cli_token_file_is_safe() {
     assert!(rejected.contains("401 Unauthorized"), "{rejected}");
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn app_supervised_unix_ipc_routes_authenticated_core_requests_without_tcp_argv() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::net::UnixStream;
+
+    const TOKEN: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    let _startup_guard = jarvis_server_startup_lock()
+        .lock()
+        .expect("lock Jarvis server startup");
+    let temporary = tempfile::tempdir().expect("Unix IPC fixture");
+    let socket_parent = temporary.path().join("run");
+    fs::create_dir(&socket_parent).expect("create Unix IPC parent");
+    fs::set_permissions(&socket_parent, fs::Permissions::from_mode(0o700))
+        .expect("secure Unix IPC parent");
+    let socket_path = socket_parent.join("core.sock");
+    let database_path = temporary.path().join("jarvis.sqlite");
+    let startup = json!({
+        "version": 1,
+        "ipc_auth": {"scheme": "bearer", "token": TOKEN, "generation": 11},
+        "ipc_transport": {
+            "kind": "unix_socket_v1",
+            "socket_path": socket_path
+        }
+    })
+    .to_string();
+    let mut child = Command::new(jarvis_cli_bin())
+        .args([
+            "serve",
+            "--db-path",
+            database_path.to_str().expect("database path"),
+            "--startup-config-stdin",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start Unix IPC Jarvis server");
+    child
+        .stdin
+        .take()
+        .expect("startup stdin")
+        .write_all(startup.as_bytes())
+        .expect("write startup envelope");
+
+    for _ in 0..200 {
+        if socket_path.exists() {
+            break;
+        }
+        if let Some(status) = child.try_wait().expect("inspect Unix IPC server") {
+            let mut stderr = String::new();
+            child
+                .stderr
+                .take()
+                .expect("Unix IPC stderr")
+                .read_to_string(&mut stderr)
+                .expect("read Unix IPC stderr");
+            panic!("Unix IPC server exited early ({status}): {stderr}");
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(socket_path.exists(), "Unix IPC socket was not created");
+    let socket_metadata = fs::symlink_metadata(&socket_path).expect("Unix IPC socket metadata");
+    assert_eq!(socket_metadata.permissions().mode() & 0o777, 0o600);
+
+    let pid = child.id().to_string();
+    let process = Command::new("ps")
+        .args(["-ww", "-o", "command=", "-p", &pid])
+        .output()
+        .expect("inspect Unix IPC argv");
+    assert!(process.status.success());
+    let command_line = String::from_utf8_lossy(&process.stdout);
+    assert!(!command_line.contains(TOKEN), "{command_line}");
+    assert!(
+        !command_line.contains(socket_path.to_string_lossy().as_ref()),
+        "{command_line}"
+    );
+    assert!(!command_line.contains("--bind"), "{command_line}");
+
+    let request = |method: &str, path: &str, authorization: Option<String>, body: Value| {
+        json!({
+            "version": 1,
+            "method": method,
+            "path": path,
+            "authorization": authorization,
+            "accept": "application/json",
+            "content_type": "application/json",
+            "body_base64": if body.is_null() {
+                String::new()
+            } else {
+                BASE64_STANDARD.encode(body.to_string())
+            }
+        })
+    };
+    let send = |request: Value| -> Value {
+        let mut stream = UnixStream::connect(&socket_path).expect("connect Unix IPC");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("set Unix IPC read timeout");
+        stream
+            .set_write_timeout(Some(Duration::from_secs(5)))
+            .expect("set Unix IPC write timeout");
+        let frame = serde_json::to_vec(&request).expect("encode Unix IPC request");
+        stream
+            .write_all(&(frame.len() as u32).to_be_bytes())
+            .expect("write Unix IPC prefix");
+        stream.write_all(&frame).expect("write Unix IPC frame");
+        stream
+            .shutdown(std::net::Shutdown::Write)
+            .expect("half-close Unix IPC request writer");
+        let mut prefix = [0_u8; 4];
+        stream
+            .read_exact(&mut prefix)
+            .expect("read Unix IPC prefix");
+        let length = u32::from_be_bytes(prefix) as usize;
+        assert!(length > 0 && length <= 12 * 1024 * 1024);
+        let mut response = vec![0_u8; length];
+        stream
+            .read_exact(&mut response)
+            .expect("read Unix IPC response");
+        serde_json::from_slice(&response).expect("decode Unix IPC response")
+    };
+
+    let unauthorized = send(request("GET", "/health", None, Value::Null));
+    assert_eq!(unauthorized["status"], 401);
+    let authorization = Some(format!("Bearer {TOKEN}"));
+    let health = send(request(
+        "GET",
+        "/health",
+        authorization.clone(),
+        Value::Null,
+    ));
+    assert_eq!(health["status"], 200);
+    let health_body = BASE64_STANDARD
+        .decode(health["body_base64"].as_str().expect("health body"))
+        .expect("decode health body");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&health_body).expect("health JSON")["status"],
+        "ok"
+    );
+
+    let command = send(request(
+        "POST",
+        "/commands",
+        authorization.clone(),
+        json!({"input":"status","context":{},"dry_run":false,"proactive":false}),
+    ));
+    assert_eq!(command["status"], 200);
+    let command_body = BASE64_STANDARD
+        .decode(command["body_base64"].as_str().expect("command body"))
+        .expect("decode command body");
+    let command_body: Value = serde_json::from_slice(&command_body).expect("command JSON");
+    assert_eq!(command_body["accepted"], true);
+    assert_eq!(command_body["task"]["status"], "completed");
+
+    let audit = send(request("GET", "/audit", authorization, Value::Null));
+    assert_eq!(audit["status"], 200);
+    let audit_body = BASE64_STANDARD
+        .decode(audit["body_base64"].as_str().expect("audit body"))
+        .expect("decode audit body");
+    assert!(serde_json::from_slice::<Value>(&audit_body)
+        .expect("audit JSON")
+        .as_array()
+        .is_some_and(|entries| !entries.is_empty()));
+
+    child.kill().expect("stop Unix IPC server");
+    child.wait().expect("reap Unix IPC server");
+}
+
 #[test]
 fn workspace_dry_run_and_alias_mismatch_never_expose_unrequested_content_cross_process() {
     let workspace = tempfile::tempdir().expect("workspace fixture");

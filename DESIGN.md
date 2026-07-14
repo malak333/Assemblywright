@@ -57,7 +57,7 @@
 | macOS Keychain for secrets | Store credentials in SQLite or config files | Secrets should use the platform credential store. |
 | First-party plugins first | Third-party marketplace in v1 | The safety model and plugin contract need to prove themselves before third-party expansion. |
 | App-owned security-scoped bookmarks for workspace roots | Put root paths in app child arguments, store plain paths, or let the model select roots | Native user selection establishes an explicit local grant; opaque IDs and bounded startup stdin keep app-selected paths out of argv, environment, model input, and audit while Rust remains the descriptor authority. Bookmark tests do not prove App Sandbox enforcement or child sandbox-extension inheritance. |
-| App-supervised bearer authentication for loopback IPC | Leave every local route unauthenticated, persist every supervised credential by default, put a token in argv/environment, or silently reuse a legacy unauthenticated core | The app rotates 32 random bytes for each supervised launch, sends them only through bounded startup stdin, and shares the in-memory credential with its IPC client. It removes a stale handoff file and does not persist the bearer by default. Exact `JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true` explicitly enables the weaker owner-only CLI handoff file; `JARVIS_MAC_IPC_AUTH_FILE` may then select an absolute test/operator path. Neither app-only variable reaches the child. Every route is protected and a managed client without a credential fails locally. This proves possession and lifecycle of a launch credential with no ambient default file, not OS identity or same-user/process isolation. |
+| App-supervised Unix-domain-socket IPC with same-EUID and per-launch bearer checks | Use loopback TCP by default, rely on socket filesystem permissions alone, persist every supervised credential, put transport authority in argv/environment, or silently reuse a legacy unauthenticated core | The default app launch creates an owner-only runtime directory and generation-random Unix socket, sends `ipc_transport:{kind:"unix_socket_v1",socket_path:"/absolute/path.sock"}` plus a fresh 32-byte bearer only through bounded startup stdin, and requires both current-EUID peer credentials and the bearer on every request. The strict framed JSON protocol is bounded and reuses the existing router. Exact `JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true` selects the explicitly weaker authenticated loopback TCP and owner-only token-file compatibility path; `JARVIS_MAC_IPC_AUTH_FILE` may then select an absolute operator/test path. This is local defense in depth, not PID, code-signing identity, device authentication, XPC, App Sandbox, or signed/live-device proof. |
 | Add a no-import Wasmi compute runtime before broader third-party execution | Treat subprocess grants as sufficient containment, enable WASI, or wait for an OS sandbox | A deliberately small `jarvis_json_v1` ABI can provide useful low-risk local computation while mechanically denying guest filesystem, environment, network, clock, and process authority. Wasmi confinement is a language-runtime boundary, not an OS sandbox or plugin trust system. |
 | Auditability as an architectural requirement | Best-effort logs after the fact | Jarvis must be able to explain why it acted, what data it used, and what permissions were involved. |
 
@@ -83,22 +83,36 @@ defined by the release checklist.
 
 `jarvis-core` is a Rust local service started and supervised by the Swift app. It owns durable execution: task planning, model routing, memory reads and writes, plugin execution, scheduled jobs, event triggers, risk policy evaluation, and audit logging.
 
-Current v1 IPC uses loopback HTTP. App-supervised launches require a per-launch
-bearer credential on every route and reject missing, malformed, duplicate, or
-incorrect authorization. Managed clients reject non-loopback destinations
-before reading or sending the credential, and authenticated servers reject
-non-loopback binds. The supervised credential remains in memory by default;
-startup removes a stale handoff file. Exact
-`JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true` explicitly enables the weaker
-owner-only CLI file, with `JARVIS_MAC_IPC_AUTH_FILE` accepted only as an
-optional absolute-path override in that mode. The supervisor removes both
-app-only variables, as well as `JARVIS_IPC_TOKEN_FILE`, from the child
-environment. Explicit operator-launched legacy servers remain
-available without authentication, but reject an unexpected Authorization
-header so the managed app cannot silently downgrade to them. A future version
-can move the IPC boundary to an authenticated Unix domain socket with verified
-peer identity, or move the core into a LaunchAgent if stronger background
-execution is needed.
+Current app-supervised IPC defaults to a Unix domain socket, not a TCP listener.
+Swift creates a current-owner `0700` runtime directory and a generation-random
+socket leaf whose absolute path fits the platform limit. The strict v1 startup
+document carries `ipc_transport:{kind:"unix_socket_v1",socket_path:"..."}` and
+the fresh 32-byte bearer; neither authority enters argv or child environment.
+Rust creates the socket as `0600`, rejects a peer whose `getpeereid` EUID does
+not match the core's current EUID, and still requires the bearer on every
+existing router path. Swift also verifies the connected core's EUID.
+
+Each connection carries exactly one four-byte big-endian length followed by one
+strict JSON request, then the client half-closes its write side so trailing
+input can be rejected before dispatch. The server returns the same framing for
+one strict JSON response.
+The versioned request admits only GET, POST, DELETE, or PATCH and exact fields
+for method, path, nullable authorization/accept/content type, and standard
+padded base64 body; the response returns exact version, status, nullable content
+type, and padded base64 body. Frame/body, hard monotonic deadline, and in-flight
+connection limits fail closed. Launch failure, stop, replacement, or observed exit clears the
+matching bearer and removes only the validated socket leaf; unsafe, wrong-type,
+or out-of-bounds paths fail without recursive cleanup.
+
+Exact `JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true` deliberately selects the weaker
+authenticated loopback TCP and owner-only token-file compatibility path instead
+of UDS. `JARVIS_MAC_IPC_AUTH_FILE` is an optional absolute override only in that
+mode. The supervisor removes both app-only variables and
+`JARVIS_IPC_TOKEN_FILE` from the child environment. Explicit operator-launched
+legacy servers remain available without authentication and reject an unexpected
+Authorization header. Same EUID is not same PID or intended process identity;
+this boundary does not prove code-sign identity, device authentication, XPC,
+App Sandbox, signing/notarization, or live-device behavior.
 
 Primary design rule: Swift should not become the agent brain, and Rust should not become the Mac UX layer.
 
@@ -386,7 +400,11 @@ Cover UI state, permission prompts, settings behavior, memory manager views, act
 
 ### IPC Contract Tests
 
-Version and test shared schemas between Swift and Rust. Breaking the app/core API should fail loudly.
+Version and test shared schemas between Swift and Rust. Cross-process coverage
+must exercise the default UDS launch with peer-EUID and bearer enforcement,
+strict framed request/response decoding, existing-route parity, bounds and
+cleanup, restart invalidation, and the explicit TCP/token compatibility path.
+Breaking the app/core API should fail loudly.
 
 ### Voice Loop Tests
 

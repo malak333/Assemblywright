@@ -78,30 +78,44 @@ release requirements, not optional UX guidance.
   and deinitialization. This is capability-lifecycle discipline, not proof of
   App Sandbox enforcement, child sandbox-extension inheritance, or IPC caller
   identity.
-- Every app-supervised core launch must rotate a 32-byte IPC bearer credential,
-  send it only in the bounded startup-stdin envelope, and require exactly one
-  valid Authorization header on every route, including health, activity
-  streams, release inspection, and trusted-wake control. The shared Swift
-  client must fail locally while its managed credential is unavailable. Launch
-  failure, stop, replacement, and observed child exit clear the matching
-  generation. The bearer must remain memory-only by default, and initialization
-  must remove a stale handoff file. Only exact
-  `JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true` may enable the explicitly weaker CLI
-  handoff; `JARVIS_MAC_IPC_AUTH_FILE` may select an absolute override only in
-  that mode. The enabled file must be bounded, no-follow, single-link,
-  owner-matched, and have no group/other permissions. The supervisor must
-  remove both app-only variables and `JARVIS_IPC_TOKEN_FILE` from the child.
-  The token must not enter argv, environment, logs, audit, diagnostics, or UI.
-  Managed clients must reject every destination that does not resolve strictly
-  to loopback before connecting or attaching a bearer, and authenticated serving
-  must reject non-loopback bind addresses.
-  Legacy explicitly unauthenticated servers reject any supplied Authorization
-  header so an app-supervised client cannot silently downgrade. The supervisor
-  This is bearer-possession and lifecycle authentication with no ambient
-  default handoff file, not device authentication, ownership proof, OS
-  identity, same-user/process isolation, App Sandbox enforcement, or host-level
-  egress control. Any process running as the same user can read an explicitly
-  enabled handoff file while it exists.
+- Every app-supervised core launch must rotate a 32-byte IPC bearer credential
+  and default to a generation-random Unix domain socket. The strict v1 startup
+  envelope is the only authority channel: it carries the bearer and
+  `ipc_transport:{kind:"unix_socket_v1",socket_path:"/absolute/path.sock"}`;
+  neither may enter argv or child environment. The runtime directory must be a
+  current-owner `0700` directory, the socket must be `0600`, and its absolute
+  path must fit the platform socket-path bound. Both peers must use
+  `getpeereid` and reject an EUID other than their current EUID. Every route,
+  including health, activity, release, and trusted-wake control, must also
+  require the launch bearer; peer EUID is defense in depth, not a bearer
+  replacement.
+- The UDS wire contract permits one four-byte big-endian length and one strict
+  versioned JSON request per connection, followed by a required write-half close
+  before one framed response. Requests allow only GET,
+  POST, DELETE, and PATCH; exact nullable header fields and standard padded
+  base64 body fields must reject unknown, malformed, duplicate, oversized, or
+  trailing input. Frame/body, hard monotonic deadline, and in-flight connection limits fail closed.
+  The shared Swift client must fail locally while its managed transport or
+  credential is unavailable. Launch failure, stop, replacement, and observed
+  child exit clear the matching generation. Cleanup may remove only the
+  validated socket leaf; wrong-type, unsafe, or changed paths must fail without
+  recursive deletion.
+- Only exact `JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true` may select the explicitly
+  weaker authenticated loopback TCP and owner-only token-file compatibility
+  path. `JARVIS_MAC_IPC_AUTH_FILE` may select an absolute override only in that
+  mode. The file must be bounded, no-follow, single-link, owner-matched, and
+  have no group/other permissions. The supervisor must remove both app-only
+  variables, `JARVIS_MAC_RELEASE_SMOKE`, and `JARVIS_IPC_TOKEN_FILE` from the child. Managed TCP clients must
+  reject non-loopback destinations before attaching a bearer; authenticated
+  TCP serving must reject non-loopback binds. Legacy explicitly unauthenticated
+  servers reject any Authorization header so a managed client cannot silently
+  downgrade.
+- These controls prove bounded local transport, same-EUID peer checks, bearer
+  possession, and launch lifecycle. Same EUID is not same PID or intended
+  process identity, and another process running as the user can read an
+  explicitly enabled handoff file while it exists. They do not prove peer PID,
+  code-sign identity, device authentication, XPC, ownership, App Sandbox,
+  host-level egress control, signing/notarization, or live-device behavior.
 - Installed `local_wasm` execution is allowed only for validated low-risk,
   non-proactive compute actions with no memory, model, filesystem, environment,
   process, clock, or network authority and the explicit `wasm_compute` grant.

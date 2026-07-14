@@ -170,14 +170,21 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   child; access is released on every stop/failure/unexpected child exit;
   and the proof boundary still excludes App Sandbox, child sandbox-extension
   inheritance, same-user/process IPC isolation, signing, and live-device QA.
-- Confirm app-supervised IPC keeps its per-launch bearer in memory by default,
-  removes a stale handoff file, and creates the hardened owner-only CLI file
-  only for exact `JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true`. If
+- Confirm app-supervised IPC defaults to a generation-random UDS in a
+  current-owner `0700` runtime directory, creates a `0600` socket at a bounded
+  absolute path, checks current EUID with `getpeereid` on both peers, and still
+  requires the per-launch bearer on every route. Confirm the one-frame strict
+  JSON protocol requires client write-half EOF before dispatch, rejects trailing
+  input, and enforces method/schema/base64 validation plus frame/body/hard-deadline/concurrency
+  bounds, restart invalidation, and validated leaf-only cleanup fail closed.
+- Confirm only exact `JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true` replaces UDS with
+  authenticated loopback TCP and the hardened owner-only CLI token file. If
   `JARVIS_MAC_IPC_AUTH_FILE` is used, confirm it is absolute and effective only
-  with that opt-in. Confirm the supervisor removes both app-only variables and
-  `JARVIS_IPC_TOKEN_FILE` from the child environment; restart/stop/failure
-  clears the matching generation and file. Treat explicit handoff as weaker
-  same-user-readable bearer possession, never OS/process identity proof.
+  with that opt-in. Confirm app-only variables and `JARVIS_IPC_TOKEN_FILE` are
+  absent from the child; restart/stop/failure clears matching state. Treat the
+  compatibility path as weaker same-user-readable bearer possession. Neither
+  path proves peer PID, intended process/code identity, device authentication,
+  XPC, App Sandbox, signing/notarization, or live-device behavior.
 
 ## Code Gate
 
@@ -943,12 +950,16 @@ Distribution packaging gate:
 - Run `./scripts/package-distribution.sh --unsigned-launch-check` when a
   packaging change should prove the release-built `Jarvis.app` executable can
   supervise its bundled core from an isolated HOME. This also validates the
-  unsigned package metadata. Confirm the app-owned IPC credential file is mode
-  `0600`, all smoke calls use `--ipc-token-file`, missing/wrong/duplicate
-  credentials fail closed, and no credential appears in output. Treat it as
-  local launch and possession-authenticated IPC evidence only; it still does
-  not prove OS identity, same-user/process isolation, signing, notarization, stapling, installation,
-  Finder/LaunchServices, live device, or manual QA.
+  unsigned package metadata. Confirm the default lane uses a `0700` owner-only
+  run directory, `0600` generation-random socket, same-EUID peer checks, the
+  per-launch bearer, no credential handoff file or TCP listener, and cleanup of
+  only the validated socket leaf. Require the non-secret app readiness line that
+  is emitted only after authenticated supervisor health, then require the
+  supervised child to exit and its socket to disappear before the compatibility
+  relaunch. Treat it as local launch and bounded
+  UDS/bearer evidence only; it still does not prove peer PID or code identity,
+  device authentication, XPC, App Sandbox, signing, notarization, stapling,
+  installation, Finder/LaunchServices, live device, or manual QA.
 - Confirm `jarvis --version` reports the canonical release version and that
   `release-evidence-doctor.sh` / `release-evidence-bundle.sh` accept the
   bundled `Contents/Resources/bin/jarvis-cli --version` output for the same

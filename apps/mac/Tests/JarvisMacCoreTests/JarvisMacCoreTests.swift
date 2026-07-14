@@ -6268,6 +6268,375 @@ struct IPCBearerAuthorizationTests {
         #expect(externalAuthorization.activeGeneration == nil)
         #expect(!FileManager.default.fileExists(atPath: externalAuthorization.tokenFileURL.path))
     }
+
+    @Test("App-style transport selection defaults to UDS and exact handoff selects TCP")
+    func appStyleTransportSelectionAndSupervisorEnvelope() async throws {
+        let directory = try shortUnixTestDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let disabled = JarvisIPCCLIHandoffConfiguration.fromEnvironment([:])
+        let enabled = JarvisIPCCLIHandoffConfiguration.fromEnvironment([
+            JarvisIPCCLIHandoffConfiguration.enableEnvironmentKey: "true",
+            JarvisIPCCLIHandoffConfiguration.fileEnvironmentKey:
+                directory.appending(path: "ipc-session-auth.json").path
+        ])
+        #expect(!disabled.isEnabled)
+        #expect(enabled.isEnabled)
+
+        let udsAuthorization = JarvisIPCSessionAuthorization(
+            mode: .appSupervised,
+            tokenFileURL: directory.appending(path: "unused-uds-auth.json"),
+            cliHandoffConfiguration: disabled,
+            transportMode: disabled.isEnabled ? .loopbackTCP : .unixSocket,
+            socketDirectoryPath: directory.appending(path: "run").path,
+            randomBytes: DeterministicAuthRandom().bytes,
+            socketIdentifier: { "udsselection" }
+        )
+        let udsLauncher = FakeProcessLauncher()
+        let udsSupervisor = JarvisCoreSupervisor(
+            configuration: JarvisCoreSupervisorConfiguration(
+                executableURL: URL(fileURLWithPath: "/tmp/jarvis-cli"), databaseURL: nil
+            ),
+            client: FakeCoreClient(healthResults: [
+                .failure(URLError(.cannotConnectToHost)), .success(sampleHealth())
+            ]),
+            processLauncher: udsLauncher,
+            workspaceRootProvider: FakeWorkspaceRootGrantProvider(roots: []),
+            ipcAuthorization: udsAuthorization
+        )
+
+        await udsSupervisor.start(environmentOverrides: [
+            JarvisCoreSupervisor.releaseSmokeEnvironmentKey: "true"
+        ])
+
+        let udsLaunch = try #require(udsLauncher.launches.first)
+        #expect(!udsLaunch.arguments.contains("--bind"))
+        let udsInput = try #require(udsLaunch.standardInput)
+        let udsEnvelope = try #require(
+            JSONSerialization.jsonObject(with: udsInput) as? [String: Any]
+        )
+        let udsTransport = try #require(udsEnvelope["ipc_transport"] as? [String: String])
+        #expect(udsTransport["kind"] == JarvisIPCUnixSocketDescriptor.kind)
+        #expect(udsTransport["socket_path"]?.hasSuffix("/run/core-udsselection.sock") == true)
+        #expect(udsEnvelope["ipc_auth"] != nil)
+        #expect(udsLaunch.environment["JARVIS_IPC_TOKEN_FILE"] == nil)
+        #expect(udsLaunch.environment[JarvisCoreSupervisor.releaseSmokeEnvironmentKey] == nil)
+
+        let tcpAuthorization = JarvisIPCSessionAuthorization(
+            mode: .appSupervised,
+            cliHandoffConfiguration: enabled,
+            transportMode: enabled.isEnabled ? .loopbackTCP : .unixSocket,
+            randomBytes: DeterministicAuthRandom().bytes
+        )
+        let tcpLauncher = FakeProcessLauncher()
+        let tcpSupervisor = JarvisCoreSupervisor(
+            configuration: JarvisCoreSupervisorConfiguration(
+                executableURL: URL(fileURLWithPath: "/tmp/jarvis-cli"), databaseURL: nil
+            ),
+            client: FakeCoreClient(healthResults: [
+                .failure(URLError(.cannotConnectToHost)), .success(sampleHealth())
+            ]),
+            processLauncher: tcpLauncher,
+            workspaceRootProvider: FakeWorkspaceRootGrantProvider(roots: []),
+            ipcAuthorization: tcpAuthorization
+        )
+
+        await tcpSupervisor.start()
+
+        let tcpLaunch = try #require(tcpLauncher.launches.first)
+        #expect(tcpLaunch.arguments.contains("--bind"))
+        let tcpInput = try #require(tcpLaunch.standardInput)
+        let tcpEnvelope = try #require(
+            JSONSerialization.jsonObject(with: tcpInput) as? [String: Any]
+        )
+        #expect(tcpEnvelope["ipc_auth"] != nil)
+        #expect(tcpEnvelope["ipc_transport"] == nil)
+        #expect(FileManager.default.fileExists(atPath: try #require(enabled.fileURL).path))
+        #expect(await tcpSupervisor.stop())
+        #expect(!FileManager.default.fileExists(atPath: try #require(enabled.fileURL).path))
+    }
+
+    @Test("UDS run directory rejects symlink, file, and permissive preexisting state")
+    func unixSocketDirectorySafety() throws {
+        let root = try shortUnixTestDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let target = root.appending(path: "target", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: false)
+
+        let symlink = root.appending(path: "symlink-run")
+        try FileManager.default.createSymbolicLink(at: symlink, withDestinationURL: target)
+        try assertUnsafeUnixSocketDirectory(symlink, tokenFileRoot: root)
+
+        let file = root.appending(path: "file-run")
+        try Data("not a directory".utf8).write(to: file)
+        try assertUnsafeUnixSocketDirectory(file, tokenFileRoot: root)
+
+        let permissive = root.appending(path: "permissive-run", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: permissive, withIntermediateDirectories: false)
+        #expect(Darwin.chmod(permissive.path, mode_t(0o755)) == 0)
+        try assertUnsafeUnixSocketDirectory(permissive, tokenFileRoot: root)
+    }
+
+    @Test("UDS path bounds and repeated leaf collisions fail closed")
+    func unixSocketPathBoundsAndCollisions() throws {
+        let root = try shortUnixTestDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let run = root.appending(path: "run", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: run, withIntermediateDirectories: false)
+        #expect(Darwin.chmod(run.path, mode_t(0o700)) == 0)
+        let collision = run.appending(path: "core-collision.sock")
+        try Data("must remain".utf8).write(to: collision)
+        let collisionAuthorization = makeUnixSocketAuthorization(
+            socketDirectoryURL: run,
+            tokenFileRoot: root,
+            socketIdentifier: { "collision" }
+        )
+        let collisionLaunchValue = try collisionAuthorization.rotateForLaunch()
+        let collisionLaunch = try #require(collisionLaunchValue)
+        #expect(throws: JarvisIPCAuthorizationError.unixSocketPathInvalid) {
+            _ = try collisionAuthorization.prepareUnixSocketForLaunch(
+                generation: collisionLaunch.generation
+            )
+        }
+        #expect(try Data(contentsOf: collision) == Data("must remain".utf8))
+
+        let longParent = root.appending(
+            path: String(repeating: "p", count: 80), directoryHint: .isDirectory
+        )
+        let longRun = longParent.appending(path: "run", directoryHint: .isDirectory)
+        let longAuthorization = makeUnixSocketAuthorization(
+            socketDirectoryURL: longRun,
+            tokenFileRoot: root,
+            socketIdentifier: { "bounded" }
+        )
+        let longLaunchValue = try longAuthorization.rotateForLaunch()
+        let longLaunch = try #require(longLaunchValue)
+        #expect(throws: JarvisIPCAuthorizationError.unixSocketPathInvalid) {
+            _ = try longAuthorization.prepareUnixSocketForLaunch(
+                generation: longLaunch.generation
+            )
+        }
+    }
+
+    @Test("UDS cleanup removes only the captured socket identity")
+    func unixSocketIdentityBoundCleanup() throws {
+        let root = try shortUnixTestDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let authorization = makeUnixSocketAuthorization(
+            socketDirectoryURL: root.appending(path: "run"),
+            tokenFileRoot: root,
+            socketIdentifier: { "identity" }
+        )
+        let launchValue = try authorization.rotateForLaunch()
+        let launch = try #require(launchValue)
+        let descriptorValue = try authorization.prepareUnixSocketForLaunch(
+            generation: launch.generation
+        )
+        let descriptor = try #require(descriptorValue)
+        let listener = try bindUnixSocketForTest(at: descriptor.socketURL)
+        defer { Darwin.close(listener) }
+        #expect(Darwin.chmod(descriptor.socketURL.path, mode_t(0o600)) == 0)
+        try authorization.captureActiveUnixSocketIdentity(generation: launch.generation)
+
+        #expect(Darwin.unlink(descriptor.socketURL.path) == 0)
+        try Data("replacement must remain".utf8).write(to: descriptor.socketURL)
+        authorization.clear(generation: launch.generation)
+
+        #expect(try Data(contentsOf: descriptor.socketURL) == Data("replacement must remain".utf8))
+    }
+}
+
+@Suite("Unix IPC transport", .serialized)
+struct UnixIPCTransportTests {
+    @Test("Wire request is strict and padded while a valid response decodes")
+    func strictWireRoundTrip() async throws {
+        let root = try shortUnixTestDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let captured = LockedTestValue<Data?>(nil)
+        let server = try UnixSocketTestServer(
+            socketURL: root.appending(path: "wire.sock"),
+            handler: { descriptor in
+                captured.set(try? readUnixTestFrame(descriptor))
+                let response = Data(
+                    #"{"version":1,"status":201,"content_type":"application/json","body_base64":"b2s="}"#.utf8
+                )
+                try? writeUnixTestFrame(descriptor, response)
+            }
+        )
+        defer { withExtendedLifetime(server) {} }
+        let response = try await DarwinJarvisUnixSocketTransport(timeoutSeconds: 2).send(
+            JarvisIPCTransportRequest(
+                method: "POST",
+                path: "/commands?dry_run=true",
+                authorization: "Bearer test-token",
+                accept: "application/json",
+                contentType: "application/json",
+                body: Data("x".utf8)
+            ),
+            to: server.socketURL
+        )
+
+        #expect(response.status == 201)
+        #expect(response.contentType == "application/json")
+        #expect(response.body == Data("ok".utf8))
+        let requestData = try #require(captured.value)
+        let request = try #require(
+            JSONSerialization.jsonObject(with: requestData) as? [String: Any]
+        )
+        #expect(Set(request.keys) == Set([
+            "version", "method", "path", "authorization", "accept", "content_type", "body_base64"
+        ]))
+        #expect(request["version"] as? Int == 1)
+        #expect(request["method"] as? String == "POST")
+        #expect(request["body_base64"] as? String == "eA==")
+    }
+
+    @Test("Malformed, oversized, and early-EOF responses fail closed")
+    func invalidResponsesFailClosed() async throws {
+        let root = try shortUnixTestDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let request = JarvisIPCTransportRequest(
+            method: "GET", path: "/health", authorization: "Bearer test-token"
+        )
+
+        let malformed = try UnixSocketTestServer(
+            socketURL: root.appending(path: "malformed.sock"),
+            handler: { descriptor in
+                _ = try? readUnixTestFrame(descriptor)
+                try? writeUnixTestFrame(
+                    descriptor,
+                    Data(#"{"version":1,"status":200,"content_type":null,"body_base64":"","extra":true}"#.utf8)
+                )
+            }
+        )
+        defer { withExtendedLifetime(malformed) {} }
+        await #expect(throws: JarvisUnixSocketTransportError.invalidResponse) {
+            _ = try await DarwinJarvisUnixSocketTransport(timeoutSeconds: 2)
+                .send(request, to: malformed.socketURL)
+        }
+
+        let oversized = try UnixSocketTestServer(
+            socketURL: root.appending(path: "oversized.sock"),
+            handler: { descriptor in
+                _ = try? readUnixTestFrame(descriptor)
+                var length = UInt32(
+                    DarwinJarvisUnixSocketTransport.maximumResponseFrameBytes + 1
+                ).bigEndian
+                withUnsafeBytes(of: &length) { bytes in
+                    _ = Darwin.write(descriptor, bytes.baseAddress, bytes.count)
+                }
+            }
+        )
+        defer { withExtendedLifetime(oversized) {} }
+        await #expect(throws: JarvisUnixSocketTransportError.frameTooLarge) {
+            _ = try await DarwinJarvisUnixSocketTransport(timeoutSeconds: 2)
+                .send(request, to: oversized.socketURL)
+        }
+
+        let eof = try UnixSocketTestServer(
+            socketURL: root.appending(path: "eof.sock"),
+            handler: { descriptor in _ = try? readUnixTestFrame(descriptor) }
+        )
+        defer { withExtendedLifetime(eof) {} }
+        await #expect(throws: JarvisUnixSocketTransportError.readFailed) {
+            _ = try await DarwinJarvisUnixSocketTransport(timeoutSeconds: 2)
+                .send(request, to: eof.socketURL)
+        }
+    }
+
+    @Test("Request caps reject oversized bodies before connecting")
+    func requestCapsFailBeforeConnect() async {
+        #expect(DarwinJarvisUnixSocketTransport.maximumRequestFrameBytes == 2 * 1024 * 1024)
+        #expect(DarwinJarvisUnixSocketTransport.maximumRequestBodyBytes == 1024 * 1024)
+        #expect(DarwinJarvisUnixSocketTransport.maximumResponseFrameBytes == 12 * 1024 * 1024)
+        #expect(DarwinJarvisUnixSocketTransport.maximumResponseBodyBytes == 8 * 1024 * 1024)
+        let body = Data(
+            repeating: 0,
+            count: DarwinJarvisUnixSocketTransport.maximumRequestBodyBytes + 1
+        )
+        await #expect(throws: JarvisUnixSocketTransportError.invalidRequest) {
+            _ = try await DarwinJarvisUnixSocketTransport(timeoutSeconds: 2).send(
+                JarvisIPCTransportRequest(
+                    method: "POST", path: "/commands", authorization: "Bearer token", body: body
+                ),
+                to: URL(fileURLWithPath: "/tmp/does-not-connect.sock")
+            )
+        }
+    }
+
+    @Test("Peer EUID comparison rejects a mismatched local user")
+    func peerUIDMismatchFailsClosed() throws {
+        try DarwinJarvisUnixSocketTransport.validatePeerUID(42, currentEUID: 42)
+        #expect(throws: JarvisUnixSocketTransportError.peerUIDMismatch) {
+            try DarwinJarvisUnixSocketTransport.validatePeerUID(41, currentEUID: 42)
+        }
+    }
+
+    @Test("Trickle responses cannot extend the hard end-to-end deadline")
+    func trickleResponseHonorsHardDeadline() async throws {
+        let root = try shortUnixTestDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let response = Data(
+            #"{"version":1,"status":200,"content_type":null,"body_base64":""}"#.utf8
+        )
+        let framedResponse: Data = {
+            var responseLength = UInt32(response.count).bigEndian
+            var frame = withUnsafeBytes(of: &responseLength) { Data($0) }
+            frame.append(response)
+            return frame
+        }()
+        let server = try UnixSocketTestServer(
+            socketURL: root.appending(path: "trickle.sock"),
+            handler: { descriptor in
+                guard (try? readUnixTestFrame(descriptor)) != nil else { return }
+                for byte in framedResponse {
+                    var byte = byte
+                    guard Darwin.write(descriptor, &byte, 1) == 1 else { return }
+                    Darwin.usleep(150_000)
+                }
+            }
+        )
+        defer { withExtendedLifetime(server) {} }
+        let clock = ContinuousClock()
+        let started = clock.now
+        await #expect(throws: JarvisUnixSocketTransportError.timedOut) {
+            _ = try await DarwinJarvisUnixSocketTransport(timeoutSeconds: 1).send(
+                JarvisIPCTransportRequest(
+                    method: "GET", path: "/health", authorization: "Bearer token"
+                ),
+                to: server.socketURL
+            )
+        }
+        let elapsed = started.duration(to: clock.now)
+        #expect(elapsed >= .milliseconds(700))
+        #expect(elapsed < .seconds(2))
+    }
+
+    @Test("Cancellation closes a connected request without waiting for timeout")
+    func cancellationClosesConnectedRequest() async throws {
+        let root = try shortUnixTestDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let server = try UnixSocketTestServer(
+            socketURL: root.appending(path: "cancel.sock"),
+            handler: { descriptor in
+                _ = try? readUnixTestFrame(descriptor)
+                _ = DispatchSemaphore(value: 0).wait(timeout: .now() + 5)
+            }
+        )
+        defer { withExtendedLifetime(server) {} }
+        let task = Task {
+            try await DarwinJarvisUnixSocketTransport(timeoutSeconds: 30).send(
+                JarvisIPCTransportRequest(
+                    method: "GET", path: "/health", authorization: "Bearer token"
+                ),
+                to: server.socketURL
+            )
+        }
+        try await waitForUnixTestServerAccept(server)
+        task.cancel()
+        await #expect(throws: JarvisUnixSocketTransportError.cancelled) {
+            _ = try await task.value
+        }
+    }
 }
 
 @Suite("Trusted wake contracts")
@@ -8767,5 +9136,225 @@ private struct JarvisCLISmokeError: Error, CustomStringConvertible {
 
     var description: String {
         "jarvis CLI smoke failed with status \(status)\nstdout:\n\(stdout)\nstderr:\n\(stderr)"
+    }
+}
+
+private func makeUnixSocketAuthorization(
+    socketDirectoryURL: URL,
+    tokenFileRoot: URL,
+    socketIdentifier: @escaping @Sendable () throws -> String
+) -> JarvisIPCSessionAuthorization {
+    JarvisIPCSessionAuthorization(
+        mode: .appSupervised,
+        tokenFileURL: tokenFileRoot.appending(path: "unused-auth.json"),
+        transportMode: .unixSocket,
+        socketDirectoryPath: socketDirectoryURL.path,
+        randomBytes: DeterministicAuthRandom().bytes,
+        socketIdentifier: socketIdentifier
+    )
+}
+
+private func shortUnixTestDirectory() throws -> URL {
+    let suffix = UUID().uuidString.prefix(8).lowercased()
+    let directory = URL(fileURLWithPath: "/tmp/juds-\(suffix)", isDirectory: true)
+    try FileManager.default.createDirectory(
+        at: directory,
+        withIntermediateDirectories: false,
+        attributes: [.posixPermissions: NSNumber(value: Int16(0o700))]
+    )
+    return directory
+}
+
+private func assertUnsafeUnixSocketDirectory(
+    _ socketDirectoryURL: URL,
+    tokenFileRoot: URL
+) throws {
+    let authorization = makeUnixSocketAuthorization(
+        socketDirectoryURL: socketDirectoryURL,
+        tokenFileRoot: tokenFileRoot,
+        socketIdentifier: { "unsafe" }
+    )
+    let launchValue = try authorization.rotateForLaunch()
+    let launch = try #require(launchValue)
+    #expect(throws: JarvisIPCAuthorizationError.unixSocketParentUnsafe) {
+        _ = try authorization.prepareUnixSocketForLaunch(generation: launch.generation)
+    }
+}
+
+private final class LockedTestValue<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: Value
+
+    init(_ value: Value) {
+        storage = value
+    }
+
+    var value: Value {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage
+    }
+
+    func set(_ value: Value) {
+        lock.lock()
+        storage = value
+        lock.unlock()
+    }
+}
+
+private final class UnixSocketTestServer: @unchecked Sendable {
+    let socketURL: URL
+    private let listener: Int32
+    private let accepted = LockedTestValue(false)
+    private let handler: @Sendable (Int32) -> Void
+
+    init(socketURL: URL, handler: @escaping @Sendable (Int32) -> Void) throws {
+        self.socketURL = socketURL
+        self.handler = handler
+        listener = try bindUnixSocketForTest(at: socketURL)
+        guard Darwin.listen(listener, 1) == 0 else {
+            Darwin.close(listener)
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .ENOTSUP)
+        }
+        DispatchQueue.global(qos: .userInitiated).async { [self] in
+            var client: Int32
+            repeat {
+                client = Darwin.accept(listener, nil, nil)
+            } while client < 0 && errno == EINTR
+            guard client >= 0 else { return }
+            var enabled: Int32 = 1
+            _ = Darwin.setsockopt(
+                client,
+                SOL_SOCKET,
+                SO_NOSIGPIPE,
+                &enabled,
+                socklen_t(MemoryLayout.size(ofValue: enabled))
+            )
+            var receiveTimeout = timeval(tv_sec: 2, tv_usec: 0)
+            _ = Darwin.setsockopt(
+                client,
+                SOL_SOCKET,
+                SO_RCVTIMEO,
+                &receiveTimeout,
+                socklen_t(MemoryLayout.size(ofValue: receiveTimeout))
+            )
+            accepted.set(true)
+            handler(client)
+            Darwin.close(client)
+        }
+    }
+
+    var didAccept: Bool { accepted.value }
+
+    deinit {
+        Darwin.close(listener)
+        _ = Darwin.unlink(socketURL.path)
+    }
+}
+
+private func waitForUnixTestServerAccept(_ server: UnixSocketTestServer) async throws {
+    let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+    while !server.didAccept {
+        guard ContinuousClock.now < deadline else {
+            throw POSIXError(.ETIMEDOUT)
+        }
+        try await Task.sleep(for: .milliseconds(5))
+    }
+}
+
+private func bindUnixSocketForTest(at socketURL: URL) throws -> Int32 {
+    guard socketURL.isFileURL, socketURL.path.hasPrefix("/") else {
+        throw POSIXError(.EINVAL)
+    }
+    let pathBytes = Array(socketURL.path.utf8)
+    guard !pathBytes.isEmpty, pathBytes.count < 104 else {
+        throw POSIXError(.ENAMETOOLONG)
+    }
+    let descriptor = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+    guard descriptor >= 0 else {
+        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .ENOTSUP)
+    }
+    var address = sockaddr_un()
+    let addressLength = MemoryLayout.offset(of: \sockaddr_un.sun_path)! + pathBytes.count + 1
+    address.sun_len = UInt8(addressLength)
+    address.sun_family = sa_family_t(AF_UNIX)
+    withUnsafeMutableBytes(of: &address.sun_path) { destination in
+        destination.copyBytes(from: pathBytes)
+        destination[pathBytes.count] = 0
+    }
+    let result = withUnsafePointer(to: &address) { pointer in
+        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            Darwin.bind(descriptor, $0, socklen_t(addressLength))
+        }
+    }
+    guard result == 0 else {
+        let code = errno
+        Darwin.close(descriptor)
+        throw POSIXError(POSIXErrorCode(rawValue: code) ?? .ENOTSUP)
+    }
+    return descriptor
+}
+
+private func readUnixTestFrame(_ descriptor: Int32) throws -> Data {
+    let prefix = try readUnixTestBytes(descriptor, count: 4)
+    var encodedLength: UInt32 = 0
+    _ = withUnsafeMutableBytes(of: &encodedLength) { prefix.copyBytes(to: $0) }
+    let frame = try readUnixTestBytes(
+        descriptor,
+        count: Int(UInt32(bigEndian: encodedLength))
+    )
+    var trailingByte: UInt8 = 0
+    while true {
+        let result = Darwin.read(descriptor, &trailingByte, 1)
+        if result < 0, errno == EINTR { continue }
+        guard result == 0 else {
+            throw POSIXError(result < 0 ? .ETIMEDOUT : .EPROTO)
+        }
+        return frame
+    }
+}
+
+private func readUnixTestBytes(_ descriptor: Int32, count: Int) throws -> Data {
+    var data = Data(count: count)
+    var offset = 0
+    try data.withUnsafeMutableBytes { bytes in
+        while offset < count {
+            let result = Darwin.read(
+                descriptor,
+                bytes.baseAddress?.advanced(by: offset),
+                count - offset
+            )
+            if result < 0, errno == EINTR { continue }
+            guard result > 0 else { throw POSIXError(.ECONNRESET) }
+            offset += result
+        }
+    }
+    return data
+}
+
+private func writeUnixTestFrame(_ descriptor: Int32, _ frame: Data) throws {
+    var length = UInt32(frame.count).bigEndian
+    try withUnsafeBytes(of: &length) { bytes in
+        try writeUnixTestBytes(descriptor, bytes)
+    }
+    try frame.withUnsafeBytes { bytes in
+        try writeUnixTestBytes(descriptor, bytes)
+    }
+}
+
+private func writeUnixTestBytes(
+    _ descriptor: Int32,
+    _ bytes: UnsafeRawBufferPointer
+) throws {
+    var offset = 0
+    while offset < bytes.count {
+        let result = Darwin.write(
+            descriptor,
+            bytes.baseAddress?.advanced(by: offset),
+            bytes.count - offset
+        )
+        if result < 0, errno == EINTR { continue }
+        guard result > 0 else { throw POSIXError(.EPIPE) }
+        offset += result
     }
 }

@@ -11,8 +11,9 @@ bounded Ollama-native NDJSON transport streaming with terminal-frame
 quarantine and in-flight cancellation,
 structured provider-failure responses with route/audit evidence, plugin
 contracts, metadata-only local plugin installation, local plugin
-provenance snapshots, scheduler state, redacted diagnostics export, a loopback
-IPC surface with compatibility policy plus feature proof/boundary metadata,
+provenance snapshots, scheduler state, redacted diagnostics export, a default
+app-supervised Unix-domain-socket IPC surface plus explicit loopback CLI
+compatibility policy and feature proof/boundary metadata,
 repository-backed activity summary and activity event stream, conservative
 release-readiness inspection, read-only release runbook IPC surfaces, and CLI smoke paths for the Swift shell
 and local packaged app proof.
@@ -172,21 +173,36 @@ health, audit, and UI presentation. The app resolves every bookmark fail closed
 before launch and retains balanced security-scope access only for the supervised
 process lifetime. Manual use of the legacy `--workspace-root` option still
 exposes the configured path in that operator-launched process's arguments.
-App-supervised launches also rotate a 32-byte bearer credential, deliver it in
-the same bounded startup-stdin envelope, and require it on every loopback route.
-The credential stays in app/core memory by default. An explicit local operator
-may relaunch the app with `JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true` to create the
-owner-only `~/Library/Application Support/Jarvis/ipc-session-auth.json` handoff
-file and then run, for example, `jarvis --ipc-token-file "$HOME/Library/Application Support/Jarvis/ipc-session-auth.json" health`.
-The token never enters child argv, environment, audit, diagnostics, or UI. A
-managed client fails closed before sending when its credential is unavailable;
-managed Swift/CLI clients reject non-loopback endpoints before bearer exposure,
-and an authenticated core rejects non-loopback binds;
-an explicitly unauthenticated legacy server rejects any Authorization header,
-preventing silent managed-client downgrade. Repository tests prove possession-
-based loopback authentication and restrictive file handling, not App Sandbox
-enforcement, sandbox-extension inheritance by the child, OS identity,
-same-user/process isolation, or live-device behavior.
+App-supervised launches also rotate a 32-byte bearer and default to a
+generation-random Unix domain socket. The bounded startup-stdin envelope carries
+both the bearer and
+`ipc_transport:{kind:"unix_socket_v1",socket_path:"/absolute/path.sock"}`;
+neither enters child argv or environment. The app-owned runtime directory is
+current-owner `0700`, the socket is `0600`, and both Swift and Rust reject a
+peer whose `getpeereid` EUID differs from their current EUID. Every route still
+requires the bearer.
+
+The UDS protocol allows one four-byte big-endian length plus one strict,
+versioned JSON request per connection, followed by a required client write-half
+close before the framed response. It permits only GET, POST,
+DELETE, and PATCH, uses standard padded base64 for bodies, and fails closed on
+unknown fields, malformed frames, bounds, deadlines, or concurrency limits.
+Stop, failure, replacement, and observed exit clear the matching launch state;
+cleanup removes only a validated socket leaf, never a directory tree.
+
+Exact `JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true` switches the app to the weaker
+authenticated loopback TCP and owner-only
+`~/Library/Application Support/Jarvis/ipc-session-auth.json` compatibility
+path. `JARVIS_MAC_IPC_AUTH_FILE` can override that file with an absolute path
+only in this mode. An operator can then run, for example,
+`jarvis --ipc-token-file "$HOME/Library/Application Support/Jarvis/ipc-session-auth.json" health`.
+The token never enters child argv, environment, audit, diagnostics, or UI.
+Loopback clients and servers retain strict loopback checks, and an explicitly
+unauthenticated legacy server rejects any Authorization header. Repository
+tests prove bounded transport, same-EUID checks, bearer possession, route
+parity, cleanup, and compatibility behavior. They do not prove peer PID,
+intended process or code-sign identity, device authentication, XPC, App
+Sandbox, signing/notarization, or live-device behavior.
 For broader registered plugin manifest inspection, `jarvis plugins list`
 defaults to a compact operator-readable summary and `jarvis plugins list --json`
 prints full manifest schemas.
@@ -367,8 +383,9 @@ build/test. Focused commands below are for local iteration or
 ownership-specific proof; they do not replace the full gate for executable
 changes.
 
-For the current IPC smoke path, start the local server and run CLI commands
-from a second terminal:
+For the explicit operator CLI compatibility path, start the local loopback
+server and run CLI commands from a second terminal. This is not the default
+app-supervised UDS path:
 
 ```sh
 cargo run -p jarvis-cli -- serve
@@ -409,8 +426,9 @@ For operator-facing release QA over a repository-backed local core, run:
 ./scripts/release-operator-qa-smoke.sh
 ```
 
-That script starts a loopback core with an isolated SQLite database, exercises
-command, audit, routes, memory create/update/review/delete/restore, scheduler
+That script starts an explicit loopback compatibility core with an isolated
+SQLite database and exercises command, audit, routes, memory
+create/update/review/delete/restore, scheduler
 attention/run-due, activity, permission review, diagnostics, emergency pause,
 release readiness, and restart recovery. It is local CLI QA evidence, not a
 clean-profile installed-app or live-device validation pass.
@@ -459,8 +477,9 @@ the distribution-shaped `Jarvis.app`, optionally ad-hoc signs it when
 and inspects the package payload for the app executable, bundled core, and
 `Info.plist`.
 The unsigned launch check additionally launches the release-built app
-executable with an isolated temporary HOME and verifies app-supervised core
-health, command, audit, diagnostics, pause/block/resume behavior, and SQLite
+executable with an isolated temporary HOME, requires a non-secret app-only
+marker emitted only after authenticated supervised health succeeds, and verifies
+socket cleanup plus command, audit, diagnostics, pause/block/resume behavior, and SQLite
 state through the bundled core. It is also part of the default
 `./scripts/release-local.sh` local release gate so distribution-layout launch
 regressions fail the standard proof path.

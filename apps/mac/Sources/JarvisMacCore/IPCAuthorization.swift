@@ -12,6 +12,24 @@ public enum JarvisIPCAuthorizationError: Error, Equatable {
     case nonLoopbackEndpoint
     case secureRandomUnavailable
     case tokenFileUnavailable
+    case unixSocketUnavailable
+    case unixSocketPathInvalid
+    case unixSocketParentUnsafe
+}
+
+public enum JarvisIPCTransportMode: Equatable, Sendable {
+    case loopbackTCP
+    case unixSocket
+}
+
+public struct JarvisIPCUnixSocketDescriptor: Equatable, Sendable {
+    public static let kind = "unix_socket_v1"
+
+    public let socketURL: URL
+
+    public init(socketURL: URL) {
+        self.socketURL = socketURL
+    }
 }
 
 public struct JarvisIPCCLIHandoffConfiguration: Equatable, Sendable {
@@ -70,28 +88,57 @@ private struct JarvisIPCAuthFile: Codable {
     let generation: UInt64
 }
 
+private struct JarvisIPCActiveUnixSocket {
+    let generation: UInt64
+    let descriptor: JarvisIPCUnixSocketDescriptor
+    var device: dev_t?
+    var inode: ino_t?
+}
+
 public final class JarvisIPCSessionAuthorization: @unchecked Sendable {
+    public static let unixSocketDirectoryEnvironmentKey = "JARVIS_MAC_IPC_SOCKET_DIRECTORY"
     public let mode: JarvisIPCAuthorizationMode
     public let tokenFileURL: URL
     public let cliHandoffConfiguration: JarvisIPCCLIHandoffConfiguration
+    public let transportMode: JarvisIPCTransportMode
 
     private let lock = NSLock()
     private let staleTokenFileURLs: [URL]
     private let randomBytes: @Sendable (Int) throws -> Data
+    private let socketDirectoryURL: URL
+    private let socketDirectoryIsValid: Bool
+    private let socketIdentifier: @Sendable () throws -> String
     private var active: JarvisIPCLaunchAuthorization?
+    private var activeSocket: JarvisIPCActiveUnixSocket?
     private var nextGeneration: UInt64 = 0
 
     public init(
         mode: JarvisIPCAuthorizationMode = .explicitUnauthenticated,
         tokenFileURL: URL? = nil,
         cliHandoffConfiguration: JarvisIPCCLIHandoffConfiguration = .disabled,
+        transportMode: JarvisIPCTransportMode = .loopbackTCP,
+        socketDirectoryPath: String? = nil,
         fileManager: FileManager = .default,
-        randomBytes: (@Sendable (Int) throws -> Data)? = nil
+        randomBytes: (@Sendable (Int) throws -> Data)? = nil,
+        socketIdentifier: (@Sendable () throws -> String)? = nil
     ) {
         self.mode = mode
         self.cliHandoffConfiguration = cliHandoffConfiguration
+        self.transportMode = transportMode
         self.randomBytes = randomBytes ?? Self.secureRandomBytes
+        self.socketIdentifier = socketIdentifier ?? {
+            try Self.secureRandomBytes(count: 8)
+                .map { String(format: "%02x", $0) }
+                .joined()
+        }
         let defaultTokenFileURL = Self.defaultTokenFileURL(fileManager: fileManager)
+        let configuredSocketDirectory = socketDirectoryPath.map { URL(fileURLWithPath: $0) }
+        self.socketDirectoryIsValid = socketDirectoryPath == nil
+            || (socketDirectoryPath?.hasPrefix("/") == true
+                && configuredSocketDirectory?.standardizedFileURL.path == socketDirectoryPath)
+        self.socketDirectoryURL = configuredSocketDirectory
+            ?? defaultTokenFileURL.deletingLastPathComponent()
+                .appending(path: "run", directoryHint: .isDirectory)
         let legacyTokenFileURL = tokenFileURL.flatMap(Self.absoluteFileURL)
         self.tokenFileURL = cliHandoffConfiguration.isEnabled
             ? cliHandoffConfiguration.fileURL ?? legacyTokenFileURL ?? defaultTokenFileURL
@@ -158,6 +205,81 @@ public final class JarvisIPCSessionAuthorization: @unchecked Sendable {
         }
     }
 
+    public func prepareUnixSocketForLaunch(
+        generation: UInt64
+    ) throws -> JarvisIPCUnixSocketDescriptor? {
+        guard mode == .appSupervised, transportMode == .unixSocket else { return nil }
+        lock.lock()
+        defer { lock.unlock() }
+        guard active?.generation == generation else {
+            throw JarvisIPCAuthorizationError.credentialUnavailable
+        }
+        guard socketDirectoryIsValid else {
+            throw JarvisIPCAuthorizationError.unixSocketPathInvalid
+        }
+        if let activeSocket, activeSocket.generation == generation {
+            return activeSocket.descriptor
+        }
+        cleanupActiveSocketLocked()
+        try Self.prepareSocketDirectory(socketDirectoryURL)
+        for _ in 0..<8 {
+            let identifier = try socketIdentifier()
+            guard !identifier.isEmpty,
+                  identifier.utf8.count <= 32,
+                  identifier.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }) else {
+                throw JarvisIPCAuthorizationError.unixSocketPathInvalid
+            }
+            let socketURL = socketDirectoryURL.appending(path: "core-\(identifier).sock")
+            guard Self.isRepresentableUnixSocketPath(socketURL) else {
+                throw JarvisIPCAuthorizationError.unixSocketPathInvalid
+            }
+            guard Self.leafDoesNotExist(socketURL) else { continue }
+            let descriptor = JarvisIPCUnixSocketDescriptor(socketURL: socketURL)
+            activeSocket = JarvisIPCActiveUnixSocket(
+                generation: generation,
+                descriptor: descriptor,
+                device: nil,
+                inode: nil
+            )
+            return descriptor
+        }
+        throw JarvisIPCAuthorizationError.unixSocketPathInvalid
+    }
+
+    public func captureActiveUnixSocketIdentity(generation: UInt64) throws {
+        guard mode == .appSupervised, transportMode == .unixSocket else { return }
+        lock.lock()
+        defer { lock.unlock() }
+        guard var activeSocket,
+              activeSocket.generation == generation else {
+            throw JarvisIPCAuthorizationError.unixSocketUnavailable
+        }
+        var metadata = stat()
+        let inspected = activeSocket.descriptor.socketURL.withUnsafeFileSystemRepresentation { path -> Bool in
+            guard let path else { return false }
+            return Darwin.lstat(path, &metadata) == 0
+        }
+        guard inspected,
+              metadata.st_mode & S_IFMT == S_IFSOCK,
+              metadata.st_uid == Darwin.geteuid(),
+              metadata.st_mode & mode_t(0o7777) == mode_t(0o600) else {
+            throw JarvisIPCAuthorizationError.unixSocketUnavailable
+        }
+        activeSocket.device = metadata.st_dev
+        activeSocket.inode = metadata.st_ino
+        self.activeSocket = activeSocket
+    }
+
+    public func activeUnixSocketURL() throws -> URL? {
+        guard mode == .appSupervised, transportMode == .unixSocket else { return nil }
+        lock.lock()
+        defer { lock.unlock() }
+        guard let active, let activeSocket, activeSocket.generation == active.generation else {
+            throw JarvisIPCAuthorizationError.unixSocketUnavailable
+        }
+        return activeSocket.descriptor.socketURL
+    }
+
     public func clear(generation: UInt64) {
         guard mode == .appSupervised else { return }
         lock.lock()
@@ -166,6 +288,7 @@ public final class JarvisIPCSessionAuthorization: @unchecked Sendable {
             return
         }
         active = nil
+        cleanupActiveSocketLocked()
         removeStaleTokenFiles()
         lock.unlock()
     }
@@ -174,6 +297,7 @@ public final class JarvisIPCSessionAuthorization: @unchecked Sendable {
         guard mode == .appSupervised else { return }
         lock.lock()
         active = nil
+        cleanupActiveSocketLocked()
         removeStaleTokenFiles()
         lock.unlock()
     }
@@ -222,6 +346,88 @@ public final class JarvisIPCSessionAuthorization: @unchecked Sendable {
         return support
             .appending(path: "Jarvis", directoryHint: .isDirectory)
             .appending(path: "ipc-session-auth.json")
+    }
+
+    private static func prepareSocketDirectory(_ url: URL) throws {
+        guard url.isFileURL, url.path.hasPrefix("/") else {
+            throw JarvisIPCAuthorizationError.unixSocketPathInvalid
+        }
+        let jarvisDirectory = url.deletingLastPathComponent()
+        try createOrValidateOwnedDirectory(jarvisDirectory, requireOwnerOnlyMode: false)
+        try createOrValidateOwnedDirectory(url, requireOwnerOnlyMode: true)
+    }
+
+    private static func createOrValidateOwnedDirectory(
+        _ url: URL,
+        requireOwnerOnlyMode: Bool
+    ) throws {
+        let result = url.withUnsafeFileSystemRepresentation { path -> Int32 in
+            guard let path else { return EINVAL }
+            if Darwin.mkdir(path, mode_t(0o700)) == 0 { return 0 }
+            return errno
+        }
+        guard result == 0 || result == EEXIST else {
+            throw JarvisIPCAuthorizationError.unixSocketParentUnsafe
+        }
+        var metadata = stat()
+        let inspected = url.withUnsafeFileSystemRepresentation { path -> Bool in
+            guard let path else { return false }
+            return Darwin.lstat(path, &metadata) == 0
+        }
+        guard inspected,
+              metadata.st_mode & S_IFMT == S_IFDIR,
+              metadata.st_uid == Darwin.geteuid() else {
+            throw JarvisIPCAuthorizationError.unixSocketParentUnsafe
+        }
+        guard !requireOwnerOnlyMode
+                || metadata.st_mode & mode_t(0o7777) == mode_t(0o700) else {
+            throw JarvisIPCAuthorizationError.unixSocketParentUnsafe
+        }
+    }
+
+    private static func isRepresentableUnixSocketPath(_ url: URL) -> Bool {
+        guard url.isFileURL, url.path.hasPrefix("/") else { return false }
+        // Darwin sockaddr_un.sun_path is 104 bytes including the trailing NUL.
+        return url.path.utf8.count < 104
+    }
+
+    private static func leafDoesNotExist(_ url: URL) -> Bool {
+        var metadata = stat()
+        let result = url.withUnsafeFileSystemRepresentation { path -> Int32 in
+            guard let path else { return EINVAL }
+            if Darwin.lstat(path, &metadata) == 0 { return 0 }
+            return errno
+        }
+        return result == ENOENT
+    }
+
+    private func cleanupActiveSocketLocked() {
+        guard let activeSocket,
+              let device = activeSocket.device,
+              let inode = activeSocket.inode else {
+            self.activeSocket = nil
+            return
+        }
+        Self.unlinkOwnedSocketLeafIfSafe(
+            at: activeSocket.descriptor.socketURL,
+            device: device,
+            inode: inode
+        )
+        self.activeSocket = nil
+    }
+
+    private static func unlinkOwnedSocketLeafIfSafe(at url: URL, device: dev_t, inode: ino_t) {
+        guard url.isFileURL, url.path.hasPrefix("/") else { return }
+        url.withUnsafeFileSystemRepresentation { path in
+            guard let path else { return }
+            var metadata = stat()
+            guard Darwin.lstat(path, &metadata) == 0,
+                  metadata.st_uid == Darwin.geteuid(),
+                  metadata.st_mode & S_IFMT == S_IFSOCK,
+                  metadata.st_dev == device,
+                  metadata.st_ino == inode else { return }
+            _ = Darwin.unlink(path)
+        }
     }
 
     private func removeStaleTokenFiles() {

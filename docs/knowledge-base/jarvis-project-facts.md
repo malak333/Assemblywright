@@ -28,7 +28,8 @@ These notes capture durable facts for future agents working on this repository.
   inspection, scheduler notifications, Keychain credential launch injection,
   and packaged-smoke support.
 - Implemented `jarvis-core` surfaces include shared task/audit/safety types,
-  an Axum loopback IPC server, runtime-backed command execution with
+  a shared Axum router served by default over app-supervised UDS and by an
+  explicit loopback compatibility server, runtime-backed command execution with
   `FakeLocalModel` by default, an opt-in Ollama-compatible local HTTP provider,
   or an opt-in ChatGPT/OpenAI-compatible HTTP provider behind explicit
   env/config, sensitivity, redaction, and audit guardrails, emergency-pause
@@ -1043,7 +1044,8 @@ requires plugin-trust `generated_at`, `review_started_at`,
   `/Applications` install location metadata. Its `--unsigned-launch-check` mode
   is part of `./scripts/release-local.sh`, validates the same package metadata,
   launches the release-built app executable with an isolated temporary HOME,
-  verifies the bundled core over loopback IPC, and checks command, audit,
+  verifies the bundled core over the default app-supervised UDS transport, and
+  checks command, audit,
   diagnostics, pause/block/resume, and SQLite state through the release app
   layout. The CLI exposes `jarvis --version`, and the
   packaging/evidence scripts require the bundled `jarvis-cli --version` output
@@ -1639,31 +1641,40 @@ requires plugin-trust `generated_at`, `review_started_at`,
   not prove Apple attestation, OS provenance,
   background launch, same-user/process isolation, live-device behavior, or
   production readiness.
-- App-supervised loopback IPC is bearer-authenticated end to end. Swift rotates
-  32 random bytes per launch, shares a generation-bound in-memory credential
-  between `JarvisCoreSupervisor` and `JarvisIPCClient`, delivers it only in the
-  bounded v1 startup-stdin envelope, and clears it on matching launch failure,
-  stop, replacement, or observed child exit. Rust protects the complete Axum
-  router, requires exactly one strict Bearer header, compares a SHA-256 digest
-  in constant time, and emits only a generic 401 challenge. The app keeps the
-  bearer memory-only by default and removes any stale handoff file. Exact
-  `JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true` enables the explicitly weaker
-  owner-only `ipc-session-auth.json` local CLI handoff;
-  `JARVIS_MAC_IPC_AUTH_FILE` is an optional absolute override only in that
-  mode. CLI parsing is
-  bounded, no-follow, current-owner, regular-file, single-link, and permission
-  checked. A legacy unauthenticated server rejects any Authorization header to
-  prevent managed-client downgrade, and the supervisor strips the enable flag,
-  override, and client-only token-file path from the child server environment.
-  Focused Rust
-  cross-process and Swift tests prove managed clients reject non-loopback
-  destinations before bearer exposure and authenticated servers reject
-  non-loopback binds. The unsigned distribution launch smoke uses an absolute
-  temporary-profile auth-file override with explicit handoff enabled, strips
-  both app-only variables from the child, and covers the packaged boundary.
-  Regression coverage must also prove default no-file behavior, stale-file
-  cleanup, exact opt-in semantics, file lifecycle cleanup, and restart
-  invalidation. This proves token possession, no ambient default file, and
-  repository-owned lifecycle behavior, not OS identity,
-  device authentication, same-user/process isolation, App Sandbox enforcement,
-  signing/notarization, live-device behavior, or host-level egress control.
+- App-supervised IPC defaults to Unix-domain transport with same-EUID and bearer
+  defense in depth. Swift rotates 32 random bytes and a generation-random socket
+  leaf per launch, shares that state between `JarvisCoreSupervisor` and
+  `JarvisIPCClient`, and sends `ipc_transport:{kind:"unix_socket_v1",
+  socket_path:"/absolute/path.sock"}` plus the bearer only in bounded startup
+  stdin. The runtime directory is current-owner `0700`, the socket is `0600`,
+  and both peers require the connected peer's `getpeereid` EUID to equal their
+  current EUID. Rust still protects the complete router with exactly one strict
+  Bearer value and constant-time digest comparison.
+- The UDS wire contract is one four-byte big-endian length plus one exact,
+  versioned JSON request, a required client write-half close, and one framed
+  response per connection. Requests admit only GET,
+  POST, DELETE, or PATCH and exact nullable authorization/accept/content-type
+  fields plus a standard padded-base64 body. Responses carry exact version,
+  status, nullable content type, and padded-base64 body. Unknown fields,
+  malformed or trailing frames, oversized frame/body, hard deadline expiry, and
+  concurrency exhaustion fail closed. Stop, failure, replacement, and observed
+  exit clear matching launch state; cleanup removes only a validated socket
+  leaf and never recursively removes a directory.
+- Exact `JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true` replaces default UDS with the
+  explicitly weaker authenticated loopback TCP plus owner-only
+  `ipc-session-auth.json` compatibility path. `JARVIS_MAC_IPC_AUTH_FILE` is an
+  absolute override only in that mode. File parsing remains bounded,
+  no-follow, current-owner, regular-file, single-link, and permission checked;
+  strict loopback and legacy no-downgrade checks remain. App-only settings,
+  exact release-smoke readiness opt-in, and `JARVIS_IPC_TOKEN_FILE` are stripped
+  from the child. The packaged lane accepts the non-secret readiness line only
+  after the Swift supervisor completes authenticated health and then verifies
+  child exit plus socket cleanup. Cross-process Rust,
+  Swift, and packaged-layout coverage must prove default route parity,
+  same-EUID rejection, bearer rejection, strict framing and bounds, socket
+  ownership/modes/path bounds, lifecycle cleanup/restart invalidation, and the
+  explicit compatibility path. This proves bounded local transport, same-EUID
+  checks, bearer possession, and repository-owned lifecycle. Same EUID is not
+  same PID or intended process; the slice does not prove peer/code-sign
+  identity, device authentication, XPC, App Sandbox/egress enforcement,
+  signing/notarization, or live-device behavior.
