@@ -1420,14 +1420,15 @@ struct JarvisMacCoreTests {
             """
             {
               "generated_at": "2026-05-20T12:00:00Z",
-              "redaction": "diagnostics export omits command bodies",
+              "redaction": "diagnostics export omits command bodies and emergency-pause reason text",
               "health": {
                 "status": "ok",
                 "version": "0.1.0",
                 "started_at": "2026-05-20T11:59:00Z",
-                "emergency_paused": false,
-                "emergency_pause_reason": null,
-                "emergency_pause_updated_at": null,
+                "emergency_paused": true,
+                "emergency_pause_reason": "redacted",
+                "emergency_pause_reason_present": true,
+                "emergency_pause_updated_at": "2026-05-20T12:00:00Z",
                 "scheduler_jobs": 1,
                 "command_runtime": "routed-fake-local-model+first-party-plugins"
               },
@@ -1466,6 +1467,38 @@ struct JarvisMacCoreTests {
         #expect(export.sensitiveMemoryItemCount == 1)
         #expect(export.schedulerJobs.first?.id == jobId)
         #expect(export.schedulerJobs.first?.trigger == .manual)
+        #expect(export.health.emergencyPaused)
+        #expect(export.health.emergencyPauseReason == .redacted)
+        #expect(export.health.emergencyPauseReasonPresent)
+        #expect(export.health.emergencyPauseSummary == "paused (reason recorded and redacted)")
+    }
+
+    @Test("Diagnostics reject arbitrary emergency-pause reason markers")
+    func diagnosticsRejectArbitraryPauseReasonMarker() {
+        let data = Data(
+            """
+            {
+              "generated_at": "2026-05-20T12:00:00Z",
+              "redaction": "redacted",
+              "health": {
+                "status": "ok",
+                "version": "0.1.0",
+                "emergency_paused": true,
+                "emergency_pause_reason": "must-not-decode",
+                "emergency_pause_reason_present": true,
+                "emergency_pause_updated_at": "2026-05-20T12:00:00Z",
+                "scheduler_jobs": 0,
+                "command_runtime": "test"
+              },
+              "scheduler_jobs": [],
+              "repository_backed": false
+            }
+            """.utf8
+        )
+
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(JarvisDiagnosticsExport.self, from: data)
+        }
     }
 
     @Test("Diagnostics client method requests diagnostics export endpoint")
@@ -5403,6 +5436,7 @@ private func diagnosticsJSON() -> Data {
             "started_at": "2026-05-20T11:59:00Z",
             "emergency_paused": false,
             "emergency_pause_reason": null,
+            "emergency_pause_reason_present": false,
             "emergency_pause_updated_at": null,
             "scheduler_jobs": 0,
             "command_runtime": "routed-fake-local-model+first-party-plugins"

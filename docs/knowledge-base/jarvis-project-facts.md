@@ -772,6 +772,14 @@ requires plugin-trust `generated_at`, `review_started_at`,
   memory counts when repository backing is enabled. It still omits memory
   values, and memory policy review similarly redacts values while surfacing
   unreviewed memory plus deleted sensitive retained memory for user review.
+- Diagnostics uses a dedicated health projection rather than embedding the
+  explicit `/health` response. It exposes `emergency_paused`,
+  `emergency_pause_updated_at`, and `emergency_pause_reason_present`, but never
+  arbitrary emergency-pause reason text; the legacy reason field is null or the
+  fixed `redacted` compatibility marker. `/health`, pause, and pause-status
+  retain the reason for deliberate operator inspection. Core and real-server
+  CLI tests use secret sentinels, and Swift tests decode and present only the
+  redacted presence summary.
 - The Swift shell has a Keychain-backed launch credential boundary for
   app-supervised model provider secrets. `JarvisCoreCredentialProvider` reads
   known credentials such as the OpenAI API key from Keychain and injects only

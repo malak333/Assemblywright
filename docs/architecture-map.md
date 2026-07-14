@@ -296,6 +296,9 @@ flowchart TB
         IPC --> ReleaseReadiness
         IPC --> EvidenceStatus
         IPC --> Diagnostics["/diagnostics/export"]
+        PauseApi --> PauseState["explicit health and pause surfaces retain operator reason"]
+        PauseState --> DiagnosticPauseProjection["diagnostic pause projection: state, updated_at, emergency_pause_reason_present, fixed redacted marker"]
+        DiagnosticPauseProjection --> Diagnostics
         IPC --> Commands["/commands"]
         IPC --> Inspection["/tasks, /audit, /activity/summary, /activity/events, /model-routes, /memory incl index status/rebuild, /approvals, /permissions/grants, /permissions/policy-review, /plugins"]
         IPC --> ApprovalExecute["/approvals/:id/execute atomic approved replay"]
@@ -1100,6 +1103,8 @@ flowchart TB
         RuntimeProd --> RepoProd["SqliteRepository"]
         RepoProd --> BackupManager["migration backup and restore manager"]
         RuntimeProd --> DiagnosticsProd["diagnostics and redacted export data"]
+        PauseStateProd["explicit operator pause reason"] --> DiagnosticPauseProjectionProd["state, updated_at, emergency_pause_reason_present, fixed redacted marker"]
+        DiagnosticPauseProjectionProd --> DiagnosticsProd
 
         ModelRouterProd --> LocalModels["real local model providers by default"]
         ModelRouterProd --> CloudModels["cloud models only after enablement, approval, redaction, and audit"]
@@ -1150,6 +1155,7 @@ flowchart TB
     BoundedLexicalRetrieval --> LocalModels
     VectorGovernance --> SemanticRetrieval["future governed hybrid/vector retrieval with user-visible provenance"]
     RepoProd --> PauseStore["emergency pause state"]
+    PauseStore --> PauseStateProd
     RepoProd --> PluginRegistry["plugin registry metadata"]
     PluginRegistry --> PluginTrustPolicy["publisher identity, signing, future OS sandbox policy, and marketplace policy"]
     RepoProd --> PermissionGrantStore["approval history and execution grants"]
@@ -1160,7 +1166,7 @@ flowchart TB
 
     MacKeychain["macOS Keychain"] --> Supervisor
     AppFiles["app-owned files and plugin bundles"] --> RuntimeProd
-    DiagnosticsProd --> Diagnostics["local diagnostics export"]
+    DiagnosticsProd --> Diagnostics["local diagnostics export without arbitrary pause reason text"]
     Diagnostics --> MacApp
     ReleaseOps["release operator"] --> PublicCI["public GitHub release-local PR gate"]
     PublicCI --> FinalReleaseGate["./scripts/release-local.sh on macOS prerequisite proof"]

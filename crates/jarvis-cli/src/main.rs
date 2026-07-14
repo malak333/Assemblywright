@@ -3158,7 +3158,7 @@ async fn run_smoke() -> anyhow::Result<()> {
     require_json_field(
         &diagnostics_json,
         "redaction",
-        "diagnostics export omits command bodies, scheduler commands, model route contexts, audit payloads, memory values, and cancellation reason text",
+        "diagnostics export omits command bodies, scheduler commands, model route contexts, audit payloads, memory values, emergency-pause reason text, and cancellation reason text",
     )?;
     require_nested_field(&diagnostics_json, &["health", "status"], "ok")?;
 

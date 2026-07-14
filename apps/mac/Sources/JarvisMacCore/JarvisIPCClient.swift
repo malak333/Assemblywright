@@ -373,7 +373,7 @@ public struct JarvisReleaseRunbook: Decodable, Equatable, Identifiable, Sendable
 public struct JarvisDiagnosticsExport: Decodable, Equatable, Sendable {
     public var generatedAt: String
     public var redaction: String
-    public var health: JarvisHealth
+    public var health: JarvisDiagnosticHealth
     public var schedulerJobs: [JarvisDiagnosticSchedulerJob]
     public var repositoryBacked: Bool
     public var schemaVersion: Int?
@@ -396,6 +396,83 @@ public struct JarvisDiagnosticsExport: Decodable, Equatable, Sendable {
         case unreviewedMemoryItemCount = "unreviewed_memory_item_count"
         case sensitiveMemoryItemCount = "sensitive_memory_item_count"
     }
+}
+
+public struct JarvisDiagnosticHealth: Decodable, Equatable, Sendable {
+    public var status: String
+    public var version: String
+    public var contract: JarvisContractMetadata?
+    public var emergencyPaused: Bool
+    public var emergencyPauseReason: JarvisDiagnosticRedactionMarker?
+    public var emergencyPauseReasonPresent: Bool
+    public var emergencyPauseUpdatedAt: String?
+    public var schedulerJobs: Int
+    public var commandRuntime: String
+    public var localModelProvider: String
+    public var localModel: String
+    public var localEndpointConfigured: Bool
+    public var chatgptEnabled: Bool
+    public var chatgptAuthMode: String
+    public var chatgptModel: String
+    public var chatgptRequiresApproval: Bool
+
+    public var emergencyPauseSummary: String {
+        guard emergencyPaused else { return "not paused" }
+        return emergencyPauseReasonPresent
+            ? "paused (reason recorded and redacted)"
+            : "paused (no reason recorded)"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        status = try container.decode(String.self, forKey: .status)
+        version = try container.decode(String.self, forKey: .version)
+        contract = try container.decodeIfPresent(JarvisContractMetadata.self, forKey: .contract)
+        emergencyPaused = try container.decode(Bool.self, forKey: .emergencyPaused)
+        emergencyPauseReason = try container.decodeIfPresent(JarvisDiagnosticRedactionMarker.self, forKey: .emergencyPauseReason)
+        emergencyPauseReasonPresent = try container.decodeIfPresent(Bool.self, forKey: .emergencyPauseReasonPresent)
+            ?? (emergencyPauseReason == .redacted)
+        guard emergencyPauseReasonPresent == (emergencyPauseReason == .redacted) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .emergencyPauseReason,
+                in: container,
+                debugDescription: "Diagnostic emergency-pause reason presence and fixed redaction marker must agree."
+            )
+        }
+        emergencyPauseUpdatedAt = try container.decodeIfPresent(String.self, forKey: .emergencyPauseUpdatedAt)
+        schedulerJobs = try container.decode(Int.self, forKey: .schedulerJobs)
+        commandRuntime = try container.decode(String.self, forKey: .commandRuntime)
+        localModelProvider = try container.decodeIfPresent(String.self, forKey: .localModelProvider) ?? "fake"
+        localModel = try container.decodeIfPresent(String.self, forKey: .localModel) ?? "fake-local-model"
+        localEndpointConfigured = try container.decodeIfPresent(Bool.self, forKey: .localEndpointConfigured) ?? false
+        chatgptEnabled = try container.decodeIfPresent(Bool.self, forKey: .chatgptEnabled) ?? false
+        chatgptAuthMode = try container.decodeIfPresent(String.self, forKey: .chatgptAuthMode) ?? "api_key"
+        chatgptModel = try container.decodeIfPresent(String.self, forKey: .chatgptModel) ?? "chatgpt-disabled"
+        chatgptRequiresApproval = try container.decodeIfPresent(Bool.self, forKey: .chatgptRequiresApproval) ?? true
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case version
+        case contract
+        case emergencyPaused = "emergency_paused"
+        case emergencyPauseReason = "emergency_pause_reason"
+        case emergencyPauseReasonPresent = "emergency_pause_reason_present"
+        case emergencyPauseUpdatedAt = "emergency_pause_updated_at"
+        case schedulerJobs = "scheduler_jobs"
+        case commandRuntime = "command_runtime"
+        case localModelProvider = "local_model_provider"
+        case localModel = "local_model"
+        case localEndpointConfigured = "local_endpoint_configured"
+        case chatgptEnabled = "chatgpt_enabled"
+        case chatgptAuthMode = "chatgpt_auth_mode"
+        case chatgptModel = "chatgpt_model"
+        case chatgptRequiresApproval = "chatgpt_requires_approval"
+    }
+}
+
+public enum JarvisDiagnosticRedactionMarker: String, Decodable, Equatable, Sendable {
+    case redacted
 }
 
 public struct JarvisDiagnosticSchedulerJob: Decodable, Equatable, Identifiable, Sendable {

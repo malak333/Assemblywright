@@ -553,8 +553,13 @@ stage or when a PR needs focused evidence for one ownership slice.
   fail-closed pause behavior, not background production trigger scheduling.
 - Confirm diagnostics export remains redacted and does not include command
   bodies, scheduler commands, model route contexts, audit payloads, memory
-  values, raw cancellation reasons, or credentials. Aggregate memory review
-  counts are allowed.
+  values, arbitrary emergency-pause reason text, raw cancellation reasons, or
+  credentials. Its dedicated health projection may expose
+  `emergency_pause_reason_present` plus a null or fixed `redacted` compatibility
+  marker; explicit health/pause operator surfaces may retain the reason.
+  Aggregate memory review counts are allowed. Run the core
+  secret-sentinel test, authenticated real-server CLI E2E, and Swift
+  decode/presentation test documented in `docs/build-test-commands.md`.
 - Confirm the Swift Memory tab still uses the Rust IPC memory contract for
   create, load, update of mutable fields, review, soft-delete, include-deleted
   refresh, restore, classification summary, and filtering, with deterministic

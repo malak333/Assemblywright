@@ -2272,6 +2272,7 @@ struct DiagnosticsExportView: View {
                 if let export = model.export {
                     LabelValueRow(label: "Generated", value: export.generatedAt)
                     LabelValueRow(label: "Core", value: "\(export.health.status) \(export.health.version)")
+                    LabelValueRow(label: "Emergency Pause", value: export.health.emergencyPauseSummary)
                     LabelValueRow(label: "Repository", value: export.repositoryBacked ? "backed" : "in memory")
                     LabelValueRow(label: "Schema", value: export.schemaVersion.map(String.init) ?? "none")
                     LabelValueRow(label: "Tasks", value: export.taskCount.map(String.init) ?? "unknown")
