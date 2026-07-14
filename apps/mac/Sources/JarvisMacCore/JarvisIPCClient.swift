@@ -502,17 +502,20 @@ public struct JarvisCommandRequest: Encodable, Equatable, Sendable {
     public var dryRun: Bool
     public var memoryContext: Bool
     public var installedWasmTools: Bool
+    public var cancellationID: UUID?
 
     public init(
         input: String,
         dryRun: Bool = true,
         memoryContext: Bool = false,
-        installedWasmTools: Bool = false
+        installedWasmTools: Bool = false,
+        cancellationID: UUID? = nil
     ) {
         self.input = input
         self.dryRun = dryRun
         self.memoryContext = memoryContext
         self.installedWasmTools = installedWasmTools
+        self.cancellationID = cancellationID
     }
 
     enum CodingKeys: String, CodingKey {
@@ -520,6 +523,23 @@ public struct JarvisCommandRequest: Encodable, Equatable, Sendable {
         case dryRun = "dry_run"
         case memoryContext = "memory_context"
         case installedWasmTools = "installed_wasm_tools"
+        case cancellationID = "cancellation_id"
+    }
+}
+
+public struct JarvisRuntimeCancellationResponse: Decodable, Equatable, Sendable {
+    public var cancellationID: UUID
+    public var cancellationRequested: Bool
+    public var activeExecutionFound: Bool
+    public var outcome: String
+    public var auditEntry: JarvisAuditEntry
+
+    enum CodingKeys: String, CodingKey {
+        case cancellationID = "cancellation_id"
+        case cancellationRequested = "cancellation_requested"
+        case activeExecutionFound = "active_execution_found"
+        case outcome
+        case auditEntry = "audit_entry"
     }
 }
 
@@ -1400,6 +1420,7 @@ public struct JarvisSchedulerStaleRecoveryItem: Decodable, Equatable, Sendable {
 
 public struct JarvisCommandResponse: Decodable, Equatable, Sendable {
     public var accepted: Bool
+    public var cancellationID: UUID?
     public var task: JarvisTask
     public var auditEntry: JarvisAuditEntry
     public var auditEntries: [JarvisAuditEntry]
@@ -1410,6 +1431,7 @@ public struct JarvisCommandResponse: Decodable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case accepted
+        case cancellationID = "cancellation_id"
         case task
         case auditEntry = "audit_entry"
         case auditEntries = "audit_entries"
@@ -1920,6 +1942,7 @@ public protocol JarvisCoreClient: Sendable {
     func releasePluginTrustRunbook() async throws -> JarvisReleaseRunbook
     func releaseEvidenceBundleRunbook() async throws -> JarvisReleaseRunbook
     func submit(_ command: JarvisCommandRequest) async throws -> JarvisCommandResponse
+    func cancelCommand(cancellationID: UUID) async throws -> JarvisRuntimeCancellationResponse
     func pause(reason: String) async throws -> JarvisPauseResponse
     func resume() async throws -> JarvisPauseResponse
     func pauseStatus() async throws -> JarvisPauseResponse
@@ -2024,6 +2047,14 @@ public final class JarvisIPCClient: JarvisCoreClient {
 
     public func submit(_ command: JarvisCommandRequest) async throws -> JarvisCommandResponse {
         try await send(path: "/commands", method: "POST", body: encoder.encode(command))
+    }
+
+    public func cancelCommand(cancellationID: UUID) async throws -> JarvisRuntimeCancellationResponse {
+        try await send(
+            path: "/runtime/cancellations/\(cancellationID.uuidString)",
+            method: "POST",
+            body: Optional<Data>.none
+        )
     }
 
     public func pause(reason: String) async throws -> JarvisPauseResponse {

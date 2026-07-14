@@ -328,6 +328,25 @@ stage or when a PR needs focused evidence for one ownership slice.
   audit evidence when a due command is not accepted.
 - Confirm runtime emergency pause and cancellation tests still cover active
   command cancellation.
+- Confirm current Swift and CLI clients generate an optional UUID
+  `cancellation_id` before `POST /commands`, duplicate or over-capacity handles
+  fail closed, and Swift exposes Cancel only while its own submission remains
+  active. Run
+  `explicit_command_handle_cancels_only_its_active_model_transport`,
+  `command_cancellation_response_distinguishes_active_from_not_found`,
+  `active_command_cancellation_is_end_to_end_and_finalized_handles_report_not_found`,
+  and `commandConsoleCancelsItsActiveSubmission`. Verify authenticated
+  `/runtime/cancellations/:id` reports `cancellation_requested` only for an
+  active exact handle and `not_found` after final acceptance, does not cancel
+  unrelated work, and suppresses late model steps/tool results when
+  cancellation wins. Record the cooperative boundary: it cannot reverse an
+  external effect already applied and is not distributed cancellation or crash
+  recovery. Verify the 1,024-entry bounded FIFO consumed-ID tombstone rejects
+  recent UUID reuse and a stale cancellation remains `not_found`; document that
+  eviction or restart ends this process-local protection, so clients must
+  generate fresh random UUIDs. Also run
+  `commandConsoleSerializesConcurrentSubmissions` to prove keyboard/voice/direct
+  overlapping submits cannot overwrite or orphan the active Swift handle.
 - Confirm plugin manifests validate declared permissions, schemas, proactive
   behavior, memory/model access, timeout behavior, and cancellation behavior.
 - Confirm local plugin installation accepts only validated manifest metadata

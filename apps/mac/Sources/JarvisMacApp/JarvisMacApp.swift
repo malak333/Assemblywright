@@ -85,9 +85,13 @@ struct JarvisMacApp: App {
             wrappedValue: VoiceAdapterStateModel(
                 adapter: JarvisMacApp.defaultVoiceAdapter(),
                 voiceState: voice,
-                shouldAutoSubmitFinalTranscript: { !console.isWorking },
+                shouldAutoSubmitFinalTranscript: {
+                    !console.isWorking && console.activeCancellationID == nil
+                },
                 autoSubmitUnavailableReason: {
-                    console.isWorking ? "Auto-submit is unavailable while a command is already running." : nil
+                    console.isWorking || console.activeCancellationID != nil
+                        ? "Auto-submit is unavailable while a command is already running."
+                        : nil
                 },
                 submitFinalTranscript: { handoff in
                     await console.submit(input: handoff.text, dryRun: handoff.dryRun)
@@ -505,6 +509,13 @@ struct CommandConsoleView: View {
                     .onSubmit(send)
                 Button("Send", action: send)
                     .disabled(model.isWorking || input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                if model.activeCancellationID != nil {
+                    Button(model.isCancelling ? "Cancelling…" : "Cancel") {
+                        Task { await model.cancelActiveCommand() }
+                    }
+                    .disabled(model.isCancelling)
+                    .help("Cancel only the command currently submitted from this console.")
+                }
             }
             .padding()
             Toggle("Use reviewed local memory", isOn: $model.memoryContextEnabled)
@@ -568,6 +579,7 @@ struct CommandConsoleView: View {
     }
 
     private func send() {
+        guard !model.isWorking, model.activeCancellationID == nil else { return }
         let command = input
         input = ""
         Task {

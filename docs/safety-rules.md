@@ -29,6 +29,26 @@ release requirements, not optional UX guidance.
   cancels active non-critical tasks, and requires deliberate resume.
 - Cancellation must propagate across tasks, tool calls, scheduled jobs, and
   proactive triggers.
+- Interactive `POST /commands` accepts an optional client-generated UUID
+  `cancellation_id` for backward compatibility. Swift and CLI clients must
+  generate the handle before submission so Cancel does not depend on a task ID
+  arriving first. The Swift console model must serialize submissions and reject
+  keyboard, voice, or direct overlap before changing its active handle. Rust
+  must register and activate that exact handle before
+  command execution, bind it to only the task created by that command, cap the
+  shared active registry at 128 handles, and reject duplicate/over-capacity
+  registration. Finalization must retain the 1,024 most recently consumed UUIDs
+  as bounded FIFO tombstones and reject their reuse, so a delayed stale cancel
+  cannot target a later run within that process-local window. Clients must use
+  fresh random UUIDs because tombstones are evicted after the cap and disappear
+  on core restart. Authenticated `POST /runtime/cancellations/:id` may cancel only
+  an active matching handle and must report `cancellation_requested` versus
+  `not_found` honestly. Cancellation must dominate the provider/tool result-acceptance
+  boundary: if it wins guard finalization, late model steps and plugin results
+  are discarded and the task is cancelled; if finalization wins first, a later
+  cancellation reports `not_found`. This cooperative boundary cannot reverse
+  an external effect already performed and is not distributed cancellation or
+  crash recovery.
 - Ollama-native response streams must remain quarantined until a bounded body
   contains one terminal `done:true` frame and the complete response envelope
   validates. Partial text, partial JSON-looking tool envelopes, provider error

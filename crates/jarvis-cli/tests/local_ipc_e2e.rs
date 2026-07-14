@@ -9191,6 +9191,103 @@ fn reviewed_local_memory_context_is_bounded_redacted_and_fails_closed_cross_proc
 }
 
 #[test]
+fn active_command_cancellation_is_end_to_end_and_finalized_handles_report_not_found() {
+    let temp = tempfile::tempdir().expect("command cancellation e2e temp dir");
+    let db_path = temp.path().join("command-cancellation.sqlite");
+    let (ollama_url, provider_ready, provider_done) =
+        start_slow_command_cancellation_ollama_server();
+    let mut server = JarvisServer::start_with_env(
+        &db_path,
+        &[
+            ("JARVIS_LOCAL_MODEL_PROVIDER", "ollama"),
+            ("JARVIS_LOCAL_MODEL", "command-cancellation-e2e"),
+            ("JARVIS_OLLAMA_BASE_URL", ollama_url.as_str()),
+            ("JARVIS_LOCAL_MODEL_TIMEOUT_MS", "5000"),
+        ],
+    );
+    let endpoint = server.endpoint();
+    let cancellation_id = "4cb6b533-c7eb-4c93-b0e6-ab4f1116ca58";
+    let command_endpoint = endpoint.clone();
+    let (command_tx, command_rx) = std::sync::mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let response = run_cli_json([
+            "command",
+            "cancel the slow command",
+            "--cancellation-id",
+            cancellation_id,
+            "--json",
+            "--endpoint",
+            command_endpoint.as_str(),
+        ]);
+        let _ = command_tx.send(response);
+    });
+
+    provider_ready
+        .recv_timeout(Duration::from_secs(5))
+        .expect("slow provider accepted and read the active command transport");
+
+    let mut cancellation = None;
+    for _ in 0..80 {
+        let response = run_cli_json([
+            "cancel-command",
+            cancellation_id,
+            "--endpoint",
+            endpoint.as_str(),
+        ]);
+        if response["active_execution_found"] == true {
+            cancellation = Some(response);
+            break;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    let cancellation = cancellation.expect("observe active command cancellation handle");
+    assert_eq!(cancellation["outcome"], "cancellation_requested");
+    assert_eq!(cancellation["cancellation_requested"], true);
+
+    let response = command_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("cancelled command CLI completed within the test bound");
+    assert_eq!(response["accepted"], false);
+    assert_eq!(response["task"]["status"], "cancelled");
+    assert_eq!(response["cancellation_id"], cancellation_id);
+    assert!(response["steps"]
+        .as_array()
+        .expect("cancelled steps")
+        .is_empty());
+    assert!(response["plugin_results"]
+        .as_array()
+        .expect("cancelled plugin results")
+        .is_empty());
+    assert!(!response.to_string().contains("late provider result"));
+
+    let finalized = run_cli_json([
+        "cancel-command",
+        cancellation_id,
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(finalized["active_execution_found"], false);
+    assert_eq!(finalized["outcome"], "not_found");
+
+    let reused = run_cli_failure([
+        "command",
+        "stale handle must not target new work",
+        "--cancellation-id",
+        cancellation_id,
+        "--json",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert!(reused.contains("recently consumed"), "{reused}");
+
+    provider_done
+        .recv_timeout(Duration::from_secs(5))
+        .expect("slow cancellation provider completed within the test bound")
+        .expect("slow cancellation provider result");
+    server.stop();
+}
+
+#[test]
 fn serve_executes_ollama_provider_tool_request_envelope() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let db_path = temp_dir.path().join("jarvis-provider-tool-e2e.sqlite");
@@ -11245,6 +11342,52 @@ fn start_ollama_envelope_server() -> (String, thread::JoinHandle<()>) {
     });
 
     (format!("http://{address}"), handle)
+}
+
+fn start_slow_command_cancellation_ollama_server() -> (
+    String,
+    std::sync::mpsc::Receiver<()>,
+    std::sync::mpsc::Receiver<Result<(), String>>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind slow cancellation provider");
+    let address = listener.local_addr().expect("slow provider address");
+    let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+    let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let result = (|| -> Result<(), String> {
+            let (mut stream, _) = listener
+                .accept()
+                .map_err(|error| format!("accept slow provider request: {error}"))?;
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .map_err(|error| format!("set slow provider read timeout: {error}"))?;
+            let mut request = [0_u8; 8192];
+            let read = stream
+                .read(&mut request)
+                .map_err(|error| format!("read slow provider request: {error}"))?;
+            let request = String::from_utf8_lossy(&request[..read]);
+            if !request.contains("POST /api/generate") {
+                return Err(format!("unexpected slow provider request: {request}"));
+            }
+            ready_tx
+                .send(())
+                .map_err(|error| format!("publish slow provider readiness: {error}"))?;
+            thread::sleep(Duration::from_millis(750));
+            let wire = format!(
+                "{}\n",
+                json!({"response":"late provider result must be discarded","done":true})
+            );
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/x-ndjson\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                wire.len(), wire
+            );
+            // Cancellation normally closes the transport before this late write.
+            let _ = stream.write_all(response.as_bytes());
+            Ok(())
+        })();
+        let _ = done_tx.send(result);
+    });
+    (format!("http://{address}"), ready_rx, done_rx)
 }
 
 fn start_memory_context_ollama_server(

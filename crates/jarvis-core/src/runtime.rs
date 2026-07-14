@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
@@ -24,6 +24,7 @@ use crate::{CapabilityScope, JarvisError, MemoryRetrieval, MemoryRetrievalContro
 
 const MAX_TASK_TOOL_OUTPUT_BYTES: usize = 128 * 1024;
 const MAX_ACTIVE_RUNTIME_CANCELLATIONS: usize = 128;
+const MAX_CONSUMED_RUNTIME_CANCELLATIONS: usize = 1_024;
 const MAX_MODEL_PLANNED_WASM_TOOLS: usize = 16;
 const MAX_MODEL_PLANNED_WASM_DESCRIPTION_BYTES: usize = 1_024;
 const MAX_MODEL_PLANNED_WASM_SCHEMA_BYTES: usize = 16 * 1_024;
@@ -81,6 +82,8 @@ pub struct CommandRequest {
     #[serde(default)]
     pub installed_wasm_tools: bool,
     #[serde(default)]
+    pub cancellation_id: Option<Uuid>,
+    #[serde(default)]
     pub expected_workspace_request: Option<serde_json::Value>,
 }
 
@@ -94,6 +97,7 @@ impl CommandRequest {
             proactive: false,
             memory_context: false,
             installed_wasm_tools: false,
+            cancellation_id: None,
             expected_workspace_request: None,
         }
     }
@@ -125,6 +129,11 @@ impl CommandRequest {
 
     pub fn with_installed_wasm_tools(mut self, installed_wasm_tools: bool) -> Self {
         self.installed_wasm_tools = installed_wasm_tools;
+        self
+    }
+
+    pub fn with_cancellation_id(mut self, cancellation_id: Option<Uuid>) -> Self {
+        self.cancellation_id = cancellation_id;
         self
     }
 
@@ -170,6 +179,9 @@ struct RuntimeControlState {
     active_runtime_cancellations: HashSet<Uuid>,
     started_runtime_cancellations: HashSet<Uuid>,
     cancelled_runtime_cancellations: HashSet<Uuid>,
+    runtime_cancellation_tasks: HashMap<Uuid, Uuid>,
+    consumed_runtime_cancellations: HashSet<Uuid>,
+    consumed_runtime_cancellation_order: VecDeque<Uuid>,
 }
 
 pub struct RuntimeCancellationGuard {
@@ -248,6 +260,9 @@ impl RuntimeControl {
     ) -> Option<RuntimeCancellationGuard> {
         let mut state = self.inner.lock().expect("runtime control lock poisoned");
         if state.active_runtime_cancellations.len() >= MAX_ACTIVE_RUNTIME_CANCELLATIONS
+            || state
+                .consumed_runtime_cancellations
+                .contains(&cancellation_id)
             || !state.active_runtime_cancellations.insert(cancellation_id)
         {
             return None;
@@ -273,6 +288,36 @@ impl RuntimeControl {
         state
             .cancelled_runtime_cancellations
             .insert(cancellation_id);
+        if let Some(task_id) = state
+            .runtime_cancellation_tasks
+            .get(&cancellation_id)
+            .copied()
+        {
+            state.cancelled_tasks.insert(task_id);
+            if state.started_runtime_cancellations.contains(&task_id) {
+                state.cancelled_runtime_cancellations.insert(task_id);
+            }
+        }
+        true
+    }
+
+    pub fn bind_runtime_cancellation_to_task(&self, cancellation_id: Uuid, task_id: Uuid) -> bool {
+        let mut state = self.inner.lock().expect("runtime control lock poisoned");
+        if !state
+            .active_runtime_cancellations
+            .contains(&cancellation_id)
+        {
+            return false;
+        }
+        state
+            .runtime_cancellation_tasks
+            .insert(cancellation_id, task_id);
+        if state
+            .cancelled_runtime_cancellations
+            .contains(&cancellation_id)
+        {
+            state.cancelled_tasks.insert(task_id);
+        }
         true
     }
 
@@ -298,14 +343,34 @@ impl RuntimeControl {
         let mut state = self.inner.lock().expect("runtime control lock poisoned");
         state.active_runtime_cancellations.remove(&cancellation_id);
         state.started_runtime_cancellations.remove(&cancellation_id);
-        state
+        let task_id = state.runtime_cancellation_tasks.remove(&cancellation_id);
+        let cancelled = state
             .cancelled_runtime_cancellations
-            .remove(&cancellation_id)
+            .remove(&cancellation_id);
+        if let Some(task_id) = task_id {
+            state.cancelled_tasks.remove(&task_id);
+        }
+        remember_consumed_runtime_cancellation(&mut state, cancellation_id);
+        cancelled
     }
 
     fn clear_task_cancellation(&self, task_id: Uuid) {
         let mut state = self.inner.lock().expect("runtime control lock poisoned");
         state.cancelled_tasks.remove(&task_id);
+    }
+}
+
+fn remember_consumed_runtime_cancellation(state: &mut RuntimeControlState, cancellation_id: Uuid) {
+    if !state.consumed_runtime_cancellations.insert(cancellation_id) {
+        return;
+    }
+    state
+        .consumed_runtime_cancellation_order
+        .push_back(cancellation_id);
+    while state.consumed_runtime_cancellation_order.len() > MAX_CONSUMED_RUNTIME_CANCELLATIONS {
+        if let Some(expired) = state.consumed_runtime_cancellation_order.pop_front() {
+            state.consumed_runtime_cancellations.remove(&expired);
+        }
     }
 }
 
@@ -524,6 +589,16 @@ where
         let mut task = self
             .command_store
             .create_task(request.session_id, request.input)?;
+        if let Some(cancellation_id) = request.cancellation_id {
+            if !self
+                .control
+                .bind_runtime_cancellation_to_task(cancellation_id, task.id)
+            {
+                return Err(JarvisError::Conflict(
+                    "command cancellation handle is no longer active".to_string(),
+                ));
+            }
+        }
         let mut audit_entries = Vec::new();
         self.record_audit(
             &mut audit_entries,
@@ -2044,15 +2119,45 @@ mod tests {
     fn runtime_cancellation_finalize_is_the_acceptance_linearization_point() {
         let control = RuntimeControl::default();
         let cancellation_id = Uuid::new_v4();
+        let task_id = Uuid::new_v4();
         let mut guard = control
             .register_runtime_cancellation(cancellation_id)
             .expect("register active runtime");
         assert!(!control.cancel_runtime_execution(cancellation_id));
         guard.activate();
+        assert!(control
+            .register_runtime_cancellation(cancellation_id)
+            .is_none());
+        assert!(control.bind_runtime_cancellation_to_task(cancellation_id, task_id));
         assert!(control.cancel_runtime_execution(cancellation_id));
+        assert!(control.is_task_cancelled(task_id));
         assert!(guard.finalize());
         assert!(!control.cancel_runtime_execution(cancellation_id));
         assert!(!control.is_runtime_cancelled(cancellation_id));
+        assert!(!control.is_task_cancelled(task_id));
+        assert!(control
+            .register_runtime_cancellation(cancellation_id)
+            .is_none());
+    }
+
+    #[test]
+    fn consumed_runtime_cancellation_tombstones_are_bounded_fifo() {
+        let control = RuntimeControl::default();
+        let mut ids = Vec::new();
+        for _ in 0..=MAX_CONSUMED_RUNTIME_CANCELLATIONS {
+            let id = Uuid::new_v4();
+            ids.push(id);
+            drop(
+                control
+                    .register_runtime_cancellation(id)
+                    .expect("register unique cancellation handle"),
+            );
+        }
+
+        assert!(control
+            .register_runtime_cancellation(*ids.last().expect("latest handle"))
+            .is_none());
+        assert!(control.register_runtime_cancellation(ids[0]).is_some());
     }
 
     #[tokio::test]
@@ -3130,6 +3235,47 @@ mod tests {
         assert_eq!(cancellation.event_type, "emergency_pause_cancelled");
         assert_eq!(cancellation.payload["partial_output_discarded"], true);
         assert_eq!(cancellation.payload["tool_envelope_exposed"], false);
+    }
+
+    #[tokio::test]
+    async fn explicit_command_handle_cancels_only_its_active_model_transport() {
+        let control = RuntimeControl::default();
+        let cancelled_id = Uuid::new_v4();
+        let unrelated_id = Uuid::new_v4();
+        let mut cancelled_guard = control
+            .register_runtime_cancellation(cancelled_id)
+            .expect("register command cancellation");
+        cancelled_guard.activate();
+        let mut unrelated_guard = control
+            .register_runtime_cancellation(unrelated_id)
+            .expect("register unrelated command cancellation");
+        unrelated_guard.activate();
+        let runtime = ConversationRuntime::with_parts(
+            RuntimeConfig::default(),
+            control.clone(),
+            SlowModel,
+            NoopRuntimeHooks,
+        );
+
+        let (response, cancellation_found) = tokio::join!(
+            runtime.execute_command(
+                CommandRequest::new("cancel this command").with_cancellation_id(Some(cancelled_id)),
+            ),
+            async {
+                tokio::time::sleep(std::time::Duration::from_millis(75)).await;
+                control.cancel_runtime_execution(cancelled_id)
+            }
+        );
+        let response = response.expect("command cancellation returns structured response");
+
+        assert!(cancellation_found);
+        assert_eq!(response.task.status, TaskStatus::Cancelled);
+        assert!(response.steps.is_empty());
+        assert!(response.tool_results.is_empty());
+        assert!(!response.message.contains("partial secret"));
+        assert!(!control.is_runtime_cancelled(unrelated_id));
+        assert!(cancelled_guard.finalize());
+        assert!(!unrelated_guard.finalize());
     }
 
     struct CancelBeforeReturnModel {

@@ -675,11 +675,13 @@ struct JarvisMacCoreTests {
 
     @Test("Command request encodes explicit command opt-ins for Rust IPC")
     func encodesCommandRequest() throws {
+        let cancellationID = UUID()
         let request = JarvisCommandRequest(
             input: "status check",
             dryRun: true,
             memoryContext: true,
-            installedWasmTools: true
+            installedWasmTools: true,
+            cancellationID: cancellationID
         )
         let data = try JSONEncoder().encode(request)
         let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -688,6 +690,59 @@ struct JarvisMacCoreTests {
         #expect(json["dry_run"] as? Bool == true)
         #expect(json["memory_context"] as? Bool == true)
         #expect(json["installed_wasm_tools"] as? Bool == true)
+        #expect(json["cancellation_id"] as? String == cancellationID.uuidString)
+    }
+
+    @Test("IPC client targets the authenticated runtime cancellation endpoint")
+    func ipcClientCancelsExactCommandHandle() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [IPCURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let client = JarvisIPCClient(
+            endpoint: JarvisEndpoint(baseURL: URL(string: "http://127.0.0.1:7787")!),
+            session: session
+        )
+        let cancellationID = UUID()
+        var observedPath: String?
+        var observedMethod: String?
+        IPCURLProtocol.handler = { request in
+            observedPath = request.url?.path(percentEncoded: false)
+            observedMethod = request.httpMethod
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (
+                response,
+                Data(
+                    """
+                    {
+                      "cancellation_id": "\(cancellationID.uuidString)",
+                      "cancellation_requested": true,
+                      "active_execution_found": true,
+                      "outcome": "cancellation_requested",
+                      "audit_entry": {
+                        "id": "11111111-1111-4111-8111-111111111111",
+                        "task_id": null,
+                        "event_type": "runtime_cancellation_requested",
+                        "summary": "runtime cancellation was requested through local IPC",
+                        "payload": { "request_content_redacted": true },
+                        "created_at": "2026-07-14T12:00:00Z"
+                      }
+                    }
+                    """.utf8
+                )
+            )
+        }
+        defer { IPCURLProtocol.handler = nil }
+
+        let response = try await client.cancelCommand(cancellationID: cancellationID)
+        #expect(observedMethod == "POST")
+        #expect(observedPath == "/runtime/cancellations/\(cancellationID.uuidString)")
+        #expect(response.activeExecutionFound)
+        #expect(response.outcome == "cancellation_requested")
     }
 
     @Test("Management client methods send supported Rust IPC requests")
@@ -2139,7 +2194,7 @@ struct JarvisMacCoreTests {
         let handoff = try #require(voice.apply(.submitTranscript))
         await console.submit(input: handoff.text, dryRun: handoff.dryRun)
 
-        #expect(client.submittedCommands == [
+        #expect(client.submittedCommandsWithoutCancellationIDs == [
             JarvisCommandRequest(input: "plugin echo hello", dryRun: true)
         ])
         #expect(handoff.dryRun == true)
@@ -2159,13 +2214,62 @@ struct JarvisMacCoreTests {
 
         await console.submit(input: "  status check  ", dryRun: false)
 
-        #expect(client.submittedCommands == [
+        #expect(client.submittedCommandsWithoutCancellationIDs == [
             JarvisCommandRequest(input: "status check", dryRun: false)
         ])
         #expect(console.transcript.map(\.text) == [
             "status check",
             "local response: status check"
         ])
+    }
+
+    @MainActor
+    @Test("Command console exposes cancellation only while its generated handle is active")
+    func commandConsoleCancelsItsActiveSubmission() async throws {
+        let client = FakeCoreClient(commandSubmissionDelayNanoseconds: 150_000_000)
+        let console = CommandConsoleModel(client: client)
+
+        let submission = Task { @MainActor in
+            await console.submit(input: "cancel this active command", dryRun: false)
+        }
+        try await Task.sleep(nanoseconds: 25_000_000)
+        let activeID = try #require(console.activeCancellationID)
+        #expect(console.isWorking)
+        #expect(client.submittedCommands.first?.cancellationID == activeID)
+
+        await console.cancelActiveCommand()
+        #expect(client.commandCancellationRequests == [activeID])
+        #expect(console.cancellationStatus == "cancellation_requested")
+
+        await submission.value
+        #expect(console.activeCancellationID == nil)
+        #expect(!console.isWorking)
+    }
+
+    @MainActor
+    @Test("Command console rejects overlapping submissions without orphaning the active handle")
+    func commandConsoleSerializesConcurrentSubmissions() async throws {
+        let client = FakeCoreClient(commandSubmissionDelayNanoseconds: 150_000_000)
+        let console = CommandConsoleModel(client: client)
+
+        let first = Task { @MainActor in
+            await console.submit(input: "first active command", dryRun: false)
+        }
+        try await Task.sleep(nanoseconds: 25_000_000)
+        let firstID = try #require(console.activeCancellationID)
+
+        await console.submit(input: "keyboard overlap must fail", dryRun: false)
+
+        #expect(console.activeCancellationID == firstID)
+        #expect(console.isWorking)
+        #expect(client.submittedCommands.count == 1)
+        #expect(client.submittedCommands.first?.input == "first active command")
+        #expect(!console.transcript.contains { $0.text == "keyboard overlap must fail" })
+        #expect(console.lastError?.contains("already active") == true)
+
+        await first.value
+        #expect(console.activeCancellationID == nil)
+        #expect(!console.isWorking)
     }
 
     @MainActor
@@ -2179,7 +2283,7 @@ struct JarvisMacCoreTests {
         console.memoryContextEnabled = true
         await console.submit(input: "status with memory")
 
-        #expect(client.submittedCommands == [
+        #expect(client.submittedCommandsWithoutCancellationIDs == [
             JarvisCommandRequest(input: "status without memory", memoryContext: false),
             JarvisCommandRequest(input: "status with memory", memoryContext: true)
         ])
@@ -2205,7 +2309,7 @@ struct JarvisMacCoreTests {
             dryRun: !console.toolExecutionEnabled
         )
 
-        #expect(client.submittedCommands == [
+        #expect(client.submittedCommandsWithoutCancellationIDs == [
             JarvisCommandRequest(
                 input: "status without installed tools",
                 installedWasmTools: false
@@ -2469,7 +2573,7 @@ struct JarvisMacCoreTests {
         adapter.emitFinal("  status check  ")
         try await Task.sleep(nanoseconds: 50_000_000)
 
-        #expect(client.submittedCommands == [
+        #expect(client.submittedCommandsWithoutCancellationIDs == [
             JarvisCommandRequest(input: "status check", dryRun: true)
         ])
         #expect(console.transcript.map(\.text) == [
@@ -5735,7 +5839,7 @@ struct ReleaseSmokeProbeTests {
             "resume",
             "pauseStatusResumed"
         ])
-        #expect(client.submittedCommands == [
+        #expect(client.submittedCommandsWithoutCancellationIDs == [
             JarvisCommandRequest(
                 input: "Jarvis release smoke deterministic dry-run check.",
                 dryRun: true
@@ -8566,6 +8670,15 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     private var activityEvents: [JarvisActivityEvent]
     private var commandStatus: String
     private(set) var submittedCommands: [JarvisCommandRequest]
+    var submittedCommandsWithoutCancellationIDs: [JarvisCommandRequest] {
+        submittedCommands.map { command in
+            var command = command
+            command.cancellationID = nil
+            return command
+        }
+    }
+    private(set) var commandCancellationRequests: [UUID]
+    private let commandSubmissionDelayNanoseconds: UInt64
     private var contractResponse: JarvisContractResponse?
     private var releaseReadinessResponse: JarvisReleaseReadiness?
     private var releaseReadinessResults: [Result<JarvisReleaseReadiness, Error>]
@@ -8635,7 +8748,8 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         trustedWakeCancelResults: [Result<JarvisTrustedWakeRule, Error>] = [],
         releaseSmokeMode: Bool = false,
         releaseSmokeFailureCall: String? = nil,
-        approvalExecutionDelayNanoseconds: UInt64 = 0
+        approvalExecutionDelayNanoseconds: UInt64 = 0,
+        commandSubmissionDelayNanoseconds: UInt64 = 0
     ) {
         self.healthResults = healthResults
         self.tasks = tasks
@@ -8643,6 +8757,8 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         self.activityEvents = activityEvents
         self.commandStatus = commandStatus
         self.submittedCommands = []
+        self.commandCancellationRequests = []
+        self.commandSubmissionDelayNanoseconds = commandSubmissionDelayNanoseconds
         self.contractResponse = contractResponse
         self.releaseReadinessResponse = releaseReadiness
         self.releaseReadinessResults = releaseReadinessResults
@@ -8766,6 +8882,9 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
 
     func submit(_ command: JarvisCommandRequest) async throws -> JarvisCommandResponse {
         submittedCommands.append(command)
+        if commandSubmissionDelayNanoseconds > 0 {
+            try await Task.sleep(nanoseconds: commandSubmissionDelayNanoseconds)
+        }
         let call = releaseSmokePaused ? "submitPaused" : "submitInitial"
         try recordReleaseSmokeCall(call)
         let response = try JSONDecoder().decode(
@@ -8780,6 +8899,31 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
             auditEntries.append(contentsOf: response.auditEntries)
         }
         return response
+    }
+
+    func cancelCommand(cancellationID: UUID) async throws -> JarvisRuntimeCancellationResponse {
+        commandCancellationRequests.append(cancellationID)
+        return try JSONDecoder().decode(
+            JarvisRuntimeCancellationResponse.self,
+            from: Data(
+                """
+                {
+                  "cancellation_id": "\(cancellationID.uuidString)",
+                  "cancellation_requested": true,
+                  "active_execution_found": true,
+                  "outcome": "cancellation_requested",
+                  "audit_entry": {
+                    "id": "11111111-1111-4111-8111-111111111111",
+                    "task_id": null,
+                    "event_type": "runtime_cancellation_requested",
+                    "summary": "runtime cancellation was requested through local IPC",
+                    "payload": { "request_content_redacted": true },
+                    "created_at": "2026-07-14T12:00:00Z"
+                  }
+                }
+                """.utf8
+            )
+        )
     }
 
     func pause(reason: String) async throws -> JarvisPauseResponse {

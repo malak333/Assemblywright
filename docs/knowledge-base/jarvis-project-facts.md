@@ -1627,6 +1627,36 @@ requires plugin-trust `generated_at`, `review_started_at`,
   deduplicated provider-native count metadata after completion; it does not show
   raw partial text or claim live-token transcript streaming.
 
+### Active interactive command cancellation
+
+- `POST /commands` has an additive optional UUID `cancellation_id`. Current
+  Swift and CLI clients generate it before submission; CLI accepts
+  `--cancellation-id` for coordination and exposes `jarvis cancel-command`.
+  The Swift console rejects keyboard, voice, or direct overlapping submission
+  before changing `activeCancellationID`, so one submit cannot orphan another.
+- Rust registers and activates the handle for the full active command, binds it
+  to only the task created by that request, propagates cancellation into the
+  provider/tool paths, and caps the shared registry at 128 active handles.
+  Duplicate and over-capacity registration fail closed. Finalization retains
+  the 1,024 most recently consumed UUIDs as FIFO tombstones; recent reuse also
+  conflicts, preventing a delayed stale cancel from targeting later work in
+  that process-local window. Clients must always generate fresh random UUIDs
+  because tombstones are evicted after the cap and lost on core restart.
+- Authenticated `POST /runtime/cancellations/:id` returns
+  `outcome: cancellation_requested` with `active_execution_found: true` only
+  when that exact execution is active. Unknown, completed, or already-finalized
+  handles return `outcome: not_found`; they do not cancel unrelated work.
+- Guard finalization is the result-acceptance linearization point. When
+  cancellation wins, the task becomes cancelled and late model steps/plugin
+  results are removed from the command response. When completion wins, a later
+  cancel is honestly not found. Swift shows Cancel only while its generated
+  handle remains active.
+- Focused Rust race tests, real-server CLI/Ollama-stub E2E, and Swift model tests
+  cover targeted cancellation, active/not-found evidence, late-output
+  suppression, and UI lifecycle. This remains process-local cooperative
+  cancellation: it cannot reverse an external effect, survive a core crash, or
+  establish distributed cancellation, signed distribution, or live-device QA.
+
 ## Safety Guardrails
 
 - Local model routing is the default.

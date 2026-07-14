@@ -555,12 +555,15 @@ pub struct CommandRequest {
     #[serde(default)]
     pub installed_wasm_tools: bool,
     #[serde(default)]
+    pub cancellation_id: Option<Uuid>,
+    #[serde(default)]
     pub sensitivity: Option<Sensitivity>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandResponse {
     pub accepted: bool,
+    pub cancellation_id: Option<Uuid>,
     pub task: TaskRecord,
     pub audit_entry: AuditEntry,
     pub audit_entries: Vec<AuditEntry>,
@@ -827,6 +830,8 @@ pub struct InstalledPluginRunRequest {
 pub struct RuntimeCancellationResponse {
     pub cancellation_id: Uuid,
     pub cancellation_requested: bool,
+    pub active_execution_found: bool,
+    pub outcome: String,
     pub audit_entry: AuditEntry,
 }
 
@@ -2176,6 +2181,21 @@ impl IpcState {
             }
         }
 
+        let mut cancellation_guard = request.cancellation_id.map(|cancellation_id| {
+            self.runtime_control
+                .register_runtime_cancellation(cancellation_id)
+                .ok_or_else(|| {
+                    JarvisError::Conflict(
+                        "command cancellation handle is already active, was recently consumed, or the active-command limit was reached"
+                            .to_string(),
+                    )
+                })
+                .map(|mut guard| {
+                    guard.activate();
+                    guard
+                })
+        }).transpose()?;
+
         let command_store = self.command_store();
         let model = RoutedModelExecutor::from_config(&self.provider_config)?;
         let runtime = ConversationRuntime::with_storage_parts(
@@ -2202,6 +2222,7 @@ impl IpcState {
                     .with_proactive(request.proactive)
                     .with_memory_context(request.memory_context)
                     .with_installed_wasm_tools(request.installed_wasm_tools)
+                    .with_cancellation_id(request.cancellation_id)
                     .with_expected_workspace_request(expected_workspace_request),
             )
             .await?;
@@ -2235,7 +2256,13 @@ impl IpcState {
         });
         let mut audit_entries = runtime_response.audit_entries;
         let mut task = runtime_response.task;
-        let plugin_dispatch = if task.status == TaskStatus::Completed && !alias_already_executed {
+        let plugin_dispatch = if task.status == TaskStatus::Completed
+            && !alias_already_executed
+            && !self.runtime_control.is_task_cancelled(task.id)
+            && !request
+                .cancellation_id
+                .is_some_and(|id| self.runtime_control.is_runtime_cancelled(id))
+        {
             self.maybe_execute_first_party_plugin(
                 &mut task,
                 FirstPartyPluginDispatchContext {
@@ -2256,7 +2283,35 @@ impl IpcState {
             command_store.update_task_status(&mut task, TaskStatus::WaitingForApproval)?;
         }
 
-        let accepted = task.status == TaskStatus::Completed;
+        let cancellation_observed = cancellation_guard
+            .take()
+            .is_some_and(|guard| guard.finalize());
+        let mut steps = runtime_response.steps;
+        let mut plugin_results = plugin_dispatch.results;
+        let mut message = plugin_dispatch.message.unwrap_or(runtime_response.message);
+        if cancellation_observed {
+            if task.status != TaskStatus::Cancelled {
+                command_store.update_task_status(&mut task, TaskStatus::Cancelled)?;
+            }
+            let cancellation_audit = AuditEntry::new(
+                Some(task.id),
+                "command_cancellation_finalized",
+                "active command cancellation won the final result-acceptance boundary",
+                json!({
+                    "cancellation_id": request.cancellation_id,
+                    "partial_model_output_discarded": true,
+                    "tool_results_discarded": true,
+                    "request_content_redacted": true,
+                }),
+            );
+            command_store.append_audit_entry(&cancellation_audit)?;
+            audit_entries.push(cancellation_audit);
+            steps.clear();
+            plugin_results.clear();
+            message = "Command cancelled.".to_string();
+        }
+
+        let accepted = task.status == TaskStatus::Completed && !cancellation_observed;
         let audit_entry = audit_entries.last().cloned().unwrap_or_else(|| {
             AuditEntry::new(
                 Some(task.id),
@@ -2271,14 +2326,15 @@ impl IpcState {
 
         Ok(CommandResponse {
             accepted,
+            cancellation_id: request.cancellation_id,
             task,
             audit_entry,
             audit_entries,
             route: runtime_response.route,
             route_evidence: runtime_response.route_evidence,
-            steps: runtime_response.steps,
-            plugin_results: plugin_dispatch.results,
-            message: plugin_dispatch.message.unwrap_or(runtime_response.message),
+            steps,
+            plugin_results,
+            message,
         })
     }
 
@@ -2515,7 +2571,7 @@ impl IpcState {
                     .register_runtime_cancellation(cancellation_id)
                     .ok_or_else(|| {
                         JarvisError::Validation(
-                            "installed plugin cancellation_id is already active or the active-run limit was reached"
+                            "installed plugin cancellation_id is already active, was recently consumed, or the active-run limit was reached"
                                 .to_string(),
                         )
                     })
@@ -3160,6 +3216,12 @@ impl IpcState {
         Ok(RuntimeCancellationResponse {
             cancellation_id,
             cancellation_requested,
+            active_execution_found: cancellation_requested,
+            outcome: if cancellation_requested {
+                "cancellation_requested".to_string()
+            } else {
+                "not_found".to_string()
+            },
             audit_entry,
         })
     }
@@ -3872,6 +3934,7 @@ impl IpcState {
                 proactive: true,
                 memory_context: false,
                 installed_wasm_tools: false,
+                cancellation_id: None,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await?;
@@ -3986,6 +4049,7 @@ impl IpcState {
                     proactive: true,
                     memory_context: false,
                     installed_wasm_tools: false,
+                    cancellation_id: None,
                     sensitivity: Some(Sensitivity::Workspace),
                 })
                 .await?;
@@ -8198,6 +8262,12 @@ fn contract_features() -> Vec<ContractFeature> {
             "Local repository evidence only; no hosted sync or multi-device state claim.",
         ),
         feature(
+            "active_command_cancellation",
+            "implemented",
+            "An optional client-generated UUID cancellation_id is registered for the full active POST /commands lifetime. The Swift console serializes submissions before changing its active handle. Authenticated POST /runtime/cancellations/:id targets only that handle, propagates to its bound task and active provider/tool work, and the final guard suppresses late model steps and tool results when cancellation wins. Rust race/unit tests, real-server CLI IPC E2E, and Swift model tests cover the boundary.",
+            "The registry is process-local, capped at 128 active handles, and retains the 1,024 most recently consumed UUIDs as FIFO tombstones so delayed stale cancellation cannot target a new run that reuses a recent handle. Clients must always generate fresh random UUIDs; a tombstone can be evicted after the bounded window or lost on process restart. cancellation_requested proves an active local command accepted the signal; not_found means no active execution existed at that linearization point. Cancellation cannot reverse an external effect that already occurred and is not distributed cancellation or crash recovery.",
+        ),
+        feature(
             "activity_events",
             "implemented",
             "Repository-backed `/activity/events` exposes bounded redacted task metadata, audit event batches, redacted installed-plugin progress, model-step progress, and model-output chunk metadata frames and is covered by CLI IPC E2E plus Swift decoding tests.",
@@ -12133,6 +12203,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 proactive: false,
                 memory_context: false,
                 installed_wasm_tools: false,
+                cancellation_id: None,
                 sensitivity: None,
             })
             .await
@@ -12166,6 +12237,42 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .audit_entries
             .iter()
             .any(|entry| entry.event_type == "model_route_selected"));
+    }
+
+    #[test]
+    fn command_cancellation_response_distinguishes_active_from_not_found() {
+        let state = IpcState::with_repository(SqliteRepository::in_memory().unwrap())
+            .expect("repository-backed state");
+        let cancellation_id = Uuid::new_v4();
+
+        let not_found = state
+            .cancel_runtime_execution(cancellation_id)
+            .expect("not-found cancellation evidence");
+        assert!(!not_found.cancellation_requested);
+        assert!(!not_found.active_execution_found);
+        assert_eq!(not_found.outcome, "not_found");
+
+        let mut guard = state
+            .runtime_control
+            .register_runtime_cancellation(cancellation_id)
+            .expect("register active command");
+        guard.activate();
+        let active = state
+            .cancel_runtime_execution(cancellation_id)
+            .expect("active cancellation evidence");
+        assert!(active.cancellation_requested);
+        assert!(active.active_execution_found);
+        assert_eq!(active.outcome, "cancellation_requested");
+        assert!(guard.finalize());
+
+        let finalized = state
+            .cancel_runtime_execution(cancellation_id)
+            .expect("finalized cancellation evidence");
+        assert_eq!(finalized.outcome, "not_found");
+        assert!(state
+            .runtime_control
+            .register_runtime_cancellation(cancellation_id)
+            .is_none());
     }
 
     #[tokio::test]
@@ -12210,6 +12317,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 proactive: false,
                 memory_context: false,
                 installed_wasm_tools: false,
+                cancellation_id: None,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -12329,6 +12437,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 proactive: false,
                 memory_context: false,
                 installed_wasm_tools: false,
+                cancellation_id: None,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -12365,6 +12474,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 proactive: false,
                 memory_context: false,
                 installed_wasm_tools: false,
+                cancellation_id: None,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -12427,6 +12537,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 proactive: false,
                 memory_context: false,
                 installed_wasm_tools: false,
+                cancellation_id: None,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -12497,6 +12608,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 proactive: false,
                 memory_context: false,
                 installed_wasm_tools: false,
+                cancellation_id: None,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -12547,6 +12659,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 proactive: false,
                 memory_context: false,
                 installed_wasm_tools: false,
+                cancellation_id: None,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -12778,6 +12891,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 proactive: false,
                 memory_context: false,
                 installed_wasm_tools: false,
+                cancellation_id: None,
                 sensitivity: None,
             })
             .await
@@ -12812,6 +12926,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 proactive: false,
                 memory_context: false,
                 installed_wasm_tools: false,
+                cancellation_id: None,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -12842,6 +12957,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 proactive: false,
                 memory_context: false,
                 installed_wasm_tools: false,
+                cancellation_id: None,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -12883,6 +12999,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 proactive: false,
                 memory_context: false,
                 installed_wasm_tools: false,
+                cancellation_id: None,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -13756,6 +13873,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 proactive: false,
                 memory_context: false,
                 installed_wasm_tools: false,
+                cancellation_id: None,
                 sensitivity: Some(Sensitivity::Private),
             })
             .await
@@ -13810,6 +13928,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 proactive: false,
                 memory_context: false,
                 installed_wasm_tools: false,
+                cancellation_id: None,
                 sensitivity: Some(Sensitivity::Private),
             })
             .await
@@ -13963,6 +14082,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 proactive: false,
                 memory_context: false,
                 installed_wasm_tools: false,
+                cancellation_id: None,
                 sensitivity: None,
             })
             .await
@@ -14018,6 +14138,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 proactive: false,
                 memory_context: false,
                 installed_wasm_tools: false,
+                cancellation_id: None,
                 sensitivity: None,
             })
             .await

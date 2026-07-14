@@ -339,9 +339,39 @@ cargo run -p jarvis-cli -- serve \
 cargo run -q -p jarvis-cli -- tools list
 cargo test -p jarvis-core workspace_inspect -- --nocapture
 cargo test -p jarvis-core runtime_cancellation -- --nocapture
+cargo test -p jarvis-core explicit_command_handle_cancels_only_its_active_model_transport -- --nocapture
+cargo test -p jarvis-core consumed_runtime_cancellation_tombstones_are_bounded_fifo -- --nocapture
+cargo test -p jarvis-core command_cancellation_response_distinguishes_active_from_not_found -- --nocapture
+cargo test -p jarvis-cli --test local_ipc_e2e active_command_cancellation_is_end_to_end_and_finalized_handles_report_not_found -- --nocapture
+swift test --disable-sandbox --package-path apps/mac --filter commandConsoleCancelsItsActiveSubmission
+swift test --disable-sandbox --package-path apps/mac --filter commandConsoleSerializesConcurrentSubmissions
 cargo test -p jarvis-cli --test local_ipc_e2e production_workspace -- --nocapture
 swift test --disable-sandbox --package-path apps/mac --filter WorkspaceRoot
 ```
+
+For an operator-visible cancellation handle, submit and cancel from separate
+terminals while the command is active:
+
+```bash
+HANDLE="$(uuidgen)"
+cargo run -p jarvis-cli -- command "status check" \
+  --cancellation-id "$HANDLE" --endpoint http://127.0.0.1:7787 --json
+cargo run -p jarvis-cli -- cancel-command "$HANDLE" \
+  --endpoint http://127.0.0.1:7787
+```
+
+The command request `cancellation_id` field is additive and optional for older clients. Current
+Swift and CLI clients generate the UUID before `POST /commands`; Swift shows
+Cancel only while that submission is active. A cancellation response with
+`outcome: cancellation_requested` proves the exact active handle accepted the
+signal. `outcome: not_found` means no matching execution was active when the
+authenticated `POST /runtime/cancellations/:id` request linearized. If cancellation wins finalization, the response is
+cancelled and late steps/tool results are suppressed. This is cooperative
+local-process cancellation and cannot undo an external effect already applied.
+The core also rejects reuse of the 1,024 most recently consumed UUIDs through a
+bounded FIFO tombstone set, so delayed stale cancels cannot target new work in
+that window. Tombstones are process-local and eventually evicted; clients must
+always generate fresh random UUIDs rather than intentionally recycle handles.
 
 `workspace_inspect.list` and `workspace_inspect.read_text` are absent when no
 root is configured. They use only opaque root IDs plus relative paths, enforce
