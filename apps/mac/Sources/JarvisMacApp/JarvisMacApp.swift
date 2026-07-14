@@ -13,6 +13,9 @@ struct JarvisMacApp: App {
     @StateObject private var runs: RunManagementModel
     @StateObject private var scheduler: SchedulerModel
     @StateObject private var schedulerNotifications: SchedulerNotificationModel
+    @StateObject private var schedulerAutomation: SchedulerAutomationSettingsModel
+    @StateObject private var schedulerAttentionCoordinator: SchedulerAttentionCoordinator
+    @StateObject private var schedulerAutomationLifecycle: SchedulerAutomationLifecycle
     @StateObject private var trustedWake: TrustedWakeModel
     @StateObject private var wakeCoordinator: MacSystemWakeCoordinator
     @StateObject private var diagnostics: DiagnosticsModel
@@ -25,6 +28,7 @@ struct JarvisMacApp: App {
 
     init() {
         let configuration = JarvisCoreSupervisorConfiguration()
+        let schedulerAutomation = SchedulerAutomationSettingsModel()
         let cliHandoffConfiguration = JarvisIPCCLIHandoffConfiguration.fromEnvironment()
         let ipcAuthorization = JarvisIPCSessionAuthorization(
             mode: .appSupervised,
@@ -54,7 +58,8 @@ struct JarvisMacApp: App {
             configuration: configuration,
             client: client,
             workspaceRootProvider: workspaceRoots,
-            ipcAuthorization: ipcAuthorization
+            ipcAuthorization: ipcAuthorization,
+            schedulerAutomationProvider: schedulerAutomation
         )
         _supervisor = StateObject(wrappedValue: supervisor)
         _console = StateObject(wrappedValue: console)
@@ -63,9 +68,28 @@ struct JarvisMacApp: App {
         _workspaceRoots = StateObject(wrappedValue: workspaceRoots)
         _approvals = StateObject(wrappedValue: ApprovalManagementModel(client: client))
         _runs = StateObject(wrappedValue: RunManagementModel(client: client))
-        _scheduler = StateObject(wrappedValue: SchedulerModel(client: client))
-        _schedulerNotifications = StateObject(
-            wrappedValue: SchedulerNotificationModel(adapter: MacSchedulerNotificationAdapter())
+        let scheduler = SchedulerModel(client: client)
+        let schedulerNotifications = SchedulerNotificationModel(adapter: MacSchedulerNotificationAdapter())
+        _scheduler = StateObject(wrappedValue: scheduler)
+        _schedulerNotifications = StateObject(wrappedValue: schedulerNotifications)
+        _schedulerAutomation = StateObject(wrappedValue: schedulerAutomation)
+        let schedulerAttentionCoordinator = SchedulerAttentionCoordinator(
+            scheduler: scheduler,
+            notifications: schedulerNotifications,
+            settings: schedulerAutomation,
+            isCoreAvailable: {
+                supervisor.isAvailable
+                    && supervisor.isSupervisingCoreProcess
+                    && supervisor.activeSchedulerAutomationConfiguration?.isEnabled == true
+            }
+        )
+        _schedulerAttentionCoordinator = StateObject(wrappedValue: schedulerAttentionCoordinator)
+        _schedulerAutomationLifecycle = StateObject(
+            wrappedValue: SchedulerAutomationLifecycle(
+                supervisor: supervisor,
+                settings: schedulerAutomation,
+                coordinator: schedulerAttentionCoordinator
+            )
         )
         let trustedWake = TrustedWakeModel(
             client: client,
@@ -125,6 +149,8 @@ struct JarvisMacApp: App {
                 runs: runs,
                 scheduler: scheduler,
                 schedulerNotifications: schedulerNotifications,
+                schedulerAutomation: schedulerAutomation,
+                schedulerAttentionCoordinator: schedulerAttentionCoordinator,
                 trustedWake: trustedWake,
                 diagnostics: diagnostics,
                 releaseReadiness: releaseReadiness,
@@ -204,6 +230,8 @@ struct JarvisShellView: View {
     @ObservedObject var runs: RunManagementModel
     @ObservedObject var scheduler: SchedulerModel
     @ObservedObject var schedulerNotifications: SchedulerNotificationModel
+    @ObservedObject var schedulerAutomation: SchedulerAutomationSettingsModel
+    @ObservedObject var schedulerAttentionCoordinator: SchedulerAttentionCoordinator
     @ObservedObject var trustedWake: TrustedWakeModel
     @ObservedObject var diagnostics: DiagnosticsModel
     @ObservedObject var releaseReadiness: ReleaseReadinessModel
@@ -238,7 +266,14 @@ struct JarvisShellView: View {
                     .tabItem { Text("Approvals") }
                 RunManagementView(model: runs)
                     .tabItem { Text("Runs") }
-                SchedulerJobsView(model: scheduler, notifications: schedulerNotifications)
+                SchedulerJobsView(
+                    model: scheduler,
+                    notifications: schedulerNotifications,
+                    automation: schedulerAutomation,
+                    attentionCoordinator: schedulerAttentionCoordinator,
+                    supervisor: supervisor,
+                    modelConfiguration: modelConfiguration
+                )
                     .tabItem { Text("Scheduler") }
                 TrustedWakeView(model: trustedWake)
                     .tabItem { Text("Wake") }
@@ -1474,6 +1509,10 @@ struct PluginManagerView: View {
 struct SchedulerJobsView: View {
     @ObservedObject var model: SchedulerModel
     @ObservedObject var notifications: SchedulerNotificationModel
+    @ObservedObject var automation: SchedulerAutomationSettingsModel
+    @ObservedObject var attentionCoordinator: SchedulerAttentionCoordinator
+    @ObservedObject var supervisor: JarvisCoreSupervisor
+    @ObservedObject var modelConfiguration: ModelConfigurationModel
     @State private var name = "manual check"
     @State private var command = "status check"
     @State private var runAt = "2026-05-20T13:00:00Z"
@@ -1487,7 +1526,10 @@ struct SchedulerJobsView: View {
         ManagementListView(
             title: "Scheduler",
             isLoading: model.isLoading,
-            lastError: model.lastError,
+            lastError: SchedulerManagementPresentation.errorMessage(
+                schedulerError: model.lastError,
+                notificationAcknowledgementError: attentionCoordinator.lastError
+            ),
             refresh: { await model.refresh() }
         ) {
             VStack(spacing: 0) {
@@ -1534,6 +1576,72 @@ struct SchedulerJobsView: View {
 
     private var schedulerForm: some View {
         VStack(alignment: .leading, spacing: 8) {
+            GroupBox("App-supervised automation") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle(
+                        "Run approved scheduler jobs while Jarvis.app is open",
+                        isOn: Binding(
+                            get: { automation.isEnabled },
+                            set: { automation.update(isEnabled: $0) }
+                        )
+                    )
+                    Toggle(
+                        "Recover stale running jobs on the next supervised start",
+                        isOn: Binding(
+                            get: { automation.recoverStaleOnStartup },
+                            set: { automation.update(recoverStaleOnStartup: $0) }
+                        )
+                    )
+                    .disabled(!automation.isEnabled)
+
+                    HStack {
+                        Text(
+                            "Bounded to every \(automation.intervalMilliseconds / 1_000)s, "
+                                + "\(automation.runLimit) jobs per tick. Notifications require separate authorization."
+                        )
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Apply & Restart Core") {
+                            Task {
+                                guard !supervisor.isAvailable || supervisor.isSupervisingCoreProcess else {
+                                    return
+                                }
+                                guard await supervisor.stop() else { return }
+                                await supervisor.start(
+                                    environmentOverrides: modelConfiguration.launchEnvironmentOverrides,
+                                    requireMatchingConfiguration: true
+                                )
+                                await model.refresh()
+                            }
+                        }
+                        .disabled(
+                            supervisor.mode == .starting
+                                || (supervisor.isAvailable && !supervisor.isSupervisingCoreProcess)
+                        )
+                    }
+
+                    Text(
+                        supervisor.isAvailable && !supervisor.isSupervisingCoreProcess
+                            ? "Another process owns the core endpoint; app automation cannot be applied there."
+                            : attentionCoordinator.isRunning
+                            ? "Automation attention polling is active."
+                            : "Automation changes take effect after the supervised core restarts."
+                    )
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    if supervisor.isSupervisingCoreProcess,
+                       supervisor.activeSchedulerAutomationConfiguration
+                        != automation.schedulerAutomationConfiguration
+                    {
+                        Text("Pending restart: the running core still uses the previous scheduler automation setting.")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+
             HStack {
                 TextField("Name", text: $name)
                     .textFieldStyle(.roundedBorder)
@@ -2792,6 +2900,17 @@ struct VoiceStateView: View {
     private func speakPreview() {
         Task {
             await speechOutput.speak(speechPreview)
+        }
+    }
+}
+
+struct SchedulerManagementPresentation {
+    static func errorMessage(
+        schedulerError: String?,
+        notificationAcknowledgementError: String?
+    ) -> String? {
+        schedulerError ?? notificationAcknowledgementError.map {
+            "Notification acknowledgement pending retry: \($0)"
         }
     }
 }

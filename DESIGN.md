@@ -50,6 +50,7 @@
 | Rust owns the assistant core | Swift-owned agent runtime | Keeps model routing, memory, tools, safety, plugins, scheduling, and audit logs in a portable, testable service. |
 | Swift owns the human-facing shell | Rust UI, web UI | Gives the best path to native voice, macOS permissions, notifications, menus, settings, and polished UI. |
 | App-supervised core first | LaunchAgent from day one | Reduces v1 complexity while preserving a path to stronger background reliability later. |
+| Keep app-supervised scheduler automation explicit and bounded | Always run persisted schedules whenever the app launches, or leave all due execution manual | A persisted user toggle enables the existing audited Rust background loop only while `Jarvis.app` supervises the core. Fixed interval/limit ceilings, bounded stale recovery, cancellable redacted attention polling, and separately authorized notifications preserve user intent without claiming LaunchAgent or OS-wake reliability. |
 | Local-model first with ChatGPT as the only approved cloud model | Cloud-first routing, provider-agnostic cloud routing | Matches the privacy posture while allowing explicit escalation for harder reasoning tasks. |
 | Support both OpenAI API-key and logged-in Codex-account authentication inside the approved ChatGPT route | API-key only, unaudited general Codex agent execution | Account authentication avoids a second stored Platform key while retaining the same sensitivity gate, route evidence, approval requirement, redacted request context, and failure audit. The Codex subprocess must ignore user/project rules, disable tool capabilities mechanically, minimize inherited environment, bound output, and fail closed when its constrained CLI contract is unavailable. |
 | Capability scopes plus risk tiers | Simple allow/deny prompts, risk tiers only | High autonomy needs both explicit permission boundaries and per-action risk evaluation. |
@@ -82,6 +83,22 @@ lifecycle controls to refresh, start, stop, and quit. It is not a second core
 owner or a hidden background agent: core startup remains app-supervised and all
 production claims still require the packaged-app and manual release evidence
 defined by the release checklist.
+The Scheduler tab also owns a persisted, default-off automation toggle. Applying
+it restarts only the app-supervised core with bounded scheduler and optional
+stale-recovery flags. A single cancellable app-lifetime coordinator polls the
+redacted attention projection and a repository-backed, bounded notification
+outbox during each accepted active poll, before independently checking macOS
+notification authorization. Rust transactionally
+records an occurrence before execution, revision-escalates failures and stale
+recovery, and requires compare-and-swap acknowledgement after Swift selects
+either notification-center submission when already authorized or a suppression
+intent when authorization is denied or not determined. Submission means the
+adapter returned, not that macOS displayed the notification. This is an
+at-least-once handoff, so a crash between submission and successful
+acknowledgement or a concurrent consumer may repeat the stable request.
+Lifecycle acceptance is
+rechecked after asynchronous authorization lookup; the coordinator never
+prompts from the background or enables trusted system wake.
 
 ### jarvis-core
 
@@ -225,6 +242,13 @@ credential-adjacent, and restricted commands stop for explicit confirmation.
 ### Scheduler And Trigger Engine
 
 Runs approved proactive routines and event-driven checks. v1 jobs should be local, inspectable, cancellable, and subject to the same policy rules as reactive commands.
+
+The packaged app can now explicitly enable that bounded loop. The setting is
+persisted locally, defaults off, clamps polling and per-tick work, optionally
+performs bounded stale-running recovery before serving, and takes effect only
+after a deliberate supervised-core restart. This is background operation while
+the app is running, not a LaunchAgent, an OS wake guarantee, or permission to
+bypass proactive policy and plugin checks.
 
 The macOS system-wake foundation is disabled by default. Swift keeps its P-256
 private key in a device-only Keychain item. Normal app/core startup never reads
@@ -520,6 +544,8 @@ permission policy review,
 redacted scheduler attention handoff, scheduler trigger policy-review items,
 adapter-backed scheduler notification controls for due, failed, and
 emergency-pause-blocked attention items,
+default-off app-supervised scheduler automation with bounded startup recovery
+and authorized no-prompt attention polling,
 and core supervision abstractions.
 The opt-in Ollama adapter uses native NDJSON response transport with bounded
 body, assembled-response, and metadata budgets. It quarantines all fragments

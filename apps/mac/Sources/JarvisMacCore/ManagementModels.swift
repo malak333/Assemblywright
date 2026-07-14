@@ -71,6 +71,7 @@ public final class ReleaseReadinessModel: ObservableObject {
             lastError = String(describing: error)
         }
     }
+
 }
 
 @MainActor
@@ -594,6 +595,32 @@ public final class SchedulerModel: ObservableObject {
             self.jobs = try await jobs
             self.attention = try await attention
         }
+    }
+
+    public func fetchAttention() async throws -> JarvisSchedulerAttentionSummary {
+        try await client.schedulerAttention()
+    }
+
+    public func fetchPendingNotificationOccurrences(
+        limit: Int = 64
+    ) async throws -> [JarvisSchedulerNotificationOccurrence] {
+        try await client.pendingSchedulerNotificationOccurrences(limit: limit)
+    }
+
+    public func acknowledgeNotificationOccurrence(
+        _ acknowledgement: JarvisSchedulerNotificationAcknowledgement
+    ) async throws {
+        _ = try await client.acknowledgeSchedulerNotificationOccurrence(
+            id: acknowledgement.id,
+            request: JarvisSchedulerNotificationAcknowledgementRequest(
+                revision: acknowledgement.revision,
+                disposition: acknowledgement.disposition
+            )
+        )
+    }
+
+    public func applyAttention(_ attention: JarvisSchedulerAttentionSummary) {
+        self.attention = attention
     }
 
     public func scheduleManual(name: String, command: String) async {

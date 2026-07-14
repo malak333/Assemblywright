@@ -320,6 +320,23 @@ enum SchedulerCommand {
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
+    /// Inspect bounded pending scheduler notification occurrences.
+    Notifications {
+        #[arg(long, default_value_t = 64)]
+        limit: usize,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    /// Acknowledge one scheduler notification occurrence after app submission or explicit suppression.
+    AcknowledgeNotification {
+        id: String,
+        #[arg(long)]
+        revision: u64,
+        #[arg(long, value_enum)]
+        disposition: SchedulerNotificationDisposition,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
     /// Fetch one scheduler job by id.
     Get {
         id: String,
@@ -359,6 +376,21 @@ enum SchedulerCommand {
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum SchedulerNotificationDisposition {
+    SubmittedToNotificationCenter,
+    SuppressedNotAuthorized,
+}
+
+impl SchedulerNotificationDisposition {
+    fn as_api_value(self) -> &'static str {
+        match self {
+            Self::SubmittedToNotificationCenter => "submitted_to_notification_center",
+            Self::SuppressedNotAuthorized => "suppressed_not_authorized",
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -1133,6 +1165,42 @@ async fn main() -> anyhow::Result<()> {
                 println!(
                     "{}",
                     server_required_request(&endpoint, "GET", "/scheduler/attention", None)?
+                );
+            }
+            SchedulerCommand::Notifications { limit, endpoint } => {
+                let limit = limit.clamp(
+                    1,
+                    jarvis_core::MAX_SCHEDULER_NOTIFICATION_OCCURRENCE_LIST_LIMIT,
+                );
+                println!(
+                    "{}",
+                    server_required_request(
+                        &endpoint,
+                        "GET",
+                        &format!("/scheduler/notification-outbox?limit={limit}"),
+                        None,
+                    )?
+                );
+            }
+            SchedulerCommand::AcknowledgeNotification {
+                id,
+                revision,
+                disposition,
+                endpoint,
+            } => {
+                let id = Uuid::parse_str(&id)?;
+                let body = serde_json::to_string(&serde_json::json!({
+                    "revision": revision,
+                    "disposition": disposition.as_api_value(),
+                }))?;
+                println!(
+                    "{}",
+                    server_required_request(
+                        &endpoint,
+                        "POST",
+                        &format!("/scheduler/notification-outbox/{id}/ack"),
+                        Some(&body),
+                    )?
                 );
             }
             SchedulerCommand::Get { id, endpoint } => {

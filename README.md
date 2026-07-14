@@ -72,6 +72,19 @@ crash or killed process leaves a job leased but unfinished.
 `jarvis serve --scheduler-recover-stale-on-startup` offers the same recovery as
 an explicit startup option and marks the audit payload with
 `automatic_recovery: true` while keeping scheduler command text redacted.
+The packaged Scheduler tab now exposes the same capability as a persisted,
+default-off app-supervised automation setting. Applying it deliberately
+restarts the supervised core with fixed bounded loop/recovery arguments. While
+enabled, a cancellable coordinator refreshes redacted attention and delivers
+notifications only if permission was already granted. Rust first writes each
+due, failed, or pause-blocked occurrence to a bounded schema-v14 outbox; Swift
+uses a stable occurrence-revision identifier and acknowledges only after
+notification-center submission or explicit no-authorization suppression. The
+handoff is durable and at-least-once: a crash before acknowledgement may repeat
+the stable request, as may a concurrent app consumer. Failure escalation uses a
+new occurrence revision and may intentionally produce a later notification. It
+never prompts automatically or claims notification
+display, LaunchAgent, or OS-wake service.
 
 ## Current Scope
 
@@ -443,7 +456,7 @@ run the focused storage recovery proof:
 
 That script proves legacy file-backed DB migration creates a preflight backup,
 failed migration-open restores the backup, newer schema versions fail with an
-explicit upgrade diagnostic, and representative schema v1-v12 fixtures preserve
+explicit upgrade diagnostic, and representative schema v1-v13 fixtures preserve
 critical rows through the current migration path. It does not replace installer
 upgrade QA.
 

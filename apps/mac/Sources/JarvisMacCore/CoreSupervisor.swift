@@ -71,7 +71,10 @@ public struct JarvisCoreSupervisorConfiguration: Equatable, Sendable {
         launchArguments(includeLoopbackBind: true)
     }
 
-    public func launchArguments(includeLoopbackBind: Bool) -> [String] {
+    public func launchArguments(
+        includeLoopbackBind: Bool,
+        schedulerAutomation: JarvisSchedulerAutomationConfiguration = .init()
+    ) -> [String] {
         var arguments = serveCommand
         if includeLoopbackBind {
             arguments.append(contentsOf: ["--bind", bindAddress])
@@ -79,6 +82,7 @@ public struct JarvisCoreSupervisorConfiguration: Equatable, Sendable {
         if let databaseURL {
             arguments.append(contentsOf: ["--db-path", databaseURL.path])
         }
+        arguments.append(contentsOf: schedulerAutomation.launchArguments)
         return arguments
     }
 
@@ -310,6 +314,7 @@ public final class JarvisCoreSupervisor: ObservableObject {
     public static let releaseSmokeEnvironmentKey = "JARVIS_MAC_RELEASE_SMOKE"
     @Published public private(set) var mode: JarvisCoreMode
     @Published public private(set) var lastHealth: JarvisHealth?
+    @Published public private(set) var activeSchedulerAutomationConfiguration: JarvisSchedulerAutomationConfiguration?
 
     public let configuration: JarvisCoreSupervisorConfiguration
     private let client: any JarvisCoreClient
@@ -318,6 +323,7 @@ public final class JarvisCoreSupervisor: ObservableObject {
     private let workspaceRootProvider: any JarvisWorkspaceRootGrantProviding
     private let ipcAuthorization: JarvisIPCSessionAuthorization
     private let peerIdentityPolicyProvider: any JarvisIPCPeerIdentityPolicyProviding
+    private let schedulerAutomationProvider: any JarvisSchedulerAutomationConfigurationProviding
     private var process: (any JarvisCoreProcess)?
     private var processMonitorTask: Task<Void, Never>?
     private var activeWorkspaceRootLease: JarvisWorkspaceRootAccessLease?
@@ -335,7 +341,8 @@ public final class JarvisCoreSupervisor: ObservableObject {
         credentialProvider: JarvisCoreCredentialProvider = JarvisCoreCredentialProvider(),
         workspaceRootProvider: any JarvisWorkspaceRootGrantProviding = JarvisWorkspaceRootBookmarkCoordinator(),
         ipcAuthorization: JarvisIPCSessionAuthorization = JarvisIPCSessionAuthorization(),
-        peerIdentityPolicyProvider: any JarvisIPCPeerIdentityPolicyProviding = SecurityJarvisIPCPeerIdentityPolicyProvider()
+        peerIdentityPolicyProvider: any JarvisIPCPeerIdentityPolicyProviding = SecurityJarvisIPCPeerIdentityPolicyProvider(),
+        schedulerAutomationProvider: any JarvisSchedulerAutomationConfigurationProviding = StaticSchedulerAutomationConfigurationProvider()
     ) {
         self.configuration = configuration
         self.client = client
@@ -344,8 +351,10 @@ public final class JarvisCoreSupervisor: ObservableObject {
         self.workspaceRootProvider = workspaceRootProvider
         self.ipcAuthorization = ipcAuthorization
         self.peerIdentityPolicyProvider = peerIdentityPolicyProvider
+        self.schedulerAutomationProvider = schedulerAutomationProvider
         self.mode = .stopped
         self.lastHealth = nil
+        self.activeSchedulerAutomationConfiguration = nil
         self.activeWorkspaceRootLease = nil
         self.activeIPCAuthorizationGeneration = nil
         self.processMonitorTask = nil
@@ -383,7 +392,8 @@ public final class JarvisCoreSupervisor: ObservableObject {
             executablePath: configuration.executableURL?.path,
             databasePath: configuration.databaseURL?.path,
             launchArguments: configuration.launchArguments(
-                includeLoopbackBind: ipcAuthorization.transportMode == .loopbackTCP
+                includeLoopbackBind: ipcAuthorization.transportMode == .loopbackTCP,
+                schedulerAutomation: schedulerAutomationProvider.schedulerAutomationConfiguration
             ),
             lastHealthStatus: lastHealth?.status,
             lastHealthRuntime: lastHealth?.commandRuntime
@@ -411,6 +421,9 @@ public final class JarvisCoreSupervisor: ObservableObject {
         mode = .starting
 
         if !skipExistingHealthCheck, await refreshHealth() {
+            if process?.isRunning != true {
+                activeSchedulerAutomationConfiguration = nil
+            }
             if requireMatchingConfiguration,
                let lastHealth,
                !Self.health(lastHealth, matches: environmentOverrides)
@@ -454,11 +467,15 @@ public final class JarvisCoreSupervisor: ObservableObject {
             environment.removeValue(forKey: JarvisIPCCLIHandoffConfiguration.fileEnvironmentKey)
             environment.removeValue(forKey: JarvisIPCSessionAuthorization.unixSocketDirectoryEnvironmentKey)
             environment.removeValue(forKey: Self.releaseSmokeEnvironmentKey)
+            environment.removeValue(forKey: SchedulerAutomationSettingsModel.enabledEnvironmentKey)
+            environment.removeValue(forKey: SchedulerAutomationSettingsModel.intervalEnvironmentKey)
             let trustedWakeBootstrap = pendingTrustedWakeBootstrap
             let trustedWakeKeyControl = pendingTrustedWakeKeyControl
             let usesLoopbackTCP = ipcAuthorization.transportMode == .loopbackTCP
+            let schedulerAutomation = schedulerAutomationProvider.schedulerAutomationConfiguration
             var launchArguments = configuration.launchArguments(
-                includeLoopbackBind: usesLoopbackTCP
+                includeLoopbackBind: usesLoopbackTCP,
+                schedulerAutomation: schedulerAutomation
             )
             if ipcAuthorization.mode == .appSupervised, usesLoopbackTCP {
                 guard JarvisIPCSessionAuthorization.isStrictLoopbackEndpoint(configuration.endpoint.baseURL),
@@ -525,6 +542,7 @@ public final class JarvisCoreSupervisor: ObservableObject {
                 try ipcAuthorization.captureActiveUnixSocketIdentity(generation: generation)
             }
             activeEnvironmentOverrides = environmentOverrides
+            activeSchedulerAutomationConfiguration = schedulerAutomation
             mode = .available
             if let process {
                 startProcessMonitor(for: process)
@@ -538,6 +556,7 @@ public final class JarvisCoreSupervisor: ObservableObject {
             }
             process?.terminate()
             process = nil
+            activeSchedulerAutomationConfiguration = nil
             activeWorkspaceRootLease?.release()
             activeWorkspaceRootLease = nil
             if let generation = launchAuthorization?.generation ?? activeIPCAuthorizationGeneration {
@@ -707,6 +726,7 @@ public final class JarvisCoreSupervisor: ObservableObject {
         }
         guard process === stoppingProcess else { return false }
         process = nil
+        activeSchedulerAutomationConfiguration = nil
         activeWorkspaceRootLease?.release()
         activeWorkspaceRootLease = nil
         if let generation = activeIPCAuthorizationGeneration {
@@ -752,6 +772,7 @@ public final class JarvisCoreSupervisor: ObservableObject {
         processMonitorTask?.cancel()
         processMonitorTask = nil
         process = nil
+        activeSchedulerAutomationConfiguration = nil
         activeWorkspaceRootLease?.release()
         activeWorkspaceRootLease = nil
         if let generation = activeIPCAuthorizationGeneration {

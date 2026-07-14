@@ -917,6 +917,22 @@ requires plugin-trust `generated_at`, `review_started_at`,
   is provided. Startup recovery runs the same stale recovery path before the
   server accepts IPC traffic, marks the audit payload with `automatic_recovery:
   true`, and remains bounded by age/limit flags.
+  Schema v14 adds `scheduler_notification_occurrences`, a bounded one-row-per-
+  occurrence outbox. Due visibility and the running transition commit before
+  command execution; failure and stale-running recovery atomically change the
+  same row to `failed`, increment its revision, and reset acknowledgement.
+  Pending rows are capped at 1,024, acknowledged retention is capped at 1,024,
+  list responses are capped at 64 with failed and pause-blocked occurrences
+  ahead of ordinary due rows, and a full outbox blocks a new claim before
+  command side effects. Authenticated operators can inspect the same surface
+  with `jarvis scheduler notifications` and acknowledge an observed revision
+  with `jarvis scheduler acknowledge-notification`; CLI E2E proves restart
+  replay, redaction, both acknowledgement dispositions, and removal from the
+  pending list. Swift acknowledges with revision CAS only after
+  notification-center submission or explicit no-authorization suppression.
+  This is at-least-once handoff: concurrent consumers or a crash after
+  submission but before acknowledgement may repeat the stable occurrence-
+  revision request; neither acknowledgement nor tests prove live OS display.
   Release-readiness feature metadata describes this as explicit plus opt-in
   startup recovery, with no default background recovery or distributed lease
   claim.
@@ -954,7 +970,7 @@ requires plugin-trust `generated_at`, `review_started_at`,
   `./scripts/release-evidence-doctor.sh --self-test`, `swift test
   --package-path apps/mac`, and `swift build --package-path apps/mac`.
   It also runs `./scripts/storage-migration-backup-smoke.sh` so file-backed
-  migration backup/recovery and representative schema v1-v12 fixture
+  migration backup/recovery and representative schema v1-v13 fixture
   preservation stay part of the default local release evidence.
 - Local-model proof now includes stubbed provider-envelope E2E plus live
   Ollama route viability observed during manual testing. The proof is still a
@@ -1096,18 +1112,42 @@ requires plugin-trust `generated_at`, `review_started_at`,
   readiness as stale or allowing production readiness to become true.
 - Swift scheduler notification controls are repo-owned adapter evidence: the
   core model can request authorization, build due, failed, and
-  emergency-pause-blocked notification requests, suppress duplicate deliveries
-  for the same attention item, and fail closed when permission is denied. The
+  emergency-pause-blocked notification requests, consume the bounded durable
+  occurrence outbox, and return explicit submission or no-authorization
+  acknowledgements. The
   Swift model tests also prove the reset path permits the same attention item to
   be redelivered for QA recapture after duplicate suppression. The app-level
   macOS notification adapter has a test seam that verifies the real
   `UNNotificationRequest` title, body, sound, thread identifier, scheduler job
-  ID, and notification-kind payload before delivery. The scheduler attention UI
+  ID, occurrence ID, revision, and notification-kind payload before delivery.
+  Stable identifiers make repeated submissions replace the same pending OS
+  request where supported, but the handoff remains at-least-once. The scheduler attention UI
   surfaces delivered notification title/body/kind/thread evidence using the
   `JARVIS_QA_NOTIFICATION_*` field names and exposes the model reset path so
   release operators can recapture notification evidence after a duplicate
   suppression check. This is not a substitute for manual clean-profile macOS
   notification prompt and delivery validation.
+- Packaged scheduler automation is an explicit local user setting, not an
+  implicit authority grant. It defaults off, persists in app preferences,
+  clamps the Rust background interval to at least one second and each run or
+  stale-recovery batch to at most 64, and applies only after a deliberate
+  app-supervised core restart. While enabled, a single cancellable coordinator
+  refreshes the redacted scheduler attention projection plus the bounded
+  durable occurrence outbox and uses the existing notification path only when
+  macOS authorization is already granted. It rechecks lifecycle acceptance
+  after asynchronous authorization, submits stable occurrence-revision IDs,
+  independently acknowledges successful batch members, and leaves failures for
+  restart/poll replay.
+  It never prompts from the background, enables trusted wake, or
+  proves LaunchAgent, OS wake, or live notification behavior. Exact
+  `JARVIS_MAC_SCHEDULER_AUTOMATION_ENABLED=true` is an explicit packaged-test or
+  operator launch opt-in; the matching interval override has the same 1,000 ms
+  floor. Both are ephemeral and stripped before the core child starts. The
+  unsigned packaged launch creates a due job through the authenticated Swift
+  UDS client and requires the background loop to complete it with matching
+  scheduler audit evidence, then suppresses and acknowledges the durable
+  occurrence without claiming live display before the fixed success marker
+  appears.
 - `./scripts/package-distribution.sh` is the repo-owned distribution packaging
   lane. Its `--check` mode is credential-free and validates local tools plus
   app and bundled-core entitlement templates. Its
@@ -1453,7 +1493,7 @@ requires plugin-trust `generated_at`, `review_started_at`,
   app-owned local files, may include personal memory/audit/plugin metadata, and
   are not redacted diagnostics exports. Keychain secrets are not stored in
   SQLite backups.
-- Storage migration coverage includes a representative schema v1-v12 fixture
+- Storage migration coverage includes a representative schema v1-v13 fixture
   matrix that preserves task, audit, emergency-pause, memory, scheduler,
   approval, installed-plugin, plugin-provenance, and route records through the
   current schema. This is repo-owned migration proof, not installer upgrade or
