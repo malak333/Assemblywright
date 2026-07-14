@@ -6633,7 +6633,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
 
     let diagnostics = run_cli_json(["diagnostics", "export", "--endpoint", endpoint.as_str()]);
     assert_eq!(diagnostics["repository_backed"], true);
-    assert_eq!(diagnostics["schema_version"], 13);
+    assert_eq!(diagnostics["schema_version"], 14);
     assert_eq!(
         diagnostics["health"]["contract"]["name"],
         "jarvis.local-ipc"
@@ -7470,6 +7470,88 @@ fn serve_background_scheduler_runs_due_jobs_and_honors_pause() {
     let audit = run_cli_json(["tasks", "audit", "--endpoint", endpoint.as_str()]);
     assert_array_contains(&audit, "event_type", "scheduler_job_due");
     assert_array_contains(&audit, "event_type", "scheduler_job_completed");
+    let completed_notifications = run_cli_json([
+        "scheduler",
+        "notifications",
+        "--limit",
+        "64",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    let completed_notifications = completed_notifications
+        .as_array()
+        .expect("completed notification occurrences");
+    assert_eq!(
+        completed_notifications.len(),
+        2,
+        "{completed_notifications:?}"
+    );
+    assert!(completed_notifications.iter().all(|occurrence| {
+        occurrence["notification_kind"] == "due_now"
+            && occurrence.get("command").is_none()
+            && occurrence["revision"] == 1
+    }));
+    for (index, occurrence) in completed_notifications.iter().enumerate() {
+        let occurrence_id = occurrence["id"].as_str().expect("occurrence id");
+        let revision = occurrence["revision"]
+            .as_u64()
+            .expect("occurrence revision")
+            .to_string();
+        let acknowledged = run_cli_json([
+            "scheduler",
+            "acknowledge-notification",
+            occurrence_id,
+            "--revision",
+            revision.as_str(),
+            "--disposition",
+            "submitted-to-notification-center",
+            "--endpoint",
+            endpoint.as_str(),
+        ]);
+        assert_eq!(
+            acknowledged["occurrence"]["acknowledged_disposition"],
+            "submitted_to_notification_center"
+        );
+        if index == 0 {
+            let idempotent = run_cli_json([
+                "scheduler",
+                "acknowledge-notification",
+                occurrence_id,
+                "--revision",
+                revision.as_str(),
+                "--disposition",
+                "submitted-to-notification-center",
+                "--endpoint",
+                endpoint.as_str(),
+            ]);
+            assert_eq!(
+                idempotent["occurrence"]["acknowledged_disposition"],
+                "submitted_to_notification_center"
+            );
+            let conflicting = run_cli_failure([
+                "scheduler",
+                "acknowledge-notification",
+                occurrence_id,
+                "--revision",
+                revision.as_str(),
+                "--disposition",
+                "suppressed-not-authorized",
+                "--endpoint",
+                endpoint.as_str(),
+            ]);
+            assert!(
+                conflicting.contains("already acknowledged differently"),
+                "{conflicting}"
+            );
+        }
+    }
+    let empty_notifications = run_cli_json([
+        "scheduler",
+        "notifications",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(empty_notifications, json!([]));
 
     let pause = run_cli_json([
         "pause",
@@ -7483,7 +7565,7 @@ fn serve_background_scheduler_runs_due_jobs_and_honors_pause() {
         "scheduler",
         "schedule",
         "background paused e2e job",
-        "plugin status",
+        "background scheduler heartbeat",
         "--endpoint",
         endpoint.as_str(),
     ]);
@@ -7498,7 +7580,99 @@ fn serve_background_scheduler_runs_due_jobs_and_honors_pause() {
     ]);
     assert_eq!(paused_status["status"], "scheduled");
 
+    let blocked_notifications = run_cli_json([
+        "scheduler",
+        "notifications",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    let blocked = blocked_notifications
+        .as_array()
+        .expect("blocked notifications")
+        .iter()
+        .find(|occurrence| occurrence["scheduler_job_id"] == paused_id)
+        .expect("paused job notification")
+        .clone();
+    assert_eq!(blocked["notification_kind"], "blocked_by_emergency_pause");
+    let blocked_occurrence_id = blocked["id"]
+        .as_str()
+        .expect("blocked occurrence id")
+        .to_string();
+    let blocked_revision = blocked["revision"]
+        .as_u64()
+        .expect("blocked revision")
+        .to_string();
+
     server.stop();
+
+    let mut restarted = JarvisServer::start(&db_path);
+    let restarted_endpoint = restarted.endpoint();
+    let replayed = run_cli_json([
+        "scheduler",
+        "notifications",
+        "--endpoint",
+        restarted_endpoint.as_str(),
+    ]);
+    assert!(replayed
+        .as_array()
+        .expect("replayed notifications")
+        .iter()
+        .any(|occurrence| occurrence["id"] == blocked_occurrence_id
+            && occurrence["notification_kind"] == "blocked_by_emergency_pause"));
+    let acknowledged = run_cli_json([
+        "scheduler",
+        "acknowledge-notification",
+        blocked_occurrence_id.as_str(),
+        "--revision",
+        blocked_revision.as_str(),
+        "--disposition",
+        "suppressed-not-authorized",
+        "--endpoint",
+        restarted_endpoint.as_str(),
+    ]);
+    assert_eq!(
+        acknowledged["occurrence"]["acknowledged_disposition"],
+        "suppressed_not_authorized"
+    );
+    assert_eq!(
+        run_cli_json([
+            "scheduler",
+            "notifications",
+            "--endpoint",
+            restarted_endpoint.as_str(),
+        ]),
+        json!([])
+    );
+    let restarted_audit =
+        run_cli_json(["tasks", "audit", "--endpoint", restarted_endpoint.as_str()]);
+    assert_array_contains(
+        &restarted_audit,
+        "event_type",
+        "scheduler_notification_acknowledged",
+    );
+    let resumed = run_cli_json(["resume", "--endpoint", restarted_endpoint.as_str()]);
+    assert_eq!(resumed["paused"], false);
+    let resumed_run = run_cli_json([
+        "scheduler",
+        "run-due",
+        "--limit",
+        "1",
+        "--endpoint",
+        restarted_endpoint.as_str(),
+    ]);
+    assert_eq!(resumed_run["emergency_paused"], false);
+    assert_eq!(resumed_run["executions"][0]["job"]["id"], paused_id);
+    assert_eq!(resumed_run["executions"][0]["job"]["status"], "completed");
+    assert_eq!(
+        run_cli_json([
+            "scheduler",
+            "notifications",
+            "--endpoint",
+            restarted_endpoint.as_str(),
+        ]),
+        json!([])
+    );
+    restarted.stop();
 }
 
 #[test]
@@ -8535,7 +8709,7 @@ fn app_supervised_unix_ipc_routes_authenticated_core_requests_without_tcp_argv()
     const TOKEN: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
     let _startup_guard = jarvis_server_startup_lock()
         .lock()
-        .expect("lock Jarvis server startup");
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let temporary = tempfile::tempdir().expect("Unix IPC fixture");
     let socket_parent = temporary.path().join("run");
     fs::create_dir(&socket_parent).expect("create Unix IPC parent");
@@ -8575,8 +8749,10 @@ fn app_supervised_unix_ipc_routes_authenticated_core_requests_without_tcp_argv()
         .expect("write startup envelope");
 
     for _ in 0..200 {
-        if socket_path.exists() {
-            break;
+        if let Ok(metadata) = fs::symlink_metadata(&socket_path) {
+            if metadata.permissions().mode() & 0o777 == 0o600 {
+                break;
+            }
         }
         if let Some(status) = child.try_wait().expect("inspect Unix IPC server") {
             let mut stderr = String::new();
@@ -10573,7 +10749,9 @@ impl JarvisServer {
         root_id: &str,
         workspace: &Path,
     ) -> Self {
-        let _startup_guard = jarvis_server_startup_lock().lock().expect("startup lock");
+        let _startup_guard = jarvis_server_startup_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let bind = unused_loopback_addr();
         let endpoint = format!("http://{bind}");
         let temp_dir = tempfile::tempdir().expect("server temp dir");
@@ -10615,7 +10793,9 @@ impl JarvisServer {
     }
 
     fn start_with_trusted_wake_bootstrap(db_path: &Path, bootstrap: &Value) -> Self {
-        let _startup_guard = jarvis_server_startup_lock().lock().expect("startup lock");
+        let _startup_guard = jarvis_server_startup_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let bind = unused_loopback_addr();
         let endpoint = format!("http://{bind}");
         let temp_dir = tempfile::tempdir().expect("server temp dir");
@@ -10651,7 +10831,9 @@ impl JarvisServer {
     }
 
     fn start_with_trusted_wake_key_control(db_path: &Path, document: &Value) -> Self {
-        let _startup_guard = jarvis_server_startup_lock().lock().expect("startup lock");
+        let _startup_guard = jarvis_server_startup_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let bind = unused_loopback_addr();
         let endpoint = format!("http://{bind}");
         let temp_dir = tempfile::tempdir().expect("server temp dir");
@@ -10697,7 +10879,7 @@ impl JarvisServer {
     fn start_authenticated(db_path: &Path, token: &str, generation: u64) -> Self {
         let _startup_guard = jarvis_server_startup_lock()
             .lock()
-            .expect("lock jarvis server startup");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let bind = unused_loopback_addr();
         let endpoint = format!("http://{bind}");
         let temp_dir = tempfile::tempdir().expect("server temp dir");
@@ -10787,7 +10969,7 @@ impl JarvisServer {
     ) -> Self {
         let _startup_guard = jarvis_server_startup_lock()
             .lock()
-            .expect("lock jarvis server startup");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let bind = unused_loopback_addr();
         let endpoint = format!("http://{bind}");
         let temp_dir = tempfile::tempdir().expect("server temp dir");

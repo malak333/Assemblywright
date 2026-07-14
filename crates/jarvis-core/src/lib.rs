@@ -28,13 +28,13 @@ pub use ipc::{
     ModelToolConstraints, PermissionGrantSummary, PermissionPolicyReview,
     PermissionPolicyReviewItem, ReleaseReadinessFeature, ReleaseReadinessResponse,
     RuntimeCancellationResponse, SchedulerAttentionItem, SchedulerAttentionSummary,
-    SchedulerBackgroundConfig, SchedulerJobExecution, SchedulerRunResponse,
-    SchedulerStaleRecoveryItem, SchedulerStaleRecoveryResponse, UpdateMemoryItemRequest,
-    DEFAULT_ACTIVITY_EVENT_INTERVAL_MS, DEFAULT_ACTIVITY_EVENT_LIMIT,
-    DEFAULT_SCHEDULER_BACKGROUND_INTERVAL_MS, DEFAULT_SCHEDULER_BACKGROUND_LIMIT,
-    DEFAULT_SCHEDULER_STALE_RECOVERY_LIMIT, DEFAULT_SCHEDULER_STALE_RECOVERY_OLDER_THAN_SECONDS,
-    IPC_BEARER_TOKEN_BYTES, IPC_BEARER_TOKEN_LENGTH, MAX_ACTIVITY_EVENT_LIMIT,
-    MAX_SCHEDULER_BACKGROUND_LIMIT,
+    SchedulerBackgroundConfig, SchedulerJobExecution, SchedulerNotificationAcknowledgementRequest,
+    SchedulerNotificationAcknowledgementResponse, SchedulerRunResponse, SchedulerStaleRecoveryItem,
+    SchedulerStaleRecoveryResponse, UpdateMemoryItemRequest, DEFAULT_ACTIVITY_EVENT_INTERVAL_MS,
+    DEFAULT_ACTIVITY_EVENT_LIMIT, DEFAULT_SCHEDULER_BACKGROUND_INTERVAL_MS,
+    DEFAULT_SCHEDULER_BACKGROUND_LIMIT, DEFAULT_SCHEDULER_STALE_RECOVERY_LIMIT,
+    DEFAULT_SCHEDULER_STALE_RECOVERY_OLDER_THAN_SECONDS, IPC_BEARER_TOKEN_BYTES,
+    IPC_BEARER_TOKEN_LENGTH, MAX_ACTIVITY_EVENT_LIMIT, MAX_SCHEDULER_BACKGROUND_LIMIT,
 };
 pub use ipc_transport::{
     serve_unix_socket, serve_unix_socket_with_peer_identity, MAX_UNIX_IPC_CONNECTIONS,
@@ -89,7 +89,11 @@ pub use startup::{
 };
 pub use storage::{
     ApprovalExecutionRecord, ApprovalExecutionState, EmergencyPauseState, InstalledPluginRecord,
-    MemoryItem, NewMemoryItem, NewPendingApproval, PendingApproval, SqliteRepository,
+    MemoryItem, NewMemoryItem, NewPendingApproval, PendingApproval,
+    SchedulerNotificationOccurrence, SqliteRepository,
+    MAX_ACKNOWLEDGED_SCHEDULER_NOTIFICATION_OCCURRENCES,
+    MAX_PENDING_SCHEDULER_NOTIFICATION_OCCURRENCES,
+    MAX_SCHEDULER_NOTIFICATION_OCCURRENCE_LIST_LIMIT,
 };
 pub use storage::{MemoryClassificationCount, MemoryClassificationSummary};
 pub use trusted_wake::{

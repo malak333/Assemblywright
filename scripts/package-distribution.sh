@@ -1218,6 +1218,8 @@ run_unsigned_launch_check() {
     JARVIS_MAC_CORE_DATABASE="$APP_DB" \
     JARVIS_MAC_IPC_AUTH_FILE="$APP_IPC_AUTH_FILE" \
     JARVIS_MAC_IPC_SOCKET_DIRECTORY="$APP_IPC_RUN_DIR" \
+    JARVIS_MAC_SCHEDULER_AUTOMATION_ENABLED="true" \
+    JARVIS_MAC_SCHEDULER_AUTOMATION_INTERVAL_MS="1000" \
     JARVIS_MAC_RELEASE_SMOKE="true" \
     "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME" >"$APP_LOG" 2>&1 &
   APP_PID="$!"
@@ -1256,6 +1258,13 @@ run_unsigned_launch_check() {
     cat "$APP_LOG" >&2 || true
     exit 1
   fi
+  CORE_PID="$(pgrep -P "$APP_PID" | head -n 1 || true)"
+  [[ -n "$CORE_PID" ]] || fail "default app launch did not retain an app-supervised core child"
+  CORE_COMMAND="$(ps -ww -o command= -p "$CORE_PID")"
+  require_output_contains "app-supervised core scheduler automation" "$CORE_COMMAND" "--scheduler-background"
+  require_output_contains "app-supervised core scheduler interval" "$CORE_COMMAND" "--scheduler-interval-ms 1000"
+  require_output_contains "app-supervised core scheduler limit" "$CORE_COMMAND" "--scheduler-limit 16"
+  require_output_contains "app-supervised core stale recovery" "$CORE_COMMAND" "--scheduler-recover-stale-on-startup"
   [[ "$(stat -f '%Lp' "$APP_IPC_RUN_DIR")" == "700" ]] || fail "default app IPC run directory is not mode 0700"
   [[ "$(stat -f '%Lp' "$DEFAULT_IPC_SOCKET")" == "600" ]] || fail "default app IPC socket is not mode 0600"
   [[ "$(stat -f '%u' "$APP_IPC_RUN_DIR")" == "$(id -u)" ]] || fail "default app IPC run directory is not owned by the current user"
@@ -1369,7 +1378,7 @@ PY
 
   DIAGNOSTICS_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" --ipc-token-file "$APP_IPC_AUTH_FILE" diagnostics export --endpoint "$ENDPOINT")"
   require_output_contains "release app diagnostics" "$DIAGNOSTICS_OUTPUT" '"repository_backed":true'
-  require_output_contains "release app diagnostics" "$DIAGNOSTICS_OUTPUT" '"task_count":3'
+  require_output_contains "release app diagnostics" "$DIAGNOSTICS_OUTPUT" '"task_count":4'
   require_output_contains "release app diagnostics" "$DIAGNOSTICS_OUTPUT" '"redaction":"diagnostics export omits command bodies'
 
   PAUSE_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" --ipc-token-file "$APP_IPC_AUTH_FILE" pause --endpoint "$ENDPOINT" --reason "unsigned distribution launch smoke")"
@@ -1392,7 +1401,7 @@ PY
   printf 'Pkg: %s\n' "$PKG_PATH"
   printf 'Signing: %s\n' "$SIGNING_STATUS"
   printf 'Clean HOME database: %s\n' "$APP_DB"
-  printf 'Proof boundary: release-built app executable, bundled core, stable ad-hoc app/core identifiers, exact-build audit-token designated-requirement acceptance plus same-EUID wrong-code pre-frame rejection, unsigned installer payload structure, isolated HOME default owner-only Unix socket plus memory-only bearer launch with no TCP listener or CLI file, authenticated Swift-client health/command/task/audit/diagnostics/pause/block/resume route sequence with durable state checks, and explicit owner-only loopback TCP CLI handoff relaunch. Ad-hoc cdhash evidence does not prove Developer ID publisher identity, and this lane does not prove Developer ID signing, notarization, stapling, /Applications install, Finder/LaunchServices validation, device authentication, App Sandbox, live microphone/Speech validation, spoken transcript handoff, live audio-output validation, App Store validation, or manual QA.\n'
+  printf 'Proof boundary: release-built app executable, bundled core, stable ad-hoc app/core identifiers, exact-build audit-token designated-requirement acceptance plus same-EUID wrong-code pre-frame rejection, unsigned installer payload structure, isolated HOME default owner-only Unix socket plus memory-only bearer launch with no TCP listener or CLI file, authenticated Swift-client health/command/task/audit/diagnostics/background-scheduler/pause/block/resume route sequence with durable scheduler completion, redacted audit, durable outbox suppression acknowledgement, and explicit owner-only loopback TCP CLI handoff relaunch. The outbox proof is at-least-once app handoff only. Ad-hoc cdhash evidence does not prove Developer ID publisher identity, and this lane does not prove Developer ID signing, notarization, stapling, /Applications install, Finder/LaunchServices validation, device authentication, App Sandbox, live macOS notification display, exactly-once delivery, OS wake reliability, live microphone/Speech validation, spoken transcript handoff, live audio-output validation, App Store validation, or manual QA.\n'
 }
 
 if [[ "$UNSIGNED_STRUCTURE_CHECK" == true ]]; then

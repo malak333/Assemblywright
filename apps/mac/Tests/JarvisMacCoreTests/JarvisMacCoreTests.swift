@@ -242,19 +242,32 @@ private final class CapturingSpeechSynthesizer: JarvisSpeechSynthesizing {
 
 @MainActor
 private final class FakeSchedulerNotificationAdapter: JarvisSchedulerNotificationAdapter {
+    var authorizationStatusResult: JarvisSchedulerNotificationAuthorization
     var authorizationResult: Result<Bool, Error>
     var deliveryResult: Result<Void, Error>
+    let authorizationStatusDelayNanoseconds: UInt64
     private(set) var authorizationRequestCount: Int
     private(set) var deliveredRequests: [JarvisSchedulerNotificationRequest]
 
     init(
+        authorizationStatus: JarvisSchedulerNotificationAuthorization = .authorized,
         authorizationResult: Result<Bool, Error> = .success(true),
-        deliveryResult: Result<Void, Error> = .success(())
+        deliveryResult: Result<Void, Error> = .success(()),
+        authorizationStatusDelayNanoseconds: UInt64 = 0
     ) {
+        self.authorizationStatusResult = authorizationStatus
         self.authorizationResult = authorizationResult
         self.deliveryResult = deliveryResult
+        self.authorizationStatusDelayNanoseconds = authorizationStatusDelayNanoseconds
         self.authorizationRequestCount = 0
         self.deliveredRequests = []
+    }
+
+    func authorizationStatus() async -> JarvisSchedulerNotificationAuthorization {
+        if authorizationStatusDelayNanoseconds > 0 {
+            try? await Task.sleep(nanoseconds: authorizationStatusDelayNanoseconds)
+        }
+        return authorizationStatusResult
     }
 
     func requestAuthorization() async throws -> Bool {
@@ -757,6 +770,7 @@ struct JarvisMacCoreTests {
         var requests: [(method: String, path: String, body: [String: Any]?)] = []
         let memoryId = UUID()
         let jobId = UUID()
+        let occurrenceId = UUID()
 
         IPCURLProtocol.handler = { request in
             let body = decodeRequestBody(request)
@@ -814,6 +828,49 @@ struct JarvisMacCoreTests {
                 return (response, schedulerJobJSON(id: jobId))
             case "/scheduler/attention":
                 return (response, schedulerAttentionJSON(id: jobId))
+            case "/scheduler/notification-outbox":
+                return (
+                    response,
+                    Data(
+                        """
+                        [{
+                          "id": "\(occurrenceId.uuidString)",
+                          "scheduler_job_id": "\(jobId.uuidString)",
+                          "name": "one shot",
+                          "occurrence_at": "2026-05-20T12:00:00Z",
+                          "notification_kind": "due_now",
+                          "revision": 1,
+                          "created_at": "2026-05-20T12:00:00Z",
+                          "updated_at": "2026-05-20T12:00:01Z",
+                          "acknowledged_at": null,
+                          "acknowledged_disposition": null
+                        }]
+                        """.utf8
+                    )
+                )
+            case "/scheduler/notification-outbox/\(occurrenceId.uuidString)/ack":
+                return (
+                    response,
+                    Data(
+                        """
+                        {
+                          "occurrence": {
+                            "id": "\(occurrenceId.uuidString)",
+                            "scheduler_job_id": "\(jobId.uuidString)",
+                            "name": "one shot",
+                            "occurrence_at": "2026-05-20T12:00:00Z",
+                            "notification_kind": "due_now",
+                            "revision": 1,
+                            "created_at": "2026-05-20T12:00:00Z",
+                            "updated_at": "2026-05-20T12:00:02Z",
+                            "acknowledged_at": "2026-05-20T12:00:02Z",
+                            "acknowledged_disposition": "suppressed_not_authorized"
+                          },
+                          "proof_boundary": "test acknowledgement"
+                        }
+                        """.utf8
+                    )
+                )
             case "/scheduler/jobs/\(jobId.uuidString)":
                 return (response, schedulerJobJSON(id: jobId))
             case "/scheduler/run-due":
@@ -867,6 +924,14 @@ struct JarvisMacCoreTests {
         _ = try await client.modelToolCatalog()
         _ = try await client.listSchedulerJobs()
         _ = try await client.schedulerAttention()
+        _ = try await client.pendingSchedulerNotificationOccurrences(limit: 100)
+        _ = try await client.acknowledgeSchedulerNotificationOccurrence(
+            id: occurrenceId,
+            request: JarvisSchedulerNotificationAcknowledgementRequest(
+                revision: 1,
+                disposition: .suppressedNotAuthorized
+            )
+        )
         _ = try await client.createSchedulerJob(
             JarvisCreateSchedulerJobRequest(
                 name: "one shot",
@@ -902,6 +967,8 @@ struct JarvisMacCoreTests {
             "GET",
             "GET",
             "GET",
+            "GET",
+            "POST",
             "POST",
             "GET",
             "POST",
@@ -931,6 +998,8 @@ struct JarvisMacCoreTests {
             "/tools/model",
             "/scheduler/jobs",
             "/scheduler/attention",
+            "/scheduler/notification-outbox?limit=64",
+            "/scheduler/notification-outbox/\(occurrenceId.uuidString)/ack",
             "/scheduler/jobs",
             "/scheduler/jobs/\(jobId.uuidString)",
             "/scheduler/run-due?limit=4",
@@ -941,7 +1010,9 @@ struct JarvisMacCoreTests {
         ])
         #expect(requests[10].body?["key"] as? String == "release-gate")
         #expect(requests[12].body?["value"] as? String == "preview then sync")
-        #expect(requests[20].body?["command"] as? String == "status check")
+        #expect(requests[21].body?["revision"] as? Int == 1)
+        #expect(requests[21].body?["disposition"] as? String == "suppressed_not_authorized")
+        #expect(requests[22].body?["command"] as? String == "status check")
     }
 
     @Test("Management payloads decode tasks and audit list")
@@ -1443,6 +1514,415 @@ struct JarvisMacCoreTests {
         #expect(adapter.authorizationRequestCount == 1)
         #expect(adapter.deliveredRequests.isEmpty)
         #expect(model.status == .denied)
+    }
+
+    @Test("Automatic scheduler notifications never prompt and require prior authorization")
+    @MainActor
+    func automaticSchedulerNotificationsRequirePriorAuthorization() async throws {
+        let attention = try JSONDecoder().decode(
+            JarvisSchedulerAttentionSummary.self,
+            from: schedulerAttentionJSON(id: UUID())
+        )
+        let adapter = FakeSchedulerNotificationAdapter(authorizationStatus: .notDetermined)
+        let model = SchedulerNotificationModel(adapter: adapter)
+
+        let beforeAuthorization = await model.notifyIfAuthorized(attention: attention)
+        adapter.authorizationStatusResult = .authorized
+        let afterAuthorization = await model.notifyIfAuthorized(attention: attention)
+        let duplicate = await model.notifyIfAuthorized(attention: attention)
+
+        #expect(beforeAuthorization == 0)
+        #expect(afterAuthorization == 1)
+        #expect(duplicate == 0)
+        #expect(adapter.authorizationRequestCount == 0)
+        #expect(adapter.deliveredRequests.count == 1)
+    }
+
+    @Test("Automatic scheduler notifications distinguish recurring occurrences")
+    @MainActor
+    func automaticSchedulerNotificationsDistinguishRecurringOccurrences() async throws {
+        let id = UUID()
+        let firstOccurrence = try JSONDecoder().decode(
+            JarvisSchedulerAttentionSummary.self,
+            from: schedulerAttentionJSON(id: id, nextDueAt: "2026-05-20T12:00:01Z")
+        )
+        let secondOccurrence = try JSONDecoder().decode(
+            JarvisSchedulerAttentionSummary.self,
+            from: schedulerAttentionJSON(id: id, nextDueAt: "2026-05-20T12:05:01Z")
+        )
+        let adapter = FakeSchedulerNotificationAdapter()
+        let model = SchedulerNotificationModel(adapter: adapter)
+
+        #expect(await model.notifyIfAuthorized(attention: firstOccurrence) == 1)
+        #expect(await model.notifyIfAuthorized(attention: firstOccurrence) == 0)
+        #expect(await model.notifyIfAuthorized(attention: secondOccurrence) == 1)
+        #expect(adapter.deliveredRequests.count == 2)
+        #expect(Set(adapter.deliveredRequests.map(\.id)).count == 2)
+    }
+
+    @Test("Durable scheduler occurrences submit or suppress with explicit acknowledgements")
+    @MainActor
+    func durableSchedulerOccurrencesReturnExplicitAcknowledgements() async throws {
+        let submitted = schedulerNotificationOccurrence(jobId: UUID())
+        let submittedAdapter = FakeSchedulerNotificationAdapter()
+        let submittedModel = SchedulerNotificationModel(adapter: submittedAdapter)
+
+        let submittedAcknowledgements = await submittedModel
+            .notifyPendingOccurrencesIfAuthorized([submitted])
+        #expect(submittedAcknowledgements == [
+            JarvisSchedulerNotificationAcknowledgement(
+                id: submitted.id,
+                revision: submitted.revision,
+                disposition: .submittedToNotificationCenter
+            )
+        ])
+        #expect(submittedAdapter.authorizationRequestCount == 0)
+        #expect(submittedAdapter.deliveredRequests.first?.id ==
+            "scheduler-occurrence-\(submitted.id.uuidString)-r1")
+
+        let suppressed = schedulerNotificationOccurrence(jobId: UUID())
+        let suppressedAdapter = FakeSchedulerNotificationAdapter(
+            authorizationStatus: .notDetermined
+        )
+        let suppressedModel = SchedulerNotificationModel(adapter: suppressedAdapter)
+        let suppressedAcknowledgements = await suppressedModel
+            .notifyPendingOccurrencesIfAuthorized([suppressed])
+        #expect(suppressedAcknowledgements.first?.disposition == .suppressedNotAuthorized)
+        #expect(suppressedAdapter.authorizationRequestCount == 0)
+        #expect(suppressedAdapter.deliveredRequests.isEmpty)
+    }
+
+    @Test("Snapshot notification deduplication history is bounded")
+    @MainActor
+    func schedulerSnapshotNotificationHistoryIsBounded() async throws {
+        let id = UUID()
+        let adapter = FakeSchedulerNotificationAdapter()
+        let model = SchedulerNotificationModel(adapter: adapter, deliveredHistoryLimit: 2)
+        let first = try JSONDecoder().decode(
+            JarvisSchedulerAttentionSummary.self,
+            from: schedulerAttentionJSON(id: id, nextDueAt: "2026-05-20T12:00:01Z")
+        )
+        let second = try JSONDecoder().decode(
+            JarvisSchedulerAttentionSummary.self,
+            from: schedulerAttentionJSON(id: id, nextDueAt: "2026-05-20T12:01:01Z")
+        )
+        let third = try JSONDecoder().decode(
+            JarvisSchedulerAttentionSummary.self,
+            from: schedulerAttentionJSON(id: id, nextDueAt: "2026-05-20T12:02:01Z")
+        )
+
+        #expect(await model.notifyIfAuthorized(attention: first) == 1)
+        #expect(await model.notifyIfAuthorized(attention: second) == 1)
+        #expect(await model.notifyIfAuthorized(attention: third) == 1)
+        #expect(await model.notifyIfAuthorized(attention: first) == 1)
+        #expect(adapter.deliveredRequests.count == 4)
+    }
+
+    @Test("Scheduler automation configuration is bounded, explicit, and persisted")
+    @MainActor
+    func schedulerAutomationConfigurationIsBoundedAndPersisted() throws {
+        let suite = "jarvis-scheduler-automation-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let model = SchedulerAutomationSettingsModel(defaults: defaults, environment: [:])
+
+        #expect(!model.isEnabled)
+        #expect(model.schedulerAutomationConfiguration.launchArguments.isEmpty)
+
+        model.update(
+            isEnabled: true,
+            intervalMilliseconds: 1,
+            runLimit: 100,
+            recoverStaleOnStartup: true,
+            staleAgeSeconds: 1,
+            staleRecoveryLimit: 0
+        )
+        let configuration = model.schedulerAutomationConfiguration
+        #expect(configuration.intervalMilliseconds == 1_000)
+        #expect(configuration.runLimit == 64)
+        #expect(configuration.staleAgeSeconds == 60)
+        #expect(configuration.staleRecoveryLimit == 1)
+        #expect(configuration.launchArguments == [
+            "--scheduler-background",
+            "--scheduler-interval-ms", "1000",
+            "--scheduler-limit", "64",
+            "--scheduler-recover-stale-on-startup",
+            "--scheduler-stale-older-than-seconds", "60",
+            "--scheduler-stale-recovery-limit", "1"
+        ])
+
+        let restored = SchedulerAutomationSettingsModel(defaults: defaults, environment: [:])
+        #expect(restored.schedulerAutomationConfiguration == configuration)
+    }
+
+    @Test("Scheduler automation environment opt-in is ephemeral")
+    @MainActor
+    func schedulerAutomationEnvironmentOptInIsEphemeral() throws {
+        let suite = "jarvis-scheduler-environment-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let launched = SchedulerAutomationSettingsModel(
+            defaults: defaults,
+            environment: [SchedulerAutomationSettingsModel.enabledEnvironmentKey: "true"]
+        )
+        launched.update(runLimit: 4)
+        let nextLaunch = SchedulerAutomationSettingsModel(defaults: defaults, environment: [:])
+
+        #expect(launched.isEnabled)
+        #expect(!nextLaunch.isEnabled)
+        #expect(nextLaunch.runLimit == 4)
+    }
+
+    @Test("Scheduler attention coordinator starts only for enabled automation and stops cleanly")
+    @MainActor
+    func schedulerAttentionCoordinatorLifecycleIsBounded() async throws {
+        let settings = StaticSchedulerAutomationConfigurationProvider(
+            configuration: JarvisSchedulerAutomationConfiguration(isEnabled: true)
+        )
+        let scheduler = SchedulerModel(client: FakeCoreClient())
+        let notifications = SchedulerNotificationModel(adapter: FakeSchedulerNotificationAdapter())
+        let coordinator = SchedulerAttentionCoordinator(
+            scheduler: scheduler,
+            notifications: notifications,
+            settings: settings,
+            pollInterval: .milliseconds(10),
+            isCoreAvailable: { true }
+        )
+
+        coordinator.start()
+        #expect(coordinator.isRunning)
+        try await Task.sleep(for: .milliseconds(30))
+        coordinator.stop()
+        #expect(!coordinator.isRunning)
+        #expect(scheduler.attention != nil)
+        #expect(coordinator.lastError == nil)
+    }
+
+    @Test("Scheduler coordinator acknowledges later submissions after one acknowledgement fails")
+    @MainActor
+    func schedulerCoordinatorContinuesAfterPartialAcknowledgementFailure() async throws {
+        let first = schedulerNotificationOccurrence(jobId: UUID())
+        let second = schedulerNotificationOccurrence(jobId: UUID())
+        let client = FakeCoreClient(
+            schedulerNotificationOccurrences: [first, second],
+            schedulerNotificationAcknowledgementFailureIDs: [first.id]
+        )
+        let scheduler = SchedulerModel(client: client)
+        let adapter = FakeSchedulerNotificationAdapter(authorizationStatus: .authorized)
+        let coordinator = SchedulerAttentionCoordinator(
+            scheduler: scheduler,
+            notifications: SchedulerNotificationModel(adapter: adapter),
+            settings: StaticSchedulerAutomationConfigurationProvider(
+                configuration: JarvisSchedulerAutomationConfiguration(isEnabled: true)
+            ),
+            isCoreAvailable: { true }
+        )
+
+        await coordinator.pollOnce()
+
+        #expect(adapter.deliveredRequests.map(\.schedulerNotificationOccurrenceId) == [first.id, second.id])
+        #expect(client.schedulerNotificationAcknowledgementIDs == [first.id, second.id])
+        let remaining = try await client.pendingSchedulerNotificationOccurrences(limit: 64)
+        #expect(remaining.map(\.id) == [first.id])
+        #expect(coordinator.lastError != nil)
+    }
+
+    @Test("Scheduler attention coordinator rejects stale poll generations")
+    @MainActor
+    func schedulerAttentionCoordinatorRejectsStalePollGenerations() async throws {
+        let suite = "jarvis-scheduler-generation-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SchedulerAutomationSettingsModel(defaults: defaults, environment: [:])
+        settings.update(isEnabled: true)
+        let attention = try JSONDecoder().decode(
+            JarvisSchedulerAttentionSummary.self,
+            from: schedulerAttentionJSON(id: UUID())
+        )
+        let scheduler = SchedulerModel(
+            client: FakeCoreClient(
+                schedulerAttention: attention,
+                schedulerAttentionDelayNanoseconds: 80_000_000,
+                schedulerNotificationOccurrences: [
+                    schedulerNotificationOccurrence(jobId: attention.items[0].id)
+                ]
+            )
+        )
+        let adapter = FakeSchedulerNotificationAdapter()
+        let notifications = SchedulerNotificationModel(adapter: adapter)
+        var available = true
+        let coordinator = SchedulerAttentionCoordinator(
+            scheduler: scheduler,
+            notifications: notifications,
+            settings: settings,
+            pollInterval: .seconds(1),
+            isCoreAvailable: { available }
+        )
+
+        coordinator.start()
+        try await Task.sleep(for: .milliseconds(10))
+        settings.update(isEnabled: false)
+        coordinator.reconcile()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(!coordinator.isRunning)
+        #expect(adapter.deliveredRequests.isEmpty)
+
+        settings.update(isEnabled: true)
+        coordinator.reconcile()
+        try await Task.sleep(for: .milliseconds(10))
+        coordinator.stop()
+        coordinator.start()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(coordinator.isRunning)
+        #expect(adapter.deliveredRequests.count == 1)
+
+        available = false
+        coordinator.reconcile()
+        #expect(!coordinator.isRunning)
+    }
+
+    @Test("Scheduler attention coordinator cancels during delayed authorization")
+    @MainActor
+    func schedulerAttentionCoordinatorCancelsDuringDelayedAuthorization() async throws {
+        let suite = "jarvis-scheduler-authorization-race-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SchedulerAutomationSettingsModel(defaults: defaults, environment: [:])
+        settings.update(isEnabled: true)
+        let attention = try JSONDecoder().decode(
+            JarvisSchedulerAttentionSummary.self,
+            from: schedulerAttentionJSON(id: UUID())
+        )
+        let adapter = FakeSchedulerNotificationAdapter(
+            authorizationStatusDelayNanoseconds: 80_000_000
+        )
+        let coordinator = SchedulerAttentionCoordinator(
+            scheduler: SchedulerModel(client: FakeCoreClient(
+                schedulerAttention: attention,
+                schedulerNotificationOccurrences: [
+                    schedulerNotificationOccurrence(jobId: attention.items[0].id)
+                ]
+            )),
+            notifications: SchedulerNotificationModel(adapter: adapter),
+            settings: settings,
+            pollInterval: .seconds(1),
+            isCoreAvailable: { true }
+        )
+
+        coordinator.start()
+        try await Task.sleep(for: .milliseconds(10))
+        settings.update(isEnabled: false)
+        coordinator.reconcile()
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(!coordinator.isRunning)
+        #expect(adapter.deliveredRequests.isEmpty)
+    }
+
+    @Test("Swift scheduler coordinator observes real IPC background execution and authorized attention")
+    @MainActor
+    func schedulerCoordinatorRealIPCEndToEnd() async throws {
+        let port = try unusedLoopbackPort()
+        let endpointURL = try #require(URL(string: "http://127.0.0.1:\(port)"))
+        let databaseURL = FileManager.default.temporaryDirectory
+            .appending(path: "jarvis-swift-scheduler-e2e-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: databaseURL) }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = [
+            "cargo", "run", "-q", "-p", "jarvis-cli", "--",
+            "serve", "--bind", "127.0.0.1:\(port)",
+            "--db-path", databaseURL.path,
+            "--scheduler-background", "--scheduler-interval-ms", "50", "--scheduler-limit", "4"
+        ]
+        process.currentDirectoryURL = jarvisRepositoryRoot()
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        defer {
+            if process.isRunning { process.terminate() }
+            process.waitUntilExit()
+        }
+
+        let client = JarvisIPCClient(endpoint: JarvisEndpoint(baseURL: endpointURL))
+        var healthy = false
+        for _ in 0..<1_200 where !healthy {
+            healthy = (try? await client.health().status) == "ok"
+            if !healthy { try await Task.sleep(for: .milliseconds(50)) }
+        }
+        try #require(healthy)
+
+        let dueAt = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-1))
+        let completedCandidate = try await client.createSchedulerJob(
+            JarvisCreateSchedulerJobRequest(
+                name: "Swift IPC scheduler completion",
+                command: "Swift IPC scheduler completion check",
+                trigger: .onceAt(runAt: dueAt)
+            )
+        )
+        var completed = completedCandidate
+        for _ in 0..<120 where completed.status != "completed" {
+            try await Task.sleep(for: .milliseconds(50))
+            completed = try await client.schedulerJob(id: completedCandidate.id)
+        }
+        #expect(completed.status == "completed")
+        let audit = try await client.listAuditEntries(taskId: nil)
+        #expect(audit.contains(where: { $0.eventType == "scheduler_job_completed" }))
+
+        _ = try await client.pause(reason: "Swift scheduler attention E2E")
+        let blockedCandidate = try await client.createSchedulerJob(
+            JarvisCreateSchedulerJobRequest(
+                name: "Swift IPC paused attention",
+                command: "redacted paused scheduler command",
+                trigger: .onceAt(runAt: dueAt)
+            )
+        )
+        let scheduler = SchedulerModel(client: client)
+        let adapter = FakeSchedulerNotificationAdapter(authorizationStatus: .authorized)
+        let notifications = SchedulerNotificationModel(adapter: adapter)
+        let settings = StaticSchedulerAutomationConfigurationProvider(
+            configuration: JarvisSchedulerAutomationConfiguration(isEnabled: true)
+        )
+        let coordinator = SchedulerAttentionCoordinator(
+            scheduler: scheduler,
+            notifications: notifications,
+            settings: settings,
+            pollInterval: .milliseconds(50),
+            isCoreAvailable: { true }
+        )
+        coordinator.start()
+        for _ in 0..<120 where adapter.deliveredRequests.count < 2 {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        coordinator.stop()
+        let deliveredByJob = Dictionary(
+            uniqueKeysWithValues: adapter.deliveredRequests.map { ($0.schedulerJobId, $0) }
+        )
+        let completedDelivery = try #require(deliveredByJob[completedCandidate.id])
+        let blockedDelivery = try #require(deliveredByJob[blockedCandidate.id])
+        #expect(completedDelivery.notificationKind == "due_now")
+        #expect(blockedDelivery.notificationKind == "blocked_by_emergency_pause")
+        #expect(completedDelivery.schedulerNotificationOccurrenceId != nil)
+        #expect(blockedDelivery.schedulerNotificationOccurrenceId != nil)
+        #expect(completedDelivery.schedulerNotificationRevision == 1)
+        #expect(blockedDelivery.schedulerNotificationRevision == 1)
+        #expect(adapter.authorizationRequestCount == 0)
+        #expect(scheduler.attention?.items.contains(where: { $0.id == blockedCandidate.id }) == true)
+        let pendingAfterAcknowledgement = try await client.pendingSchedulerNotificationOccurrences(limit: 64)
+        #expect(pendingAfterAcknowledgement.isEmpty)
+        let acknowledgedAudit = try await client.listAuditEntries(taskId: nil)
+        #expect(
+            acknowledgedAudit.filter { $0.eventType == "scheduler_notification_acknowledged" }.count >= 2
+        )
+
+        let deliveredCount = adapter.deliveredRequests.count
+        coordinator.start()
+        try await Task.sleep(for: .milliseconds(150))
+        coordinator.stop()
+        #expect(adapter.deliveredRequests.count == deliveredCount)
+        _ = try await client.resume()
     }
 
     @Test("Pause status decodes detailed timestamps")
@@ -3519,6 +3999,36 @@ struct JarvisMacCoreTests {
         ])
     }
 
+    @Test("Supervisor launch arguments opt in to bounded scheduler automation")
+    func supervisorConfigurationBuildsSchedulerAutomationArguments() {
+        let configuration = JarvisCoreSupervisorConfiguration(
+            bindAddress: "127.0.0.1:8899",
+            executableURL: URL(fileURLWithPath: "/tmp/jarvis-cli"),
+            databaseURL: nil
+        )
+        let automation = JarvisSchedulerAutomationConfiguration(
+            isEnabled: true,
+            intervalMilliseconds: 5_000,
+            runLimit: 4,
+            recoverStaleOnStartup: true,
+            staleAgeSeconds: 600,
+            staleRecoveryLimit: 3
+        )
+
+        #expect(configuration.launchArguments(
+            includeLoopbackBind: false,
+            schedulerAutomation: automation
+        ) == [
+            "serve",
+            "--scheduler-background",
+            "--scheduler-interval-ms", "5000",
+            "--scheduler-limit", "4",
+            "--scheduler-recover-stale-on-startup",
+            "--scheduler-stale-older-than-seconds", "600",
+            "--scheduler-stale-recovery-limit", "3"
+        ])
+    }
+
     @Test("Supervisor configuration accepts packaged smoke endpoint environment")
     func supervisorConfigurationAcceptsPackagedSmokeEnvironment() {
         let configuration = JarvisCoreSupervisorConfiguration(
@@ -4422,7 +4932,8 @@ struct JarvisMacCoreTests {
         id: UUID,
         emergencyPaused: Bool = false,
         notificationKind: String = "due_now",
-        notificationReason: String = "A scheduler job is due and ready for the app to surface."
+        notificationReason: String = "A scheduler job is due and ready for the app to surface.",
+        nextDueAt: String = "2026-05-20T12:00:01Z"
     ) -> Data {
         Data(
             """
@@ -4442,13 +4953,33 @@ struct JarvisMacCoreTests {
                   "trigger": "manual",
                   "status": "scheduled",
                   "due": true,
-                  "next_due_at": "2026-05-20T12:00:01Z",
+                  "next_due_at": "\(nextDueAt)",
                   "notification_kind": "\(notificationKind)",
                   "notification_reason": "\(notificationReason)"
                 }
               ]
             }
             """.utf8
+        )
+    }
+
+    private func schedulerNotificationOccurrence(
+        id: UUID = UUID(),
+        jobId: UUID,
+        notificationKind: String = "due_now",
+        revision: UInt64 = 1
+    ) -> JarvisSchedulerNotificationOccurrence {
+        JarvisSchedulerNotificationOccurrence(
+            id: id,
+            schedulerJobId: jobId,
+            name: "one shot",
+            occurrenceAt: "2026-05-20T12:00:01Z",
+            notificationKind: notificationKind,
+            revision: revision,
+            createdAt: "2026-05-20T12:00:01Z",
+            updatedAt: "2026-05-20T12:00:01Z",
+            acknowledgedAt: nil,
+            acknowledgedDisposition: nil
         )
     }
 
@@ -5833,6 +6364,12 @@ struct ReleaseSmokeProbeTests {
             "listTasks",
             "taskAudit",
             "diagnostics",
+            "schedulerCreate",
+            "schedulerJob",
+            "schedulerAudit",
+            "schedulerNotifications",
+            "schedulerNotificationAck",
+            "schedulerNotifications",
             "pause",
             "pauseStatusPaused",
             "submitPaused",
@@ -5904,6 +6441,12 @@ struct ReleaseSmokeProbeTests {
             "listTasks",
             "taskAudit",
             "diagnostics",
+            "schedulerCreate",
+            "schedulerJob",
+            "schedulerAudit",
+            "schedulerNotifications",
+            "schedulerNotificationAck",
+            "schedulerNotifications",
             "pause",
             "pauseStatusPaused",
             "submitPaused",
@@ -6013,6 +6556,55 @@ struct WorkspaceRootBookmarkTests {
 
         #expect(await supervisor.stop())
         #expect(provider.released)
+    }
+
+    @Test("Supervisor preserves automation for its healthy child and clears it for external core")
+    func supervisorPreservesOwnedSchedulerAutomationAcrossRepeatedStart() async throws {
+        let automation = JarvisSchedulerAutomationConfiguration(
+            isEnabled: true,
+            intervalMilliseconds: 5_000
+        )
+        let provider = StaticSchedulerAutomationConfigurationProvider(
+            configuration: automation
+        )
+        let launcher = FakeProcessLauncher()
+        let supervisor = JarvisCoreSupervisor(
+            configuration: JarvisCoreSupervisorConfiguration(
+                executableURL: URL(fileURLWithPath: "/tmp/jarvis-cli"),
+                databaseURL: nil
+            ),
+            client: FakeCoreClient(healthResults: [
+                .failure(URLError(.cannotConnectToHost)),
+                .success(sampleHealth()),
+                .success(sampleHealth())
+            ]),
+            processLauncher: launcher,
+            workspaceRootProvider: FakeWorkspaceRootGrantProvider(roots: []),
+            schedulerAutomationProvider: provider
+        )
+
+        await supervisor.start()
+        #expect(supervisor.activeSchedulerAutomationConfiguration == automation)
+        await supervisor.start()
+        #expect(launcher.launches.count == 1)
+        #expect(supervisor.activeSchedulerAutomationConfiguration == automation)
+        #expect(await supervisor.stop())
+
+        let externalLauncher = FakeProcessLauncher()
+        let externalSupervisor = JarvisCoreSupervisor(
+            configuration: JarvisCoreSupervisorConfiguration(
+                executableURL: URL(fileURLWithPath: "/tmp/jarvis-cli"),
+                databaseURL: nil
+            ),
+            client: FakeCoreClient(healthResults: [.success(sampleHealth())]),
+            processLauncher: externalLauncher,
+            workspaceRootProvider: FakeWorkspaceRootGrantProvider(roots: []),
+            schedulerAutomationProvider: provider
+        )
+
+        await externalSupervisor.start()
+        #expect(externalLauncher.launches.isEmpty)
+        #expect(externalSupervisor.activeSchedulerAutomationConfiguration == nil)
     }
 
     @Test("Supervisor omits startup stdin when no authority is configured")
@@ -8695,6 +9287,12 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     private var installedPlugins: [JarvisInstalledPluginRecord]
     private var installedPluginsUnavailable: Bool
     private var schedulerJobs: [JarvisSchedulerJob]
+    private var schedulerAttentionResponse: JarvisSchedulerAttentionSummary?
+    private let schedulerAttentionDelayNanoseconds: UInt64
+    private var schedulerNotificationOccurrences: [JarvisSchedulerNotificationOccurrence]
+    private(set) var schedulerNotificationAcknowledgements: [JarvisSchedulerNotificationAcknowledgementRequest]
+    private(set) var schedulerNotificationAcknowledgementIDs: [UUID]
+    private let schedulerNotificationAcknowledgementFailureIDs: Set<UUID>
     private var memoryItems: [JarvisMemoryItem]
     private var memoryRetentionPlanResult: JarvisMemoryRetentionPlan?
     private var permissionGrantSummaryResult: JarvisPermissionGrantSummary?
@@ -8739,6 +9337,10 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         installedPlugins: [JarvisInstalledPluginRecord] = [],
         installedPluginsUnavailable: Bool = false,
         schedulerJobs: [JarvisSchedulerJob] = [],
+        schedulerAttention: JarvisSchedulerAttentionSummary? = nil,
+        schedulerAttentionDelayNanoseconds: UInt64 = 0,
+        schedulerNotificationOccurrences: [JarvisSchedulerNotificationOccurrence] = [],
+        schedulerNotificationAcknowledgementFailureIDs: Set<UUID> = [],
         memoryItems: [JarvisMemoryItem] = [],
         memoryRetentionPlan: JarvisMemoryRetentionPlan? = nil,
         permissionGrantSummary: JarvisPermissionGrantSummary? = nil,
@@ -8775,6 +9377,12 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         self.installedPlugins = installedPlugins
         self.installedPluginsUnavailable = installedPluginsUnavailable
         self.schedulerJobs = schedulerJobs
+        self.schedulerAttentionResponse = schedulerAttention
+        self.schedulerAttentionDelayNanoseconds = schedulerAttentionDelayNanoseconds
+        self.schedulerNotificationOccurrences = schedulerNotificationOccurrences
+        self.schedulerNotificationAcknowledgements = []
+        self.schedulerNotificationAcknowledgementIDs = []
+        self.schedulerNotificationAcknowledgementFailureIDs = schedulerNotificationAcknowledgementFailureIDs
         self.memoryItems = memoryItems
         self.memoryRetentionPlanResult = memoryRetentionPlan
         self.permissionGrantSummaryResult = permissionGrantSummary
@@ -8964,7 +9572,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     }
 
     func listAuditEntries(taskId: UUID?) async throws -> [JarvisAuditEntry] {
-        try recordReleaseSmokeCall("taskAudit")
+        try recordReleaseSmokeCall(taskId == nil ? "schedulerAudit" : "taskAudit")
         if let taskId {
             return auditEntries.filter { $0.taskId == taskId }
         }
@@ -9192,7 +9800,13 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     }
 
     func schedulerAttention() async throws -> JarvisSchedulerAttentionSummary {
-        try JSONDecoder().decode(
+        if schedulerAttentionDelayNanoseconds > 0 {
+            try await Task.sleep(nanoseconds: schedulerAttentionDelayNanoseconds)
+        }
+        if let schedulerAttentionResponse {
+            return schedulerAttentionResponse
+        }
+        return try JSONDecoder().decode(
             JarvisSchedulerAttentionSummary.self,
             from: Data(
                 """
@@ -9212,12 +9826,92 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         )
     }
 
+    func pendingSchedulerNotificationOccurrences(
+        limit: Int
+    ) async throws -> [JarvisSchedulerNotificationOccurrence] {
+        try recordReleaseSmokeCall("schedulerNotifications")
+        return Array(schedulerNotificationOccurrences.prefix(max(1, min(64, limit))))
+    }
+
+    func acknowledgeSchedulerNotificationOccurrence(
+        id: UUID,
+        request: JarvisSchedulerNotificationAcknowledgementRequest
+    ) async throws -> JarvisSchedulerNotificationAcknowledgementResponse {
+        try recordReleaseSmokeCall("schedulerNotificationAck")
+        schedulerNotificationAcknowledgementIDs.append(id)
+        schedulerNotificationAcknowledgements.append(request)
+        if schedulerNotificationAcknowledgementFailureIDs.contains(id) {
+            throw URLError(.cannotWriteToFile)
+        }
+        guard let index = schedulerNotificationOccurrences.firstIndex(where: { $0.id == id }),
+              schedulerNotificationOccurrences[index].revision == request.revision else {
+            throw URLError(.resourceUnavailable)
+        }
+        var occurrence = schedulerNotificationOccurrences.remove(at: index)
+        occurrence.acknowledgedAt = "2026-07-14T12:00:03Z"
+        occurrence.acknowledgedDisposition = request.disposition.rawValue
+        return JarvisSchedulerNotificationAcknowledgementResponse(
+            occurrence: occurrence,
+            proofBoundary: "test acknowledgement"
+        )
+    }
+
     func schedulerJob(id: UUID) async throws -> JarvisSchedulerJob {
-        throw URLError(.unsupportedURL)
+        guard releaseSmokeMode,
+              let index = schedulerJobs.firstIndex(where: { $0.id == id })
+        else {
+            throw URLError(.unsupportedURL)
+        }
+        try recordReleaseSmokeCall("schedulerJob")
+        schedulerJobs[index].status = "completed"
+        schedulerJobs[index].updatedAt = "2026-07-14T12:00:02Z"
+        if !auditEntries.contains(where: { $0.eventType == "scheduler_job_completed" }) {
+            auditEntries.append(
+                JarvisAuditEntry(
+                    id: UUID(),
+                    taskId: UUID(),
+                    eventType: "scheduler_job_completed",
+                    summary: "scheduler finished due job command",
+                    payload: .object(["scheduler_job_id": .string(id.uuidString)]),
+                    createdAt: "2026-07-14T12:00:02Z"
+                )
+            )
+        }
+        if !schedulerNotificationOccurrences.contains(where: { $0.schedulerJobId == id }) {
+            schedulerNotificationOccurrences.append(
+                JarvisSchedulerNotificationOccurrence(
+                    id: UUID(),
+                    schedulerJobId: id,
+                    name: schedulerJobs[index].name,
+                    occurrenceAt: "2026-07-14T12:00:01Z",
+                    notificationKind: "due_now",
+                    revision: 1,
+                    createdAt: "2026-07-14T12:00:01Z",
+                    updatedAt: "2026-07-14T12:00:01Z",
+                    acknowledgedAt: nil,
+                    acknowledgedDisposition: nil
+                )
+            )
+        }
+        return schedulerJobs[index]
     }
 
     func createSchedulerJob(_ request: JarvisCreateSchedulerJobRequest) async throws -> JarvisSchedulerJob {
-        throw URLError(.unsupportedURL)
+        guard releaseSmokeMode else { throw URLError(.unsupportedURL) }
+        try recordReleaseSmokeCall("schedulerCreate")
+        let job = JarvisSchedulerJob(
+            id: UUID(),
+            name: request.name,
+            command: request.command,
+            trigger: request.trigger,
+            status: "scheduled",
+            createdAt: "2026-07-14T12:00:01Z",
+            updatedAt: "2026-07-14T12:00:01Z",
+            cancelledAt: nil,
+            cancellationReason: nil
+        )
+        schedulerJobs.append(job)
+        return job
     }
 
     func cancelSchedulerJob(id: UUID) async throws -> JarvisSchedulerJob {
@@ -9568,6 +10262,33 @@ private func runJarvisCLIJSON(_ args: [String]) throws -> Data {
         )
     }
     return output
+}
+
+private func unusedLoopbackPort() throws -> UInt16 {
+    let descriptor = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+    guard descriptor >= 0 else { throw POSIXError(.ENOTSOCK) }
+    defer { Darwin.close(descriptor) }
+
+    var address = sockaddr_in()
+    address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_port = 0
+    address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+    let bindResult = withUnsafePointer(to: &address) { pointer in
+        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            Darwin.bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+        }
+    }
+    guard bindResult == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EADDRINUSE) }
+
+    var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+    let nameResult = withUnsafeMutablePointer(to: &address) { pointer in
+        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            Darwin.getsockname(descriptor, $0, &length)
+        }
+    }
+    guard nameResult == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EINVAL) }
+    return UInt16(bigEndian: address.sin_port)
 }
 
 private func noopVoiceCaptureCallbacks() -> JarvisVoiceCaptureCallbacks {

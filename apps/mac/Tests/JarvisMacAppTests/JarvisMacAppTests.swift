@@ -33,6 +33,21 @@ struct JarvisMacAppTests {
         #expect(JarvisMenuBarContract.title == "Jarvis")
     }
 
+    @Test("Scheduler presentation surfaces durable notification acknowledgement failures")
+    func schedulerPresentationSurfacesNotificationAcknowledgementFailures() {
+        let acknowledgementError = SchedulerManagementPresentation.errorMessage(
+            schedulerError: nil,
+            notificationAcknowledgementError: "temporary IPC failure"
+        )
+        let schedulerError = SchedulerManagementPresentation.errorMessage(
+            schedulerError: "scheduler unavailable",
+            notificationAcknowledgementError: "temporary IPC failure"
+        )
+
+        #expect(acknowledgementError == "Notification acknowledgement pending retry: temporary IPC failure")
+        #expect(schedulerError == "scheduler unavailable")
+    }
+
     @Test("Menu bar presentation maps every supervisor lifecycle state")
     func menuBarPresentationMapsSupervisorLifecycle() {
         let stopped = JarvisMenuBarPresentation(mode: .stopped)
@@ -360,13 +375,16 @@ struct JarvisMacAppTests {
         let notificationCenter = CapturingUserNotificationCenter(authorizationResult: true)
         let adapter = MacSchedulerNotificationAdapter(notificationCenter: notificationCenter)
         let schedulerJobId = UUID(uuidString: "00000000-0000-4000-8000-000000000123")!
+        let occurrenceID = UUID(uuidString: "00000000-0000-4000-8000-000000000456")!
         let request = JarvisSchedulerNotificationRequest(
             id: "scheduler-\(schedulerJobId.uuidString)-due_now",
             schedulerJobId: schedulerJobId,
             title: "Jarvis scheduler job due",
             body: "A scheduler job is due and ready for the app to surface.",
             notificationKind: "due_now",
-            threadIdentifier: "jarvis.scheduler"
+            threadIdentifier: "jarvis.scheduler",
+            schedulerNotificationOccurrenceId: occurrenceID,
+            schedulerNotificationRevision: 3
         )
 
         try await adapter.deliver(request)
@@ -380,6 +398,11 @@ struct JarvisMacAppTests {
         #expect(deliveredRequest.content.sound != nil)
         #expect(deliveredRequest.content.userInfo["scheduler_job_id"] as? String == schedulerJobId.uuidString)
         #expect(deliveredRequest.content.userInfo["notification_kind"] as? String == request.notificationKind)
+        #expect(
+            deliveredRequest.content.userInfo["scheduler_notification_occurrence_id"] as? String
+                == occurrenceID.uuidString
+        )
+        #expect(deliveredRequest.content.userInfo["scheduler_notification_revision"] as? UInt64 == 3)
     }
 
     @Test("Scheduler notification evidence presentation exposes release QA fields")
@@ -435,6 +458,10 @@ private final class CapturingUserNotificationCenter: JarvisUserNotificationCente
     init(authorizationResult: Bool) {
         self.authorizationResult = authorizationResult
         self.deliveredRequests = []
+    }
+
+    func authorizationStatus() async -> UNAuthorizationStatus {
+        authorizationResult ? .authorized : .denied
     }
 
     func requestAuthorization(options: UNAuthorizationOptions) async throws -> Bool {

@@ -560,6 +560,21 @@ stage or when a PR needs focused evidence for one ownership slice.
   controls, return redacted diagnostic job fields, and append
   `scheduler_stale_running_recovered` without exposing scheduler command bodies
   or running stale job side effects.
+- Confirm packaged scheduler automation defaults off, persists only an explicit
+  user opt-in, and takes effect through a deliberate app-supervised core
+  restart with bounded background and optional stale-recovery arguments.
+  Confirm the attention coordinator is single-flight and cancellable, skips an
+  unavailable core, consumes only redacted attention plus the bounded durable
+  occurrence outbox, never prompts for notification permission, and rechecks
+  lifecycle acceptance after asynchronous authorization. Confirm due claim is
+  durable before execution, failure/stale recovery atomically revision-escalates
+  the same occurrence, acknowledgements use revision CAS after app submission or
+  explicit no-authorization suppression, and restart replays unacknowledged
+  occurrences. This is at-least-once handoff; a pre-ack crash may repeat the
+  stable request. Repeated app starts must preserve active automation for
+  the same supervised child and must not claim it for an external core. The
+  unsigned packaged launch must expose the expected child
+  arguments without claiming LaunchAgent, OS wake, or live notification proof.
 - Confirm permission policy review includes unreviewed memory items and deleted
   sensitive memory retained in local storage without exposing memory values, and
   diagnostics export exposes only aggregate active, unreviewed, and sensitive
@@ -753,7 +768,7 @@ stage or when a PR needs focused evidence for one ownership slice.
   repository-backed local smoke.
 - Confirm `./scripts/storage-migration-backup-smoke.sh` passes for storage
   changes, proving legacy DB backup creation, restore after migration-open
-  failure, newer-schema diagnostics, and representative schema v1-v12 fixture
+  failure, newer-schema diagnostics, and representative schema v1-v13 fixture
   preservation. Treat broad installer upgrade behavior as a separate
   release-candidate gate.
 - Confirm local plugin metadata install/list/get coverage remains in that E2E

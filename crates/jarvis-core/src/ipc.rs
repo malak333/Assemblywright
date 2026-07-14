@@ -29,7 +29,8 @@ use futures_util::StreamExt as FuturesStreamExt;
 use crate::storage::{
     ApprovalExecutionState, EmergencyPauseState as StoredEmergencyPauseState,
     MemoryClassificationSummary, NewMemoryItem, NewPendingApproval, PendingApproval,
-    SqliteRepository,
+    SchedulerNotificationOccurrence, SqliteRepository,
+    MAX_SCHEDULER_NOTIFICATION_OCCURRENCE_LIST_LIMIT,
 };
 use crate::trusted_wake::{
     decode_public_key, hash_grant_token, validate_command, verify_envelope,
@@ -769,6 +770,18 @@ pub struct SchedulerAttentionItem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SchedulerNotificationAcknowledgementRequest {
+    pub revision: u64,
+    pub disposition: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SchedulerNotificationAcknowledgementResponse {
+    pub occurrence: SchedulerNotificationOccurrence,
+    pub proof_boundary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateMemoryItemRequest {
     pub category: String,
     pub key: String,
@@ -1220,6 +1233,7 @@ impl IpcState {
                 "/plugins/installed/:id".to_string(),
                 "/scheduler/jobs".to_string(),
                 "/scheduler/attention".to_string(),
+                "/scheduler/notification-outbox".to_string(),
                 "/scheduler/jobs/:id".to_string(),
                 "/system-wake/status".to_string(),
                 "/system-wake/attention".to_string(),
@@ -3454,6 +3468,96 @@ impl IpcState {
         })
     }
 
+    fn claim_scheduler_job_notification_occurrence(
+        &self,
+        due_job: &SchedulerJob,
+        occurrence_at: DateTime<Utc>,
+    ) -> JarvisResult<(SchedulerJob, Uuid)> {
+        let occurrence_id = Uuid::new_v4();
+        match &self.repository {
+            Some(repository) => {
+                let (running, occurrence) = repository
+                    .lock()
+                    .expect("IPC repository lock poisoned")
+                    .claim_scheduler_job_with_notification_occurrence(
+                        due_job.id,
+                        occurrence_id,
+                        occurrence_at,
+                    )?;
+                self.scheduler.restore_persisted(running.clone());
+                Ok((running, occurrence.id))
+            }
+            None => Ok((self.scheduler.mark_running(due_job.id)?, occurrence_id)),
+        }
+    }
+
+    fn record_blocked_scheduler_notification_occurrence(
+        &self,
+        due_job: &SchedulerJob,
+        occurrence_at: DateTime<Utc>,
+    ) -> JarvisResult<()> {
+        if let Some(repository) = &self.repository {
+            repository
+                .lock()
+                .expect("IPC repository lock poisoned")
+                .record_blocked_scheduler_notification_occurrence(
+                    due_job,
+                    Uuid::new_v4(),
+                    occurrence_at,
+                )?;
+        }
+        Ok(())
+    }
+
+    fn persist_scheduler_outcome_with_notification(
+        &self,
+        final_job: &SchedulerJob,
+        occurrence_id: Uuid,
+        audit_entry: &AuditEntry,
+        failed: bool,
+    ) -> JarvisResult<()> {
+        match &self.repository {
+            Some(repository) => repository
+                .lock()
+                .expect("IPC repository lock poisoned")
+                .finish_scheduler_job_with_notification_occurrence(
+                    final_job,
+                    occurrence_id,
+                    audit_entry,
+                    failed,
+                )
+                .map(|_| ()),
+            None => self.command_store().append_audit_entry(audit_entry),
+        }
+    }
+
+    pub fn pending_scheduler_notification_occurrences(
+        &self,
+        limit: usize,
+    ) -> JarvisResult<Vec<SchedulerNotificationOccurrence>> {
+        self.using_repository(|repository| {
+            repository.list_pending_scheduler_notification_occurrences(limit)
+        })
+    }
+
+    pub fn acknowledge_scheduler_notification_occurrence(
+        &self,
+        id: Uuid,
+        request: SchedulerNotificationAcknowledgementRequest,
+    ) -> JarvisResult<SchedulerNotificationAcknowledgementResponse> {
+        let occurrence = self.using_repository(|repository| {
+            repository.acknowledge_scheduler_notification_occurrence(
+                id,
+                request.revision,
+                &request.disposition,
+            )
+        })?;
+        Ok(SchedulerNotificationAcknowledgementResponse {
+            occurrence,
+            proof_boundary: "Acknowledged app submission or explicit no-authorization suppression only; this does not prove live OS display or exactly-once delivery.".to_string(),
+        })
+    }
+
     pub fn complete_scheduler_job(&self, id: Uuid) -> JarvisResult<SchedulerJob> {
         let job = self.scheduler.complete(id)?;
         self.persist_scheduler_transition(&job, |repository| repository.complete_scheduler_job(id))
@@ -3990,8 +4094,13 @@ impl IpcState {
     pub async fn run_due_scheduler_jobs(&self, limit: usize) -> JarvisResult<SchedulerRunResponse> {
         let checked_at = Utc::now();
         let limit = limit.max(1);
+        let due_jobs = self.scheduler.due_jobs(checked_at, limit);
 
         if self.runtime_control.is_emergency_paused() {
+            for due_job in &due_jobs {
+                let occurrence_at = scheduler_job_due_at(due_job).unwrap_or(due_job.updated_at);
+                self.record_blocked_scheduler_notification_occurrence(due_job, occurrence_at)?;
+            }
             return Ok(SchedulerRunResponse {
                 checked_at,
                 limit,
@@ -4000,11 +4109,12 @@ impl IpcState {
             });
         }
 
-        let due_jobs = self.scheduler.due_jobs(checked_at, limit);
         let mut executions = Vec::new();
 
         for due_job in due_jobs {
             if self.runtime_control.is_emergency_paused() {
+                let occurrence_at = scheduler_job_due_at(&due_job).unwrap_or(due_job.updated_at);
+                self.record_blocked_scheduler_notification_occurrence(&due_job, occurrence_at)?;
                 self.append_scheduler_audit_entry(
                     None,
                     "scheduler_run_stopped_by_emergency_pause",
@@ -4018,7 +4128,9 @@ impl IpcState {
                 break;
             }
 
-            let running = self.mark_scheduler_job_running(due_job.id)?;
+            let occurrence_at = scheduler_job_due_at(&due_job).unwrap_or(due_job.updated_at);
+            let (running, notification_occurrence_id) =
+                self.claim_scheduler_job_notification_occurrence(&due_job, occurrence_at)?;
             self.append_scheduler_audit_entry(
                 None,
                 "scheduler_job_due",
@@ -4066,12 +4178,12 @@ impl IpcState {
 
             let final_job = if command_response.accepted {
                 if matches!(running.trigger, TriggerKind::Interval { .. }) {
-                    self.reschedule_interval_scheduler_job(running.id)?
+                    self.scheduler.reschedule_interval(running.id)?
                 } else {
-                    self.complete_scheduler_job(running.id)?
+                    self.scheduler.complete(running.id)?
                 }
             } else {
-                self.fail_scheduler_job(running.id)?
+                self.scheduler.fail(running.id)?
             };
 
             let event_type = match final_job.status {
@@ -4081,13 +4193,19 @@ impl IpcState {
                 SchedulerJobStatus::Cancelled => "scheduler_job_cancelled",
                 SchedulerJobStatus::Running => "scheduler_job_running",
             };
-            self.append_scheduler_execution_audit(
+            let outcome_audit = Self::scheduler_execution_audit_entry(
                 event_type,
                 "scheduler finished due job command",
                 &final_job,
                 &command_response,
-                &mut audit_entries,
+            );
+            self.persist_scheduler_outcome_with_notification(
+                &final_job,
+                notification_occurrence_id,
+                &outcome_audit,
+                !command_response.accepted,
             )?;
+            audit_entries.push(outcome_audit);
 
             if !command_response.accepted {
                 let pause_reason = format!(
@@ -4174,8 +4292,8 @@ impl IpcState {
                 .signed_duration_since(stale_since)
                 .num_seconds()
                 .max(0);
-            let failed = self.fail_scheduler_job(stale_job.id)?;
-            let audit_entry = self.append_scheduler_audit_entry(
+            let failed = self.scheduler.fail(stale_job.id)?;
+            let audit_entry = AuditEntry::new(
                 None,
                 "scheduler_stale_running_recovered",
                 if automatic_recovery {
@@ -4196,7 +4314,19 @@ impl IpcState {
                     "command_redacted": true,
                     "automatic_recovery": automatic_recovery,
                 }),
-            )?;
+            );
+            let persistence = match &self.repository {
+                Some(repository) => repository
+                    .lock()
+                    .expect("IPC repository lock poisoned")
+                    .recover_stale_scheduler_job_with_notification_occurrence(&failed, &audit_entry)
+                    .map(|_| ()),
+                None => self.command_store().append_audit_entry(&audit_entry),
+            };
+            if let Err(error) = persistence {
+                self.scheduler.restore_persisted(stale_job);
+                return Err(error);
+            }
             recovered.push(SchedulerStaleRecoveryItem {
                 job: DiagnosticSchedulerJob::from(failed),
                 stale_since,
@@ -4314,7 +4444,20 @@ impl IpcState {
         command_response: &CommandResponse,
         audit_entries: &mut Vec<AuditEntry>,
     ) -> JarvisResult<()> {
-        let entry = AuditEntry::new(
+        let entry =
+            Self::scheduler_execution_audit_entry(event_type, summary, job, command_response);
+        self.command_store().append_audit_entry(&entry)?;
+        audit_entries.push(entry);
+        Ok(())
+    }
+
+    fn scheduler_execution_audit_entry(
+        event_type: &str,
+        summary: &str,
+        job: &SchedulerJob,
+        command_response: &CommandResponse,
+    ) -> AuditEntry {
+        AuditEntry::new(
             Some(command_response.task.id),
             event_type,
             summary,
@@ -4326,10 +4469,7 @@ impl IpcState {
                 "task_status": command_response.task.status,
                 "accepted": command_response.accepted,
             }),
-        );
-        self.command_store().append_audit_entry(&entry)?;
-        audit_entries.push(entry);
-        Ok(())
+        )
     }
 
     fn append_scheduler_proactive_policy_audit(
@@ -5099,6 +5239,14 @@ pub fn router_with_auth(state: IpcState, auth: Option<IpcAuth>) -> Router {
             get(list_scheduler_jobs).post(create_scheduler_job),
         )
         .route("/scheduler/attention", get(scheduler_attention))
+        .route(
+            "/scheduler/notification-outbox",
+            get(list_scheduler_notification_occurrences),
+        )
+        .route(
+            "/scheduler/notification-outbox/:id/ack",
+            post(acknowledge_scheduler_notification_occurrence),
+        )
         .route("/scheduler/run-due", post(run_due_scheduler_jobs))
         .route(
             "/scheduler/recover-stale",
@@ -5996,6 +6144,31 @@ async fn scheduler_attention(State(state): State<IpcState>) -> Json<SchedulerAtt
     Json(state.scheduler_attention())
 }
 
+async fn list_scheduler_notification_occurrences(
+    State(state): State<IpcState>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Result<Json<Vec<SchedulerNotificationOccurrence>>, (StatusCode, Json<ErrorResponse>)> {
+    let limit = query
+        .get("limit")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(MAX_SCHEDULER_NOTIFICATION_OCCURRENCE_LIST_LIMIT);
+    state
+        .pending_scheduler_notification_occurrences(limit)
+        .map(Json)
+        .map_err(error_response)
+}
+
+async fn acknowledge_scheduler_notification_occurrence(
+    State(state): State<IpcState>,
+    Path(id): Path<Uuid>,
+    Json(request): Json<SchedulerNotificationAcknowledgementRequest>,
+) -> Result<Json<SchedulerNotificationAcknowledgementResponse>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .acknowledge_scheduler_notification_occurrence(id, request)
+        .map(Json)
+        .map_err(error_response)
+}
+
 async fn get_scheduler_job(
     State(state): State<IpcState>,
     Path(id): Path<Uuid>,
@@ -6204,6 +6377,13 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
         endpoint("GET", "/scheduler/jobs", false, false),
         endpoint("POST", "/scheduler/jobs", false, false),
         endpoint("GET", "/scheduler/attention", false, true),
+        endpoint("GET", "/scheduler/notification-outbox", true, true),
+        endpoint(
+            "POST",
+            "/scheduler/notification-outbox/:id/ack",
+            true,
+            false,
+        ),
         endpoint("POST", "/scheduler/run-due", false, false),
         endpoint("POST", "/scheduler/recover-stale", false, false),
         endpoint("GET", "/scheduler/jobs/:id", false, false),
@@ -8282,8 +8462,8 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "scheduler_attention",
             "implemented",
-            "Repository-backed scheduler jobs expose redacted `/scheduler/attention` due/running/failed handoff, explicit run-due execution, background loop tests, and CLI IPC E2E.",
-            "Visibility and app-notification handoff only; scheduler attention does not grant proactive plugin execution, and live OS notification delivery remains a manual release gate.",
+            "Repository-backed scheduler jobs expose redacted `/scheduler/attention`, plus a schema-v14 bounded durable occurrence outbox with compare-and-swap acknowledgement after app submission or explicit no-authorization suppression. Due occurrence claim precedes execution, failed and stale-running outcomes revision-escalate atomically, and app notification identifiers are stable per occurrence revision.",
+            "This is an at-least-once app-notification handoff: concurrent consumers or a crash after notification-center submission but before acknowledgement may repeat a stable request. It does not prove live OS display, background OS wake, or proactive plugin authorization, and live-device notification evidence remains a manual release gate.",
         ),
         feature(
             "trusted_macos_system_wake",
@@ -8733,6 +8913,9 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .contains(&"/tools/model".to_string()));
         assert!(contract
             .safe_inspection_paths
+            .contains(&"/scheduler/notification-outbox".to_string()));
+        assert!(contract
+            .safe_inspection_paths
             .contains(&"/plugins/manifests/:id".to_string()));
         assert!(contract
             .safe_inspection_paths
@@ -8821,6 +9004,20 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .any(|endpoint| endpoint.method == "GET"
                 && endpoint.path == "/scheduler/jobs/:id"
                 && !endpoint.repository_required));
+        assert!(contract
+            .endpoints
+            .iter()
+            .any(|endpoint| endpoint.method == "GET"
+                && endpoint.path == "/scheduler/notification-outbox"
+                && endpoint.repository_required
+                && endpoint.redacted));
+        assert!(contract
+            .endpoints
+            .iter()
+            .any(|endpoint| endpoint.method == "POST"
+                && endpoint.path == "/scheduler/notification-outbox/:id/ack"
+                && endpoint.repository_required
+                && !endpoint.redacted));
         assert!(contract
             .endpoints
             .iter()
@@ -13384,6 +13581,16 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .iter()
             .any(|entry| entry.event_type == "scheduler_job_completed"
                 || entry.event_type == "scheduler_job_rescheduled")));
+        let pending_notifications = state
+            .pending_scheduler_notification_occurrences(64)
+            .expect("pending scheduler notifications");
+        assert_eq!(pending_notifications.len(), 3);
+        assert!(pending_notifications
+            .iter()
+            .all(|occurrence| occurrence.notification_kind == "due_now"));
+        assert!(!serde_json::to_string(&pending_notifications)
+            .expect("notification JSON")
+            .contains("plugin status"));
 
         let tasks = state
             .using_repository(SqliteRepository::list_tasks)
@@ -13614,6 +13821,77 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
     }
 
     #[tokio::test]
+    async fn stale_scheduler_recovery_atomically_escalates_durable_occurrence_after_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("jarvis.sqlite");
+        let repository = SqliteRepository::open(&db_path).unwrap();
+        let state = IpcState::with_repository(repository).expect("state");
+        let job = state
+            .schedule_scheduler_job(SchedulerJobSpec {
+                name: "restart recovery occurrence".to_string(),
+                command: "do not expose restart recovery command".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .expect("schedule");
+        let (_, occurrence_id) = state
+            .claim_scheduler_job_notification_occurrence(&job, job.updated_at)
+            .expect("claim occurrence");
+        assert!(state
+            .pending_scheduler_notification_occurrences(64)
+            .expect("pending while running")
+            .is_empty());
+        assert!(state
+            .acknowledge_scheduler_notification_occurrence(
+                occurrence_id,
+                SchedulerNotificationAcknowledgementRequest {
+                    revision: 1,
+                    disposition: "submitted_to_notification_center".to_string(),
+                },
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("before its job outcome is durable"));
+        drop(state);
+
+        let connection = rusqlite::Connection::open(&db_path).unwrap();
+        connection
+            .execute(
+                "UPDATE scheduler_notification_occurrences
+                 SET acknowledged_at = updated_at,
+                     acknowledged_disposition = 'submitted_to_notification_center'
+                 WHERE id = ?1",
+                rusqlite::params![occurrence_id.to_string()],
+            )
+            .unwrap();
+        drop(connection);
+
+        let repository = SqliteRepository::open(&db_path).unwrap();
+        let restarted = IpcState::with_repository(repository).expect("restart state");
+        let response = restarted
+            .recover_stale_scheduler_jobs(0, 16)
+            .expect("recover stale");
+        assert_eq!(response.recovered.len(), 1);
+        assert_eq!(response.recovered[0].job.id, job.id);
+        let pending = restarted
+            .pending_scheduler_notification_occurrences(64)
+            .expect("pending after recovery");
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].id, occurrence_id);
+        assert_eq!(pending[0].notification_kind, "failed");
+        assert_eq!(pending[0].revision, 2);
+        assert_eq!(pending[0].acknowledged_at, None);
+        let audit = restarted
+            .using_repository(|repository| repository.list_audit_entries(None))
+            .expect("audit");
+        assert!(audit
+            .iter()
+            .any(|entry| entry.event_type == "scheduler_stale_running_recovered"));
+        assert!(!serde_json::to_string(&pending)
+            .expect("pending JSON")
+            .contains("do not expose restart recovery command"));
+    }
+
+    #[tokio::test]
     async fn automatic_stale_scheduler_recovery_marks_audit_without_command_text() {
         let repository = SqliteRepository::in_memory().unwrap();
         let state = IpcState::with_repository(repository).expect("state");
@@ -13676,6 +13954,21 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .using_repository(SqliteRepository::list_tasks)
             .expect("tasks");
         assert!(tasks.is_empty());
+        let first_pending = state
+            .pending_scheduler_notification_occurrences(64)
+            .expect("first blocked occurrence");
+        assert_eq!(first_pending.len(), 1);
+        assert_eq!(first_pending[0].scheduler_job_id, job.id);
+        assert_eq!(
+            first_pending[0].notification_kind,
+            "blocked_by_emergency_pause"
+        );
+        let repeated = state.run_due_scheduler_jobs(10).await.expect("repeat due");
+        assert!(repeated.emergency_paused);
+        let second_pending = state
+            .pending_scheduler_notification_occurrences(64)
+            .expect("deduplicated blocked occurrence");
+        assert_eq!(second_pending, first_pending);
     }
 
     #[tokio::test]
@@ -13818,6 +14111,13 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             SchedulerJobStatus::Cancelled
         );
         assert!(state.pause_status().paused);
+        let pending_notifications = state
+            .pending_scheduler_notification_occurrences(64)
+            .expect("failed notification");
+        assert_eq!(pending_notifications.len(), 1);
+        assert_eq!(pending_notifications[0].scheduler_job_id, approval_job.id);
+        assert_eq!(pending_notifications[0].notification_kind, "failed");
+        assert_eq!(pending_notifications[0].revision, 2);
         drop(state);
 
         let repository = SqliteRepository::open(&db_path).unwrap();
@@ -13891,7 +14191,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .expect("diagnostics export");
         assert_eq!(export.health.status, "ok");
         assert!(export.repository_backed);
-        assert_eq!(export.schema_version, Some(13));
+        assert_eq!(export.schema_version, Some(14));
         assert_eq!(export.task_count, Some(1));
         assert!(export.audit_entry_count.unwrap_or_default() >= 2);
         assert_eq!(export.model_route_record_count, Some(1));

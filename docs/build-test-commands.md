@@ -511,6 +511,37 @@ cargo run -p jarvis-cli -- serve \
   --scheduler-limit 16
 ```
 
+`Jarvis.app` exposes the same loop through the Scheduler tab's default-off
+automation setting. Apply the setting to restart the app-supervised core; the
+app clamps the interval to at least 1,000 ms and limits each tick and stale
+recovery batch to 64. Exact `JARVIS_MAC_SCHEDULER_AUTOMATION_ENABLED=true` is
+reserved as an explicit packaged-test/operator launch opt-in. A test may also
+lower the interval with `JARVIS_MAC_SCHEDULER_AUTOMATION_INTERVAL_MS`, subject
+to the same 1,000 ms floor. Both overrides are ephemeral and stripped from the
+child environment. Focused proof:
+
+```sh
+swift test --disable-sandbox --package-path apps/mac --filter schedulerAutomation
+swift test --disable-sandbox --package-path apps/mac --filter schedulerAttentionCoordinator
+swift test --disable-sandbox --package-path apps/mac --filter automaticSchedulerNotifications
+swift test --disable-sandbox --package-path apps/mac --filter schedulerCoordinatorRealIPCEndToEnd
+swift test --disable-sandbox --package-path apps/mac --filter supervisorPreservesOwnedSchedulerAutomationAcrossRepeatedStart
+./scripts/package-distribution.sh --unsigned-launch-check
+```
+
+The Swift tests prove persistence, ephemeral environment overrides, bounds,
+generation-safe lifecycle cancellation including delayed authorization,
+repeated-start ownership, real-IPC durable outbox submission/acknowledgement,
+restart replay, partial acknowledgement failure handling, no-prompt
+authorization, and stable occurrence-revision requests. The unsigned launch check proves the packaged
+app starts its supervised core with bounded scheduler/recovery arguments and
+uses its authenticated Swift client to create and observe an automatically
+completed due job plus matching scheduler audit and outbox acknowledgement
+evidence. CLI E2E independently proves pause behavior, bounded ticks, durable
+restart replay, redaction, and CAS acknowledgement. The handoff is at-least-once;
+none of these checks prove exactly-once delivery, live OS display, or OS wake
+reliability.
+
 To recover stale persisted `Running` scheduler jobs before a repository-backed
 server starts accepting IPC traffic, opt in explicitly:
 
@@ -561,6 +592,8 @@ cargo run -p jarvis-cli -- scheduler list
 cargo run -p jarvis-cli -- scheduler schedule "manual check" "status check"
 cargo run -p jarvis-cli -- scheduler schedule "approval fail closed" "plugin approval echo scheduler pause"
 cargo run -p jarvis-cli -- scheduler run-due --limit 1
+cargo run -p jarvis-cli -- scheduler notifications --limit 64
+cargo run -p jarvis-cli -- scheduler acknowledge-notification <occurrence-uuid> --revision 1 --disposition suppressed-not-authorized
 cargo run -p jarvis-cli -- scheduler recover-stale --older-than-seconds 3600 --limit 16
 cargo run -p jarvis-cli -- plugins installed
 cargo run -p jarvis-cli -- pause --reason "manual smoke"
@@ -1042,7 +1075,7 @@ release-proof smoke command and is run by `./scripts/release-local.sh`.
 proof for migration changes: it runs Rust tests that create a legacy
 file-backed DB, verify preflight backup creation, corrupt the DB after backup
 to prove restore on migration-open failure, verify newer schema versions fail
-with an explicit upgrade diagnostic, and migrate representative schema v1-v12
+with an explicit upgrade diagnostic, and migrate representative schema v1-v13
 fixtures while preserving tasks, audit, memory, scheduler, approval, plugin,
 and route rows.
 `./scripts/release-operator-qa-smoke.sh` is the local operator-facing release

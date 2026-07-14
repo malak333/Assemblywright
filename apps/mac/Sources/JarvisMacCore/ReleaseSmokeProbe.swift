@@ -7,6 +7,11 @@ public enum JarvisReleaseSmokeProbeStep: String, Equatable, Sendable {
     case taskList
     case taskAudit
     case diagnostics
+    case schedulerCreate
+    case schedulerBackgroundExecution
+    case schedulerAudit
+    case schedulerNotificationOutbox
+    case schedulerNotificationAcknowledgement
     case pause
     case pausedStatus
     case pausedCommand
@@ -24,6 +29,7 @@ public struct JarvisReleaseSmokeProbe: Sendable {
 
     private static let commandInput = "Jarvis release smoke deterministic dry-run check."
     private static let pauseReason = "Jarvis release smoke emergency-pause check."
+    private static let schedulerCommand = "Jarvis release smoke scheduler background check."
 
     private let client: any JarvisCoreClient
     private let timeout: Duration
@@ -102,6 +108,57 @@ public struct JarvisReleaseSmokeProbe: Sendable {
                 step: .diagnostics
             )
 
+            let dueAt = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-1))
+            let scheduledJob = try await client.createSchedulerJob(
+                JarvisCreateSchedulerJobRequest(
+                    name: "release smoke background scheduler",
+                    command: Self.schedulerCommand,
+                    trigger: .onceAt(runAt: dueAt)
+                )
+            )
+            try require(scheduledJob.status == "scheduled", step: .schedulerCreate)
+
+            var completedJob = scheduledJob
+            for _ in 0..<100 where completedJob.status != "completed" {
+                try await Task.sleep(for: .milliseconds(100))
+                completedJob = try await client.schedulerJob(id: scheduledJob.id)
+            }
+            try require(completedJob.status == "completed", step: .schedulerBackgroundExecution)
+
+            let schedulerAudit = try await client.listAuditEntries(taskId: nil)
+            try require(
+                schedulerAudit.contains(where: {
+                    $0.eventType == "scheduler_job_completed"
+                        && Self.payload($0.payload, containsSchedulerJobID: scheduledJob.id)
+                }),
+                step: .schedulerAudit
+            )
+
+            let pendingNotifications = try await client.pendingSchedulerNotificationOccurrences(
+                limit: 64
+            )
+            guard let occurrence = pendingNotifications.first(where: {
+                $0.schedulerJobId == scheduledJob.id
+            }) else {
+                throw JarvisReleaseSmokeProbeError.validationFailed(
+                    .schedulerNotificationOutbox
+                )
+            }
+            _ = try await client.acknowledgeSchedulerNotificationOccurrence(
+                id: occurrence.id,
+                request: JarvisSchedulerNotificationAcknowledgementRequest(
+                    revision: occurrence.revision,
+                    disposition: .suppressedNotAuthorized
+                )
+            )
+            let remainingNotifications = try await client.pendingSchedulerNotificationOccurrences(
+                limit: 64
+            )
+            try require(
+                !remainingNotifications.contains(where: { $0.id == occurrence.id }),
+                step: .schedulerNotificationAcknowledgement
+            )
+
             // A failed pause response is ambiguous: the server may have applied the pause
             // before transport failed. Resume is therefore required from this point onward.
             resumeCleanupRequired = true
@@ -156,5 +213,17 @@ public struct JarvisReleaseSmokeProbe: Sendable {
         guard condition() else {
             throw JarvisReleaseSmokeProbeError.validationFailed(step)
         }
+    }
+
+    private static func payload(
+        _ payload: JarvisJSONValue?,
+        containsSchedulerJobID id: UUID
+    ) -> Bool {
+        guard case let .object(object) = payload,
+              case let .string(value) = object["scheduler_job_id"]
+        else {
+            return false
+        }
+        return value.lowercased() == id.uuidString.lowercased()
     }
 }

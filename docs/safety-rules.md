@@ -239,6 +239,24 @@ release requirements, not optional UX guidance.
   actions must also be manifest-opted-in for proactive execution with
   `proactive_run`; non-opted-in scheduled plugin actions fail closed before side
   effects execute.
+- Packaged-app scheduler automation must default off and require a persisted,
+  visible user opt-in. The app may then start only the existing bounded audited
+  background loop, with an interval of at least one second, a maximum of 64
+  jobs per tick, and optional bounded stale-running recovery. Applying a change
+  requires a deliberate app-supervised core restart. Attention polling must be
+  single-flight and cancellable, stop while the core is unavailable, use only
+  the redacted attention projection and bounded durable occurrence outbox, and
+  recheck lifecycle acceptance after every asynchronous authorization boundary.
+  Due visibility must be committed before execution; failure and stale recovery
+  must revision-escalate the same occurrence atomically. Acknowledgement must be
+  compare-and-swap guarded and happen only after notification-center submission
+  or explicit no-authorization suppression. Delivery is at-least-once, so a
+  crash before acknowledgement or a concurrent app consumer may repeat a
+  stable occurrence-revision request. A failure after a pause-blocked handoff
+  is an explicit revision escalation and may produce a later notification; no
+  exactly-once OS-display claim is made.
+  The app must never prompt from the
+  background, auto-enable trusted wake, or imply LaunchAgent/OS-wake behavior.
 - Trusted macOS system-wake rules are disabled by default and use explicit,
   generation-bound enablement. Only public P-256 key material crosses bounded
   supervisor stdin during explicit initial provisioning; normal app/core

@@ -1348,6 +1348,60 @@ public struct JarvisSchedulerAttentionItem: Decodable, Equatable, Identifiable, 
     }
 }
 
+public struct JarvisSchedulerNotificationOccurrence: Decodable, Equatable, Identifiable, Sendable {
+    public var id: UUID
+    public var schedulerJobId: UUID
+    public var name: String
+    public var occurrenceAt: String
+    public var notificationKind: String
+    public var revision: UInt64
+    public var createdAt: String
+    public var updatedAt: String
+    public var acknowledgedAt: String?
+    public var acknowledgedDisposition: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case schedulerJobId = "scheduler_job_id"
+        case name
+        case occurrenceAt = "occurrence_at"
+        case notificationKind = "notification_kind"
+        case revision
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+        case acknowledgedAt = "acknowledged_at"
+        case acknowledgedDisposition = "acknowledged_disposition"
+    }
+}
+
+public enum JarvisSchedulerNotificationAcknowledgementDisposition: String, Encodable, Equatable, Sendable {
+    case submittedToNotificationCenter = "submitted_to_notification_center"
+    case suppressedNotAuthorized = "suppressed_not_authorized"
+}
+
+public struct JarvisSchedulerNotificationAcknowledgementRequest: Encodable, Equatable, Sendable {
+    public var revision: UInt64
+    public var disposition: JarvisSchedulerNotificationAcknowledgementDisposition
+
+    public init(
+        revision: UInt64,
+        disposition: JarvisSchedulerNotificationAcknowledgementDisposition
+    ) {
+        self.revision = revision
+        self.disposition = disposition
+    }
+}
+
+public struct JarvisSchedulerNotificationAcknowledgementResponse: Decodable, Equatable, Sendable {
+    public var occurrence: JarvisSchedulerNotificationOccurrence
+    public var proofBoundary: String
+
+    enum CodingKeys: String, CodingKey {
+        case occurrence
+        case proofBoundary = "proof_boundary"
+    }
+}
+
 public struct JarvisCreateSchedulerJobRequest: Encodable, Equatable, Sendable {
     public var name: String
     public var command: String
@@ -1967,6 +2021,11 @@ public protocol JarvisCoreClient: Sendable {
     func listInstalledPlugins() async throws -> [JarvisInstalledPluginRecord]
     func listSchedulerJobs() async throws -> [JarvisSchedulerJob]
     func schedulerAttention() async throws -> JarvisSchedulerAttentionSummary
+    func pendingSchedulerNotificationOccurrences(limit: Int) async throws -> [JarvisSchedulerNotificationOccurrence]
+    func acknowledgeSchedulerNotificationOccurrence(
+        id: UUID,
+        request: JarvisSchedulerNotificationAcknowledgementRequest
+    ) async throws -> JarvisSchedulerNotificationAcknowledgementResponse
     func schedulerJob(id: UUID) async throws -> JarvisSchedulerJob
     func createSchedulerJob(_ request: JarvisCreateSchedulerJobRequest) async throws -> JarvisSchedulerJob
     func cancelSchedulerJob(id: UUID) async throws -> JarvisSchedulerJob
@@ -2174,6 +2233,28 @@ public final class JarvisIPCClient: JarvisCoreClient {
 
     public func schedulerAttention() async throws -> JarvisSchedulerAttentionSummary {
         try await send(path: "/scheduler/attention", method: "GET", body: Optional<Data>.none)
+    }
+
+    public func pendingSchedulerNotificationOccurrences(
+        limit: Int = 64
+    ) async throws -> [JarvisSchedulerNotificationOccurrence] {
+        let boundedLimit = min(64, max(limit, 1))
+        return try await send(
+            path: "/scheduler/notification-outbox?limit=\(boundedLimit)",
+            method: "GET",
+            body: Optional<Data>.none
+        )
+    }
+
+    public func acknowledgeSchedulerNotificationOccurrence(
+        id: UUID,
+        request: JarvisSchedulerNotificationAcknowledgementRequest
+    ) async throws -> JarvisSchedulerNotificationAcknowledgementResponse {
+        try await send(
+            path: "/scheduler/notification-outbox/\(id.uuidString)/ack",
+            method: "POST",
+            body: encoder.encode(request)
+        )
     }
 
     public func schedulerJob(id: UUID) async throws -> JarvisSchedulerJob {

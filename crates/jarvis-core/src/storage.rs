@@ -30,8 +30,25 @@ use crate::{
     MAX_MEMORY_RETRIEVAL_CORPUS_BYTES,
 };
 
-const CURRENT_SCHEMA_VERSION: i64 = 13;
+const CURRENT_SCHEMA_VERSION: i64 = 14;
 pub(crate) const MAX_MODEL_PLANNED_WASM_CANDIDATES: usize = 64;
+pub const MAX_PENDING_SCHEDULER_NOTIFICATION_OCCURRENCES: usize = 1_024;
+pub const MAX_ACKNOWLEDGED_SCHEDULER_NOTIFICATION_OCCURRENCES: usize = 1_024;
+pub const MAX_SCHEDULER_NOTIFICATION_OCCURRENCE_LIST_LIMIT: usize = 64;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SchedulerNotificationOccurrence {
+    pub id: Uuid,
+    pub scheduler_job_id: Uuid,
+    pub name: String,
+    pub occurrence_at: DateTime<Utc>,
+    pub notification_kind: String,
+    pub revision: u64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub acknowledged_at: Option<DateTime<Utc>>,
+    pub acknowledged_disposition: Option<String>,
+}
 
 #[derive(Debug, Clone)]
 pub struct StoredTrustedWakeRule {
@@ -956,6 +973,482 @@ impl SqliteRepository {
             .query_map([], scheduler_job_from_row)
             .map_err(storage_error)?;
         collect_rows(rows)
+    }
+
+    pub fn claim_scheduler_job_with_notification_occurrence(
+        &self,
+        id: Uuid,
+        occurrence_id: Uuid,
+        occurrence_at: DateTime<Utc>,
+    ) -> JarvisResult<(SchedulerJob, SchedulerNotificationOccurrence)> {
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        let current = tx
+            .query_row(
+                "SELECT id, name, command, trigger, status, created_at, updated_at,
+                        cancelled_at, cancellation_reason
+                 FROM scheduler_jobs WHERE id = ?1",
+                params![id.to_string()],
+                scheduler_job_from_row,
+            )
+            .optional()
+            .map_err(storage_error)?
+            .ok_or_else(|| JarvisError::Storage(format!("scheduler job not found: {id}")))?;
+        if current.status != SchedulerJobStatus::Scheduled {
+            return Err(JarvisError::Conflict(format!(
+                "only a scheduled job can claim a scheduler notification occurrence: {id}"
+            )));
+        }
+
+        let occurrence_at_db = to_db_time(occurrence_at);
+        let existing =
+            scheduler_notification_occurrence_for_job_time_tx(&tx, id, &occurrence_at_db)?;
+        match existing {
+            Some(existing) if existing.notification_kind == "blocked_by_emergency_pause" => {
+                if existing.acknowledged_at.is_some() {
+                    ensure_scheduler_notification_capacity_tx(&tx)?;
+                }
+            }
+            Some(existing)
+                if existing.notification_kind != "due_now"
+                    || existing.acknowledged_at.is_some() =>
+            {
+                if existing.acknowledged_at.is_some() {
+                    ensure_scheduler_notification_capacity_tx(&tx)?;
+                }
+                tx.execute(
+                    "UPDATE scheduler_notification_occurrences
+                     SET notification_kind = 'due_now', revision = revision + 1,
+                         updated_at = ?1, acknowledged_at = NULL,
+                         acknowledged_disposition = NULL
+                     WHERE id = ?2",
+                    params![to_db_time(Utc::now()), existing.id.to_string()],
+                )
+                .map_err(storage_error)?;
+            }
+            Some(_) => {}
+            None => {
+                ensure_scheduler_notification_capacity_tx(&tx)?;
+                let now = Utc::now();
+                tx.execute(
+                    "INSERT INTO scheduler_notification_occurrences
+                     (id, scheduler_job_id, name, occurrence_at, notification_kind, revision,
+                      created_at, updated_at, acknowledged_at, acknowledged_disposition)
+                     VALUES (?1, ?2, ?3, ?4, 'due_now', 1, ?5, ?5, NULL, NULL)",
+                    params![
+                        occurrence_id.to_string(),
+                        id.to_string(),
+                        &current.name,
+                        occurrence_at_db,
+                        to_db_time(now),
+                    ],
+                )
+                .map_err(storage_error)?;
+            }
+        }
+
+        let updated_at = Utc::now();
+        let changed = tx
+            .execute(
+                "UPDATE scheduler_jobs SET status = 'running', updated_at = ?1
+                 WHERE id = ?2 AND status = 'scheduled'",
+                params![to_db_time(updated_at), id.to_string()],
+            )
+            .map_err(storage_error)?;
+        if changed != 1 {
+            return Err(JarvisError::Conflict(format!(
+                "scheduler job changed before notification occurrence claim: {id}"
+            )));
+        }
+        let running = tx
+            .query_row(
+                "SELECT id, name, command, trigger, status, created_at, updated_at,
+                        cancelled_at, cancellation_reason
+                 FROM scheduler_jobs WHERE id = ?1",
+                params![id.to_string()],
+                scheduler_job_from_row,
+            )
+            .map_err(storage_error)?;
+        let occurrence =
+            scheduler_notification_occurrence_for_job_time_tx(&tx, id, &occurrence_at_db)?
+                .ok_or_else(|| {
+                    JarvisError::Storage(format!(
+                        "scheduler notification occurrence missing after claim: {occurrence_id}"
+                    ))
+                })?;
+        tx.commit().map_err(storage_error)?;
+        Ok((running, occurrence))
+    }
+
+    pub fn record_blocked_scheduler_notification_occurrence(
+        &self,
+        job: &SchedulerJob,
+        occurrence_id: Uuid,
+        occurrence_at: DateTime<Utc>,
+    ) -> JarvisResult<SchedulerNotificationOccurrence> {
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        let occurrence_at_db = to_db_time(occurrence_at);
+        let existing =
+            scheduler_notification_occurrence_for_job_time_tx(&tx, job.id, &occurrence_at_db)?;
+        let now = Utc::now();
+        match existing {
+            Some(existing) if existing.notification_kind != "blocked_by_emergency_pause" => {
+                if existing.acknowledged_at.is_some() {
+                    ensure_scheduler_notification_capacity_tx(&tx)?;
+                }
+                tx.execute(
+                    "UPDATE scheduler_notification_occurrences
+                     SET notification_kind = 'blocked_by_emergency_pause',
+                         revision = revision + 1,
+                         updated_at = ?1,
+                         acknowledged_at = NULL,
+                         acknowledged_disposition = NULL
+                     WHERE id = ?2",
+                    params![to_db_time(now), existing.id.to_string()],
+                )
+                .map_err(storage_error)?;
+            }
+            Some(_) => {}
+            None => {
+                ensure_scheduler_notification_capacity_tx(&tx)?;
+                tx.execute(
+                    "INSERT INTO scheduler_notification_occurrences
+                     (id, scheduler_job_id, name, occurrence_at, notification_kind, revision,
+                      created_at, updated_at, acknowledged_at, acknowledged_disposition)
+                     VALUES (?1, ?2, ?3, ?4, 'blocked_by_emergency_pause', 1,
+                             ?5, ?5, NULL, NULL)",
+                    params![
+                        occurrence_id.to_string(),
+                        job.id.to_string(),
+                        &job.name,
+                        occurrence_at_db,
+                        to_db_time(now),
+                    ],
+                )
+                .map_err(storage_error)?;
+            }
+        }
+        let occurrence =
+            scheduler_notification_occurrence_for_job_time_tx(&tx, job.id, &occurrence_at_db)?
+                .ok_or_else(|| {
+                    JarvisError::Storage(format!(
+                        "blocked scheduler notification occurrence missing: {}",
+                        job.id
+                    ))
+                })?;
+        tx.commit().map_err(storage_error)?;
+        Ok(occurrence)
+    }
+
+    pub fn finish_scheduler_job_with_notification_occurrence(
+        &self,
+        final_job: &SchedulerJob,
+        occurrence_id: Uuid,
+        audit_entry: &AuditEntry,
+        failed: bool,
+    ) -> JarvisResult<SchedulerNotificationOccurrence> {
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        let current_occurrence = scheduler_notification_occurrence_by_id_tx(&tx, occurrence_id)?
+            .ok_or_else(|| {
+                JarvisError::Storage(format!(
+                    "scheduler notification occurrence missing before outcome commit: {occurrence_id}"
+                ))
+            })?;
+        if current_occurrence.scheduler_job_id != final_job.id {
+            return Err(JarvisError::Conflict(format!(
+                "scheduler notification occurrence belongs to another job: {occurrence_id}"
+            )));
+        }
+        let acknowledged_blocked_reservation = current_occurrence.notification_kind
+            == "blocked_by_emergency_pause"
+            && current_occurrence.acknowledged_at.is_some();
+        if failed
+            && current_occurrence.acknowledged_at.is_some()
+            && !acknowledged_blocked_reservation
+        {
+            ensure_scheduler_notification_capacity_tx(&tx)?;
+        }
+        let changed = tx
+            .execute(
+                "UPDATE scheduler_jobs
+                 SET status = ?1, updated_at = ?2, cancelled_at = ?3,
+                     cancellation_reason = ?4
+                 WHERE id = ?5 AND status = 'running'",
+                params![
+                    scheduler_status_to_str(final_job.status),
+                    to_db_time(final_job.updated_at),
+                    final_job.cancelled_at.map(to_db_time),
+                    &final_job.cancellation_reason,
+                    final_job.id.to_string(),
+                ],
+            )
+            .map_err(storage_error)?;
+        if changed != 1 {
+            return Err(JarvisError::Conflict(format!(
+                "scheduler job changed before notification outcome commit: {}",
+                final_job.id
+            )));
+        }
+        append_audit_entry_tx(&tx, audit_entry)?;
+        if failed {
+            let changed = tx
+                .execute(
+                    "UPDATE scheduler_notification_occurrences
+                     SET notification_kind = 'failed',
+                         revision = CASE WHEN notification_kind = 'failed'
+                             THEN revision ELSE revision + 1 END,
+                         updated_at = ?1,
+                         acknowledged_at = CASE WHEN notification_kind = 'failed'
+                             THEN acknowledged_at ELSE NULL END,
+                         acknowledged_disposition = CASE WHEN notification_kind = 'failed'
+                             THEN acknowledged_disposition ELSE NULL END
+                     WHERE id = ?2 AND scheduler_job_id = ?3",
+                    params![
+                        to_db_time(Utc::now()),
+                        occurrence_id.to_string(),
+                        final_job.id.to_string(),
+                    ],
+                )
+                .map_err(storage_error)?;
+            if changed != 1 {
+                return Err(JarvisError::Storage(format!(
+                    "scheduler notification occurrence missing at failure commit: {occurrence_id}"
+                )));
+            }
+        }
+        let occurrence = scheduler_notification_occurrence_by_id_tx(&tx, occurrence_id)?
+            .ok_or_else(|| {
+                JarvisError::Storage(format!(
+                    "scheduler notification occurrence missing after outcome commit: {occurrence_id}"
+                ))
+            })?;
+        tx.commit().map_err(storage_error)?;
+        Ok(occurrence)
+    }
+
+    pub fn recover_stale_scheduler_job_with_notification_occurrence(
+        &self,
+        failed_job: &SchedulerJob,
+        audit_entry: &AuditEntry,
+    ) -> JarvisResult<Option<SchedulerNotificationOccurrence>> {
+        if failed_job.status != SchedulerJobStatus::Failed {
+            return Err(JarvisError::Validation(
+                "stale scheduler recovery must persist a failed job".to_string(),
+            ));
+        }
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        let occurrence = tx
+            .query_row(
+                "SELECT id, scheduler_job_id, name, occurrence_at, notification_kind,
+                        revision, created_at, updated_at, acknowledged_at,
+                        acknowledged_disposition
+                 FROM scheduler_notification_occurrences
+                 WHERE scheduler_job_id = ?1
+                 ORDER BY occurrence_at DESC, created_at DESC, id DESC
+                 LIMIT 1",
+                params![failed_job.id.to_string()],
+                scheduler_notification_occurrence_from_row,
+            )
+            .optional()
+            .map_err(storage_error)?;
+        let acknowledged_occurrence_needs_capacity =
+            occurrence.as_ref().is_some_and(|occurrence| {
+                occurrence.acknowledged_at.is_some()
+                    && occurrence.notification_kind != "blocked_by_emergency_pause"
+            });
+        if acknowledged_occurrence_needs_capacity {
+            ensure_scheduler_notification_capacity_tx(&tx)?;
+        }
+        let changed = tx
+            .execute(
+                "UPDATE scheduler_jobs
+                 SET status = 'failed', updated_at = ?1, cancelled_at = NULL,
+                     cancellation_reason = NULL
+                 WHERE id = ?2 AND status = 'running'",
+                params![to_db_time(failed_job.updated_at), failed_job.id.to_string()],
+            )
+            .map_err(storage_error)?;
+        if changed != 1 {
+            return Err(JarvisError::Conflict(format!(
+                "scheduler job changed before stale recovery commit: {}",
+                failed_job.id
+            )));
+        }
+        append_audit_entry_tx(&tx, audit_entry)?;
+        let occurrence = if let Some(occurrence) = occurrence {
+            let changed = tx
+                .execute(
+                    "UPDATE scheduler_notification_occurrences
+                     SET notification_kind = 'failed',
+                         revision = CASE WHEN notification_kind = 'failed'
+                             THEN revision ELSE revision + 1 END,
+                         updated_at = ?1,
+                         acknowledged_at = CASE WHEN notification_kind = 'failed'
+                             THEN acknowledged_at ELSE NULL END,
+                         acknowledged_disposition = CASE WHEN notification_kind = 'failed'
+                             THEN acknowledged_disposition ELSE NULL END
+                     WHERE id = ?2 AND scheduler_job_id = ?3",
+                    params![
+                        to_db_time(Utc::now()),
+                        occurrence.id.to_string(),
+                        failed_job.id.to_string(),
+                    ],
+                )
+                .map_err(storage_error)?;
+            if changed != 1 {
+                return Err(JarvisError::Storage(format!(
+                    "scheduler notification occurrence missing at stale recovery: {}",
+                    occurrence.id
+                )));
+            }
+            scheduler_notification_occurrence_by_id_tx(&tx, occurrence.id)?
+        } else {
+            None
+        };
+        tx.commit().map_err(storage_error)?;
+        Ok(occurrence)
+    }
+
+    pub fn list_pending_scheduler_notification_occurrences(
+        &self,
+        limit: usize,
+    ) -> JarvisResult<Vec<SchedulerNotificationOccurrence>> {
+        let limit = limit.clamp(1, MAX_SCHEDULER_NOTIFICATION_OCCURRENCE_LIST_LIMIT);
+        let mut statement = self
+            .conn
+            .prepare(
+                "SELECT occurrences.id, occurrences.scheduler_job_id, occurrences.name,
+                        occurrences.occurrence_at, occurrences.notification_kind,
+                        occurrences.revision, occurrences.created_at, occurrences.updated_at,
+                        occurrences.acknowledged_at, occurrences.acknowledged_disposition
+                 FROM scheduler_notification_occurrences occurrences
+                 JOIN scheduler_jobs jobs ON jobs.id = occurrences.scheduler_job_id
+                 WHERE occurrences.acknowledged_at IS NULL
+                   AND NOT (
+                       occurrences.notification_kind = 'due_now'
+                       AND jobs.status = 'running'
+                   )
+                 ORDER BY CASE occurrences.notification_kind
+                              WHEN 'failed' THEN 0
+                              WHEN 'blocked_by_emergency_pause' THEN 1
+                              ELSE 2
+                          END ASC,
+                          occurrences.created_at ASC,
+                          occurrences.id ASC
+                 LIMIT ?1",
+            )
+            .map_err(storage_error)?;
+        let rows = statement
+            .query_map(
+                params![i64::try_from(limit).unwrap_or(i64::MAX)],
+                scheduler_notification_occurrence_from_row,
+            )
+            .map_err(storage_error)?;
+        collect_rows(rows)
+    }
+
+    pub fn acknowledge_scheduler_notification_occurrence(
+        &self,
+        id: Uuid,
+        revision: u64,
+        disposition: &str,
+    ) -> JarvisResult<SchedulerNotificationOccurrence> {
+        if !matches!(
+            disposition,
+            "submitted_to_notification_center" | "suppressed_not_authorized"
+        ) {
+            return Err(JarvisError::Validation(
+                "scheduler notification acknowledgement disposition is invalid".to_string(),
+            ));
+        }
+        let revision = i64::try_from(revision).map_err(|_| {
+            JarvisError::Validation(
+                "scheduler notification acknowledgement revision is out of range".to_string(),
+            )
+        })?;
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        let current = scheduler_notification_occurrence_by_id_tx(&tx, id)?.ok_or_else(|| {
+            JarvisError::Conflict(format!(
+                "scheduler notification occurrence is unknown: {id}"
+            ))
+        })?;
+        let scheduler_job_status = tx
+            .query_row(
+                "SELECT jobs.status
+                 FROM scheduler_jobs jobs
+                 JOIN scheduler_notification_occurrences occurrences
+                   ON occurrences.scheduler_job_id = jobs.id
+                 WHERE occurrences.id = ?1",
+                params![id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(storage_error)?;
+        if current.notification_kind == "due_now" && scheduler_job_status == "running" {
+            return Err(JarvisError::Conflict(format!(
+                "scheduler notification occurrence cannot be acknowledged before its job outcome is durable: {id}"
+            )));
+        }
+        if current.revision != u64::try_from(revision).unwrap_or(u64::MAX) {
+            return Err(JarvisError::Conflict(format!(
+                "scheduler notification occurrence revision changed: {id}"
+            )));
+        }
+        if let Some(existing) = current.acknowledged_disposition.as_deref() {
+            if existing == disposition {
+                tx.commit().map_err(storage_error)?;
+                return Ok(current);
+            }
+            return Err(JarvisError::Conflict(format!(
+                "scheduler notification occurrence already acknowledged differently: {id}"
+            )));
+        }
+        let acknowledged_at = Utc::now();
+        let changed = tx
+            .execute(
+                "UPDATE scheduler_notification_occurrences
+                 SET acknowledged_at = ?1, acknowledged_disposition = ?2, updated_at = ?1
+                 WHERE id = ?3 AND revision = ?4 AND acknowledged_at IS NULL",
+                params![
+                    to_db_time(acknowledged_at),
+                    disposition,
+                    id.to_string(),
+                    revision,
+                ],
+            )
+            .map_err(storage_error)?;
+        if changed != 1 {
+            return Err(JarvisError::Conflict(format!(
+                "scheduler notification occurrence acknowledgement lost its compare-and-swap: {id}"
+            )));
+        }
+        append_audit_entry_tx(
+            &tx,
+            &AuditEntry::new(
+                None,
+                "scheduler_notification_acknowledged",
+                "scheduler notification occurrence received an explicit app acknowledgement",
+                json!({
+                    "scheduler_notification_occurrence_id": id,
+                    "scheduler_job_id": current.scheduler_job_id,
+                    "revision": revision,
+                    "disposition": disposition,
+                    "notification_content_redacted": true,
+                }),
+            ),
+        )?;
+        let acknowledged =
+            scheduler_notification_occurrence_by_id_tx(&tx, id)?.ok_or_else(|| {
+                JarvisError::Storage(format!(
+                    "scheduler notification occurrence missing after acknowledgement: {id}"
+                ))
+            })?;
+        prune_acknowledged_scheduler_notification_occurrences_tx(&tx)?;
+        tx.commit().map_err(storage_error)?;
+        Ok(acknowledged)
     }
 
     pub fn enroll_trusted_wake_rule(
@@ -2756,6 +3249,9 @@ impl SqliteRepository {
         if version < 13 {
             self.apply_migration_13()?;
         }
+        if version < 14 {
+            self.apply_migration_14()?;
+        }
 
         let migrated = self.schema_version()?;
         if migrated != CURRENT_SCHEMA_VERSION {
@@ -3064,6 +3560,46 @@ impl SqliteRepository {
         tx.execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
             params![13, now],
+        )
+        .map_err(storage_error)?;
+        tx.commit().map_err(storage_error)?;
+        Ok(())
+    }
+
+    fn apply_migration_14(&self) -> JarvisResult<()> {
+        let now = to_db_time(Utc::now());
+        let tx = self.conn.unchecked_transaction().map_err(storage_error)?;
+        tx.execute_batch(
+            "
+            CREATE TABLE scheduler_notification_occurrences (
+                id TEXT PRIMARY KEY NOT NULL,
+                scheduler_job_id TEXT NOT NULL REFERENCES scheduler_jobs(id) ON DELETE RESTRICT,
+                name TEXT NOT NULL,
+                occurrence_at TEXT NOT NULL,
+                notification_kind TEXT NOT NULL CHECK (notification_kind IN (
+                    'due_now', 'blocked_by_emergency_pause', 'failed'
+                )),
+                revision INTEGER NOT NULL CHECK (revision >= 1),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                acknowledged_at TEXT NULL,
+                acknowledged_disposition TEXT NULL CHECK (
+                    acknowledged_disposition IS NULL OR acknowledged_disposition IN (
+                        'submitted_to_notification_center', 'suppressed_not_authorized'
+                    )
+                ),
+                UNIQUE (scheduler_job_id, occurrence_at)
+            );
+            CREATE INDEX idx_scheduler_notification_pending
+                ON scheduler_notification_occurrences (acknowledged_at, created_at, id);
+            CREATE INDEX idx_scheduler_notification_job_occurrence
+                ON scheduler_notification_occurrences (scheduler_job_id, occurrence_at);
+            ",
+        )
+        .map_err(storage_error)?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+            params![14, now],
         )
         .map_err(storage_error)?;
         tx.commit().map_err(storage_error)?;
@@ -3894,6 +4430,112 @@ fn scheduler_job_from_row(row: &Row<'_>) -> rusqlite::Result<SchedulerJob> {
             .transpose()?,
         cancellation_reason: row.get(8)?,
     })
+}
+
+fn scheduler_notification_occurrence_from_row(
+    row: &Row<'_>,
+) -> rusqlite::Result<SchedulerNotificationOccurrence> {
+    let revision = row.get::<_, i64>(5)?;
+    Ok(SchedulerNotificationOccurrence {
+        id: parse_uuid(&row.get::<_, String>(0)?)?,
+        scheduler_job_id: parse_uuid(&row.get::<_, String>(1)?)?,
+        name: row.get(2)?,
+        occurrence_at: parse_db_time(&row.get::<_, String>(3)?)?,
+        notification_kind: row.get(4)?,
+        revision: u64::try_from(revision).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                5,
+                rusqlite::types::Type::Integer,
+                Box::new(error),
+            )
+        })?,
+        created_at: parse_db_time(&row.get::<_, String>(6)?)?,
+        updated_at: parse_db_time(&row.get::<_, String>(7)?)?,
+        acknowledged_at: row
+            .get::<_, Option<String>>(8)?
+            .map(|time| parse_db_time(&time))
+            .transpose()?,
+        acknowledged_disposition: row.get(9)?,
+    })
+}
+
+fn scheduler_notification_occurrence_by_id_tx(
+    tx: &Transaction<'_>,
+    id: Uuid,
+) -> JarvisResult<Option<SchedulerNotificationOccurrence>> {
+    tx.query_row(
+        "SELECT id, scheduler_job_id, name, occurrence_at, notification_kind,
+                revision, created_at, updated_at, acknowledged_at,
+                acknowledged_disposition
+         FROM scheduler_notification_occurrences WHERE id = ?1",
+        params![id.to_string()],
+        scheduler_notification_occurrence_from_row,
+    )
+    .optional()
+    .map_err(storage_error)
+}
+
+fn scheduler_notification_occurrence_for_job_time_tx(
+    tx: &Transaction<'_>,
+    scheduler_job_id: Uuid,
+    occurrence_at: &str,
+) -> JarvisResult<Option<SchedulerNotificationOccurrence>> {
+    tx.query_row(
+        "SELECT id, scheduler_job_id, name, occurrence_at, notification_kind,
+                revision, created_at, updated_at, acknowledged_at,
+                acknowledged_disposition
+         FROM scheduler_notification_occurrences
+         WHERE scheduler_job_id = ?1 AND occurrence_at = ?2",
+        params![scheduler_job_id.to_string(), occurrence_at],
+        scheduler_notification_occurrence_from_row,
+    )
+    .optional()
+    .map_err(storage_error)
+}
+
+fn ensure_scheduler_notification_capacity_tx(tx: &Transaction<'_>) -> JarvisResult<()> {
+    let capacity_used = tx
+        .query_row(
+            "SELECT COUNT(*)
+             FROM scheduler_notification_occurrences occurrences
+             JOIN scheduler_jobs jobs ON jobs.id = occurrences.scheduler_job_id
+             WHERE occurrences.acknowledged_at IS NULL
+                OR (
+                    occurrences.notification_kind = 'blocked_by_emergency_pause'
+                    AND occurrences.acknowledged_at IS NOT NULL
+                    AND jobs.status = 'running'
+                )",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(storage_error)?;
+    let capacity_used = usize::try_from(capacity_used).unwrap_or(usize::MAX);
+    if capacity_used >= MAX_PENDING_SCHEDULER_NOTIFICATION_OCCURRENCES {
+        return Err(JarvisError::Conflict(
+            "scheduler notification outbox is full; acknowledge pending occurrences before executing more scheduler jobs"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn prune_acknowledged_scheduler_notification_occurrences_tx(
+    tx: &Transaction<'_>,
+) -> JarvisResult<()> {
+    tx.execute(
+        "DELETE FROM scheduler_notification_occurrences
+         WHERE id IN (
+             SELECT id FROM scheduler_notification_occurrences
+             WHERE acknowledged_at IS NOT NULL
+             ORDER BY acknowledged_at DESC, id DESC
+             LIMIT -1 OFFSET ?1
+         )",
+        params![
+            i64::try_from(MAX_ACKNOWLEDGED_SCHEDULER_NOTIFICATION_OCCURRENCES).unwrap_or(i64::MAX)
+        ],
+    )
+    .map_err(storage_error)?;
+    Ok(())
 }
 
 fn trusted_wake_rule_from_row(row: &Row<'_>) -> rusqlite::Result<StoredTrustedWakeRule> {
@@ -4921,12 +5563,13 @@ mod tests {
                 "
                 DROP TRIGGER model_route_records_no_delete;
                 DROP TRIGGER model_route_records_no_update;
+                DROP TABLE scheduler_notification_occurrences;
                 DROP TABLE model_route_records;
                 DROP TABLE approval_executions;
                 DROP TABLE trusted_wake_key_grants;
                 DROP TABLE trusted_wake_events;
                 DROP TABLE trusted_wake_rules;
-                DELETE FROM schema_migrations WHERE version IN (7, 8, 9, 10, 11, 12, 13);
+                DELETE FROM schema_migrations WHERE version IN (7, 8, 9, 10, 11, 12, 13, 14);
                 ",
             )
             .unwrap();
@@ -4992,12 +5635,13 @@ mod tests {
                 "
                 DROP TRIGGER model_route_records_no_delete;
                 DROP TRIGGER model_route_records_no_update;
+                DROP TABLE scheduler_notification_occurrences;
                 DROP TABLE model_route_records;
                 DROP TABLE approval_executions;
                 DROP TABLE trusted_wake_key_grants;
                 DROP TABLE trusted_wake_events;
                 DROP TABLE trusted_wake_rules;
-                DELETE FROM schema_migrations WHERE version IN (7, 8, 9, 10, 11, 12, 13);
+                DELETE FROM schema_migrations WHERE version IN (7, 8, 9, 10, 11, 12, 13, 14);
                 ",
             )
             .unwrap();
@@ -5286,6 +5930,403 @@ mod tests {
     }
 
     #[test]
+    fn scheduler_notification_occurrence_is_durable_revisioned_and_cas_acknowledged() {
+        let repo = SqliteRepository::in_memory().unwrap();
+        let scheduler = crate::Scheduler::new();
+        let job = scheduler
+            .schedule(crate::SchedulerJobSpec {
+                name: "notification occurrence".to_string(),
+                command: "status".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .unwrap();
+        repo.upsert_scheduler_job(&job).unwrap();
+        let occurrence_id = Uuid::new_v4();
+        let occurrence_at = job.updated_at;
+
+        let (running, due) = repo
+            .claim_scheduler_job_with_notification_occurrence(job.id, occurrence_id, occurrence_at)
+            .unwrap();
+        assert_eq!(running.status, SchedulerJobStatus::Running);
+        assert_eq!(due.id, occurrence_id);
+        assert_eq!(due.notification_kind, "due_now");
+        assert_eq!(due.revision, 1);
+        assert!(repo
+            .list_pending_scheduler_notification_occurrences(64)
+            .unwrap()
+            .is_empty());
+        assert!(repo
+            .acknowledge_scheduler_notification_occurrence(
+                occurrence_id,
+                1,
+                "submitted_to_notification_center",
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("before its job outcome is durable"));
+
+        let mut failed = running;
+        failed.status = SchedulerJobStatus::Failed;
+        failed.updated_at = Utc::now();
+        let outcome_audit = AuditEntry::new(
+            None,
+            "scheduler_job_failed",
+            "scheduler finished due job command",
+            json!({"scheduler_job_id": job.id, "command_redacted": true}),
+        );
+        let escalated = repo
+            .finish_scheduler_job_with_notification_occurrence(
+                &failed,
+                occurrence_id,
+                &outcome_audit,
+                true,
+            )
+            .unwrap();
+        assert_eq!(escalated.notification_kind, "failed");
+        assert_eq!(escalated.revision, 2);
+        assert!(repo
+            .acknowledge_scheduler_notification_occurrence(
+                occurrence_id,
+                1,
+                "submitted_to_notification_center",
+            )
+            .is_err());
+
+        let acknowledged = repo
+            .acknowledge_scheduler_notification_occurrence(
+                occurrence_id,
+                2,
+                "submitted_to_notification_center",
+            )
+            .unwrap();
+        assert_eq!(
+            acknowledged.acknowledged_disposition.as_deref(),
+            Some("submitted_to_notification_center")
+        );
+        assert!(repo
+            .list_pending_scheduler_notification_occurrences(64)
+            .unwrap()
+            .is_empty());
+        let idempotent = repo
+            .acknowledge_scheduler_notification_occurrence(
+                occurrence_id,
+                2,
+                "submitted_to_notification_center",
+            )
+            .unwrap();
+        assert_eq!(idempotent.id, occurrence_id);
+        assert!(repo
+            .list_audit_entries(None)
+            .unwrap()
+            .iter()
+            .any(|entry| entry.event_type == "scheduler_notification_acknowledged"));
+    }
+
+    #[test]
+    fn acknowledged_blocked_scheduler_notification_is_not_reopened_on_resume() {
+        let repo = SqliteRepository::in_memory().unwrap();
+        let scheduler = crate::Scheduler::new();
+        let job = scheduler
+            .schedule(crate::SchedulerJobSpec {
+                name: "blocked occurrence".to_string(),
+                command: "status".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .unwrap();
+        repo.upsert_scheduler_job(&job).unwrap();
+        let occurrence_at = job.updated_at;
+        let first = repo
+            .record_blocked_scheduler_notification_occurrence(&job, Uuid::new_v4(), occurrence_at)
+            .unwrap();
+        let duplicate = repo
+            .record_blocked_scheduler_notification_occurrence(&job, Uuid::new_v4(), occurrence_at)
+            .unwrap();
+        assert_eq!(first.id, duplicate.id);
+        assert_eq!(duplicate.revision, 1);
+        repo.acknowledge_scheduler_notification_occurrence(
+            first.id,
+            first.revision,
+            "suppressed_not_authorized",
+        )
+        .unwrap();
+
+        let (running, claimed) = repo
+            .claim_scheduler_job_with_notification_occurrence(job.id, Uuid::new_v4(), occurrence_at)
+            .unwrap();
+        assert_eq!(claimed.id, first.id);
+        assert_eq!(claimed.notification_kind, "blocked_by_emergency_pause");
+        assert_eq!(claimed.revision, 1);
+        assert_eq!(
+            claimed.acknowledged_disposition.as_deref(),
+            Some("suppressed_not_authorized")
+        );
+        assert_eq!(running.status, SchedulerJobStatus::Running);
+        assert!(repo
+            .list_pending_scheduler_notification_occurrences(64)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn scheduler_notification_pending_cap_fails_before_job_claim() {
+        let repo = SqliteRepository::in_memory().unwrap();
+        let scheduler = crate::Scheduler::new();
+        let job = scheduler
+            .schedule(crate::SchedulerJobSpec {
+                name: "bounded occurrence".to_string(),
+                command: "status".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .unwrap();
+        repo.upsert_scheduler_job(&job).unwrap();
+        let blocked_occurrence = repo
+            .record_blocked_scheduler_notification_occurrence(&job, Uuid::new_v4(), job.updated_at)
+            .unwrap();
+        repo.acknowledge_scheduler_notification_occurrence(
+            blocked_occurrence.id,
+            blocked_occurrence.revision,
+            "suppressed_not_authorized",
+        )
+        .unwrap();
+        let base = job.updated_at + chrono::Duration::days(1);
+        for index in 0..MAX_PENDING_SCHEDULER_NOTIFICATION_OCCURRENCES {
+            let occurrence_at = base + chrono::Duration::microseconds(index as i64);
+            repo.raw_connection()
+                .execute(
+                    "INSERT INTO scheduler_notification_occurrences
+                     (id, scheduler_job_id, name, occurrence_at, notification_kind, revision,
+                      created_at, updated_at, acknowledged_at, acknowledged_disposition)
+                     VALUES (?1, ?2, 'bounded', ?3, 'due_now', 1, ?3, ?3, NULL, NULL)",
+                    params![
+                        Uuid::new_v4().to_string(),
+                        job.id.to_string(),
+                        to_db_time(occurrence_at),
+                    ],
+                )
+                .unwrap();
+        }
+
+        let error = repo
+            .claim_scheduler_job_with_notification_occurrence(
+                job.id,
+                Uuid::new_v4(),
+                job.updated_at,
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("outbox is full"));
+        assert_eq!(
+            repo.get_scheduler_job(job.id).unwrap().unwrap().status,
+            SchedulerJobStatus::Scheduled
+        );
+    }
+
+    #[test]
+    fn acknowledged_blocked_resume_reserves_failure_notification_capacity() {
+        let repo = SqliteRepository::in_memory().unwrap();
+        let scheduler = crate::Scheduler::new();
+        let job = scheduler
+            .schedule(crate::SchedulerJobSpec {
+                name: "reserved failure occurrence".to_string(),
+                command: "status".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .unwrap();
+        repo.upsert_scheduler_job(&job).unwrap();
+        let occurrence = repo
+            .record_blocked_scheduler_notification_occurrence(&job, Uuid::new_v4(), job.updated_at)
+            .unwrap();
+        repo.acknowledge_scheduler_notification_occurrence(
+            occurrence.id,
+            occurrence.revision,
+            "suppressed_not_authorized",
+        )
+        .unwrap();
+        let capacity_job = scheduler
+            .schedule(crate::SchedulerJobSpec {
+                name: "capacity filler".to_string(),
+                command: "status".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .unwrap();
+        repo.upsert_scheduler_job(&capacity_job).unwrap();
+        let base = job.updated_at + chrono::Duration::days(1);
+        for index in 0..(MAX_PENDING_SCHEDULER_NOTIFICATION_OCCURRENCES - 1) {
+            let occurrence_at = base + chrono::Duration::microseconds(index as i64);
+            repo.raw_connection()
+                .execute(
+                    "INSERT INTO scheduler_notification_occurrences
+                     (id, scheduler_job_id, name, occurrence_at, notification_kind, revision,
+                      created_at, updated_at, acknowledged_at, acknowledged_disposition)
+                     VALUES (?1, ?2, 'bounded', ?3, 'due_now', 1, ?3, ?3, NULL, NULL)",
+                    params![
+                        Uuid::new_v4().to_string(),
+                        capacity_job.id.to_string(),
+                        to_db_time(occurrence_at),
+                    ],
+                )
+                .unwrap();
+        }
+
+        let (mut running, claimed) = repo
+            .claim_scheduler_job_with_notification_occurrence(
+                job.id,
+                Uuid::new_v4(),
+                job.updated_at,
+            )
+            .unwrap();
+        assert_eq!(claimed.id, occurrence.id);
+        assert!(claimed.acknowledged_at.is_some());
+
+        running.status = SchedulerJobStatus::Failed;
+        running.updated_at = Utc::now();
+        let failed = repo
+            .finish_scheduler_job_with_notification_occurrence(
+                &running,
+                claimed.id,
+                &AuditEntry::new(
+                    None,
+                    "scheduler_job_failed",
+                    "scheduler failed after acknowledged blocked notification",
+                    json!({"scheduler_job_id": job.id}),
+                ),
+                true,
+            )
+            .unwrap();
+        assert_eq!(failed.notification_kind, "failed");
+        assert_eq!(failed.revision, 2);
+        assert!(failed.acknowledged_at.is_none());
+    }
+
+    #[test]
+    fn acknowledged_blocked_resume_reserves_stale_recovery_capacity() {
+        let repo = SqliteRepository::in_memory().unwrap();
+        let scheduler = crate::Scheduler::new();
+        let job = scheduler
+            .schedule(crate::SchedulerJobSpec {
+                name: "reserved stale occurrence".to_string(),
+                command: "status".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .unwrap();
+        repo.upsert_scheduler_job(&job).unwrap();
+        let occurrence = repo
+            .record_blocked_scheduler_notification_occurrence(&job, Uuid::new_v4(), job.updated_at)
+            .unwrap();
+        repo.acknowledge_scheduler_notification_occurrence(
+            occurrence.id,
+            occurrence.revision,
+            "suppressed_not_authorized",
+        )
+        .unwrap();
+        let capacity_job = scheduler
+            .schedule(crate::SchedulerJobSpec {
+                name: "stale capacity filler".to_string(),
+                command: "status".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .unwrap();
+        repo.upsert_scheduler_job(&capacity_job).unwrap();
+        let base = job.updated_at + chrono::Duration::days(1);
+        for index in 0..(MAX_PENDING_SCHEDULER_NOTIFICATION_OCCURRENCES - 1) {
+            let occurrence_at = base + chrono::Duration::microseconds(index as i64);
+            repo.raw_connection()
+                .execute(
+                    "INSERT INTO scheduler_notification_occurrences
+                     (id, scheduler_job_id, name, occurrence_at, notification_kind, revision,
+                      created_at, updated_at, acknowledged_at, acknowledged_disposition)
+                     VALUES (?1, ?2, 'bounded', ?3, 'due_now', 1, ?3, ?3, NULL, NULL)",
+                    params![
+                        Uuid::new_v4().to_string(),
+                        capacity_job.id.to_string(),
+                        to_db_time(occurrence_at),
+                    ],
+                )
+                .unwrap();
+        }
+
+        let (running, claimed) = repo
+            .claim_scheduler_job_with_notification_occurrence(
+                job.id,
+                Uuid::new_v4(),
+                job.updated_at,
+            )
+            .unwrap();
+        let mut failed = running;
+        failed.status = SchedulerJobStatus::Failed;
+        failed.updated_at = Utc::now();
+        let recovered = repo
+            .recover_stale_scheduler_job_with_notification_occurrence(
+                &failed,
+                &AuditEntry::new(
+                    None,
+                    "scheduler_job_failed",
+                    "scheduler recovered stale job after acknowledged blocked notification",
+                    json!({"scheduler_job_id": job.id}),
+                ),
+            )
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(recovered.id, claimed.id);
+        assert_eq!(recovered.notification_kind, "failed");
+        assert_eq!(recovered.revision, 2);
+        assert!(recovered.acknowledged_at.is_none());
+        assert_eq!(
+            repo.get_scheduler_job(job.id).unwrap().unwrap().status,
+            SchedulerJobStatus::Failed
+        );
+    }
+
+    #[test]
+    fn scheduler_notification_list_prioritizes_failed_and_blocked_occurrences() {
+        let repo = SqliteRepository::in_memory().unwrap();
+        let scheduler = crate::Scheduler::new();
+        let job = scheduler
+            .schedule(crate::SchedulerJobSpec {
+                name: "priority occurrence".to_string(),
+                command: "status".to_string(),
+                trigger: TriggerKind::Manual,
+            })
+            .unwrap();
+        repo.upsert_scheduler_job(&job).unwrap();
+        let base = job.updated_at + chrono::Duration::days(1);
+        let mut expected = Vec::new();
+        for (index, kind) in ["due_now", "blocked_by_emergency_pause", "failed"]
+            .into_iter()
+            .enumerate()
+        {
+            let id = Uuid::new_v4();
+            let occurrence_at = base + chrono::Duration::seconds(index as i64);
+            repo.raw_connection()
+                .execute(
+                    "INSERT INTO scheduler_notification_occurrences
+                     (id, scheduler_job_id, name, occurrence_at, notification_kind, revision,
+                      created_at, updated_at, acknowledged_at, acknowledged_disposition)
+                     VALUES (?1, ?2, 'priority', ?3, ?4, 1, ?3, ?3, NULL, NULL)",
+                    params![
+                        id.to_string(),
+                        job.id.to_string(),
+                        to_db_time(occurrence_at),
+                        kind,
+                    ],
+                )
+                .unwrap();
+            expected.push(id);
+        }
+
+        let listed = repo
+            .list_pending_scheduler_notification_occurrences(64)
+            .unwrap();
+        assert_eq!(
+            listed
+                .iter()
+                .map(|occurrence| occurrence.id)
+                .collect::<Vec<_>>(),
+            vec![expected[2], expected[1], expected[0]]
+        );
+    }
+
+    #[test]
     fn scheduler_job_lifecycle_transitions_are_durable() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("jarvis.sqlite");
@@ -5434,6 +6475,7 @@ mod tests {
                 10 => repo.apply_migration_10().unwrap(),
                 11 => repo.apply_migration_11().unwrap(),
                 12 => repo.apply_migration_12().unwrap(),
+                13 => repo.apply_migration_13().unwrap(),
                 _ => unreachable!("unsupported fixture version"),
             }
         }
@@ -5617,7 +6659,7 @@ mod tests {
                     )
                     .unwrap();
             }
-            8..=12 => {
+            8..=13 => {
                 let provenance = InstalledPluginProvenance {
                     provenance_schema_version: 1,
                     capture_method: "fixture_v8".to_string(),
