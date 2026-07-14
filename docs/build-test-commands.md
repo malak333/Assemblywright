@@ -1265,7 +1265,9 @@ The focused lanes include signed rotate and destructive recover cross-process
 E2E, legacy-bootstrap bypass rejection, wrong-key/token-replay/old-signature
 rejection, one-shot disabled install, grant expiry and quarantine, Swift
 Keychain journal reconciliation, near-expiry preservation of a healthy core,
-and supervisor lifecycle serialization. The CLI exposes read-only inspection
+and supervisor lifecycle serialization. The concurrent-provision fixtures use
+an async bounded readiness wait so they do not block the main actor while the
+detached bootstrap provider is scheduled on a loaded runner. The CLI exposes read-only inspection
 through `system-wake status`, prepare through `system-wake key-prepare`, and
 cancel/reset through `system-wake key-cancel`; supervised install/resume uses
 `serve --trusted-wake-key-control-stdin` with bounded stdin and EOF.

@@ -1633,7 +1633,10 @@ requires plugin-trust `generated_at`, `review_started_at`,
   They cover adversarial proof bindings, signed rotation, destructive recovery,
   legacy bypass rejection, wrong key, token replay, old signature rejection,
   grant expiry/quarantine, crash reconciliation, lifecycle serialization, and
-  audit redaction. They do not prove Apple attestation, OS provenance,
+  audit redaction. The controlled bootstrap test fixture waits asynchronously
+  with a bounded deadline; a synchronous semaphore wait on the main actor can
+  starve the provision task under CI load and must not be reintroduced. They do
+  not prove Apple attestation, OS provenance,
   background launch, same-user/process isolation, live-device behavior, or
   production readiness.
 - App-supervised loopback IPC is bearer-authenticated end to end. Swift rotates
