@@ -40,7 +40,7 @@ These notes capture durable facts for future agents working on this repository.
   events/progress, installed-plugin metadata/provenance/grants, diagnostics,
   plugin manifest validation, and deterministic first-party test plugins.
 - Production first-party inventory is separate from deterministic test
-  fixtures: `fake_*` plugins do not appear in `/tools/model`, provider
+  fixtures: `fake_*` plugins do not appear in `/tools/model`, the default provider
   advertisements, or production manifest inspection. `system_status.status`
   is the bounded always-present status action. Explicit repeatable
   app-owned security-scoped bookmark grants add local-only
@@ -74,9 +74,11 @@ These notes capture durable facts for future agents working on this repository.
   entry, and dispatches only the exact configured production `PluginHost`.
   `dry_run` skips plugin execution and records audit evidence. For
   provider-originated requests, `system_status.status` is the valid status
-  pair; `status`, `fake_*`, `chrome_extension`, installed plugins, and
-  unconfigured workspace actions remain unavailable unless the exact pair
-  appears in `/tools/model` or `jarvis tools list`.
+  pair; `status`, `fake_*`, `chrome_extension`, and unconfigured workspace
+  actions remain unavailable unless the exact pair appears in the route-scoped
+  runtime catalog. `/tools/model` and `jarvis tools list` expose its default
+  first-party portion. Installed tools are absent unless the individual command
+  opts in and a reactive local route admits an eligible `local_wasm` action.
 - Repository-backed `/commands` also persists append-only SQLite model-route
   records. The stored and inspectable route copy keeps provider/outcome/policy
   evidence but omits `context_for_model`, so restart recovery can prove route
@@ -128,6 +130,28 @@ These notes capture durable facts for future agents working on this repository.
   process authority. Hard ceilings are 4 MiB module, 256 KiB request, 1 MiB
   output, 16 MiB memory, zero table elements, and 10 million fuel per invocation. Only low-risk,
   non-proactive, no-memory/model/network compute actions qualify.
+- Model-planned installed WASM is disabled by default. The command's explicit
+  `installed_wasm_tools` opt-in adds only enabled `wasm_compute`, current
+  exact-provenance, eligible `local_wasm` schemas after a reactive local route
+  is selected. Cloud/proactive routes, first-party identifier collisions, and
+  every `local_subprocess` action stay excluded. The deterministic extension is
+  capped at 16 actions, 1 KiB per description, 16 KiB per input schema, and
+  64 KiB combined. Private, credential-adjacent, and restricted commands stop
+  for the same explicit confirmation policy as first-party model tools before
+  guest entry. Execution repeats grant,
+  eligibility, schema, and exact-provenance validation immediately before
+  entering Wasmi; advertisement is never execution authority.
+  Discovery snapshots at most 64 enabled `wasm_compute` candidates under the
+  repository mutex, hashes outside the lock, and accepts only unchanged
+  records. Source-tree provenance is limited to 8,192 entries, 4,096 files,
+  64 levels, and 64 MiB.
+  The Swift console keeps installed-WASM advertisement and actual tool
+  execution as separate default-off toggles. Installed schemas can be planned
+  in dry-run mode; the operator must explicitly enable execution, which applies
+  to every model-planned tool in that console.
+  This is local-model-only guest-language confinement. It is not OS sandboxing,
+  marketplace/publisher trust, malware analysis, same-user/process IPC
+  isolation, signing/notarization, or live-device evidence.
 - WASM install provenance binds the exact module bytes. Schema v12 migrates
   existing installed-plugin rows without enabling them or broadening grants;
   restart retains the WASM grant and provenance contract. Pause, cooperative
@@ -285,18 +309,20 @@ These notes capture durable facts for future agents working on this repository.
   not perform signing, notarization, stapling, installation,
   Finder/LaunchServices validation, or live-device validation.
 - `ConversationRuntime` supports bounded fake-model and provider-envelope
-  planned first-party tool calls with schema validation, policy checks, approval
+  planned first-party tool calls plus explicit reactive-local installed WASM
+  calls with schema validation, policy checks, approval
   stops, tool-result audit entries, and feedback of tool results into later
   model steps. Ollama-compatible and ChatGPT/OpenAI-compatible text responses
   can return a strict JSON envelope with `message`, `complete`, and
   `tool_requests`; ChatGPT/OpenAI-compatible responses can also return native
   OpenAI `tool_calls` for advertised first-party tool definitions. Plain text
-  remains backward-compatible. This is not installed-plugin orchestration or
-  broad third-party tool execution.
+  remains backward-compatible. Installed model planning is restricted to the
+  default-off confined WASM exception, not broad installed-plugin or third-party
+  tool execution.
 - Live local testing with Ollama `llama3.2` has proven the opt-in
   Ollama-compatible HTTP route can complete real model commands. The runtime
-  derives the provider-visible first-party tool catalog from validated
-  first-party manifests, exposes the same redacted catalog through
+  derives the default provider-visible first-party tool catalog from validated
+  first-party manifests, exposes the same redacted default catalog through
   `/tools/model` and `jarvis tools list`, advertises it as an Ollama JSON
   allowlist and ChatGPT/OpenAI-compatible native tool definitions, and rejects
   hallucinated provider plugin IDs/actions before policy checks or tool
@@ -305,14 +331,17 @@ These notes capture durable facts for future agents working on this repository.
   model step as `rejected` tool results. Malformed provider envelopes,
   including prose mixed with JSON `tool_requests`, still fail as redacted model
   errors instead of leaking tool-planning text as a normal answer.
-- The registered model-tool contract is first-party only. Ollama envelope
+- The default registered model-tool contract is first-party only. Ollama envelope
   requests use `plugin_id` plus `action`; native ChatGPT/OpenAI-compatible tool
   names use `plugin__action`; both must map back to the same registered
-  first-party catalog before any policy check or execution. Installed plugin
+  route-scoped catalog before any policy check or execution. Installed plugin
   registry records are inspectable and separately executable through explicit
-  grants, but model-originated tool calls cannot target them and `/tools/model`
-  excludes installed plugin paths, subprocess configuration, provenance hashes,
-  audit payloads, memory values, and provider route context.
+  grants. Only an explicitly opted-in reactive local command can add eligible
+  installed `local_wasm` schemas; cloud/proactive requests and
+  `local_subprocess` cannot target them. `/tools/model` remains the default
+  first-party view and all catalogs exclude installed paths, subprocess
+  configuration, provenance hashes, audit payloads, memory values, and provider
+  route context.
 - Installed-plugin safe inspection is redacted by default:
   `/plugins/installed` and `/plugins/installed/:id` omit local `source_path`
   values, manifest paths, subprocess command paths, publisher-signature
@@ -389,7 +418,7 @@ These notes capture durable facts for future agents working on this repository.
 - Repository-backed IPC state exposes task, audit, model-route, and memory
   inspection routes, persists scheduler jobs, restores them at startup, and all
   IPC states expose `/plugins/manifests` for deterministic first-party plugin
-  manifests plus `/tools/model` for the redacted first-party model-tool catalog.
+  manifests plus `/tools/model` for the redacted default first-party model-tool catalog.
   Repository-backed IPC also exposes `/plugins/installed` for metadata-only
   local plugin installation. Installed records are persisted with
   `execution_enabled: false` and `execution_grant: metadata_only` by default.
@@ -627,7 +656,9 @@ requires plugin-trust `generated_at`, `review_started_at`,
   `plugins verify-publisher-signature`, `plugins disable-installed`, and
   `plugins run-installed` for disabled-by-default local manifests, auditable
   publisher-origin review, trusted-key signature verification, and explicit
-  subprocess execution.
+  subprocess execution. `command --installed-wasm-tools` is the separate
+  default-off per-command surface for eligible reactive-local installed WASM
+  model planning; the Swift command console exposes the matching toggle.
 - A local unsigned distribution launch proof exists, and installed plugin
   execution now has constrained local subprocess plus no-import Wasmi compute
   proof. Developer ID signing,

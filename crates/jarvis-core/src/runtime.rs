@@ -12,7 +12,7 @@ use crate::model::{
 };
 use crate::plugin::{
     plugin_permission_scopes, PluginCallRequest, PluginCallResult, PluginCallStatus, PluginHost,
-    PluginSource,
+    PluginManifest, PluginSource,
 };
 use crate::router::{
     ModelProvider as RouteModelProvider, ModelRouteRecord, ModelRouteRequest, ModelRouter,
@@ -24,6 +24,10 @@ use crate::{CapabilityScope, JarvisError, MemoryRetrieval, MemoryRetrievalContro
 
 const MAX_TASK_TOOL_OUTPUT_BYTES: usize = 128 * 1024;
 const MAX_ACTIVE_RUNTIME_CANCELLATIONS: usize = 128;
+const MAX_MODEL_PLANNED_WASM_TOOLS: usize = 16;
+const MAX_MODEL_PLANNED_WASM_DESCRIPTION_BYTES: usize = 1_024;
+const MAX_MODEL_PLANNED_WASM_SCHEMA_BYTES: usize = 16 * 1_024;
+const MAX_MODEL_PLANNED_WASM_CATALOG_BYTES: usize = 64 * 1_024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeConfig {
@@ -75,6 +79,8 @@ pub struct CommandRequest {
     #[serde(default)]
     pub memory_context: bool,
     #[serde(default)]
+    pub installed_wasm_tools: bool,
+    #[serde(default)]
     pub expected_workspace_request: Option<serde_json::Value>,
 }
 
@@ -87,6 +93,7 @@ impl CommandRequest {
             dry_run: false,
             proactive: false,
             memory_context: false,
+            installed_wasm_tools: false,
             expected_workspace_request: None,
         }
     }
@@ -113,6 +120,11 @@ impl CommandRequest {
 
     pub fn with_memory_context(mut self, memory_context: bool) -> Self {
         self.memory_context = memory_context;
+        self
+    }
+
+    pub fn with_installed_wasm_tools(mut self, installed_wasm_tools: bool) -> Self {
+        self.installed_wasm_tools = installed_wasm_tools;
         self
     }
 
@@ -194,6 +206,12 @@ impl RuntimeControl {
     pub fn emergency_pause(&self) {
         let mut state = self.inner.lock().expect("runtime control lock poisoned");
         state.emergency_paused = true;
+        let started = state
+            .started_runtime_cancellations
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        state.cancelled_runtime_cancellations.extend(started);
     }
 
     pub fn resume(&self) {
@@ -211,6 +229,9 @@ impl RuntimeControl {
     pub fn cancel_task(&self, task_id: Uuid) {
         let mut state = self.inner.lock().expect("runtime control lock poisoned");
         state.cancelled_tasks.insert(task_id);
+        if state.started_runtime_cancellations.contains(&task_id) {
+            state.cancelled_runtime_cancellations.insert(task_id);
+        }
     }
 
     pub fn is_task_cancelled(&self, task_id: Uuid) -> bool {
@@ -315,6 +336,21 @@ pub trait RuntimeCommandStore {
             "memory retrieval requires repository-backed storage".to_string(),
         ))
     }
+
+    fn model_planned_wasm_manifests(&self) -> JarvisResult<Vec<crate::PluginManifest>> {
+        Ok(Vec::new())
+    }
+
+    fn execute_model_planned_wasm(
+        &self,
+        _task_id: Uuid,
+        _session_id: Uuid,
+        _request: &ModelToolRequest,
+    ) -> JarvisResult<PluginCallResult> {
+        Err(JarvisError::PolicyBlocked(
+            "model-planned installed WASM execution requires repository-backed IPC".to_string(),
+        ))
+    }
 }
 
 #[derive(Debug, Default)]
@@ -376,6 +412,19 @@ where
     ) -> JarvisResult<MemoryRetrieval> {
         (*self).retrieve_memory_context(query, sensitivity, control)
     }
+
+    fn model_planned_wasm_manifests(&self) -> JarvisResult<Vec<crate::PluginManifest>> {
+        (*self).model_planned_wasm_manifests()
+    }
+
+    fn execute_model_planned_wasm(
+        &self,
+        task_id: Uuid,
+        session_id: Uuid,
+        request: &ModelToolRequest,
+    ) -> JarvisResult<PluginCallResult> {
+        (*self).execute_model_planned_wasm(task_id, session_id, request)
+    }
 }
 
 impl RuntimeCommandStore for SqliteRepository {
@@ -403,6 +452,10 @@ impl RuntimeCommandStore for SqliteRepository {
         control: &mut dyn FnMut() -> MemoryRetrievalControl,
     ) -> JarvisResult<MemoryRetrieval> {
         self.retrieve_memory_context_with_control(query, sensitivity, control)
+    }
+
+    fn model_planned_wasm_manifests(&self) -> JarvisResult<Vec<crate::PluginManifest>> {
+        SqliteRepository::model_planned_wasm_manifests(self)
     }
 }
 
@@ -481,6 +534,7 @@ where
                 json!({
                     "session_id": task.session_id,
                     "sensitivity": request.sensitivity,
+                    "installed_wasm_tools_requested": request.installed_wasm_tools,
                 }),
             ),
         )?;
@@ -824,6 +878,18 @@ where
                 ));
             }
 
+            let selected_provider = route_evidence
+                .as_ref()
+                .and_then(|record| record.selected_provider);
+            // Preserve the exact catalog presented to this model step. The installed
+            // runner independently revalidates current provenance and grants just
+            // before execution, but a mid-step mutation must fail as an execution
+            // denial rather than changing the historical model allowlist.
+            let advertised_installed_wasm = self.registered_installed_wasm_manifests_for_provider(
+                selected_provider,
+                request.installed_wasm_tools,
+                request.proactive,
+            );
             let model_request = ModelRequest {
                 task_id: task.id,
                 session_id: task.session_id,
@@ -831,10 +897,9 @@ where
                 step_index,
                 tool_results: tool_results.clone(),
                 memory_context: memory_context.clone(),
-                first_party_tools: self.registered_first_party_model_tools_for_provider(
-                    route_evidence
-                        .as_ref()
-                        .and_then(|record| record.selected_provider),
+                first_party_tools: self.registered_model_tools_from_manifests(
+                    selected_provider,
+                    &advertised_installed_wasm,
                 ),
             };
             let execution_route = route_evidence
@@ -956,11 +1021,10 @@ where
                     sensitivity: request.sensitivity,
                     step_index,
                     tool_requests: &model_response.tool_requests,
-                    selected_provider: route_evidence
-                        .as_ref()
-                        .and_then(|record| record.selected_provider),
+                    selected_provider,
                     dry_run: request.dry_run,
                     proactive: request.proactive,
+                    advertised_installed_wasm: &advertised_installed_wasm,
                     expected_workspace_request: request.expected_workspace_request.as_ref(),
                     prior_tool_output_bytes: serde_json::to_vec(&tool_results)
                         .map(|encoded| encoded.len())
@@ -1108,6 +1172,7 @@ where
             selected_provider,
             dry_run,
             proactive,
+            advertised_installed_wasm,
             expected_workspace_request,
             prior_tool_output_bytes,
         } = context;
@@ -1144,11 +1209,15 @@ where
                 step_index,
                 tool_request,
                 selected_provider,
+                proactive,
+                advertised_installed_wasm,
             ) {
                 Ok(manifest) => manifest,
                 Err(error) => {
-                    let registered_tools =
-                        self.registered_first_party_tool_names_for_provider(selected_provider);
+                    let registered_tools = self.registered_model_tool_names_for_provider(
+                        selected_provider,
+                        advertised_installed_wasm,
+                    );
                     let guidance = tool_rejection_message(&error, &registered_tools);
                     self.record_audit(
                         audit_entries,
@@ -1194,8 +1263,10 @@ where
                             "workspace tool request does not match the explicit command authority"
                                 .to_string(),
                         );
-                        let registered_tools =
-                            self.registered_first_party_tool_names_for_provider(selected_provider);
+                        let registered_tools = self.registered_model_tool_names_for_provider(
+                            selected_provider,
+                            advertised_installed_wasm,
+                        );
                         let guidance = tool_rejection_message(&error, &registered_tools);
                         self.record_audit(
                             audit_entries,
@@ -1276,17 +1347,66 @@ where
                 continue;
             }
 
-            let call_result = match self.plugin_host.execute_cancellable(
-                PluginCallRequest::reactive(
-                    tool_request.plugin_id.clone(),
-                    tool_request.action.clone(),
-                    tool_request.input.clone(),
+            let execute_result = if manifest.source == PluginSource::LocalWasm {
+                let policy = crate::PermissionEngine::evaluate(&crate::PolicyRequest {
+                    task_id: Some(task.id),
+                    action: format!("{}.{}", manifest.id, action.name),
+                    requested_scopes: granted_scopes.clone(),
+                    granted_scopes: granted_scopes.clone(),
+                    risk_tier: action.risk_tier,
+                    sensitivity,
+                    emergency_paused: self.control.is_emergency_paused(),
+                    approval: None,
+                });
+                match policy.decision {
+                    crate::ApprovalDecision::Blocked => {
+                        Err(crate::JarvisError::PolicyBlocked(policy.reason))
+                    }
+                    crate::ApprovalDecision::RequireConfirmation => Ok(PluginCallResult {
+                        status: PluginCallStatus::ApprovalRequired,
+                        output: json!({ "approval_required": true }),
+                        metadata: crate::PluginCallMetadata {
+                            plugin_id: manifest.id.clone(),
+                            action: action.name.clone(),
+                            permissions: action.permissions.clone(),
+                            risk_tier: action.risk_tier,
+                            approval_required: true,
+                            approval_status: policy.approval_status,
+                            proactive,
+                            memory_access: action.memory_access,
+                            model_access: action.model_access,
+                            timeout_ms: action.timeout.timeout_ms,
+                            cancellation: action.cancellation,
+                            audit_fields: action.audit_fields.clone(),
+                            audit_summary: json!({
+                                "runtime_kind": "wasm",
+                                "execution_started": false,
+                                "input_output_content_redacted": true,
+                            }),
+                        },
+                    }),
+                    crate::ApprovalDecision::AllowSilently
+                    | crate::ApprovalDecision::AllowWithNotification => self
+                        .command_store
+                        .execute_model_planned_wasm(task.id, task.session_id, tool_request),
+                }
+            } else {
+                self.plugin_host.execute_cancellable(
+                    PluginCallRequest::reactive(
+                        tool_request.plugin_id.clone(),
+                        tool_request.action.clone(),
+                        tool_request.input.clone(),
+                    )
+                    .with_granted_scopes(granted_scopes)
+                    .with_sensitivity(sensitivity)
+                    .with_proactive(proactive),
+                    || {
+                        self.control.is_emergency_paused()
+                            || self.control.is_task_cancelled(task.id)
+                    },
                 )
-                .with_granted_scopes(granted_scopes)
-                .with_sensitivity(sensitivity)
-                .with_proactive(proactive),
-                || self.control.is_emergency_paused() || self.control.is_task_cancelled(task.id),
-            ) {
+            };
+            let call_result = match execute_result {
                 Ok(result) => result,
                 Err(error) => {
                     let status = if matches!(error, crate::JarvisError::PolicyBlocked(_)) {
@@ -1415,6 +1535,8 @@ where
         step_index: u32,
         request: &ModelToolRequest,
         selected_provider: Option<crate::router::ModelProvider>,
+        proactive: bool,
+        advertised_installed_wasm: &[PluginManifest],
     ) -> JarvisResult<crate::PluginManifest> {
         if request.plugin_id.trim().is_empty() {
             return Err(crate::JarvisError::Validation(
@@ -1432,7 +1554,19 @@ where
             ));
         }
 
-        let manifest = self.plugin_host.manifest(&request.plugin_id)?;
+        let manifest = match self.plugin_host.manifest(&request.plugin_id) {
+            Ok(manifest) => manifest,
+            Err(first_party_error) => {
+                if proactive || selected_provider != Some(crate::router::ModelProvider::Local) {
+                    return Err(first_party_error);
+                }
+                advertised_installed_wasm
+                    .iter()
+                    .find(|manifest| manifest.id == request.plugin_id)
+                    .cloned()
+                    .ok_or(first_party_error)?
+            }
+        };
         if request.plugin_id == "workspace_inspect"
             && selected_provider == Some(crate::router::ModelProvider::ChatGpt)
         {
@@ -1440,9 +1574,19 @@ where
                 "workspace inspection is restricted to local-model routes".to_string(),
             ));
         }
-        if manifest.source != PluginSource::FirstParty {
+        if manifest.source != PluginSource::FirstParty && manifest.source != PluginSource::LocalWasm
+        {
             return Err(crate::JarvisError::PolicyBlocked(
-                "runtime only executes first-party model-planned tools".to_string(),
+                "runtime only executes first-party or explicitly opted-in confined WASM model tools"
+                    .to_string(),
+            ));
+        }
+        if manifest.source == PluginSource::LocalWasm
+            && (proactive || selected_provider != Some(crate::router::ModelProvider::Local))
+        {
+            return Err(crate::JarvisError::PolicyBlocked(
+                "installed WASM model tools require explicit opt-in on a reactive local-model route"
+                    .to_string(),
             ));
         }
         let action = manifest.action(&request.action).ok_or_else(|| {
@@ -1462,21 +1606,67 @@ where
         Ok(manifest)
     }
 
-    fn registered_first_party_tool_names_for_provider(
+    fn registered_model_tool_names_for_provider(
         &self,
         selected_provider: Option<crate::router::ModelProvider>,
+        advertised_installed_wasm: &[PluginManifest],
     ) -> Vec<String> {
-        self.registered_first_party_model_tools_for_provider(selected_provider)
+        self.registered_model_tools_from_manifests(selected_provider, advertised_installed_wasm)
             .into_iter()
             .map(|tool| format!("{}.{}", tool.plugin_id, tool.action))
             .collect()
     }
 
+    #[cfg(test)]
     fn registered_first_party_model_tools_for_provider(
         &self,
         selected_provider: Option<crate::router::ModelProvider>,
+        installed_wasm_tools: bool,
+        proactive: bool,
     ) -> Vec<crate::model::ModelToolDefinition> {
-        model_tool_definitions_from_manifests(
+        let installed_wasm = self.registered_installed_wasm_manifests_for_provider(
+            selected_provider,
+            installed_wasm_tools,
+            proactive,
+        );
+        self.registered_model_tools_from_manifests(selected_provider, &installed_wasm)
+    }
+
+    fn registered_installed_wasm_manifests_for_provider(
+        &self,
+        selected_provider: Option<crate::router::ModelProvider>,
+        installed_wasm_tools: bool,
+        proactive: bool,
+    ) -> Vec<PluginManifest> {
+        if !installed_wasm_tools
+            || proactive
+            || selected_provider != Some(crate::router::ModelProvider::Local)
+        {
+            return Vec::new();
+        }
+        let first_party_ids = self
+            .plugin_host
+            .manifests()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|manifest| manifest.id)
+            .collect::<HashSet<_>>();
+        let manifests = self
+            .command_store
+            .model_planned_wasm_manifests()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|manifest| !first_party_ids.contains(&manifest.id))
+            .collect();
+        bounded_model_planned_wasm_manifests(manifests)
+    }
+
+    fn registered_model_tools_from_manifests(
+        &self,
+        selected_provider: Option<crate::router::ModelProvider>,
+        advertised_installed_wasm: &[PluginManifest],
+    ) -> Vec<crate::model::ModelToolDefinition> {
+        let mut tools = model_tool_definitions_from_manifests(
             self.plugin_host
                 .manifests()
                 .unwrap_or_default()
@@ -1486,7 +1676,35 @@ where
                     manifest.id != "workspace_inspect"
                         || selected_provider != Some(crate::router::ModelProvider::ChatGpt)
                 }),
-        )
+        );
+        if !advertised_installed_wasm.is_empty() {
+            let first_party_ids = tools
+                .iter()
+                .map(|tool| tool.plugin_id.clone())
+                .collect::<HashSet<_>>();
+            for manifest in advertised_installed_wasm {
+                if first_party_ids.contains(&manifest.id) {
+                    continue;
+                }
+                for action in &manifest.actions {
+                    tools.push(crate::model::ModelToolDefinition {
+                        plugin_id: manifest.id.clone(),
+                        action: action.name.clone(),
+                        description: action.description.clone(),
+                        input_schema: action.input_schema.schema.clone(),
+                    });
+                }
+            }
+        }
+        tools.sort_by(|left, right| {
+            left.plugin_id
+                .cmp(&right.plugin_id)
+                .then_with(|| left.action.cmp(&right.action))
+        });
+        tools.dedup_by(|left, right| {
+            left.plugin_id == right.plugin_id && left.action == right.action
+        });
+        tools
     }
 
     fn finish(
@@ -1514,6 +1732,53 @@ where
         self.hooks.task_finished(&response.task, &response);
         response
     }
+}
+
+fn bounded_model_planned_wasm_manifests(mut manifests: Vec<PluginManifest>) -> Vec<PluginManifest> {
+    manifests.sort_by(|left, right| left.id.cmp(&right.id));
+    let mut tool_count = 0_usize;
+    let mut catalog = Vec::new();
+    let mut bounded = Vec::new();
+
+    for mut manifest in manifests {
+        manifest
+            .actions
+            .sort_by(|left, right| left.name.cmp(&right.name));
+        manifest.actions.retain(|action| {
+            if tool_count >= MAX_MODEL_PLANNED_WASM_TOOLS
+                || action.description.len() > MAX_MODEL_PLANNED_WASM_DESCRIPTION_BYTES
+            {
+                return false;
+            }
+            let Ok(schema) = serde_json::to_vec(&action.input_schema.schema) else {
+                return false;
+            };
+            if schema.len() > MAX_MODEL_PLANNED_WASM_SCHEMA_BYTES {
+                return false;
+            }
+            catalog.push(crate::model::ModelToolDefinition {
+                plugin_id: manifest.id.clone(),
+                action: action.name.clone(),
+                description: action.description.clone(),
+                input_schema: action.input_schema.schema.clone(),
+            });
+            let within_catalog_budget = serde_json::to_vec(&catalog)
+                .is_ok_and(|encoded| encoded.len() <= MAX_MODEL_PLANNED_WASM_CATALOG_BYTES);
+            if !within_catalog_budget {
+                catalog.pop();
+                return false;
+            }
+            tool_count += 1;
+            true
+        });
+        if !manifest.actions.is_empty() {
+            bounded.push(manifest);
+        }
+        if tool_count >= MAX_MODEL_PLANNED_WASM_TOOLS {
+            break;
+        }
+    }
+    bounded
 }
 
 fn touch(task: &mut TaskRecord) {
@@ -1738,6 +2003,7 @@ struct ToolPlanContext<'a> {
     selected_provider: Option<crate::router::ModelProvider>,
     dry_run: bool,
     proactive: bool,
+    advertised_installed_wasm: &'a [PluginManifest],
     expected_workspace_request: Option<&'a serde_json::Value>,
     prior_tool_output_bytes: usize,
 }
@@ -2074,6 +2340,218 @@ mod tests {
         assert_eq!(response.task.status, TaskStatus::Completed);
         let tools = captured_tools.lock().expect("captured tools").clone();
         assert_eq!(tools, vec![vec!["runtime_status.inspect".to_string()]]);
+    }
+
+    #[tokio::test]
+    async fn installed_wasm_model_tools_require_opt_in_and_execute_only_on_local_route() {
+        let executions = Arc::new(AtomicUsize::new(0));
+        let store = ModelPlannedWasmStore {
+            executions: executions.clone(),
+        };
+        let captured_tools = Arc::new(Mutex::new(Vec::new()));
+        let runtime = ConversationRuntime::with_storage_parts(
+            RuntimeConfig::new(3),
+            RuntimeControl::default(),
+            InstalledWasmToolModel {
+                captured_tools: captured_tools.clone(),
+            },
+            NoopRuntimeHooks,
+            store,
+        );
+
+        let default_response = runtime
+            .execute_command(CommandRequest::new("do not expose installed tools"))
+            .await
+            .expect("default command");
+        assert_eq!(default_response.task.status, TaskStatus::Completed);
+        assert_eq!(executions.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            default_response.audit_entries[0].payload["installed_wasm_tools_requested"],
+            false
+        );
+        assert!(!captured_tools
+            .lock()
+            .expect("captured tools")
+            .first()
+            .expect("default inventory")
+            .iter()
+            .any(|tool| tool == "installed_compute.compute"));
+
+        captured_tools.lock().expect("captured tools").clear();
+        let opted_in = runtime
+            .execute_command(
+                CommandRequest::new("use confined compute").with_installed_wasm_tools(true),
+            )
+            .await
+            .expect("opted-in command");
+        assert_eq!(opted_in.task.status, TaskStatus::Completed);
+        assert_eq!(executions.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            opted_in.audit_entries[0].payload["installed_wasm_tools_requested"],
+            true
+        );
+        assert!(captured_tools
+            .lock()
+            .expect("captured tools")
+            .iter()
+            .flatten()
+            .any(|tool| tool == "installed_compute.compute"));
+        assert_eq!(opted_in.tool_results[0].output["computed"], true);
+
+        let private_response = runtime
+            .execute_command(
+                CommandRequest::new("use confined compute on private context")
+                    .with_sensitivity(Sensitivity::Private)
+                    .with_installed_wasm_tools(true),
+            )
+            .await
+            .expect("private installed tool request");
+        assert_eq!(private_response.task.status, TaskStatus::WaitingForApproval);
+        assert_eq!(executions.load(Ordering::SeqCst), 1);
+        assert_eq!(private_response.tool_results.len(), 1);
+        assert_eq!(private_response.tool_results[0].status, "approval_required");
+        assert_eq!(
+            private_response.tool_results[0].output,
+            json!({ "approval_required": true })
+        );
+        assert!(private_response.audit_entries.iter().any(|entry| {
+            entry.event_type == "tool_execution_result"
+                && entry.payload["approval_required"] == true
+                && entry.payload["approval_status"] == "pending"
+        }));
+
+        assert!(!runtime
+            .registered_first_party_model_tools_for_provider(
+                Some(crate::router::ModelProvider::ChatGpt),
+                true,
+                false,
+            )
+            .iter()
+            .any(|tool| tool.plugin_id == "installed_compute"));
+        assert!(!runtime
+            .registered_first_party_model_tools_for_provider(
+                Some(crate::router::ModelProvider::Local),
+                true,
+                true,
+            )
+            .iter()
+            .any(|tool| tool.plugin_id == "installed_compute"));
+    }
+
+    #[test]
+    fn installed_wasm_model_catalog_is_deterministically_bounded() {
+        let mut manifest = model_planned_wasm_manifest();
+        let template = manifest.actions.remove(0);
+
+        let mut oversized_description = template.clone();
+        oversized_description.name = "00_oversized_description".to_string();
+        oversized_description.description =
+            "x".repeat(MAX_MODEL_PLANNED_WASM_DESCRIPTION_BYTES + 1);
+        manifest.actions.push(oversized_description);
+
+        let mut oversized_schema = template.clone();
+        oversized_schema.name = "01_oversized_schema".to_string();
+        oversized_schema.input_schema = JsonSchema::new(json!({
+            "type": "object",
+            "description": "x".repeat(MAX_MODEL_PLANNED_WASM_SCHEMA_BYTES + 1)
+        }));
+        manifest.actions.push(oversized_schema);
+
+        for index in (0..MAX_MODEL_PLANNED_WASM_TOOLS + 2).rev() {
+            let mut action = template.clone();
+            action.name = format!("tool_{index:02}");
+            manifest.actions.push(action);
+        }
+
+        let bounded = bounded_model_planned_wasm_manifests(vec![manifest]);
+        let actions = bounded
+            .iter()
+            .flat_map(|manifest| {
+                manifest
+                    .actions
+                    .iter()
+                    .map(move |action| (manifest, action))
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(actions.len(), MAX_MODEL_PLANNED_WASM_TOOLS);
+        assert!(actions
+            .iter()
+            .all(|(_, action)| action.name.starts_with("tool_")));
+        assert!(actions.windows(2).all(|pair| {
+            (pair[0].0.id.as_str(), pair[0].1.name.as_str())
+                < (pair[1].0.id.as_str(), pair[1].1.name.as_str())
+        }));
+        let catalog = actions
+            .iter()
+            .map(|(manifest, action)| crate::model::ModelToolDefinition {
+                plugin_id: manifest.id.clone(),
+                action: action.name.clone(),
+                description: action.description.clone(),
+                input_schema: action.input_schema.schema.clone(),
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            serde_json::to_vec(&catalog)
+                .expect("catalog serializes")
+                .len()
+                <= MAX_MODEL_PLANNED_WASM_CATALOG_BYTES
+        );
+
+        let mut escaped_manifest = model_planned_wasm_manifest();
+        let escaped_template = escaped_manifest.actions.remove(0);
+        for index in 0..MAX_MODEL_PLANNED_WASM_TOOLS {
+            let mut action = escaped_template.clone();
+            action.name = format!("escaped_{index:02}");
+            action.description = "\\".repeat(MAX_MODEL_PLANNED_WASM_DESCRIPTION_BYTES);
+            action.input_schema = JsonSchema::new(json!({
+                "type": "object",
+                "description": "\\".repeat(2_500)
+            }));
+            escaped_manifest.actions.push(action);
+        }
+        let escaped_bounded = bounded_model_planned_wasm_manifests(vec![escaped_manifest]);
+        let escaped_catalog = model_tool_definitions_from_manifests(escaped_bounded);
+        assert!(escaped_catalog.len() < MAX_MODEL_PLANNED_WASM_TOOLS);
+        assert!(
+            serde_json::to_vec(&escaped_catalog)
+                .expect("escaped catalog serializes")
+                .len()
+                <= MAX_MODEL_PLANNED_WASM_CATALOG_BYTES
+        );
+    }
+
+    #[test]
+    fn installed_wasm_identifier_collision_preserves_first_party_catalog() {
+        let mut plugin_host = PluginHost::new();
+        plugin_host
+            .register(InventoryPlugin {
+                plugin_id: "installed_compute",
+                source: PluginSource::FirstParty,
+            })
+            .expect("colliding first-party plugin registers");
+        let runtime = ConversationRuntime::with_storage_parts(
+            RuntimeConfig::default(),
+            RuntimeControl::default(),
+            InventoryCaptureModel {
+                captured_tools: Arc::new(Mutex::new(Vec::new())),
+            },
+            NoopRuntimeHooks,
+            ModelPlannedWasmStore {
+                executions: Arc::new(AtomicUsize::new(0)),
+            },
+        )
+        .with_plugin_host(plugin_host);
+
+        let tools = runtime.registered_first_party_model_tools_for_provider(
+            Some(crate::router::ModelProvider::Local),
+            true,
+            false,
+        );
+
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].plugin_id, "installed_compute");
+        assert_eq!(tools[0].action, "inspect");
     }
 
     #[tokio::test]
@@ -2793,6 +3271,146 @@ mod tests {
 
     struct InventoryCaptureModel {
         captured_tools: Arc<Mutex<Vec<Vec<String>>>>,
+    }
+
+    struct InstalledWasmToolModel {
+        captured_tools: Arc<Mutex<Vec<Vec<String>>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl ModelExecutor for InstalledWasmToolModel {
+        async fn execute(&self, request: ModelRequest) -> JarvisResult<ModelResponse> {
+            self.captured_tools.lock().expect("captured tools").push(
+                request
+                    .first_party_tools
+                    .iter()
+                    .map(|tool| format!("{}.{}", tool.plugin_id, tool.action))
+                    .collect(),
+            );
+            let tool_requests = if request.step_index == 0
+                && request
+                    .first_party_tools
+                    .iter()
+                    .any(|tool| tool.plugin_id == "installed_compute")
+            {
+                vec![ModelToolRequest::new(
+                    "installed_compute",
+                    "compute",
+                    json!({}),
+                )]
+            } else {
+                Vec::new()
+            };
+            Ok(ModelResponse {
+                route: ModelRoute::fake_local("installed wasm tool model"),
+                message: "installed WASM tool step".to_string(),
+                complete: tool_requests.is_empty(),
+                output_chunks: Vec::new(),
+                tool_requests,
+            })
+        }
+    }
+
+    struct ModelPlannedWasmStore {
+        executions: Arc<AtomicUsize>,
+    }
+
+    impl RuntimeCommandStore for ModelPlannedWasmStore {
+        fn create_task(&self, session_id: Uuid, user_input: String) -> JarvisResult<TaskRecord> {
+            NoopRuntimeCommandStore.create_task(session_id, user_input)
+        }
+
+        fn update_task_status(
+            &self,
+            task: &mut TaskRecord,
+            status: TaskStatus,
+        ) -> JarvisResult<()> {
+            NoopRuntimeCommandStore.update_task_status(task, status)
+        }
+
+        fn append_audit_entry(&self, entry: &AuditEntry) -> JarvisResult<()> {
+            NoopRuntimeCommandStore.append_audit_entry(entry)
+        }
+
+        fn append_model_route_record(&self, record: &ModelRouteRecord) -> JarvisResult<()> {
+            NoopRuntimeCommandStore.append_model_route_record(record)
+        }
+
+        fn model_planned_wasm_manifests(&self) -> JarvisResult<Vec<PluginManifest>> {
+            Ok(vec![model_planned_wasm_manifest()])
+        }
+
+        fn execute_model_planned_wasm(
+            &self,
+            _task_id: Uuid,
+            _session_id: Uuid,
+            request: &ModelToolRequest,
+        ) -> JarvisResult<PluginCallResult> {
+            assert_eq!(request.plugin_id, "installed_compute");
+            assert_eq!(request.action, "compute");
+            self.executions.fetch_add(1, Ordering::SeqCst);
+            let action = model_planned_wasm_manifest().actions.remove(0);
+            Ok(PluginCallResult {
+                status: PluginCallStatus::Completed,
+                output: json!({"computed": true}),
+                metadata: crate::PluginCallMetadata {
+                    plugin_id: request.plugin_id.clone(),
+                    action: request.action.clone(),
+                    permissions: Vec::new(),
+                    risk_tier: crate::RiskTier::Low,
+                    approval_required: false,
+                    approval_status: crate::ApprovalStatus::NotRequired,
+                    proactive: false,
+                    memory_access: PluginAccess::None,
+                    model_access: PluginAccess::None,
+                    timeout_ms: action.timeout.timeout_ms,
+                    cancellation: action.cancellation,
+                    audit_fields: Vec::new(),
+                    audit_summary: json!({
+                        "runtime_kind": "wasm",
+                        "input_output_content_redacted": true,
+                    }),
+                },
+            })
+        }
+    }
+
+    fn model_planned_wasm_manifest() -> PluginManifest {
+        PluginManifest {
+            manifest_schema_version: 1,
+            id: "installed_compute".to_string(),
+            name: "Installed Compute".to_string(),
+            version: "1.0.0".to_string(),
+            source: PluginSource::LocalWasm,
+            author: "Jarvis Tests".to_string(),
+            source_path: Some("/redacted".to_string()),
+            subprocess: None,
+            wasm: Some(crate::PluginWasmManifest {
+                module: "plugin.wasm".to_string(),
+                abi: crate::PluginWasmAbi::JarvisJsonV1,
+            }),
+            publisher_signature: None,
+            actions: vec![PluginActionManifest {
+                name: "compute".to_string(),
+                description: "Run confined local computation.".to_string(),
+                permissions: Vec::new(),
+                risk_tier: crate::RiskTier::Low,
+                input_schema: JsonSchema::empty_object(),
+                output_schema: JsonSchema::new(json!({
+                    "type": "object",
+                    "properties": {"computed": {"type": "boolean"}},
+                    "required": ["computed"],
+                    "additionalProperties": false
+                })),
+                proactive: false,
+                memory_access: PluginAccess::None,
+                model_access: PluginAccess::None,
+                network_access: Default::default(),
+                audit_fields: Vec::new(),
+                timeout: PluginTimeout::default_for_action(),
+                cancellation: CancellationBehavior::Cooperative,
+            }],
+        }
     }
 
     #[async_trait::async_trait]

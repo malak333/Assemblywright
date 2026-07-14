@@ -12,6 +12,8 @@ public final class CommandConsoleModel: ObservableObject {
     @Published public private(set) var isDegraded: Bool
     @Published public private(set) var degradedReason: String?
     @Published public var memoryContextEnabled: Bool
+    @Published public var installedWasmToolsEnabled: Bool
+    @Published public var toolExecutionEnabled: Bool
 
     private let client: any JarvisCoreClient
 
@@ -26,6 +28,8 @@ public final class CommandConsoleModel: ObservableObject {
         self.isDegraded = false
         self.degradedReason = nil
         self.memoryContextEnabled = false
+        self.installedWasmToolsEnabled = false
+        self.toolExecutionEnabled = false
     }
 
     public func refreshHealth() async {
@@ -61,7 +65,8 @@ public final class CommandConsoleModel: ObservableObject {
     public func submit(
         input: String,
         dryRun: Bool = true,
-        memoryContext: Bool? = nil
+        memoryContext: Bool? = nil,
+        installedWasmTools: Bool? = nil
     ) async {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -72,10 +77,10 @@ public final class CommandConsoleModel: ObservableObject {
                 JarvisCommandRequest(
                     input: trimmed,
                     dryRun: dryRun,
-                    memoryContext: memoryContext ?? self.memoryContextEnabled
+                    memoryContext: memoryContext ?? self.memoryContextEnabled,
+                    installedWasmTools: installedWasmTools ?? self.installedWasmToolsEnabled
                 )
             )
-            self.isPaused = response.task.status == "blocked" ? true : self.isPaused
             self.transcript.append(
                 TranscriptEntry(role: .assistant, text: response.message)
             )

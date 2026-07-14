@@ -232,21 +232,33 @@ to explain what happened:
   a completed local subprocess, while `os_sandbox_enforced` remains false until
   a real OS sandbox or host-level egress policy is enforced by the runner.
 - Model-originated tool requests are stricter than direct plugin registry
-  inspection. They may target only registered first-party plugin actions
-  advertised to the provider. `/tools/model` exposes the redacted registered
-  first-party model-tool catalog used for provider grounding; Ollama receives it
-  as a JSON allowlist of exact `plugin_id` and `action` values, and
-  ChatGPT/OpenAI-compatible native tool definitions are projected from the same
-  catalog. The normative path is provider response parsing, canonical envelope
-  or native-name normalization, lookup against the registered first-party
-  catalog, input schema validation, policy/approval, then execution. Unknown
-  plugin IDs, undeclared actions,
-  non-object or schema-invalid inputs, and non-first-party requests fail closed
-  before policy checks or execution, emit `tool_request_rejected` audit
-  evidence, and are returned to the model as `rejected` tool results for
-  bounded recovery on the next step. Oversized tool plans and malformed provider
-  envelopes still fail the task. Installed plugins, including enabled
-  `local_subprocess` plugins, are never model-planned tools.
+  inspection. The default provider inventory contains only registered
+  first-party actions, and `/tools/model` remains the redacted first-party
+  catalog inspection surface. An explicit per-command `installed_wasm_tools`
+  opt-in may extend only a reactive local-model step with currently enabled,
+  exact-provenance `local_wasm` actions holding `wasm_compute`; proactive and
+  cloud routes and every installed `local_subprocess` action remain excluded.
+  The installed extension sorts identifiers and actions, then admits at most
+  16 actions under a 1 KiB description limit, 16 KiB serialized input-schema
+  limit, and 64 KiB combined catalog budget.
+  Before any installed guest starts, the runtime also applies the normal
+  sensitivity policy; private, credential-adjacent, and restricted requests
+  return a pending approval result.
+  Discovery snapshots at most 64 enabled `wasm_compute` candidates under the
+  repository mutex and performs bounded provenance verification after unlock;
+  it rechecks unchanged registry state before advertisement. Provenance rejects
+  source trees above 8,192 entries, 4,096 files, 64 levels, or 64 MiB.
+  Ollama receives the exact per-step inventory as a JSON allowlist of
+  `plugin_id` and `action` values. The normative path is provider response
+  parsing, canonical envelope or native-name normalization, lookup against that
+  exact advertised catalog, input-schema validation, policy evaluation, and
+  execution-time grant/eligibility/provenance revalidation before Wasmi entry.
+  Unknown IDs, undeclared actions, non-object or schema-invalid inputs, and
+  installed actions outside that narrow opt-in fail closed before execution,
+  emit `tool_request_rejected` audit evidence, and return `rejected` tool
+  results for bounded recovery. Oversized plans and malformed provider
+  envelopes still fail the task. Installed subprocess plugins are never
+  model-planned tools.
 - Enabled installed plugin execution is limited to `local_subprocess` manifests
   with the `subprocess_stdio` grant for non-network actions and
   `subprocess_stdio_network` for network-declaring actions. The command must

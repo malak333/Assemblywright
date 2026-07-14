@@ -37,14 +37,20 @@ release requirements, not optional UX guidance.
   transport and dominate a simultaneous model completion before exposure.
 - Degraded modes must be visible when local models, microphone access, TTS,
   ChatGPT, plugins, persistence, or IPC are unavailable.
-- Model-originated tool calls must be constrained to runtime-derived
-  first-party inventory advertised from the registered `PluginHost` manifests.
+- Model-originated tool calls must be constrained to runtime-derived inventory.
+  The default inventory is the registered first-party `PluginHost` manifests.
+  A separate installed-tool catalog may be added only when the individual
+  command explicitly opts in with `installed_wasm_tools`, routing selected a
+  reactive local-model provider, and each advertised installed record is an
+  enabled, currently provenance-matching, eligible `local_wasm` plugin.
   Unknown plugin IDs, undeclared actions, non-object inputs, schema failures,
-  and non-first-party requests must fail closed before execution and be
+  and requests outside the exact per-step advertised inventory must fail closed before execution and be
   surfaced as rejected tool results for bounded model recovery; oversized plans
   and malformed provider envelopes must fail the task. Native provider
-  function-call formatting cannot bypass registry lookup or schema validation,
-  and installed plugin records cannot become model-planned tools.
+  function-call formatting cannot bypass registry lookup or schema validation.
+  Cloud or proactive routes, commands without the opt-in, identifier collisions,
+  ineligible or stale records, and every installed `local_subprocess` action
+  must remain absent from the catalog and fail closed before execution.
 - Production workspace inspection is disabled unless an operator configures an
   allowlisted root. Requests may contain only an opaque root ID and validated
   relative path. Descriptor-anchored no-follow traversal must reject absolute,
@@ -113,6 +119,20 @@ release requirements, not optional UX guidance.
   external effects before Jarvis discards its late result.
   Output acceptance atomically finalizes the active cancellation ID; requests
   arriving after that point report that no active execution was found.
+  Model planning for these actions is disabled by default, local-model-only,
+  reactive-only, and explicitly enabled per command. Advertisement must expose
+  no more than 16 actions, 1 KiB per description, 16 KiB per input schema, and
+  64 KiB across the installed-tool catalog, never installed paths, module
+  bytes, hashes, publisher material, or subprocess configuration. Execution
+  must pass the normal sensitivity policy; private, credential-adjacent, and
+  restricted commands require confirmation before Wasmi starts. Execution
+  must repeat eligibility, enabled-grant, schema, and exact-byte provenance
+  validation immediately before guest entry; a catalog snapshot is not
+  authority to run changed or disabled code.
+  Discovery snapshots no more than 64 enabled `wasm_compute` candidates while
+  holding the repository mutex, releases it before provenance hashing, and
+  rechecks unchanged database state before advertisement. Source-tree
+  provenance rejects more than 8,192 entries, 4,096 files, 64 levels, or 64 MiB.
 - Audit logs must explain model route, permission checks, tool calls,
   approvals, denials, files touched, external actions attempted, failures, and
   final state.
@@ -188,7 +208,11 @@ policy:
 - Third-party plugin marketplace.
 - Cloud-first routing.
 - Plugin access outside declared scopes.
-- Executing locally installed plugin metadata. Local installs begin as disabled
+- Treating arbitrary installed plugin metadata as model-plannable authority.
+  The sole model-planned exception is an explicitly opted-in, reactive local
+  route selecting a currently eligible `local_wasm` action under the preceding
+  confinement rules; `local_subprocess`, cloud, and proactive model planning
+  remain blocked. Local installs begin as disabled
   manifest metadata with `execution_grant: metadata_only`. Any installed-plugin
   run request must fail closed, append audit evidence, and report
   `side_effect_executed: false` unless the manifest is a verified

@@ -31,6 +31,10 @@ const MAX_PLUGIN_PROGRESS_STAGE_CHARS: usize = 64;
 const MAX_PLUGIN_PROGRESS_MESSAGE_CHARS: usize = 240;
 const MAX_PLUGIN_STDOUT_BYTES: usize = 1024 * 1024;
 const MAX_PLUGIN_STDERR_BYTES: usize = 256 * 1024;
+const MAX_PLUGIN_SOURCE_TREE_FILES: usize = 4_096;
+const MAX_PLUGIN_SOURCE_TREE_ENTRIES: usize = 8_192;
+const MAX_PLUGIN_SOURCE_TREE_DEPTH: usize = 64;
+const MAX_PLUGIN_SOURCE_TREE_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1002,10 +1006,20 @@ fn source_tree_snapshot(root: &Path) -> JarvisResult<SourceTreeSnapshot> {
     })?;
     let mut files = Vec::new();
     let mut normalized_paths = HashSet::new();
-    collect_source_tree_files(&canonical_root, &canonical_root, &mut files)?;
+    let mut discovered_bytes = 0_u64;
+    let mut discovered_entries = 0_usize;
+    collect_source_tree_files(
+        &canonical_root,
+        &canonical_root,
+        &mut files,
+        &mut discovered_bytes,
+        &mut discovered_entries,
+        0,
+    )?;
     files.sort_by(|left, right| left.0.cmp(&right.0));
 
     let mut digest = Sha256::new();
+    let mut hashed_bytes = 0_u64;
     digest.update(b"jarvis-plugin-source-tree-sha256-v1\0");
     digest.update(b"ignore-policy-v1\0");
     for (relative_path, file_path) in &files {
@@ -1015,9 +1029,23 @@ fn source_tree_snapshot(root: &Path) -> JarvisResult<SourceTreeSnapshot> {
                 "plugin source tree has case-insensitive duplicate path: {relative_path}"
             )));
         }
-        let file_bytes = fs::read(file_path).map_err(|err| {
+        let remaining = MAX_PLUGIN_SOURCE_TREE_BYTES.saturating_sub(hashed_bytes);
+        let mut file = fs::File::open(file_path).map_err(|err| {
             JarvisError::Validation(format!("read plugin source tree file: {err}"))
         })?;
+        let mut file_bytes = Vec::new();
+        Read::by_ref(&mut file)
+            .take(remaining.saturating_add(1))
+            .read_to_end(&mut file_bytes)
+            .map_err(|err| {
+                JarvisError::Validation(format!("read plugin source tree file: {err}"))
+            })?;
+        if file_bytes.len() as u64 > remaining {
+            return Err(JarvisError::Validation(format!(
+                "plugin source tree exceeds {MAX_PLUGIN_SOURCE_TREE_BYTES} bytes"
+            )));
+        }
+        hashed_bytes = hashed_bytes.saturating_add(file_bytes.len() as u64);
         digest.update(b"file\0");
         update_digest_with_len_prefixed_bytes(&mut digest, relative_path.as_bytes());
         update_digest_with_len_prefixed_bytes(&mut digest, &file_bytes);
@@ -1033,11 +1061,31 @@ fn collect_source_tree_files(
     root: &Path,
     current: &Path,
     files: &mut Vec<(String, PathBuf)>,
+    total_bytes: &mut u64,
+    total_entries: &mut usize,
+    depth: usize,
 ) -> JarvisResult<()> {
-    let mut entries = fs::read_dir(current)
-        .map_err(|err| JarvisError::Validation(format!("read plugin source tree: {err}")))?
-        .collect::<Result<Vec<_>, _>>()
+    if depth > MAX_PLUGIN_SOURCE_TREE_DEPTH {
+        return Err(JarvisError::Validation(format!(
+            "plugin source tree exceeds depth {MAX_PLUGIN_SOURCE_TREE_DEPTH}"
+        )));
+    }
+    let read_dir = fs::read_dir(current)
         .map_err(|err| JarvisError::Validation(format!("read plugin source tree: {err}")))?;
+    let mut entries = Vec::new();
+    for entry in read_dir {
+        if *total_entries >= MAX_PLUGIN_SOURCE_TREE_ENTRIES {
+            return Err(JarvisError::Validation(format!(
+                "plugin source tree exceeds {MAX_PLUGIN_SOURCE_TREE_ENTRIES} entries"
+            )));
+        }
+        entries.push(
+            entry.map_err(|err| {
+                JarvisError::Validation(format!("read plugin source tree: {err}"))
+            })?,
+        );
+        *total_entries += 1;
+    }
     entries.sort_by_key(|entry| entry.path());
 
     for entry in entries {
@@ -1057,10 +1105,23 @@ fn collect_source_tree_files(
             continue;
         }
         if file_type.is_dir() {
-            collect_source_tree_files(root, &path, files)?;
+            collect_source_tree_files(root, &path, files, total_bytes, total_entries, depth + 1)?;
             continue;
         }
         if file_type.is_file() {
+            if files.len() >= MAX_PLUGIN_SOURCE_TREE_FILES {
+                return Err(JarvisError::Validation(format!(
+                    "plugin source tree exceeds {MAX_PLUGIN_SOURCE_TREE_FILES} files"
+                )));
+            }
+            *total_bytes = total_bytes.checked_add(metadata.len()).ok_or_else(|| {
+                JarvisError::Validation("plugin source tree byte count overflowed".to_string())
+            })?;
+            if *total_bytes > MAX_PLUGIN_SOURCE_TREE_BYTES {
+                return Err(JarvisError::Validation(format!(
+                    "plugin source tree exceeds {MAX_PLUGIN_SOURCE_TREE_BYTES} bytes"
+                )));
+            }
             let canonical_path = fs::canonicalize(&path).map_err(|err| {
                 JarvisError::Validation(format!("plugin source tree file is not readable: {err}"))
             })?;
@@ -1628,8 +1689,19 @@ impl InstalledPlugin {
 }
 
 fn sha256_file(path: &Path) -> JarvisResult<String> {
-    let bytes = fs::read(path)
+    let mut file = fs::File::open(path)
         .map_err(|err| JarvisError::Validation(format!("hash {}: {err}", path.display())))?;
+    let mut bytes = Vec::new();
+    Read::by_ref(&mut file)
+        .take(MAX_PLUGIN_SOURCE_TREE_BYTES.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|err| JarvisError::Validation(format!("hash {}: {err}", path.display())))?;
+    if bytes.len() as u64 > MAX_PLUGIN_SOURCE_TREE_BYTES {
+        return Err(JarvisError::Validation(format!(
+            "plugin file exceeds {MAX_PLUGIN_SOURCE_TREE_BYTES} bytes: {}",
+            path.display()
+        )));
+    }
     let digest = Sha256::digest(&bytes);
     Ok(format!("{digest:x}"))
 }
@@ -2672,6 +2744,47 @@ mod tests {
         fs::write(right.path().join("nested/tool.txt"), "changed").expect("right tool changed");
         let changed = source_tree_snapshot(right.path()).expect("changed snapshot");
         assert_ne!(right_snapshot.sha256, changed.sha256);
+    }
+
+    #[test]
+    fn source_tree_snapshot_rejects_oversized_tree_before_reading_contents() {
+        let dir = tempfile::tempdir().expect("oversized temp plugin dir");
+        let oversized = fs::File::create(dir.path().join("oversized.bin"))
+            .expect("create oversized sparse file");
+        oversized
+            .set_len(MAX_PLUGIN_SOURCE_TREE_BYTES + 1)
+            .expect("size oversized sparse file");
+
+        let error = source_tree_snapshot(dir.path()).expect_err("reject oversized source tree");
+
+        assert!(error
+            .to_string()
+            .contains("plugin source tree exceeds 67108864 bytes"));
+    }
+
+    #[test]
+    fn source_tree_snapshot_rejects_excessive_entry_fanout_and_depth() {
+        let fanout = tempfile::tempdir().expect("fanout temp plugin dir");
+        for index in 0..=MAX_PLUGIN_SOURCE_TREE_ENTRIES {
+            fs::create_dir(fanout.path().join(format!("dir-{index:05}")))
+                .expect("create fanout directory");
+        }
+        let fanout_error =
+            source_tree_snapshot(fanout.path()).expect_err("reject excessive fanout");
+        assert!(fanout_error
+            .to_string()
+            .contains("plugin source tree exceeds 8192 entries"));
+
+        let depth = tempfile::tempdir().expect("depth temp plugin dir");
+        let mut current = depth.path().to_path_buf();
+        for index in 0..=MAX_PLUGIN_SOURCE_TREE_DEPTH {
+            current = current.join(format!("d{index}"));
+            fs::create_dir(&current).expect("create nested directory");
+        }
+        let depth_error = source_tree_snapshot(depth.path()).expect_err("reject excessive depth");
+        assert!(depth_error
+            .to_string()
+            .contains("plugin source tree exceeds depth 64"));
     }
 
     #[cfg(unix)]

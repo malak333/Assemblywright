@@ -3,8 +3,9 @@
 Jarvis is a local-first macOS assistant foundation. The current repo implements
 the Rust core described in [DESIGN.md](DESIGN.md): durable task/audit
 primitives, policy-gated first-party plugin commands, bounded model-planned
-first-party tool orchestration, strict provider response envelopes for
-first-party tool requests, local-first model routing evidence, opt-in
+first-party tool orchestration plus explicit local-only installed WASM tool
+opt-in, strict provider response envelopes for model-tool requests, local-first
+model routing evidence, opt-in
 Ollama-compatible local HTTP and ChatGPT/OpenAI-compatible provider boundaries,
 bounded Ollama-native NDJSON transport streaming with terminal-frame
 quarantine and in-flight cancellation,
@@ -98,13 +99,15 @@ blocks restricted data and sends only redacted route context. Provider failures
 return failed command responses with redacted diagnostics instead of becoming
 IPC transport errors. Provider text responses may also use a strict JSON
 envelope with `message`, `complete`, and `tool_requests`; accepted tool
-requests still pass through the existing first-party schema, policy, approval,
-and audit path. ChatGPT/OpenAI-compatible responses may also return native
+requests still pass through the existing schema, policy, approval, and audit
+path. ChatGPT/OpenAI-compatible responses may also return native
 OpenAI `tool_calls` for the advertised first-party tool definitions; those are
 translated into the same bounded first-party path. Plain text remains
-supported, and this is not installed-plugin orchestration or broad third-party
-tool execution. `/tools/model` and `jarvis tools list` expose the same redacted
-registered first-party model-tool catalog that providers receive. Local-model
+supported. `/tools/model` and `jarvis tools list` expose the redacted default
+first-party catalog; an opted-in command derives its additional installed WASM
+catalog at execution time rather than broadening that default inspection
+surface. That extension is deterministic and capped at 16 actions, 1 KiB per
+description, 16 KiB per input schema, and 64 KiB combined. Local-model
 prompts now include that catalog as a JSON allowlist of exact `plugin_id` and
 `action` pairs, and hallucinated or invalid model-planned plugin IDs/actions
 fail closed before policy checks or tool execution, then feed registered-tool
@@ -140,10 +143,13 @@ argument contract fails closed before model execution; update the bundled
 Codex/ChatGPT app or CLI before retrying. Use `OpenAI API` when a non-agentic
 HTTP provider boundary is required.
 Plugin availability for model planning means the `/tools/model` first-party
-catalog only. `jarvis tools list`, `jarvis tools model`, and
-`jarvis tools catalog` all print that same catalog. Chrome/browser-extension
-capabilities are unavailable unless they appear there, and installed local
-plugins remain outside model-originated planning.
+catalog by default. `jarvis tools list`, `jarvis tools model`, and
+`jarvis tools catalog` all print that same default catalog. A command can pass
+`--installed-wasm-tools` (the Swift console has the matching toggle) to add only
+currently eligible installed `local_wasm` actions after a reactive local-model
+route is selected. The flag defaults false, never applies to ChatGPT/cloud or
+proactive commands, and never admits `local_subprocess`. Chrome/browser-extension
+capabilities remain unavailable unless they are registered first-party tools.
 Production inventory excludes the deterministic `fake_*` test fixtures. It
 always includes the bounded metadata-only `system_status.status` action. The
 macOS app owns durable, user-selected workspace grants as security-scoped
@@ -225,6 +231,15 @@ presented as `not OS sandboxed`.
 Runs may carry a unique `--cancellation-id`; `jarvis plugins cancel-run <id>`
 requests cooperative cancellation through local IPC. Wasmi checks it between
 fuel slices and before accepting output.
+
+Model-planned use of this runtime is default-off. When a reactive local-model
+command explicitly sets `installed_wasm_tools`, Jarvis derives a redacted
+catalog only from enabled `wasm_compute` records with current exact-byte
+provenance and eligible action schemas, rejects first-party identifier
+collisions, and repeats those checks immediately before guest execution. The
+catalog and audit surfaces omit module bytes, paths, hashes, inputs, outputs,
+publisher material, and subprocess configuration. Cloud/proactive routes and
+all installed subprocess plugins stay excluded.
 
 ## Production Work Protocol
 
