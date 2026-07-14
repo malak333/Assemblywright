@@ -1773,7 +1773,9 @@ struct JarvisMacCoreTests {
         try await Task.sleep(for: .milliseconds(10))
         coordinator.stop()
         coordinator.start()
-        try await Task.sleep(for: .milliseconds(100))
+        for _ in 0..<40 where adapter.deliveredRequests.isEmpty {
+            try await Task.sleep(for: .milliseconds(25))
+        }
         #expect(coordinator.isRunning)
         #expect(adapter.deliveredRequests.count == 1)
 
