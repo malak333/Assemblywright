@@ -8,6 +8,9 @@ public final class CommandConsoleModel: ObservableObject {
     @Published public private(set) var isPaused: Bool
     @Published public private(set) var pauseStatus: JarvisPauseResponse?
     @Published public private(set) var isWorking: Bool
+    @Published public private(set) var isCancelling: Bool
+    @Published public private(set) var activeCancellationID: UUID?
+    @Published public private(set) var cancellationStatus: String?
     @Published public private(set) var lastError: String?
     @Published public private(set) var isDegraded: Bool
     @Published public private(set) var degradedReason: String?
@@ -24,6 +27,9 @@ public final class CommandConsoleModel: ObservableObject {
         self.isPaused = false
         self.pauseStatus = nil
         self.isWorking = false
+        self.isCancelling = false
+        self.activeCancellationID = nil
+        self.cancellationStatus = nil
         self.lastError = nil
         self.isDegraded = false
         self.degradedReason = nil
@@ -70,21 +76,52 @@ public final class CommandConsoleModel: ObservableObject {
     ) async {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        guard activeCancellationID == nil, !isWorking else {
+            lastError = "A command is already active; cancel it or wait for completion before submitting another."
+            return
+        }
 
         transcript.append(TranscriptEntry(role: .user, text: trimmed))
+        let cancellationID = UUID()
+        activeCancellationID = cancellationID
+        cancellationStatus = nil
+        defer {
+            if activeCancellationID == cancellationID {
+                activeCancellationID = nil
+            }
+        }
         await run {
             let response = try await self.client.submit(
                 JarvisCommandRequest(
                     input: trimmed,
                     dryRun: dryRun,
                     memoryContext: memoryContext ?? self.memoryContextEnabled,
-                    installedWasmTools: installedWasmTools ?? self.installedWasmToolsEnabled
+                    installedWasmTools: installedWasmTools ?? self.installedWasmToolsEnabled,
+                    cancellationID: cancellationID
                 )
             )
             self.transcript.append(
                 TranscriptEntry(role: .assistant, text: response.message)
             )
             self.activity.insert(contentsOf: ActivityEntry.entries(from: response), at: 0)
+        }
+    }
+
+    public func cancelActiveCommand() async {
+        guard let cancellationID = activeCancellationID, !isCancelling else { return }
+        isCancelling = true
+        lastError = nil
+        defer { isCancelling = false }
+
+        do {
+            let response = try await client.cancelCommand(cancellationID: cancellationID)
+            cancellationStatus = response.outcome
+            if !response.activeExecutionFound {
+                lastError = "The command was no longer active when cancellation reached the core."
+            }
+        } catch {
+            lastError = String(describing: error)
+            markDegraded("Command cancellation failed: \(error)")
         }
     }
 

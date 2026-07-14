@@ -11,6 +11,8 @@ ARCHITECTURE="docs/architecture-map.md"
 KB="docs/knowledge-base/jarvis-project-facts.md"
 README="README.md"
 CORE_IPC="crates/jarvis-core/src/ipc.rs"
+DESIGN="DESIGN.md"
+SAFETY_RULES="docs/safety-rules.md"
 
 fail() {
   printf 'error: %s\n' "$1" >&2
@@ -46,6 +48,8 @@ require_file "$ARCHITECTURE"
 require_file "$KB"
 require_file "$README"
 require_file "$CORE_IPC"
+require_file "$DESIGN"
+require_file "$SAFETY_RULES"
 
 for file in "$BUILD_DOCS" "$CHECKLIST" "$README"; do
   require_text "atomic approval decision" "$file" "redacted decision audit"
@@ -77,6 +81,21 @@ require_text "approval decision IPC proof" "$BUILD_DOCS" "approval_decision_audi
 require_text "approval grant-chain storage proof" "$BUILD_DOCS" "approved_row_without_matching_grant_audit_cannot_be_claimed"
 require_text "approval legacy grant storage proof" "$BUILD_DOCS" "matching_legacy_raw_metadata_grant_audit_remains_claimable"
 require_text "approval grant-chain IPC proof" "$BUILD_DOCS" "approved_row_without_grant_audit_cannot_claim_or_enter_plugin_across_restart"
+
+for file in "$BUILD_DOCS" "$CHECKLIST" "$ARCHITECTURE" "$KB"; do
+  require_text "active command cancellation handle" "$file" "cancellation_id"
+  require_text "active command cancellation endpoint" "$file" "/runtime/cancellations/:id"
+  require_text "active command cancellation active evidence" "$file" "cancellation_requested"
+  require_text "active command cancellation not-found evidence" "$file" "not_found"
+  require_text "active command cancellation tombstones" "$file" "1,024"
+  require_text "active command cancellation tombstone lifecycle" "$file" "process-local"
+done
+require_text "active command cancellation safety" "$SAFETY_RULES" "result-acceptance"
+require_text "active command cancellation design" "$DESIGN" "client-generated cancellation handle"
+require_text "active command cancellation core test" "$BUILD_DOCS" "explicit_command_handle_cancels_only_its_active_model_transport"
+require_text "active command cancellation E2E" "$BUILD_DOCS" "active_command_cancellation_is_end_to_end_and_finalized_handles_report_not_found"
+require_text "active command cancellation Swift test" "$BUILD_DOCS" "commandConsoleCancelsItsActiveSubmission"
+require_text "active command cancellation concurrent Swift test" "$CHECKLIST" "commandConsoleSerializesConcurrentSubmissions"
 
 require_text "core app-supervised IPC audit-token proof" "$CORE_IPC" "LOCAL_PEERTOKEN"
 require_text "core app-supervised IPC Security.framework proof" "$CORE_IPC" "Security.framework designated requirement"

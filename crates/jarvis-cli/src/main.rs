@@ -15,6 +15,7 @@ use jarvis_core::{
     InstalledPluginPublisherVerificationRequest, Sensitivity, TriggerKind, UpdateMemoryItemRequest,
 };
 use tokio::net::TcpListener;
+use uuid::Uuid;
 
 const MAX_IPC_TOKEN_FILE_BYTES: usize = 1024;
 static IPC_BEARER_TOKEN: OnceLock<String> = OnceLock::new();
@@ -118,9 +119,18 @@ enum CliCommand {
         installed_wasm_tools: bool,
         #[arg(long)]
         sensitivity: Option<String>,
+        /// Use this UUID as the command cancellation handle; one is generated when omitted.
+        #[arg(long)]
+        cancellation_id: Option<String>,
         /// Print the raw JSON command response.
         #[arg(long)]
         json: bool,
+    },
+    /// Cancel exactly one active command by its client-generated UUID handle.
+    CancelCommand {
+        cancellation_id: String,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
     },
     /// Activate emergency pause.
     Pause {
@@ -1050,8 +1060,15 @@ async fn main() -> anyhow::Result<()> {
             memory_context,
             installed_wasm_tools,
             sensitivity,
+            cancellation_id,
             json,
         } => {
+            let cancellation_id = cancellation_id
+                .as_deref()
+                .map(Uuid::parse_str)
+                .transpose()
+                .map_err(|_| anyhow::anyhow!("cancellation-id must be a UUID"))?
+                .unwrap_or_else(Uuid::new_v4);
             let body = serde_json::to_string(&CommandRequest {
                 input,
                 session_id: None,
@@ -1060,6 +1077,7 @@ async fn main() -> anyhow::Result<()> {
                 proactive: false,
                 memory_context,
                 installed_wasm_tools,
+                cancellation_id: Some(cancellation_id),
                 sensitivity: sensitivity.as_deref().map(parse_sensitivity).transpose()?,
             })?;
             let response = server_required_request(&endpoint, "POST", "/commands", Some(&body))?;
@@ -1068,6 +1086,22 @@ async fn main() -> anyhow::Result<()> {
             } else {
                 println!("{}", format_command_response(&response)?);
             }
+        }
+        CliCommand::CancelCommand {
+            cancellation_id,
+            endpoint,
+        } => {
+            let cancellation_id = Uuid::parse_str(&cancellation_id)
+                .map_err(|_| anyhow::anyhow!("cancellation-id must be a UUID"))?;
+            println!(
+                "{}",
+                server_required_request(
+                    &endpoint,
+                    "POST",
+                    &format!("/runtime/cancellations/{cancellation_id}"),
+                    None,
+                )?
+            );
         }
         CliCommand::Pause { reason, endpoint } => {
             let body = serde_json::to_string(&EmergencyPauseRequest { reason })?;
@@ -1941,6 +1975,12 @@ fn format_command_response(response: &str) -> anyhow::Result<String> {
         format!("Accepted: {accepted}"),
         format!("Task: {task_id}"),
     ];
+    if let Some(cancellation_id) = value
+        .get("cancellation_id")
+        .and_then(serde_json::Value::as_str)
+    {
+        lines.push(format!("Cancellation handle: {cancellation_id}"));
+    }
 
     if let Some(route) = value.get("route").and_then(serde_json::Value::as_object) {
         let provider = route
@@ -3127,16 +3167,20 @@ async fn run_smoke() -> anyhow::Result<()> {
     require_array_contains_object_field(&contract_json["endpoints"], "path", "/tools/model")?;
     require_array_contains_object_field(&contract_json["endpoints"], "path", "/model-routes")?;
 
-    let command_body = serde_json::to_string(&CommandRequest {
-        input: "smoke command".to_string(),
-        session_id: None,
-        context: serde_json::json!({ "surface": "cli-smoke" }),
-        dry_run: true,
-        proactive: false,
-        memory_context: false,
-        installed_wasm_tools: false,
-        sensitivity: None,
-    })?;
+    let smoke_command_body = || {
+        serde_json::to_string(&CommandRequest {
+            input: "smoke command".to_string(),
+            session_id: None,
+            context: serde_json::json!({ "surface": "cli-smoke" }),
+            dry_run: true,
+            proactive: false,
+            memory_context: false,
+            installed_wasm_tools: false,
+            cancellation_id: Some(Uuid::new_v4()),
+            sensitivity: None,
+        })
+    };
+    let command_body = smoke_command_body()?;
     let command = request(&endpoint, "POST", "/commands", Some(&command_body))?;
     let command_json: serde_json::Value = serde_json::from_str(&command)?;
     require_bool_field(&command_json, "accepted", true)?;
@@ -3169,7 +3213,8 @@ async fn run_smoke() -> anyhow::Result<()> {
     let pause_json: serde_json::Value = serde_json::from_str(&pause)?;
     require_bool_field(&pause_json, "paused", true)?;
 
-    let blocked = request(&endpoint, "POST", "/commands", Some(&command_body))?;
+    let blocked_body = smoke_command_body()?;
+    let blocked = request(&endpoint, "POST", "/commands", Some(&blocked_body))?;
     let blocked_json: serde_json::Value = serde_json::from_str(&blocked)?;
     require_bool_field(&blocked_json, "accepted", false)?;
     require_nested_field(&blocked_json, &["task", "status"], "blocked")?;
@@ -3193,11 +3238,12 @@ async fn run_smoke() -> anyhow::Result<()> {
     let persistent_server = tokio::spawn(jarvis_core::serve_listener(listener, state));
 
     request_with_retry(&persistent_endpoint, "GET", "/health", None)?;
+    let persisted_command_body = smoke_command_body()?;
     let persisted_command = request(
         &persistent_endpoint,
         "POST",
         "/commands",
-        Some(&command_body),
+        Some(&persisted_command_body),
     )?;
     let persisted_command_json: serde_json::Value = serde_json::from_str(&persisted_command)?;
     require_nested_field(&persisted_command_json, &["task", "status"], "completed")?;
