@@ -555,7 +555,29 @@ approval when repository backing is enabled, and requiring a separate CLI/IPC
 grant or denial. Granting an approval records the decision but does not execute
 the side effect; approved first-party actions require an explicit
 `jarvis approvals execute <approval-id>` replay, which verifies the original
-action and scope contract before recording `approval_executed` audit evidence.
+task, action, risk, scope, input-schema, and current-policy contract before
+schema v13 atomically creates a unique durable execution claim with redacted
+policy/claim audit evidence. Only the successful claimant invokes the plugin;
+duplicate and post-restart replay returns conflict/HTTP 409. Terminal execution
+state, task state, and terminal audits commit together. Any durable claim
+permanently consumes that approval: failure, cancellation, timeout, restart, or
+a storage interruption after claim can leave the effect ambiguous, and
+automatic retry is forbidden. Inspect audit evidence and create a new approval
+when another attempt is appropriate.
+
+Focused one-shot approval proof:
+
+```sh
+cargo test -p jarvis-core concurrent_approved_execution_has_exactly_one_winner -- --nocapture
+cargo test -p jarvis-core migration_13_backfills_completed_approval_execution_as_consumed -- --nocapture
+cargo test -p jarvis-cli --test local_ipc_e2e concurrent_approved_execution_is_one_shot_across_ipc_and_restart -- --nocapture
+swift test --disable-sandbox --package-path apps/mac --filter ApprovalManagementModel
+```
+
+The Rust race test proves one claimant, the schema-v13 migration test proves
+historical terminal audit evidence remains consumed, the cross-process IPC E2E
+proves one HTTP winner plus durable HTTP 409 after restart, and the Swift tests
+prove duplicate-submit suppression and claimed-approval hiding after refresh.
 `jarvis permissions grants` reads the combined local grant
 surface: approval counts/history, high-risk pending count, installed-plugin
 `metadata_only` grant records, and the invariant that side effects still
@@ -968,7 +990,7 @@ release-proof smoke command and is run by `./scripts/release-local.sh`.
 proof for migration changes: it runs Rust tests that create a legacy
 file-backed DB, verify preflight backup creation, corrupt the DB after backup
 to prove restore on migration-open failure, verify newer schema versions fail
-with an explicit upgrade diagnostic, and migrate representative schema v1-v11
+with an explicit upgrade diagnostic, and migrate representative schema v1-v12
 fixtures while preserving tasks, audit, memory, scheduler, approval, plugin,
 and route rows.
 `./scripts/release-operator-qa-smoke.sh` is the local operator-facing release

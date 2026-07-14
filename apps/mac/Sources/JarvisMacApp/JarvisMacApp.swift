@@ -1858,7 +1858,7 @@ struct ApprovalCenterView: View {
                                 Label("Run Approved", systemImage: "play.circle")
                             }
                             .buttonStyle(.bordered)
-                            .disabled(model.isLoading)
+                            .disabled(model.isLoading || model.isExecuting(id: item.id))
                         } else {
                             Text("Inspection only")
                                 .font(.caption2)

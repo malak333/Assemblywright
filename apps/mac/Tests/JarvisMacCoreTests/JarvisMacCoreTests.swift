@@ -3103,6 +3103,53 @@ struct JarvisMacCoreTests {
     }
 
     @MainActor
+    @Test("Approval management model suppresses duplicate approved execution submits")
+    func approvalManagementModelSuppressesDuplicateExecution() async {
+        let approval = samplePendingApproval(status: "approved", decidedBy: "mac-ui", decisionReason: "reviewed")
+        let client = FakeCoreClient(
+            contractResponse: fullApprovalContract(),
+            approvals: [approval],
+            permissionGrantSummary: samplePermissionGrantSummary(approval: approval),
+            approvalExecutionDelayNanoseconds: 50_000_000
+        )
+        let model = ApprovalManagementModel(client: client)
+        await model.refresh()
+
+        async let first: Void = model.execute(id: approval.id)
+        async let second: Void = model.execute(id: approval.id)
+        _ = await (first, second)
+
+        #expect(client.approvalExecutions == [approval.id])
+        #expect(model.pendingItems.isEmpty)
+    }
+
+    @MainActor
+    @Test("Approval management model hides durably claimed approval after restart")
+    func approvalManagementModelHidesClaimedApproval() async {
+        let approval = samplePendingApproval(status: "approved", decidedBy: "mac-ui", decisionReason: "reviewed")
+        let client = FakeCoreClient(
+            auditEntries: [
+                JarvisAuditEntry(
+                    id: UUID(),
+                    taskId: approval.taskId,
+                    eventType: "approval_execution_claimed",
+                    summary: "approved action execution was atomically claimed",
+                    payload: .object(["approval_id": .string(approval.id.uuidString)]),
+                    createdAt: "2026-07-14T12:15:00Z"
+                )
+            ],
+            contractResponse: fullApprovalContract(),
+            approvals: [approval]
+        )
+        let model = ApprovalManagementModel(client: client)
+
+        await model.refresh()
+
+        #expect(model.pendingItems.isEmpty)
+        #expect(client.approvalExecutions.isEmpty)
+    }
+
+    @MainActor
     @Test("Approval management model denies pending approval")
     func approvalManagementModelDeniesPendingApproval() async {
         let approval = samplePendingApproval()
@@ -8506,6 +8553,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     private var permissionGrantSummaryResult: JarvisPermissionGrantSummary?
     private(set) var approvalDecisions: [ApprovalDecision]
     private(set) var approvalExecutions: [UUID]
+    private let approvalExecutionDelayNanoseconds: UInt64
     private(set) var includeDeletedMemoryRequests: [Bool]
     private(set) var createdMemoryRequests: [JarvisCreateMemoryItemRequest]
     private(set) var updatedMemoryRequests: [(id: UUID, request: JarvisMemoryMutationRequest)]
@@ -8552,7 +8600,8 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         trustedWakePrepareResult: Result<JarvisTrustedWakeKeyControlPrepareResponse, Error>? = nil,
         trustedWakeCancelResults: [Result<JarvisTrustedWakeRule, Error>] = [],
         releaseSmokeMode: Bool = false,
-        releaseSmokeFailureCall: String? = nil
+        releaseSmokeFailureCall: String? = nil,
+        approvalExecutionDelayNanoseconds: UInt64 = 0
     ) {
         self.healthResults = healthResults
         self.tasks = tasks
@@ -8589,6 +8638,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         self.releaseSmokeCalls = []
         self.approvalDecisions = []
         self.approvalExecutions = []
+        self.approvalExecutionDelayNanoseconds = approvalExecutionDelayNanoseconds
         self.includeDeletedMemoryRequests = []
         self.createdMemoryRequests = []
         self.updatedMemoryRequests = []
@@ -9245,6 +9295,9 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     func executeApproval(id: UUID) async throws -> JarvisApprovalExecutionResponse {
         guard let approval = approvals.first(where: { $0.id == id }) else {
             throw URLError(.badServerResponse)
+        }
+        if approvalExecutionDelayNanoseconds > 0 {
+            try await Task.sleep(nanoseconds: approvalExecutionDelayNanoseconds)
         }
         approvalExecutions.append(id)
         auditEntries.append(

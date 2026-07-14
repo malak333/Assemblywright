@@ -375,9 +375,16 @@ purge automation, or OS-level network sandboxing.
 Approval grant/deny decisions remain side-effect-free. Approved first-party
 approval records require a separate one-shot `/approvals/:id/execute` or
 `jarvis approvals execute <approval-id>` replay, which verifies the original
-action and scopes before recording `approval_executed` audit evidence. The
-Swift Approval Center exposes the same boundary by showing Run Approved only
-for approved records that do not already have execution audit evidence.
+task, action, risk, scopes, input schema, and current policy before schema v13
+atomically records a unique durable execution claim and redacted claim/policy
+audit evidence. Only the claimant invokes the plugin; a duplicate or restarted
+replay fails with conflict/HTTP 409. Terminal execution state, task state, and
+terminal audit evidence commit together. Once claimed, an approval is consumed:
+failure, cancellation, timeout, restart, or a persistence interruption can make
+the effect ambiguous, so automatic retry is forbidden. Inspect the audit trail
+and create a new approval when another attempt is appropriate. The Swift
+Approval Center suppresses duplicate submits and hides approvals that have
+either claim or terminal execution evidence.
 
 ## Build And Test
 
@@ -428,7 +435,7 @@ run the focused storage recovery proof:
 
 That script proves legacy file-backed DB migration creates a preflight backup,
 failed migration-open restores the backup, newer schema versions fail with an
-explicit upgrade diagnostic, and representative schema v1-v11 fixtures preserve
+explicit upgrade diagnostic, and representative schema v1-v12 fixtures preserve
 critical rows through the current migration path. It does not replace installer
 upgrade QA.
 

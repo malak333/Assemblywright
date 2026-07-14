@@ -59,6 +59,7 @@
 | App-owned security-scoped bookmarks for workspace roots | Put root paths in app child arguments, store plain paths, or let the model select roots | Native user selection establishes an explicit local grant; opaque IDs and bounded startup stdin keep app-selected paths out of argv, environment, model input, and audit while Rust remains the descriptor authority. Bookmark tests do not prove App Sandbox enforcement or child sandbox-extension inheritance. |
 | App-supervised Unix-domain-socket IPC with Apple audit-token code identity, same-EUID, and per-launch bearer checks | Use loopback TCP by default, rely on socket filesystem permissions alone, persist every supervised credential, trust PID/path lookup, put transport authority in argv/environment, or silently reuse a legacy unauthenticated core | The default app launch creates an owner-only runtime directory and generation-random Unix socket, sends `ipc_transport:{kind:"unix_socket_peer_identity_v1",socket_path:"/absolute/path.sock",peer_code_requirement:"...",peer_identity_profile:"adhoc_exact|developer_id_hardened"}` plus a fresh 32-byte bearer only through bounded startup stdin, and requires `LOCAL_PEERTOKEN`/Security.framework requirement validation, current-EUID credentials, and the bearer before every request. Swift validates the connected core through the same audit-token mechanism. Exact `JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true` selects the explicitly weaker authenticated loopback TCP and owner-only token-file compatibility path. Ad-hoc requirements bind one exact build by cdhash and do not establish publisher identity; the Developer ID profile requires stable app/core identifiers, the same nonempty team, and hardened runtime. This is intended-process defense in depth, not device authentication, XPC, App Sandbox, notarization, or live-device proof. |
 | Add a no-import Wasmi compute runtime before broader third-party execution | Treat subprocess grants as sufficient containment, enable WASI, or wait for an OS sandbox | A deliberately small `jarvis_json_v1` ABI can provide useful low-risk local computation while mechanically denying guest filesystem, environment, network, clock, and process authority. Wasmi confinement is a language-runtime boundary, not an OS sandbox or plugin trust system. |
+| Consume approved execution authority with a durable schema-v13 claim before plugin entry | Treat an `approval_executed` audit lookup as a lock, hold the repository mutex across plugin execution, or retry an interrupted approval automatically | The replay path validates the approved record, still-waiting task, exact action, current risk and scopes, current manifest, input schema, and current policy before an immediate transaction inserts the unique `approval_executions` claim and redacted claim audit. That claim permanently consumes the approval. Terminal execution state, task state, and terminal audits commit together. A process loss or persistence failure after the claim leaves an ambiguous effect boundary and never authorizes automatic retry; an operator must review the evidence and create a new approval if another attempt is appropriate. |
 | Auditability as an architectural requirement | Best-effort logs after the fact | Jarvis must be able to explain why it acted, what data it used, and what permissions were involved. |
 
 ## Architecture
@@ -292,6 +293,19 @@ UI to inspect, edit, disable, categorize, or delete remembered facts and prefere
 
 Capability toggles, risk-tier rules, per-plugin scopes, approval history, and emergency pause/kill switch.
 
+Approval decisions and execution authority are separate. Approve or deny never
+runs a side effect. An explicit approved execution first revalidates the task,
+approved record, still-waiting task, exact action, current risk and scopes,
+current manifest, input schema, and policy. Schema v13
+then atomically writes a unique durable claim and redacted
+`approval_execution_claimed` audit before plugin entry. The claim is permanent:
+success, failure, cancellation, timeout, or an unresolved restart cannot reuse
+the approval. Terminal execution state, task state, and terminal audit evidence
+commit in one transaction. Because a post-claim interruption may have produced
+an external effect, Jarvis reports the outcome as ambiguous and requires an
+operator to review evidence and create a new approval rather than retrying
+automatically.
+
 ### Plugin Manager
 
 Installed plugin list, requested permissions, enable/disable controls, logs, and version/update state.
@@ -314,7 +328,8 @@ tool features are disabled before redacted context is sent.
 4. The conversation runtime asks the model router for a model decision.
 5. The selected model produces a plan, answer, or tool request.
 6. Tool requests go through the permission and risk engine before execution.
-7. The plugin host runs allowed tools and streams progress back to Swift.
+7. Approval-required tools are revalidated, durably claimed exactly once, and
+   only then enter the plugin host; allowed non-approval tools enter directly.
 8. Memory writes are proposed, classified, and stored only if policy allows.
 9. The audit log records the full chain: input, route, decisions, tools, outputs, approvals, and final result.
 10. Swift displays and speaks the response, then exposes follow-up controls.

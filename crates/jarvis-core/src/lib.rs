@@ -88,8 +88,8 @@ pub use startup::{
     MAX_UNIX_SOCKET_PATH_BYTES, SERVE_STARTUP_CONFIG_VERSION,
 };
 pub use storage::{
-    EmergencyPauseState, InstalledPluginRecord, MemoryItem, NewMemoryItem, NewPendingApproval,
-    PendingApproval, SqliteRepository,
+    ApprovalExecutionRecord, ApprovalExecutionState, EmergencyPauseState, InstalledPluginRecord,
+    MemoryItem, NewMemoryItem, NewPendingApproval, PendingApproval, SqliteRepository,
 };
 pub use storage::{MemoryClassificationCount, MemoryClassificationSummary};
 pub use trusted_wake::{

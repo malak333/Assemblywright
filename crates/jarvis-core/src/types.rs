@@ -12,6 +12,8 @@ pub enum JarvisError {
     ApprovalRequired(String),
     #[error("validation failed: {0}")]
     Validation(String),
+    #[error("conflict: {0}")]
+    Conflict(String),
     #[error("storage error: {0}")]
     Storage(String),
     #[error("plugin error: {0}")]

@@ -417,11 +417,17 @@ stage or when a PR needs focused evidence for one ownership slice.
   backing, remain side-effect-free, and stay covered by local IPC tests.
 - Confirm approved first-party approval execution requires a one-shot explicit
   `/approvals/:id/execute` or `jarvis approvals execute <approval-id>` call,
-  verifies the original task action and scope contract against the approval
-  record, applies an approval grant only for that replay, updates the task
-  result, prevents duplicate replay through existing audit evidence, and
-  records `approval_executed` plus plugin completion audit evidence with
-  `side_effect_executed: true`.
+  verifies the original task, action, risk, scope, input-schema, and current
+  policy contract against the approval record, then uses schema v13 to
+  atomically create one unique durable execution claim with redacted
+  policy/claim audit evidence before plugin invocation. Confirm only one
+  claimant runs, duplicate and post-restart replay returns conflict/HTTP 409,
+  historical `approval_executed` rows migrate as consumed, and terminal
+  execution state, task state, and terminal audits commit together. A durable
+  claim permanently consumes the approval: failure, cancellation, timeout,
+  restart, or storage interruption after claim can leave the effect ambiguous,
+  so automatic retry is forbidden; the operator must inspect audit evidence
+  and create a new approval when another attempt is appropriate.
 - Confirm `/permissions/grants` and `jarvis permissions grants` expose
   read-only approval history/counts plus installed-plugin grant state,
   provenance integrity status, unverified plugin counts, and the
@@ -709,7 +715,7 @@ stage or when a PR needs focused evidence for one ownership slice.
   repository-backed local smoke.
 - Confirm `./scripts/storage-migration-backup-smoke.sh` passes for storage
   changes, proving legacy DB backup creation, restore after migration-open
-  failure, newer-schema diagnostics, and representative schema v1-v11 fixture
+  failure, newer-schema diagnostics, and representative schema v1-v12 fixture
   preservation. Treat broad installer upgrade behavior as a separate
   release-candidate gate.
 - Confirm local plugin metadata install/list/get coverage remains in that E2E

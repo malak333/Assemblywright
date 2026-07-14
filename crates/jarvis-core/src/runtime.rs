@@ -1929,6 +1929,7 @@ fn model_error_kind(error: &crate::JarvisError) -> &'static str {
         crate::JarvisError::PolicyBlocked(_) => "policy_blocked",
         crate::JarvisError::ApprovalRequired(_) => "approval_required",
         crate::JarvisError::Validation(_) => "validation",
+        crate::JarvisError::Conflict(_) => "conflict",
         crate::JarvisError::Storage(_) => "storage",
         crate::JarvisError::Plugin(_) => "plugin",
         crate::JarvisError::Model(_) => "model",
