@@ -84,19 +84,24 @@ release requirements, not optional UX guidance.
   streams, release inspection, and trusted-wake control. The shared Swift
   client must fail locally while its managed credential is unavailable. Launch
   failure, stop, replacement, and observed child exit clear the matching
-  generation. The explicit CLI handoff file must be a bounded, no-follow,
-  single-link, owner-matched regular file with no group/other permissions; the
-  token must not enter argv, environment, logs, audit, diagnostics, or UI.
+  generation. The bearer must remain memory-only by default, and initialization
+  must remove a stale handoff file. Only exact
+  `JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true` may enable the explicitly weaker CLI
+  handoff; `JARVIS_MAC_IPC_AUTH_FILE` may select an absolute override only in
+  that mode. The enabled file must be bounded, no-follow, single-link,
+  owner-matched, and have no group/other permissions. The supervisor must
+  remove both app-only variables and `JARVIS_IPC_TOKEN_FILE` from the child.
+  The token must not enter argv, environment, logs, audit, diagnostics, or UI.
   Managed clients must reject every destination that does not resolve strictly
   to loopback before connecting or attaching a bearer, and authenticated serving
   must reject non-loopback bind addresses.
   Legacy explicitly unauthenticated servers reject any supplied Authorization
   header so an app-supervised client cannot silently downgrade. The supervisor
-  removes the client-only `JARVIS_IPC_TOKEN_FILE` path from the child server's
-  environment. This is bearer-
-  possession authentication, not device authentication, ownership proof, OS
+  This is bearer-possession and lifecycle authentication with no ambient
+  default handoff file, not device authentication, ownership proof, OS
   identity, same-user/process isolation, App Sandbox enforcement, or host-level
-  egress control.
+  egress control. Any process running as the same user can read an explicitly
+  enabled handoff file while it exists.
 - Installed `local_wasm` execution is allowed only for validated low-risk,
   non-proactive compute actions with no memory, model, filesystem, environment,
   process, clock, or network authority and the explicit `wasm_compute` grant.

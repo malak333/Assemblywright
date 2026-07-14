@@ -170,6 +170,14 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   child; access is released on every stop/failure/unexpected child exit;
   and the proof boundary still excludes App Sandbox, child sandbox-extension
   inheritance, same-user/process IPC isolation, signing, and live-device QA.
+- Confirm app-supervised IPC keeps its per-launch bearer in memory by default,
+  removes a stale handoff file, and creates the hardened owner-only CLI file
+  only for exact `JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true`. If
+  `JARVIS_MAC_IPC_AUTH_FILE` is used, confirm it is absolute and effective only
+  with that opt-in. Confirm the supervisor removes both app-only variables and
+  `JARVIS_IPC_TOKEN_FILE` from the child environment; restart/stop/failure
+  clears the matching generation and file. Treat explicit handoff as weaker
+  same-user-readable bearer possession, never OS/process identity proof.
 
 ## Code Gate
 

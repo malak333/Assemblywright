@@ -127,8 +127,11 @@ commands such as `jarvis release readiness`, `jarvis plugins list`, and
 `jarvis tools list`, instead of returning a raw connection-refused error.
 
 The packaged app supervises an authenticated core. To inspect that live core
-from the bundled or development CLI, opt in to the app-owned owner-only handoff
-file (the global option may appear before or after the subcommand):
+from the bundled or development CLI, explicitly launch the app with exact
+`JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true`. The bearer otherwise remains in
+memory and any stale handoff file is removed. Once explicitly enabled, use the
+app-owned owner-only handoff file (the global option may appear before or after
+the subcommand):
 
 ```sh
 cargo run -p jarvis-cli -- --ipc-token-file \
@@ -139,17 +142,36 @@ cargo run -p jarvis-cli -- --ipc-token-file \
 The CLI opens the file no-follow, requires a bounded single-link regular file
 owned by the current user with mode no broader than `0600`, validates the strict
 versioned JSON document, rejects any resolved non-loopback endpoint, and sends
-only the bearer header. Do not print, copy,
+only the bearer header. This opt-in is weaker because any process running as the
+same user can read the file while it exists. Do not print, copy,
 or pass the credential through argv or environment. A manually started legacy
 `jarvis serve` remains explicitly unauthenticated and rejects any Authorization
 header.
 
-The unsigned distribution launch lane supplies an absolute
-`JARVIS_MAC_IPC_AUTH_FILE` path inside its temporary profile because macOS
+When CLI handoff is explicitly enabled, an absolute `JARVIS_MAC_IPC_AUTH_FILE`
+may override the standard path. The unsigned distribution launch lane uses
+that override inside its temporary profile because macOS
 Application Support discovery is not redirected by a synthetic `HOME`. The app
-uses that path only for its owner-only handoff file, and the supervisor removes
-the override from the child server environment. Normal packaged launches use
-the standard Application Support location.
+uses that path only for the enabled owner-only handoff file. The supervisor
+removes `JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF`, `JARVIS_MAC_IPC_AUTH_FILE`, and
+`JARVIS_IPC_TOKEN_FILE` from the child server environment. Normal packaged
+launches do not create a handoff file.
+
+Focused regression and E2E proof for this boundary:
+
+```sh
+swift test --disable-sandbox --package-path apps/mac --filter IPCBearerAuthorizationTests
+cargo test -p jarvis-cli --test local_ipc_e2e app_supervised_ipc_auth_is_fail_closed_and_cli_token_file_is_safe -- --nocapture
+./scripts/package-distribution.sh --unsigned-launch-check
+./scripts/release-docs-drift-smoke.sh
+```
+
+Coverage must prove that the default creates no credential file and removes a
+stale one, the exact opt-in creates and lifecycle-clears the hardened file, the
+optional override must be absolute, app-only handoff variables do not reach the
+child, missing or stale credentials receive a generic 401, and restart rotation
+invalidates the old bearer. These lanes prove bearer lifecycle and absence of
+an ambient default file, not OS/process identity or same-user isolation.
 
 `jarvis smoke` starts an ephemeral loopback server and verifies the currently
 implemented foundation surfaces: health, command execution, pause blocking,

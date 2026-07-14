@@ -433,7 +433,8 @@ public final class JarvisCoreSupervisor: ObservableObject {
             var environment = credentialProvider.launchEnvironment(base: ProcessInfo.processInfo.environment)
             environment.merge(environmentOverrides) { _, override in override }
             environment.removeValue(forKey: "JARVIS_IPC_TOKEN_FILE")
-            environment.removeValue(forKey: "JARVIS_MAC_IPC_AUTH_FILE")
+            environment.removeValue(forKey: JarvisIPCCLIHandoffConfiguration.enableEnvironmentKey)
+            environment.removeValue(forKey: JarvisIPCCLIHandoffConfiguration.fileEnvironmentKey)
             let trustedWakeBootstrap = pendingTrustedWakeBootstrap
             let trustedWakeKeyControl = pendingTrustedWakeKeyControl
             var launchArguments = configuration.launchArguments

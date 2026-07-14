@@ -6135,7 +6135,7 @@ fn release_live_device_runbook_from(
                 .to_string(),
             "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' in target/release-live-device-qa.env before collecting command evidence"
                 .to_string(),
-            "Confirm JARVIS_IPC_TOKEN_FILE points to the app-owned ipc-session-auth.json path, then source target/release-live-device-qa.env before IPC commands"
+            "Launch Jarvis with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true for this operator evidence session, then confirm JARVIS_IPC_TOKEN_FILE points to the app-owned ipc-session-auth.json path before IPC commands"
                 .to_string(),
             "cargo run -p jarvis-cli -- command \"status check\" --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\" --json"
                 .to_string(),
@@ -6198,7 +6198,7 @@ fn release_signed_distribution_runbook_from(
                 .to_string(),
             "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks"
                 .to_string(),
-            "Export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks"
+            "Launch Jarvis with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true, then export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks"
                 .to_string(),
             "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
                 .to_string(),
@@ -6244,7 +6244,7 @@ fn release_plugin_trust_runbook_from(
                 .to_string(),
             "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks"
                 .to_string(),
-            "Export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks"
+            "Launch Jarvis with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true, then export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks"
                 .to_string(),
             "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
                 .to_string(),
@@ -6308,7 +6308,7 @@ fn release_evidence_bundle_runbook_from(
             "./scripts/release-evidence-doctor.sh --assert-complete".to_string(),
             "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks"
                 .to_string(),
-            "Export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks"
+            "Launch Jarvis with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true, then export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks"
                 .to_string(),
             "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
                 .to_string(),

@@ -24,11 +24,10 @@ struct JarvisMacApp: App {
 
     init() {
         let configuration = JarvisCoreSupervisorConfiguration()
-        let authFileURL = ProcessInfo.processInfo.environment["JARVIS_MAC_IPC_AUTH_FILE"]
-            .flatMap { $0.hasPrefix("/") ? URL(fileURLWithPath: $0) : nil }
+        let cliHandoffConfiguration = JarvisIPCCLIHandoffConfiguration.fromEnvironment()
         let ipcAuthorization = JarvisIPCSessionAuthorization(
             mode: .appSupervised,
-            tokenFileURL: authFileURL
+            cliHandoffConfiguration: cliHandoffConfiguration
         )
         let client = JarvisIPCClient(
             endpoint: configuration.endpoint,

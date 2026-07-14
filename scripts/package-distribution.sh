@@ -1005,7 +1005,7 @@ Next release evidence commands:
   JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_APPLE_ID='apple-id@example.com' JARVIS_NOTARYTOOL_TEAM_ID='TEAMID1234' JARVIS_NOTARYTOOL_PASSWORD='app-specific-password' ./scripts/package-distribution.sh
   ./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env
   Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' in target/release-live-device-qa.env
-  Confirm JARVIS_IPC_TOKEN_FILE points to the app-owned ipc-session-auth.json path, then source the template before IPC commands
+  Launch Jarvis with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true for the operator evidence session, then confirm JARVIS_IPC_TOKEN_FILE points to the app-owned ipc-session-auth.json path before IPC commands
   set -a && source target/release-live-device-qa.env && set +a
   cargo run -p jarvis-cli -- command "status check" --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}" --json
   record the returned task ID as JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid>' or a task-associated audit ID as 'audit:<uuid>'
@@ -1066,6 +1066,8 @@ run_unsigned_structure_check() {
 }
 
 run_unsigned_launch_check() {
+  require_command curl
+  require_command lsof
   build_app_bundle
 
   SIGNING_STATUS="not attempted"
@@ -1101,33 +1103,80 @@ run_unsigned_launch_check() {
   CLEAN_HOME="$LAUNCH_TMP_DIR/home"
   APP_DB="$CLEAN_HOME/Library/Application Support/Jarvis/jarvis.sqlite"
   APP_IPC_AUTH_FILE="$CLEAN_HOME/Library/Application Support/Jarvis/ipc-session-auth.json"
-  APP_LOG="$LAUNCH_TMP_DIR/JarvisMacApp.log"
+  APP_LOG="$LAUNCH_TMP_DIR/JarvisMacApp-memory-only.log"
   mkdir -p "$CLEAN_HOME"
 
-  cleanup_launch() {
+  stop_launch() {
     if [[ -n "$APP_PID" ]] && kill -0 "$APP_PID" 2>/dev/null; then
       kill "$APP_PID" 2>/dev/null || true
       wait "$APP_PID" 2>/dev/null || true
     fi
+    APP_PID=""
 
-    if command -v lsof >/dev/null 2>&1; then
-      while IFS= read -r pid; do
-        if [[ -n "$pid" ]]; then
-          kill "$pid" 2>/dev/null || true
-        fi
-      done < <(lsof -ti "tcp:$PORT" 2>/dev/null || true)
-    fi
+    while IFS= read -r pid; do
+      if [[ -n "$pid" ]]; then
+        kill "$pid" 2>/dev/null || true
+      fi
+    done < <(lsof -ti "tcp:$PORT" 2>/dev/null || true)
 
+    for _ in {1..40}; do
+      if ! nc -z 127.0.0.1 "$PORT" >/dev/null 2>&1; then
+        return
+      fi
+      sleep 0.1
+    done
+    return 1
+  }
+
+  cleanup_launch() {
+    stop_launch || true
     rm -rf "$LAUNCH_TMP_DIR"
   }
   trap cleanup_launch EXIT
 
-  printf '\n==> Launching release app %s with HOME=%s and endpoint %s\n' "$APP_PATH" "$CLEAN_HOME" "$ENDPOINT"
+  printf '\n==> Launching release app with the default memory-only IPC credential\n'
   env \
     HOME="$CLEAN_HOME" \
     JARVIS_MAC_CORE_BIND_ADDRESS="127.0.0.1:$PORT" \
     JARVIS_MAC_CORE_ENDPOINT="$ENDPOINT" \
     JARVIS_MAC_CORE_DATABASE="$APP_DB" \
+    JARVIS_MAC_IPC_AUTH_FILE="$APP_IPC_AUTH_FILE" \
+    "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME" >"$APP_LOG" 2>&1 &
+  APP_PID="$!"
+
+  MEMORY_ONLY_STATUS=""
+  for _ in {1..60}; do
+    if ! kill -0 "$APP_PID" 2>/dev/null; then
+      printf 'error: release app exited before the memory-only core became reachable; app log follows\n' >&2
+      cat "$APP_LOG" >&2 || true
+      exit 1
+    fi
+    if [[ -e "$APP_IPC_AUTH_FILE" ]]; then
+      fail "default app launch persisted an IPC credential without explicit CLI handoff opt-in"
+    fi
+    MEMORY_ONLY_STATUS="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "$ENDPOINT/health" 2>/dev/null || true)"
+    if [[ "$MEMORY_ONLY_STATUS" == "401" ]]; then
+      break
+    fi
+    sleep 0.25
+  done
+
+  if [[ "$MEMORY_ONLY_STATUS" != "401" ]]; then
+    printf 'error: memory-only app core did not expose the authenticated 401 boundary; app log follows\n' >&2
+    cat "$APP_LOG" >&2 || true
+    exit 1
+  fi
+  [[ ! -e "$APP_IPC_AUTH_FILE" ]] || fail "default app launch persisted an IPC credential"
+  stop_launch || fail "release app core did not release loopback port $PORT"
+
+  APP_LOG="$LAUNCH_TMP_DIR/JarvisMacApp-explicit-cli-handoff.log"
+  printf '\n==> Relaunching release app with explicit owner-only CLI handoff opt-in\n'
+  env \
+    HOME="$CLEAN_HOME" \
+    JARVIS_MAC_CORE_BIND_ADDRESS="127.0.0.1:$PORT" \
+    JARVIS_MAC_CORE_ENDPOINT="$ENDPOINT" \
+    JARVIS_MAC_CORE_DATABASE="$APP_DB" \
+    JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF="true" \
     JARVIS_MAC_IPC_AUTH_FILE="$APP_IPC_AUTH_FILE" \
     "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME" >"$APP_LOG" 2>&1 &
   APP_PID="$!"
@@ -1193,7 +1242,7 @@ run_unsigned_launch_check() {
   printf 'Pkg: %s\n' "$PKG_PATH"
   printf 'Signing: %s\n' "$SIGNING_STATUS"
   printf 'Clean HOME database: %s\n' "$APP_DB"
-  printf 'Proof boundary: release-built app executable, bundled core, unsigned installer payload structure, isolated HOME launch, app-supervised bearer-authenticated command/audit/diagnostics/pause smoke with an owner-only CLI handoff file, and optional ad-hoc signing only; no OS identity proof, same-user/process isolation, Developer ID signing, notarization, stapling, /Applications install, Finder/LaunchServices validation, live microphone/Speech validation, spoken transcript handoff, live audio-output validation, App Store validation, or manual QA.\n'
+  printf 'Proof boundary: release-built app executable, bundled core, unsigned installer payload structure, isolated HOME default memory-only bearer launch with no CLI file, authenticated 401 denial, explicit owner-only CLI handoff relaunch, command/audit/diagnostics/pause smoke, and optional ad-hoc signing only; no OS identity proof, intended-process or same-user isolation, Developer ID signing, notarization, stapling, /Applications install, Finder/LaunchServices validation, live microphone/Speech validation, spoken transcript handoff, live audio-output validation, App Store validation, or manual QA.\n'
 }
 
 if [[ "$UNSIGNED_STRUCTURE_CHECK" == true ]]; then

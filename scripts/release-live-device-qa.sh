@@ -499,9 +499,11 @@ write_env_template() {
 # app has been installed into a clean macOS profile and launched through Finder
 # or LaunchServices.
 #
-# Set JARVIS_RELEASE_CORE_ENDPOINT to the running release core endpoint and
-# JARVIS_IPC_TOKEN_FILE to the app-owned handoff file, source this template,
-# then capture the command evidence ID from that same authenticated endpoint:
+# For the operator evidence session, launch Jarvis with the exact opt-in
+# JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true. Then set JARVIS_RELEASE_CORE_ENDPOINT
+# to the running release core endpoint and JARVIS_IPC_TOKEN_FILE to the app-owned
+# handoff file, source this template, and capture the command evidence ID from
+# that same authenticated endpoint:
 #   cargo run -p jarvis-cli -- command "status check" --endpoint "\${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}" --json
 # Use the returned task ID as JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:<uuid>",
 # or use an audit ID from task-associated command/audit evidence as "audit:<uuid>".
