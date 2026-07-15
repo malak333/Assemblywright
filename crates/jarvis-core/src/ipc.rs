@@ -98,6 +98,13 @@ const LIVE_DEVICE_QA_REQUIRED_FIELDS: &[&str] = &[
     "app_bundle.build_version",
     "app_bundle.microphone_usage_description",
     "app_bundle.speech_recognition_usage_description",
+    "app_executable.executable_path",
+    "app_executable.sha256",
+    "app_executable.code_identifier",
+    "app_executable.team_identifier",
+    "app_executable.cdhash",
+    "signed_provenance.report_path",
+    "signed_provenance.sha256",
     "bundled_core.executable_path",
     "bundled_core.version",
     "bundled_core.sha256",
@@ -178,6 +185,8 @@ const SIGNED_DISTRIBUTION_PROVENANCE_REQUIRED_FIELDS: &[&str] = &[
     "artifacts.pkg_path",
     "artifacts.zip_sha256",
     "artifacts.pkg_sha256",
+    "artifacts.app_executable_path",
+    "artifacts.app_executable_sha256",
     "artifacts.bundled_core_path",
     "artifacts.bundled_core_sha256",
     "artifacts.bundled_core_version",
@@ -185,6 +194,9 @@ const SIGNED_DISTRIBUTION_PROVENANCE_REQUIRED_FIELDS: &[&str] = &[
     "signing.developer_id_installer_identity",
     "signing.app_bundle_codesign",
     "signing.app_executable_codesign",
+    "signing.app_executable_identifier",
+    "signing.app_executable_team_identifier",
+    "signing.app_executable_cdhash",
     "signing.bundled_core_codesign",
     "signing.installer_pkg_signature",
     "notarization.app_zip_submission_id",
@@ -207,6 +219,7 @@ const SIGNED_DISTRIBUTION_PROVENANCE_REQUIRED_FIELDS: &[&str] = &[
     "validation_flags.installer_pkg_stapled",
     "validation_flags.gatekeeper_assessed",
     "validation_flags.artifact_digests_recorded",
+    "validation_flags.app_executable_identity_recorded",
     "proof_boundary",
 ];
 const RELEASE_EVIDENCE_BUNDLE_REQUIRED_FIELDS: &[&str] = &[
@@ -6414,15 +6427,14 @@ fn release_readiness_features(
     evidence_mode_enabled: bool,
 ) -> Vec<ContractFeature> {
     let live_device_qa_valid =
-        release_evidence_item_present(evidence_status, "live_device_qa_report")
-            && evidence_mode_enabled;
+        release_live_device_evidence_valid(evidence_status, evidence_mode_enabled);
     contract_features()
         .into_iter()
         .map(|mut feature| {
             if feature.key == "live_voice_loop" && live_device_qa_valid {
                 feature.status = "implemented".to_string();
-                feature.proof = "A valid owner-recorded live-device QA report is present through explicitly enabled release evidence status, including microphone/Speech permission prompts, spoken transcript handoff into the command path, and speech-output playback evidence.".to_string();
-                feature.boundary = "Owner-recorded live-device QA evidence for the referenced release candidate only; readiness still does not perform signing, notarization, stapling, installation, Finder/LaunchServices validation, live audio capture, App Store review, marketplace review, malware analysis, or OS sandbox/egress enforcement.".to_string();
+                feature.proof = "A valid owner-recorded live-device QA report and valid signed-distribution provenance are present through explicitly enabled release evidence status, including exact app-executable digest/code-identity binding, microphone/Speech permission prompts, spoken transcript handoff into the command path, and speech-output playback evidence.".to_string();
+                feature.boundary = "Owner-recorded live-device QA evidence with point-in-time binding to the referenced signed release candidate only; readiness still does not perform signing, notarization, stapling, installation, Finder/LaunchServices validation, live audio capture, continuous integrity monitoring, App Store review, marketplace review, malware analysis, or OS sandbox/egress enforcement.".to_string();
             }
             feature
         })
@@ -6440,6 +6452,15 @@ fn release_evidence_item_present(status: &ReleaseEvidenceStatusResponse, key: &s
         .items
         .iter()
         .any(|item| item.key == key && item.status == ReleaseEvidenceItemStatus::Present)
+}
+
+fn release_live_device_evidence_valid(
+    evidence_status: &ReleaseEvidenceStatusResponse,
+    evidence_mode_enabled: bool,
+) -> bool {
+    evidence_mode_enabled
+        && release_evidence_item_present(evidence_status, "live_device_qa_report")
+        && release_evidence_item_present(evidence_status, "signed_distribution_provenance_report")
 }
 
 fn release_production_ready(
@@ -6786,11 +6807,12 @@ fn release_evidence_status_from_env_with_repository(
             zip_path.clone(),
             pkg_path.clone(),
         ),
-        release_json_report_item(
+        release_live_device_qa_report_item(
             "live_device_qa_report",
             "Live-device QA report",
             live_qa_report.clone(),
             LIVE_DEVICE_QA_REQUIRED_FIELDS,
+            signed_provenance_report.clone(),
             repository,
         ),
         release_json_report_item(
@@ -6840,7 +6862,7 @@ fn release_evidence_status_from_env_with_repository(
         invalid_count,
         items,
         proof_boundary:
-            "File/report inventory only; complete means expected paths are present, app bundle metadata matches the expected bundle identifier/version/build and approved microphone/Speech privacy prompt copy, bundled core version-marker metadata matches the expected release version, and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/non-future timestamp semantics, required repository-backed task/audit command-result evidence resolution, plugin-trust non-future timestamp and owner-asserted review-source semantics, and final evidence-bundle path/digest/archive-URI/signature-validation/non-future timestamp semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, execute release artifacts, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
+            "File/report inventory only; complete means expected paths are present, app bundle metadata matches the expected bundle identifier/version/build and approved microphone/Speech privacy prompt copy, bundled core version-marker metadata matches the expected release version, and JSON reports pass required field checks plus signed-provenance artifact digest matching, live-device QA release-metadata/non-future timestamp semantics, exact app-executable SHA-256/code-identity and signed-provenance cross-report binding, required repository-backed task/audit command-result evidence resolution, plugin-trust non-future timestamp and owner-asserted review-source semantics, and final evidence-bundle path/digest/archive-URI/signature-validation/non-future timestamp semantics. This endpoint does not sign, notarize, staple, install, Finder-launch, execute release artifacts, run live-device QA, run marketplace review, scan malware, or enforce an OS sandbox/egress policy."
             .to_string(),
     }
 }
@@ -6915,6 +6937,46 @@ fn release_json_report_item(
     repository: Option<&SqliteRepository>,
 ) -> ReleaseEvidenceStatusItem {
     let (status, detail) = inspect_release_json_report(key, &path, required_fields, repository);
+    ReleaseEvidenceStatusItem {
+        key: key.to_string(),
+        label: label.to_string(),
+        path: path.display().to_string(),
+        kind: ReleaseEvidenceKind::JsonReport,
+        status,
+        required_for_production: true,
+        manual_gate: true,
+        detail,
+    }
+}
+
+fn release_live_device_qa_report_item(
+    key: &str,
+    label: &str,
+    path: PathBuf,
+    required_fields: &[&str],
+    signed_provenance_path: PathBuf,
+    repository: Option<&SqliteRepository>,
+) -> ReleaseEvidenceStatusItem {
+    let (mut status, mut detail) =
+        inspect_release_json_report(key, &path, required_fields, repository);
+    if status == ReleaseEvidenceItemStatus::Present {
+        let binding_result = (|| {
+            let live_qa = read_release_evidence_child_report(&path, "live-device QA report")?;
+            let signed_provenance = read_release_evidence_child_report(
+                &signed_provenance_path,
+                "signed-distribution provenance report",
+            )?;
+            validate_live_device_signed_provenance_binding(
+                &live_qa,
+                &signed_provenance,
+                &signed_provenance_path,
+            )
+        })();
+        if let Err(error) = binding_result {
+            status = ReleaseEvidenceItemStatus::Invalid;
+            detail = error;
+        }
+    }
     ReleaseEvidenceStatusItem {
         key: key.to_string(),
         label: label.to_string(),
@@ -7298,6 +7360,17 @@ fn validate_live_device_qa_report(
     let expected_installed_app_path = std::env::var("JARVIS_QA_INSTALLED_APP_PATH")
         .unwrap_or_else(|_| "/Applications/Jarvis.app".to_string());
     require_json_string_value(value, "installed_app_path", &expected_installed_app_path)?;
+    require_json_string_value(
+        value,
+        "app_executable.executable_path",
+        &format!("{expected_installed_app_path}/Contents/MacOS/JarvisMacApp"),
+    )?;
+    require_json_sha256_value(value, "app_executable.sha256")?;
+    require_json_string_value(value, "app_executable.code_identifier", &expected_bundle_id)?;
+    require_json_team_identifier_value(value, "app_executable.team_identifier")?;
+    require_json_cdhash_value(value, "app_executable.cdhash")?;
+    require_json_nonempty_string_value(value, "signed_provenance.report_path")?;
+    require_json_sha256_value(value, "signed_provenance.sha256")?;
     require_json_string_value(
         value,
         "bundled_core.executable_path",
@@ -7686,16 +7759,26 @@ fn validate_signed_distribution_provenance(value: &serde_json::Value) -> Result<
         return Err("JSON report evidence_type must be signed_distribution_provenance".to_string());
     }
     require_json_string_value(value, "version", &expected_release_evidence_version())?;
+    let expected_app_path = env_path_or(
+        "JARVIS_EVIDENCE_APP_PATH",
+        env_path("JARVIS_EVIDENCE_DIST_DIR", "target/distribution").join("Jarvis.app"),
+    );
+    require_json_string_value(
+        value,
+        "artifacts.app_executable_path",
+        &expected_app_path
+            .join("Contents/MacOS/JarvisMacApp")
+            .display()
+            .to_string(),
+    )?;
+    require_json_sha256_value(value, "artifacts.app_executable_sha256")?;
     require_json_string_value(
         value,
         "artifacts.bundled_core_path",
-        &env_path_or(
-            "JARVIS_EVIDENCE_APP_PATH",
-            env_path("JARVIS_EVIDENCE_DIST_DIR", "target/distribution").join("Jarvis.app"),
-        )
-        .join("Contents/Resources/bin/jarvis-cli")
-        .display()
-        .to_string(),
+        &expected_app_path
+            .join("Contents/Resources/bin/jarvis-cli")
+            .display()
+            .to_string(),
     )?;
     require_json_string_value(
         value,
@@ -7711,9 +7794,22 @@ fn validate_signed_distribution_provenance(value: &serde_json::Value) -> Result<
             "com.nobiletechnology.jarvis",
         ),
     )?;
+    let expected_bundle_identifier = env_value_alias(
+        "JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID",
+        "JARVIS_QA_EXPECTED_BUNDLE_ID",
+        "com.nobiletechnology.jarvis",
+    );
+    require_json_string_value(
+        value,
+        "signing.app_executable_identifier",
+        &expected_bundle_identifier,
+    )?;
+    require_json_team_identifier_value(value, "signing.app_executable_team_identifier")?;
+    require_json_cdhash_value(value, "signing.app_executable_cdhash")?;
     for field in [
         "artifacts.zip_sha256",
         "artifacts.pkg_sha256",
+        "artifacts.app_executable_sha256",
         "artifacts.bundled_core_sha256",
         "notarization.app_zip_notary_log_sha256",
         "notarization.installer_pkg_notary_log_sha256",
@@ -7777,6 +7873,7 @@ fn validate_signed_distribution_provenance(value: &serde_json::Value) -> Result<
         "validation_flags.installer_pkg_stapled",
         "validation_flags.gatekeeper_assessed",
         "validation_flags.artifact_digests_recorded",
+        "validation_flags.app_executable_identity_recorded",
     ] {
         require_json_bool_value(value, field, true)?;
     }
@@ -7796,6 +7893,12 @@ fn validate_signed_distribution_artifact_digests(
         "artifacts.pkg_sha256",
         "installer package artifact",
         pkg_path,
+    )?;
+    require_json_sha256_matches_file(
+        value,
+        "artifacts.app_executable_sha256",
+        "app executable",
+        &app_path.join("Contents/MacOS/JarvisMacApp"),
     )?;
     require_json_sha256_matches_file(
         value,
@@ -7935,6 +8038,70 @@ fn validate_release_evidence_bundle(value: &serde_json::Value) -> Result<(), Str
     Ok(())
 }
 
+fn validate_live_device_signed_provenance_binding(
+    live_qa: &serde_json::Value,
+    signed_provenance: &serde_json::Value,
+    signed_provenance_path: &FsPath,
+) -> Result<(), String> {
+    let expected_signed_provenance_path = signed_provenance_path.display().to_string();
+    let live_signed_provenance_path = json_string_at(live_qa, "signed_provenance.report_path")
+        .ok_or_else(|| {
+            "live-device QA report is missing signed_provenance.report_path".to_string()
+        })?;
+    if live_signed_provenance_path != expected_signed_provenance_path {
+        return Err(
+            "live-device QA report signed_provenance.report_path does not match the configured signed-distribution provenance report"
+                .to_string(),
+        );
+    }
+    require_json_sha256_matches_file(
+        live_qa,
+        "signed_provenance.sha256",
+        "signed-distribution provenance report",
+        signed_provenance_path,
+    )?;
+
+    for (live_field, signed_field, label) in [
+        (
+            "bundled_core.sha256",
+            "artifacts.bundled_core_sha256",
+            "bundled_core.sha256",
+        ),
+        (
+            "app_executable.sha256",
+            "artifacts.app_executable_sha256",
+            "app executable SHA-256",
+        ),
+        (
+            "app_executable.code_identifier",
+            "signing.app_executable_identifier",
+            "app executable code identifier",
+        ),
+        (
+            "app_executable.team_identifier",
+            "signing.app_executable_team_identifier",
+            "app executable team identifier",
+        ),
+        (
+            "app_executable.cdhash",
+            "signing.app_executable_cdhash",
+            "app executable CDHash",
+        ),
+    ] {
+        let live_value = json_string_at(live_qa, live_field)
+            .ok_or_else(|| format!("live-device QA report is missing {live_field}"))?;
+        let signed_value = json_string_at(signed_provenance, signed_field).ok_or_else(|| {
+            format!("signed-distribution provenance report is missing {signed_field}")
+        })?;
+        if live_value != signed_value {
+            return Err(format!(
+                "live-device QA report {label} does not match signed-distribution provenance"
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_release_evidence_bundle_file_bindings(
     value: &serde_json::Value,
     paths: ReleaseEvidenceBundleDigestPaths<'_>,
@@ -8023,21 +8190,14 @@ fn validate_release_evidence_bundle_file_bindings(
     validate_live_device_qa_report(&live_qa, repository).map_err(|error| {
         format!("live-device QA report referenced by release evidence bundle is invalid: {error}")
     })?;
-    let live_core_sha = json_string_at(&live_qa, "bundled_core.sha256").ok_or_else(|| {
-        "live-device QA report referenced by release evidence bundle is missing bundled_core.sha256"
-            .to_string()
+    validate_live_device_signed_provenance_binding(
+        &live_qa,
+        &signed_provenance,
+        paths.signed_provenance_report,
+    )
+    .map_err(|error| {
+        format!("live-device QA report referenced by release evidence bundle is invalid: {error}")
     })?;
-    let signed_core_sha =
-        json_string_at(&signed_provenance, "artifacts.bundled_core_sha256").ok_or_else(|| {
-            "signed-distribution provenance report referenced by release evidence bundle is missing artifacts.bundled_core_sha256"
-                .to_string()
-        })?;
-    if live_core_sha != signed_core_sha {
-        return Err(
-            "live-device QA report referenced by release evidence bundle has bundled_core.sha256 that does not match signed-distribution provenance artifacts.bundled_core_sha256"
-                .to_string(),
-        );
-    }
     let plugin_qa =
         read_release_evidence_child_report(paths.plugin_qa_report, "plugin-trust QA report")?;
     validate_plugin_trust_qa_report(&plugin_qa).map_err(|error| {
@@ -8284,6 +8444,39 @@ fn require_json_sha256_value(value: &serde_json::Value, dotted_path: &str) -> Re
     }
 }
 
+fn require_json_team_identifier_value(
+    value: &serde_json::Value,
+    dotted_path: &str,
+) -> Result<(), String> {
+    let found = json_string_at(value, dotted_path)
+        .ok_or_else(|| format!("JSON report is missing required field: {dotted_path}"))?;
+    let valid = found.len() == 10
+        && found
+            .bytes()
+            .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit());
+    if valid {
+        Ok(())
+    } else {
+        Err(format!(
+            "JSON report field must be a 10-character Apple team identifier: {dotted_path}"
+        ))
+    }
+}
+
+fn require_json_cdhash_value(value: &serde_json::Value, dotted_path: &str) -> Result<(), String> {
+    let found = json_string_at(value, dotted_path)
+        .ok_or_else(|| format!("JSON report is missing required field: {dotted_path}"))?;
+    let valid =
+        (40..=64).contains(&found.len()) && found.bytes().all(|byte| byte.is_ascii_hexdigit());
+    if valid {
+        Ok(())
+    } else {
+        Err(format!(
+            "JSON report field must be a 40-64 character hexadecimal CDHash: {dotted_path}"
+        ))
+    }
+}
+
 fn require_utc_report_timestamp(
     value: &serde_json::Value,
     dotted_path: &str,
@@ -8325,7 +8518,7 @@ fn release_json_present_detail(key: &str) -> String {
     match key {
         "release_evidence_bundle" => "JSON report exists, schema/evidence identity is valid, expected release version matches, artifact/report paths and SHA-256 digests match current artifacts and reports, owner evidence notes are non-placeholder, reports archive URI is durable and non-placeholder, and local signature validation is true; clean-profile, live-device, and plugin-trust claims remain owner-recorded external evidence".to_string(),
         "signed_distribution_provenance_report" => "JSON report exists, expected release version, bundle identifier, bundled core path/version/digest match, Apple-tool-derived signing/notarization/stapling/Gatekeeper evidence is semantically valid, required flags are true, and artifact SHA-256 digests match the current zip/pkg/core files; clean-profile install and live-device QA remain separate manual gates".to_string(),
-        "live_device_qa_report" => "JSON report exists, required owner-recorded fields and proof boundary are non-empty, owner evidence notes are non-placeholder, installed app path, release metadata, bundled core executable path/version/SHA-256 binding, timestamps, observed transcript, observed command text, and task/audit command evidence reference match expected values; live-device claims are still owner-recorded external evidence".to_string(),
+        "live_device_qa_report" => "JSON report exists, required owner-recorded fields and proof boundary are non-empty, owner evidence notes are non-placeholder, installed app path, release metadata, bundled core executable path/version/SHA-256 binding, exact app-executable digest/code identity and signed-provenance path/SHA-256 binding, timestamps, observed transcript, observed command text, and task/audit command evidence reference match expected values; live-device claims are still owner-recorded external evidence".to_string(),
         "plugin_trust_qa_report" => "JSON report exists, schema/evidence identity is valid, expected release version matches, self-test fixture identity is false, required owner-recorded fields are present, owner evidence notes are non-placeholder, review and egress validation timestamps are valid and ordered, and deny/allow egress fixture notes are present; marketplace, malware, sandbox, and host-level egress claims remain owner-recorded external evidence".to_string(),
         _ => "JSON report exists and required owner-recorded fields are present; external claims are not revalidated by evidence-status".to_string(),
     }
@@ -8369,8 +8562,7 @@ fn release_blocking_manual_gates(
     }
 
     let live_device_qa_valid =
-        release_evidence_item_present(evidence_status, "live_device_qa_report")
-            && evidence_mode_enabled;
+        release_live_device_evidence_valid(evidence_status, evidence_mode_enabled);
     let mut gates = vec![
         "Developer ID Application and Installer signing credentials configured and used for a full signed package run".to_string(),
         "notarization and stapling completed for both app and installer package".to_string(),
@@ -9524,6 +9716,19 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 "live microphone gate should remain for {status:?}"
             );
         }
+
+        let mut evidence_status =
+            release_evidence_status_fixture(ReleaseEvidenceItemStatus::Present);
+        evidence_status
+            .items
+            .iter_mut()
+            .find(|item| item.key == "signed_distribution_provenance_report")
+            .expect("signed provenance fixture")
+            .status = ReleaseEvidenceItemStatus::Invalid;
+        let features = release_readiness_features(&evidence_status, true);
+        assert!(features.iter().any(|feature| {
+            feature.key == "live_voice_loop" && feature.status == "pending_manual_validation"
+        }));
     }
 
     #[test]
@@ -9846,6 +10051,17 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 "microphone_usage_description": EXPECTED_MICROPHONE_USAGE_DESCRIPTION,
                 "speech_recognition_usage_description": EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION
             },
+            "app_executable": {
+                "executable_path": "/Applications/Jarvis.app/Contents/MacOS/JarvisMacApp",
+                "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "code_identifier": "com.nobiletechnology.jarvis",
+                "team_identifier": "9VZ742YKV4",
+                "cdhash": "0123456789abcdef0123456789abcdef01234567"
+            },
+            "signed_provenance": {
+                "report_path": "target/distribution/Jarvis-0.1.4-signed-provenance.json",
+                "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            },
             "bundled_core": {
                 "executable_path": "/Applications/Jarvis.app/Contents/Resources/bin/jarvis-cli",
                 "version": "jarvis 0.1.4",
@@ -10017,6 +10233,8 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 "pkg_path": "target/distribution/Jarvis-0.1.4.pkg",
                 "zip_sha256": digest,
                 "pkg_sha256": digest,
+                "app_executable_path": "target/distribution/Jarvis.app/Contents/MacOS/JarvisMacApp",
+                "app_executable_sha256": digest,
                 "bundled_core_path": "target/distribution/Jarvis.app/Contents/Resources/bin/jarvis-cli",
                 "bundled_core_sha256": digest,
                 "bundled_core_version": "jarvis 0.1.4"
@@ -10131,6 +10349,25 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let (status, detail) = inspect_live_device_qa_report_value(report);
         assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
         assert!(detail.contains("installed_app_path"), "{detail}");
+    }
+
+    #[test]
+    fn live_device_qa_report_rejects_invalid_app_executable_identity() {
+        for (field, invalid_value) in [
+            ("sha256", "not-a-digest"),
+            ("code_identifier", "com.example.StaleJarvis"),
+            ("team_identifier", "BADTEAM"),
+            ("cdhash", "not-a-cdhash"),
+        ] {
+            let mut report = valid_live_device_qa_report_json();
+            report["app_executable"][field] = json!(invalid_value);
+            let (status, detail) = inspect_live_device_qa_report_value(report);
+            assert_eq!(status, ReleaseEvidenceItemStatus::Invalid, "{field}");
+            assert!(
+                detail.contains(&format!("app_executable.{field}")),
+                "{field}: {detail}"
+            );
+        }
     }
 
     #[test]
@@ -11000,9 +11237,14 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .expect("release evidence artifact fixture lock");
         let temp_dir = tempfile::tempdir().expect("temp release evidence");
         let app_path = PathBuf::from("target/distribution/Jarvis.app");
+        let app_executable_path = app_path.join("Contents/MacOS/JarvisMacApp");
         let bundled_core_path = app_path.join("Contents/Resources/bin/jarvis-cli");
+        std::fs::create_dir_all(app_executable_path.parent().expect("app executable parent"))
+            .expect("create app executable fixture");
         std::fs::create_dir_all(bundled_core_path.parent().expect("bundled core parent"))
             .expect("create app bundle fixture");
+        std::fs::write(&app_executable_path, "current app executable")
+            .expect("write app executable artifact");
         std::fs::write(&bundled_core_path, "current bundled core")
             .expect("write bundled core artifact");
         let zip_file = temp_dir.path().join("Jarvis-0.1.4.zip");
@@ -11034,6 +11276,10 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             json!(file_sha256(&zip_file).expect("zip digest"));
         signed_report["artifacts"]["pkg_sha256"] =
             json!(file_sha256(&pkg_file).expect("package digest"));
+        signed_report["artifacts"]["app_executable_path"] =
+            json!(app_executable_path.display().to_string());
+        signed_report["artifacts"]["app_executable_sha256"] =
+            json!(file_sha256(&app_executable_path).expect("app executable digest"));
         signed_report["artifacts"]["bundled_core_sha256"] =
             json!(file_sha256(&bundled_core_path).expect("bundled core digest"));
         signed_report["notarization"]["app_zip_notary_log"] =
@@ -11050,8 +11296,14 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         )
         .expect("write signed report");
         let mut live_report = valid_live_device_qa_report_json();
+        live_report["app_executable"]["path"] = json!(app_executable_path.display().to_string());
+        live_report["app_executable"]["sha256"] =
+            json!(file_sha256(&app_executable_path).expect("app executable digest"));
         live_report["bundled_core"]["sha256"] =
             json!(file_sha256(&bundled_core_path).expect("bundled core digest"));
+        live_report["signed_provenance"]["report_path"] = json!(signed_file.display().to_string());
+        live_report["signed_provenance"]["sha256"] =
+            json!(file_sha256(&signed_file).expect("signed digest"));
         std::fs::write(
             &live_file,
             serde_json::to_vec(&live_report).expect("encode live report"),
@@ -11105,9 +11357,14 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .expect("release evidence artifact fixture lock");
         let temp_dir = tempfile::tempdir().expect("temp release evidence");
         let app_path = PathBuf::from("target/distribution/Jarvis.app");
+        let app_executable_path = app_path.join("Contents/MacOS/JarvisMacApp");
         let bundled_core_path = app_path.join("Contents/Resources/bin/jarvis-cli");
+        std::fs::create_dir_all(app_executable_path.parent().expect("app executable parent"))
+            .expect("create app executable fixture");
         std::fs::create_dir_all(bundled_core_path.parent().expect("bundled core parent"))
             .expect("create app bundle fixture");
+        std::fs::write(&app_executable_path, "current app executable")
+            .expect("write app executable artifact");
         std::fs::write(&bundled_core_path, "current bundled core")
             .expect("write bundled core artifact");
         let zip_file = temp_dir.path().join("Jarvis-0.1.4.zip");
@@ -11139,6 +11396,10 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             json!(file_sha256(&zip_file).expect("zip digest"));
         signed_report["artifacts"]["pkg_sha256"] =
             json!(file_sha256(&pkg_file).expect("package digest"));
+        signed_report["artifacts"]["app_executable_path"] =
+            json!(app_executable_path.display().to_string());
+        signed_report["artifacts"]["app_executable_sha256"] =
+            json!(file_sha256(&app_executable_path).expect("app executable digest"));
         signed_report["artifacts"]["bundled_core_sha256"] =
             json!(file_sha256(&bundled_core_path).expect("bundled core digest"));
         signed_report["notarization"]["app_zip_notary_log"] =
@@ -11155,8 +11416,14 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         )
         .expect("write signed report");
         let mut live_report = valid_live_device_qa_report_json();
+        live_report["app_executable"]["path"] = json!(app_executable_path.display().to_string());
+        live_report["app_executable"]["sha256"] =
+            json!(file_sha256(&app_executable_path).expect("app executable digest"));
         live_report["bundled_core"]["sha256"] =
             json!(file_sha256(&bundled_core_path).expect("bundled core digest"));
+        live_report["signed_provenance"]["report_path"] = json!(signed_file.display().to_string());
+        live_report["signed_provenance"]["sha256"] =
+            json!(file_sha256(&signed_file).expect("signed digest"));
         live_report["validation_flags"]["notification"] = json!(false);
         std::fs::write(
             &live_file,
@@ -11202,6 +11469,30 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             "{error}"
         );
         assert!(error.contains("validation_flags.notification"), "{error}");
+
+        live_report["validation_flags"]["notification"] = json!(true);
+        live_report["app_executable"]["sha256"] =
+            json!("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+        let repository = SqliteRepository::in_memory().expect("repository");
+        let task = repository
+            .create_task(Uuid::new_v4(), "status check")
+            .expect("task");
+        repository
+            .update_task_status(task.id, TaskStatus::Completed)
+            .expect("mark task completed");
+        live_report["voice_command_observation"]["command_result_evidence_id"] =
+            json!(format!("task:{}", task.id));
+        std::fs::write(
+            &live_file,
+            serde_json::to_vec(&live_report).expect("encode mismatched live report"),
+        )
+        .expect("write mismatched live report");
+        report["reports"]["live_device_qa_sha256"] =
+            json!(file_sha256(&live_file).expect("mismatched live digest"));
+        let error =
+            validate_release_evidence_bundle_file_bindings(&report, paths, Some(&repository))
+                .expect_err("mismatched app executable digest should fail");
+        assert!(error.contains("app executable SHA-256"), "{error}");
     }
 
     fn valid_signed_distribution_provenance_json() -> serde_json::Value {
@@ -11218,6 +11509,8 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 "pkg_path": "target/distribution/Jarvis-0.1.4.pkg",
                 "zip_sha256": digest,
                 "pkg_sha256": digest,
+                "app_executable_path": "target/distribution/Jarvis.app/Contents/MacOS/JarvisMacApp",
+                "app_executable_sha256": digest,
                 "bundled_core_path": "target/distribution/Jarvis.app/Contents/Resources/bin/jarvis-cli",
                 "bundled_core_sha256": digest,
                 "bundled_core_version": "jarvis 0.1.4"
@@ -11227,6 +11520,9 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 "developer_id_installer_identity": "Developer ID Installer: Jarvis QA Fixture",
                 "app_bundle_codesign": "Authority=Developer ID Application: Jarvis QA Fixture",
                 "app_executable_codesign": "Authority=Developer ID Application: Jarvis QA Fixture",
+                "app_executable_identifier": "com.nobiletechnology.jarvis",
+                "app_executable_team_identifier": "9VZ742YKV4",
+                "app_executable_cdhash": "0123456789abcdef0123456789abcdef01234567",
                 "bundled_core_codesign": "Authority=Developer ID Application: Jarvis QA Fixture",
                 "installer_pkg_signature": "Developer ID Installer: Jarvis QA Fixture"
             },
@@ -11256,7 +11552,8 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 "app_stapled": true,
                 "installer_pkg_stapled": true,
                 "gatekeeper_assessed": true,
-                "artifact_digests_recorded": true
+                "artifact_digests_recorded": true,
+                "app_executable_identity_recorded": true
             },
             "proof_boundary": "Signed distribution provenance fixture."
         })
@@ -11436,9 +11733,13 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
     #[test]
     fn signed_distribution_provenance_rejects_wrong_bundled_core_path_or_digest() {
         let app_dir = tempfile::tempdir().expect("temp app bundle");
+        let app_executable = app_dir.path().join("Contents/MacOS/JarvisMacApp");
         let core_path = app_dir.path().join("Contents/Resources/bin/jarvis-cli");
+        std::fs::create_dir_all(app_executable.parent().expect("app executable parent"))
+            .expect("create app executable parent");
         std::fs::create_dir_all(core_path.parent().expect("core parent"))
             .expect("create core parent");
+        std::fs::write(&app_executable, "current app executable").expect("write app executable");
         std::fs::write(&core_path, "current core").expect("write core artifact");
 
         let mut wrong_path = valid_signed_distribution_provenance_json();
@@ -11455,6 +11756,10 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             json!(file_sha256(zip_file.path()).expect("zip digest"));
         stale_digest["artifacts"]["pkg_sha256"] =
             json!(file_sha256(pkg_file.path()).expect("package digest"));
+        stale_digest["artifacts"]["app_executable_path"] =
+            json!(app_executable.display().to_string());
+        stale_digest["artifacts"]["app_executable_sha256"] =
+            json!(file_sha256(&app_executable).expect("app executable digest"));
         stale_digest["artifacts"]["bundled_core_path"] = json!(core_path.display().to_string());
         let error = validate_signed_distribution_artifact_digests(
             &stale_digest,
@@ -11470,6 +11775,24 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             ),
             "{error}"
         );
+    }
+
+    #[test]
+    fn signed_distribution_provenance_rejects_invalid_app_executable_identity() {
+        for (field, invalid_value) in [
+            ("app_executable_identifier", "com.example.StaleJarvis"),
+            ("app_executable_team_identifier", "BADTEAM"),
+            ("app_executable_cdhash", "not-a-cdhash"),
+        ] {
+            let mut report = valid_signed_distribution_provenance_json();
+            report["signing"][field] = json!(invalid_value);
+            let (status, detail) = inspect_signed_distribution_provenance_value(report);
+            assert_eq!(status, ReleaseEvidenceItemStatus::Invalid, "{field}");
+            assert!(
+                detail.contains(&format!("signing.{field}")),
+                "{field}: {detail}"
+            );
+        }
     }
 
     #[test]
@@ -11498,9 +11821,13 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let pkg_file = tempfile::NamedTempFile::new().expect("temp package artifact");
         let zip_notary_log = tempfile::NamedTempFile::new().expect("temp zip notary log");
         let pkg_notary_log = tempfile::NamedTempFile::new().expect("temp package notary log");
+        let app_executable = app_dir.path().join("Contents/MacOS/JarvisMacApp");
         let core_path = app_dir.path().join("Contents/Resources/bin/jarvis-cli");
+        std::fs::create_dir_all(app_executable.parent().expect("app executable parent"))
+            .expect("create app executable parent");
         std::fs::create_dir_all(core_path.parent().expect("core parent"))
             .expect("create core parent");
+        std::fs::write(&app_executable, "current app executable").expect("write app executable");
         std::fs::write(&core_path, "current core").expect("write core artifact");
         std::fs::write(zip_file.path(), "current zip").expect("write zip artifact");
         std::fs::write(pkg_file.path(), "current package").expect("write package artifact");
@@ -11513,6 +11840,9 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             json!(file_sha256(zip_file.path()).expect("zip digest"));
         report["artifacts"]["pkg_sha256"] =
             json!(file_sha256(pkg_file.path()).expect("package digest"));
+        report["artifacts"]["app_executable_path"] = json!(app_executable.display().to_string());
+        report["artifacts"]["app_executable_sha256"] =
+            json!(file_sha256(&app_executable).expect("app executable digest"));
         report["artifacts"]["bundled_core_path"] = json!(core_path.display().to_string());
         report["artifacts"]["bundled_core_sha256"] =
             json!(file_sha256(&core_path).expect("core digest"));
@@ -11561,7 +11891,17 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             manual_gate: true,
             detail: "test fixture".to_string(),
         };
-        let items = vec![live_device_item, missing_bundle];
+        let signed_provenance_item = ReleaseEvidenceStatusItem {
+            key: "signed_distribution_provenance_report".to_string(),
+            label: "Signed-distribution provenance report".to_string(),
+            path: "target/distribution/Jarvis-0.1.4-signed-provenance.json".to_string(),
+            kind: ReleaseEvidenceKind::JsonReport,
+            status: ReleaseEvidenceItemStatus::Present,
+            required_for_production: true,
+            manual_gate: true,
+            detail: "test fixture".to_string(),
+        };
+        let items = vec![live_device_item, signed_provenance_item, missing_bundle];
         let satisfied_count = items
             .iter()
             .filter(|item| item.status == ReleaseEvidenceItemStatus::Present)

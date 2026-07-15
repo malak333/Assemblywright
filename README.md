@@ -535,7 +535,9 @@ package creation when Apple credentials are provided. It now also writes a
 `Jarvis-<version>-signed-provenance.json` report with signing identities,
 notary submission IDs/log paths, staple validation output, Gatekeeper
 assessment output, bundled core `jarvis --version` output, and artifact
-SHA-256 digests for the signed zip/pkg, plus the bundled
+SHA-256 digests for the signed zip/pkg. The report also records the exact app
+executable path/SHA-256 and its structured code Identifier, TeamIdentifier,
+and CDHash, plus the bundled
 `Contents/Resources/bin/jarvis-cli` path and SHA-256 digest. It
 also asserts the stable app/core code identifiers. This static signed-artifact
 evidence does not by itself exercise the Developer ID peer-identity route and
@@ -564,6 +566,11 @@ evidence-mode readiness/evidence-status verification commands to run after the
 report is generated. After the owner validates a signed installed app on a real
 Mac profile, fill that template, source it, and rerun the script with
 `--assert-complete`.
+The assertion requires the signed-provenance report and revalidates the
+installed app executable with `codesign`, stapler, and Gatekeeper. Its
+executable SHA-256, code identifier, TeamIdentifier, and CDHash must match the
+signed candidate; the live report records that identity and the exact
+signed-provenance path/SHA-256 for final cross-report validation.
 The assertion requires explicit transcript handoff validation, structured
 spoken-command observation fields with the installed app path matching the
 expected `/Applications/Jarvis.app` path, unless explicitly overridden with
@@ -661,7 +668,8 @@ with either the QA script variables (`JARVIS_QA_REPORT_PATH`,
 `JARVIS_PLUGIN_QA_REPORT_PATH`) or the bundle/doctor aliases
 (`JARVIS_EVIDENCE_LIVE_QA_REPORT`, `JARVIS_EVIDENCE_PLUGIN_QA_REPORT`). The
 live-device QA report must bind the validated bundle identifier, app version,
-build version, and voice permission usage strings to the installed app. Unlike
+build version, voice permission usage strings, and exact executable code
+identity to the installed app and signed provenance. Unlike
 doctor/status inventory, the real `--bundle` path also validates the signed
 provenance report, local app signature, app stapling ticket, installer signature, installer stapling ticket,
 and app zip payload, then records SHA-256 digests for distribution artifacts and
@@ -701,7 +709,8 @@ reports receive semantic validation for signed-distribution provenance
 version/bundle metadata, bundled core path/version/SHA-256 binding,
 signing/notary/staple and Gatekeeper fields, required flags, SHA-256 digests,
 signed-provenance zip/pkg/core digest matches against current artifact files,
-live-device QA metadata, plugin-trust non-future timestamps plus
+signed-provenance app-executable digest/Identifier/TeamIdentifier/CDHash
+matching against live-device QA, live-device QA metadata, plugin-trust non-future timestamps plus
 `review_source: owner-asserted-manual-review`, and final bundle
 path/digest semantics, child-report semantic validity, and
 `validation_flags.local_signature_validation`. The status surface still does not

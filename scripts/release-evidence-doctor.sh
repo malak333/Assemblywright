@@ -930,6 +930,53 @@ check_json_sha256() {
   fi
 }
 
+check_json_app_code_identity() {
+  local label="$1"
+  local path="$2"
+  local identifier_field="$3"
+  local team_field="$4"
+  local cdhash_field="$5"
+  local expected_identifier="$6"
+
+  if python3 - "$path" "$identifier_field" "$team_field" "$cdhash_field" "$expected_identifier" <<'PY'
+import json
+import re
+import sys
+
+path, identifier_field, team_field, cdhash_field, expected_identifier = sys.argv[1:6]
+try:
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+except Exception:
+    raise SystemExit(1)
+
+def value_at(field):
+    value = data
+    for part in field.split("."):
+        if not isinstance(value, dict) or part not in value:
+            raise SystemExit(1)
+        value = value[part]
+    if not isinstance(value, str) or not value:
+        raise SystemExit(1)
+    return value
+
+identifier = value_at(identifier_field)
+team = value_at(team_field)
+cdhash = value_at(cdhash_field)
+valid = (
+    identifier == expected_identifier
+    and re.fullmatch(r"[A-Z0-9]{10}", team)
+    and re.fullmatch(r"[0-9A-Fa-f]{40,64}", cdhash)
+)
+raise SystemExit(0 if valid else 1)
+PY
+  then
+    record_satisfied "$label: app executable code identity is structured and matches $expected_identifier"
+  else
+    record_missing "$label invalid app executable code identity in $path"
+  fi
+}
+
 check_json_sha256_matches_file() {
   local label="$1"
   local path="$2"
@@ -1142,15 +1189,17 @@ check_release_evidence() {
     check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.app_path" "$APP_PATH"
     check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.zip_path" "$ZIP_PATH"
     check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.pkg_path" "$PKG_PATH"
+    check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.app_executable_path" "$APP_PATH/Contents/MacOS/JarvisMacApp"
     check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.bundled_core_path" "$APP_PATH/Contents/Resources/bin/jarvis-cli"
     check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.bundled_core_version" "jarvis $EXPECTED_VERSION"
-    for field in artifacts.zip_sha256 artifacts.pkg_sha256 artifacts.bundled_core_sha256; do
+    for field in artifacts.zip_sha256 artifacts.pkg_sha256 artifacts.app_executable_sha256 artifacts.bundled_core_sha256; do
       check_json_sha256 "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "$field"
     done
     check_json_sha256_matches_file "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.zip_sha256" "app zip artifact" "$ZIP_PATH"
     check_json_sha256_matches_file "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.pkg_sha256" "installer package artifact" "$PKG_PATH"
+    check_json_sha256_matches_file "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.app_executable_sha256" "app executable" "$APP_PATH/Contents/MacOS/JarvisMacApp"
     check_json_sha256_matches_file "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.bundled_core_sha256" "bundled core executable" "$APP_PATH/Contents/Resources/bin/jarvis-cli"
-    for flag in developer_id_application_signed developer_id_installer_signed app_zip_notarized installer_pkg_notarized app_stapled installer_pkg_stapled gatekeeper_assessed artifact_digests_recorded; do
+    for flag in developer_id_application_signed developer_id_installer_signed app_zip_notarized installer_pkg_notarized app_stapled installer_pkg_stapled gatekeeper_assessed artifact_digests_recorded app_executable_identity_recorded; do
       check_json_flag "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "validation_flags.$flag"
     done
     for field in notarization.app_zip_notary_log notarization.installer_pkg_notary_log; do
@@ -1166,6 +1215,9 @@ check_release_evidence() {
     for field in signing.app_bundle_codesign signing.app_executable_codesign signing.bundled_core_codesign; do
       check_json_string_contains "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "$field" "Authority=Developer ID Application: "
     done
+    check_json_app_code_identity "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" \
+      "signing.app_executable_identifier" "signing.app_executable_team_identifier" \
+      "signing.app_executable_cdhash" "$EXPECTED_BUNDLE_ID"
     check_json_string_contains "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "signing.installer_pkg_signature" "Developer ID Installer: "
     check_json_uuid "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "notarization.app_zip_submission_id"
     check_json_uuid "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "notarization.installer_pkg_submission_id"
@@ -1228,11 +1280,23 @@ check_release_evidence() {
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.build_version" "$EXPECTED_VERSION"
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.microphone_usage_description" "$EXPECTED_MICROPHONE_USAGE_DESCRIPTION"
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.speech_recognition_usage_description" "$EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION"
+    check_json_string "live-device QA report" "$LIVE_QA_REPORT" "app_executable.executable_path" "$EXPECTED_INSTALLED_APP_PATH/Contents/MacOS/JarvisMacApp"
+    check_json_sha256 "live-device QA report" "$LIVE_QA_REPORT" "app_executable.sha256"
+    check_json_app_code_identity "live-device QA report" "$LIVE_QA_REPORT" \
+      "app_executable.code_identifier" "app_executable.team_identifier" \
+      "app_executable.cdhash" "$EXPECTED_BUNDLE_ID"
+    check_json_string "live-device QA report" "$LIVE_QA_REPORT" "signed_provenance.report_path" "$SIGNED_PROVENANCE_REPORT"
+    check_json_sha256 "live-device QA report" "$LIVE_QA_REPORT" "signed_provenance.sha256"
+    check_json_sha256_matches_file "live-device QA report" "$LIVE_QA_REPORT" "signed_provenance.sha256" "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT"
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "bundled_core.executable_path" "$EXPECTED_INSTALLED_APP_PATH/Contents/Resources/bin/jarvis-cli"
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "bundled_core.version" "jarvis $EXPECTED_VERSION"
     check_json_sha256 "live-device QA report" "$LIVE_QA_REPORT" "bundled_core.sha256"
     if valid_json_file "$SIGNED_PROVENANCE_REPORT"; then
       check_json_fields_equal_across_files "live-device bundled-core digest" "$LIVE_QA_REPORT" "bundled_core.sha256" "$SIGNED_PROVENANCE_REPORT" "artifacts.bundled_core_sha256"
+      check_json_fields_equal_across_files "live-device app-executable digest" "$LIVE_QA_REPORT" "app_executable.sha256" "$SIGNED_PROVENANCE_REPORT" "artifacts.app_executable_sha256"
+      check_json_fields_equal_across_files "live-device app-executable identifier" "$LIVE_QA_REPORT" "app_executable.code_identifier" "$SIGNED_PROVENANCE_REPORT" "signing.app_executable_identifier"
+      check_json_fields_equal_across_files "live-device app-executable team identifier" "$LIVE_QA_REPORT" "app_executable.team_identifier" "$SIGNED_PROVENANCE_REPORT" "signing.app_executable_team_identifier"
+      check_json_fields_equal_across_files "live-device app-executable CDHash" "$LIVE_QA_REPORT" "app_executable.cdhash" "$SIGNED_PROVENANCE_REPORT" "signing.app_executable_cdhash"
     fi
     if [[ "${#MISSING_ITEMS[@]}" -eq "$missing_before_live" ]]; then
       LIVE_QA_REPORT_VALID=true
@@ -1466,7 +1530,9 @@ write_fixture_reports() {
   local live_path="$1"
   local plugin_path="$2"
   local live_core_sha
+  local live_app_executable_sha
   live_core_sha="$(file_sha256 "$(dirname "$live_path")/dist/Jarvis.app/Contents/Resources/bin/jarvis-cli")"
+  live_app_executable_sha="$(file_sha256 "$(dirname "$live_path")/dist/Jarvis.app/Contents/MacOS/JarvisMacApp")"
 
   cat >"$live_path" <<JSON
 {
@@ -1526,6 +1592,13 @@ write_fixture_reports() {
     "build_version": "$VERSION",
     "microphone_usage_description": "$EXPECTED_MICROPHONE_USAGE_DESCRIPTION",
     "speech_recognition_usage_description": "$EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION"
+  },
+  "app_executable": {
+    "executable_path": "/Applications/Jarvis.app/Contents/MacOS/JarvisMacApp",
+    "sha256": "$live_app_executable_sha",
+    "code_identifier": "com.nobiletechnology.jarvis",
+    "team_identifier": "9VZ742YKV4",
+    "cdhash": "0123456789abcdef0123456789abcdef01234567"
   },
   "bundled_core": {
     "executable_path": "/Applications/Jarvis.app/Contents/Resources/bin/jarvis-cli",
@@ -1710,6 +1783,7 @@ if [[ "$SELF_TEST" == true ]]; then
   touch "$self_test_pkg"
   self_test_zip_sha="$(file_sha256 "$self_test_zip")"
   self_test_pkg_sha="$(file_sha256 "$self_test_pkg")"
+  self_test_app_executable_sha="$(file_sha256 "$tmp_dir/dist/Jarvis.app/Contents/MacOS/JarvisMacApp")"
   self_test_core_sha="$(file_sha256 "$tmp_dir/dist/Jarvis.app/Contents/Resources/bin/jarvis-cli")"
   cat >"$tmp_dir/app-zip-notarytool.log" <<'LOG'
 id: 00000000-0000-4000-8000-000000000001
@@ -1735,6 +1809,8 @@ LOG
     "pkg_path": "$self_test_pkg",
     "zip_sha256": "$self_test_zip_sha",
     "pkg_sha256": "$self_test_pkg_sha",
+    "app_executable_path": "$tmp_dir/dist/Jarvis.app/Contents/MacOS/JarvisMacApp",
+    "app_executable_sha256": "$self_test_app_executable_sha",
     "bundled_core_path": "$tmp_dir/dist/Jarvis.app/Contents/Resources/bin/jarvis-cli",
     "bundled_core_sha256": "$self_test_core_sha",
     "bundled_core_version": "jarvis $VERSION"
@@ -1744,6 +1820,9 @@ LOG
     "developer_id_installer_identity": "Developer ID Installer: Jarvis QA Fixture",
     "app_bundle_codesign": "Authority=Developer ID Application: Jarvis QA Fixture",
     "app_executable_codesign": "Authority=Developer ID Application: Jarvis QA Fixture",
+    "app_executable_identifier": "com.nobiletechnology.jarvis",
+    "app_executable_team_identifier": "9VZ742YKV4",
+    "app_executable_cdhash": "0123456789abcdef0123456789abcdef01234567",
     "bundled_core_codesign": "Authority=Developer ID Application: Jarvis QA Fixture",
     "installer_pkg_signature": "Developer ID Installer: Jarvis QA Fixture"
   },
@@ -1773,11 +1852,28 @@ LOG
     "app_stapled": true,
     "installer_pkg_stapled": true,
     "gatekeeper_assessed": true,
-    "artifact_digests_recorded": true
+    "artifact_digests_recorded": true,
+    "app_executable_identity_recorded": true
   },
   "proof_boundary": "self-test fixture"
 }
 JSON
+  self_test_signed_provenance_sha="$(file_sha256 "$tmp_dir/dist/Jarvis-$VERSION-signed-provenance.json")"
+  python3 - "$tmp_dir/live.json" "$tmp_dir/dist/Jarvis-$VERSION-signed-provenance.json" "$self_test_signed_provenance_sha" <<'PY'
+import json
+import sys
+
+live_path, provenance_path, provenance_sha = sys.argv[1:4]
+with open(live_path, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["signed_provenance"] = {
+    "report_path": provenance_path,
+    "sha256": provenance_sha,
+}
+with open(live_path, "w", encoding="utf-8") as handle:
+    json.dump(data, handle, indent=2, sort_keys=True)
+    handle.write("\n")
+PY
   write_fixture_bundle \
     "$tmp_dir/bundle.json" \
     "$tmp_dir/dist/Jarvis.app" \

@@ -268,5 +268,14 @@ done
 require_text "release readiness blocker docs" "$CHECKLIST" "live-device QA"
 require_text "release readiness blocker docs" "$CHECKLIST" "plugin-trust QA"
 require_text "release readiness blocker docs" "$CHECKLIST" "Developer ID"
+require_text "design app executable identity binding" "$DESIGN" "TeamIdentifier, and CDHash"
+require_text "safety app executable identity binding" "$SAFETY_RULES" "continuous runtime integrity"
+require_text "readme signed app executable identity" "$README" "structured code Identifier, TeamIdentifier"
+require_text "build docs signed provenance live QA binding" "$BUILD_DOCS" "JARVIS_QA_SIGNED_PROVENANCE_REPORT"
+require_text "release checklist app identity drift" "$CHECKLIST" "reject cross-report artifact or identity drift"
+require_text "architecture current app identity binding" "$ARCHITECTURE" "app executable path/SHA-256 plus Identifier, TeamIdentifier, and CDHash"
+require_text "architecture target app identity binding" "$ARCHITECTURE" "point-in-time installed executable and signed-provenance binding"
+require_text "knowledge base app identity binding" "$KB" "Signed distribution and live-device evidence are now joined by the exact app"
+require_text "core release proof boundary app identity" "$CORE_IPC" "exact app-executable SHA-256/code-identity"
 
 printf 'Jarvis release docs drift smoke: ok\n'

@@ -260,21 +260,26 @@ flowchart TB
     ReleaseReadiness["/release/readiness and jarvis release readiness"] --> Docs
     ReleaseReadinessFallback["serverless CLI readiness fallback"] --> ReleaseReadiness
     EvidenceStatus["/release/evidence-status and jarvis release evidence-status"] --> EvidenceDoctor
-    EvidenceStatus --> LiveQASemanticValidator["live QA semantic validator: bundle/version/core-digest/timestamp/transcript/command/non-voice-owner/self-test checks"]
-    EvidenceStatus --> FinalBundleValidator["final bundle validator: path/digest/local-signature/archive-URI/owner-attestation and child-report semantic checks"]
+    EvidenceStatus --> LiveQASemanticValidator["live QA semantic validator: bundle/version/core/executable identity/timestamp/transcript/command/owner checks"]
+    EvidenceStatus --> FinalBundleValidator["final bundle validator: path/digest/app code identity/local-signature/archive-URI/owner-attestation and child-report checks"]
     LiveQASemanticValidator --> RepoEvidenceLookup["repository-backed command-result lookup: task/audit record must exist"]
     RepoEvidenceLookup --> Repository["SQLite tasks and audit entries"]
     LiveQASemanticValidator --> ReleaseReadiness
     subgraph ManualExternal["Manual external evidence, not local gate proof"]
-        LiveDeviceAssert["release-live-device-qa.sh assert-complete"] --> LiveDeviceQAReport["target/release-live-device-qa-report.json owner-recorded voice and non-voice evidence"]
+        LiveDeviceAssert["release-live-device-qa.sh assert-complete"]
+        LiveDeviceQAReport["target/release-live-device-qa-report.json owner-recorded voice, non-voice, and exact app identity evidence"]
         PluginTrustAssert["release-plugin-trust-qa.sh assert-complete"] --> PluginTrustQAReport["target/release-plugin-trust-qa-report.json owner-recorded plugin trust evidence"]
         PluginTrustRunbook -. guides .-> PluginTrustAssert
         SignedArtifacts["Developer ID signed, notarized, and stapled zip/pkg"] --> EvidenceBundleRun["release-evidence-bundle.sh bundle"]
         SignedArtifacts --> SignedProvenance["package-distribution.sh signed provenance report"]
+        SignedProvenance --> SignedAppIdentity["app executable path/SHA-256 plus Identifier, TeamIdentifier, and CDHash"]
         SignedDistributionRunbook -. guides .-> SignedArtifacts
         SignedProvenance --> EvidenceBundleRun
         EvidenceBundleEnv --> EvidenceBundleRun
         LiveDeviceEnv --> LiveDeviceAssert
+        SignedAppIdentity --> LiveDeviceAssert
+        LiveDeviceAssert --> InstalledAppIdentity["codesign/stapler/Gatekeeper plus installed executable digest and code identity"]
+        InstalledAppIdentity --> LiveDeviceQAReport
         PluginTrustEnv --> PluginTrustAssert
         CleanProfileFinderQA["owner-recorded clean-profile install and Finder/LaunchServices QA"] --> LiveDeviceQAReport
         ManualInstalledAppQA["owner-recorded manual installed-app command, audit, memory, scheduler, plugin, pause, diagnostics, notifications, restart QA"] --> LiveDeviceQAReport
@@ -929,7 +934,9 @@ mandatory, parses every required live-device/plugin-trust report flag, requires
 non-empty and non-placeholder owner-recorded evidence-note fields in both QA
 reports plus the final bundle owner attestation, confirms the live-device QA bundle id/version/build
 metadata and approved microphone/Speech privacy prompt copy match the expected
-release, checks live-device voice and notification timestamps are ordered UTC values,
+release, requires the live report's app executable SHA-256, Identifier,
+TeamIdentifier, CDHash, and signed-provenance path/SHA-256 to match the signed
+candidate, checks live-device voice and notification timestamps are ordered UTC values,
 and records SHA-256 digests for distribution artifacts and QA reports before
 writing evidence.
 The `./scripts/release-evidence-doctor.sh --check` command inventories the
@@ -939,7 +946,8 @@ manifest paths so operators can see present, missing, or invalid evidence before
 version marker before counting those local artifacts as present, and it rejects
 final bundles that reference semantically invalid signed-provenance,
 live-device QA, or plugin-trust QA child reports even when the recorded child
-digests match. When evidence is missing it prints the package preflight, both
+digests match. Signed-provenance and live-device inspection also reject exact
+app executable digest or code-identity drift. When evidence is missing it prints the package preflight, both
 supported signing credential forms, external handoff directory generator,
 live-device template/assertion, plugin-trust template/assertion, and final
 evidence-bundle template/bundle commands. It is a diagnostic inventory, not
@@ -1280,14 +1288,18 @@ flowchart TB
     ReleaseOps --> CredentialedPackageLane
     CredentialedPackageLane --> SignedApp["Developer ID signed, notarized, and stapled app zip"]
     CredentialedPackageLane --> SignedInstaller["Developer ID signed and notarized /Applications installer package"]
+    CredentialedPackageLane --> SignedAppProvenanceProd["signed app executable digest, Identifier, TeamIdentifier, and CDHash"]
     ReleaseOps --> CleanProfileQA["clean-profile install and Finder/LaunchServices launch QA"]
     ReleaseOps --> LiveDeviceQAProd["owner-recorded live microphone, Speech, transcript handoff, and audio-output QA"]
+    SignedAppProvenanceProd --> InstalledIdentityBindingProd["point-in-time installed executable and signed-provenance binding"]
+    LiveDeviceQAProd --> InstalledIdentityBindingProd
     LiveDeviceQAProd --> CommandEvidenceProd["repository-backed task/audit command-result evidence"]
     ReleaseOps --> NotificationQAProd["live macOS notification prompt and delivery QA"]
     ReleaseOps --> PluginTrustQAProd["marketplace, malware, signed-publisher, OS sandbox, and egress QA"]
     ReleaseOps --> ManualReleaseQA["manual installed-app command, audit, memory, scheduler, plugin, pause, diagnostics, notifications, restart QA"]
     SignedApp --> FinalEvidenceBundle["archived final release evidence bundle"]
     SignedInstaller --> FinalEvidenceBundle
+    InstalledIdentityBindingProd --> FinalEvidenceBundle
     CleanProfileQA --> FinalEvidenceBundle
     LiveDeviceQAProd --> CommandEvidenceProd
     CommandEvidenceProd --> FinalEvidenceBundle
@@ -1307,6 +1319,11 @@ plugin-trust QA evidence, and an archived final release evidence bundle. The cur
 repository proves only the implemented Rust and Swift surfaces listed
 above; local, OpenAI-compatible HTTP, and authenticated Codex CLI account
 provider boundaries are implemented, but full assistant behavior is not.
+The target release evidence chain keeps the signed candidate and live-device
+report joined by the app executable digest and structured code identity. That
+binding prevents a valid report for one build from being bundled with another;
+it remains point-in-time evidence and does not claim continuous runtime
+integrity or installation attestation.
 A model-selection restart waits for the app-supervised process to exit before
 relaunch and accepts post-launch health only when provider/auth-mode/model
 metadata matches the requested configuration, preventing stale-core health

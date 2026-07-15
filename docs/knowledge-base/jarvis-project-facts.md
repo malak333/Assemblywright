@@ -1834,3 +1834,14 @@ requires plugin-trust `generated_at`, `review_started_at`,
   only exact-build cdhash mechanics; it does not prove Developer ID publisher
   identity, device authentication, XPC, App Sandbox/egress enforcement,
   notarization, or live-device behavior.
+- Signed distribution and live-device evidence are now joined by the exact app
+  executable. `package-distribution.sh` records its path/SHA-256 and structured
+  codesign Identifier, ten-character TeamIdentifier, and CDHash.
+  `release-live-device-qa.sh --assert-complete` requires the signed-provenance
+  report, revalidates the installed executable with codesign, stapler, and
+  Gatekeeper, records the installed identity plus signed-provenance path/SHA,
+  and fails on drift. Bundle, doctor, Rust unit, and CLI E2E validators enforce
+  the same cross-report binding, including
+  `release_evidence_status_rejects_live_app_executable_digest_mismatch`. This is
+  point-in-time candidate evidence, not installation provenance, continuous
+  integrity, Apple attestation, or proof that manual live-device QA occurred.

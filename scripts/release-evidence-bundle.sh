@@ -763,6 +763,45 @@ if not isinstance(cursor, str) or len(cursor) != 64 or any(char not in hexdigits
 PY
 }
 
+require_json_app_code_identity() {
+  local label="$1"
+  local path="$2"
+  local identifier_field="$3"
+  local team_field="$4"
+  local cdhash_field="$5"
+  local expected_identifier="$6"
+  require_command python3
+  python3 - "$label" "$path" "$identifier_field" "$team_field" "$cdhash_field" "$expected_identifier" <<'PY'
+import json
+import re
+import sys
+
+label, path, identifier_field, team_field, cdhash_field, expected_identifier = sys.argv[1:7]
+with open(path, encoding="utf-8") as handle:
+    data = json.load(handle)
+
+def value_at(field):
+    value = data
+    for part in field.split("."):
+        if not isinstance(value, dict) or part not in value:
+            raise SystemExit(f"{label} is missing required field: {field}")
+        value = value[part]
+    if not isinstance(value, str) or not value:
+        raise SystemExit(f"{label} field must be a non-empty string: {field}")
+    return value
+
+identifier = value_at(identifier_field)
+team = value_at(team_field)
+cdhash = value_at(cdhash_field)
+if identifier != expected_identifier:
+    raise SystemExit(f"{label} {identifier_field} must equal {expected_identifier}")
+if not re.fullmatch(r"[A-Z0-9]{10}", team):
+    raise SystemExit(f"{label} {team_field} must be a 10-character Apple team identifier")
+if not re.fullmatch(r"[0-9A-Fa-f]{40,64}", cdhash):
+    raise SystemExit(f"{label} {cdhash_field} must be a 40-64 character hexadecimal CDHash")
+PY
+}
+
 require_json_sha256_matches_file() {
   local label="$1"
   local path="$2"
@@ -1300,6 +1339,7 @@ EOF
   touch "$self_test_pkg"
   self_test_zip_sha="$(file_sha256 "$self_test_zip")"
   self_test_pkg_sha="$(file_sha256 "$self_test_pkg")"
+  self_test_app_executable_sha="$(file_sha256 "$tmp_dir/dist/Jarvis.app/Contents/MacOS/JarvisMacApp")"
   self_test_core_sha="$(file_sha256 "$tmp_dir/dist/Jarvis.app/Contents/Resources/bin/jarvis-cli")"
   cat >"$tmp_dir/app-zip-notarytool.log" <<'LOG'
 id: 00000000-0000-4000-8000-000000000001
@@ -1376,6 +1416,13 @@ LOG
     "build_version": "$VERSION",
     "microphone_usage_description": "$EXPECTED_MICROPHONE_USAGE_DESCRIPTION",
     "speech_recognition_usage_description": "$EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION"
+  },
+  "app_executable": {
+    "executable_path": "/Applications/Jarvis.app/Contents/MacOS/JarvisMacApp",
+    "sha256": "$self_test_app_executable_sha",
+    "code_identifier": "com.nobiletechnology.jarvis",
+    "team_identifier": "9VZ742YKV4",
+    "cdhash": "0123456789abcdef0123456789abcdef01234567"
   },
   "bundled_core": {
     "executable_path": "/Applications/Jarvis.app/Contents/Resources/bin/jarvis-cli",
@@ -1458,6 +1505,8 @@ JSON
     "pkg_path": "$self_test_pkg",
     "zip_sha256": "$self_test_zip_sha",
     "pkg_sha256": "$self_test_pkg_sha",
+    "app_executable_path": "$tmp_dir/dist/Jarvis.app/Contents/MacOS/JarvisMacApp",
+    "app_executable_sha256": "$self_test_app_executable_sha",
     "bundled_core_path": "$tmp_dir/dist/Jarvis.app/Contents/Resources/bin/jarvis-cli",
     "bundled_core_sha256": "$self_test_core_sha",
     "bundled_core_version": "jarvis $VERSION"
@@ -1467,6 +1516,9 @@ JSON
     "developer_id_installer_identity": "Developer ID Installer: Jarvis QA Fixture",
     "app_bundle_codesign": "Authority=Developer ID Application: Jarvis QA Fixture",
     "app_executable_codesign": "Authority=Developer ID Application: Jarvis QA Fixture",
+    "app_executable_identifier": "com.nobiletechnology.jarvis",
+    "app_executable_team_identifier": "9VZ742YKV4",
+    "app_executable_cdhash": "0123456789abcdef0123456789abcdef01234567",
     "bundled_core_codesign": "Authority=Developer ID Application: Jarvis QA Fixture",
     "installer_pkg_signature": "Developer ID Installer: Jarvis QA Fixture"
   },
@@ -1496,11 +1548,28 @@ JSON
     "app_stapled": true,
     "installer_pkg_stapled": true,
     "gatekeeper_assessed": true,
-    "artifact_digests_recorded": true
+    "artifact_digests_recorded": true,
+    "app_executable_identity_recorded": true
   },
   "proof_boundary": "self-test fixture"
 }
 JSON
+  self_test_signed_provenance_sha="$(file_sha256 "$tmp_dir/signed-provenance.json")"
+  python3 - "$tmp_dir/live.json" "$tmp_dir/signed-provenance.json" "$self_test_signed_provenance_sha" <<'PY'
+import json
+import sys
+
+live_path, provenance_path, provenance_sha = sys.argv[1:4]
+with open(live_path, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["signed_provenance"] = {
+    "report_path": provenance_path,
+    "sha256": provenance_sha,
+}
+with open(live_path, "w", encoding="utf-8") as handle:
+    json.dump(data, handle, indent=2, sort_keys=True)
+    handle.write("\n")
+PY
 
   "$0" --write-template "$tmp_dir/release-evidence-bundle.env" >/dev/null
   require_file "release evidence template" "$tmp_dir/release-evidence-bundle.env"
@@ -2689,15 +2758,17 @@ require_json_string_equals "signed-distribution provenance report" "$SIGNED_PROV
 require_json_string_equals "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.app_path" "$APP_PATH"
 require_json_string_equals "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.zip_path" "$ZIP_PATH"
 require_json_string_equals "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.pkg_path" "$PKG_PATH"
+require_json_string_equals "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.app_executable_path" "$APP_PATH/Contents/MacOS/JarvisMacApp"
 require_json_string_equals "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.bundled_core_path" "$APP_PATH/Contents/Resources/bin/jarvis-cli"
 require_json_string_equals "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.bundled_core_version" "jarvis $EXPECTED_VERSION"
-for field in artifacts.zip_sha256 artifacts.pkg_sha256 artifacts.bundled_core_sha256; do
+for field in artifacts.zip_sha256 artifacts.pkg_sha256 artifacts.app_executable_sha256 artifacts.bundled_core_sha256; do
   require_json_sha256 "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "$field"
 done
 require_json_sha256_matches_file "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.zip_sha256" "app zip artifact" "$ZIP_PATH"
 require_json_sha256_matches_file "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.pkg_sha256" "installer package artifact" "$PKG_PATH"
+require_json_sha256_matches_file "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.app_executable_sha256" "app executable" "$APP_PATH/Contents/MacOS/JarvisMacApp"
 require_json_sha256_matches_file "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.bundled_core_sha256" "bundled core executable" "$APP_PATH/Contents/Resources/bin/jarvis-cli"
-for flag in developer_id_application_signed developer_id_installer_signed app_zip_notarized installer_pkg_notarized app_stapled installer_pkg_stapled gatekeeper_assessed artifact_digests_recorded; do
+for flag in developer_id_application_signed developer_id_installer_signed app_zip_notarized installer_pkg_notarized app_stapled installer_pkg_stapled gatekeeper_assessed artifact_digests_recorded app_executable_identity_recorded; do
   require_json_bool_true "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "validation_flags.$flag"
 done
 for field in notarization.app_zip_notary_log notarization.installer_pkg_notary_log; do
@@ -2713,6 +2784,9 @@ require_json_string_prefix "signed-distribution provenance report" "$SIGNED_PROV
 for field in signing.app_bundle_codesign signing.app_executable_codesign signing.bundled_core_codesign; do
   require_json_string_contains "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "$field" "Authority=Developer ID Application: "
 done
+require_json_app_code_identity "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" \
+  "signing.app_executable_identifier" "signing.app_executable_team_identifier" \
+  "signing.app_executable_cdhash" "$EXPECTED_BUNDLE_ID"
 require_json_string_contains "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "signing.installer_pkg_signature" "Developer ID Installer: "
 require_json_uuid "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "notarization.app_zip_submission_id"
 require_json_uuid "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "notarization.installer_pkg_submission_id"
@@ -2774,10 +2848,22 @@ require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "app_bundle
 require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.build_version" "$EXPECTED_VERSION"
 require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.microphone_usage_description" "$EXPECTED_MICROPHONE_USAGE_DESCRIPTION"
 require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.speech_recognition_usage_description" "$EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION"
+require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "app_executable.executable_path" "$EXPECTED_INSTALLED_APP_PATH/Contents/MacOS/JarvisMacApp"
+require_json_sha256 "live-device QA report" "$LIVE_QA_REPORT" "app_executable.sha256"
+require_json_app_code_identity "live-device QA report" "$LIVE_QA_REPORT" \
+  "app_executable.code_identifier" "app_executable.team_identifier" \
+  "app_executable.cdhash" "$EXPECTED_BUNDLE_ID"
+require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "signed_provenance.report_path" "$SIGNED_PROVENANCE_REPORT"
+require_json_sha256 "live-device QA report" "$LIVE_QA_REPORT" "signed_provenance.sha256"
+require_json_sha256_matches_file "live-device QA report" "$LIVE_QA_REPORT" "signed_provenance.sha256" "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT"
 require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "bundled_core.executable_path" "$EXPECTED_INSTALLED_APP_PATH/Contents/Resources/bin/jarvis-cli"
 require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "bundled_core.version" "jarvis $EXPECTED_VERSION"
 require_json_sha256 "live-device QA report" "$LIVE_QA_REPORT" "bundled_core.sha256"
 require_json_fields_equal "live-device bundled-core digest" "$LIVE_QA_REPORT" "bundled_core.sha256" "$SIGNED_PROVENANCE_REPORT" "artifacts.bundled_core_sha256"
+require_json_fields_equal "live-device app-executable digest" "$LIVE_QA_REPORT" "app_executable.sha256" "$SIGNED_PROVENANCE_REPORT" "artifacts.app_executable_sha256"
+require_json_fields_equal "live-device app-executable identifier" "$LIVE_QA_REPORT" "app_executable.code_identifier" "$SIGNED_PROVENANCE_REPORT" "signing.app_executable_identifier"
+require_json_fields_equal "live-device app-executable team identifier" "$LIVE_QA_REPORT" "app_executable.team_identifier" "$SIGNED_PROVENANCE_REPORT" "signing.app_executable_team_identifier"
+require_json_fields_equal "live-device app-executable CDHash" "$LIVE_QA_REPORT" "app_executable.cdhash" "$SIGNED_PROVENANCE_REPORT" "signing.app_executable_cdhash"
 for flag in marketplace_review malware_scan os_sandbox egress_enforcement signed_publisher_policy manual_trust_review; do
   require_json_bool_true "plugin trust QA report" "$PLUGIN_QA_REPORT" "validation_flags.$flag"
 done

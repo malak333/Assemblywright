@@ -1210,6 +1210,12 @@ report is accepted by `jarvis release evidence-status`, and confirms
 external-mode readiness moves `live_voice_loop` to implemented while production
 readiness stays blocked by the remaining signed distribution and final evidence
 bundle gates.
+The assertion consumes `JARVIS_QA_SIGNED_PROVENANCE_REPORT` (defaulting to the
+canonical signed-provenance output), verifies the installed app executable with
+codesign, stapler, and Gatekeeper, and requires its SHA-256, code Identifier,
+TeamIdentifier, and CDHash to match signed provenance. The JSON report records
+those fields plus the signed-provenance path/SHA-256. Final bundle, doctor, and
+Rust/CLI validators reject report substitution or executable identity drift.
 The observed transcript must match the spoken test phrase after trimming, the
 expected installed app path must match `JARVIS_QA_INSTALLED_APP_PATH` or
 `/Applications/Jarvis.app`, expected and observed command text must match after
@@ -1233,6 +1239,16 @@ validation flags, voice-loop evidence fields, owner/device/profile/timestamp
 and live voice/non-voice evidence-note fields, structured command observation
 including `audio_output_device_label`, structured notification observation,
 schema identity, and the proof boundary.
+Focused cross-report E2E is:
+
+```sh
+cargo test -p jarvis-cli --test local_ipc_e2e release_evidence_status_rejects_live_app_executable_digest_mismatch -- --nocapture
+```
+
+This proves fail-closed report binding with fixtures and asserts executable
+drift keeps both the live-device evidence item invalid and `live_voice_loop`
+pending even in external evidence mode; it does not perform real Developer ID
+signing, installation, or live-device QA.
 The installed app metadata must match the approved `Info.plist` copy exactly:
 `NSMicrophoneUsageDescription` is `Jarvis uses microphone input only when you explicitly start local voice capture.`, and
 `NSSpeechRecognitionUsageDescription` is `Jarvis uses speech recognition only to turn your spoken command into a local assistant request.`.

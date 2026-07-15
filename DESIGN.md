@@ -29,7 +29,9 @@
 - Live-device QA can clear voice readiness only when owner-recorded report
   fields pass semantic validation and, for repository-backed IPC readiness, the
   `command_result_evidence_id` resolves to existing task or task-associated
-  audit evidence.
+  audit evidence. The report must also bind the installed app executable's
+  SHA-256, code identifier, TeamIdentifier, and CDHash to the exact signed
+  provenance report used by the final evidence bundle.
 - Architecture docs are release artifacts: keep both current-state and
   end-goal production diagrams aligned with any release-evidence flow change.
 
@@ -65,6 +67,7 @@
 | Give diagnostics a dedicated redacted health projection | Reuse the full `/health` response inside diagnostics, redact arbitrary reason text by convention, or remove pause visibility entirely | Explicit health and pause-status surfaces retain the operator-entered emergency-pause reason, but `/diagnostics/export` uses a distinct type that can carry only pause state, update time, `emergency_pause_reason_present`, and the fixed `redacted` compatibility marker. This makes accidental raw-reason export structurally unavailable while preserving useful support evidence and the additive v1 response shape. |
 | Give every interactive command an optional client-generated cancellation handle | Cancel by connection lifetime, cancel the newest task, wait until a task ID is returned, permit overlapping console submits, or reuse installed-plugin-only cancellation | Swift and CLI generate a bounded UUID before `POST /commands`; the Swift console serializes submissions before mutating its active handle. Rust registers the UUID for the full active request, binds it to only the created task, propagates it through provider and tool cancellation, and uses guard finalization as the result-acceptance linearization point. Authenticated cancellation reports `cancellation_requested` only while that exact handle is active and `not_found` otherwise. The 1,024 most recently consumed UUIDs remain bounded FIFO tombstones to reject recent reuse; clients still require fresh random UUIDs because tombstones are process-local and eventually evicted. Cancellation cannot undo an external effect that already happened. |
 | Auditability as an architectural requirement | Best-effort logs after the fact | Jarvis must be able to explain why it acted, what data it used, and what permissions were involved. |
+| Bind live-device QA to the exact signed app executable and code identity | Treat bundle metadata or bundled-core identity as sufficient, or accept independent valid-looking reports | Signed provenance records the app executable path/SHA-256 plus Identifier, TeamIdentifier, and CDHash. Live-device QA rechecks the installed executable and the signed-provenance report, while final bundle, doctor, and Rust evidence-status validation require the two reports to agree. This prevents artifact mixing but remains point-in-time evidence, not continuous integrity or proof that installation preserved every byte. |
 
 ## Architecture
 
