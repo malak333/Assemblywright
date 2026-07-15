@@ -13287,7 +13287,10 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 },
             )
         });
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        // The full workspace suite launches many subprocess-heavy tests in
+        // parallel. Allow scheduler contention without racing the evidence
+        // fixture's normal five-second action timeout.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while !sentinel.exists() {
             assert!(
                 std::time::Instant::now() < deadline,

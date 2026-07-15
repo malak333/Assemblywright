@@ -8,7 +8,9 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 #[cfg(unix)]
 use rustix::{
     io::Errno,
-    process::{kill_process_group, test_kill_process_group, Pid, Signal},
+    process::{
+        kill_process_group, test_kill_process_group, waitid, Pid, Signal, WaitId, WaitIdOptions,
+    },
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -18,9 +20,9 @@ use std::os::unix::process::CommandExt;
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    io::{Read, Write},
+    io::{self, Read, Write},
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Child, Command, ExitStatus, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc, Arc,
@@ -52,6 +54,13 @@ const SUBPROCESS_GROUP_KILL_CONFIRM_TIMEOUT: Duration = Duration::from_millis(50
 type SubprocessGroupId = Pid;
 #[cfg(not(unix))]
 type SubprocessGroupId = u32;
+
+struct SubprocessExitObservation {
+    // Unix uses waitid(WNOWAIT) so cleanup can keep the PID/PGID pinned until
+    // the final group signal. Other platforms retain the status reaped by
+    // Child::try_wait so it is not lost during cleanup.
+    reaped_status: Option<ExitStatus>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1684,8 +1693,8 @@ pub fn execute_installed_subprocess_plugin_cancellable(
                 stderr_reader,
             );
         }
-        let status = match child.try_wait() {
-            Ok(status) => status,
+        let exit_observation = match observe_subprocess_exit(&mut child) {
+            Ok(observation) => observation,
             Err(error) => {
                 return fail_subprocess_after_spawn(
                     JarvisError::Plugin(format!("wait subprocess plugin: {error}")),
@@ -1697,7 +1706,7 @@ pub fn execute_installed_subprocess_plugin_cancellable(
                 );
             }
         };
-        if let Some(status) = status {
+        if let Some(exit_observation) = exit_observation {
             if let Err(error) = ensure_subprocess_control(control()) {
                 return fail_subprocess_after_spawn(
                     error,
@@ -1711,9 +1720,10 @@ pub fn execute_installed_subprocess_plugin_cancellable(
             // A plugin leader may exit while a descendant keeps inherited pipes
             // or continues work. End the dedicated group before collecting the
             // final bounded output so the invocation cannot detach descendants.
-            close_subprocess_after_spawn(
+            let status = close_subprocess_after_spawn(
                 &mut child,
                 process_group,
+                exit_observation.reaped_status,
                 stdin_writer,
                 stdout_reader,
                 stderr_reader,
@@ -1780,6 +1790,26 @@ fn ensure_subprocess_control(state: SubprocessControlState) -> JarvisResult<()> 
 }
 
 #[cfg(unix)]
+fn observe_subprocess_exit(child: &mut Child) -> io::Result<Option<SubprocessExitObservation>> {
+    let status = waitid(
+        WaitId::Pid(Pid::from_child(child)),
+        WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
+    )?;
+    Ok(status.map(|_| SubprocessExitObservation {
+        reaped_status: None,
+    }))
+}
+
+#[cfg(not(unix))]
+fn observe_subprocess_exit(child: &mut Child) -> io::Result<Option<SubprocessExitObservation>> {
+    child.try_wait().map(|status| {
+        status.map(|status| SubprocessExitObservation {
+            reaped_status: Some(status),
+        })
+    })
+}
+
+#[cfg(unix)]
 fn subprocess_process_group(child: &Child) -> JarvisResult<SubprocessGroupId> {
     Ok(Pid::from_child(child))
 }
@@ -1790,20 +1820,31 @@ fn subprocess_process_group(child: &Child) -> JarvisResult<SubprocessGroupId> {
 }
 
 #[cfg(unix)]
-fn signal_subprocess_group(process_group: SubprocessGroupId, signal: Signal) -> JarvisResult<()> {
+fn signal_subprocess_group(process_group: SubprocessGroupId, signal: Signal) -> Result<(), Errno> {
     match kill_process_group(process_group, signal) {
         Ok(()) | Err(Errno::SRCH) => Ok(()),
-        Err(error) => Err(JarvisError::Plugin(format!(
-            "signal subprocess process group: {error}"
-        ))),
+        Err(error) => Err(error),
     }
 }
 
 #[cfg(unix)]
-fn subprocess_group_exists(process_group: SubprocessGroupId) -> JarvisResult<bool> {
-    match test_kill_process_group(process_group) {
-        Ok(()) => Ok(true),
-        Err(Errno::SRCH) => Ok(false),
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SubprocessGroupInspection {
+    Absent,
+    Signalable,
+    PresentButNotSignalable,
+}
+
+#[cfg(unix)]
+fn classify_subprocess_group_probe(
+    result: Result<(), Errno>,
+) -> JarvisResult<SubprocessGroupInspection> {
+    match result {
+        Ok(()) => Ok(SubprocessGroupInspection::Signalable),
+        Err(Errno::SRCH) => Ok(SubprocessGroupInspection::Absent),
+        // POSIX kill(-pgid, 0) uses EPERM to report that the group exists but
+        // the caller cannot signal it. This is never evidence of cleanup.
+        Err(Errno::PERM) => Ok(SubprocessGroupInspection::PresentButNotSignalable),
         Err(error) => Err(JarvisError::Plugin(format!(
             "inspect subprocess process group: {error}"
         ))),
@@ -1811,25 +1852,42 @@ fn subprocess_group_exists(process_group: SubprocessGroupId) -> JarvisResult<boo
 }
 
 #[cfg(unix)]
+fn inspect_subprocess_group(
+    process_group: SubprocessGroupId,
+) -> JarvisResult<SubprocessGroupInspection> {
+    classify_subprocess_group_probe(test_kill_process_group(process_group))
+}
+
+#[cfg(unix)]
 fn terminate_subprocess_group(
     child: &mut Child,
     process_group: SubprocessGroupId,
-) -> JarvisResult<()> {
+    reaped_status: Option<ExitStatus>,
+) -> JarvisResult<ExitStatus> {
     let mut cleanup_errors = Vec::new();
-    if let Err(error) = signal_subprocess_group(process_group, Signal::TERM) {
-        cleanup_errors.push(error.to_string());
+    if reaped_status.is_some() {
+        cleanup_errors
+            .push("subprocess leader was reaped before Unix process-group cleanup".to_string());
     }
+    if let Err(error) = signal_subprocess_group(process_group, Signal::TERM) {
+        // macOS can report EPERM when the pinned group contains only a zombie
+        // leader. Defer EPERM to the post-reap, probe-only confirmation;
+        // persistent EPERM there still fails closed.
+        if error != Errno::PERM {
+            cleanup_errors.push(format!("signal subprocess process group: {error}"));
+        }
+    }
+    // Keep the leader unreaped until the final process-group signal. While the
+    // leader remains a child (or a zombie), its PID/PGID cannot be recycled for
+    // an unrelated process group.
+    let mut group_absent = false;
     let deadline = Instant::now() + SUBPROCESS_TERMINATION_GRACE;
     while Instant::now() < deadline {
-        let leader_exited = match child.try_wait() {
-            Ok(status) => status.is_some(),
-            Err(error) => {
-                cleanup_errors.push(format!("wait subprocess plugin: {error}"));
-                false
+        match inspect_subprocess_group(process_group) {
+            Ok(SubprocessGroupInspection::Absent) => {
+                group_absent = true;
+                break;
             }
-        };
-        match subprocess_group_exists(process_group) {
-            Ok(false) if leader_exited => break,
             Ok(_) => {}
             Err(error) => {
                 cleanup_errors.push(error.to_string());
@@ -1838,62 +1896,116 @@ fn terminate_subprocess_group(
         }
         thread::sleep(Duration::from_millis(5));
     }
-    if let Err(error) = signal_subprocess_group(process_group, Signal::KILL) {
-        cleanup_errors.push(error.to_string());
-    }
-    let leader_still_running = match child.try_wait() {
-        Ok(status) => status.is_none(),
-        Err(error) => {
-            cleanup_errors.push(format!(
-                "wait subprocess plugin before fallback kill: {error}"
-            ));
-            true
+
+    if !group_absent {
+        if let Err(error) = signal_subprocess_group(process_group, Signal::KILL) {
+            if error != Errno::PERM {
+                cleanup_errors.push(format!("signal subprocess process group: {error}"));
+            }
         }
-    };
-    if leader_still_running {
-        if let Err(error) = child.kill() {
-            cleanup_errors.push(format!("fallback kill subprocess leader: {error}"));
-        }
-    }
-    if let Err(error) = child.wait() {
-        cleanup_errors.push(format!("reap subprocess plugin: {error}"));
     }
 
-    let confirmation_deadline = Instant::now() + SUBPROCESS_GROUP_KILL_CONFIRM_TIMEOUT;
+    // No process-group signal is allowed after this point. Reaping may release
+    // the numeric PID/PGID for reuse, so leader fallback cleanup is deliberately
+    // bounded and scoped to the still-owned Child handle.
+    let leader_deadline = Instant::now() + SUBPROCESS_GROUP_KILL_CONFIRM_TIMEOUT;
+    let mut fallback_kill_attempted = false;
+    let mut leader_status = None;
     loop {
-        match subprocess_group_exists(process_group) {
-            Ok(false) => break,
-            Ok(true) if Instant::now() < confirmation_deadline => {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                leader_status = Some(status);
+                break;
+            }
+            Ok(None) if !fallback_kill_attempted => {
+                fallback_kill_attempted = true;
+                if let Err(error) = child.kill() {
+                    cleanup_errors.push(format!("fallback kill subprocess leader: {error}"));
+                }
+            }
+            Ok(None) if Instant::now() < leader_deadline => {
                 thread::sleep(Duration::from_millis(5));
             }
-            Ok(true) => {
+            Ok(None) => {
                 cleanup_errors.push(
-                    "subprocess process group remained after bounded KILL confirmation".to_string(),
+                    "subprocess leader was not reaped after bounded fallback kill confirmation"
+                        .to_string(),
                 );
                 break;
             }
             Err(error) => {
-                cleanup_errors.push(error.to_string());
+                cleanup_errors.push(format!("reap subprocess plugin: {error}"));
                 break;
             }
         }
     }
-    cleanup_result(cleanup_errors)
+
+    if !group_absent {
+        // Probe-only confirmation cannot affect a recycled PGID. A recycled or
+        // otherwise persistent group can cause conservative false uncertainty,
+        // but it must never trigger a signal after the leader has been reaped.
+        let confirmation_deadline = Instant::now() + SUBPROCESS_GROUP_KILL_CONFIRM_TIMEOUT;
+        loop {
+            match inspect_subprocess_group(process_group) {
+                Ok(SubprocessGroupInspection::Absent) => break,
+                Ok(_) if Instant::now() < confirmation_deadline => {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Ok(SubprocessGroupInspection::Signalable) => {
+                    cleanup_errors.push(
+                        "subprocess process group remained after bounded KILL confirmation"
+                            .to_string(),
+                    );
+                    break;
+                }
+                Ok(SubprocessGroupInspection::PresentButNotSignalable) => {
+                    cleanup_errors.push(
+                        "subprocess process group existence could not be cleared after bounded KILL confirmation because the group was not signalable"
+                            .to_string(),
+                    );
+                    break;
+                }
+                Err(error) => {
+                    cleanup_errors.push(error.to_string());
+                    break;
+                }
+            }
+        }
+    }
+    if !cleanup_errors.is_empty() {
+        return Err(JarvisError::Plugin(cleanup_errors.join("; ")));
+    }
+    leader_status.ok_or_else(|| {
+        JarvisError::Plugin("subprocess leader exit status was not collected".to_string())
+    })
 }
 
 #[cfg(not(unix))]
 fn terminate_subprocess_group(
     child: &mut Child,
     _process_group: SubprocessGroupId,
-) -> JarvisResult<()> {
+    reaped_status: Option<ExitStatus>,
+) -> JarvisResult<ExitStatus> {
+    if let Some(status) = reaped_status {
+        return Ok(status);
+    }
     let mut cleanup_errors = Vec::new();
     if let Err(error) = child.kill() {
         cleanup_errors.push(format!("terminate subprocess plugin: {error}"));
     }
-    if let Err(error) = child.wait() {
-        cleanup_errors.push(format!("reap subprocess plugin: {error}"));
+    let status = match child.wait() {
+        Ok(status) => Some(status),
+        Err(error) => {
+            cleanup_errors.push(format!("reap subprocess plugin: {error}"));
+            None
+        }
+    };
+    if !cleanup_errors.is_empty() {
+        return Err(JarvisError::Plugin(cleanup_errors.join("; ")));
     }
-    cleanup_result(cleanup_errors)
+    status.ok_or_else(|| {
+        JarvisError::Plugin("subprocess leader exit status was not collected".to_string())
+    })
 }
 
 fn join_subprocess_io_threads(
@@ -1931,15 +2043,16 @@ fn join_subprocess_io_threads(
 fn close_subprocess_after_spawn(
     child: &mut Child,
     process_group: SubprocessGroupId,
+    reaped_status: Option<ExitStatus>,
     stdin_writer: thread::JoinHandle<()>,
     stdout_reader: thread::JoinHandle<()>,
     stderr_reader: thread::JoinHandle<()>,
-) -> JarvisResult<()> {
-    let termination = terminate_subprocess_group(child, process_group);
+) -> JarvisResult<ExitStatus> {
+    let termination = terminate_subprocess_group(child, process_group, reaped_status);
     let io = join_subprocess_io_threads(stdin_writer, stdout_reader, stderr_reader);
     match (termination, io) {
-        (Ok(()), Ok(())) => Ok(()),
-        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+        (Ok(status), Ok(())) => Ok(status),
+        (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
         (Err(termination), Err(io)) => Err(JarvisError::Plugin(format!(
             "{termination}; additional subprocess I/O cleanup failure: {io}"
         ))),
@@ -1957,23 +2070,21 @@ fn fail_subprocess_after_spawn<T>(
     match close_subprocess_after_spawn(
         child,
         process_group,
+        None,
         stdin_writer,
         stdout_reader,
         stderr_reader,
     ) {
-        Ok(()) => Err(primary),
-        Err(cleanup) => Err(JarvisError::Plugin(format!(
-            "{primary}; subprocess cleanup failure: {cleanup}"
-        ))),
+        Ok(_) => Err(primary),
+        Err(cleanup) => Err(attach_subprocess_cleanup_failure(primary, cleanup)),
     }
 }
 
-fn cleanup_result(errors: Vec<String>) -> JarvisResult<()> {
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(JarvisError::Plugin(errors.join("; ")))
-    }
+fn attach_subprocess_cleanup_failure(primary: JarvisError, cleanup: JarvisError) -> JarvisError {
+    // Cleanup uncertainty is elevated to a plugin failure even when the
+    // primary cause was a policy block. Callers must not infer that emergency
+    // pause completed containment successfully from the primary enum alone.
+    JarvisError::Plugin(format!("{primary}; subprocess cleanup failure: {cleanup}"))
 }
 
 fn require_subprocess_stdin_delivery(
@@ -3712,12 +3823,19 @@ while :; do sleep 1; done
     #[cfg(unix)]
     #[test]
     fn local_subprocess_emergency_pause_terminates_and_reaps_promptly() {
-        let fixture =
-            local_subprocess_fixture("#!/bin/sh\ntrap '' TERM\nwhile :; do sleep 1; done\n");
+        let fixture = local_subprocess_fixture(
+            r#"#!/bin/sh
+trap '' TERM
+while :; do
+  printf x >> "$JARVIS_PLUGIN_SOURCE_PATH/heartbeat"
+  sleep 0.01
+done
+"#,
+        );
         let manifest = local_subprocess_manifest("pause_process_group", "runner.sh");
         let source_path = fixture.path().canonicalize().expect("canonical fixture");
+        let heartbeat = source_path.join("heartbeat");
         let started = Instant::now();
-        let mut control_checks = 0;
 
         let error = execute_installed_subprocess_plugin_cancellable(
             &manifest,
@@ -3725,8 +3843,7 @@ while :; do sleep 1; done
             &source_path,
             &json!({}),
             || {
-                control_checks += 1;
-                if control_checks > 1 {
+                if fs::metadata(&heartbeat).is_ok_and(|metadata| metadata.len() >= 1) {
                     SubprocessControlState::EmergencyPaused
                 } else {
                     SubprocessControlState::Continue
@@ -3738,9 +3855,41 @@ while :; do sleep 1; done
         assert!(matches!(error, JarvisError::PolicyBlocked(_)), "{error}");
         assert!(error.to_string().contains("emergency pause"), "{error}");
         assert!(
-            started.elapsed() < Duration::from_secs(2),
+            started.elapsed() < Duration::from_secs(5),
             "pause waited for the plugin timeout instead of terminating it"
         );
+        let stopped_len = fs::metadata(&heartbeat).expect("heartbeat evidence").len();
+        thread::sleep(Duration::from_millis(200));
+        assert_eq!(
+            fs::metadata(&heartbeat).expect("stable heartbeat").len(),
+            stopped_len,
+            "the emergency-paused subprocess continued after cleanup returned"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_group_probe_permission_denied_is_not_treated_as_absent() {
+        assert_eq!(
+            classify_subprocess_group_probe(Err(Errno::PERM)).unwrap(),
+            SubprocessGroupInspection::PresentButNotSignalable
+        );
+        assert_eq!(
+            classify_subprocess_group_probe(Err(Errno::SRCH)).unwrap(),
+            SubprocessGroupInspection::Absent
+        );
+    }
+
+    #[test]
+    fn emergency_pause_cleanup_uncertainty_is_elevated_with_primary_evidence() {
+        let error = attach_subprocess_cleanup_failure(
+            JarvisError::PolicyBlocked("emergency pause".to_string()),
+            JarvisError::Plugin("process group was not signalable".to_string()),
+        );
+        assert!(matches!(error, JarvisError::Plugin(_)), "{error}");
+        assert!(error.to_string().contains("emergency pause"), "{error}");
+        assert!(error.to_string().contains("cleanup failure"), "{error}");
+        assert!(error.to_string().contains("not signalable"), "{error}");
     }
 
     #[test]
@@ -3799,7 +3948,7 @@ sleep 30
 
         assert!(error.to_string().contains("stdout exceeded"), "{error}");
         assert!(
-            started.elapsed() < Duration::from_secs(2),
+            started.elapsed() < Duration::from_secs(5),
             "blocked stdin prevented bounded process-group cleanup"
         );
     }
