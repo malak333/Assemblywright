@@ -363,6 +363,22 @@ that same handle while execution is active and presents a Cancel Run control.
 
 Installed plugin list, requested permissions, enable/disable controls, logs, and version/update state.
 
+The current Swift Plugin Manager exposes only the existing Rust-owned
+lifecycle authority: verify local provenance, explicitly choose a compatible
+execution grant, enable after verification, and disable back to
+`metadata_only`. Confirmation captures the exact reviewed grant and redacted
+lifecycle-contract digest; Rust applies the mutation only when that digest still
+matches, preventing stale review from broadening authority. Each plugin
+serializes lifecycle mutations, refreshes from the repository-backed inspection
+endpoint after every outcome, and disables all lifecycle actions whenever that
+registry is stale. Network-capable grant review shows exact declared hosts and
+permissions, while subprocess confirmation remains explicit that the current
+runner is not OS sandboxed and does not enforce host-level egress. Verification
+and authority responses use the redacted inspection projection. Rust commits
+each provenance audit and each authority mutation plus its redacted
+`side_effect_executed:false` audit transactionally; audit failure rolls the
+associated state change back.
+
 ### Settings And Model Routing
 
 Local model configuration, ChatGPT configuration with separate OpenAI API-key
@@ -607,6 +623,18 @@ plain-hostname allowlists in `network_access`; policy review surfaces those
 actions, and executable installed plugins with network-declaring actions must
 be enabled with the explicit `subprocess_stdio_network` grant. OS-level network
 sandbox enforcement and host-level egress filtering remain target architecture.
+The Swift Plugin tab can verify a redacted installed record, explicitly select
+a manifest-compatible grant, enable only after matching provenance, and disable
+without executing plugin code. The confirmed grant and lifecycle-contract
+digest form a compare-and-set request, so changed or reinstalled records require
+fresh inspection and confirmation. It refreshes authoritative server state
+after every attempt, disables lifecycle actions while that state is stale, and
+exposes declared network hosts plus the current lack of OS sandbox/egress
+enforcement. Mutation responses remain redacted. Provenance verification audits
+and grant-mutation audits commit transactionally in Rust, with focused storage,
+Swift contract/model/presentation, and authenticated loopback-TCP compatibility
+E2E coverage across enabled and disabled restarts. Default packaged IPC remains
+the peer-identity-validated Unix-domain-socket transport.
 The product still lacks
 Apple-tool-validated signed/notarized/stapled release evidence, live microphone and audio-output validation,
 marketplace/OS-network-sandbox plugin trust boundaries, richer

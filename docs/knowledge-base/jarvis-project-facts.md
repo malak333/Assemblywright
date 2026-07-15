@@ -753,13 +753,27 @@ requires plugin-trust `generated_at`, `review_started_at`,
   and recovery creates exactly one redacted grant audit without exposing actor
   or reason text.
 - The Swift Plugin tab decodes `/plugins/installed` registry records through
-  the same redacted inspection contract used by the CLI and IPC surfaces. It
+  the same redacted contract used by the CLI and IPC surfaces. It
   shows execution grant, provenance integrity status, origin-review state,
   action metadata, executable/not-executable status, and redaction markers
   alongside first-party manifests, while local paths, subprocess command paths,
-  signature material, and provenance hashes stay hidden. This surface is
-  read-only and degrades to a warning while keeping first-party manifests
-  visible when the repository-backed installed registry endpoint is unavailable.
+  signature material, and provenance hashes stay hidden. Typed lifecycle
+  controls can verify provenance, explicitly select a compatible grant, enable
+  only after matching provenance, and disable to `metadata_only`. Confirmation
+  binds the exact grant plus a redacted lifecycle-contract digest, and Rust
+  rejects stale/reinstalled records as compare-and-set conflicts. They display
+  exact declared permissions/hosts, serialize per-plugin mutations, refresh
+  authoritative records after every result, disable all lifecycle actions while
+  registry state is stale, return only redacted mutation records, and never
+  install or run code.
+  Subprocess UI keeps the not-OS-sandboxed/no-host-egress warning. Rust commits
+  the authority mutation and redacted non-execution audit atomically; storage
+  failure injection plus authenticated loopback-TCP compatibility Swift E2E
+  across enabled and disabled restarts prove rollback, persistence, post-restart
+  audits, malformed/stale-request rejection, redaction, and zero plugin
+  execution. This E2E is not evidence for the packaged app's default
+  peer-identity UDS. The tab still degrades to a
+  warning while keeping first-party manifests visible when the registry is unavailable.
 - The CLI has matching `release readiness`, `release evidence-status`,
   `command`/`ask`, `tools`, `tasks`, `memory`, `scheduler`, `diagnostics`, and
   `plugins` subcommands, including

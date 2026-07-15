@@ -1288,6 +1288,7 @@ struct PluginManagerView: View {
     @ObservedObject var modelConfiguration: ModelConfigurationModel
     @State private var workspaceStatus: String?
     @State private var workspaceOperationInProgress = false
+    @State private var pendingEnablement: PluginEnablementConfirmation?
 
     var body: some View {
         ManagementListView(
@@ -1381,7 +1382,7 @@ struct PluginManagerView: View {
 
                 if !model.installedPlugins.isEmpty {
                     Section("Installed") {
-                        ForEach(model.installedPlugins) { plugin in
+                        ForEach(model.installedPlugins, id: \.id) { (plugin: JarvisInstalledPluginRecord) in
                             VStack(alignment: .leading, spacing: 5) {
                                 HStack {
                                     Text("\(plugin.manifest.name) \(plugin.manifest.version)")
@@ -1403,9 +1404,96 @@ struct PluginManagerView: View {
                                     .font(.caption2)
                                     .foregroundStyle(plugin.provenance.needsReview ? .orange : .secondary)
                                     .textSelection(.enabled)
+                                Text("Permissions: \(model.declaredPermissions(for: plugin).joined(separator: ", "))")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                                let hosts = model.declaredNetworkHosts(for: plugin)
+                                Text("Declared network hosts: \(hosts.isEmpty ? "none" : hosts.joined(separator: ", "))")
+                                    .font(.caption2)
+                                    .foregroundStyle(hosts.isEmpty ? Color.secondary : Color.orange)
+                                    .textSelection(.enabled)
+
+                                let grants = model.availableExecutionGrants(for: plugin)
+                                if grants.count > 1 {
+                                    Picker(
+                                        "Execution grant",
+                                        selection: Binding(
+                                            get: { model.selectedExecutionGrant(for: plugin) ?? "" },
+                                            set: { model.selectExecutionGrant($0, for: plugin.id) }
+                                        )
+                                    ) {
+                                        Text("Select a grant").tag("")
+                                        ForEach(grants) { option in
+                                            Text(option.label).tag(option.grant)
+                                        }
+                                    }
+                                    .pickerStyle(.menu)
+                                    .disabled(!model.installedRegistryIsFresh || model.isMutating(id: plugin.id))
+                                } else if let grant = grants.first {
+                                    Text("Grant: \(grant.label) — \(grant.detail)")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .textSelection(.enabled)
+                                } else if plugin.manifest.source == "local_subprocess" {
+                                    Text("Execution controls unavailable: the current core did not provide complete network declarations.")
+                                        .font(.caption2)
+                                        .foregroundStyle(.orange)
+                                }
+
+                                if plugin.lifecycleContractSha256 == nil {
+                                    Text("Lifecycle controls unavailable: the current core did not provide a contract token.")
+                                        .font(.caption2)
+                                        .foregroundStyle(.orange)
+                                }
+
+                                HStack {
+                                    Button("Verify Integrity") {
+                                        Task { await model.verifyProvenance(id: plugin.id) }
+                                    }
+                                    .disabled(!model.canVerify(plugin))
+
+                                    Button("Enable") {
+                                        guard let grant = model.selectedExecutionGrant(for: plugin),
+                                              let digest = plugin.lifecycleContractSha256 else { return }
+                                        pendingEnablement = PluginEnablementConfirmation(
+                                            pluginID: plugin.id,
+                                            pluginName: plugin.manifest.name,
+                                            grant: grant,
+                                            lifecycleContractSha256: digest,
+                                            declaredHosts: hosts
+                                        )
+                                    }
+                                    .disabled(!model.canEnable(plugin))
+
+                                    Button("Disable", role: .destructive) {
+                                        guard let digest = plugin.lifecycleContractSha256 else { return }
+                                        Task {
+                                            await model.disable(
+                                                id: plugin.id,
+                                                expectedLifecycleContractSha256: digest
+                                            )
+                                        }
+                                    }
+                                    .disabled(!model.canDisable(plugin))
+
+                                    if model.isMutating(id: plugin.id) {
+                                        ProgressView().controlSize(.small)
+                                    }
+                                    Spacer()
+                                }
                             }
                             .padding(.vertical, 4)
                         }
+                    }
+                }
+
+                if let lastAction = model.lastAction {
+                    Section("Plugin lifecycle") {
+                        Text(lastAction)
+                            .font(.caption)
+                            .foregroundStyle(.green)
+                            .textSelection(.enabled)
                     }
                 }
 
@@ -1425,6 +1513,37 @@ struct PluginManagerView: View {
                         }
                         .padding(.vertical, 4)
                     }
+                }
+            }
+            .confirmationDialog(
+                "Enable installed plugin?",
+                isPresented: Binding(
+                    get: { pendingEnablement != nil },
+                    set: { if !$0 { pendingEnablement = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                if let pendingEnablement {
+                    Button("Enable with \(pendingEnablement.grant)") {
+                        let pluginID = pendingEnablement.pluginID
+                        let grant = pendingEnablement.grant
+                        let digest = pendingEnablement.lifecycleContractSha256
+                        self.pendingEnablement = nil
+                        Task {
+                            await model.enable(
+                                id: pluginID,
+                                grant: grant,
+                                expectedLifecycleContractSha256: digest
+                            )
+                        }
+                    }
+                    Button("Cancel", role: .cancel) {
+                        self.pendingEnablement = nil
+                    }
+                }
+            } message: {
+                if let pendingEnablement {
+                    Text(pendingEnablement.message)
                 }
             }
         }
@@ -1503,6 +1622,31 @@ struct PluginManagerView: View {
         } else if case let .degraded(reason) = supervisor.mode {
             workspaceStatus = reason
         }
+    }
+}
+
+struct PluginEnablementConfirmation: Identifiable {
+    let pluginID: String
+    let pluginName: String
+    let grant: String
+    let lifecycleContractSha256: String
+    let declaredHosts: [String]
+
+    var id: String { "\(pluginID):\(grant):\(lifecycleContractSha256)" }
+
+    var message: String {
+        let hosts = declaredHosts.isEmpty
+            ? "No network hosts are declared."
+            : "Declared network hosts: \(declaredHosts.joined(separator: ", "))."
+        let containment = switch grant {
+        case "wasm_compute":
+            "WASM compute is confined with no imports, filesystem, network, environment, clock, or process authority."
+        case "subprocess_stdio", "subprocess_stdio_network":
+            "Subprocess grants are not OS sandboxed and host-level egress is not enforced."
+        default:
+            "Runtime containment is not declared for this grant."
+        }
+        return "Enable \(pluginName) with \(grant)? \(hosts) \(containment) This action changes execution authority but does not run the plugin."
     }
 }
 

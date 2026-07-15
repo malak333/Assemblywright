@@ -512,6 +512,19 @@ public final class MemoryManagerModel: ObservableObject {
     }
 }
 
+public struct JarvisInstalledPluginExecutionGrantOption: Equatable, Identifiable, Sendable {
+    public var id: String { grant }
+    public let grant: String
+    public let label: String
+    public let detail: String
+
+    public init(grant: String, label: String, detail: String) {
+        self.grant = grant
+        self.label = label
+        self.detail = detail
+    }
+}
+
 @MainActor
 public final class PluginManagerModel: ObservableObject {
     @Published public private(set) var manifests: [JarvisPluginManifest]
@@ -519,6 +532,10 @@ public final class PluginManagerModel: ObservableObject {
     @Published public private(set) var modelToolCatalogWarning: String?
     @Published public private(set) var installedPlugins: [JarvisInstalledPluginRecord]
     @Published public private(set) var installedRegistryWarning: String?
+    @Published public private(set) var installedRegistryIsFresh: Bool
+    @Published public private(set) var selectedExecutionGrants: [String: String]
+    @Published public private(set) var mutatingPluginIDs: Set<String>
+    @Published public private(set) var lastAction: String?
     @Published public private(set) var isLoading: Bool
     @Published public private(set) var lastError: String?
 
@@ -531,13 +548,19 @@ public final class PluginManagerModel: ObservableObject {
         self.modelToolCatalogWarning = nil
         self.installedPlugins = []
         self.installedRegistryWarning = nil
+        self.installedRegistryIsFresh = false
+        self.selectedExecutionGrants = [:]
+        self.mutatingPluginIDs = []
+        self.lastAction = nil
         self.isLoading = false
         self.lastError = nil
     }
 
     public func refresh() async {
+        guard !isLoading, mutatingPluginIDs.isEmpty else { return }
         isLoading = true
         lastError = nil
+        installedRegistryIsFresh = false
         defer { isLoading = false }
 
         do {
@@ -556,11 +579,249 @@ public final class PluginManagerModel: ObservableObject {
         }
 
         do {
-            self.installedPlugins = try await client.listInstalledPlugins()
-            self.installedRegistryWarning = nil
+            try await refreshInstalledRegistry()
         } catch {
             self.installedPlugins = []
+            self.installedRegistryIsFresh = false
             self.installedRegistryWarning = "Installed plugin registry unavailable: \(error)"
+        }
+    }
+
+    public func availableExecutionGrants(
+        for plugin: JarvisInstalledPluginRecord
+    ) -> [JarvisInstalledPluginExecutionGrantOption] {
+        switch plugin.manifest.source {
+        case "local_wasm":
+            return [
+                JarvisInstalledPluginExecutionGrantOption(
+                    grant: "wasm_compute",
+                    label: "WASM compute",
+                    detail: "No imports, filesystem, network, environment, clock, or process authority."
+                )
+            ]
+        case "local_subprocess":
+            guard plugin.manifest.actions.allSatisfy({ $0.networkAccess != nil }) else {
+                return []
+            }
+            var grants: [JarvisInstalledPluginExecutionGrantOption] = []
+            if plugin.manifest.actions.contains(where: { $0.networkAccess?.mode == "none" }) {
+                grants.append(
+                    JarvisInstalledPluginExecutionGrantOption(
+                        grant: "subprocess_stdio",
+                        label: "Subprocess, no declared network",
+                        detail: "Bounded JSON stdio. The subprocess is not OS sandboxed."
+                    )
+                )
+            }
+            if plugin.manifest.actions.contains(where: { $0.networkAccess?.declaresNetworkAccess == true }) {
+                grants.append(
+                    JarvisInstalledPluginExecutionGrantOption(
+                        grant: "subprocess_stdio_network",
+                        label: "Subprocess with declared hosts",
+                        detail: "Manifest host allowlist review only; host-level egress is not enforced."
+                    )
+                )
+            }
+            return grants
+        default:
+            return []
+        }
+    }
+
+    public func selectedExecutionGrant(for plugin: JarvisInstalledPluginRecord) -> String? {
+        let available = availableExecutionGrants(for: plugin)
+        if let selected = selectedExecutionGrants[plugin.id],
+           available.contains(where: { $0.grant == selected }) {
+            return selected
+        }
+        return available.count == 1 ? available[0].grant : nil
+    }
+
+    public func selectExecutionGrant(_ grant: String, for pluginID: String) {
+        guard let plugin = installedPlugins.first(where: { $0.id == pluginID }),
+              availableExecutionGrants(for: plugin).contains(where: { $0.grant == grant }) else {
+            return
+        }
+        selectedExecutionGrants[pluginID] = grant
+    }
+
+    public func isMutating(id: String) -> Bool {
+        mutatingPluginIDs.contains(id)
+    }
+
+    public func canEnable(_ plugin: JarvisInstalledPluginRecord) -> Bool {
+        installedRegistryIsFresh
+            && mutatingPluginIDs.isEmpty
+            && !plugin.executionEnabled
+            && plugin.provenance.integrityStatus == "matches_install_snapshot"
+            && plugin.lifecycleContractSha256?.isEmpty == false
+            && selectedExecutionGrant(for: plugin) != nil
+    }
+
+    public func canDisable(_ plugin: JarvisInstalledPluginRecord) -> Bool {
+        installedRegistryIsFresh
+            && mutatingPluginIDs.isEmpty
+            && plugin.executionEnabled
+            && plugin.lifecycleContractSha256?.isEmpty == false
+    }
+
+    public func canVerify(_ plugin: JarvisInstalledPluginRecord) -> Bool {
+        installedRegistryIsFresh && mutatingPluginIDs.isEmpty
+    }
+
+    public func verifyProvenance(id: String) async {
+        guard installedRegistryIsFresh else {
+            lastError = "Refresh the installed plugin registry before verifying integrity."
+            return
+        }
+        await mutateInstalledPlugin(id: id, success: "Plugin integrity verification completed.") {
+            try await self.client.verifyInstalledPluginProvenance(id: id)
+        }
+    }
+
+    public func enable(
+        id: String,
+        grant: String,
+        expectedLifecycleContractSha256: String
+    ) async {
+        guard installedRegistryIsFresh else {
+            lastError = "Refresh the installed plugin registry before enabling execution."
+            return
+        }
+        guard let plugin = installedPlugins.first(where: { $0.id == id }) else {
+            lastError = "Installed plugin is no longer available."
+            return
+        }
+        guard plugin.provenance.integrityStatus == "matches_install_snapshot" else {
+            lastError = "Verify plugin integrity before enabling execution."
+            return
+        }
+        guard availableExecutionGrants(for: plugin).contains(where: { $0.grant == grant }) else {
+            lastError = "The confirmed execution grant is no longer supported by the current manifest."
+            return
+        }
+        guard !expectedLifecycleContractSha256.isEmpty,
+              plugin.lifecycleContractSha256 == expectedLifecycleContractSha256 else {
+            lastError = "The installed plugin lifecycle contract changed after confirmation. Refresh and review it again."
+            return
+        }
+        await mutateInstalledPlugin(id: id, success: "Plugin execution enabled with \(grant).") {
+            try await self.client.setInstalledPluginExecution(
+                id: id,
+                request: JarvisInstalledPluginExecutionRequest(
+                    executionEnabled: true,
+                    executionGrant: grant,
+                    expectedLifecycleContractSha256: expectedLifecycleContractSha256
+                )
+            )
+        }
+    }
+
+    public func enable(id: String) async {
+        guard let plugin = installedPlugins.first(where: { $0.id == id }),
+              let grant = selectedExecutionGrant(for: plugin),
+              let digest = plugin.lifecycleContractSha256 else {
+            lastError = "Refresh and review the installed plugin before enabling execution."
+            return
+        }
+        await enable(id: id, grant: grant, expectedLifecycleContractSha256: digest)
+    }
+
+    public func disable(id: String, expectedLifecycleContractSha256: String) async {
+        guard installedRegistryIsFresh else {
+            lastError = "Refresh the installed plugin registry before disabling execution."
+            return
+        }
+        guard let plugin = installedPlugins.first(where: { $0.id == id }),
+              !expectedLifecycleContractSha256.isEmpty,
+              plugin.lifecycleContractSha256 == expectedLifecycleContractSha256 else {
+            lastError = "The installed plugin lifecycle contract changed. Refresh before disabling execution."
+            return
+        }
+        await mutateInstalledPlugin(id: id, success: "Plugin execution disabled.") {
+            try await self.client.setInstalledPluginExecution(
+                id: id,
+                request: JarvisInstalledPluginExecutionRequest(
+                    executionEnabled: false,
+                    executionGrant: "metadata_only",
+                    expectedLifecycleContractSha256: expectedLifecycleContractSha256
+                )
+            )
+        }
+    }
+
+    public func disable(id: String) async {
+        guard let plugin = installedPlugins.first(where: { $0.id == id }),
+              let digest = plugin.lifecycleContractSha256 else {
+            lastError = "Refresh the installed plugin registry before disabling execution."
+            return
+        }
+        await disable(id: id, expectedLifecycleContractSha256: digest)
+    }
+
+    public func declaredNetworkHosts(for plugin: JarvisInstalledPluginRecord) -> [String] {
+        Array(Set(plugin.manifest.actions.flatMap { $0.networkAccess?.allowedHosts ?? [] })).sorted()
+    }
+
+    public func declaredPermissions(for plugin: JarvisInstalledPluginRecord) -> [String] {
+        Array(Set(plugin.manifest.actions.flatMap(\.permissions))).sorted()
+    }
+
+    private func mutateInstalledPlugin(
+        id: String,
+        success: String,
+        operation: @escaping () async throws -> JarvisInstalledPluginRecord
+    ) async {
+        // The mutation response and its repository refresh are one global
+        // lifecycle critical section. Per-plugin locking permits two list
+        // responses to arrive out of order and make an older registry snapshot
+        // look fresh after a newer authority change.
+        guard mutatingPluginIDs.isEmpty else { return }
+        mutatingPluginIDs.insert(id)
+        lastError = nil
+        lastAction = nil
+        defer { mutatingPluginIDs.remove(id) }
+
+        do {
+            let updated = try await operation()
+            applyAuthoritativeInstalledPlugin(updated)
+            lastAction = success
+        } catch {
+            lastError = String(describing: error)
+        }
+
+        do {
+            try await refreshInstalledRegistry()
+        } catch {
+            installedRegistryIsFresh = false
+            installedRegistryWarning = "Installed plugin registry refresh failed after lifecycle action; controls are disabled until refresh succeeds: \(error)"
+        }
+    }
+
+    private func applyAuthoritativeInstalledPlugin(_ record: JarvisInstalledPluginRecord) {
+        if let index = installedPlugins.firstIndex(where: { $0.id == record.id }) {
+            installedPlugins[index] = record
+        } else {
+            installedPlugins.append(record)
+            installedPlugins.sort { $0.id < $1.id }
+        }
+    }
+
+    private func refreshInstalledRegistry() async throws {
+        let records = try await client.listInstalledPlugins()
+        self.installedPlugins = records
+        self.installedRegistryIsFresh = true
+        self.installedRegistryWarning = nil
+        let validIDs = Set(records.map(\.id))
+        selectedExecutionGrants = selectedExecutionGrants.filter { validIDs.contains($0.key) }
+        for plugin in records {
+            let options = availableExecutionGrants(for: plugin)
+            if options.count == 1 {
+                selectedExecutionGrants[plugin.id] = options[0].grant
+            } else if let selected = selectedExecutionGrants[plugin.id],
+                      !options.contains(where: { $0.grant == selected }) {
+                selectedExecutionGrants.removeValue(forKey: plugin.id)
+            }
         }
     }
 }

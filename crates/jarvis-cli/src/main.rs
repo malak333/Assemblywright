@@ -42,6 +42,11 @@ struct IpcTokenFile {
     generation: u64,
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct InstalledPluginLifecycleInspection {
+    lifecycle_contract_sha256: String,
+}
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum IpcTokenScheme {
@@ -1638,9 +1643,17 @@ async fn main() -> anyhow::Result<()> {
                 grant,
                 endpoint,
             } => {
+                let inspection: InstalledPluginLifecycleInspection =
+                    serde_json::from_str(&server_required_request(
+                        &endpoint,
+                        "GET",
+                        &format!("/plugins/installed/{id}"),
+                        None,
+                    )?)?;
                 let body = serde_json::to_string(&InstalledPluginExecutionRequest {
                     execution_enabled: true,
                     execution_grant: grant,
+                    expected_lifecycle_contract_sha256: inspection.lifecycle_contract_sha256,
                 })?;
                 println!(
                     "{}",
@@ -1653,9 +1666,17 @@ async fn main() -> anyhow::Result<()> {
                 );
             }
             PluginsCommand::DisableInstalled { id, endpoint } => {
+                let inspection: InstalledPluginLifecycleInspection =
+                    serde_json::from_str(&server_required_request(
+                        &endpoint,
+                        "GET",
+                        &format!("/plugins/installed/{id}"),
+                        None,
+                    )?)?;
                 let body = serde_json::to_string(&InstalledPluginExecutionRequest {
                     execution_enabled: false,
                     execution_grant: InstalledPluginExecutionGrant::MetadataOnly,
+                    expected_lifecycle_contract_sha256: inspection.lifecycle_contract_sha256,
                 })?;
                 println!(
                     "{}",
@@ -3536,7 +3557,8 @@ fn require_number_at_least(
 
 #[cfg(test)]
 mod tests {
-    use super::is_transport_unavailable;
+    use super::{is_transport_unavailable, InstalledPluginLifecycleInspection};
+    use jarvis_core::{InstalledPluginExecutionGrant, InstalledPluginExecutionRequest};
 
     #[test]
     fn transport_unavailable_includes_restricted_loopback_errors() {
@@ -3564,5 +3586,23 @@ mod tests {
 
         let server_error = anyhow::anyhow!("HTTP/1.1 500 Internal Server Error");
         assert!(!is_transport_unavailable(&server_error));
+    }
+
+    #[test]
+    fn installed_plugin_lifecycle_request_uses_inspection_digest() {
+        let digest = "a".repeat(64);
+        let inspection: InstalledPluginLifecycleInspection =
+            serde_json::from_value(serde_json::json!({ "lifecycle_contract_sha256": digest }))
+                .unwrap();
+        let request = InstalledPluginExecutionRequest {
+            execution_enabled: true,
+            execution_grant: InstalledPluginExecutionGrant::SubprocessStdio,
+            expected_lifecycle_contract_sha256: inspection.lifecycle_contract_sha256,
+        };
+        let encoded = serde_json::to_value(request).unwrap();
+        assert_eq!(
+            encoded["expected_lifecycle_contract_sha256"],
+            serde_json::json!("a".repeat(64))
+        );
     }
 }

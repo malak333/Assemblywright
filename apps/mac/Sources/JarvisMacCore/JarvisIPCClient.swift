@@ -1040,6 +1040,7 @@ public struct JarvisPluginActionManifest: Decodable, Equatable, Sendable {
     public var proactive: Bool
     public var memoryAccess: String
     public var modelAccess: String
+    public var networkAccess: JarvisPluginNetworkAccess? = nil
     public var auditFields: [String]
     public var timeout: JarvisPluginTimeout
     public var cancellation: String
@@ -1054,9 +1055,35 @@ public struct JarvisPluginActionManifest: Decodable, Equatable, Sendable {
         case proactive
         case memoryAccess = "memory_access"
         case modelAccess = "model_access"
+        case networkAccess = "network_access"
         case auditFields = "audit_fields"
         case timeout
         case cancellation
+    }
+}
+
+public struct JarvisPluginNetworkAccess: Decodable, Equatable, Sendable {
+    public var mode: String
+    public var allowedHosts: [String]
+
+    public var declaresNetworkAccess: Bool {
+        mode == "declared_hosts"
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case mode
+        case allowedHosts = "allowed_hosts"
+    }
+
+    public init(mode: String, allowedHosts: [String] = []) {
+        self.mode = mode
+        self.allowedHosts = allowedHosts
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.mode = try container.decode(String.self, forKey: .mode)
+        self.allowedHosts = try container.decodeIfPresent([String].self, forKey: .allowedHosts) ?? []
     }
 }
 
@@ -1179,6 +1206,9 @@ public struct JarvisInstalledPluginRecord: Decodable, Equatable, Identifiable, S
     public var runtimeKind: String?
     public var wasmConfinementEnforced: Bool?
     public var osSandboxEnforced: Bool?
+    /// Redacted compare-and-set token for lifecycle authority changes. Older
+    /// cores may omit it; mutation controls must then remain unavailable.
+    public var lifecycleContractSha256: String? = nil
     public var installedAt: String
 
     public var isExecutable: Bool {
@@ -1228,7 +1258,30 @@ public struct JarvisInstalledPluginRecord: Decodable, Equatable, Identifiable, S
         case runtimeKind = "runtime_kind"
         case wasmConfinementEnforced = "wasm_confinement_enforced"
         case osSandboxEnforced = "os_sandbox_enforced"
+        case lifecycleContractSha256 = "lifecycle_contract_sha256"
         case installedAt = "installed_at"
+    }
+}
+
+public struct JarvisInstalledPluginExecutionRequest: Encodable, Equatable, Sendable {
+    public var executionEnabled: Bool
+    public var executionGrant: String
+    public var expectedLifecycleContractSha256: String
+
+    public init(
+        executionEnabled: Bool,
+        executionGrant: String,
+        expectedLifecycleContractSha256: String
+    ) {
+        self.executionEnabled = executionEnabled
+        self.executionGrant = executionGrant
+        self.expectedLifecycleContractSha256 = expectedLifecycleContractSha256
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case executionEnabled = "execution_enabled"
+        case executionGrant = "execution_grant"
+        case expectedLifecycleContractSha256 = "expected_lifecycle_contract_sha256"
     }
 }
 
@@ -2056,6 +2109,11 @@ public protocol JarvisCoreClient: Sendable {
     func listPluginManifests() async throws -> [JarvisPluginManifest]
     func modelToolCatalog() async throws -> JarvisModelToolCatalog
     func listInstalledPlugins() async throws -> [JarvisInstalledPluginRecord]
+    func verifyInstalledPluginProvenance(id: String) async throws -> JarvisInstalledPluginRecord
+    func setInstalledPluginExecution(
+        id: String,
+        request: JarvisInstalledPluginExecutionRequest
+    ) async throws -> JarvisInstalledPluginRecord
     func listSchedulerJobs() async throws -> [JarvisSchedulerJob]
     func schedulerAttention() async throws -> JarvisSchedulerAttentionSummary
     func pendingSchedulerNotificationOccurrences(limit: Int) async throws -> [JarvisSchedulerNotificationOccurrence]
@@ -2271,6 +2329,25 @@ public final class JarvisIPCClient: JarvisCoreClient {
 
     public func listInstalledPlugins() async throws -> [JarvisInstalledPluginRecord] {
         try await send(path: "/plugins/installed", method: "GET", body: Optional<Data>.none)
+    }
+
+    public func verifyInstalledPluginProvenance(id: String) async throws -> JarvisInstalledPluginRecord {
+        try await send(
+            path: "/plugins/installed/\(id)/provenance/verify",
+            method: "POST",
+            body: Optional<Data>.none
+        )
+    }
+
+    public func setInstalledPluginExecution(
+        id: String,
+        request: JarvisInstalledPluginExecutionRequest
+    ) async throws -> JarvisInstalledPluginRecord {
+        try await send(
+            path: "/plugins/installed/\(id)/execution",
+            method: "POST",
+            body: encoder.encode(request)
+        )
     }
 
     public func listSchedulerJobs() async throws -> [JarvisSchedulerJob] {

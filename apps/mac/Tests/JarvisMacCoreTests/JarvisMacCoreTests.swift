@@ -1314,6 +1314,7 @@ struct JarvisMacCoreTests {
         #expect(record.sourcePath == nil)
         #expect(!record.executionEnabled)
         #expect(record.executionGrant == "metadata_only")
+        #expect(record.lifecycleContractSha256 == String(repeating: "a", count: 64))
         #expect(record.provenance.manifestPath == nil)
         #expect(record.provenance.manifestSha256 == nil)
         #expect(record.provenance.sourcePath == nil)
@@ -3966,6 +3967,524 @@ struct JarvisMacCoreTests {
         #expect(model.installedPlugins.first?.confinementSummary == "local subprocess • not OS sandboxed")
     }
 
+    @Test("Plugin lifecycle client sends exact verify and execution contracts")
+    func pluginLifecycleClientUsesTypedContracts() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [IPCURLProtocol.self]
+        let client = JarvisIPCClient(
+            endpoint: JarvisEndpoint(baseURL: URL(string: "http://127.0.0.1:7787")!),
+            session: URLSession(configuration: configuration)
+        )
+        let records = try JSONSerialization.jsonObject(with: installedPluginsJSON()) as! [[String: Any]]
+        let recordData = try JSONSerialization.data(withJSONObject: records[0])
+        var methods: [String] = []
+        var paths: [String] = []
+        var bodies: [[String: Any]?] = []
+        IPCURLProtocol.handler = { request in
+            methods.append(request.httpMethod ?? "")
+            paths.append(request.url?.path ?? "")
+            bodies.append(decodeRequestBody(request))
+            return (
+                HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                recordData
+            )
+        }
+        defer { IPCURLProtocol.handler = nil }
+
+        _ = try await client.verifyInstalledPluginProvenance(id: "local_runner_test")
+        _ = try await client.setInstalledPluginExecution(
+            id: "local_runner_test",
+            request: JarvisInstalledPluginExecutionRequest(
+                executionEnabled: true,
+                executionGrant: "subprocess_stdio",
+                expectedLifecycleContractSha256: String(repeating: "a", count: 64)
+            )
+        )
+
+        #expect(methods == ["POST", "POST"])
+        #expect(paths == [
+            "/plugins/installed/local_runner_test/provenance/verify",
+            "/plugins/installed/local_runner_test/execution"
+        ])
+        #expect(bodies[0] == nil)
+        #expect(bodies[1]?["execution_enabled"] as? Bool == true)
+        #expect(bodies[1]?["execution_grant"] as? String == "subprocess_stdio")
+        #expect(
+            bodies[1]?["expected_lifecycle_contract_sha256"] as? String
+                == String(repeating: "a", count: 64)
+        )
+    }
+
+    @MainActor
+    @Test("Plugin manager verifies, enables, and disables from authoritative registry state")
+    func pluginManagerLifecycleIsFailClosedAndAuthoritative() async throws {
+        let installed = try JSONDecoder().decode(
+            [JarvisInstalledPluginRecord].self,
+            from: installedPluginsJSON()
+        )
+        let client = FakeCoreClient(installedPlugins: installed)
+        let model = PluginManagerModel(client: client)
+
+        await model.refresh()
+        let initial = try #require(model.installedPlugins.first)
+        #expect(!model.canEnable(initial))
+        #expect(model.selectedExecutionGrant(for: initial) == "subprocess_stdio")
+        #expect(model.declaredPermissions(for: initial) == ["read_workspace"])
+        #expect(model.declaredNetworkHosts(for: initial).isEmpty)
+
+        await model.verifyProvenance(id: initial.id)
+        let verified = try #require(model.installedPlugins.first)
+        #expect(verified.provenance.integrityStatus == "matches_install_snapshot")
+        #expect(model.canEnable(verified))
+        #expect(client.installedPluginProvenanceVerificationIDs == [initial.id])
+        #expect(client.installedPluginListRequests == 2)
+
+        let verifiedDigest = try #require(verified.lifecycleContractSha256)
+        await model.enable(
+            id: initial.id,
+            grant: "subprocess_stdio",
+            expectedLifecycleContractSha256: verifiedDigest
+        )
+        let enabled = try #require(model.installedPlugins.first)
+        #expect(enabled.executionEnabled)
+        #expect(enabled.executionGrant == "subprocess_stdio")
+        #expect(client.installedPluginExecutionRequests.count == 1)
+        #expect(client.installedPluginExecutionRequests[0].request == JarvisInstalledPluginExecutionRequest(
+            executionEnabled: true,
+            executionGrant: "subprocess_stdio",
+            expectedLifecycleContractSha256: verifiedDigest
+        ))
+        #expect(client.installedPluginListRequests == 3)
+
+        let enabledDigest = try #require(enabled.lifecycleContractSha256)
+        await model.disable(
+            id: initial.id,
+            expectedLifecycleContractSha256: enabledDigest
+        )
+        let disabled = try #require(model.installedPlugins.first)
+        #expect(!disabled.executionEnabled)
+        #expect(disabled.executionGrant == "metadata_only")
+        #expect(client.installedPluginExecutionRequests.count == 2)
+        #expect(client.installedPluginExecutionRequests[1].request == JarvisInstalledPluginExecutionRequest(
+            executionEnabled: false,
+            executionGrant: "metadata_only",
+            expectedLifecycleContractSha256: enabledDigest
+        ))
+        #expect(client.installedPluginListRequests == 4)
+        #expect(model.lastAction == "Plugin execution disabled.")
+    }
+
+    @MainActor
+    @Test("Plugin manager requires explicit selection for network authority")
+    func pluginManagerRequiresExplicitNetworkGrantSelection() async throws {
+        var plugin = try #require(
+            JSONDecoder().decode([JarvisInstalledPluginRecord].self, from: installedPluginsJSON()).first
+        )
+        plugin.provenance.integrityStatus = "matches_install_snapshot"
+        var networkAction = try #require(plugin.manifest.actions.first)
+        networkAction.name = "fetch"
+        networkAction.permissions = ["network"]
+        networkAction.networkAccess = JarvisPluginNetworkAccess(
+            mode: "declared_hosts",
+            allowedHosts: ["api.example.com", "status.example.com"]
+        )
+        plugin.manifest.actions.append(networkAction)
+        let client = FakeCoreClient(installedPlugins: [plugin])
+        let model = PluginManagerModel(client: client)
+
+        await model.refresh()
+        let loaded = try #require(model.installedPlugins.first)
+        #expect(model.availableExecutionGrants(for: loaded).map(\.grant) == [
+            "subprocess_stdio", "subprocess_stdio_network"
+        ])
+        #expect(model.selectedExecutionGrant(for: loaded) == nil)
+        #expect(!model.canEnable(loaded))
+        #expect(model.declaredNetworkHosts(for: loaded) == ["api.example.com", "status.example.com"])
+
+        model.selectExecutionGrant("subprocess_stdio_network", for: loaded.id)
+        #expect(model.selectedExecutionGrant(for: loaded) == "subprocess_stdio_network")
+        #expect(model.canEnable(loaded))
+
+        let confirmedDigest = try #require(loaded.lifecycleContractSha256)
+        await model.enable(
+            id: loaded.id,
+            grant: "subprocess_stdio",
+            expectedLifecycleContractSha256: confirmedDigest
+        )
+        #expect(client.installedPluginExecutionRequests.last?.request.executionGrant == "subprocess_stdio")
+        #expect(
+            client.installedPluginExecutionRequests.last?.request.expectedLifecycleContractSha256
+                == confirmedDigest
+        )
+    }
+
+    @MainActor
+    @Test("Plugin manager rejects stale lifecycle contracts and fails closed after refresh loss")
+    func pluginManagerLifecycleCASAndRegistryFreshnessFailClosed() async throws {
+        var installed = try JSONDecoder().decode(
+            [JarvisInstalledPluginRecord].self,
+            from: installedPluginsJSON()
+        )
+        installed[0].provenance.integrityStatus = "matches_install_snapshot"
+
+        let staleClient = FakeCoreClient(installedPlugins: installed)
+        let staleModel = PluginManagerModel(client: staleClient)
+        await staleModel.refresh()
+        let staleRecord = try #require(staleModel.installedPlugins.first)
+        await staleModel.enable(
+            id: staleRecord.id,
+            grant: "subprocess_stdio",
+            expectedLifecycleContractSha256: String(repeating: "f", count: 64)
+        )
+        #expect(staleModel.installedPlugins.first?.executionEnabled == false)
+        #expect(staleModel.lastAction == nil)
+        #expect(staleModel.lastError?.contains("lifecycle contract changed") == true)
+
+        let refreshFailureClient = FakeCoreClient(
+            installedPlugins: installed,
+            installedPluginListFailureStartingAtRequest: 2
+        )
+        let refreshFailureModel = PluginManagerModel(client: refreshFailureClient)
+        await refreshFailureModel.refresh()
+        let verified = try #require(refreshFailureModel.installedPlugins.first)
+        let digest = try #require(verified.lifecycleContractSha256)
+        await refreshFailureModel.enable(
+            id: verified.id,
+            grant: "subprocess_stdio",
+            expectedLifecycleContractSha256: digest
+        )
+
+        let applied = try #require(refreshFailureModel.installedPlugins.first)
+        #expect(applied.executionEnabled)
+        #expect(refreshFailureModel.lastAction?.contains("enabled with subprocess_stdio") == true)
+        #expect(refreshFailureModel.installedRegistryIsFresh == false)
+        #expect(refreshFailureModel.installedRegistryWarning != nil)
+        #expect(!refreshFailureModel.canEnable(applied))
+        #expect(!refreshFailureModel.canDisable(applied))
+        #expect(!refreshFailureModel.canVerify(applied))
+    }
+
+    @MainActor
+    @Test("Plugin manager suppresses duplicate lifecycle actions and never mutates optimistically")
+    func pluginManagerSuppressesDuplicateAndFailedMutations() async throws {
+        let installed = try JSONDecoder().decode(
+            [JarvisInstalledPluginRecord].self,
+            from: installedPluginsJSON()
+        )
+        let delayedClient = FakeCoreClient(
+            installedPlugins: installed,
+            installedPluginMutationDelayNanoseconds: 50_000_000
+        )
+        let delayedModel = PluginManagerModel(client: delayedClient)
+        await delayedModel.refresh()
+
+        async let first: Void = delayedModel.verifyProvenance(id: "local_runner_test")
+        async let duplicate: Void = delayedModel.verifyProvenance(id: "local_runner_test")
+        _ = await (first, duplicate)
+        #expect(delayedClient.installedPluginProvenanceVerificationIDs == ["local_runner_test"])
+
+        let failingClient = FakeCoreClient(
+            installedPlugins: installed,
+            installedPluginMutationUnavailable: true
+        )
+        let failingModel = PluginManagerModel(client: failingClient)
+        await failingModel.refresh()
+        await failingModel.verifyProvenance(id: "local_runner_test")
+
+        #expect(failingModel.installedPlugins.first?.provenance.integrityStatus == "not_verified")
+        #expect(failingModel.lastAction == nil)
+        #expect(failingModel.lastError != nil)
+        #expect(failingClient.installedPluginListRequests == 2)
+    }
+
+    @MainActor
+    @Test("Plugin manager globally serializes lifecycle mutation and refresh across plugins")
+    func pluginManagerPreventsCrossPluginRegistryRefreshReordering() async throws {
+        var first = try #require(
+            JSONDecoder().decode([JarvisInstalledPluginRecord].self, from: installedPluginsJSON()).first
+        )
+        first.provenance.integrityStatus = "matches_install_snapshot"
+
+        var second = first
+        second.id = "second_local_runner"
+        second.manifest.id = second.id
+        second.manifest.name = "Second Local Runner"
+        second.executionEnabled = true
+        second.executionGrant = "subprocess_stdio"
+        let firstID = first.id
+        let secondID = second.id
+
+        let mutationGate = FakeInstalledPluginMutationGate()
+        let client = FakeCoreClient(
+            installedPlugins: [first, second],
+            installedPluginMutationGate: mutationGate
+        )
+        let model = PluginManagerModel(client: client)
+        await model.refresh()
+
+        async let firstMutation: Void = model.verifyProvenance(id: firstID)
+        await mutationGate.waitUntilEntered()
+        #expect(model.mutatingPluginIDs == [firstID])
+
+        let loadedFirst = try #require(model.installedPlugins.first(where: { $0.id == firstID }))
+        let loadedSecond = try #require(model.installedPlugins.first(where: { $0.id == secondID }))
+        #expect(!model.canVerify(loadedFirst))
+        #expect(!model.canVerify(loadedSecond))
+        #expect(!model.canEnable(loadedFirst))
+        #expect(!model.canDisable(loadedSecond))
+
+        // A second plugin action arriving while the first mutation's global
+        // critical section is open must not create a second mutation/list pair
+        // whose full-registry response could be applied out of order.
+        await model.verifyProvenance(id: secondID)
+        await mutationGate.release()
+        await firstMutation
+
+        #expect(client.installedPluginProvenanceVerificationIDs == [firstID])
+        #expect(client.installedPluginListRequests == 2)
+        #expect(model.installedRegistryIsFresh)
+        #expect(model.installedPlugins.first(where: { $0.id == secondID })?.executionEnabled == true)
+        #expect(model.mutatingPluginIDs.isEmpty)
+    }
+
+    @MainActor
+    @Test("Swift plugin lifecycle controls persist through authenticated real IPC without execution")
+    func pluginManagerRealIPCLifecycleEndToEnd() async throws {
+        let directory = jarvisRepositoryRoot()
+            .appending(path: "target/swift-plugin-lifecycle-e2e-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appending(path: "jarvis.sqlite")
+        let pluginDirectory = directory.appending(path: "plugin", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: pluginDirectory, withIntermediateDirectories: true)
+        let canonicalPluginDirectory = pluginDirectory.resolvingSymlinksInPath()
+        let executionSentinel = directory.appending(path: "plugin-executed")
+        let runnerURL = pluginDirectory.appending(path: "plugin-runner.sh")
+        try Data(
+            "#!/bin/sh\ntouch \"\(executionSentinel.path)\"\nprintf '{\"path\":\"ok\"}'\n".utf8
+        ).write(to: runnerURL)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: runnerURL.path)
+        let manifestURL = pluginDirectory.appending(path: "jarvis-plugin.json")
+        let manifest: [String: Any] = [
+            "manifest_schema_version": 1,
+            "id": "swift_lifecycle_e2e",
+            "name": "Swift Lifecycle E2E",
+            "version": "0.1.0",
+            "source": "local_subprocess",
+            "author": "Jarvis E2E",
+            "source_path": canonicalPluginDirectory.path,
+            "subprocess": [
+                "command": "plugin-runner.sh",
+                "args": [],
+                "stdin": "json",
+                "stdout": "json"
+            ],
+            "actions": [[
+                "name": "inspect",
+                "description": "Prove lifecycle controls do not execute plugin code.",
+                "permissions": ["read_workspace"],
+                "risk_tier": "low",
+                "input_schema": ["schema": ["type": "object"]],
+                "output_schema": ["schema": ["type": "object"]],
+                "proactive": false,
+                "memory_access": "none",
+                "model_access": "none",
+                "network_access": ["mode": "none"],
+                "audit_fields": [],
+                "timeout": ["timeout_ms": 5_000, "on_timeout": "cancel"],
+                "cancellation": "cooperative"
+            ]]
+        ]
+        try JSONSerialization.data(withJSONObject: manifest).write(to: manifestURL)
+
+        let port = try unusedLoopbackPort()
+        let endpointURL = try #require(URL(string: "http://127.0.0.1:\(port)"))
+
+        func launch() throws -> (Process, JarvisIPCSessionAuthorization, JarvisIPCLaunchAuthorization) {
+            let authorization = JarvisIPCSessionAuthorization(
+                mode: .appSupervised,
+                transportMode: .loopbackTCP
+            )
+            let launchValue = try authorization.rotateForLaunch()
+            let launch = try #require(launchValue)
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.arguments = [
+                "cargo", "run", "-q", "-p", "jarvis-cli", "--",
+                "serve", "--bind", "127.0.0.1:\(port)",
+                "--db-path", databaseURL.path,
+                "--startup-config-stdin"
+            ]
+            process.currentDirectoryURL = jarvisRepositoryRoot()
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            let stdin = Pipe()
+            process.standardInput = stdin
+            try process.run()
+            let startup = try JSONSerialization.data(withJSONObject: [
+                "version": 1,
+                "ipc_auth": [
+                    "scheme": "bearer",
+                    "token": launch.token,
+                    "generation": launch.generation
+                ]
+            ])
+            try stdin.fileHandleForWriting.write(contentsOf: startup)
+            try stdin.fileHandleForWriting.close()
+            return (process, authorization, launch)
+        }
+
+        func stop(_ process: Process) {
+            if process.isRunning { process.terminate() }
+            process.waitUntilExit()
+        }
+
+        func awaitHealthy(_ client: JarvisIPCClient) async throws {
+            for _ in 0..<1_200 {
+                if (try? await client.health().status) == "ok" { return }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            throw URLError(.timedOut)
+        }
+
+        let (firstProcess, firstAuthorization, firstLaunch) = try launch()
+        defer { stop(firstProcess) }
+        let firstClient = JarvisIPCClient(
+            endpoint: JarvisEndpoint(baseURL: endpointURL),
+            authorization: firstAuthorization
+        )
+        try await awaitHealthy(firstClient)
+
+        var installRequest = URLRequest(url: endpointURL.appending(path: "/plugins/installed"))
+        installRequest.httpMethod = "POST"
+        installRequest.setValue(firstLaunch.headerValue, forHTTPHeaderField: "Authorization")
+        installRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        installRequest.httpBody = try JSONSerialization.data(withJSONObject: [
+            "manifest_path": manifestURL.path
+        ])
+        let (installData, installResponse) = try await URLSession.shared.data(for: installRequest)
+        #expect((installResponse as? HTTPURLResponse)?.statusCode == 200)
+        _ = try JSONDecoder().decode(JarvisInstalledPluginRecord.self, from: installData)
+
+        let rawVerified = try await firstClient.verifyInstalledPluginProvenance(id: "swift_lifecycle_e2e")
+        #expect(rawVerified.provenance.integrityStatus == "matches_install_snapshot")
+        #expect(rawVerified.sourcePath == nil)
+        #expect(rawVerified.provenance.manifestPath == nil)
+        #expect(rawVerified.provenance.manifestSha256 == nil)
+        #expect(rawVerified.provenance.sourcePath == nil)
+        #expect(rawVerified.provenance.subprocessCommandPath == nil)
+        #expect(rawVerified.provenance.subprocessCommandSha256 == nil)
+
+        let model = PluginManagerModel(client: firstClient)
+        await model.refresh()
+        let verified = try #require(model.installedPlugins.first)
+        #expect(verified.id == "swift_lifecycle_e2e")
+        #expect(!verified.executionEnabled)
+        #expect(model.canEnable(verified))
+
+        let verifiedDigest = try #require(verified.lifecycleContractSha256)
+        await model.enable(
+            id: verified.id,
+            grant: "subprocess_stdio",
+            expectedLifecycleContractSha256: verifiedDigest
+        )
+        #expect(model.lastError == nil)
+        #expect(model.installedPlugins.first?.executionEnabled == true)
+        #expect(model.installedPlugins.first?.executionGrant == "subprocess_stdio")
+        #expect(!FileManager.default.fileExists(atPath: executionSentinel.path))
+
+        stop(firstProcess)
+        let (secondProcess, secondAuthorization, _) = try launch()
+        defer { stop(secondProcess) }
+        let secondClient = JarvisIPCClient(
+            endpoint: JarvisEndpoint(baseURL: endpointURL),
+            authorization: secondAuthorization
+        )
+        try await awaitHealthy(secondClient)
+        let enabledAfterRestart = try #require(try await secondClient.listInstalledPlugins().first)
+        #expect(enabledAfterRestart.id == "swift_lifecycle_e2e")
+        #expect(enabledAfterRestart.executionEnabled)
+        #expect(enabledAfterRestart.executionGrant == "subprocess_stdio")
+        #expect(!FileManager.default.fileExists(atPath: executionSentinel.path))
+
+        let enabledAudit = try await secondClient.listAuditEntries(taskId: nil)
+        #expect(enabledAudit.filter { $0.eventType == "installed_plugin_execution_authority_updated" }.count == 1)
+        #expect(enabledAudit.contains { $0.eventType == "installed_plugin_provenance_verified" })
+        #expect(!enabledAudit.contains { $0.eventType == "installed_plugin_subprocess_completed" })
+
+        let enabledDigest = try #require(enabledAfterRestart.lifecycleContractSha256)
+        do {
+            _ = try await secondClient.setInstalledPluginExecution(
+                id: enabledAfterRestart.id,
+                request: JarvisInstalledPluginExecutionRequest(
+                    executionEnabled: false,
+                    executionGrant: "subprocess_stdio",
+                    expectedLifecycleContractSha256: enabledDigest
+                )
+            )
+            Issue.record("Disabled execution accepted a non-metadata grant")
+        } catch let JarvisIPCError.httpStatus(status, body) {
+            #expect(status == 400)
+            #expect(body.contains("disabled installed plugin execution requires metadata_only grant"))
+        }
+
+        do {
+            _ = try await secondClient.setInstalledPluginExecution(
+                id: enabledAfterRestart.id,
+                request: JarvisInstalledPluginExecutionRequest(
+                    executionEnabled: false,
+                    executionGrant: "metadata_only",
+                    expectedLifecycleContractSha256: String(repeating: "f", count: 64)
+                )
+            )
+            Issue.record("Execution authority accepted a stale lifecycle contract")
+        } catch let JarvisIPCError.httpStatus(status, body) {
+            #expect(status == 400)
+            #expect(body.contains("lifecycle contract changed"))
+        }
+
+        let afterRejectedRequests = try #require(try await secondClient.listInstalledPlugins().first)
+        #expect(afterRejectedRequests.executionEnabled)
+        #expect(afterRejectedRequests.executionGrant == "subprocess_stdio")
+        let rejectedAudit = try await secondClient.listAuditEntries(taskId: nil)
+        #expect(rejectedAudit.filter { $0.eventType == "installed_plugin_execution_authority_updated" }.count == 1)
+
+        let rawDisabled = try await secondClient.setInstalledPluginExecution(
+            id: enabledAfterRestart.id,
+            request: JarvisInstalledPluginExecutionRequest(
+                executionEnabled: false,
+                executionGrant: "metadata_only",
+                expectedLifecycleContractSha256: enabledDigest
+            )
+        )
+        #expect(!rawDisabled.executionEnabled)
+        #expect(rawDisabled.executionGrant == "metadata_only")
+        #expect(rawDisabled.sourcePath == nil)
+        #expect(rawDisabled.provenance.manifestPath == nil)
+        #expect(rawDisabled.provenance.manifestSha256 == nil)
+        #expect(rawDisabled.provenance.sourcePath == nil)
+        #expect(rawDisabled.provenance.subprocessCommandPath == nil)
+        #expect(rawDisabled.provenance.subprocessCommandSha256 == nil)
+        #expect(!FileManager.default.fileExists(atPath: executionSentinel.path))
+
+        stop(secondProcess)
+        let (thirdProcess, thirdAuthorization, _) = try launch()
+        defer { stop(thirdProcess) }
+        let thirdClient = JarvisIPCClient(
+            endpoint: JarvisEndpoint(baseURL: endpointURL),
+            authorization: thirdAuthorization
+        )
+        try await awaitHealthy(thirdClient)
+        let disabledAfterRestart = try #require(try await thirdClient.listInstalledPlugins().first)
+        #expect(!disabledAfterRestart.executionEnabled)
+        #expect(disabledAfterRestart.executionGrant == "metadata_only")
+        let disabledAudit = try await thirdClient.listAuditEntries(taskId: nil)
+        #expect(disabledAudit.filter { $0.eventType == "installed_plugin_execution_authority_updated" }.count == 2)
+        #expect(disabledAudit.contains { $0.eventType == "installed_plugin_provenance_verified" })
+        #expect(!disabledAudit.contains { $0.eventType == "installed_plugin_subprocess_completed" })
+        #expect(!FileManager.default.fileExists(atPath: executionSentinel.path))
+    }
+
     @MainActor
     @Test("Plugin manager decodes redacted WASM confinement metadata")
     func pluginManagerModelDecodesWasmConfinement() async throws {
@@ -6370,6 +6889,7 @@ private func installedPluginsJSON() -> Data {
             },
             "execution_enabled": false,
             "execution_grant": "metadata_only",
+            "lifecycle_contract_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "installed_at": "2026-05-20T12:00:00Z"
           }
         ]
@@ -9418,6 +9938,29 @@ private func sampleMemoryItem(
     )
 }
 
+private actor FakeInstalledPluginMutationGate {
+    private var entered = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func waitUntilReleased() async {
+        entered = true
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func waitUntilEntered() async {
+        while !entered {
+            await Task.yield()
+        }
+    }
+
+    func release() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
 private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     struct ApprovalDecision: Equatable {
         var id: UUID
@@ -9456,6 +9999,13 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     private var modelToolCatalogUnavailable: Bool
     private var installedPlugins: [JarvisInstalledPluginRecord]
     private var installedPluginsUnavailable: Bool
+    private let installedPluginListFailureStartingAtRequest: Int?
+    private let installedPluginMutationUnavailable: Bool
+    private let installedPluginMutationDelayNanoseconds: UInt64
+    private let installedPluginMutationGate: FakeInstalledPluginMutationGate?
+    private(set) var installedPluginListRequests: Int
+    private(set) var installedPluginProvenanceVerificationIDs: [String]
+    private(set) var installedPluginExecutionRequests: [(id: String, request: JarvisInstalledPluginExecutionRequest)]
     private var schedulerJobs: [JarvisSchedulerJob]
     private var schedulerAttentionResponse: JarvisSchedulerAttentionSummary?
     private let schedulerAttentionDelayNanoseconds: UInt64
@@ -9507,6 +10057,10 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         modelToolCatalogUnavailable: Bool = false,
         installedPlugins: [JarvisInstalledPluginRecord] = [],
         installedPluginsUnavailable: Bool = false,
+        installedPluginListFailureStartingAtRequest: Int? = nil,
+        installedPluginMutationUnavailable: Bool = false,
+        installedPluginMutationDelayNanoseconds: UInt64 = 0,
+        installedPluginMutationGate: FakeInstalledPluginMutationGate? = nil,
         schedulerJobs: [JarvisSchedulerJob] = [],
         schedulerAttention: JarvisSchedulerAttentionSummary? = nil,
         schedulerAttentionDelayNanoseconds: UInt64 = 0,
@@ -9549,6 +10103,13 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         self.modelToolCatalogUnavailable = modelToolCatalogUnavailable
         self.installedPlugins = installedPlugins
         self.installedPluginsUnavailable = installedPluginsUnavailable
+        self.installedPluginListFailureStartingAtRequest = installedPluginListFailureStartingAtRequest
+        self.installedPluginMutationUnavailable = installedPluginMutationUnavailable
+        self.installedPluginMutationDelayNanoseconds = installedPluginMutationDelayNanoseconds
+        self.installedPluginMutationGate = installedPluginMutationGate
+        self.installedPluginListRequests = 0
+        self.installedPluginProvenanceVerificationIDs = []
+        self.installedPluginExecutionRequests = []
         self.schedulerJobs = schedulerJobs
         self.schedulerAttentionResponse = schedulerAttention
         self.schedulerAttentionDelayNanoseconds = schedulerAttentionDelayNanoseconds
@@ -9966,10 +10527,65 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     }
 
     func listInstalledPlugins() async throws -> [JarvisInstalledPluginRecord] {
-        if installedPluginsUnavailable {
+        installedPluginListRequests += 1
+        if installedPluginsUnavailable
+            || installedPluginListFailureStartingAtRequest.map({ installedPluginListRequests >= $0 }) == true
+        {
             throw URLError(.cannotConnectToHost)
         }
         return installedPlugins
+    }
+
+    func verifyInstalledPluginProvenance(id: String) async throws -> JarvisInstalledPluginRecord {
+        installedPluginProvenanceVerificationIDs.append(id)
+        if let installedPluginMutationGate {
+            await installedPluginMutationGate.waitUntilReleased()
+        }
+        if installedPluginMutationDelayNanoseconds > 0 {
+            try await Task.sleep(nanoseconds: installedPluginMutationDelayNanoseconds)
+        }
+        if installedPluginMutationUnavailable {
+            throw URLError(.cannotWriteToFile)
+        }
+        guard let index = installedPlugins.firstIndex(where: { $0.id == id }) else {
+            throw URLError(.fileDoesNotExist)
+        }
+        installedPlugins[index].provenance.integrityStatus = "matches_install_snapshot"
+        installedPlugins[index].provenance.lastVerifiedAt = "2026-07-15T12:00:00Z"
+        installedPlugins[index].lifecycleContractSha256 = String(repeating: "b", count: 64)
+        return installedPlugins[index]
+    }
+
+    func setInstalledPluginExecution(
+        id: String,
+        request: JarvisInstalledPluginExecutionRequest
+    ) async throws -> JarvisInstalledPluginRecord {
+        installedPluginExecutionRequests.append((id, request))
+        if let installedPluginMutationGate {
+            await installedPluginMutationGate.waitUntilReleased()
+        }
+        if installedPluginMutationDelayNanoseconds > 0 {
+            try await Task.sleep(nanoseconds: installedPluginMutationDelayNanoseconds)
+        }
+        if installedPluginMutationUnavailable {
+            throw URLError(.cannotWriteToFile)
+        }
+        guard let index = installedPlugins.firstIndex(where: { $0.id == id }) else {
+            throw URLError(.fileDoesNotExist)
+        }
+        guard installedPlugins[index].lifecycleContractSha256 == request.expectedLifecycleContractSha256 else {
+            throw JarvisIPCError.httpStatus(
+                400,
+                "installed plugin lifecycle contract changed; refresh inspection before updating execution authority"
+            )
+        }
+        installedPlugins[index].executionEnabled = request.executionEnabled
+        installedPlugins[index].executionGrant = request.executionGrant
+        installedPlugins[index].lifecycleContractSha256 = String(
+            repeating: request.executionEnabled ? "c" : "d",
+            count: 64
+        )
+        return installedPlugins[index]
     }
 
     func listSchedulerJobs() async throws -> [JarvisSchedulerJob] {

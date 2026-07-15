@@ -386,11 +386,23 @@ contract testing. Release verification should keep covering:
   sensitive non-entry, canonical-input and contract binding, redaction,
   pre-claim mutation rejection, durable one-shot claim/replay conflict, and no
   automatic retry after a claim.
+- Swift installed-plugin lifecycle coverage proves typed provenance and
+  execution-authority requests, verification-before-enable, explicit grant
+  selection for mixed network/non-network manifests, exact declared-host and
+  permission review, per-plugin duplicate suppression, authoritative refresh
+  after success or failure, fail-closed stale-registry controls, exact
+  confirmed-grant plus lifecycle-digest compare-and-set binding,
+  disable-to-`metadata_only`, redacted mutation responses, and zero plugin
+  runtime entry. Rust storage coverage injects audit insertion failures and
+  proves provenance/authority state rolls back transactionally. Authenticated
+  loopback-TCP compatibility E2E proves malformed and stale request rejection,
+  enabled and disabled restart persistence, post-restart audit persistence, and
+  a no-execution sentinel; it is not default-UDS transport evidence.
 - `local_wasm` install/restart/run coverage proves schema-v12 migration,
   `wasm_compute` grant separation, exact-byte provenance, required exports,
   import/WASI rejection, module/request/output/memory/fuel ceilings,
   low-risk compute-only policy, JSON/schema validation, dry-run nonexecution,
   pause/cancel/timeout/fuel fail-closed behavior, and redacted inspection/audit.
 - Swift decoding/presentation tests distinguish `WASM confined • no imports •
-  no filesystem • no network` from `local subprocess • not OS sandboxed`
-  without adding plugin execution controls.
+  no filesystem • no network` from `local subprocess • not OS sandboxed`; the
+  lifecycle controls change authority only and never add install or run actions.
