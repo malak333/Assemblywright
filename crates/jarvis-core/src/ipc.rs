@@ -27,9 +27,10 @@ use uuid::Uuid;
 use futures_util::StreamExt as FuturesStreamExt;
 
 use crate::storage::{
-    ApprovalExecutionState, EmergencyPauseState as StoredEmergencyPauseState,
-    MemoryClassificationSummary, NewMemoryItem, NewPendingApproval, PendingApproval,
-    SchedulerNotificationOccurrence, SqliteRepository,
+    ApprovalExecutionClaim, ApprovalExecutionState,
+    EmergencyPauseState as StoredEmergencyPauseState, InstalledPluginApprovalBinding,
+    MemoryClassificationSummary, NewInstalledPluginApproval, NewMemoryItem, NewPendingApproval,
+    PendingApproval, SchedulerNotificationOccurrence, SqliteRepository,
     MAX_SCHEDULER_NOTIFICATION_OCCURRENCE_LIST_LIMIT,
 };
 use crate::trusted_wake::{
@@ -588,6 +589,13 @@ pub struct CommandResponse {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalExecutionRequest {
+    #[serde(default)]
+    pub cancellation_id: Option<Uuid>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApprovalExecutionResponse {
     pub accepted: bool,
@@ -596,6 +604,8 @@ pub struct ApprovalExecutionResponse {
     pub audit_entry: AuditEntry,
     pub audit_entries: Vec<AuditEntry>,
     pub plugin_results: Vec<PluginCallResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub installed_plugin_result: Option<InstalledPluginRunResponse>,
     pub message: String,
 }
 
@@ -839,6 +849,10 @@ pub struct InstalledPluginPublisherSignatureVerificationRequest {
     pub reason: Option<String>,
 }
 
+fn default_installed_plugin_sensitivity() -> Sensitivity {
+    Sensitivity::Workspace
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstalledPluginRunRequest {
     pub action: String,
@@ -848,6 +862,8 @@ pub struct InstalledPluginRunRequest {
     pub session_id: Option<Uuid>,
     #[serde(default)]
     pub cancellation_id: Option<Uuid>,
+    #[serde(default = "default_installed_plugin_sensitivity")]
+    pub sensitivity: Sensitivity,
     #[serde(default)]
     pub dry_run: bool,
 }
@@ -890,6 +906,10 @@ pub struct InstalledPluginRunResponse {
     pub exit_code: Option<i32>,
     #[serde(default)]
     pub progress_events: Vec<crate::PluginProgressEvent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_approval: Option<PendingApproval>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task: Option<TaskRecord>,
     pub audit_entry: AuditEntry,
 }
 
@@ -1937,7 +1957,28 @@ impl IpcState {
     }
 
     pub fn execute_approved_approval(&self, id: Uuid) -> JarvisResult<ApprovalExecutionResponse> {
-        let (approval, task) = self.using_repository(|repository| {
+        self.execute_approved_approval_with_request(id, ApprovalExecutionRequest::default())
+    }
+
+    pub fn execute_approved_approval_with_request(
+        &self,
+        id: Uuid,
+        request: ApprovalExecutionRequest,
+    ) -> JarvisResult<ApprovalExecutionResponse> {
+        let mut cancellation_guard = request
+            .cancellation_id
+            .map(|cancellation_id| {
+                self.runtime_control
+                    .register_runtime_cancellation(cancellation_id)
+                    .ok_or_else(|| {
+                        JarvisError::Conflict(
+                            "approval cancellation handle is already active, was recently consumed, or the active-execution limit was reached"
+                                .to_string(),
+                        )
+                    })
+            })
+            .transpose()?;
+        let (approval, task, installed_binding) = self.using_repository(|repository| {
             let approval = repository
                 .get_pending_approval(id)?
                 .ok_or_else(|| JarvisError::Storage(format!("pending approval not found: {id}")))?;
@@ -1946,11 +1987,37 @@ impl IpcState {
                     "approval {id} must be approved before execution"
                 )));
             }
+            if repository.get_approval_execution(id)?.is_some() {
+                return Err(JarvisError::Conflict(format!(
+                    "approval {id} execution has already been claimed"
+                )));
+            }
             let task = repository.get_task(approval.task_id)?.ok_or_else(|| {
                 JarvisError::Storage(format!("task not found: {}", approval.task_id))
             })?;
-            Ok((approval, task))
+            let installed_binding = repository.get_installed_plugin_approval_binding(id)?;
+            Ok((approval, task, installed_binding))
         })?;
+
+        if let Some(cancellation_id) = request.cancellation_id {
+            if !self
+                .runtime_control
+                .bind_runtime_cancellation_to_task(cancellation_id, task.id)
+            {
+                return Err(JarvisError::Conflict(
+                    "approval cancellation handle could not be bound to its task".to_string(),
+                ));
+            }
+        }
+
+        if let Some(binding) = installed_binding {
+            return self.execute_approved_installed_plugin(
+                approval,
+                task,
+                binding,
+                cancellation_guard,
+            );
+        }
 
         let mut plugin_request = first_party_plugin_request(&task.user_input).ok_or_else(|| {
             JarvisError::Validation(format!(
@@ -2047,6 +2114,14 @@ impl IpcState {
                 "input_redacted": true,
             }),
         );
+        if let Some(guard) = cancellation_guard.as_mut() {
+            guard.activate();
+        }
+        if self.runtime_control.is_task_cancelled(task.id) {
+            return Err(JarvisError::PolicyBlocked(format!(
+                "approval {id} task was cancelled before execution claim"
+            )));
+        }
         let execution = self.using_repository(|repository| {
             repository.claim_approved_execution(
                 approval.id,
@@ -2058,7 +2133,7 @@ impl IpcState {
             )
         })?;
 
-        let result = match self.plugin_host.execute_cancellable(plugin_request, || {
+        let mut result = match self.plugin_host.execute_cancellable(plugin_request, || {
             self.runtime_control.is_emergency_paused()
                 || self.runtime_control.is_task_cancelled(task.id)
         }) {
@@ -2105,6 +2180,13 @@ impl IpcState {
                 return Err(error);
             }
         };
+        let cancellation_observed = cancellation_guard
+            .take()
+            .is_some_and(|guard| guard.finalize());
+        if cancellation_observed {
+            result.status = PluginCallStatus::Cancelled;
+            result.output = json!({ "cancelled": true });
+        }
         let completed = result.status == PluginCallStatus::Completed;
         let (execution_state, task_status) = match result.status {
             PluginCallStatus::Completed => {
@@ -2183,10 +2265,310 @@ impl IpcState {
             audit_entry: execution_audit,
             audit_entries,
             plugin_results: vec![result],
+            installed_plugin_result: None,
             message: if completed {
                 "approved first-party plugin action executed".to_string()
             } else {
                 "approved first-party plugin action did not complete".to_string()
+            },
+        })
+    }
+
+    fn execute_approved_installed_plugin(
+        &self,
+        approval: PendingApproval,
+        task: TaskRecord,
+        binding: InstalledPluginApprovalBinding,
+        mut cancellation_guard: Option<crate::runtime::RuntimeCancellationGuard>,
+    ) -> JarvisResult<ApprovalExecutionResponse> {
+        if binding.approval_id != approval.id || binding.task_id != task.id {
+            return Err(JarvisError::Validation(format!(
+                "approval {} installed invocation binding does not match its task",
+                approval.id
+            )));
+        }
+        let expected_action = format!("{}.{}", binding.plugin_id, binding.action);
+        if approval.action != expected_action {
+            return Err(JarvisError::Validation(format!(
+                "approval {} action no longer matches its installed invocation",
+                approval.id
+            )));
+        }
+        let canonical_input = canonical_json_string(&binding.input)?;
+        if sha256_text(&canonical_input) != binding.input_sha256 {
+            return Err(JarvisError::Storage(
+                "installed plugin approval input binding failed integrity verification".to_string(),
+            ));
+        }
+
+        let record = self.using_repository(|repository| {
+            repository.verify_installed_plugin_provenance(&binding.plugin_id)
+        })?;
+        validate_installed_plugin_record(&record)?;
+        if !record.execution_enabled || record.execution_grant != binding.execution_grant {
+            return Err(JarvisError::Validation(format!(
+                "approval {} installed plugin execution grant changed before claim",
+                approval.id
+            )));
+        }
+        if record.provenance.integrity_status
+            != InstalledPluginIntegrityStatus::MatchesInstallSnapshot
+        {
+            return Err(JarvisError::Validation(format!(
+                "approval {} installed plugin provenance is no longer current",
+                approval.id
+            )));
+        }
+        if installed_plugin_approval_contract_sha256(&record)? != binding.contract_sha256 {
+            return Err(JarvisError::Validation(format!(
+                "approval {} installed plugin contract or provenance changed before claim",
+                approval.id
+            )));
+        }
+        let action = record.manifest.action(&binding.action).ok_or_else(|| {
+            JarvisError::Validation(format!(
+                "approval {} installed plugin action is no longer declared",
+                approval.id
+            ))
+        })?;
+        action
+            .input_schema
+            .validate_value("approved installed plugin input", &binding.input)?;
+        let requested_scopes = plugin_permission_scopes(&action.permissions);
+        if requested_scopes != approval.requested_scopes || action.risk_tier != approval.risk_tier {
+            return Err(JarvisError::Validation(format!(
+                "approval {} installed plugin risk or scopes changed before claim",
+                approval.id
+            )));
+        }
+        let action_requires_network_grant =
+            action.network_access.mode != crate::PluginNetworkAccessMode::None;
+        match record.manifest.source {
+            PluginSource::LocalWasm
+                if record.execution_grant != InstalledPluginExecutionGrant::WasmCompute =>
+            {
+                return Err(JarvisError::Validation(format!(
+                    "approval {} installed WASM grant changed before claim",
+                    approval.id
+                )));
+            }
+            PluginSource::LocalSubprocess
+                if !installed_plugin_grant_allows_action(
+                    record.execution_grant,
+                    action_requires_network_grant,
+                ) =>
+            {
+                return Err(JarvisError::Validation(format!(
+                    "approval {} installed subprocess grant no longer allows the action",
+                    approval.id
+                )));
+            }
+            PluginSource::LocalWasm | PluginSource::LocalSubprocess => {}
+            _ => {
+                return Err(JarvisError::Validation(format!(
+                    "approval {} installed plugin source is not executable",
+                    approval.id
+                )));
+            }
+        }
+        if self.runtime_control.is_task_cancelled(task.id) {
+            return Err(JarvisError::PolicyBlocked(format!(
+                "approval {} task was cancelled before execution claim",
+                approval.id
+            )));
+        }
+
+        let policy_request = PolicyRequest {
+            task_id: Some(task.id),
+            action: approval.action.clone(),
+            requested_scopes: requested_scopes.clone(),
+            granted_scopes: requested_scopes,
+            risk_tier: action.risk_tier,
+            sensitivity: approval.sensitivity,
+            emergency_paused: self.runtime_control.is_emergency_paused(),
+            approval: Some(ApprovalGrant::approved(approval.requested_scopes.clone())),
+        };
+        let policy = PermissionEngine::evaluate(&policy_request);
+        if policy.decision == ApprovalDecision::Blocked {
+            return Err(JarvisError::PolicyBlocked(policy.reason));
+        }
+        if policy.decision == ApprovalDecision::RequireConfirmation {
+            return Err(JarvisError::Validation(format!(
+                "approval {} did not satisfy the current installed plugin policy",
+                approval.id
+            )));
+        }
+
+        let policy_audit = AuditEntry::new(
+            Some(task.id),
+            "approval_execution_policy_evaluated",
+            "approved installed plugin policy was revalidated before execution",
+            json!({
+                "approval_id": approval.id,
+                "plugin_id": binding.plugin_id,
+                "action": binding.action,
+                "decision": policy.decision,
+                "reason": policy.reason,
+                "risk_tier": policy.risk_tier,
+                "approval_status": policy.approval_status,
+                "execution_grant": binding.execution_grant,
+                "side_effect_executed": false,
+                "input_redacted": true,
+                "binding_digests_redacted": true,
+            }),
+        );
+        let execution_id = Uuid::new_v4();
+        let claim_audit = AuditEntry::new(
+            Some(task.id),
+            "approval_execution_claimed",
+            "approved installed plugin invocation was atomically claimed before runtime entry",
+            json!({
+                "approval_id": approval.id,
+                "execution_id": execution_id,
+                "plugin_id": binding.plugin_id,
+                "action": binding.action,
+                "state": "claimed",
+                "effect_possible": true,
+                "automatic_retry_allowed": false,
+                "input_redacted": true,
+                "binding_digests_redacted": true,
+            }),
+        );
+        if let Some(guard) = cancellation_guard.as_mut() {
+            guard.activate();
+        }
+        if self.runtime_control.is_task_cancelled(task.id) {
+            return Err(JarvisError::PolicyBlocked(format!(
+                "approval {} task was cancelled before execution claim",
+                approval.id
+            )));
+        }
+        let execution = self.using_repository(|repository| {
+            repository.claim_installed_plugin_approved_execution(
+                ApprovalExecutionClaim {
+                    approval_id: approval.id,
+                    execution_id,
+                    expected_task_id: task.id,
+                    expected_action: &approval.action,
+                    policy_audit: &policy_audit,
+                    claim_audit: &claim_audit,
+                },
+                &binding,
+            )
+        })?;
+        let execution_context = InstalledPluginApprovalExecutionContext {
+            approval_id: approval.id,
+            execution_id: execution.id,
+            task_id: task.id,
+            plugin_id: binding.plugin_id.clone(),
+            action: binding.action.clone(),
+            input_sha256: binding.input_sha256.clone(),
+            contract_sha256: binding.contract_sha256.clone(),
+            execution_grant: binding.execution_grant,
+        };
+        let mut response = match self.run_installed_plugin_inner(
+            &binding.plugin_id,
+            InstalledPluginRunRequest {
+                action: binding.action.clone(),
+                input: binding.input.clone(),
+                session_id: Some(task.session_id),
+                cancellation_id: None,
+                sensitivity: approval.sensitivity,
+                dry_run: false,
+            },
+            None,
+            Some(execution_context),
+        ) {
+            Ok(response) => response,
+            Err(error) => {
+                let terminal_audit = AuditEntry::new(
+                    Some(task.id),
+                    "installed_plugin_failed_after_approval",
+                    "approved installed plugin failed after its durable claim",
+                    json!({
+                        "approval_id": approval.id,
+                        "execution_id": execution.id,
+                        "plugin_id": binding.plugin_id,
+                        "action": binding.action,
+                        "status": "failed",
+                        "error_kind": approval_execution_error_kind(&error),
+                        "effect_possible": true,
+                        "automatic_retry_allowed": false,
+                        "input_redacted": true,
+                    }),
+                );
+                self.using_repository(|repository| {
+                    repository.finish_approval_execution(
+                        execution.id,
+                        ApprovalExecutionState::Failed,
+                        TaskStatus::Failed,
+                        std::slice::from_ref(&terminal_audit),
+                    )
+                })?;
+                return Err(error);
+            }
+        };
+
+        let cancellation_observed = cancellation_guard
+            .take()
+            .is_some_and(|guard| guard.finalize());
+        if cancellation_observed {
+            response.status = "cancelled".to_string();
+            response.reason =
+                "approved installed plugin completion discarded by cancellation".to_string();
+            response.output = None;
+        }
+
+        let completed = response.status == "completed";
+        let (execution_state, task_status) = match response.status.as_str() {
+            "completed" => (ApprovalExecutionState::Completed, TaskStatus::Completed),
+            "cancelled" => (ApprovalExecutionState::Cancelled, TaskStatus::Cancelled),
+            _ => (ApprovalExecutionState::Failed, TaskStatus::Failed),
+        };
+        let terminal_audit = AuditEntry::new(
+            Some(task.id),
+            "approval_executed",
+            "approved installed plugin invocation reached a non-retryable terminal state",
+            json!({
+                "approval_id": approval.id,
+                "execution_id": execution.id,
+                "plugin_id": binding.plugin_id,
+                "action": binding.action,
+                "status": response.status,
+                "approval_status": approval.status,
+                "side_effect_executed": response.side_effect_executed,
+                "effect_possible": response.side_effect_executed,
+                "automatic_retry_allowed": false,
+                "input_redacted": true,
+            }),
+        );
+        let task = self.using_repository(|repository| {
+            repository.finish_approval_execution(
+                execution.id,
+                execution_state,
+                task_status,
+                std::slice::from_ref(&terminal_audit),
+            )
+        })?;
+        let audit_entries = vec![
+            policy_audit,
+            claim_audit,
+            response.audit_entry.clone(),
+            terminal_audit.clone(),
+        ];
+        Ok(ApprovalExecutionResponse {
+            accepted: completed,
+            approval,
+            task,
+            audit_entry: terminal_audit,
+            audit_entries,
+            plugin_results: Vec::new(),
+            installed_plugin_result: Some(response),
+            message: if completed {
+                "approved installed plugin invocation executed".to_string()
+            } else {
+                "approved installed plugin invocation did not complete and cannot be retried"
+                    .to_string()
             },
         })
     }
@@ -2572,12 +2954,39 @@ impl IpcState {
         self.using_repository(|repository| repository.create_pending_approval(approval))
     }
 
+    fn persist_installed_plugin_pending_approval(
+        &self,
+        record: &InstalledPluginRecord,
+        action: &crate::PluginActionManifest,
+        request: &InstalledPluginRunRequest,
+        policy: &crate::PolicyDecision,
+    ) -> JarvisResult<crate::storage::InstalledPluginPendingApproval> {
+        let canonical_input_json = canonical_json_string(&request.input)?;
+        let input_sha256 = sha256_text(&canonical_input_json);
+        let contract_sha256 = installed_plugin_approval_contract_sha256(record)?;
+        self.using_repository(|repository| {
+            repository.create_installed_plugin_pending_approval(NewInstalledPluginApproval {
+                session_id: request.session_id.unwrap_or_else(Uuid::new_v4),
+                plugin_id: record.id.clone(),
+                action: action.name.clone(),
+                canonical_input_json,
+                input_sha256,
+                contract_sha256,
+                execution_grant: record.execution_grant,
+                requested_scopes: plugin_permission_scopes(&action.permissions),
+                risk_tier: action.risk_tier,
+                sensitivity: request.sensitivity,
+                reason: policy.reason.clone(),
+            })
+        })
+    }
+
     pub fn run_installed_plugin(
         &self,
         id: &str,
         request: InstalledPluginRunRequest,
     ) -> JarvisResult<InstalledPluginRunResponse> {
-        self.run_installed_plugin_inner(id, request, None)
+        self.run_installed_plugin_inner(id, request, None, None)
     }
 
     fn run_installed_plugin_inner(
@@ -2585,6 +2994,7 @@ impl IpcState {
         id: &str,
         request: InstalledPluginRunRequest,
         model_task_id: Option<Uuid>,
+        approved_execution: Option<InstalledPluginApprovalExecutionContext>,
     ) -> JarvisResult<InstalledPluginRunResponse> {
         if request.action.trim().is_empty() {
             return Err(JarvisError::Validation(
@@ -2683,13 +3093,46 @@ impl IpcState {
         let mut wasm_request_bytes = None;
         let mut wasm_output_bytes = None;
         let mut wasm_fuel_consumed = None;
+        let mut pending_approval = None;
+        let mut pending_task = None;
+        let approved_binding_current = match approved_execution.as_ref() {
+            Some(context) => {
+                context.plugin_id == record.id
+                    && context.action == request.action
+                    && context.execution_grant == record.execution_grant
+                    && sha256_text(&canonical_json_string(&request.input)?) == context.input_sha256
+                    && installed_plugin_approval_contract_sha256(&record)?
+                        == context.contract_sha256
+            }
+            None => true,
+        };
         let cancellation_requested = || {
             request
                 .cancellation_id
                 .is_some_and(|id| self.runtime_control.is_runtime_cancelled(id))
                 || model_task_id
                     .is_some_and(|task_id| self.runtime_control.is_task_cancelled(task_id))
+                || approved_execution
+                    .as_ref()
+                    .is_some_and(|context| self.runtime_control.is_task_cancelled(context.task_id))
         };
+        let installed_policy = action_manifest.map(|action| {
+            let requested_scopes = plugin_permission_scopes(&action.permissions);
+            PermissionEngine::evaluate(&PolicyRequest {
+                task_id: approved_execution
+                    .as_ref()
+                    .map(|context| context.task_id)
+                    .or(model_task_id),
+                action: format!("{}.{}", record.id, action.name),
+                requested_scopes: requested_scopes.clone(),
+                granted_scopes: requested_scopes.clone(),
+                risk_tier: action.risk_tier,
+                sensitivity: request.sensitivity,
+                emergency_paused: self.runtime_control.is_emergency_paused(),
+                approval: (approved_execution.is_some() && approved_binding_current)
+                    .then(|| ApprovalGrant::approved(requested_scopes)),
+            })
+        });
 
         let (mut status, mut reason) = if let Err(error) = &manifest_validation {
             ("blocked".to_string(), error.to_string())
@@ -2761,45 +3204,69 @@ impl IpcState {
                 "blocked".to_string(),
                 "installed plugin execution was cancelled before runtime start".to_string(),
             )
+        } else if !approved_binding_current {
+            (
+                "blocked".to_string(),
+                "approved installed plugin binding changed after claim; runtime did not start"
+                    .to_string(),
+            )
         } else if record.manifest.source == PluginSource::LocalWasm {
             if record.execution_grant != InstalledPluginExecutionGrant::WasmCompute {
                 (
                     "blocked".to_string(),
                     "local_wasm execution requires the wasm_compute grant".to_string(),
                 )
-            } else if let (Some(action), Some(artifact)) = (action_manifest, wasm_artifact.as_ref())
-            {
-                runtime_started = true;
-                if let Some(guard) = cancellation_guard.as_mut() {
-                    guard.activate();
-                }
-                match execute_installed_wasm_plugin(
-                    &record.manifest,
-                    action,
-                    &artifact.bytes,
-                    &request.input,
-                    || {
-                        if self.runtime_control.is_emergency_paused() {
-                            WasmControlState::EmergencyPaused
-                        } else if cancellation_requested() {
-                            WasmControlState::Cancelled
-                        } else {
-                            WasmControlState::Continue
-                        }
-                    },
-                ) {
-                    Ok(execution) => {
-                        wasm_request_bytes = Some(execution.request_bytes);
-                        wasm_output_bytes = Some(execution.output_bytes);
-                        wasm_fuel_consumed = Some(execution.fuel_consumed);
-                        output = Some(execution.output);
-                        (
-                            "completed".to_string(),
-                            "installed plugin WASM completed with confined validated JSON output"
-                                .to_string(),
-                        )
+            } else if let (Some(action), Some(artifact), Some(policy)) = (
+                action_manifest,
+                wasm_artifact.as_ref(),
+                installed_policy.as_ref(),
+            ) {
+                if policy.decision == ApprovalDecision::Blocked {
+                    ("blocked".to_string(), policy.reason.clone())
+                } else if policy.decision == ApprovalDecision::RequireConfirmation {
+                    let pending = self.persist_installed_plugin_pending_approval(
+                        &record, action, &request, policy,
+                    )?;
+                    pending_task = Some(pending.task);
+                    pending_approval = Some(pending.approval);
+                    (
+                        "approval_required".to_string(),
+                        "installed plugin invocation requires explicit approval and did not start"
+                            .to_string(),
+                    )
+                } else {
+                    runtime_started = true;
+                    if let Some(guard) = cancellation_guard.as_mut() {
+                        guard.activate();
                     }
-                    Err(error) => ("failed".to_string(), error.to_string()),
+                    match execute_installed_wasm_plugin(
+                        &record.manifest,
+                        action,
+                        &artifact.bytes,
+                        &request.input,
+                        || {
+                            if self.runtime_control.is_emergency_paused() {
+                                WasmControlState::EmergencyPaused
+                            } else if cancellation_requested() {
+                                WasmControlState::Cancelled
+                            } else {
+                                WasmControlState::Continue
+                            }
+                        },
+                    ) {
+                        Ok(execution) => {
+                            wasm_request_bytes = Some(execution.request_bytes);
+                            wasm_output_bytes = Some(execution.output_bytes);
+                            wasm_fuel_consumed = Some(execution.fuel_consumed);
+                            output = Some(execution.output);
+                            (
+                                "completed".to_string(),
+                                "installed plugin WASM completed with confined validated JSON output"
+                                    .to_string(),
+                            )
+                        }
+                        Err(error) => ("failed".to_string(), error.to_string()),
+                    }
                 }
             } else {
                 (
@@ -2837,32 +3304,53 @@ impl IpcState {
                     "blocked".to_string(),
                     "installed plugin execution requires subprocess config".to_string(),
                 )
-            } else {
-                let action = action_manifest.expect("contract validated action");
-                runtime_started = true;
-                if let Some(guard) = cancellation_guard.as_mut() {
-                    guard.activate();
-                }
-                match execute_installed_subprocess_plugin(
-                    &record.manifest,
-                    action,
-                    std::path::Path::new(&record.source_path),
-                    &request.input,
-                ) {
-                    Ok(execution) => {
-                        stdout_bytes = Some(execution.stdout_bytes);
-                        stderr_bytes = Some(execution.stderr_bytes);
-                        exit_code = execution.exit_code;
-                        progress_events = execution.progress_events;
-                        output = Some(execution.output);
-                        (
-                            "completed".to_string(),
-                            "installed plugin subprocess completed with validated JSON output"
-                                .to_string(),
-                        )
+            } else if let Some(policy) = installed_policy.as_ref() {
+                if policy.decision == ApprovalDecision::Blocked {
+                    ("blocked".to_string(), policy.reason.clone())
+                } else if policy.decision == ApprovalDecision::RequireConfirmation {
+                    let action = action_manifest.expect("contract validated action");
+                    let pending = self.persist_installed_plugin_pending_approval(
+                        &record, action, &request, policy,
+                    )?;
+                    pending_task = Some(pending.task);
+                    pending_approval = Some(pending.approval);
+                    (
+                        "approval_required".to_string(),
+                        "installed plugin invocation requires explicit approval and did not start"
+                            .to_string(),
+                    )
+                } else {
+                    let action = action_manifest.expect("contract validated action");
+                    runtime_started = true;
+                    if let Some(guard) = cancellation_guard.as_mut() {
+                        guard.activate();
                     }
-                    Err(error) => ("failed".to_string(), error.to_string()),
+                    match execute_installed_subprocess_plugin(
+                        &record.manifest,
+                        action,
+                        std::path::Path::new(&record.source_path),
+                        &request.input,
+                    ) {
+                        Ok(execution) => {
+                            stdout_bytes = Some(execution.stdout_bytes);
+                            stderr_bytes = Some(execution.stderr_bytes);
+                            exit_code = execution.exit_code;
+                            progress_events = execution.progress_events;
+                            output = Some(execution.output);
+                            (
+                                "completed".to_string(),
+                                "installed plugin subprocess completed with validated JSON output"
+                                    .to_string(),
+                            )
+                        }
+                        Err(error) => ("failed".to_string(), error.to_string()),
+                    }
                 }
+            } else {
+                (
+                    "blocked".to_string(),
+                    "installed plugin policy could not be evaluated".to_string(),
+                )
             }
         } else {
             (
@@ -2924,6 +3412,7 @@ impl IpcState {
             ("wasm", "failed") => "installed_plugin_wasm_failed",
             ("subprocess", "completed") => "installed_plugin_subprocess_completed",
             ("subprocess", "failed") => "installed_plugin_subprocess_failed",
+            (_, "approval_required") => "installed_plugin_approval_required",
             (_, "dry_run") => "installed_plugin_contract_dry_run",
             _ if manifest_valid && action_declared && !input_valid => {
                 "installed_plugin_input_invalid"
@@ -2947,10 +3436,24 @@ impl IpcState {
         let mut audit_payload = json!({
             "plugin_id": record.id,
             "action": request.action,
-                "session_id": request.session_id,
-                "cancellation_id_present": request.cancellation_id.is_some(),
-                "cancellation_requested": cancellation_observed,
-                "model_planned": model_task_id.is_some(),
+            "session_id": request.session_id,
+            "cancellation_id_present": request.cancellation_id.is_some(),
+            "cancellation_requested": cancellation_observed,
+            "model_planned": model_task_id.is_some(),
+            "approved_execution": approved_execution.as_ref().map(|context| json!({
+                "approval_id": context.approval_id,
+                "execution_id": context.execution_id,
+                "task_id": context.task_id,
+            })),
+            "approval_id": pending_approval.as_ref().map(|approval| approval.id),
+            "approval_status": pending_approval
+                .as_ref()
+                .map(|approval| approval.status)
+                .unwrap_or(ApprovalStatus::NotRequired),
+            "sensitivity": request.sensitivity,
+            "policy_decision": installed_policy
+                .as_ref()
+                .map(|policy| policy.decision.clone()),
             "action_requires_network_grant": action_requires_network_grant,
             "subprocess_started": runtime_kind == "subprocess" && runtime_started,
             "sandbox_process_started": false,
@@ -3025,7 +3528,11 @@ impl IpcState {
         legacy_contract.insert("contract_validated".to_string(), json!(contract_validated));
         legacy_contract.insert("side_effect_executed".to_string(), json!(runtime_started));
         let audit_entry = AuditEntry::new(
-            model_task_id,
+            pending_task
+                .as_ref()
+                .map(|task| task.id)
+                .or(approved_execution.as_ref().map(|context| context.task_id))
+                .or(model_task_id),
             event_type,
             "installed plugin run request recorded with bounded runtime evidence",
             audit_payload,
@@ -3033,7 +3540,10 @@ impl IpcState {
         self.using_repository(|repository| {
             for progress_event in &progress_events {
                 repository.append_audit_entry(&AuditEntry::new(
-                    None,
+                    approved_execution
+                        .as_ref()
+                        .map(|context| context.task_id)
+                        .or(model_task_id),
                     "installed_plugin_progress",
                     "installed subprocess plugin reported bounded progress",
                     json!({
@@ -3074,6 +3584,8 @@ impl IpcState {
             stderr_bytes,
             exit_code,
             progress_events,
+            pending_approval,
+            task: pending_task,
             audit_entry,
         })
     }
@@ -4585,6 +5097,18 @@ struct PluginDispatch {
     message: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+struct InstalledPluginApprovalExecutionContext {
+    approval_id: Uuid,
+    execution_id: Uuid,
+    task_id: Uuid,
+    plugin_id: String,
+    action: String,
+    input_sha256: String,
+    contract_sha256: String,
+    execution_grant: InstalledPluginExecutionGrant,
+}
+
 struct FirstPartyPluginDispatchContext<'a> {
     input: &'a str,
     sensitivity: Sensitivity,
@@ -4705,9 +5229,11 @@ impl RuntimeCommandStore for SharedCommandStore {
                 input: request.input.clone(),
                 session_id: Some(session_id),
                 cancellation_id: Some(task_id),
+                sensitivity: Sensitivity::Workspace,
                 dry_run: false,
             },
             Some(task_id),
+            None,
         )?;
         let action = self.state.using_repository(|repository| {
             repository
@@ -5939,9 +6465,13 @@ async fn deny_approval(
 async fn execute_approved_approval(
     State(state): State<IpcState>,
     Path(id): Path<Uuid>,
+    request: Option<Json<ApprovalExecutionRequest>>,
 ) -> Result<Json<ApprovalExecutionResponse>, (StatusCode, Json<ErrorResponse>)> {
     state
-        .execute_approved_approval(id)
+        .execute_approved_approval_with_request(
+            id,
+            request.map(|Json(request)| request).unwrap_or_default(),
+        )
         .map(Json)
         .map_err(error_response)
 }
@@ -8696,7 +9226,7 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "approval_execution",
             "implemented",
-            "Approved first-party actions execute through `/approvals/:id/execute` only after matching approval_granted audit evidence plus current action, risk, scope, input-schema, and policy validation. Missing or unrelated grant evidence fails before claim or plugin entry; current redacted and exact legacy raw-metadata audit shapes are accepted only when their authority and decision fields match. Schema-v13 atomically records a unique durable execution claim plus redacted policy/claim audits before plugin invocation; terminal state, task state, and terminal audits commit together. Rust race/migration/grant-chain tests, cross-process CLI IPC E2E, and Swift duplicate-submit/restart tests cover the one-shot boundary.",
+            "Approved first-party and installed-plugin actions execute through `/approvals/:id/execute` only after matching approval_granted audit evidence plus current action, risk, scope, input-schema, and policy validation; schema-v15 installed bindings additionally protect canonical input, manifest/provenance, and execution grant. Missing, unrelated, or changed evidence fails before claim or plugin entry; current redacted and exact legacy raw-metadata audit shapes are accepted only when their authority and decision fields match. Schema-v13 atomically records a unique durable execution claim plus redacted policy/claim audits before plugin invocation; terminal state, task state, and terminal audits commit together. CLI and Swift attach a fresh cancellation UUID that is bound to the approved task and activated at claim, so authenticated cancellation can discard late output and durably terminalize only that active run as cancelled. Rust race/migration/grant-chain/cancellation tests, authenticated cross-process CLI IPC E2E, and Swift duplicate-submit/restart/request tests cover the one-shot boundary.",
             "Every durable claim permanently consumes that approval. Failure, cancellation, timeout, storage interruption, or restart after claim may leave the effect ambiguous and automatic retry is forbidden; an operator must inspect audit evidence and create a new approval when appropriate. Grant/deny remains side-effect-free, the claim path never fabricates grant evidence, execution remains limited to explicitly approved first-party plugin commands, and this is not broad autonomous execution or distributed exactly-once delivery.",
         ),
         feature(
@@ -8813,6 +9343,64 @@ fn feature(
 fn sha256_text(value: &str) -> String {
     let digest = Sha256::digest(value.as_bytes());
     format!("{digest:x}")
+}
+
+fn canonical_json_string(value: &serde_json::Value) -> JarvisResult<String> {
+    serde_json::to_string(&canonical_json_value(value)).map_err(|error| {
+        JarvisError::Validation(format!(
+            "installed plugin input could not be canonicalized: {error}"
+        ))
+    })
+}
+
+fn canonical_json_value(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(object) => {
+            let mut keys = object.keys().collect::<Vec<_>>();
+            keys.sort_unstable();
+            let mut canonical = serde_json::Map::new();
+            for key in keys {
+                canonical.insert(key.clone(), canonical_json_value(&object[key]));
+            }
+            serde_json::Value::Object(canonical)
+        }
+        serde_json::Value::Array(values) => {
+            serde_json::Value::Array(values.iter().map(canonical_json_value).collect())
+        }
+        _ => value.clone(),
+    }
+}
+
+fn installed_plugin_approval_contract_sha256(
+    record: &InstalledPluginRecord,
+) -> JarvisResult<String> {
+    let provenance = &record.provenance;
+    let contract = json!({
+        "plugin_id": record.id,
+        "manifest": record.manifest,
+        "source_path": record.source_path,
+        "execution_enabled": record.execution_enabled,
+        "execution_grant": record.execution_grant,
+        "provenance": {
+            "provenance_schema_version": provenance.provenance_schema_version,
+            "capture_method": provenance.capture_method,
+            "manifest_path": provenance.manifest_path,
+            "manifest_sha256": provenance.manifest_sha256,
+            "source_path": provenance.source_path,
+            "source_path_canonicalized": provenance.source_path_canonicalized,
+            "source_tree_sha256": provenance.source_tree_sha256,
+            "source_tree_file_count": provenance.source_tree_file_count,
+            "subprocess_command_path": provenance.subprocess_command_path,
+            "subprocess_command_sha256": provenance.subprocess_command_sha256,
+            "wasm_module_path": provenance.wasm_module_path,
+            "wasm_module_sha256": provenance.wasm_module_sha256,
+            "captured_at": provenance.captured_at,
+            "integrity_status": provenance.integrity_status,
+            "origin_claim": provenance.origin_claim,
+            "origin_claim_verified": provenance.origin_claim_verified,
+        },
+    });
+    Ok(sha256_text(&canonical_json_string(&contract)?))
 }
 
 fn model_planned_wasm_action_eligible(action: &crate::PluginActionManifest) -> bool {
@@ -8984,6 +9572,45 @@ json.dump({
             .permissions();
         permissions.set_mode(0o700);
         std::fs::set_permissions(&script, permissions).expect("chmod plugin runner");
+    }
+
+    #[cfg(unix)]
+    fn write_sentinel_plugin_script(dir: &std::path::Path, sentinel: &std::path::Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let script = dir.join("plugin-runner.py");
+        let sentinel = serde_json::to_string(&sentinel.display().to_string())
+            .expect("serialize sentinel path");
+        std::fs::write(
+            &script,
+            format!(
+                r#"#!/usr/bin/env python3
+import json
+import pathlib
+import sys
+import time
+
+request = json.load(sys.stdin)
+pathlib.Path({sentinel}).write_text("started")
+if request["input"]["path"] == "fail-after-claim":
+    raise SystemExit(7)
+if request["input"]["path"] == "cancel-after-claim":
+    time.sleep(0.5)
+json.dump({{
+    "path": request["input"]["path"],
+    "secret_seen": False,
+    "plugin_id": "local_runner_test",
+    "plugin_action": "inspect"
+}}, sys.stdout)
+"#
+            ),
+        )
+        .expect("write sentinel plugin runner");
+        let mut permissions = std::fs::metadata(&script)
+            .expect("script metadata")
+            .permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&script, permissions).expect("chmod sentinel plugin runner");
     }
 
     #[cfg(unix)]
@@ -12027,6 +12654,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                     input: json!({ "path": "README.md" }),
                     session_id: Some(Uuid::new_v4()),
                     cancellation_id: None,
+                    sensitivity: Sensitivity::Workspace,
                     dry_run: false,
                 },
             )
@@ -12100,6 +12728,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                     input: json!({}),
                     session_id: None,
                     cancellation_id: None,
+                    sensitivity: Sensitivity::Workspace,
                     dry_run: false,
                 },
             )
@@ -12145,6 +12774,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                     input: json!({ "path": "README.md" }),
                     session_id: None,
                     cancellation_id: None,
+                    sensitivity: Sensitivity::Workspace,
                     dry_run: true,
                 },
             )
@@ -12197,6 +12827,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                     input: json!({ "path": "README.md", "extra": true }),
                     session_id: None,
                     cancellation_id: None,
+                    sensitivity: Sensitivity::Workspace,
                     dry_run: true,
                 },
             )
@@ -12282,6 +12913,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                     input: json!({ "path": "README.md" }),
                     session_id: None,
                     cancellation_id: None,
+                    sensitivity: Sensitivity::Workspace,
                     dry_run: false,
                 },
             )
@@ -12332,6 +12964,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                     input: json!({ "path": "README.md" }),
                     session_id: None,
                     cancellation_id: None,
+                    sensitivity: Sensitivity::Workspace,
                     dry_run: false,
                 },
             )
@@ -12342,6 +12975,421 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             InstalledPluginIntegrityStatus::ChangedSinceInstall
         );
         assert!(!changed_response.side_effect_executed);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn installed_plugin_confirm_invocation_requires_bound_one_shot_approval() {
+        let repository = SqliteRepository::in_memory().unwrap();
+        let source_dir = tempfile::tempdir().unwrap();
+        let sentinel_dir = tempfile::tempdir().unwrap();
+        let sentinel = sentinel_dir.path().join("runtime-started");
+        let source_path_buf = source_dir.path().canonicalize().unwrap();
+        write_sentinel_plugin_script(&source_path_buf, &sentinel);
+        let source_path = source_path_buf.display().to_string();
+        let mut manifest = local_subprocess_manifest(&source_path);
+        manifest.actions[0].risk_tier = crate::RiskTier::Confirm;
+        let manifest_path = source_path_buf.join("jarvis-plugin.json");
+        std::fs::write(&manifest_path, serde_json::to_string(&manifest).unwrap()).unwrap();
+        let installed = InstalledPlugin::from_local_manifest_path(&manifest_path).unwrap();
+        repository.install_plugin_metadata(installed).unwrap();
+        let state = IpcState::with_repository(repository).expect("state");
+        state
+            .verify_installed_plugin_provenance("local_runner_test")
+            .expect("verify provenance");
+        state
+            .set_installed_plugin_execution(
+                "local_runner_test",
+                InstalledPluginExecutionRequest {
+                    execution_enabled: true,
+                    execution_grant: InstalledPluginExecutionGrant::SubprocessStdio,
+                },
+            )
+            .expect("enable subprocess");
+
+        let bound_input = json!({ "path": "approval-secret-value" });
+        let pending = state
+            .run_installed_plugin(
+                "local_runner_test",
+                InstalledPluginRunRequest {
+                    action: "inspect".to_string(),
+                    input: bound_input.clone(),
+                    session_id: Some(Uuid::new_v4()),
+                    cancellation_id: None,
+                    sensitivity: Sensitivity::Workspace,
+                    dry_run: false,
+                },
+            )
+            .expect("pending approval response");
+        assert_eq!(pending.status, "approval_required");
+        assert!(!pending.side_effect_executed);
+        assert!(!sentinel.exists());
+        let approval = pending.pending_approval.expect("pending approval");
+        let task = pending.task.expect("approval task");
+        assert_eq!(approval.status, ApprovalStatus::Pending);
+        assert_eq!(approval.task_id, task.id);
+        assert_eq!(task.status, TaskStatus::WaitingForApproval);
+        assert_eq!(approval.action, "local_runner_test.inspect");
+        let audits = state
+            .using_repository(|repository| repository.list_audit_entries(Some(task.id)))
+            .expect("approval audits");
+        let audit_json = serde_json::to_string(&audits).unwrap();
+        assert!(!audit_json.contains("approval-secret-value"));
+        assert!(audit_json.contains("binding_digests_redacted"));
+
+        let current_record = state
+            .using_repository(|repository| {
+                repository
+                    .get_installed_plugin("local_runner_test")?
+                    .ok_or_else(|| JarvisError::Validation("installed plugin missing".to_string()))
+            })
+            .expect("current installed plugin");
+        let input_sha256 =
+            sha256_text(&canonical_json_string(&bound_input).expect("canonical bound input"));
+        let current_contract_sha256 =
+            installed_plugin_approval_contract_sha256(&current_record).expect("contract digest");
+        let execution_context =
+            |task_id, contract_sha256| InstalledPluginApprovalExecutionContext {
+                approval_id: approval.id,
+                execution_id: Uuid::new_v4(),
+                task_id,
+                plugin_id: "local_runner_test".to_string(),
+                action: "inspect".to_string(),
+                input_sha256: input_sha256.clone(),
+                contract_sha256,
+                execution_grant: InstalledPluginExecutionGrant::SubprocessStdio,
+            };
+        let stale_contract = state
+            .run_installed_plugin_inner(
+                "local_runner_test",
+                InstalledPluginRunRequest {
+                    action: "inspect".to_string(),
+                    input: bound_input.clone(),
+                    session_id: Some(task.session_id),
+                    cancellation_id: None,
+                    sensitivity: Sensitivity::Workspace,
+                    dry_run: false,
+                },
+                None,
+                Some(execution_context(task.id, "0".repeat(64))),
+            )
+            .expect("stale post-claim contract response");
+        assert_eq!(stale_contract.status, "blocked");
+        assert!(stale_contract
+            .reason
+            .contains("binding changed after claim"));
+        assert!(!stale_contract.side_effect_executed);
+        assert!(!sentinel.exists());
+
+        let cancelled_approved_task = state
+            .using_repository(|repository| {
+                repository.create_task(task.session_id, "cancelled approved plugin execution")
+            })
+            .expect("cancelled approval task");
+        state
+            .runtime_control
+            .cancel_task(cancelled_approved_task.id);
+        let cancelled = state
+            .run_installed_plugin_inner(
+                "local_runner_test",
+                InstalledPluginRunRequest {
+                    action: "inspect".to_string(),
+                    input: bound_input.clone(),
+                    session_id: Some(task.session_id),
+                    cancellation_id: None,
+                    sensitivity: Sensitivity::Workspace,
+                    dry_run: false,
+                },
+                None,
+                Some(execution_context(
+                    cancelled_approved_task.id,
+                    current_contract_sha256,
+                )),
+            )
+            .expect("cancelled approved execution response");
+        assert_eq!(cancelled.status, "blocked");
+        assert!(cancelled.reason.contains("cancelled before runtime start"));
+        assert!(!cancelled.side_effect_executed);
+        assert!(!sentinel.exists());
+
+        state
+            .approve_approval(
+                approval.id,
+                "unit-test".to_string(),
+                Some("reviewed exact installed invocation".to_string()),
+            )
+            .expect("approve invocation");
+        state
+            .set_installed_plugin_execution(
+                "local_runner_test",
+                InstalledPluginExecutionRequest {
+                    execution_enabled: false,
+                    execution_grant: InstalledPluginExecutionGrant::MetadataOnly,
+                },
+            )
+            .expect("disable before approved execution");
+        let changed_grant = state
+            .execute_approved_approval(approval.id)
+            .expect_err("changed grant must fail before claim");
+        assert!(changed_grant.to_string().contains("grant changed"));
+        assert!(state
+            .using_repository(|repository| repository.get_approval_execution(approval.id))
+            .unwrap()
+            .is_none());
+        assert!(!sentinel.exists());
+        state
+            .set_installed_plugin_execution(
+                "local_runner_test",
+                InstalledPluginExecutionRequest {
+                    execution_enabled: true,
+                    execution_grant: InstalledPluginExecutionGrant::SubprocessStdio,
+                },
+            )
+            .expect("restore exact grant");
+        let executed = state
+            .execute_approved_approval(approval.id)
+            .expect("execute approved invocation");
+        assert!(executed.accepted);
+        assert_eq!(executed.task.status, TaskStatus::Completed);
+        assert!(sentinel.exists());
+        assert!(executed.plugin_results.is_empty());
+        let installed_result = executed
+            .installed_plugin_result
+            .expect("installed plugin result");
+        assert_eq!(installed_result.status, "completed");
+        assert!(installed_result.side_effect_executed);
+        assert_eq!(
+            installed_result.output.unwrap()["path"],
+            "approval-secret-value"
+        );
+
+        let replay = state
+            .execute_approved_approval(approval.id)
+            .expect_err("approval execution is one-shot");
+        assert!(matches!(replay, JarvisError::Conflict(_)));
+
+        std::fs::remove_file(&sentinel).expect("reset runtime sentinel");
+        let failing_pending = state
+            .run_installed_plugin(
+                "local_runner_test",
+                InstalledPluginRunRequest {
+                    action: "inspect".to_string(),
+                    input: json!({ "path": "fail-after-claim" }),
+                    session_id: Some(Uuid::new_v4()),
+                    cancellation_id: None,
+                    sensitivity: Sensitivity::Workspace,
+                    dry_run: false,
+                },
+            )
+            .expect("second pending approval");
+        let failing_approval = failing_pending.pending_approval.expect("failing approval");
+        state
+            .approve_approval(
+                failing_approval.id,
+                "unit-test".to_string(),
+                Some("reviewed failing invocation".to_string()),
+            )
+            .expect("approve failing invocation");
+        let failed = state
+            .execute_approved_approval(failing_approval.id)
+            .expect("post-claim failure is a terminal response");
+        assert!(!failed.accepted);
+        assert_eq!(failed.task.status, TaskStatus::Failed);
+        assert!(sentinel.exists());
+        assert_eq!(
+            failed
+                .installed_plugin_result
+                .as_ref()
+                .expect("failed installed result")
+                .status,
+            "failed"
+        );
+        assert_eq!(
+            state
+                .using_repository(|repository| {
+                    repository.get_approval_execution(failing_approval.id)
+                })
+                .unwrap()
+                .expect("failed durable execution")
+                .state,
+            ApprovalExecutionState::Failed
+        );
+        let failed_replay = state
+            .execute_approved_approval(failing_approval.id)
+            .expect_err("post-claim failure remains consumed");
+        assert!(matches!(failed_replay, JarvisError::Conflict(_)));
+
+        std::fs::remove_file(&sentinel).expect("reset cancellation sentinel");
+        let cancellation_pending = state
+            .run_installed_plugin(
+                "local_runner_test",
+                InstalledPluginRunRequest {
+                    action: "inspect".to_string(),
+                    input: json!({ "path": "cancel-after-claim" }),
+                    session_id: Some(Uuid::new_v4()),
+                    cancellation_id: None,
+                    sensitivity: Sensitivity::Workspace,
+                    dry_run: false,
+                },
+            )
+            .expect("cancellable pending approval");
+        let cancellation_approval = cancellation_pending
+            .pending_approval
+            .expect("cancellable approval");
+        state
+            .approve_approval(
+                cancellation_approval.id,
+                "unit-test".to_string(),
+                Some("reviewed cancellable invocation".to_string()),
+            )
+            .expect("approve cancellable invocation");
+        let cancellation_id = Uuid::new_v4();
+        let executing = state.clone();
+        let approval_id = cancellation_approval.id;
+        let handle = std::thread::spawn(move || {
+            executing.execute_approved_approval_with_request(
+                approval_id,
+                ApprovalExecutionRequest {
+                    cancellation_id: Some(cancellation_id),
+                },
+            )
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !sentinel.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(sentinel.exists(), "approved runtime did not start in time");
+        let cancellation = state
+            .cancel_runtime_execution(cancellation_id)
+            .expect("cancel approved execution");
+        assert!(cancellation.active_execution_found);
+        let cancelled = handle
+            .join()
+            .expect("join approved execution")
+            .expect("cancelled execution response");
+        assert!(!cancelled.accepted);
+        assert_eq!(cancelled.task.status, TaskStatus::Cancelled);
+        let cancelled_result = cancelled
+            .installed_plugin_result
+            .expect("cancelled installed result");
+        assert_eq!(cancelled_result.status, "cancelled");
+        assert!(cancelled_result.output.is_none());
+        assert_eq!(
+            state
+                .using_repository(|repository| {
+                    repository.get_approval_execution(cancellation_approval.id)
+                })
+                .unwrap()
+                .expect("cancelled durable execution")
+                .state,
+            ApprovalExecutionState::Cancelled
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn installed_plugin_approval_binding_and_claim_survive_restart() {
+        let database_dir = tempfile::tempdir().unwrap();
+        let database_path = database_dir.path().join("jarvis.sqlite");
+        let source_dir = tempfile::tempdir().unwrap();
+        let sentinel_dir = tempfile::tempdir().unwrap();
+        let sentinel = sentinel_dir.path().join("restart-runtime-started");
+        let source_path_buf = source_dir.path().canonicalize().unwrap();
+        write_sentinel_plugin_script(&source_path_buf, &sentinel);
+        let source_path = source_path_buf.display().to_string();
+        let mut manifest = local_subprocess_manifest(&source_path);
+        manifest.actions[0].risk_tier = crate::RiskTier::Confirm;
+        let manifest_path = source_path_buf.join("jarvis-plugin.json");
+        std::fs::write(&manifest_path, serde_json::to_string(&manifest).unwrap()).unwrap();
+
+        let repository = SqliteRepository::open(&database_path).unwrap();
+        repository
+            .install_plugin_metadata(
+                InstalledPlugin::from_local_manifest_path(&manifest_path).unwrap(),
+            )
+            .unwrap();
+        let state = IpcState::with_repository(repository).expect("initial state");
+        state
+            .verify_installed_plugin_provenance("local_runner_test")
+            .expect("verify provenance");
+        state
+            .set_installed_plugin_execution(
+                "local_runner_test",
+                InstalledPluginExecutionRequest {
+                    execution_enabled: true,
+                    execution_grant: InstalledPluginExecutionGrant::SubprocessStdio,
+                },
+            )
+            .expect("enable subprocess");
+        let pending = state
+            .run_installed_plugin(
+                "local_runner_test",
+                InstalledPluginRunRequest {
+                    action: "inspect".to_string(),
+                    input: json!({ "path": "restart-bound-input" }),
+                    session_id: Some(Uuid::new_v4()),
+                    cancellation_id: None,
+                    sensitivity: Sensitivity::Workspace,
+                    dry_run: false,
+                },
+            )
+            .expect("pending approval");
+        let approval_id = pending.pending_approval.expect("approval").id;
+        assert!(!sentinel.exists());
+        drop(state);
+
+        let restarted = IpcState::with_repository(
+            SqliteRepository::open(&database_path).expect("reopen before claim"),
+        )
+        .expect("restarted state");
+        restarted
+            .approve_approval(
+                approval_id,
+                "restart-test".to_string(),
+                Some("reviewed after restart".to_string()),
+            )
+            .expect("approve after restart");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let mut handles = Vec::new();
+        for _ in 0..2 {
+            let contender = restarted.clone();
+            let barrier = barrier.clone();
+            handles.push(std::thread::spawn(move || {
+                barrier.wait();
+                contender.execute_approved_approval(approval_id)
+            }));
+        }
+        barrier.wait();
+        let results = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("join approval contender"))
+            .collect::<Vec<_>>();
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| matches!(result, Err(JarvisError::Conflict(_))))
+                .count(),
+            1
+        );
+        assert!(
+            results
+                .iter()
+                .find_map(|result| result.as_ref().ok())
+                .expect("winning installed execution")
+                .accepted
+        );
+        assert!(sentinel.exists());
+        drop(restarted);
+
+        let replay_state = IpcState::with_repository(
+            SqliteRepository::open(&database_path).expect("reopen after claim"),
+        )
+        .expect("replay state");
+        let replay = replay_state
+            .execute_approved_approval(approval_id)
+            .expect_err("durable claim rejects replay after restart");
+        assert!(matches!(replay, JarvisError::Conflict(_)));
     }
 
     #[cfg(unix)]
@@ -12382,6 +13430,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                     input: json!({ "path": "README.md" }),
                     session_id: None,
                     cancellation_id: None,
+                    sensitivity: Sensitivity::Workspace,
                     dry_run: false,
                 },
             )
@@ -12531,6 +13580,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                     input: json!({ "path": "README.md" }),
                     session_id: None,
                     cancellation_id: None,
+                    sensitivity: Sensitivity::Workspace,
                     dry_run: false,
                 },
             )
@@ -12575,6 +13625,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                     input: json!({ "path": "README.md" }),
                     session_id: None,
                     cancellation_id: None,
+                    sensitivity: Sensitivity::Workspace,
                     dry_run: false,
                 },
             )
@@ -12640,6 +13691,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                     input: json!({ "path": "README.md" }),
                     session_id: None,
                     cancellation_id: None,
+                    sensitivity: Sensitivity::Workspace,
                     dry_run: false,
                 },
             )
@@ -12655,6 +13707,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                     input: json!({ "path": "README.md" }),
                     session_id: None,
                     cancellation_id: None,
+                    sensitivity: Sensitivity::Workspace,
                     dry_run: false,
                 },
             )
@@ -12690,6 +13743,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                     input: json!({ "path": "README.md" }),
                     session_id: None,
                     cancellation_id: None,
+                    sensitivity: Sensitivity::Workspace,
                     dry_run: false,
                 },
             )
@@ -12713,6 +13767,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                     input: json!({ "path": "README.md" }),
                     session_id: None,
                     cancellation_id: None,
+                    sensitivity: Sensitivity::Workspace,
                     dry_run: false,
                 },
             )
@@ -14531,7 +15586,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .expect("diagnostics export");
         assert_eq!(export.health.status, "ok");
         assert!(export.repository_backed);
-        assert_eq!(export.schema_version, Some(14));
+        assert_eq!(export.schema_version, Some(15));
         assert_eq!(export.task_count, Some(1));
         assert!(export.audit_entry_count.unwrap_or_default() >= 2);
         assert_eq!(export.model_route_record_count, Some(1));

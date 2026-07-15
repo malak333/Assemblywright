@@ -214,7 +214,7 @@ release requirements, not optional UX guidance.
   but must not enter audit payloads. Any decision-audit persistence failure
   rolls the entire decision back to pending so no unaudited grant chain exists.
   An explicit
-  approved first-party replay must validate the approved record, still-waiting
+  approved replay must validate the approved record, still-waiting
   task, exact action, current risk and scopes, current manifest, input schema,
   and current policy before claiming execution authority. It must also find
   matching `approval_granted` audit evidence for the same approval ID, task,
@@ -235,6 +235,20 @@ release requirements, not optional UX guidance.
   failure that leaves a claimed execution unresolved is likewise ambiguous.
   Jarvis must never automatically retry a claimed approval; the operator must
   review the evidence and create a new approval for any deliberate new attempt.
+- Direct installed-plugin execution must pass `PermissionEngine`. Contract dry
+  runs remain non-executing and eligible Low/default-sensitivity invocations may
+  run directly. Confirm actions or sensitive invocations must create a pending
+  approval before runtime entry. Schema v15 binds that approval to canonical
+  input and the exact manifest, provenance, and execution grant; input and
+  binding digests stay out of public approval, audit, and diagnostics surfaces.
+  Approval execution must reject changed input integrity, contract,
+  provenance, grant, risk, scope, pause, cancellation, or policy before the
+  one-shot claim. After claim, failure is effect-possible and non-retryable.
+  CLI and Swift approved-execution requests must generate a fresh
+  `cancellation_id`; Rust registers it, binds it to the approved task, and
+  activates it at the claim boundary. Authenticated cancellation of that exact
+  active handle must discard late output and atomically record cancelled claim
+  and task state. It cannot undo an effect already performed.
 - Memory writes must have provenance, timestamp, category, sensitivity label,
   and review/delete controls.
 - Memory index artifacts are rebuildable projections, never canonical state.
@@ -356,6 +370,9 @@ Safety regressions should fail release verification:
 - Plugin actions executing outside their manifest.
 - Installed plugin run attempts that execute while `execution_enabled` is
   false, omit manifest/action/provenance validation, or skip audit evidence.
+- Installed Confirm or sensitive invocations entering Wasmi/subprocess before
+  approval, or an installed approval executing after its bound input, manifest,
+  provenance, grant, risk, scopes, or policy changed.
 - Installed plugin network grants executing non-network actions, or stdio
   grants executing network-declaring actions.
 - Installed subprocess plugin enablement or execution while provenance status

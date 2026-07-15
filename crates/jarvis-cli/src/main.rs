@@ -9,9 +9,10 @@ use base64::Engine as _;
 use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand, ValueEnum};
 use jarvis_core::{
-    ApprovalDecisionRequest, CommandRequest, CreateMemoryItemRequest, CreateSchedulerJobRequest,
-    EmergencyPauseRequest, InstallPluginRequest, InstalledPluginExecutionGrant,
-    InstalledPluginExecutionRequest, InstalledPluginPublisherSignatureVerificationRequest,
+    ApprovalDecisionRequest, ApprovalExecutionRequest, CommandRequest, CreateMemoryItemRequest,
+    CreateSchedulerJobRequest, EmergencyPauseRequest, InstallPluginRequest,
+    InstalledPluginExecutionGrant, InstalledPluginExecutionRequest,
+    InstalledPluginPublisherSignatureVerificationRequest,
     InstalledPluginPublisherVerificationRequest, Sensitivity, TriggerKind, UpdateMemoryItemRequest,
 };
 use tokio::net::TcpListener;
@@ -699,6 +700,9 @@ enum PluginsCommand {
         /// Attach a unique cooperative cancellation identifier to this run.
         #[arg(long)]
         cancellation_id: Option<String>,
+        /// Sensitivity applied to policy evaluation for this invocation.
+        #[arg(long, default_value = "workspace")]
+        sensitivity: String,
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
@@ -758,9 +762,12 @@ enum ApprovalsCommand {
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
-    /// Execute an already-approved first-party action.
+    /// Execute an already-approved invocation using its durable one-shot claim.
     Execute {
         id: String,
+        /// Client-generated handle accepted by `runtime cancel` while execution is active.
+        #[arg(long)]
+        cancellation_id: Option<Uuid>,
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
@@ -1722,14 +1729,17 @@ async fn main() -> anyhow::Result<()> {
                 input,
                 dry_run,
                 cancellation_id,
+                sensitivity,
                 endpoint,
             } => {
                 let input: serde_json::Value = serde_json::from_str(&input)?;
+                let sensitivity = parse_sensitivity(&sensitivity)?;
                 let body = serde_json::to_string(&serde_json::json!({
                     "action": action,
                     "input": input,
                     "session_id": null,
                     "cancellation_id": cancellation_id,
+                    "sensitivity": sensitivity,
                     "dry_run": dry_run,
                 }))?;
                 println!(
@@ -1817,14 +1827,21 @@ async fn main() -> anyhow::Result<()> {
                     )?
                 );
             }
-            ApprovalsCommand::Execute { id, endpoint } => {
+            ApprovalsCommand::Execute {
+                id,
+                cancellation_id,
+                endpoint,
+            } => {
+                let body = serde_json::to_string(&ApprovalExecutionRequest {
+                    cancellation_id: Some(cancellation_id.unwrap_or_else(Uuid::new_v4)),
+                })?;
                 println!(
                     "{}",
                     server_required_request(
                         &endpoint,
                         "POST",
                         &format!("/approvals/{id}/execute"),
-                        None
+                        Some(&body)
                     )?
                 );
             }

@@ -273,6 +273,13 @@ Runs may carry a unique `--cancellation-id`; `jarvis plugins cancel-run <id>`
 requests cooperative cancellation through local IPC. Wasmi checks it between
 fuel slices and before accepting output.
 
+Direct installed-plugin runs pass the same permission policy used by the rest
+of the runtime. Contract dry runs remain non-executing, and eligible `low` risk
+requests at the default `workspace` sensitivity can still execute directly.
+`confirm` actions or more-sensitive invocations return `approval_required`
+without entering Wasmi or starting a subprocess. `jarvis plugins run-installed`
+accepts `--sensitivity` so this policy input is explicit.
+
 Model-planned use of this runtime is default-off. When a reactive local-model
 command explicitly sets `installed_wasm_tools`, Jarvis derives a redacted
 catalog only from enabled `wasm_compute` records with current exact-byte
@@ -389,13 +396,20 @@ Approval grant/deny decisions remain side-effect-free and atomically commit the
 decision with a redacted decision audit in one immediate transaction. Audit
 failure rolls the record back to pending so no unaudited grant chain can reach
 execution authority; free-form actor and reason stay out of audit payloads.
-Approved first-party
-approval records require a separate one-shot `/approvals/:id/execute` or
+Approved first-party and installed-plugin approval records require a separate
+one-shot `/approvals/:id/execute` or
 `jarvis approvals execute <approval-id>` replay, which verifies the original
 task, action, risk, scopes, input schema, current policy, and matching
 approval_granted audit evidence before schema v13
 atomically records a unique durable execution claim and redacted claim/policy
-audit evidence. Only the claimant invokes the plugin; a duplicate or restarted
+audit evidence. For installed-plugin invocations, schema v15 also stores a
+private approval binding for the canonical input plus the exact manifest,
+provenance, and execution-grant contract. The approval-required run response,
+approval record, audit, and diagnostic surfaces omit the bound input and both
+binding digests; successful execution output remains governed by the declared
+output schema and existing response contract. Execution revalidates the binding
+before it claims authority. Only the claimant invokes
+the plugin; a duplicate or restarted
 replay fails with conflict/HTTP 409. Terminal execution state, task state, and
 terminal audit evidence commit together. Once claimed, an approval is consumed:
 failure, cancellation, timeout, restart, or a persistence interruption can make
@@ -406,6 +420,13 @@ either claim or terminal execution evidence. Exact legacy raw-metadata audit
 evidence remains compatible when its approval ID, task, action, status, policy
 metadata, actor/reason, and non-execution fields match; missing or unrelated
 evidence cannot be substituted and Jarvis never fabricates a grant audit.
+Current CLI and Swift clients attach a fresh `cancellation_id` to approved
+execution. While that exact claimed run is active,
+`POST /runtime/cancellations/:id` binds cancellation to its approval task,
+discards late output at the acceptance boundary, and durably terminalizes the
+claim/task as cancelled. This is cooperative and cannot reverse an external
+effect that already occurred. The Approval Center retains the same handle while
+Run Approved is active and replaces that control with Cancel Run.
 
 ## Build And Test
 

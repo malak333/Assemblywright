@@ -9,6 +9,7 @@ use rusqlite::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::router::{
@@ -30,7 +31,7 @@ use crate::{
     MAX_MEMORY_RETRIEVAL_CORPUS_BYTES,
 };
 
-const CURRENT_SCHEMA_VERSION: i64 = 14;
+const CURRENT_SCHEMA_VERSION: i64 = 15;
 pub(crate) const MAX_MODEL_PLANNED_WASM_CANDIDATES: usize = 64;
 pub const MAX_PENDING_SCHEDULER_NOTIFICATION_OCCURRENCES: usize = 1_024;
 pub const MAX_ACKNOWLEDGED_SCHEDULER_NOTIFICATION_OCCURRENCES: usize = 1_024;
@@ -167,6 +168,49 @@ pub struct ApprovalExecutionRecord {
     pub state: ApprovalExecutionState,
     pub claimed_at: DateTime<Utc>,
     pub finished_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct InstalledPluginApprovalBinding {
+    pub approval_id: Uuid,
+    pub task_id: Uuid,
+    pub plugin_id: String,
+    pub action: String,
+    pub input: serde_json::Value,
+    pub input_sha256: String,
+    pub contract_sha256: String,
+    pub execution_grant: InstalledPluginExecutionGrant,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct NewInstalledPluginApproval {
+    pub session_id: Uuid,
+    pub plugin_id: String,
+    pub action: String,
+    pub canonical_input_json: String,
+    pub input_sha256: String,
+    pub contract_sha256: String,
+    pub execution_grant: InstalledPluginExecutionGrant,
+    pub requested_scopes: Vec<CapabilityScope>,
+    pub risk_tier: RiskTier,
+    pub sensitivity: Sensitivity,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct InstalledPluginPendingApproval {
+    pub task: TaskRecord,
+    pub approval: PendingApproval,
+}
+
+pub(crate) struct ApprovalExecutionClaim<'a> {
+    pub approval_id: Uuid,
+    pub execution_id: Uuid,
+    pub expected_task_id: Uuid,
+    pub expected_action: &'a str,
+    pub policy_audit: &'a AuditEntry,
+    pub claim_audit: &'a AuditEntry,
 }
 
 pub struct SqliteRepository {
@@ -2793,6 +2837,228 @@ impl SqliteRepository {
         Ok(pending)
     }
 
+    pub(crate) fn create_installed_plugin_pending_approval(
+        &self,
+        request: NewInstalledPluginApproval,
+    ) -> JarvisResult<InstalledPluginPendingApproval> {
+        if request.plugin_id.trim().is_empty() || request.action.trim().is_empty() {
+            return Err(JarvisError::Validation(
+                "installed plugin approval requires a plugin id and action".to_string(),
+            ));
+        }
+        if request.input_sha256.len() != 64
+            || !request
+                .input_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+            || request.contract_sha256.len() != 64
+            || !request
+                .contract_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(JarvisError::Validation(
+                "installed plugin approval binding requires SHA-256 digests".to_string(),
+            ));
+        }
+        serde_json::from_str::<serde_json::Value>(&request.canonical_input_json).map_err(|_| {
+            JarvisError::Validation(
+                "installed plugin approval input must be valid canonical JSON".to_string(),
+            )
+        })?;
+        if sha256_storage_text(&request.canonical_input_json) != request.input_sha256 {
+            return Err(JarvisError::Validation(
+                "installed plugin approval input digest does not match stored input".to_string(),
+            ));
+        }
+
+        let now = Utc::now();
+        let task = TaskRecord {
+            id: Uuid::new_v4(),
+            session_id: request.session_id,
+            user_input: format!(
+                "installed plugin action awaiting approval: {}.{}",
+                request.plugin_id, request.action
+            ),
+            status: TaskStatus::WaitingForApproval,
+            created_at: now,
+            updated_at: now,
+        };
+        let approval = PendingApproval {
+            id: Uuid::new_v4(),
+            task_id: task.id,
+            action: format!("{}.{}", request.plugin_id, request.action),
+            requested_scopes: request.requested_scopes,
+            risk_tier: request.risk_tier,
+            sensitivity: request.sensitivity,
+            status: ApprovalStatus::Pending,
+            reason: request.reason,
+            requested_at: now,
+            decided_at: None,
+            decided_by: None,
+            decision_reason: None,
+        };
+        let policy_audit = AuditEntry::new(
+            Some(task.id),
+            "installed_plugin_policy_evaluated",
+            "policy required explicit approval for an installed plugin invocation",
+            json!({
+                "approval_id": approval.id,
+                "plugin_id": request.plugin_id,
+                "action": request.action,
+                "decision": "require_confirmation",
+                "reason": approval.reason,
+                "risk_tier": approval.risk_tier,
+                "sensitivity": approval.sensitivity,
+                "requested_scopes": approval.requested_scopes,
+                "execution_grant": request.execution_grant,
+                "side_effect_executed": false,
+                "input_redacted": true,
+                "binding_digests_redacted": true,
+            }),
+        );
+        let pending_audit = AuditEntry::new(
+            Some(task.id),
+            "approval_pending",
+            "installed plugin invocation is pending explicit approval and did not execute",
+            json!({
+                "approval_id": approval.id,
+                "plugin_id": request.plugin_id,
+                "action": request.action,
+                "risk_tier": approval.risk_tier,
+                "sensitivity": approval.sensitivity,
+                "requested_scopes": approval.requested_scopes,
+                "approval_status": approval.status,
+                "execution_grant": request.execution_grant,
+                "side_effect_executed": false,
+                "input_redacted": true,
+                "binding_digests_redacted": true,
+            }),
+        );
+
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        tx.execute(
+            "INSERT INTO tasks (id, session_id, user_input, status, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                task.id.to_string(),
+                task.session_id.to_string(),
+                &task.user_input,
+                task_status_to_str(&task.status),
+                to_db_time(task.created_at),
+                to_db_time(task.updated_at),
+            ],
+        )
+        .map_err(storage_error)?;
+        tx.execute(
+            "INSERT INTO pending_approvals
+             (id, task_id, action, requested_scopes, risk_tier, sensitivity, status, reason, requested_at, decided_at, decided_by, decision_reason)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', ?7, ?8, NULL, NULL, NULL)",
+            params![
+                approval.id.to_string(),
+                approval.task_id.to_string(),
+                &approval.action,
+                scopes_to_json(&approval.requested_scopes)?,
+                risk_tier_to_str(approval.risk_tier),
+                sensitivity_to_str(approval.sensitivity),
+                &approval.reason,
+                to_db_time(approval.requested_at),
+            ],
+        )
+        .map_err(storage_error)?;
+        tx.execute(
+            "INSERT INTO installed_plugin_approval_bindings
+             (approval_id, task_id, plugin_id, action, input_json, input_sha256, contract_sha256, execution_grant, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                approval.id.to_string(),
+                task.id.to_string(),
+                &request.plugin_id,
+                &request.action,
+                &request.canonical_input_json,
+                &request.input_sha256,
+                &request.contract_sha256,
+                request.execution_grant.as_str(),
+                to_db_time(now),
+            ],
+        )
+        .map_err(storage_error)?;
+        append_audit_entry_tx(&tx, &policy_audit)?;
+        append_audit_entry_tx(&tx, &pending_audit)?;
+        tx.commit().map_err(storage_error)?;
+
+        Ok(InstalledPluginPendingApproval { task, approval })
+    }
+
+    pub(crate) fn get_installed_plugin_approval_binding(
+        &self,
+        approval_id: Uuid,
+    ) -> JarvisResult<Option<InstalledPluginApprovalBinding>> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT approval_id, task_id, plugin_id, action, input_json, input_sha256, contract_sha256, execution_grant, created_at
+                 FROM installed_plugin_approval_bindings
+                 WHERE approval_id = ?1",
+                params![approval_id.to_string()],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, String>(8)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(storage_error)?;
+        let Some((
+            approval_id,
+            task_id,
+            plugin_id,
+            action,
+            input_json,
+            input_sha256,
+            contract_sha256,
+            execution_grant,
+            created_at,
+        )) = row
+        else {
+            return Ok(None);
+        };
+        if sha256_storage_text(&input_json) != input_sha256 {
+            return Err(JarvisError::Storage(
+                "installed plugin approval input binding failed integrity verification".to_string(),
+            ));
+        }
+        let input = serde_json::from_str(&input_json).map_err(|_| {
+            JarvisError::Storage(
+                "installed plugin approval input binding contains invalid JSON".to_string(),
+            )
+        })?;
+        Ok(Some(InstalledPluginApprovalBinding {
+            approval_id: Uuid::parse_str(&approval_id).map_err(|error| {
+                JarvisError::Storage(format!("invalid installed approval id: {error}"))
+            })?,
+            task_id: Uuid::parse_str(&task_id).map_err(|error| {
+                JarvisError::Storage(format!("invalid installed approval task id: {error}"))
+            })?,
+            plugin_id,
+            action,
+            input,
+            input_sha256,
+            contract_sha256,
+            execution_grant: InstalledPluginExecutionGrant::parse(&execution_grant)?,
+            created_at: parse_db_time(&created_at).map_err(storage_error)?,
+        }))
+    }
+
     pub fn get_pending_approval(&self, id: Uuid) -> JarvisResult<Option<PendingApproval>> {
         self.conn
             .query_row(
@@ -2958,6 +3224,40 @@ impl SqliteRepository {
         policy_audit: &AuditEntry,
         claim_audit: &AuditEntry,
     ) -> JarvisResult<ApprovalExecutionRecord> {
+        self.claim_approved_execution_with_binding(
+            ApprovalExecutionClaim {
+                approval_id,
+                execution_id,
+                expected_task_id,
+                expected_action,
+                policy_audit,
+                claim_audit,
+            },
+            None,
+        )
+    }
+
+    pub(crate) fn claim_installed_plugin_approved_execution(
+        &self,
+        claim: ApprovalExecutionClaim<'_>,
+        expected_installed_binding: &InstalledPluginApprovalBinding,
+    ) -> JarvisResult<ApprovalExecutionRecord> {
+        self.claim_approved_execution_with_binding(claim, Some(expected_installed_binding))
+    }
+
+    fn claim_approved_execution_with_binding(
+        &self,
+        claim: ApprovalExecutionClaim<'_>,
+        expected_installed_binding: Option<&InstalledPluginApprovalBinding>,
+    ) -> JarvisResult<ApprovalExecutionRecord> {
+        let ApprovalExecutionClaim {
+            approval_id,
+            execution_id,
+            expected_task_id,
+            expected_action,
+            policy_audit,
+            claim_audit,
+        } = claim;
         let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
             .map_err(storage_error)?;
         let approval = tx
@@ -2980,6 +3280,45 @@ impl SqliteRepository {
             return Err(JarvisError::Validation(format!(
                 "approval {approval_id} no longer matches the validated task and action"
             )));
+        }
+        if let Some(expected) = expected_installed_binding {
+            let persisted = tx
+                .query_row(
+                    "SELECT task_id, plugin_id, action, input_sha256, contract_sha256, execution_grant
+                     FROM installed_plugin_approval_bindings
+                     WHERE approval_id = ?1",
+                    params![approval_id.to_string()],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, String>(3)?,
+                            row.get::<_, String>(4)?,
+                            row.get::<_, String>(5)?,
+                        ))
+                    },
+                )
+                .optional()
+                .map_err(storage_error)?
+                .ok_or_else(|| {
+                    JarvisError::Validation(format!(
+                        "approval {approval_id} installed invocation binding is missing"
+                    ))
+                })?;
+            let expected_persisted = (
+                expected.task_id.to_string(),
+                expected.plugin_id.clone(),
+                expected.action.clone(),
+                expected.input_sha256.clone(),
+                expected.contract_sha256.clone(),
+                expected.execution_grant.as_str().to_string(),
+            );
+            if persisted != expected_persisted || expected.approval_id != approval_id {
+                return Err(JarvisError::Conflict(format!(
+                    "approval {approval_id} installed invocation binding changed before claim"
+                )));
+            }
         }
         if tx
             .query_row(
@@ -3251,6 +3590,9 @@ impl SqliteRepository {
         }
         if version < 14 {
             self.apply_migration_14()?;
+        }
+        if version < 15 {
+            self.apply_migration_15()?;
         }
 
         let migrated = self.schema_version()?;
@@ -3600,6 +3942,54 @@ impl SqliteRepository {
         tx.execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
             params![14, now],
+        )
+        .map_err(storage_error)?;
+        tx.commit().map_err(storage_error)?;
+        Ok(())
+    }
+
+    fn apply_migration_15(&self) -> JarvisResult<()> {
+        let now = to_db_time(Utc::now());
+        let tx = self.conn.unchecked_transaction().map_err(storage_error)?;
+        tx.execute_batch(
+            "
+            CREATE TABLE installed_plugin_approval_bindings (
+                approval_id TEXT PRIMARY KEY NOT NULL
+                    REFERENCES pending_approvals(id) ON DELETE CASCADE,
+                task_id TEXT NOT NULL UNIQUE
+                    REFERENCES tasks(id) ON DELETE CASCADE,
+                plugin_id TEXT NOT NULL,
+                action TEXT NOT NULL,
+                input_json TEXT NOT NULL CHECK (json_valid(input_json) = 1),
+                input_sha256 TEXT NOT NULL CHECK (
+                    length(input_sha256) = 64 AND input_sha256 NOT GLOB '*[^0-9a-f]*'
+                ),
+                contract_sha256 TEXT NOT NULL CHECK (
+                    length(contract_sha256) = 64 AND contract_sha256 NOT GLOB '*[^0-9a-f]*'
+                ),
+                execution_grant TEXT NOT NULL CHECK (execution_grant IN (
+                    'metadata_only', 'subprocess_stdio', 'subprocess_stdio_network', 'wasm_compute'
+                )),
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX idx_installed_plugin_approval_plugin_created
+                ON installed_plugin_approval_bindings (plugin_id, created_at);
+            CREATE TRIGGER installed_plugin_approval_bindings_no_update
+            BEFORE UPDATE ON installed_plugin_approval_bindings
+            BEGIN
+                SELECT RAISE(ABORT, 'installed plugin approval bindings are append-only');
+            END;
+            CREATE TRIGGER installed_plugin_approval_bindings_no_delete
+            BEFORE DELETE ON installed_plugin_approval_bindings
+            BEGIN
+                SELECT RAISE(ABORT, 'installed plugin approval bindings are append-only');
+            END;
+            ",
+        )
+        .map_err(storage_error)?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+            params![15, now],
         )
         .map_err(storage_error)?;
         tx.commit().map_err(storage_error)?;
@@ -4943,6 +5333,11 @@ fn storage_error(error: rusqlite::Error) -> JarvisError {
     JarvisError::Storage(error.to_string())
 }
 
+fn sha256_storage_text(value: &str) -> String {
+    let digest = Sha256::digest(value.as_bytes());
+    format!("{digest:x}")
+}
+
 fn storage_io_error(error: std::io::Error) -> JarvisError {
     JarvisError::Storage(error.to_string())
 }
@@ -5108,6 +5503,86 @@ mod tests {
                 assert!(update_error.to_string().contains("append-only"));
             }
         }
+    }
+
+    #[test]
+    fn installed_plugin_pending_approval_binds_input_without_audit_disclosure() {
+        let repo = SqliteRepository::in_memory().unwrap();
+        let canonical_input_json = r#"{"path":"README.md","secret":"do-not-audit"}"#;
+        let input_sha256 = sha256_storage_text(canonical_input_json);
+        let contract_sha256 = "a".repeat(64);
+        let created = repo
+            .create_installed_plugin_pending_approval(NewInstalledPluginApproval {
+                session_id: Uuid::new_v4(),
+                plugin_id: "installed_confirm_test".to_string(),
+                action: "inspect".to_string(),
+                canonical_input_json: canonical_input_json.to_string(),
+                input_sha256: input_sha256.clone(),
+                contract_sha256: contract_sha256.clone(),
+                execution_grant: InstalledPluginExecutionGrant::SubprocessStdio,
+                requested_scopes: vec![CapabilityScope::PluginRun, CapabilityScope::FileRead],
+                risk_tier: RiskTier::Confirm,
+                sensitivity: Sensitivity::Private,
+                reason: "action requires explicit user confirmation".to_string(),
+            })
+            .expect("create installed plugin approval");
+
+        assert_eq!(created.task.status, TaskStatus::WaitingForApproval);
+        assert_eq!(created.approval.status, ApprovalStatus::Pending);
+        assert_eq!(created.approval.task_id, created.task.id);
+        let binding = repo
+            .get_installed_plugin_approval_binding(created.approval.id)
+            .unwrap()
+            .expect("binding");
+        assert_eq!(binding.task_id, created.task.id);
+        assert_eq!(binding.plugin_id, "installed_confirm_test");
+        assert_eq!(binding.action, "inspect");
+        assert_eq!(binding.input["secret"], "do-not-audit");
+        assert_eq!(binding.input_sha256, input_sha256);
+        assert_eq!(binding.contract_sha256, contract_sha256);
+        assert_eq!(
+            binding.execution_grant,
+            InstalledPluginExecutionGrant::SubprocessStdio
+        );
+
+        let audit_json = serde_json::to_string(
+            &repo
+                .list_audit_entries(Some(created.task.id))
+                .expect("approval audits"),
+        )
+        .unwrap();
+        assert!(!audit_json.contains("do-not-audit"));
+        assert!(!audit_json.contains(&binding.input_sha256));
+        assert!(!audit_json.contains(&binding.contract_sha256));
+        assert!(audit_json.contains("binding_digests_redacted"));
+
+        let update_error = repo
+            .raw_connection()
+            .execute(
+                "UPDATE installed_plugin_approval_bindings
+                 SET input_json = ?1, input_sha256 = ?2
+                 WHERE approval_id = ?3",
+                params![
+                    r#"{"path":"tampered"}"#,
+                    sha256_storage_text(r#"{"path":"tampered"}"#),
+                    created.approval.id.to_string()
+                ],
+            )
+            .expect_err("paired binding tamper must be rejected");
+        assert!(update_error.to_string().contains("append-only"));
+        let delete_error = repo
+            .raw_connection()
+            .execute(
+                "DELETE FROM installed_plugin_approval_bindings WHERE approval_id = ?1",
+                params![created.approval.id.to_string()],
+            )
+            .expect_err("binding deletion must be rejected");
+        assert!(delete_error.to_string().contains("append-only"));
+        let unchanged = repo
+            .get_installed_plugin_approval_binding(created.approval.id)
+            .unwrap()
+            .expect("binding remains present");
+        assert_eq!(unchanged.input["secret"], "do-not-audit");
     }
 
     #[test]
@@ -5563,13 +6038,14 @@ mod tests {
                 "
                 DROP TRIGGER model_route_records_no_delete;
                 DROP TRIGGER model_route_records_no_update;
+                DROP TABLE installed_plugin_approval_bindings;
                 DROP TABLE scheduler_notification_occurrences;
                 DROP TABLE model_route_records;
                 DROP TABLE approval_executions;
                 DROP TABLE trusted_wake_key_grants;
                 DROP TABLE trusted_wake_events;
                 DROP TABLE trusted_wake_rules;
-                DELETE FROM schema_migrations WHERE version IN (7, 8, 9, 10, 11, 12, 13, 14);
+                DELETE FROM schema_migrations WHERE version IN (7, 8, 9, 10, 11, 12, 13, 14, 15);
                 ",
             )
             .unwrap();
@@ -5635,13 +6111,14 @@ mod tests {
                 "
                 DROP TRIGGER model_route_records_no_delete;
                 DROP TRIGGER model_route_records_no_update;
+                DROP TABLE installed_plugin_approval_bindings;
                 DROP TABLE scheduler_notification_occurrences;
                 DROP TABLE model_route_records;
                 DROP TABLE approval_executions;
                 DROP TABLE trusted_wake_key_grants;
                 DROP TABLE trusted_wake_events;
                 DROP TABLE trusted_wake_rules;
-                DELETE FROM schema_migrations WHERE version IN (7, 8, 9, 10, 11, 12, 13, 14);
+                DELETE FROM schema_migrations WHERE version IN (7, 8, 9, 10, 11, 12, 13, 14, 15);
                 ",
             )
             .unwrap();
@@ -6476,6 +6953,7 @@ mod tests {
                 11 => repo.apply_migration_11().unwrap(),
                 12 => repo.apply_migration_12().unwrap(),
                 13 => repo.apply_migration_13().unwrap(),
+                14 => repo.apply_migration_14().unwrap(),
                 _ => unreachable!("unsupported fixture version"),
             }
         }
@@ -6659,7 +7137,7 @@ mod tests {
                     )
                     .unwrap();
             }
-            8..=13 => {
+            8..=14 => {
                 let provenance = InstalledPluginProvenance {
                     provenance_schema_version: 1,
                     capture_method: "fixture_v8".to_string(),

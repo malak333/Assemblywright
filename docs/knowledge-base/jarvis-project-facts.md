@@ -474,6 +474,20 @@ These notes capture durable facts for future agents working on this repository.
   a superset that can run non-network actions in mixed manifests; only
   currently granted action classes can run through the constrained
   subprocess-stdio JSON boundary.
+- Every non-dry-run installed-plugin request evaluates its manifest risk,
+  declared scopes, explicit sensitivity (CLI default `workspace`), pause state,
+  and any approval through `PermissionEngine`. Eligible Low/default-sensitivity
+  requests retain direct execution. Confirm actions or sensitive requests
+  return `approval_required`, atomically persist a waiting task and pending
+  approval, and do not enter Wasmi or start a subprocess.
+- Schema v15 adds the private `installed_plugin_approval_bindings` table. Each
+  row is one-to-one with an approval/task and stores canonical input plus its
+  SHA-256, a contract SHA-256 covering the exact manifest and provenance state,
+  and the execution grant. Approval-required run responses, approval records,
+  permission views, audits, and diagnostics expose neither the bound input nor
+  either digest; audit evidence records only explicit redaction booleans.
+  Schema-validated plugin output after approved execution remains part of the
+  existing execution response contract and is not the private binding record.
 - Installed plugin publisher-origin claims can be operator-pinned through
   `/plugins/installed/:id/publisher/verify` or `plugins verify-publisher`.
   Verification requires the stored provenance to already match the install
@@ -659,7 +673,8 @@ requires plugin-trust `generated_at`, `review_started_at`,
   reason, and recommended action only. Memory values and provenance strings are
   intentionally omitted, `automation_enabled` is false, and the surface does not
   purge, restore, rewrite, or otherwise mutate memory.
-- Approved first-party approval records can be explicitly executed through
+- Approved first-party and installed-plugin approval records can be explicitly
+  executed through
   `/approvals/:id/execute` or `jarvis approvals execute <approval-id>`.
   Approve/deny remains side-effect-free. Grant and denial each use one immediate
   transaction to recheck pending state, update the decision, and append a
@@ -673,6 +688,12 @@ requires plugin-trust `generated_at`, `review_started_at`,
   immediate transaction to insert one
   unique schema-v13 `approval_executions` claim and a redacted
   `approval_execution_claimed` audit.
+- Installed-plugin approval execution first verifies canonical-input integrity,
+  current provenance, exact manifest/contract digest, execution grant, action,
+  risk, scopes, sensitivity policy, pause, cancellation, and the same matching
+  `approval_granted` authority evidence. Any mismatch fails before claim and
+  runtime entry. The successful claimant reuses the bound input; callers cannot
+  substitute new execution input at approval time.
 - A durable execution claim permanently consumes its approval. Concurrent and
   later attempts conflict before plugin entry. Success, failure, cancellation,
   and timeout write terminal execution state, task state, and terminal audit
@@ -694,11 +715,26 @@ requires plugin-trust `generated_at`, `review_started_at`,
   latest legacy timestamps bound the migrated record. This preserves the
   permanent replay guard without depending on SQLite row visitation order.
 - The Swift Approval Center loads pending approvals for grant/deny controls and
-  approved-unexecuted approvals for a Run Approved action when the IPC contract
+  approved-unexecuted first-party or installed-plugin approvals for a Run
+  Approved action when the IPC contract
   exposes `/approvals/:id/execute`. It treats either
   `approval_execution_claimed` or `approval_executed` as consumed authority,
   hides claimed records after refresh/restart, and suppresses duplicate Run
   Approved interaction while a request is active.
+- The CLI `plugins run-installed` command accepts `--sensitivity` and returns the
+  normal redacted pending-approval/task projection for approval-required runs.
+  `approvals execute` is invocation-generic and returns an additive
+  `installed_plugin_result` for an approved installed execution while preserving
+  the existing first-party `plugin_results` contract.
+- CLI and Swift approved-execution clients generate a fresh UUID
+  `cancellation_id`. Rust registers it, binds it to the approved task, and
+  activates it at the durable claim boundary. Authenticated
+  `/runtime/cancellations/:id` can then cancel only that active run; a winning
+  cancellation discards output and atomically records cancelled execution/task
+  state. The Approval Center retains that same UUID for its visible Cancel Run
+  control, suppresses duplicate execution/cancellation, and clears it only when
+  execution finishes. This cooperative boundary cannot undo an external side
+  effect.
 - Focused storage and real-server CLI IPC coverage injects a SQLite abort on
   decision-audit insertion. It proves grant and denial both roll back, failed
   grants remain pending after restart, `/execute` rejects that broken chain,

@@ -2642,7 +2642,11 @@ struct JarvisMacCoreTests {
             id: approvalId,
             request: JarvisApprovalDecisionRequest(decidedBy: "mac-ui", reason: "too risky")
         )
-        let executed = try await client.executeApproval(id: approvalId)
+        let executionCancellationID = UUID()
+        let executed = try await client.executeApproval(
+            id: approvalId,
+            cancellationID: executionCancellationID
+        )
 
         #expect(pending.first?.id == approvalId)
         #expect(grants.highRiskPendingCount == 1)
@@ -2665,6 +2669,9 @@ struct JarvisMacCoreTests {
         #expect(requests[4].body?["decided_by"] as? String == "mac-ui")
         #expect(requests[4].body?["reason"] as? String == "reviewed")
         #expect(requests[5].body?["reason"] as? String == "too risky")
+        let cancellationID = try #require(requests[6].body?["cancellation_id"] as? String)
+        #expect(UUID(uuidString: cancellationID) == executionCancellationID)
+        #expect(requests[6].body?.count == 1)
     }
 
     @MainActor
@@ -3767,6 +3774,90 @@ struct JarvisMacCoreTests {
 
         #expect(client.approvalExecutions == [approval.id])
         #expect(model.pendingItems.isEmpty)
+    }
+
+    @MainActor
+    @Test("Approval execution and cancellation share one handle and clear late state")
+    func approvalManagementModelCancelsExecutionWithMatchingHandle() async throws {
+        let approval = samplePendingApproval(
+            status: "approved",
+            decidedBy: "mac-ui",
+            decisionReason: "reviewed"
+        )
+        let client = FakeCoreClient(
+            contractResponse: fullApprovalContract(),
+            approvals: [approval],
+            permissionGrantSummary: samplePermissionGrantSummary(approval: approval),
+            approvalExecutionDelayNanoseconds: 100_000_000,
+            commandCancellationDelayNanoseconds: 50_000_000
+        )
+        let model = ApprovalManagementModel(client: client)
+        await model.refresh()
+
+        async let execution: Void = model.execute(id: approval.id)
+        while client.approvalExecutionCancellationIDs.isEmpty {
+            await Task.yield()
+        }
+        let activeCancellationID = try #require(model.executionCancellationID(for: approval.id))
+        #expect(model.isExecuting(id: approval.id))
+        #expect(client.approvalExecutionCancellationIDs == [activeCancellationID])
+
+        async let duplicate: Void = model.execute(id: approval.id)
+        async let cancellation: Void = model.cancelExecution(id: approval.id)
+        while client.commandCancellationRequests.isEmpty {
+            await Task.yield()
+        }
+
+        #expect(client.commandCancellationRequests == [activeCancellationID])
+        #expect(model.isCancelling(id: approval.id))
+        await cancellation
+        #expect(model.isExecuting(id: approval.id))
+        _ = await (execution, duplicate)
+
+        #expect(client.approvalExecutions == [approval.id])
+        #expect(client.approvalExecutionCancellationIDs == [activeCancellationID])
+        #expect(!model.isExecuting(id: approval.id))
+        #expect(!model.isCancelling(id: approval.id))
+        #expect(model.executionCancellationID(for: approval.id) == nil)
+        #expect(model.pendingItems.isEmpty)
+    }
+
+    @MainActor
+    @Test("Approval management model approves and executes an installed action exactly once")
+    func approvalManagementModelExecutesInstalledApprovalOnce() async {
+        let approval = samplePendingApproval(action: "local_installed.confirm_action")
+        let client = FakeCoreClient(
+            contractResponse: fullApprovalContract(),
+            approvals: [approval],
+            permissionGrantSummary: samplePermissionGrantSummary(approval: approval),
+            approvalExecutionDelayNanoseconds: 50_000_000
+        )
+        let model = ApprovalManagementModel(client: client)
+
+        await model.refresh()
+        await model.approve(id: approval.id, reason: "reviewed installed action")
+        #expect(model.pendingItems.first?.executionAvailable == true)
+
+        async let first: Void = model.execute(id: approval.id)
+        async let duplicate: Void = model.execute(id: approval.id)
+        _ = await (first, duplicate)
+
+        #expect(client.approvalDecisions == [
+            FakeCoreClient.ApprovalDecision(
+                id: approval.id,
+                approved: true,
+                reason: "reviewed installed action"
+            )
+        ])
+        #expect(client.approvalExecutions == [approval.id])
+        #expect(model.pendingItems.isEmpty)
+        #expect(model.lastExecution?.installedPluginResult?.pluginId == "local_installed")
+        #expect(model.lastExecution?.installedPluginResult?.action == "confirm_action")
+        #expect(model.lastExecution?.installedPluginResult?.sideEffectExecuted == true)
+        #expect(model.lastExecution?.pluginResults.isEmpty == true)
+        let decodedDescription = String(describing: model.lastExecution)
+        #expect(!decodedDescription.contains("do-not-expose-bound-input"))
+        #expect(!decodedDescription.contains("binding-digest-must-stay-core-only"))
     }
 
     @MainActor
@@ -5278,6 +5369,7 @@ private func fullApprovalContract() -> JarvisContractResponse {
 private func samplePendingApproval(
     id: UUID = UUID(),
     taskId: UUID = UUID(),
+    action: String = "fake_echo.approval_echo",
     status: String = "pending",
     decidedBy: String? = nil,
     decisionReason: String? = nil
@@ -5287,6 +5379,7 @@ private func samplePendingApproval(
         from: pendingApprovalJSON(
             id: id,
             taskId: taskId,
+            action: action,
             status: status,
             decidedBy: decidedBy,
             decisionReason: decisionReason
@@ -5297,6 +5390,7 @@ private func samplePendingApproval(
 private func pendingApprovalJSON(
     id: UUID,
     taskId: UUID,
+    action: String = "fake_echo.approval_echo",
     status: String = "pending",
     decidedBy: String? = nil,
     decisionReason: String? = nil
@@ -5310,7 +5404,7 @@ private func pendingApprovalJSON(
         {
           "id": "\(id.uuidString)",
           "task_id": "\(taskId.uuidString)",
-          "action": "fake_echo.approval_echo",
+          "action": "\(action)",
           "requested_scopes": ["conversation", "file_write"],
           "risk_tier": "confirm",
           "sensitivity": "workspace",
@@ -5371,6 +5465,52 @@ private func approvalExecutionJSON(approvalId: UUID, taskId: UUID) -> Data {
             }
           ],
           "message": "approved first-party plugin action executed"
+        }
+        """.utf8
+    )
+}
+
+private func installedApprovalExecutionJSON(approval: JarvisPendingApproval) -> Data {
+    let sessionId = UUID()
+    let auditId = UUID()
+    return Data(
+        """
+        {
+          "accepted": true,
+          "approval": \(String(decoding: pendingApprovalJSON(id: approval.id, taskId: approval.taskId, action: approval.action, status: "approved", decidedBy: "mac-ui", decisionReason: "reviewed installed action"), as: UTF8.self)),
+          "task": {
+            "id": "\(approval.taskId.uuidString)",
+            "session_id": "\(sessionId.uuidString)",
+            "user_input": "installed plugin action awaiting approval: local_installed.confirm_action",
+            "status": "completed",
+            "created_at": "2026-07-14T12:00:00Z",
+            "updated_at": "2026-07-14T12:02:00Z"
+          },
+          "audit_entry": {
+            "id": "\(auditId.uuidString)",
+            "task_id": "\(approval.taskId.uuidString)",
+            "event_type": "approval_executed",
+            "summary": "approved action reached a non-retryable terminal state",
+            "payload": { "approval_id": "\(approval.id.uuidString)", "side_effect_executed": true },
+            "created_at": "2026-07-14T12:02:00Z"
+          },
+          "audit_entries": [],
+          "plugin_results": [],
+          "installed_plugin_result": {
+            "plugin_id": "local_installed",
+            "action": "confirm_action",
+            "status": "completed",
+            "reason": "installed plugin completed after explicit approval",
+            "execution_enabled": true,
+            "execution_grant": "subprocess_stdio",
+            "contract_validated": true,
+            "side_effect_executed": true,
+            "runtime_kind": "subprocess",
+            "input": { "secret": "do-not-expose-bound-input" },
+            "input_sha256": "binding-digest-must-stay-core-only",
+            "contract_sha256": "binding-digest-must-stay-core-only"
+          },
+          "message": "approved installed plugin action executed"
         }
         """.utf8
     )
@@ -9299,6 +9439,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         }
     }
     private(set) var commandCancellationRequests: [UUID]
+    private let commandCancellationDelayNanoseconds: UInt64
     private let commandSubmissionDelayNanoseconds: UInt64
     private var contractResponse: JarvisContractResponse?
     private var releaseReadinessResponse: JarvisReleaseReadiness?
@@ -9327,6 +9468,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     private var permissionGrantSummaryResult: JarvisPermissionGrantSummary?
     private(set) var approvalDecisions: [ApprovalDecision]
     private(set) var approvalExecutions: [UUID]
+    private(set) var approvalExecutionCancellationIDs: [UUID]
     private let approvalExecutionDelayNanoseconds: UInt64
     private(set) var includeDeletedMemoryRequests: [Bool]
     private(set) var createdMemoryRequests: [JarvisCreateMemoryItemRequest]
@@ -9380,6 +9522,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         releaseSmokeMode: Bool = false,
         releaseSmokeFailureCall: String? = nil,
         approvalExecutionDelayNanoseconds: UInt64 = 0,
+        commandCancellationDelayNanoseconds: UInt64 = 0,
         commandSubmissionDelayNanoseconds: UInt64 = 0
     ) {
         self.healthResults = healthResults
@@ -9389,6 +9532,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         self.commandStatus = commandStatus
         self.submittedCommands = []
         self.commandCancellationRequests = []
+        self.commandCancellationDelayNanoseconds = commandCancellationDelayNanoseconds
         self.commandSubmissionDelayNanoseconds = commandSubmissionDelayNanoseconds
         self.contractResponse = contractResponse
         self.releaseReadinessResponse = releaseReadiness
@@ -9425,6 +9569,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         self.releaseSmokeCalls = []
         self.approvalDecisions = []
         self.approvalExecutions = []
+        self.approvalExecutionCancellationIDs = []
         self.approvalExecutionDelayNanoseconds = approvalExecutionDelayNanoseconds
         self.includeDeletedMemoryRequests = []
         self.createdMemoryRequests = []
@@ -9540,6 +9685,9 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
 
     func cancelCommand(cancellationID: UUID) async throws -> JarvisRuntimeCancellationResponse {
         commandCancellationRequests.append(cancellationID)
+        if commandCancellationDelayNanoseconds > 0 {
+            try await Task.sleep(nanoseconds: commandCancellationDelayNanoseconds)
+        }
         return try JSONDecoder().decode(
             JarvisRuntimeCancellationResponse.self,
             from: Data(
@@ -10193,10 +10341,14 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         try decideApproval(id: id, approved: false, request: request)
     }
 
-    func executeApproval(id: UUID) async throws -> JarvisApprovalExecutionResponse {
+    func executeApproval(
+        id: UUID,
+        cancellationID: UUID
+    ) async throws -> JarvisApprovalExecutionResponse {
         guard let approval = approvals.first(where: { $0.id == id }) else {
             throw URLError(.badServerResponse)
         }
+        approvalExecutionCancellationIDs.append(cancellationID)
         if approvalExecutionDelayNanoseconds > 0 {
             try await Task.sleep(nanoseconds: approvalExecutionDelayNanoseconds)
         }
@@ -10206,14 +10358,16 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
                 id: UUID(),
                 taskId: approval.taskId,
                 eventType: "approval_executed",
-                summary: "approved first-party plugin action execution completed",
+                summary: "approved action execution completed",
                 payload: .object(["approval_id": .string(approval.id.uuidString)]),
                 createdAt: "2026-05-20T12:15:00Z"
             )
         )
         return try JSONDecoder().decode(
             JarvisApprovalExecutionResponse.self,
-            from: approvalExecutionJSON(approvalId: approval.id, taskId: approval.taskId)
+            from: approval.action == "local_installed.confirm_action"
+                ? installedApprovalExecutionJSON(approval: approval)
+                : approvalExecutionJSON(approvalId: approval.id, taskId: approval.taskId)
         )
     }
 
@@ -10231,6 +10385,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         let decidedApproval = samplePendingApproval(
             id: approval.id,
             taskId: approval.taskId,
+            action: approval.action,
             status: approved ? "approved" : "denied",
             decidedBy: request.decidedBy,
             decisionReason: request.reason

@@ -619,8 +619,11 @@ grant or denial. Grant and denial recheck pending state and commit the decision
 plus a redacted decision audit in one immediate transaction. Audit failure
 rolls all decision fields back to pending; actor and reason remain available on
 the approval record but are absent from audit payloads, so no unaudited grant
-chain can become execution authority. Granting an approval
-does not execute the side effect; approved first-party actions require an explicit
+chain can become execution authority. Direct installed-plugin runs also pass
+the permission engine: dry runs do not execute, eligible Low/default-sensitivity
+requests remain direct, and Confirm or sensitive requests persist approval
+without runtime entry. Granting an approval does not execute the side effect;
+approved first-party and installed-plugin actions require an explicit
 `jarvis approvals execute <approval-id>` replay, which verifies the original
 task, action, risk, scope, input-schema, current-policy contract, and matching
 approval_granted audit evidence before
@@ -631,7 +634,25 @@ state, task state, and terminal audits commit together. Any durable claim
 permanently consumes that approval: failure, cancellation, timeout, restart, or
 a storage interruption after claim can leave the effect ambiguous, and
 automatic retry is forbidden. Inspect audit evidence and create a new approval
-when another attempt is appropriate.
+when another attempt is appropriate. Installed-plugin approvals additionally
+use a schema-v15 private binding over canonical input, manifest/provenance, and
+execution grant. The binding is revalidated before claim and its input/digests
+are redacted from public and audit surfaces.
+
+CLI and Swift generate a fresh cancellation UUID for every approved execution.
+The CLI also accepts an explicit handle when coordinating a separate cancel:
+
+```sh
+HANDLE="$(uuidgen | tr '[:upper:]' '[:lower:]')"
+cargo run -p jarvis-cli -- approvals execute <approval-id> --cancellation-id "$HANDLE"
+cargo run -p jarvis-cli -- plugins cancel-run "$HANDLE"
+```
+
+Cancellation is accepted only while that exact approved execution is active.
+When it wins output acceptance, the durable claim and task become cancelled and
+late output is discarded; an external effect already performed is not undone.
+The Approval Center uses the same retained UUID for its in-flight Cancel Run
+control and clears it when execution completes.
 
 Focused one-shot approval proof:
 
@@ -641,9 +662,13 @@ cargo test -p jarvis-core approval_decision_and_redacted_audit_commit_or_roll_ba
 cargo test -p jarvis-core approved_row_without_matching_grant_audit_cannot_be_claimed -- --nocapture
 cargo test -p jarvis-core matching_legacy_raw_metadata_grant_audit_remains_claimable -- --nocapture
 cargo test -p jarvis-core migration_13_backfills_completed_approval_execution_as_consumed -- --nocapture
+cargo test -p jarvis-core installed_plugin_pending_approval_binds_input_without_audit_disclosure -- --nocapture
+cargo test -p jarvis-core installed_plugin_confirm_invocation_requires_bound_one_shot_approval -- --nocapture
+cargo test -p jarvis-cli --test local_ipc_e2e authenticated_approved_installed_execution_can_be_cancelled_after_claim -- --nocapture
 cargo test -p jarvis-cli --test local_ipc_e2e approval_decision_audit_failure_rolls_back_across_cli_ipc_and_restart -- --nocapture
 cargo test -p jarvis-cli --test local_ipc_e2e approved_row_without_grant_audit_cannot_claim_or_enter_plugin_across_restart -- --nocapture
 cargo test -p jarvis-cli --test local_ipc_e2e concurrent_approved_execution_is_one_shot_across_ipc_and_restart -- --nocapture
+cargo test -p jarvis-cli --test local_ipc_e2e serve_exposes_local_ipc_contract_and_persists_state -- --nocapture
 swift test --disable-sandbox --package-path apps/mac --filter ApprovalManagementModel
 ```
 
@@ -654,6 +679,9 @@ creates one redacted audit. The Rust race test proves one claimant, the schema-v
 historical terminal audit evidence remains consumed, the cross-process IPC E2E
 proves one HTTP winner plus durable HTTP 409 after restart, and the Swift tests
 prove duplicate-submit suppression and claimed-approval hiding after refresh.
+The installed-plugin tests prove Low compatibility, Confirm/sensitive non-entry,
+schema-v15 input/contract binding and redaction, explicit approved execution,
+and permanent replay consumption through the real CLI/IPC path.
 The authority-chain tests prove an approved row without a matching grant audit
 cannot claim or enter the plugin across restart, unrelated audits cannot be
 substituted, and the exact legacy raw-metadata audit shape remains compatible.
@@ -735,7 +763,7 @@ cargo run -p jarvis-cli -- routes get <route-id>
 cargo run -p jarvis-cli -- routes get <route-id> --json
 cargo run -p jarvis-cli -- approvals list --status pending
 cargo run -p jarvis-cli -- approvals approve <approval-id> --decided-by cli --reason "reviewed"
-cargo run -p jarvis-cli -- approvals execute <approval-id>
+cargo run -p jarvis-cli -- approvals execute <approval-id> --cancellation-id <uuid>
 cargo run -p jarvis-cli -- approvals deny <approval-id> --decided-by cli --reason "not safe"
 cargo run -p jarvis-cli -- release readiness
 cargo run -p jarvis-cli -- permissions review

@@ -388,6 +388,16 @@ stage or when a PR needs focused evidence for one ownership slice.
   isolation that prevents inherited app/core secrets from reaching plugins,
   durable audit evidence, and `side_effect_executed: false` when no side effect
   is allowed.
+- Confirm direct installed-plugin requests evaluate action risk and explicit
+  sensitivity through `PermissionEngine`: contract dry runs remain
+  non-executing, eligible Low/default-sensitivity actions remain compatible,
+  and Confirm or sensitive invocations return a pending approval without Wasmi
+  or subprocess entry. Confirm schema v15 atomically binds the waiting task and
+  approval to canonical input, exact manifest/provenance contract, and execution
+  grant while approval-required run responses, approval records, audits,
+  permission views, and diagnostics omit the bound input and binding digests.
+  Do not confuse schema-validated plugin output after approved execution with
+  disclosure of the private binding fields.
 - Confirm installed subprocess progress frames are bounded to parsed
   sequence/stage/message events, append `installed_plugin_progress` audit
   evidence, emit redacted `activity_progress` SSE frames through
@@ -412,7 +422,8 @@ stage or when a PR needs focused evidence for one ownership slice.
   when repository backing is used. It also persists append-only model-route
   records in SQLite and exposes redacted `/model-routes` CLI/IPC inspection
   that survives restart without retaining route context. Approval-required
-  first-party command scaffolds persist inspectable pending approvals and record
+  first-party command and direct installed-plugin scaffolds persist inspectable
+  pending approvals and record
   CLI/IPC grant or denial decisions without executing side effects. Bounded
   fake-model first-party tool calls, strict Ollama-compatible and
   ChatGPT/OpenAI-compatible provider-envelope first-party tool requests, native
@@ -439,7 +450,8 @@ stage or when a PR needs focused evidence for one ownership slice.
   failure must roll all decision fields back to pending across restart, keep
   `/execute` unauthorized, and leave no unaudited grant chain. Free-form actor
   and reason text must stay out of the audit payload.
-- Confirm approved first-party approval execution requires a one-shot explicit
+- Confirm approved first-party or installed-plugin approval execution requires
+  a one-shot explicit
   `/approvals/:id/execute` or `jarvis approvals execute <approval-id>` call,
   verifies the original task, action, risk, scope, input-schema, and current
   policy contract against the approval record, and requires matching
@@ -453,6 +465,15 @@ stage or when a PR needs focused evidence for one ownership slice.
   restart, or storage interruption after claim can leave the effect ambiguous,
   so automatic retry is forbidden; the operator must inspect audit evidence
   and create a new approval when another attempt is appropriate.
+  Installed-plugin replay must additionally verify canonical-input integrity and
+  an unchanged schema-v15 manifest/provenance/grant binding before the claim;
+  mutation, pause, cancellation, or current-policy failure must prevent runtime
+  entry. Any failure after claim consumes authority and remains non-retryable.
+  Confirm CLI and Swift attach a fresh approved-execution `cancellation_id`,
+  authenticated cancellation targets only that active claimed run, a winning
+  race discards output and durably records cancelled claim/task state, and a
+  later cancellation reports `not_found`. Record that already-performed
+  external effects cannot be reversed.
   An approved row without matching evidence must create no durable claim or
   policy/claim audit and must not enter the plugin, including after restart.
   Unrelated audit substitution must fail. The exact legacy raw-metadata audit
@@ -593,7 +614,8 @@ stage or when a PR needs focused evidence for one ownership slice.
   and model-request surfaces retain their normal user-command visibility.
 - Confirm the Swift Approval Center renders permission policy review status
   alongside grant history when the IPC contract exposes the endpoint, stages
-  approved-unexecuted first-party approvals for Run Approved, and hides
+  approved-unexecuted first-party and installed-plugin approvals for Run
+  Approved, and hides
   approvals that already have `approval_executed` task-audit evidence.
 - Confirm scheduler job create/list/cancel and due-run execution state is
   restored and updated when repository backing is enabled. Due-run coverage
