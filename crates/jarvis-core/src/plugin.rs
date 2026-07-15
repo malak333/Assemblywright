@@ -783,6 +783,195 @@ fn default_manifest_schema_version() -> u16 {
     LOCAL_MANIFEST_SCHEMA_VERSION
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SemanticVersionIdentifier {
+    Numeric(String),
+    Text(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SemanticVersion {
+    core: [String; 3],
+    prerelease: Vec<SemanticVersionIdentifier>,
+}
+
+impl SemanticVersion {
+    fn parse(value: &str) -> JarvisResult<Self> {
+        let (without_build, build) = value
+            .split_once('+')
+            .map_or((value, None), |(version, build)| (version, Some(build)));
+        if without_build.contains('+') || build.is_some_and(|build| build.contains('+')) {
+            return Err(JarvisError::Validation(format!(
+                "plugin version must be valid SemVer 2.0.0: {value}"
+            )));
+        }
+        if let Some(build) = build {
+            validate_semantic_identifiers(build, false, value)?;
+        }
+        let (core, prerelease) = without_build
+            .split_once('-')
+            .map_or((without_build, None), |(core, prerelease)| {
+                (core, Some(prerelease))
+            });
+        let mut components = core.split('.');
+        let major = parse_semantic_core_number(components.next(), value)?;
+        let minor = parse_semantic_core_number(components.next(), value)?;
+        let patch = parse_semantic_core_number(components.next(), value)?;
+        if components.next().is_some() {
+            return Err(JarvisError::Validation(format!(
+                "plugin version must be valid SemVer 2.0.0: {value}"
+            )));
+        }
+        let prerelease = prerelease
+            .map(|prerelease| parse_semantic_prerelease(prerelease, value))
+            .transpose()?
+            .unwrap_or_default();
+        Ok(Self {
+            core: [major, minor, patch],
+            prerelease,
+        })
+    }
+}
+
+fn parse_semantic_core_number(value: Option<&str>, full: &str) -> JarvisResult<String> {
+    let value = value.ok_or_else(|| {
+        JarvisError::Validation(format!("plugin version must be valid SemVer 2.0.0: {full}"))
+    })?;
+    if value.is_empty()
+        || !value.bytes().all(|byte| byte.is_ascii_digit())
+        || (value.len() > 1 && value.starts_with('0'))
+    {
+        return Err(JarvisError::Validation(format!(
+            "plugin version must be valid SemVer 2.0.0: {full}"
+        )));
+    }
+    Ok(value.to_string())
+}
+
+fn validate_semantic_identifiers(
+    value: &str,
+    reject_numeric_leading_zero: bool,
+    full: &str,
+) -> JarvisResult<()> {
+    if value.is_empty() {
+        return Err(JarvisError::Validation(format!(
+            "plugin version must be valid SemVer 2.0.0: {full}"
+        )));
+    }
+    for identifier in value.split('.') {
+        if identifier.is_empty()
+            || !identifier
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            || (reject_numeric_leading_zero
+                && identifier.bytes().all(|byte| byte.is_ascii_digit())
+                && identifier.len() > 1
+                && identifier.starts_with('0'))
+        {
+            return Err(JarvisError::Validation(format!(
+                "plugin version must be valid SemVer 2.0.0: {full}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn parse_semantic_prerelease(
+    value: &str,
+    full: &str,
+) -> JarvisResult<Vec<SemanticVersionIdentifier>> {
+    validate_semantic_identifiers(value, true, full)?;
+    value
+        .split('.')
+        .map(|identifier| {
+            if identifier.bytes().all(|byte| byte.is_ascii_digit()) {
+                Ok(SemanticVersionIdentifier::Numeric(identifier.to_string()))
+            } else {
+                Ok(SemanticVersionIdentifier::Text(identifier.to_string()))
+            }
+        })
+        .collect()
+}
+
+fn compare_semantic_versions(
+    left: &SemanticVersion,
+    right: &SemanticVersion,
+) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+
+    for (left, right) in left.core.iter().zip(&right.core) {
+        match compare_semantic_numeric_identifier(left, right) {
+            Ordering::Equal => {}
+            ordering => return ordering,
+        }
+    }
+    match (left.prerelease.is_empty(), right.prerelease.is_empty()) {
+        (true, true) => return Ordering::Equal,
+        (true, false) => return Ordering::Greater,
+        (false, true) => return Ordering::Less,
+        (false, false) => {}
+    }
+    for (left, right) in left.prerelease.iter().zip(&right.prerelease) {
+        let ordering = match (left, right) {
+            (
+                SemanticVersionIdentifier::Numeric(left),
+                SemanticVersionIdentifier::Numeric(right),
+            ) => compare_semantic_numeric_identifier(left, right),
+            (SemanticVersionIdentifier::Numeric(_), SemanticVersionIdentifier::Text(_)) => {
+                Ordering::Less
+            }
+            (SemanticVersionIdentifier::Text(_), SemanticVersionIdentifier::Numeric(_)) => {
+                Ordering::Greater
+            }
+            (SemanticVersionIdentifier::Text(left), SemanticVersionIdentifier::Text(right)) => {
+                left.cmp(right)
+            }
+        };
+        if ordering != Ordering::Equal {
+            return ordering;
+        }
+    }
+    left.prerelease.len().cmp(&right.prerelease.len())
+}
+
+fn compare_semantic_numeric_identifier(left: &str, right: &str) -> std::cmp::Ordering {
+    left.len().cmp(&right.len()).then_with(|| left.cmp(right))
+}
+
+pub(crate) fn require_valid_semantic_version(version: &str) -> JarvisResult<()> {
+    SemanticVersion::parse(version).map(|_| ())
+}
+
+pub(crate) fn require_strictly_newer_semantic_version(
+    current: &str,
+    candidate: &str,
+) -> JarvisResult<()> {
+    let current_version = SemanticVersion::parse(current)?;
+    let candidate_version = SemanticVersion::parse(candidate)?;
+    if compare_semantic_versions(&candidate_version, &current_version)
+        != std::cmp::Ordering::Greater
+    {
+        return Err(JarvisError::Validation(format!(
+            "installed plugin update requires a strictly newer semantic version than {current}"
+        )));
+    }
+    Ok(())
+}
+
+pub(crate) fn require_installed_plugin_update_version(
+    current: &str,
+    candidate: &str,
+) -> JarvisResult<()> {
+    SemanticVersion::parse(candidate)?;
+    if SemanticVersion::parse(current).is_err() {
+        // A persisted pre-SemVer record may cross this boundary once. Once
+        // stored, the valid candidate makes every later update strictly
+        // ordered by SemVer precedence.
+        return Ok(());
+    }
+    require_strictly_newer_semantic_version(current, candidate)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstalledPlugin {
     pub manifest: PluginManifest,
@@ -2031,6 +2220,7 @@ impl InstalledPlugin {
         })?;
         let manifest: PluginManifest = serde_json::from_str(&content)
             .map_err(|err| JarvisError::Validation(format!("parse plugin manifest: {err}")))?;
+        require_valid_semantic_version(&manifest.version)?;
         let source_path = manifest.validate_local_install(manifest_path)?;
 
         let provenance =
@@ -3841,5 +4031,73 @@ PY
             }
             Ok(json!({}))
         }
+    }
+
+    #[test]
+    fn semantic_version_update_order_follows_semver_precedence() {
+        for (current, candidate) in [
+            ("1.0.0", "1.0.1"),
+            ("1.9.9", "2.0.0"),
+            ("1.0.0-alpha.1", "1.0.0-alpha.beta"),
+            ("1.0.0-rc.1", "1.0.0"),
+            ("1.0.0+build.1", "1.0.1+build.1"),
+        ] {
+            require_strictly_newer_semantic_version(current, candidate).unwrap();
+        }
+        for (current, candidate) in [
+            ("1.0.0", "1.0.0"),
+            ("1.0.0+build.1", "1.0.0+build.2"),
+            ("2.0.0", "1.9.9"),
+            ("1.0.0", "1.0.0-rc.1"),
+        ] {
+            assert!(require_strictly_newer_semantic_version(current, candidate).is_err());
+        }
+    }
+
+    #[test]
+    fn semantic_version_update_rejects_invalid_versions() {
+        for invalid in ["1", "1.0", "01.0.0", "1.00.0", "1.0.0-01", "1.0.0+"] {
+            assert!(require_strictly_newer_semantic_version("1.0.0", invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn semantic_version_supports_unbounded_numeric_identifiers() {
+        let huge = "9".repeat(256);
+        let huger = format!("1{huge}");
+        require_strictly_newer_semantic_version(&format!("{huge}.0.0"), &format!("{huger}.0.0"))
+            .unwrap();
+        require_strictly_newer_semantic_version(
+            &format!("1.0.0-{huge}"),
+            &format!("1.0.0-{huger}"),
+        )
+        .unwrap();
+        assert!(require_valid_semantic_version(&format!("1.0.0-0{huge}")).is_err());
+    }
+
+    #[test]
+    fn installed_plugin_update_allows_one_legacy_version_migration() {
+        require_installed_plugin_update_version("legacy-v1", "0.1.0").unwrap();
+        assert!(require_installed_plugin_update_version("legacy-v1", "still-legacy").is_err());
+        assert!(require_installed_plugin_update_version("0.1.0", "0.1.0").is_err());
+    }
+
+    #[test]
+    fn local_manifest_install_rejects_non_semver_version() {
+        let dir = local_subprocess_fixture("#!/bin/sh\nprintf '{\"ok\":true}'\n");
+        let source_path = dir.path().canonicalize().expect("canonical plugin dir");
+        let manifest_path = source_path.join("jarvis-plugin.json");
+        let mut manifest = local_subprocess_manifest("invalid_version", "runner.sh");
+        manifest.version = "release-one".to_string();
+        manifest.source_path = Some(source_path.display().to_string());
+        fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&manifest).expect("serialize manifest"),
+        )
+        .expect("write manifest");
+
+        let error = InstalledPlugin::from_local_manifest_path(&manifest_path)
+            .expect_err("new local install requires SemVer");
+        assert!(error.to_string().contains("valid SemVer 2.0.0"));
     }
 }

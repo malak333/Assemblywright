@@ -13,7 +13,8 @@ use jarvis_core::{
     CreateSchedulerJobRequest, EmergencyPauseRequest, InstallPluginRequest,
     InstalledPluginExecutionGrant, InstalledPluginExecutionRequest,
     InstalledPluginPublisherSignatureVerificationRequest,
-    InstalledPluginPublisherVerificationRequest, Sensitivity, TriggerKind, UpdateMemoryItemRequest,
+    InstalledPluginPublisherVerificationRequest, InstalledPluginUpdateApplyRequest,
+    InstalledPluginUpdatePreviewRequest, Sensitivity, TriggerKind, UpdateMemoryItemRequest,
 };
 use tokio::net::TcpListener;
 use uuid::Uuid;
@@ -644,6 +645,35 @@ enum PluginsCommand {
     },
     /// Fetch one locally installed plugin metadata record by id.
     InstalledGet {
+        id: String,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    /// Preview a strictly newer local plugin update without mutating lifecycle state.
+    UpdatePreview {
+        id: String,
+        manifest_path: PathBuf,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    /// Preview and atomically apply a local plugin update, resetting execution authority.
+    UpdateApply {
+        id: String,
+        manifest_path: PathBuf,
+        /// Exact installed lifecycle contract token returned by the reviewed update-preview command.
+        #[arg(long)]
+        expected_lifecycle_contract_sha256: String,
+        /// Exact candidate contract token returned by the reviewed update-preview command.
+        #[arg(long)]
+        expected_candidate_update_contract_sha256: String,
+        /// Confirm the current redacted preview and apply it.
+        #[arg(long)]
+        confirm: bool,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    /// Show bounded, plugin-scoped lifecycle history with raw audit payloads redacted.
+    History {
         id: String,
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
@@ -1635,6 +1665,74 @@ async fn main() -> anyhow::Result<()> {
                         "GET",
                         &format!("/plugins/installed/{id}"),
                         None
+                    )?
+                );
+            }
+            PluginsCommand::UpdatePreview {
+                id,
+                manifest_path,
+                endpoint,
+            } => {
+                let inspection: InstalledPluginLifecycleInspection =
+                    serde_json::from_str(&server_required_request(
+                        &endpoint,
+                        "GET",
+                        &format!("/plugins/installed/{id}"),
+                        None,
+                    )?)?;
+                let manifest_path = std::fs::canonicalize(manifest_path)?;
+                let body = serde_json::to_string(&InstalledPluginUpdatePreviewRequest {
+                    manifest_path: manifest_path.display().to_string(),
+                    expected_lifecycle_contract_sha256: inspection.lifecycle_contract_sha256,
+                })?;
+                println!(
+                    "{}",
+                    server_required_request(
+                        &endpoint,
+                        "POST",
+                        &format!("/plugins/installed/{id}/update/preview"),
+                        Some(&body),
+                    )?
+                );
+            }
+            PluginsCommand::UpdateApply {
+                id,
+                manifest_path,
+                expected_lifecycle_contract_sha256,
+                expected_candidate_update_contract_sha256,
+                confirm,
+                endpoint,
+            } => {
+                if !confirm {
+                    anyhow::bail!(
+                        "plugin update apply requires --confirm after reviewing the preview"
+                    );
+                }
+                let manifest_path = std::fs::canonicalize(manifest_path)?;
+                let apply_body = serde_json::to_string(&InstalledPluginUpdateApplyRequest {
+                    manifest_path: manifest_path.display().to_string(),
+                    expected_lifecycle_contract_sha256,
+                    expected_candidate_update_contract_sha256,
+                    confirmed: true,
+                })?;
+                println!(
+                    "{}",
+                    server_required_request(
+                        &endpoint,
+                        "POST",
+                        &format!("/plugins/installed/{id}/update/apply"),
+                        Some(&apply_body),
+                    )?
+                );
+            }
+            PluginsCommand::History { id, endpoint } => {
+                println!(
+                    "{}",
+                    server_required_request(
+                        &endpoint,
+                        "GET",
+                        &format!("/plugins/installed/{id}/history"),
+                        None,
                     )?
                 );
             }

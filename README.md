@@ -254,6 +254,20 @@ network-capable installed plugins are enabled with `subprocess_stdio_network`.
 This is runtime grant gating and manifest governance, not an OS-level network
 sandbox or host-level egress filter.
 
+New local plugin installs require valid SemVer 2.0.0. For an already installed plugin, `jarvis plugins update-preview <id>
+/absolute/path/to/jarvis-plugin.json` performs redacted validation without a
+mutation and prints `current_lifecycle_contract_sha256` plus
+`candidate_update_contract_sha256` for review. Apply them without refreshing:
+`jarvis plugins update-apply <id> /absolute/path/to/jarvis-plugin.json
+--expected-lifecycle-contract-sha256 <64hex>
+--expected-candidate-update-contract-sha256 <64hex> --confirm`. Success resets
+execution to disabled `metadata_only`. `jarvis plugins history <id>` prints the
+bounded redacted lifecycle projection. These commands require a running
+repository-backed core. The candidate token is opaque aggregate integrity data,
+not a raw component provenance hash or trust signal.
+A persisted pre-SemVer record may make one fully governed transition to valid
+SemVer; all later updates are strictly ordered by SemVer precedence.
+
 Installed `local_wasm` plugins provide a narrower compute-only alternative.
 They require the explicit `wasm_compute` grant and the custom
 `jarvis_json_v1` exports `memory`, `jarvis_alloc`, and `jarvis_run`. Jarvis
@@ -370,6 +384,18 @@ macOS Model tab routes over that same guarded cloud provider. Later slices
 continue the same branch/PR discipline;
 release language should describe only the merged repo-owned surfaces with
 recorded focused E2E or integration proof.
+The Plugin tab also supports an explicitly selected local replacement manifest
+and bounded redacted lifecycle history. A replacement is untrusted input: it
+must match the installed plugin identity and pass manifest/provenance
+validation. Preview returns the reviewed `current_lifecycle_contract_sha256`
+and opaque `candidate_update_contract_sha256`; confirmed apply preserves that
+exact pair, reloads the candidate, and rejects lifecycle or snapshot drift before
+Jarvis captures a new snapshot and resets execution to
+disabled `metadata_only`. The operator must verify the new snapshot and
+explicitly re-enable a compatible grant. This local workflow is not a
+marketplace, publisher-trust verdict, malware analysis, OS sandbox, host-egress
+policy, or plugin-trust QA.
+
 The permission center now surfaces installed-plugin provenance status from
 `/permissions/grants`, including unverified plugin counts and local integrity
 state. `/permissions/policy-review` turns pending approvals and installed

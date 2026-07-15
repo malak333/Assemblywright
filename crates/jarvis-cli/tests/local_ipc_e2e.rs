@@ -8555,6 +8555,289 @@ fn concurrent_approved_execution_is_one_shot_across_ipc_and_restart() {
 
 #[cfg(unix)]
 #[test]
+fn installed_plugin_update_preview_apply_history_is_cas_bound_redacted_and_persistent() {
+    let temp = tempfile::tempdir().expect("plugin update fixture");
+    let db_path = temp.path().join("plugin-update.sqlite");
+    let plugin_dir = temp.path().join("plugin-update-source");
+    fs::create_dir(&plugin_dir).expect("create plugin update source");
+    let plugin_dir = plugin_dir.canonicalize().expect("canonical plugin source");
+    write_executable_plugin_script(&plugin_dir);
+    fs::write(plugin_dir.join("fixture-resource.txt"), "v1").expect("write plugin resource");
+    let manifest_path = plugin_dir.join("jarvis-plugin.json");
+    let write_manifest = |id: &str, name: &str, version: &str| {
+        let mut manifest = local_subprocess_manifest_json(id, name, &plugin_dir);
+        manifest["version"] = json!(version);
+        fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&manifest).expect("serialize update manifest"),
+        )
+        .expect("write update manifest");
+    };
+    write_manifest("plugin_update_e2e", "Plugin Update E2E", "release-one");
+
+    let mut server = JarvisServer::start(&db_path);
+    let endpoint = server.endpoint();
+    let invalid_install = run_cli_failure([
+        "plugins",
+        "install",
+        manifest_path.to_str().expect("manifest path"),
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert!(
+        invalid_install.contains("valid SemVer 2.0.0"),
+        "{invalid_install}"
+    );
+    write_manifest("plugin_update_e2e", "Plugin Update E2E", "0.1.0");
+    let installed = run_cli_json([
+        "plugins",
+        "install",
+        manifest_path.to_str().expect("manifest path"),
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(installed["id"], "plugin_update_e2e");
+    let duplicate = run_cli_failure([
+        "plugins",
+        "install",
+        manifest_path.to_str().expect("manifest path"),
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert!(duplicate.contains("audited update workflow"), "{duplicate}");
+    run_cli_json([
+        "plugins",
+        "verify-installed",
+        "plugin_update_e2e",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    let initially_enabled = run_cli_json([
+        "plugins",
+        "enable-installed",
+        "plugin_update_e2e",
+        "--grant",
+        "subprocess_stdio",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(initially_enabled["execution_enabled"], true);
+
+    for version in ["0.1.0", "0.0.9"] {
+        write_manifest("plugin_update_e2e", "Plugin Update E2E", version);
+        let rejected = run_cli_failure([
+            "plugins",
+            "update-preview",
+            "plugin_update_e2e",
+            manifest_path.to_str().expect("manifest path"),
+            "--endpoint",
+            endpoint.as_str(),
+        ]);
+        assert!(rejected.contains("strictly newer"), "{rejected}");
+    }
+    write_manifest("different_plugin", "Plugin Update E2E", "0.2.0");
+    let mismatched = run_cli_failure([
+        "plugins",
+        "update-preview",
+        "plugin_update_e2e",
+        manifest_path.to_str().expect("manifest path"),
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert!(mismatched.contains("manifest id"), "{mismatched}");
+
+    write_manifest("plugin_update_e2e", "Plugin Update E2E", "0.2.0");
+    let preview = run_cli_json([
+        "plugins",
+        "update-preview",
+        "plugin_update_e2e",
+        manifest_path.to_str().expect("manifest path"),
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(preview["plugin_id"], "plugin_update_e2e");
+    assert_eq!(preview["current_version"], "0.1.0");
+    assert_eq!(preview["candidate_version"], "0.2.0");
+    assert_eq!(preview["execution_will_be_disabled"], true);
+    assert_eq!(preview["confirmation_required"], true);
+    let lifecycle = preview["current_lifecycle_contract_sha256"]
+        .as_str()
+        .expect("lifecycle contract")
+        .to_string();
+    let candidate = preview["candidate_update_contract_sha256"]
+        .as_str()
+        .expect("candidate contract")
+        .to_string();
+    assert_eq!(lifecycle.len(), 64);
+    assert_eq!(candidate.len(), 64);
+    let preview_encoded = serde_json::to_string(&preview).expect("preview JSON");
+    assert!(!preview_encoded.contains(plugin_dir.to_str().expect("plugin dir")));
+    assert!(!preview_encoded.contains("manifest_sha256"));
+    assert!(!preview_encoded.contains("source_tree_sha256"));
+
+    let unconfirmed = run_cli_failure([
+        "plugins",
+        "update-apply",
+        "plugin_update_e2e",
+        manifest_path.to_str().expect("manifest path"),
+        "--expected-lifecycle-contract-sha256",
+        lifecycle.as_str(),
+        "--expected-candidate-update-contract-sha256",
+        candidate.as_str(),
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert!(unconfirmed.contains("requires --confirm"), "{unconfirmed}");
+
+    write_manifest("plugin_update_e2e", "Changed After Preview", "0.2.0");
+    let changed_candidate = run_cli_failure([
+        "plugins",
+        "update-apply",
+        "plugin_update_e2e",
+        manifest_path.to_str().expect("manifest path"),
+        "--expected-lifecycle-contract-sha256",
+        lifecycle.as_str(),
+        "--expected-candidate-update-contract-sha256",
+        candidate.as_str(),
+        "--confirm",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert!(
+        changed_candidate.contains("changed after preview"),
+        "{changed_candidate}"
+    );
+
+    write_manifest("plugin_update_e2e", "Plugin Update E2E", "0.2.0");
+    let preview = run_cli_json([
+        "plugins",
+        "update-preview",
+        "plugin_update_e2e",
+        manifest_path.to_str().expect("manifest path"),
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    let stale_lifecycle = preview["current_lifecycle_contract_sha256"]
+        .as_str()
+        .expect("stale lifecycle")
+        .to_string();
+    let stable_candidate = preview["candidate_update_contract_sha256"]
+        .as_str()
+        .expect("stable candidate")
+        .to_string();
+    run_cli_json([
+        "plugins",
+        "verify-installed",
+        "plugin_update_e2e",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    let stale_apply = run_cli_failure([
+        "plugins",
+        "update-apply",
+        "plugin_update_e2e",
+        manifest_path.to_str().expect("manifest path"),
+        "--expected-lifecycle-contract-sha256",
+        stale_lifecycle.as_str(),
+        "--expected-candidate-update-contract-sha256",
+        stable_candidate.as_str(),
+        "--confirm",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert!(
+        stale_apply.contains("lifecycle contract changed"),
+        "{stale_apply}"
+    );
+
+    let current_preview = run_cli_json([
+        "plugins",
+        "update-preview",
+        "plugin_update_e2e",
+        manifest_path.to_str().expect("manifest path"),
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    let current_lifecycle = current_preview["current_lifecycle_contract_sha256"]
+        .as_str()
+        .expect("current lifecycle");
+    let current_candidate = current_preview["candidate_update_contract_sha256"]
+        .as_str()
+        .expect("current candidate");
+    let updated = run_cli_json([
+        "plugins",
+        "update-apply",
+        "plugin_update_e2e",
+        manifest_path.to_str().expect("manifest path"),
+        "--expected-lifecycle-contract-sha256",
+        current_lifecycle,
+        "--expected-candidate-update-contract-sha256",
+        current_candidate,
+        "--confirm",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(updated["manifest"]["version"], "0.2.0");
+    assert_eq!(updated["execution_enabled"], false);
+    assert_eq!(updated["execution_grant"], "metadata_only");
+    assert_eq!(updated["provenance"]["integrity_status"], "not_verified");
+    assert_eq!(updated["provenance"]["origin_claim_verified"], false);
+
+    let history = run_cli_json([
+        "plugins",
+        "history",
+        "plugin_update_e2e",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(history["plugin_id"], "plugin_update_e2e");
+    assert_eq!(history["local_paths_redacted"], true);
+    assert_eq!(history["provenance_hashes_redacted"], true);
+    assert_eq!(history["payloads_redacted"], true);
+    assert_array_contains(&history["entries"], "action", "installed_plugin_updated");
+    let history_encoded = serde_json::to_string(&history).expect("history JSON");
+    assert!(!history_encoded.contains(plugin_dir.to_str().expect("plugin dir")));
+    assert!(!history_encoded.contains("manifest_sha256"));
+    assert!(!history_encoded.contains("payload\""));
+
+    server.stop();
+    let mut restarted = JarvisServer::start(&db_path);
+    let restarted_endpoint = restarted.endpoint();
+    let persisted = run_cli_json([
+        "plugins",
+        "installed-get",
+        "plugin_update_e2e",
+        "--endpoint",
+        restarted_endpoint.as_str(),
+    ]);
+    assert_eq!(persisted["manifest"]["version"], "0.2.0");
+    assert_eq!(persisted["execution_enabled"], false);
+    run_cli_json([
+        "plugins",
+        "verify-installed",
+        "plugin_update_e2e",
+        "--endpoint",
+        restarted_endpoint.as_str(),
+    ]);
+    let enabled = run_cli_json([
+        "plugins",
+        "enable-installed",
+        "plugin_update_e2e",
+        "--grant",
+        "subprocess_stdio",
+        "--endpoint",
+        restarted_endpoint.as_str(),
+    ]);
+    assert_eq!(enabled["execution_enabled"], true);
+    assert_eq!(
+        enabled["provenance"]["integrity_status"],
+        "matches_install_snapshot"
+    );
+    restarted.stop();
+}
+
+#[cfg(unix)]
+#[test]
 fn authenticated_approved_installed_execution_can_be_cancelled_after_claim() {
     let temp = tempfile::tempdir().expect("approval cancellation fixture");
     let db_path = temp.path().join("jarvis.sqlite");

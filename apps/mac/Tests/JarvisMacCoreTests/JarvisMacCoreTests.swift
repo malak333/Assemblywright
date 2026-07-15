@@ -4015,6 +4015,179 @@ struct JarvisMacCoreTests {
         )
     }
 
+    @Test("Plugin update client binds previewed candidate and decodes redacted history")
+    func pluginUpdateClientUsesTypedRedactedContracts() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [IPCURLProtocol.self]
+        let client = JarvisIPCClient(
+            endpoint: JarvisEndpoint(baseURL: URL(string: "http://127.0.0.1:7787")!),
+            session: URLSession(configuration: configuration)
+        )
+        let record = try JSONSerialization.jsonObject(with: installedPluginsJSON()) as! [[String: Any]]
+        let recordData = try JSONSerialization.data(withJSONObject: record[0])
+        var methods: [String] = []
+        var paths: [String] = []
+        var bodies: [[String: Any]?] = []
+        IPCURLProtocol.handler = { request in
+            methods.append(request.httpMethod ?? "")
+            paths.append(request.url?.path ?? "")
+            bodies.append(decodeRequestBody(request))
+            let response = switch request.url?.path {
+            case "/plugins/installed/local_runner_test/update/preview":
+                installedPluginUpdatePreviewJSON()
+            case "/plugins/installed/local_runner_test/update/apply":
+                recordData
+            default:
+                installedPluginLifecycleHistoryJSON()
+            }
+            return (
+                HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                response
+            )
+        }
+        defer { IPCURLProtocol.handler = nil }
+
+        let digest = String(repeating: "a", count: 64)
+        let candidateDigest = String(repeating: "f", count: 64)
+        let preview = try await client.previewInstalledPluginUpdate(
+            id: "local_runner_test",
+            request: JarvisInstalledPluginUpdatePreviewRequest(
+                manifestPath: "/private/update/plugin.json",
+                expectedLifecycleContractSha256: digest
+            )
+        )
+        _ = try await client.applyInstalledPluginUpdate(
+            id: "local_runner_test",
+            request: JarvisInstalledPluginUpdateApplyRequest(
+                manifestPath: "/private/update/plugin.json",
+                expectedLifecycleContractSha256: digest,
+                expectedCandidateUpdateContractSha256: candidateDigest,
+                confirmed: true
+            )
+        )
+        let history = try await client.installedPluginLifecycleHistory(id: "local_runner_test")
+
+        #expect(preview.candidateUpdateContractSha256 == candidateDigest)
+        #expect(preview.localPathsRedacted && preview.provenanceHashesRedacted)
+        #expect(history.localPathsRedacted && history.provenanceHashesRedacted && history.payloadsRedacted)
+        #expect(history.entries.map(\.action) == ["install"])
+        #expect(methods == ["POST", "POST", "GET"])
+        #expect(paths == [
+            "/plugins/installed/local_runner_test/update/preview",
+            "/plugins/installed/local_runner_test/update/apply",
+            "/plugins/installed/local_runner_test/history",
+        ])
+        #expect(bodies[0]?["manifest_path"] as? String == "/private/update/plugin.json")
+        #expect(bodies[0]?["expected_lifecycle_contract_sha256"] as? String == digest)
+        #expect(bodies[1]?["expected_candidate_update_contract_sha256"] as? String == candidateDigest)
+        #expect(bodies[1]?["confirmed"] as? Bool == true)
+        #expect(bodies[2] == nil)
+    }
+
+    @MainActor
+    @Test("Plugin manager previews and applies updates fail closed with execution disabled")
+    func pluginManagerUpdateRequiresPreviewAndConfirmation() async throws {
+        let installed = try JSONDecoder().decode(
+            [JarvisInstalledPluginRecord].self,
+            from: installedPluginsJSON()
+        )
+        let client = FakeCoreClient(installedPlugins: installed)
+        let model = PluginManagerModel(client: client)
+
+        await model.refresh()
+        let original = try #require(model.installedPlugins.first)
+        #expect(model.canPreviewUpdate(original))
+        #expect(!model.canApplyUpdate(original))
+
+        let preview = try #require(await model.previewUpdate(
+            id: original.id,
+            manifestPath: "/private/update/plugin.json"
+        ))
+        #expect(preview.currentVersion == "0.1.0")
+        #expect(preview.candidateVersion == "0.2.0")
+        #expect(model.canApplyUpdate(original))
+        model.cancelUpdatePreview(id: original.id)
+        #expect(model.updatePreview(for: original.id) == nil)
+        #expect(!model.canApplyUpdate(original))
+
+        _ = try #require(await model.previewUpdate(
+            id: original.id,
+            manifestPath: "/private/update/plugin.json"
+        ))
+        #expect(client.installedPluginUpdatePreviewRequests.count == 2)
+
+        await model.applyUpdate(id: original.id)
+
+        let updated = try #require(model.installedPlugins.first)
+        #expect(updated.manifest.version == "0.2.0")
+        #expect(!updated.executionEnabled)
+        #expect(updated.executionGrant == "metadata_only")
+        #expect(updated.provenance.integrityStatus == "not_verified")
+        #expect(model.updatePreview(for: original.id) == nil)
+        #expect(client.installedPluginUpdateApplyRequests.count == 1)
+        #expect(client.installedPluginUpdateApplyRequests[0].request.confirmed)
+        #expect(
+            client.installedPluginUpdateApplyRequests[0].request.expectedCandidateUpdateContractSha256
+                == String(repeating: "f", count: 64)
+        )
+        #expect(model.lastAction?.contains("Execution remains disabled") == true)
+    }
+
+    @MainActor
+    @Test("Plugin history failure degrades independently from registry authority")
+    func pluginLifecycleHistoryFailureDoesNotStaleRegistry() async throws {
+        let installed = try JSONDecoder().decode(
+            [JarvisInstalledPluginRecord].self,
+            from: installedPluginsJSON()
+        )
+        let client = FakeCoreClient(
+            installedPlugins: installed,
+            installedPluginLifecycleHistoryUnavailable: true
+        )
+        let model = PluginManagerModel(client: client)
+
+        await model.refresh()
+
+        let plugin = try #require(model.installedPlugins.first)
+        #expect(model.installedRegistryIsFresh)
+        #expect(model.installedRegistryWarning == nil)
+        #expect(model.lifecycleHistory(for: plugin.id).isEmpty)
+        #expect(model.lifecycleHistoryWarning?.contains("unavailable") == true)
+        #expect(model.canPreviewUpdate(plugin))
+    }
+
+    @MainActor
+    @Test("Plugin mutation clears lifecycle projection when history refresh fails")
+    func pluginLifecycleHistoryClearsAfterPostMutationRefreshFailure() async throws {
+        let installed = try JSONDecoder().decode(
+            [JarvisInstalledPluginRecord].self,
+            from: installedPluginsJSON()
+        )
+        let client = FakeCoreClient(
+            installedPlugins: installed,
+            installedPluginLifecycleHistoryFailureStartingAtRequest: 2
+        )
+        let model = PluginManagerModel(client: client)
+
+        await model.refresh()
+
+        let initial = try #require(model.installedPlugins.first)
+        #expect(model.lifecycleHistory(for: initial.id).count == 1)
+        #expect(model.lifecycleHistoryProofBoundary(for: initial.id) != nil)
+        #expect(model.lifecycleHistoryWarning == nil)
+
+        await model.verifyProvenance(id: initial.id)
+
+        let verified = try #require(model.installedPlugins.first)
+        #expect(verified.provenance.integrityStatus == "matches_install_snapshot")
+        #expect(model.installedRegistryIsFresh)
+        #expect(model.installedRegistryWarning == nil)
+        #expect(model.lifecycleHistory(for: initial.id).isEmpty)
+        #expect(model.lifecycleHistoryProofBoundary(for: initial.id) == nil)
+        #expect(model.lifecycleHistoryWarning?.contains("refresh failed") == true)
+        #expect(client.installedPluginLifecycleHistoryIDs == [initial.id, initial.id])
+    }
+
     @MainActor
     @Test("Plugin manager verifies, enables, and disables from authoritative registry state")
     func pluginManagerLifecycleIsFailClosedAndAuthoritative() async throws {
@@ -6893,6 +7066,48 @@ private func installedPluginsJSON() -> Data {
             "installed_at": "2026-05-20T12:00:00Z"
           }
         ]
+        """.utf8
+    )
+}
+
+private func installedPluginUpdatePreviewJSON(pluginID: String = "local_runner_test") -> Data {
+    Data(
+        """
+        {
+          "plugin_id": "\(pluginID)",
+          "current_version": "0.1.0",
+          "candidate_version": "0.2.0",
+          "current_lifecycle_contract_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "execution_will_be_disabled": true,
+          "confirmation_required": true,
+          "candidate_update_contract_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "local_paths_redacted": true,
+          "provenance_hashes_redacted": true,
+          "proof_boundary": "Preview validates candidate identity, version, and bytes without changing plugin authority."
+        }
+        """.utf8
+    )
+}
+
+private func installedPluginLifecycleHistoryJSON(pluginID: String = "local_runner_test") -> Data {
+    Data(
+        """
+        {
+          "plugin_id": "\(pluginID)",
+          "entries": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "plugin_id": "\(pluginID)",
+              "action": "install",
+              "outcome": "installed",
+              "created_at": "2026-07-15T12:00:00Z"
+            }
+          ],
+          "local_paths_redacted": true,
+          "provenance_hashes_redacted": true,
+          "payloads_redacted": true,
+          "proof_boundary": "Redacted installed-plugin lifecycle metadata only."
+        }
         """.utf8
     )
 }
@@ -10006,6 +10221,11 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     private(set) var installedPluginListRequests: Int
     private(set) var installedPluginProvenanceVerificationIDs: [String]
     private(set) var installedPluginExecutionRequests: [(id: String, request: JarvisInstalledPluginExecutionRequest)]
+    private(set) var installedPluginUpdatePreviewRequests: [(id: String, request: JarvisInstalledPluginUpdatePreviewRequest)]
+    private(set) var installedPluginUpdateApplyRequests: [(id: String, request: JarvisInstalledPluginUpdateApplyRequest)]
+    private(set) var installedPluginLifecycleHistoryIDs: [String]
+    private let installedPluginLifecycleHistoryUnavailable: Bool
+    private let installedPluginLifecycleHistoryFailureStartingAtRequest: Int?
     private var schedulerJobs: [JarvisSchedulerJob]
     private var schedulerAttentionResponse: JarvisSchedulerAttentionSummary?
     private let schedulerAttentionDelayNanoseconds: UInt64
@@ -10061,6 +10281,8 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         installedPluginMutationUnavailable: Bool = false,
         installedPluginMutationDelayNanoseconds: UInt64 = 0,
         installedPluginMutationGate: FakeInstalledPluginMutationGate? = nil,
+        installedPluginLifecycleHistoryUnavailable: Bool = false,
+        installedPluginLifecycleHistoryFailureStartingAtRequest: Int? = nil,
         schedulerJobs: [JarvisSchedulerJob] = [],
         schedulerAttention: JarvisSchedulerAttentionSummary? = nil,
         schedulerAttentionDelayNanoseconds: UInt64 = 0,
@@ -10110,6 +10332,11 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         self.installedPluginListRequests = 0
         self.installedPluginProvenanceVerificationIDs = []
         self.installedPluginExecutionRequests = []
+        self.installedPluginUpdatePreviewRequests = []
+        self.installedPluginUpdateApplyRequests = []
+        self.installedPluginLifecycleHistoryIDs = []
+        self.installedPluginLifecycleHistoryUnavailable = installedPluginLifecycleHistoryUnavailable
+        self.installedPluginLifecycleHistoryFailureStartingAtRequest = installedPluginLifecycleHistoryFailureStartingAtRequest
         self.schedulerJobs = schedulerJobs
         self.schedulerAttentionResponse = schedulerAttention
         self.schedulerAttentionDelayNanoseconds = schedulerAttentionDelayNanoseconds
@@ -10586,6 +10813,58 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
             count: 64
         )
         return installedPlugins[index]
+    }
+
+    func previewInstalledPluginUpdate(
+        id: String,
+        request: JarvisInstalledPluginUpdatePreviewRequest
+    ) async throws -> JarvisInstalledPluginUpdatePreview {
+        installedPluginUpdatePreviewRequests.append((id, request))
+        guard installedPlugins.contains(where: { $0.id == id }) else {
+            throw URLError(.fileDoesNotExist)
+        }
+        return try JSONDecoder().decode(
+            JarvisInstalledPluginUpdatePreview.self,
+            from: installedPluginUpdatePreviewJSON(pluginID: id)
+        )
+    }
+
+    func applyInstalledPluginUpdate(
+        id: String,
+        request: JarvisInstalledPluginUpdateApplyRequest
+    ) async throws -> JarvisInstalledPluginRecord {
+        installedPluginUpdateApplyRequests.append((id, request))
+        guard let index = installedPlugins.firstIndex(where: { $0.id == id }) else {
+            throw URLError(.fileDoesNotExist)
+        }
+        guard request.confirmed,
+              request.expectedCandidateUpdateContractSha256 == String(repeating: "f", count: 64),
+              installedPlugins[index].lifecycleContractSha256 == request.expectedLifecycleContractSha256 else {
+            throw JarvisIPCError.httpStatus(409, "plugin update preview is stale")
+        }
+        installedPlugins[index].manifest.version = "0.2.0"
+        installedPlugins[index].executionEnabled = false
+        installedPlugins[index].executionGrant = "metadata_only"
+        installedPlugins[index].provenance.integrityStatus = "not_verified"
+        installedPlugins[index].lifecycleContractSha256 = String(repeating: "e", count: 64)
+        return installedPlugins[index]
+    }
+
+    func installedPluginLifecycleHistory(
+        id: String
+    ) async throws -> JarvisInstalledPluginLifecycleHistory {
+        installedPluginLifecycleHistoryIDs.append(id)
+        if installedPluginLifecycleHistoryUnavailable
+            || installedPluginLifecycleHistoryFailureStartingAtRequest.map({
+                installedPluginLifecycleHistoryIDs.count >= $0
+            }) == true
+        {
+            throw URLError(.cannotConnectToHost)
+        }
+        return try JSONDecoder().decode(
+            JarvisInstalledPluginLifecycleHistory.self,
+            from: installedPluginLifecycleHistoryJSON(pluginID: id)
+        )
     }
 
     func listSchedulerJobs() async throws -> [JarvisSchedulerJob] {

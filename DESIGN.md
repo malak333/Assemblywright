@@ -363,21 +363,50 @@ that same handle while execution is active and presents a Cancel Run control.
 
 Installed plugin list, requested permissions, enable/disable controls, logs, and version/update state.
 
-The current Swift Plugin Manager exposes only the existing Rust-owned
-lifecycle authority: verify local provenance, explicitly choose a compatible
+The current Swift Plugin Manager exposes the Rust-owned lifecycle authority:
+apply an explicitly selected local replacement manifest, inspect redacted
+lifecycle history, verify local provenance, explicitly choose a compatible
 execution grant, enable after verification, and disable back to
-`metadata_only`. Confirmation captures the exact reviewed grant and redacted
-lifecycle-contract digest; Rust applies the mutation only when that digest still
-matches, preventing stale review from broadening authority. Each plugin
+`metadata_only`. The replacement candidate remains untrusted input. New local
+installs require valid SemVer 2.0.0. An update must retain the installed plugin
+identity, advance its semantic version, pass the same bounded manifest and
+provenance validation as installation, match the
+currently inspected lifecycle digest, capture a new snapshot, and reset the
+record to disabled `metadata_only`; the new bytes require fresh provenance
+verification and explicit re-enable. Confirmation captures the exact reviewed
+grant and redacted lifecycle-contract digest; Rust applies the mutation only
+when that digest still matches, preventing stale review from broadening authority. Each plugin
 serializes lifecycle mutations, refreshes from the repository-backed inspection
 endpoint after every outcome, and disables all lifecycle actions whenever that
 registry is stale. Network-capable grant review shows exact declared hosts and
 permissions, while subprocess confirmation remains explicit that the current
 runner is not OS sandboxed and does not enforce host-level egress. Verification
 and authority responses use the redacted inspection projection. Rust commits
-each provenance audit and each authority mutation plus its redacted
+each provenance/update audit and each authority mutation plus its redacted
 `side_effect_executed:false` audit transactionally; audit failure rolls the
-associated state change back.
+associated state change back. Lifecycle history is a bounded redacted view of
+those transitions, not publisher identity, marketplace approval, malware
+analysis, OS sandboxing, or host-egress proof.
+
+A persisted pre-SemVer installed record may cross the version boundary once to
+a valid SemVer candidate under the same identity, source-kind, lifecycle-CAS,
+candidate-snapshot, disabled-authority, and atomic-audit checks. Once stored,
+that candidate makes every later update strictly ordered by SemVer precedence.
+
+The typed update contract separates review from mutation:
+`POST /plugins/installed/:id/update/preview` validates the local candidate and
+returns only a redacted current/candidate version summary plus the fact that
+execution will be disabled and an opaque `candidate_update_contract_sha256`
+aggregate integrity binding, and echoes the validated
+`current_lifecycle_contract_sha256`. Clients must preserve and show that exact
+reviewed token pair. `POST /plugins/installed/:id/update/apply` requires the
+same candidate path, both preview tokens, and explicit confirmation; it must
+not silently re-inspect or refresh either token. Rust reloads the candidate,
+recomputes the binding from the exact snapshot, and rejects preview/apply drift
+before mutation. The binding is not a raw manifest, source-tree, command, or
+module provenance hash.
+`GET /plugins/installed/:id/history` returns the bounded redacted lifecycle
+ledger.
 
 ### Settings And Model Routing
 
@@ -623,9 +652,12 @@ plain-hostname allowlists in `network_access`; policy review surfaces those
 actions, and executable installed plugins with network-declaring actions must
 be enabled with the explicit `subprocess_stdio_network` grant. OS-level network
 sandbox enforcement and host-level egress filtering remain target architecture.
-The Swift Plugin tab can verify a redacted installed record, explicitly select
-a manifest-compatible grant, enable only after matching provenance, and disable
-without executing plugin code. The confirmed grant and lifecycle-contract
+The Swift Plugin tab can update a matching installed record from an explicitly
+selected local manifest, inspect redacted lifecycle history, verify the new
+snapshot, explicitly select a manifest-compatible grant, enable only after
+matching provenance, and disable without executing plugin code. Every update
+resets execution to disabled `metadata_only`; it does not carry forward prior
+verification or authority. The confirmed grant and lifecycle-contract
 digest form a compare-and-set request, so changed or reinstalled records require
 fresh inspection and confirmation. It refreshes authoritative server state
 after every attempt, disables lifecycle actions while that state is stale, and

@@ -724,15 +724,63 @@ after provenance matches; this verifies the portable manifest identity
 signature against the explicit trusted key with local `source_path` omitted,
 but still does not prove marketplace approval or malware safety.
 
+Audited local update and redacted lifecycle history require a running
+repository-backed core:
+
+```sh
+cargo run -p jarvis-cli -- plugins update-preview <id> /absolute/path/to/jarvis-plugin.json
+cargo run -p jarvis-cli -- plugins update-apply <id> /absolute/path/to/jarvis-plugin.json \
+  --expected-lifecycle-contract-sha256 <64hex> \
+  --expected-candidate-update-contract-sha256 <64hex> \
+  --confirm
+cargo run -p jarvis-cli -- plugins history <id>
+```
+
+New local installs require valid SemVer 2.0.0. Preview validates the exact
+installed lifecycle digest, plugin identity, unchanged source/runtime kind,
+normally strictly newer SemVer candidate, and bounded
+local snapshot. It returns `current_lifecycle_contract_sha256` and opaque
+`candidate_update_contract_sha256`. Confirmed apply requires both values from
+that visibly reviewed preview and never auto-refreshes or substitutes them. It
+reloads the candidate and rejects lifecycle or exact-snapshot drift before the
+atomic mutation. Success preserves the installed record identity, replaces metadata
+and provenance, appends `installed_plugin_updated`, and resets execution to
+disabled `metadata_only`; verify and explicitly enable again before execution.
+A persisted pre-SemVer record may make one fully governed transition to valid
+SemVer; every later update is strictly ordered by SemVer precedence.
+History returns at most 100 newest plugin-scoped entries with only entry ID,
+plugin ID, action, outcome, and timestamp. This is local lifecycle evidence,
+not marketplace, publisher, malware, OS-sandbox, host-egress, signing,
+notarization, or live-device proof.
+
 Focused installed-plugin lifecycle verification:
 
 ```sh
+cargo test -p jarvis-core semantic_version_update -- --nocapture
+cargo test -p jarvis-core installed_plugin_update_is_cas_bound_atomic_and_persistent -- --nocapture
+cargo test -p jarvis-core installed_plugin_update_rejects_changed_candidate_and_rolls_back_on_audit_failure -- --nocapture
+cargo test -p jarvis-core installed_plugin_history_is_plugin_scoped_newest_first_and_bounded -- --nocapture
+cargo test -p jarvis-cli --test local_ipc_e2e installed_plugin_update_preview_apply_history_is_cas_bound_redacted_and_persistent -- --nocapture
 cargo test -p jarvis-core installed_plugin_execution_authority_and_audit_commit_atomically -- --nocapture
+swift test --disable-sandbox --package-path apps/mac --filter pluginUpdateClientUsesTypedRedactedContracts
+swift test --disable-sandbox --package-path apps/mac --filter pluginManagerUpdateRequiresPreviewAndConfirmation
+swift test --disable-sandbox --package-path apps/mac --filter pluginLifecycleHistoryFailureDoesNotStaleRegistry
 swift test --disable-sandbox --package-path apps/mac --filter pluginLifecycleClientUsesTypedContracts
 swift test --disable-sandbox --package-path apps/mac --filter pluginManager
 swift test --disable-sandbox --package-path apps/mac --filter pluginEnablementConfirmationIsExplicit
 swift test --disable-sandbox --package-path apps/mac --filter pluginManagerRealIPCLifecycleEndToEnd
 ```
+
+The update storage tests cover strict identity/version/source checks,
+transactional persistence, preserved install identity/time, disabled authority,
+publisher-verification reset, candidate and lifecycle compare-and-set failures,
+injected audit-write rollback, and the newest-first 100-entry plugin-scoped
+history bound. The cross-process CLI E2E covers duplicate-install rejection,
+redacted preview tokens, changed-candidate and stale-lifecycle rejection,
+confirmed apply, disabled post-update state, redacted history, restart
+persistence, and required re-verification before re-enable over the authenticated
+loopback compatibility server. It is not default-UDS, publisher, marketplace,
+malware, OS-sandbox, host-egress, signing, notarization, or live-device proof.
 
 The real-core Swift E2E uses the authenticated loopback-TCP compatibility path,
 not the packaged app's default peer-identity-validated Unix-domain socket. With

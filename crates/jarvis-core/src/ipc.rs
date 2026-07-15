@@ -27,7 +27,8 @@ use uuid::Uuid;
 use futures_util::StreamExt as FuturesStreamExt;
 
 use crate::storage::{
-    installed_plugin_lifecycle_contract_sha256, ApprovalExecutionClaim, ApprovalExecutionState,
+    installed_plugin_lifecycle_contract_sha256, installed_plugin_update_candidate_contract_sha256,
+    ApprovalExecutionClaim, ApprovalExecutionState,
     EmergencyPauseState as StoredEmergencyPauseState, InstalledPluginApprovalBinding,
     MemoryClassificationSummary, NewInstalledPluginApproval, NewMemoryItem, NewPendingApproval,
     PendingApproval, SchedulerNotificationOccurrence, SqliteRepository,
@@ -827,6 +828,45 @@ pub struct InstallPluginRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstalledPluginUpdatePreviewRequest {
+    pub manifest_path: String,
+    pub expected_lifecycle_contract_sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstalledPluginUpdateApplyRequest {
+    pub manifest_path: String,
+    pub expected_lifecycle_contract_sha256: String,
+    pub expected_candidate_update_contract_sha256: String,
+    #[serde(default)]
+    pub confirmed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InstalledPluginUpdatePreview {
+    pub plugin_id: String,
+    pub current_version: String,
+    pub candidate_version: String,
+    pub current_lifecycle_contract_sha256: String,
+    pub execution_will_be_disabled: bool,
+    pub confirmation_required: bool,
+    pub candidate_update_contract_sha256: String,
+    pub local_paths_redacted: bool,
+    pub provenance_hashes_redacted: bool,
+    pub proof_boundary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InstalledPluginLifecycleHistoryResponse {
+    pub plugin_id: String,
+    pub entries: Vec<crate::InstalledPluginLifecycleHistoryEntry>,
+    pub local_paths_redacted: bool,
+    pub provenance_hashes_redacted: bool,
+    pub payloads_redacted: bool,
+    pub proof_boundary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstalledPluginExecutionRequest {
     #[serde(default)]
     pub execution_enabled: bool,
@@ -1269,6 +1309,7 @@ impl IpcState {
                 "/plugins/manifests/:id".to_string(),
                 "/plugins/installed".to_string(),
                 "/plugins/installed/:id".to_string(),
+                "/plugins/installed/:id/history".to_string(),
                 "/scheduler/jobs".to_string(),
                 "/scheduler/attention".to_string(),
                 "/scheduler/notification-outbox".to_string(),
@@ -3823,6 +3864,76 @@ impl IpcState {
         })
     }
 
+    pub fn preview_installed_plugin_update(
+        &self,
+        id: &str,
+        request: InstalledPluginUpdatePreviewRequest,
+    ) -> JarvisResult<InstalledPluginUpdatePreview> {
+        let candidate = InstalledPlugin::from_local_manifest_path(&request.manifest_path)?;
+        self.using_repository(|repository| {
+            let current = repository.validate_installed_plugin_update(
+                id,
+                &candidate,
+                &request.expected_lifecycle_contract_sha256,
+            )?;
+            let candidate_update_contract_sha256 =
+                installed_plugin_update_candidate_contract_sha256(&candidate)?;
+            Ok(InstalledPluginUpdatePreview {
+                plugin_id: id.to_string(),
+                current_version: current.manifest.version,
+                candidate_version: candidate.manifest.version,
+                current_lifecycle_contract_sha256: request
+                    .expected_lifecycle_contract_sha256,
+                execution_will_be_disabled: true,
+                confirmation_required: true,
+                candidate_update_contract_sha256,
+                local_paths_redacted: true,
+                provenance_hashes_redacted: true,
+                proof_boundary: "Preview validates the exact current lifecycle contract, matching plugin identity/runtime kind, and a strictly newer SemVer candidate. It does not mutate metadata, enable authority, verify publisher trust, or run plugin code; local paths and provenance hashes are omitted."
+                    .to_string(),
+            })
+        })
+    }
+
+    pub fn apply_installed_plugin_update(
+        &self,
+        id: &str,
+        request: InstalledPluginUpdateApplyRequest,
+    ) -> JarvisResult<InstalledPluginRecord> {
+        if !request.confirmed {
+            return Err(JarvisError::Validation(
+                "installed plugin update apply requires confirmed=true after reviewing a current preview"
+                    .to_string(),
+            ));
+        }
+        let candidate = InstalledPlugin::from_local_manifest_path(&request.manifest_path)?;
+        self.using_repository(|repository| {
+            repository.update_installed_plugin_metadata(
+                id,
+                candidate,
+                &request.expected_lifecycle_contract_sha256,
+                &request.expected_candidate_update_contract_sha256,
+            )
+        })
+    }
+
+    pub fn installed_plugin_lifecycle_history(
+        &self,
+        id: &str,
+    ) -> JarvisResult<InstalledPluginLifecycleHistoryResponse> {
+        self.using_repository(|repository| {
+            Ok(InstalledPluginLifecycleHistoryResponse {
+                plugin_id: id.to_string(),
+                entries: repository.list_installed_plugin_lifecycle_history(id)?,
+                local_paths_redacted: true,
+                provenance_hashes_redacted: true,
+                payloads_redacted: true,
+                proof_boundary: "Plugin-scoped lifecycle projection includes only event identity, sanitized action/outcome labels, and timestamps. Raw audit payloads, local paths, provenance hashes, manifest contents, and plugin input/output are omitted."
+                    .to_string(),
+            })
+        })
+    }
+
     pub fn cancel_runtime_execution(
         &self,
         cancellation_id: Uuid,
@@ -5826,6 +5937,18 @@ pub fn router_with_auth(state: IpcState, auth: Option<IpcAuth>) -> Router {
         )
         .route("/plugins/installed/:id", get(get_installed_plugin))
         .route(
+            "/plugins/installed/:id/update/preview",
+            post(preview_installed_plugin_update),
+        )
+        .route(
+            "/plugins/installed/:id/update/apply",
+            post(apply_installed_plugin_update),
+        )
+        .route(
+            "/plugins/installed/:id/history",
+            get(installed_plugin_lifecycle_history),
+        )
+        .route(
             "/plugins/installed/:id/execution",
             post(set_installed_plugin_execution),
         )
@@ -6668,6 +6791,39 @@ async fn install_plugin(
         .map_err(error_response)
 }
 
+async fn preview_installed_plugin_update(
+    State(state): State<IpcState>,
+    Path(id): Path<String>,
+    Json(request): Json<InstalledPluginUpdatePreviewRequest>,
+) -> Result<Json<InstalledPluginUpdatePreview>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .preview_installed_plugin_update(&id, request)
+        .map(Json)
+        .map_err(error_response)
+}
+
+async fn apply_installed_plugin_update(
+    State(state): State<IpcState>,
+    Path(id): Path<String>,
+    Json(request): Json<InstalledPluginUpdateApplyRequest>,
+) -> Result<Json<InstalledPluginInspectionRecord>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .apply_installed_plugin_update(&id, request)
+        .and_then(installed_plugin_inspection_record)
+        .map(Json)
+        .map_err(error_response)
+}
+
+async fn installed_plugin_lifecycle_history(
+    State(state): State<IpcState>,
+    Path(id): Path<String>,
+) -> Result<Json<InstalledPluginLifecycleHistoryResponse>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .installed_plugin_lifecycle_history(&id)
+        .map(Json)
+        .map_err(error_response)
+}
+
 async fn set_installed_plugin_execution(
     State(state): State<IpcState>,
     Path(id): Path<String>,
@@ -6969,6 +7125,9 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
         endpoint("GET", "/plugins/installed", true, true),
         endpoint("POST", "/plugins/installed", true, false),
         endpoint("GET", "/plugins/installed/:id", true, true),
+        endpoint("POST", "/plugins/installed/:id/update/preview", true, false),
+        endpoint("POST", "/plugins/installed/:id/update/apply", true, false),
+        endpoint("GET", "/plugins/installed/:id/history", true, true),
         endpoint("POST", "/plugins/installed/:id/execution", true, false),
         endpoint(
             "POST",
