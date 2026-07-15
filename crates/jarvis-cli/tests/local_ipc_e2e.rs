@@ -10,8 +10,10 @@ use std::time::{Duration, Instant};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use ed25519_dalek::{Signer, SigningKey};
 use jarvis_core::{
-    ApprovalStatus, AuditEntry, CapabilityScope, NewMemoryItem, NewPendingApproval, RiskTier,
-    Sensitivity, SqliteRepository, TaskStatus,
+    ApprovalExecutionState, ApprovalStatus, AuditEntry, CapabilityScope, InstalledPlugin,
+    InstalledPluginExecutionGrant, InstalledPluginExecutionRequest, InstalledPluginRunRequest,
+    IpcState, NewMemoryItem, NewPendingApproval, RiskTier, Sensitivity, SqliteRepository,
+    TaskStatus,
 };
 use p256::ecdsa::{Signature as P256Signature, SigningKey as P256SigningKey};
 use serde_json::{json, Value};
@@ -5947,6 +5949,89 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert!(!subprocess_run_encoded.contains("raw stderr secret"));
     assert!(!subprocess_run_encoded.contains("ignored"));
 
+    let pending_installed_run = run_cli_json([
+        "plugins",
+        "run-installed",
+        "local_subprocess_e2e",
+        "inspect",
+        "--input",
+        r#"{"path":"approval-e2e-secret"}"#,
+        "--sensitivity",
+        "private",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(pending_installed_run["status"], "approval_required");
+    assert_eq!(pending_installed_run["side_effect_executed"], false);
+    assert_eq!(
+        pending_installed_run["audit_entry"]["event_type"],
+        "installed_plugin_approval_required"
+    );
+    assert_eq!(
+        pending_installed_run["pending_approval"]["action"],
+        "local_subprocess_e2e.inspect"
+    );
+    assert_eq!(
+        pending_installed_run["pending_approval"]["sensitivity"],
+        "private"
+    );
+    assert_eq!(
+        pending_installed_run["task"]["status"],
+        "waiting_for_approval"
+    );
+    let pending_installed_encoded =
+        serde_json::to_string(&pending_installed_run).expect("pending installed run JSON");
+    assert!(!pending_installed_encoded.contains("approval-e2e-secret"));
+    assert!(!pending_installed_encoded.contains("input_sha256"));
+    assert!(!pending_installed_encoded.contains("contract_sha256"));
+    let installed_approval_id = pending_installed_run["pending_approval"]["id"]
+        .as_str()
+        .expect("installed approval id");
+    let approved_installed = run_cli_json([
+        "approvals",
+        "approve",
+        installed_approval_id,
+        "--decided-by",
+        "local_ipc_e2e",
+        "--reason",
+        "reviewed exact installed invocation",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(approved_installed["status"], "approved");
+    let executed_installed = run_cli_json([
+        "approvals",
+        "execute",
+        installed_approval_id,
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(executed_installed["accepted"], true);
+    assert_eq!(executed_installed["task"]["status"], "completed");
+    assert!(executed_installed["plugin_results"]
+        .as_array()
+        .expect("plugin results")
+        .is_empty());
+    assert_eq!(
+        executed_installed["installed_plugin_result"]["status"],
+        "completed"
+    );
+    assert_eq!(
+        executed_installed["installed_plugin_result"]["output"]["path"],
+        "approval-e2e-secret"
+    );
+    let installed_replay = run_cli_failure([
+        "approvals",
+        "execute",
+        installed_approval_id,
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert!(
+        installed_replay.contains("already been claimed"),
+        "{installed_replay}"
+    );
+
     fs::write(subprocess_plugin_dir.join("fixture-resource.txt"), "v2")
         .expect("mutate subprocess fixture resource");
     let changed_subprocess_run = run_cli_json([
@@ -6725,7 +6810,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
 
     let diagnostics = run_cli_json(["diagnostics", "export", "--endpoint", endpoint.as_str()]);
     assert_eq!(diagnostics["repository_backed"], true);
-    assert_eq!(diagnostics["schema_version"], 14);
+    assert_eq!(diagnostics["schema_version"], 15);
     assert_eq!(
         diagnostics["health"]["contract"]["name"],
         "jarvis.local-ipc"
@@ -6982,7 +7067,24 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         "--endpoint",
         restarted_endpoint.as_str(),
     ]);
-    assert!(persisted_approvals.as_array().unwrap().is_empty());
+    assert_array_contains(&persisted_approvals, "id", installed_approval_id);
+    assert_array_contains(
+        &persisted_approvals,
+        "action",
+        "local_subprocess_e2e.inspect",
+    );
+    assert_array_contains(&persisted_approvals, "status", "approved");
+    let persisted_installed_replay = run_cli_failure([
+        "approvals",
+        "execute",
+        installed_approval_id,
+        "--endpoint",
+        restarted_endpoint.as_str(),
+    ]);
+    assert!(
+        persisted_installed_replay.contains("already been claimed"),
+        "{persisted_installed_replay}"
+    );
 
     let persisted_grants = run_cli_json([
         "permissions",
@@ -8446,6 +8548,176 @@ fn concurrent_approved_execution_is_one_shot_across_ipc_and_restart() {
         "{restarted_claimed_error}"
     );
     restarted.stop();
+}
+
+#[cfg(unix)]
+#[test]
+fn authenticated_approved_installed_execution_can_be_cancelled_after_claim() {
+    let temp = tempfile::tempdir().expect("approval cancellation fixture");
+    let db_path = temp.path().join("jarvis.sqlite");
+    let plugin_dir = temp.path().join("cancellable-installed-plugin");
+    fs::create_dir(&plugin_dir).expect("create cancellable plugin dir");
+    let plugin_dir = plugin_dir
+        .canonicalize()
+        .expect("canonical cancellable plugin dir");
+    write_executable_plugin_script(&plugin_dir);
+    fs::write(plugin_dir.join("fixture-resource.txt"), "v1")
+        .expect("write cancellable fixture resource");
+    let manifest_path = plugin_dir.join("jarvis-plugin.json");
+    fs::write(
+        &manifest_path,
+        json!({
+            "manifest_schema_version": 1,
+            "id": "cancellable_approval_e2e",
+            "name": "Cancellable Approval E2E",
+            "version": "0.1.0",
+            "source": "local_subprocess",
+            "author": "Jarvis E2E",
+            "source_path": plugin_dir.display().to_string(),
+            "subprocess": {
+                "command": "plugin-runner.py",
+                "args": [],
+                "stdin": "json",
+                "stdout": "json"
+            },
+            "actions": [{
+                "name": "inspect",
+                "description": "Prove authenticated cancellation after approval claim.",
+                "permissions": ["read_workspace"],
+                "risk_tier": "confirm",
+                "input_schema": { "schema": {
+                    "type": "object",
+                    "properties": { "path": { "type": "string" } },
+                    "required": ["path"],
+                    "additionalProperties": false
+                }},
+                "output_schema": { "schema": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" },
+                        "secret_seen": { "type": "boolean" },
+                        "plugin_id": { "type": "string" },
+                        "plugin_action": { "type": "string" }
+                    },
+                    "required": ["path"],
+                    "additionalProperties": false
+                }},
+                "proactive": false,
+                "memory_access": "none",
+                "model_access": "none",
+                "audit_fields": ["path"],
+                "timeout": { "timeout_ms": 5000, "on_timeout": "cancel" },
+                "cancellation": "cooperative"
+            }]
+        })
+        .to_string(),
+    )
+    .expect("write cancellable manifest");
+
+    let repository = SqliteRepository::open(&db_path).expect("open setup repository");
+    repository
+        .install_plugin_metadata(
+            InstalledPlugin::from_local_manifest_path(&manifest_path)
+                .expect("load cancellable plugin"),
+        )
+        .expect("install cancellable plugin");
+    let setup = IpcState::with_repository(repository).expect("setup IPC state");
+    setup
+        .verify_installed_plugin_provenance("cancellable_approval_e2e")
+        .expect("verify cancellable plugin");
+    setup
+        .set_installed_plugin_execution(
+            "cancellable_approval_e2e",
+            InstalledPluginExecutionRequest {
+                execution_enabled: true,
+                execution_grant: InstalledPluginExecutionGrant::SubprocessStdio,
+            },
+        )
+        .expect("enable cancellable plugin");
+    let pending = setup
+        .run_installed_plugin(
+            "cancellable_approval_e2e",
+            InstalledPluginRunRequest {
+                action: "inspect".to_string(),
+                input: json!({ "path": "cancel-after-claim" }),
+                session_id: None,
+                cancellation_id: None,
+                sensitivity: Sensitivity::Workspace,
+                dry_run: false,
+            },
+        )
+        .expect("create cancellable approval");
+    let approval_id = pending.pending_approval.expect("pending approval").id;
+    setup
+        .approve_approval(
+            approval_id,
+            "authenticated-e2e".to_string(),
+            Some("reviewed cancellable invocation".to_string()),
+        )
+        .expect("approve cancellable invocation");
+    drop(setup);
+
+    let token = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    let mut server = JarvisServer::start_authenticated(&db_path, token, 1);
+    let endpoint = server.endpoint();
+    let authorization = format!("Bearer {token}");
+    let cancellation_id = uuid::Uuid::new_v4();
+    let execute_path = format!("/approvals/{approval_id}/execute");
+    let execute_body = json!({ "cancellation_id": cancellation_id }).to_string();
+    let execute_endpoint = endpoint.clone();
+    let execute_authorization = authorization.clone();
+    let execution = thread::spawn(move || {
+        request_with_authorization_headers(
+            &execute_endpoint,
+            "POST",
+            &execute_path,
+            Some(&execute_body),
+            &[execute_authorization.as_str()],
+        )
+    });
+
+    let cancel_path = format!("/runtime/cancellations/{cancellation_id}");
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let cancellation = loop {
+        let response = request_with_authorization_headers(
+            &endpoint,
+            "POST",
+            &cancel_path,
+            Some("{}"),
+            &[authorization.as_str()],
+        )
+        .expect("authenticated cancellation request");
+        let response: Value = serde_json::from_str(&response).expect("cancellation JSON");
+        if response["active_execution_found"] == true {
+            break response;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "approved execution never became cancellable"
+        );
+        thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(cancellation["outcome"], "cancellation_requested");
+    let response = execution
+        .join()
+        .expect("join authenticated approved execution")
+        .expect("approved execution response");
+    let response: Value = serde_json::from_str(&response).expect("approved execution JSON");
+    assert_eq!(response["accepted"], false);
+    assert_eq!(response["task"]["status"], "cancelled");
+    assert_eq!(response["installed_plugin_result"]["status"], "cancelled");
+    assert!(response["installed_plugin_result"]["output"].is_null());
+    server.stop();
+
+    let repository = SqliteRepository::open(&db_path).expect("reopen cancellation repository");
+    assert_eq!(
+        repository
+            .get_approval_execution(approval_id)
+            .expect("load cancelled claim")
+            .expect("cancelled claim")
+            .state,
+        ApprovalExecutionState::Cancelled
+    );
 }
 
 #[test]
@@ -12983,8 +13255,11 @@ fn write_executable_plugin_script(dir: &Path) {
 import json
 import os
 import sys
+import time
 
 request = json.load(sys.stdin)
+if request["input"]["path"] == "cancel-after-claim":
+    time.sleep(0.5)
 print('{"jarvis_progress":true,"stage":"prepare","message":"validated request"}', file=sys.stderr)
 print('raw stderr secret should stay redacted', file=sys.stderr)
 print('{"jarvis_progress":true,"stage":"complete","message":"writing validated output","payload":{"ignored":"not exposed"}}', file=sys.stderr)

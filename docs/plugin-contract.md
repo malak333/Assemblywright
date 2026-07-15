@@ -226,11 +226,25 @@ to explain what happened:
   boundary. The boundary revalidates the stored manifest/version metadata,
   checks the requested action is declared, validates input schema, verifies the
   local source-tree provenance snapshot, honors `execution_enabled` and
-  `execution_grant`, checks that the stored source path is canonical, and
-  appends audit evidence. That audit evidence distinguishes subprocess
-  execution from OS sandbox enforcement: `subprocess_started` can be true for
+  `execution_grant`, checks that the stored source path is canonical, evaluates
+  action risk and caller-supplied sensitivity through `PermissionEngine`, and
+  appends audit evidence. Contract dry runs never enter a runtime. Eligible
+  `low`/`workspace` invocations retain direct execution compatibility;
+  `confirm` or sensitive invocations atomically create a waiting task, pending
+  approval, redacted audit evidence, and schema-v15 private invocation binding
+  without starting Wasmi or a subprocess. That binding covers canonical input,
+  the exact manifest/provenance contract, and the execution grant. The common
+  `/approvals/:id/execute` path revalidates all bound state, current policy, and
+  matching grant evidence before the schema-v13 one-shot claim. Audit evidence
+  distinguishes subprocess execution from OS sandbox enforcement:
+  `subprocess_started` can be true for
   a completed local subprocess, while `os_sandbox_enforced` remains false until
   a real OS sandbox or host-level egress policy is enforced by the runner.
+  CLI and Swift send a fresh `cancellation_id` with approval execution. Rust
+  binds it to the approved task and activates it around the durable claim and
+  runtime; authenticated `/runtime/cancellations/:id` discards output and
+  records a cancelled terminal claim when cancellation wins acceptance. The
+  subprocess boundary still cannot reverse a side effect already performed.
 - Model-originated tool requests are stricter than direct plugin registry
   inspection. The default provider inventory contains only registered
   first-party actions, and `/tools/model` remains the redacted first-party
@@ -357,7 +371,10 @@ contract testing. Release verification should keep covering:
   validation, minimal subprocess environment isolation, network declaration
   validation, contract-only dry-run evidence, constrained subprocess execution
   evidence, publisher-origin/signature verification evidence, and durable audit
-  evidence.
+  evidence. Approval coverage proves direct Low compatibility, Confirm or
+  sensitive non-entry, canonical-input and contract binding, redaction,
+  pre-claim mutation rejection, durable one-shot claim/replay conflict, and no
+  automatic retry after a claim.
 - `local_wasm` install/restart/run coverage proves schema-v12 migration,
   `wasm_compute` grant separation, exact-byte provenance, required exports,
   import/WASI rejection, module/request/output/memory/fuel ceilings,

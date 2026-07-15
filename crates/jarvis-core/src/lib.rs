@@ -18,11 +18,11 @@ pub mod workspace;
 
 pub use ipc::{
     router, router_with_auth, serve, serve_listener, serve_listener_with_auth, serve_with_auth,
-    ApprovalDecisionRequest, ApprovalExecutionResponse, ApprovalStatusCount, CommandRequest,
-    CommandResponse, CreateMemoryItemRequest, CreateSchedulerJobRequest, EmergencyPauseRequest,
-    EmergencyPauseResponse, ErrorResponse, HealthResponse, InstallPluginRequest,
-    InstalledPluginExecutionRequest, InstalledPluginGrantSurface,
-    InstalledPluginPublisherSignatureVerificationRequest,
+    ApprovalDecisionRequest, ApprovalExecutionRequest, ApprovalExecutionResponse,
+    ApprovalStatusCount, CommandRequest, CommandResponse, CreateMemoryItemRequest,
+    CreateSchedulerJobRequest, EmergencyPauseRequest, EmergencyPauseResponse, ErrorResponse,
+    HealthResponse, InstallPluginRequest, InstalledPluginExecutionRequest,
+    InstalledPluginGrantSurface, InstalledPluginPublisherSignatureVerificationRequest,
     InstalledPluginPublisherVerificationRequest, InstalledPluginRunRequest,
     InstalledPluginRunResponse, IpcAuth, IpcState, ModelToolCatalogEntry, ModelToolCatalogResponse,
     ModelToolConstraints, PermissionGrantSummary, PermissionPolicyReview,

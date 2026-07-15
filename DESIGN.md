@@ -326,8 +326,16 @@ Capability toggles, risk-tier rules, per-plugin scopes, approval history, and em
 Approval decisions and execution authority are separate. Approve or deny never
 runs a side effect. An explicit approved execution first revalidates the task,
 approved record, still-waiting task, exact action, current risk and scopes,
-current manifest, input schema, and policy. Schema v13
-then atomically writes a unique durable claim and redacted
+current manifest, input schema, and policy. Direct installed-plugin runs also
+pass through the permission engine: low/notify actions may continue under their
+explicit execution grant, while confirm-tier or sensitive invocations create a
+pending approval without entering the runtime. Schema v15 binds that pending
+invocation to canonical input held only in SQLite plus private input/contract
+digests, the exact plugin/action, manifest and authorization-relevant provenance,
+execution grant, task, scopes, risk, and sensitivity. The binding input and
+digests are never returned by approval, audit, diagnostics, CLI, or Swift
+surfaces. Explicit execution re-verifies every bound field, then the Schema v13
+claim mechanism atomically writes a unique durable claim and redacted
 `approval_execution_claimed` audit before plugin entry. The claim is permanent:
 success, failure, cancellation, timeout, or an unresolved restart cannot reuse
 the approval. Terminal execution state, task state, and terminal audit evidence
@@ -335,6 +343,14 @@ commit in one transaction. Because a post-claim interruption may have produced
 an external effect, Jarvis reports the outcome as ambiguous and requires an
 operator to review evidence and create a new approval rather than retrying
 automatically.
+
+CLI and Swift approved-execution clients generate a fresh cancellation UUID.
+Rust registers the handle, binds it to the approved task, and activates it at
+the claim boundary. Authenticated cancellation can target only that exact
+active run; when it wins output acceptance, Jarvis discards late output and
+atomically records cancelled claim and task state. This cooperative boundary
+cannot reverse an external effect already performed. The Approval Center owns
+that same handle while execution is active and presents a Cancel Run control.
 
 ### Plugin Manager
 

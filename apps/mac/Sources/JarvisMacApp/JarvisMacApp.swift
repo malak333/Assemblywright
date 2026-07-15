@@ -1933,7 +1933,7 @@ struct ApprovalCenterView: View {
                 }
 
                 if let execution = model.lastExecution {
-                    Text("\(execution.approval.action) executed: \(execution.task.status)")
+                    Text("\(execution.approval.action): \(execution.message)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -1972,13 +1972,26 @@ struct ApprovalCenterView: View {
                             .buttonStyle(.bordered)
                             .disabled(model.isLoading)
                         } else if item.executionAvailable {
-                            Button {
-                                execute(item.id)
-                            } label: {
-                                Label("Run Approved", systemImage: "play.circle")
+                            if model.isExecuting(id: item.id) {
+                                Button(role: .destructive) {
+                                    cancelExecution(item.id)
+                                } label: {
+                                    Label(
+                                        model.isCancelling(id: item.id) ? "Cancelling" : "Cancel Run",
+                                        systemImage: "stop.circle"
+                                    )
+                                }
+                                .buttonStyle(.bordered)
+                                .disabled(model.isCancelling(id: item.id))
+                            } else {
+                                Button {
+                                    execute(item.id)
+                                } label: {
+                                    Label("Run Approved", systemImage: "play.circle")
+                                }
+                                .buttonStyle(.bordered)
+                                .disabled(model.isLoading)
                             }
-                            .buttonStyle(.bordered)
-                            .disabled(model.isLoading || model.isExecuting(id: item.id))
                         } else {
                             Text("Inspection only")
                                 .font(.caption2)
@@ -2030,6 +2043,12 @@ struct ApprovalCenterView: View {
         Task {
             await model.execute(id: id)
             decisionReasons[id] = nil
+        }
+    }
+
+    private func cancelExecution(_ id: UUID) {
+        Task {
+            await model.cancelExecution(id: id)
         }
     }
 }

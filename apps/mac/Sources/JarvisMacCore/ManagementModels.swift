@@ -797,7 +797,8 @@ public final class ApprovalManagementModel: ObservableObject {
 
     private let client: any JarvisCoreClient
     private var pluginManifests: [JarvisPluginManifest]
-    private var executingApprovalIDs: Set<UUID>
+    @Published private var executionCancellationIDs: [UUID: UUID]
+    @Published private var cancellingApprovalIDs: Set<UUID>
 
     public init(client: any JarvisCoreClient = JarvisIPCClient()) {
         self.client = client
@@ -811,7 +812,8 @@ public final class ApprovalManagementModel: ObservableObject {
         self.isLoading = false
         self.lastError = nil
         self.pluginManifests = []
-        self.executingApprovalIDs = []
+        self.executionCancellationIDs = [:]
+        self.cancellingApprovalIDs = []
     }
 
     public func refresh() async {
@@ -869,16 +871,26 @@ public final class ApprovalManagementModel: ObservableObject {
 
     public func execute(id: UUID) async {
         guard supportsApprovalExecution else {
-            lastError = "Core does not expose approved approval execution."
+            lastError = "Core does not expose approved action execution."
             return
         }
-        guard executingApprovalIDs.insert(id).inserted else {
+        let cancellationID = UUID()
+        guard executionCancellationIDs[id] == nil else {
             return
         }
-        defer { executingApprovalIDs.remove(id) }
+        executionCancellationIDs[id] = cancellationID
+        defer {
+            if executionCancellationIDs[id] == cancellationID {
+                executionCancellationIDs[id] = nil
+            }
+            cancellingApprovalIDs.remove(id)
+        }
 
         await run {
-            let execution = try await self.client.executeApproval(id: id)
+            let execution = try await self.client.executeApproval(
+                id: id,
+                cancellationID: cancellationID
+            )
             self.lastExecution = execution
             self.pendingItems.removeAll { $0.id == id }
             if self.contract?.exposesPermissionGrantSummary == true {
@@ -897,7 +909,36 @@ public final class ApprovalManagementModel: ObservableObject {
     }
 
     public func isExecuting(id: UUID) -> Bool {
-        executingApprovalIDs.contains(id)
+        executionCancellationIDs[id] != nil
+    }
+
+    public func isCancelling(id: UUID) -> Bool {
+        cancellingApprovalIDs.contains(id)
+    }
+
+    public func executionCancellationID(for id: UUID) -> UUID? {
+        executionCancellationIDs[id]
+    }
+
+    public func cancelExecution(id: UUID) async {
+        guard let cancellationID = executionCancellationIDs[id] else {
+            return
+        }
+        guard cancellingApprovalIDs.insert(id).inserted else {
+            return
+        }
+        lastError = nil
+        defer { cancellingApprovalIDs.remove(id) }
+
+        do {
+            let response = try await client.cancelCommand(cancellationID: cancellationID)
+            guard response.cancellationID == cancellationID else {
+                lastError = "Core returned a mismatched approval execution cancellation handle."
+                return
+            }
+        } catch {
+            lastError = String(describing: error)
+        }
     }
 
     private func decide(

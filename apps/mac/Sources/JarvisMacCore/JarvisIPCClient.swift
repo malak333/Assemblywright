@@ -1503,6 +1503,7 @@ public struct JarvisApprovalExecutionResponse: Decodable, Equatable, Sendable {
     public var auditEntry: JarvisAuditEntry
     public var auditEntries: [JarvisAuditEntry]
     public var pluginResults: [JarvisPluginCallResult]
+    public var installedPluginResult: JarvisInstalledPluginExecutionResult?
     public var message: String
 
     enum CodingKeys: String, CodingKey {
@@ -1512,7 +1513,43 @@ public struct JarvisApprovalExecutionResponse: Decodable, Equatable, Sendable {
         case auditEntry = "audit_entry"
         case auditEntries = "audit_entries"
         case pluginResults = "plugin_results"
+        case installedPluginResult = "installed_plugin_result"
         case message
+    }
+}
+
+private struct JarvisApprovalExecutionRequest: Encodable {
+    var cancellationID: UUID
+
+    enum CodingKeys: String, CodingKey {
+        case cancellationID = "cancellation_id"
+    }
+}
+
+/// Redacted execution evidence for an installed plugin approval. The bound
+/// invocation input and integrity digests intentionally are not decoded by the
+/// macOS approval surface.
+public struct JarvisInstalledPluginExecutionResult: Decodable, Equatable, Sendable {
+    public var pluginId: String
+    public var action: String
+    public var status: String
+    public var reason: String
+    public var executionEnabled: Bool
+    public var executionGrant: String
+    public var contractValidated: Bool
+    public var sideEffectExecuted: Bool
+    public var runtimeKind: String
+
+    enum CodingKeys: String, CodingKey {
+        case pluginId = "plugin_id"
+        case action
+        case status
+        case reason
+        case executionEnabled = "execution_enabled"
+        case executionGrant = "execution_grant"
+        case contractValidated = "contract_validated"
+        case sideEffectExecuted = "side_effect_executed"
+        case runtimeKind = "runtime_kind"
     }
 }
 
@@ -2045,7 +2082,16 @@ public protocol JarvisCoreClient: Sendable {
     func approval(id: UUID) async throws -> JarvisPendingApproval
     func approveApproval(id: UUID, request: JarvisApprovalDecisionRequest) async throws -> JarvisPendingApproval
     func denyApproval(id: UUID, request: JarvisApprovalDecisionRequest) async throws -> JarvisPendingApproval
-    func executeApproval(id: UUID) async throws -> JarvisApprovalExecutionResponse
+    func executeApproval(
+        id: UUID,
+        cancellationID: UUID
+    ) async throws -> JarvisApprovalExecutionResponse
+}
+
+public extension JarvisCoreClient {
+    func executeApproval(id: UUID) async throws -> JarvisApprovalExecutionResponse {
+        try await executeApproval(id: id, cancellationID: UUID())
+    }
 }
 
 public final class JarvisIPCClient: JarvisCoreClient {
@@ -2377,8 +2423,16 @@ public final class JarvisIPCClient: JarvisCoreClient {
         try await send(path: "/approvals/\(id.uuidString)/deny", method: "POST", body: encoder.encode(request))
     }
 
-    public func executeApproval(id: UUID) async throws -> JarvisApprovalExecutionResponse {
-        try await send(path: "/approvals/\(id.uuidString)/execute", method: "POST", body: Optional<Data>.none)
+    public func executeApproval(
+        id: UUID,
+        cancellationID: UUID
+    ) async throws -> JarvisApprovalExecutionResponse {
+        let request = JarvisApprovalExecutionRequest(cancellationID: cancellationID)
+        return try await send(
+            path: "/approvals/\(id.uuidString)/execute",
+            method: "POST",
+            body: encoder.encode(request)
+        )
     }
 
     private func send<Response: Decodable>(
