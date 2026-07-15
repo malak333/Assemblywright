@@ -19,6 +19,7 @@ use p256::ecdsa::{Signature as P256Signature, SigningKey as P256SigningKey};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
+use uuid::Uuid;
 
 const SERVER_HEALTH_ATTEMPTS: usize = 400;
 const SERVER_HEALTH_RETRY_DELAY: Duration = Duration::from_millis(25);
@@ -4831,6 +4832,16 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
     assert_array_contains(
         &contract["endpoints"],
         "path",
+        "/approval-executions/attention",
+    );
+    assert_array_contains(
+        &contract["endpoints"],
+        "path",
+        "/approval-executions/attention/:execution_id/acknowledge",
+    );
+    assert_array_contains(
+        &contract["endpoints"],
+        "path",
         "/plugins/installed/:id/execution",
     );
     assert_array_contains(
@@ -4859,6 +4870,10 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
         "/permissions/policy-review",
     );
     assert_string_array_contains(&contract["safe_inspection_paths"], "/approvals/:id");
+    assert_string_array_contains(
+        &contract["safe_inspection_paths"],
+        "/approval-executions/attention",
+    );
     assert_string_array_contains(&contract["safe_inspection_paths"], "/activity/summary");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/activity/events");
     assert_string_array_contains(&contract["safe_inspection_paths"], "/memory/classification");
@@ -6813,7 +6828,7 @@ fn serve_exposes_local_ipc_contract_and_persists_state() {
 
     let diagnostics = run_cli_json(["diagnostics", "export", "--endpoint", endpoint.as_str()]);
     assert_eq!(diagnostics["repository_backed"], true);
-    assert_eq!(diagnostics["schema_version"], 15);
+    assert_eq!(diagnostics["schema_version"], 16);
     assert_eq!(
         diagnostics["health"]["contract"]["name"],
         "jarvis.local-ipc"
@@ -8348,10 +8363,181 @@ fn approved_row_without_grant_audit_cannot_claim_or_enter_plugin_across_restart(
 }
 
 #[test]
+fn file_backed_core_ownership_blocks_second_process_and_defers_live_claim_reconciliation() {
+    let temp = tempfile::tempdir().expect("owner lease fixture");
+    let db_path = temp.path().join("jarvis-owner-lease.sqlite");
+    let (task_id, approval_id, execution_id) = {
+        let repository = SqliteRepository::open(&db_path).expect("setup repository");
+        let task = repository
+            .create_task(Uuid::new_v4(), "owner lease active claim")
+            .expect("create task");
+        repository
+            .update_task_status(task.id, TaskStatus::WaitingForApproval)
+            .expect("stage task");
+        let approval = repository
+            .create_pending_approval(NewPendingApproval {
+                task_id: task.id,
+                action: "system_status.status".to_string(),
+                requested_scopes: vec![CapabilityScope::PluginRun, CapabilityScope::Conversation],
+                risk_tier: RiskTier::Notify,
+                sensitivity: Sensitivity::Workspace,
+                reason: "owner lease active claim fixture".to_string(),
+            })
+            .expect("create approval");
+        repository
+            .decide_pending_approval(approval.id, ApprovalStatus::Approved, "e2e", None)
+            .expect("approve fixture");
+        (task.id, approval.id, Uuid::new_v4())
+    };
+    let connection = rusqlite::Connection::open(&db_path).expect("downgrade fixture connection");
+    connection
+        .execute_batch(
+            "DROP TABLE approval_execution_attention;
+             DELETE FROM schema_migrations WHERE version = 16;",
+        )
+        .expect("create schema-v15 fixture");
+    drop(connection);
+
+    let mut owner = JarvisServer::start(&db_path);
+    let owner_endpoint = owner.endpoint();
+    let connection = rusqlite::Connection::open(&db_path).expect("live raw fixture connection");
+    let now = chrono::Utc::now().to_rfc3339();
+    connection
+        .execute(
+            "INSERT INTO approval_executions
+             (id, approval_id, task_id, action, state, claimed_at, finished_at)
+             VALUES (?1, ?2, ?3, 'system_status.status', 'claimed', ?4, NULL)",
+            rusqlite::params![
+                execution_id.to_string(),
+                approval_id.to_string(),
+                task_id.to_string(),
+                now,
+            ],
+        )
+        .expect("simulate claim owned by live core");
+    drop(connection);
+    let live_attention = run_cli_json([
+        "approvals",
+        "attention",
+        "--endpoint",
+        owner_endpoint.as_str(),
+    ]);
+    assert_eq!(live_attention["unacknowledged_count"], 0);
+
+    let second_bind = unused_loopback_addr();
+    let mut second = Command::new(jarvis_cli_bin())
+        .args([
+            "serve",
+            "--bind",
+            &second_bind.to_string(),
+            "--db-path",
+            db_path.to_str().expect("db path"),
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start competing core");
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if second.try_wait().expect("poll competing core").is_some() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            let _ = second.kill();
+            let _ = second.wait();
+            panic!("competing core did not fail promptly on the owner lease");
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    let second_output = second.wait_with_output().expect("collect competing core");
+    assert!(!second_output.status.success());
+    let second_error = String::from_utf8_lossy(&second_output.stderr);
+    assert!(
+        second_error.contains("already owned by another Jarvis core"),
+        "{second_error}"
+    );
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+
+        let symlink_alias = temp.path().join("jarvis-owner-symlink.sqlite");
+        symlink(&db_path, &symlink_alias).expect("create database symlink alias");
+        let symlink_error = run_competing_core_failure(&symlink_alias);
+        assert!(
+            symlink_error.contains("regular current-owner non-hardlinked file"),
+            "{symlink_error}"
+        );
+        fs::remove_file(&symlink_alias).expect("remove symlink alias");
+
+        let hardlink_alias = temp.path().join("jarvis-owner-hardlink.sqlite");
+        fs::hard_link(&db_path, &hardlink_alias).expect("create database hardlink alias");
+        let hardlink_error = run_competing_core_failure(&hardlink_alias);
+        assert!(
+            hardlink_error.contains("regular current-owner non-hardlinked file"),
+            "{hardlink_error}"
+        );
+        fs::remove_file(&hardlink_alias).expect("remove hardlink alias");
+    }
+
+    let connection = rusqlite::Connection::open(&db_path).expect("inspect live claim");
+    let task_status: String = connection
+        .query_row(
+            "SELECT status FROM tasks WHERE id = ?1",
+            rusqlite::params![task_id.to_string()],
+            |row| row.get(0),
+        )
+        .expect("task status");
+    let attention_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM approval_execution_attention",
+            [],
+            |row| row.get(0),
+        )
+        .expect("attention count");
+    let execution_state: String = connection
+        .query_row(
+            "SELECT state FROM approval_executions WHERE id = ?1",
+            rusqlite::params![execution_id.to_string()],
+            |row| row.get(0),
+        )
+        .expect("execution state");
+    assert_eq!(task_status, "waiting_for_approval");
+    assert_eq!(attention_count, 0);
+    assert_eq!(execution_state, "claimed");
+    drop(connection);
+
+    owner.stop();
+    let mut restarted = JarvisServer::start(&db_path);
+    let restarted_endpoint = restarted.endpoint();
+    let restart_attention = run_cli_json([
+        "approvals",
+        "attention",
+        "--endpoint",
+        restarted_endpoint.as_str(),
+    ]);
+    assert_eq!(restart_attention["unacknowledged_count"], 1);
+    assert_eq!(
+        restart_attention["items"][0]["execution_id"],
+        execution_id.to_string()
+    );
+    let failed_task = run_cli_json([
+        "tasks",
+        "get",
+        &task_id.to_string(),
+        "--endpoint",
+        restarted_endpoint.as_str(),
+    ]);
+    assert_eq!(failed_task["status"], "failed");
+    restarted.stop();
+}
+
+#[test]
 fn concurrent_approved_execution_is_one_shot_across_ipc_and_restart() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let db_path = temp_dir.path().join("jarvis-approval-once.sqlite");
-    let (approval_id, task_id, claimed_approval_id, claimed_task_id) = {
+    let (approval_id, task_id, claimed_approval_id, claimed_task_id, claimed_execution_id) = {
         let repository = SqliteRepository::open(&db_path).expect("open repository");
         let task = repository
             .create_task(
@@ -8452,6 +8638,7 @@ fn concurrent_approved_execution_is_one_shot_across_ipc_and_restart() {
             task.id.to_string(),
             claimed_approval.id.to_string(),
             claimed_task.id.to_string(),
+            execution_id.to_string(),
         )
     };
 
@@ -8461,6 +8648,80 @@ fn concurrent_approved_execution_is_one_shot_across_ipc_and_restart() {
     let claimed_error = request(&endpoint, "POST", &claimed_path, Some("{}"))
         .expect_err("startup cannot retry an unresolved durable claim");
     assert!(claimed_error.contains("409 Conflict"), "{claimed_error}");
+    let attention = run_cli_json(["approvals", "attention", "--endpoint", endpoint.as_str()]);
+    assert_eq!(attention["attention_required"], true);
+    assert_eq!(attention["unacknowledged_count"], 1);
+    assert_eq!(attention["returned_item_count"], 1);
+    assert_eq!(attention["item_limit"], 100);
+    assert_eq!(attention["items_truncated"], false);
+    assert_eq!(attention["items"][0]["execution_id"], claimed_execution_id);
+    assert_eq!(attention["items"][0]["approval_id"], claimed_approval_id);
+    assert_eq!(attention["items"][0]["task_id"], claimed_task_id);
+    assert_eq!(attention["items"][0]["revision"], 1);
+    assert_eq!(attention["items"][0]["effect_possible"], true);
+    assert_eq!(attention["items"][0]["automatic_retry"], false);
+    assert_eq!(attention["items"][0]["action_redacted"], true);
+    let encoded_attention = serde_json::to_string(&attention).expect("attention JSON");
+    assert!(!encoded_attention.contains("system_status.status"));
+    assert!(!encoded_attention.contains("restart ambiguity proof"));
+    let failed_claimed_task = run_cli_json([
+        "tasks",
+        "get",
+        &claimed_task_id,
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(failed_claimed_task["status"], "failed");
+    let stale_acknowledgement = run_cli_failure([
+        "approvals",
+        "acknowledge-without-retry",
+        &claimed_execution_id,
+        "--revision",
+        "2",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert!(
+        stale_acknowledgement.contains("409 Conflict"),
+        "{stale_acknowledgement}"
+    );
+    let acknowledgement = run_cli_json([
+        "approvals",
+        "acknowledge-without-retry",
+        &claimed_execution_id,
+        "--revision",
+        "1",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert_eq!(acknowledgement["attention"]["revision"], 2);
+    assert_eq!(
+        acknowledgement["attention"]["acknowledged_disposition"],
+        "acknowledged_without_retry"
+    );
+    assert!(acknowledgement["proof_boundary"]
+        .as_str()
+        .expect("proof boundary")
+        .contains("without retrying"));
+    let cleared_attention =
+        run_cli_json(["approvals", "attention", "--endpoint", endpoint.as_str()]);
+    assert_eq!(cleared_attention["attention_required"], false);
+    assert_eq!(cleared_attention["unacknowledged_count"], 0);
+    assert_eq!(cleared_attention["returned_item_count"], 0);
+    assert_eq!(cleared_attention["items_truncated"], false);
+    let acknowledgement_replay = run_cli_failure([
+        "approvals",
+        "acknowledge-without-retry",
+        &claimed_execution_id,
+        "--revision",
+        "1",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    assert!(
+        acknowledgement_replay.contains("409 Conflict"),
+        "{acknowledgement_replay}"
+    );
     let path = format!("/approvals/{approval_id}/execute");
     let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
     let mut handles = Vec::new();
@@ -8525,6 +8786,38 @@ fn concurrent_approved_execution_is_one_shot_across_ipc_and_restart() {
         0
     );
     assert_eq!(
+        claimed_audits
+            .iter()
+            .filter(|entry| {
+                entry["event_type"] == "approval_execution_startup_ambiguous_attention_required"
+            })
+            .count(),
+        1
+    );
+    assert_eq!(
+        claimed_audits
+            .iter()
+            .filter(|entry| {
+                entry["event_type"] == "approval_execution_attention_acknowledged_without_retry"
+            })
+            .count(),
+        1
+    );
+    let attention_audits = claimed_audits
+        .iter()
+        .filter(|entry| {
+            matches!(
+                entry["event_type"].as_str(),
+                Some("approval_execution_startup_ambiguous_attention_required")
+                    | Some("approval_execution_attention_acknowledged_without_retry")
+            )
+        })
+        .collect::<Vec<_>>();
+    let encoded_attention_audits =
+        serde_json::to_string(&attention_audits).expect("attention audit JSON");
+    assert!(!encoded_attention_audits.contains("system_status.status"));
+    assert!(!encoded_attention_audits.contains("restart ambiguity proof"));
+    assert_eq!(
         task_audits
             .iter()
             .filter(|entry| entry["event_type"] == "approval_executed")
@@ -8550,6 +8843,14 @@ fn concurrent_approved_execution_is_one_shot_across_ipc_and_restart() {
         restarted_claimed_error.contains("409 Conflict"),
         "{restarted_claimed_error}"
     );
+    let restarted_attention = run_cli_json([
+        "approvals",
+        "attention",
+        "--endpoint",
+        restarted.endpoint().as_str(),
+    ]);
+    assert_eq!(restarted_attention["attention_required"], false);
+    assert_eq!(restarted_attention["unacknowledged_count"], 0);
     restarted.stop();
 }
 
@@ -9286,6 +9587,24 @@ fn app_supervised_ipc_auth_is_fail_closed_and_cli_token_file_is_safe() {
     let tasks = request_with_authorization_headers(&endpoint, "GET", "/tasks", None, &[&bearer])
         .expect("authenticated tasks");
     assert_eq!(serde_json::from_str::<Value>(&tasks).unwrap(), json!([]));
+    let unauthenticated_attention =
+        request(&endpoint, "GET", "/approval-executions/attention", None)
+            .expect_err("approval execution attention requires configured IPC authentication");
+    assert!(
+        unauthenticated_attention.contains("401 Unauthorized"),
+        "{unauthenticated_attention}"
+    );
+    let attention = request_with_authorization_headers(
+        &endpoint,
+        "GET",
+        "/approval-executions/attention",
+        None,
+        &[&bearer],
+    )
+    .expect("authenticated approval execution attention");
+    let attention: Value = serde_json::from_str(&attention).unwrap();
+    assert_eq!(attention["attention_required"], false);
+    assert_eq!(attention["unacknowledged_count"], 0);
     let audit = request_with_authorization_headers(&endpoint, "GET", "/audit", None, &[&bearer])
         .expect("authenticated audit");
     assert_eq!(serde_json::from_str::<Value>(&audit).unwrap(), json!([]));
@@ -11469,6 +11788,44 @@ fn assert_key_control_start_fails(db_path: &Path, document: &Value) {
         .write_all(document.to_string().as_bytes())
         .unwrap();
     assert!(!child.wait_with_output().unwrap().status.success());
+}
+
+fn run_competing_core_failure(db_path: &Path) -> String {
+    let bind = unused_loopback_addr();
+    let mut child = Command::new(jarvis_cli_bin())
+        .args([
+            "serve",
+            "--bind",
+            &bind.to_string(),
+            "--db-path",
+            db_path.to_str().expect("database path"),
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start competing core alias probe");
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if child
+            .try_wait()
+            .expect("poll competing core alias probe")
+            .is_some()
+        {
+            break;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("competing core alias probe did not fail promptly");
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    let output = child
+        .wait_with_output()
+        .expect("collect competing core alias probe");
+    assert!(!output.status.success());
+    String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
 struct JarvisServer {

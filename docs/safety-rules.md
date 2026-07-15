@@ -289,6 +289,29 @@ release requirements, not optional UX guidance.
   failure that leaves a claimed execution unresolved is likewise ambiguous.
   Jarvis must never automatically retry a claimed approval; the operator must
   review the evidence and create a new approval for any deliberate new attempt.
+- Repository-backed startup must project every pre-existing unresolved claim
+  into the schema-v16 approval-execution attention ledger before serving IPC.
+  Projection and acknowledgement must remain redacted: no action, input,
+  decision reason, actor, plugin path, or provenance digest may be returned.
+  The bounded list must report the true unacknowledged total, returned count,
+  item limit, and truncation flag consistently; clients must fail closed on
+  contradictory pagination metadata rather than understate recovery attention.
+  Acknowledgement requires the exact observed revision and the literal
+  `acknowledged_without_retry` disposition. Its immediate transaction must
+  compare-and-swap one unacknowledged row and append audit evidence together;
+  stale, replayed, or overflowing revisions fail closed. Clients must require
+  the exact successor revision and identical execution, approval, and task IDs
+  before clearing the displayed row. It must never invoke a plugin,
+  mutate/delete the permanent claim, or create/retry an approval.
+- A file-backed repository must acquire its secure sibling `.owner.lock`
+  before migration backup, version inspection, database open, or migration and
+  retain the lease for its lifetime. The lock must be opened no-follow and
+  close-on-exec, be a current-owner regular single-link file with mode `0600`,
+  and accept one nonblocking exclusive Unix lock. Symlink, hard-link,
+  permissive-mode, wrong-owner, unsupported-platform, and competing-owner
+  states fail closed before SQLite mutation.
+  Treat this as coordination among cooperating Jarvis repositories only; never
+  claim the advisory lease OS-blocks raw SQLite or noncooperating writers.
 - Direct installed-plugin execution must pass `PermissionEngine`. Contract dry
   runs remain non-executing and eligible Low/default-sensitivity invocations may
   run directly. Confirm actions or sensitive invocations must create a pending

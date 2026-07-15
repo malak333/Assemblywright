@@ -472,6 +472,9 @@ flowchart TB
         ApprovalPreclaim --> ApprovalClaim["schema-v13 unique durable claim plus redacted claim audit"]
         ApprovalClaim --> ApprovalTerminal["terminal execution, task state, and audits commit atomically"]
         ApprovalClaim --> ApprovalAmbiguous["claimed restart is effect-possible; no automatic retry"]
+        ApprovalAmbiguous --> ApprovalAttention["schema-v16 redacted startup attention projection; true total plus bounded page"]
+        ApprovalAttention --> ApprovalAcknowledge["exact-revision acknowledge without retry CAS"]
+        ApprovalAcknowledge --> ApprovalConsumed["original claim remains permanently consumed"]
         IPC --> PublisherReview["/plugins/installed/:id/publisher/verify"]
         IPC --> PublisherSignature["/plugins/installed/:id/publisher/signature/verify"]
         IPC --> InstalledProvenanceVerify["/plugins/installed/:id/provenance/verify"]
@@ -587,6 +590,8 @@ flowchart TB
     end
 
     IPC --> RepoState["optional SqliteRepository backing"]
+    RepoState --> OwnerLease["secure sibling owner lease held before backup/migration for repository lifetime"]
+    OwnerLease --> OwnerLeaseBoundary["cooperating Jarvis owners only; raw SQLite writers not OS-blocked"]
     RuntimeStore --> RepoState
     Inspection --> RepoState
     PublisherReview --> RepoState
@@ -925,7 +930,11 @@ a signed/notarized packaged Mac approval flow.
 File-backed `SqliteRepository::open` creates a preflight migration backup for
 existing databases below the current schema version and restores the original
 DB/WAL/SHM files if opening/configuring/migrating fails. The backup is
-app-owned local state, not a redacted export.
+app-owned local state, not a redacted export. Before that preflight, the
+repository acquires a secure nonblocking sibling owner lease and retains it for
+its lifetime, serializing cooperating Jarvis cores across backup, migration,
+and startup reconciliation. The advisory lease does not OS-block raw SQLite or
+other noncooperating writers.
 Repository-backed IPC state also exposes task, audit, model-route, memory,
 permission-grant, scheduler, plugin manifest, installed-plugin, and
 installed-plugin execution-grant inspection endpoints, so the CLI and Swift
@@ -1322,7 +1331,9 @@ sequenceDiagram
   health/contract/command/pause/task/audit/memory/plugin/scheduler/diagnostics
   JSON contracts. Approval management loads pending approvals for decisions and
   approved-unexecuted approvals for explicit one-shot execution when
-  `/contract` exposes the matching endpoints.
+  `/contract` exposes the matching endpoints, plus the redacted unresolved-
+  execution attention projection and exact-revision acknowledge-without-retry
+  action when the schema-v16 recovery endpoints are available.
 - `apps/mac/JarvisMacApp`: SwiftUI shell with health status,
   degraded-mode banner, transcript, activity/audit panel, memory, plugin,
   approval, run/audit, scheduler, diagnostics, voice-state tabs, send,
@@ -1360,6 +1371,8 @@ flowchart TB
         RuntimeProd --> SchedulerProd["scheduler and trigger engine"]
         RuntimeProd --> MemoryPolicy["memory classification and review flow"]
         RuntimeProd --> RepoProd["SqliteRepository"]
+        RepoProd --> OwnerLeaseProd["secure lifetime owner lease before backup, migration, and reconciliation"]
+        OwnerLeaseProd --> CooperativeBoundaryProd["cooperating Jarvis owners; raw writers remain outside advisory enforcement"]
         RepoProd --> BackupManager["migration backup and restore manager"]
         RuntimeProd --> DiagnosticsProd["diagnostics and redacted export data"]
         PauseStateProd["explicit operator pause reason"] --> DiagnosticPauseProjectionProd["state, updated_at, emergency_pause_reason_present, fixed redacted marker"]
@@ -1412,6 +1425,8 @@ flowchart TB
     ApprovalUI --> DecisionLedgerProd["atomic decision plus redacted authority audit"]
     InstalledPendingProd --> DecisionLedgerProd
     DecisionLedgerProd --> BoundClaimProd["durable single-consumer claim after binding and policy revalidation"]
+    BoundClaimProd --> ApprovalRecoveryProd["redacted restart attention ledger, truthful bounded backlog, and explicit no-retry acknowledgement"]
+    ApprovalRecoveryProd --> ApprovalUI
     BoundClaimProd --> WasmComputeProd
     BoundClaimProd --> SubprocessProd
     DecisionLedgerProd --> PermissionGrantStore
@@ -1512,6 +1527,8 @@ external action, or broader production operation.
 
 | Area | Current implementation | Target production state | Phase |
 | --- | --- | --- | --- |
+| Repository ownership | File-backed repositories acquire a no-follow, close-on-exec, current-owner regular single-link `0600` sibling lock with a nonblocking exclusive Unix lease before backup/version/migration and retain it through repository lifetime. Two-process E2E proves a competing core fails before mutation and a schema-v15 live claim is reconciled only after the first owner exits. | One cooperating Jarvis core owns a database lifecycle at a time, with later platform storage changes preserving the same fail-closed migration/recovery serialization. | Secure cooperating-owner lease, release/reacquire, insecure-lock rejection, migration serialization, and two-process claim-reconciliation proof implemented. Advisory locking does not OS-block raw SQLite or noncooperating writers. |
+| Approval execution recovery | Schema v16 projects pre-existing unresolved durable claims into a separate redacted attention ledger before repository-backed IPC starts. `GET /approval-executions/attention`, CLI inspection, and the Swift Approval Center expose only identifiers, timestamps, revision, and fixed effect/no-retry/action-redacted evidence. The summary separates the true total from returned count, 100-item limit, and explicit truncation. Exact-revision `acknowledged_without_retry` uses one transactional CAS plus audit append. | Operators can review ambiguous post-claim restarts without replaying authority; any justified new attempt still requires a distinct task and approval. | Repository startup reconciliation, bounded unacknowledged list with truthful backlog metadata, CLI/IPC/Swift attention surfaces, stale/replay conflict, and explicit acknowledgement implemented. The permanent execution claim is never changed or deleted, plugin runtime is never entered, and no automatic retry or effect determination is claimed. |
 | Installed-plugin lifecycle UX | The Swift Plugin tab uses typed provenance, `POST /plugins/installed/:id/update/preview`, explicitly confirmed `POST /plugins/installed/:id/update/apply`, redacted `GET /plugins/installed/:id/history`, and execution-authority endpoints. New local installs require valid SemVer 2.0.0. A local update candidate is revalidated as untrusted input, must retain plugin identity and advance its semantic version, is bound to both the inspected lifecycle digest and opaque `candidate_update_contract_sha256`, and always resets authority to disabled `metadata_only`; one governed pre-SemVer-to-SemVer compatibility transition is allowed for persisted legacy records, after which strict precedence applies. Apply reloads the exact candidate snapshot, and provenance verification plus explicit compatible-grant enablement must be repeated. Public history entries return only entry ID, plugin ID, lifecycle action, normalized outcome, and timestamp. Inspection shows redacted records plus exact declared permissions/hosts, serializes mutations per plugin, refreshes authoritative state after every outcome, and disables actions while registry state is stale. It never executes plugin code. Rust transactionally audits provenance/update transitions and atomically commits each authority mutation with its redacted non-execution audit; focused storage and authenticated compatibility E2E cover rollback, persistence, bounded history redaction, rejection, and zero execution. Default UDS transport proof remains separate. | Authenticated publisher update delivery, rollback policy, malware analysis, signed OS-sandboxed execution, and host-enforced declared-host egress integrate with the same explicit lifecycle UX without broadening authority silently. No third-party marketplace is a v1 goal. | Audited local update/history and atomic lifecycle boundary implemented; authenticated update distribution, OS sandbox/egress enforcement, and external plugin-trust evidence remain pending. |
 | Menu-bar presence | Native SwiftUI `MenuBarExtra` shares the existing app-owned supervisor, console, and model configuration state; it exposes a stable main-window route, conservative lifecycle status, health refresh, fail-closed start/stop availability, and quit. | Signed and installed `Jarvis.app` remains reachable after its main window closes, without creating a second core owner, and passes live Finder/LaunchServices window-reopen and lifecycle QA. | Swift scene/model contract and architecture implemented; signed installed-app GUI QA remains manual release evidence. |
 | Mac shell | Buildable Swift/SwiftUI shell with health, command transcript, pause/resume, activity/audit rendering, bounded activity event-stream watch, memory classification, redacted retention-plan review, and create/update/review/delete/restore controls, model/plugin/scheduler/diagnostics/release-readiness tabs, degraded-mode handling, and a `JarvisCoreSupervisor` abstraction for configured or bundled local core binaries. The Model tab decodes active provider/model health metadata, lists installed Ollama models from `/api/tags`, merges recommended downloadable Llama/Mistral/Phi/Gemma/Qwen options including Gemma 4, Gemma 3, Qwen3.6, Qwen3, Qwen2.5, Qwen2.5-Coder, and Qwen2.5-VL tags, shows RAM estimates from installed model size or curated pre-download estimates, pulls missing selections through `/api/pull`, starts/stops selected Ollama residency through `/api/generate` keep-alive requests, and restarts only the app-supervised core with selected model environment overrides. The Plugin tab renders first-party manifests plus redacted installed-plugin registry records with execution grant, provenance integrity, origin-review, action metadata, executable status, and redaction markers while omitting local paths, command paths, signature material, and provenance hashes; it degrades gracefully when the repository-backed installed registry is unavailable. The Scheduler tab can inspect/create/cancel jobs, request attention notifications, run due jobs through bounded `/scheduler/run-due`, and recover stale running jobs through bounded `/scheduler/recover-stale`, then refreshes jobs/attention, shows concise last-action state, and exposes delivered-notification evidence fields with reset/recapture controls without exposing scheduler command bodies. The Release tab renders `/release/readiness` blockers, external evidence-mode state, recommended commands, implemented proofs, pending features, proof boundary, `/release/evidence-status` file/report inventory plus invalid evidence details, and read-only signed-distribution/live-device/plugin-trust runbooks while preserving the explicit external-evidence production boundary; evidence rows label path, detail, and production/manual-gate context, present presence-only evidence rows show the caveat on the status line, runbook-load failures surface as warnings without hiding readiness/evidence status, and the production-ready display is fail-closed unless readiness is true, evidence status is complete, and the evidence view has no missing, invalid, stale refresh, or runbook warning state. The Voice tab gates capture behind permission state before start attempts, and the unsigned distribution launch check exercises the release-built `Jarvis.app` layout with temp-profile app-supervised core proof. | Packaged `Jarvis.app` supervises the core, owns voice/text UX, settings, memory and permission surfaces, diagnostics export, release-readiness review, and recovery states. | Shell supervision, Swift model selection/download/start/stop controls for app-supervised Ollama cores, Swift memory management including redacted retention-plan visibility, bounded activity event-stream watch, installed-plugin registry inspection surfaces, Swift scheduler run/recovery and notification evidence controls, Swift release-readiness/evidence-status/runbook inspection with runbook-load warnings, app-level Release row presentation coverage, explicit evidence-mode row coverage, voice permission-before-capture gating, and unsigned distribution launch proof implemented; Developer ID signing, notarization/stapling, signed installer validation, clean-profile /Applications install, Finder/LaunchServices launch, and manual production release QA pending. |

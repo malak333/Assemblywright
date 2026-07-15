@@ -2198,6 +2198,48 @@ struct ApprovalCenterView: View {
                         .foregroundStyle(.secondary)
                 }
 
+                if let acknowledged = model.lastAcknowledgedExecution {
+                    Text("Ambiguous execution \(acknowledged.executionId.uuidString) acknowledged without retry.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+
+                if !model.executionAttention.isEmpty {
+                    Section("Execution recovery") {
+                        if model.executionAttentionItemsTruncated {
+                            Text("Showing \(model.executionAttention.count) of \(model.executionAttentionUnacknowledgedCount) unresolved claims (page limit \(model.executionAttentionItemLimit)). Acknowledge reviewed rows, then refresh to load the next page.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("\(model.executionAttentionUnacknowledgedCount) unresolved approval execution claim(s) require review.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        ForEach(model.executionAttention) { item in
+                            VStack(alignment: .leading, spacing: 5) {
+                                Label("Ambiguous approved execution", systemImage: "exclamationmark.triangle")
+                                    .font(.subheadline)
+                                Text("A durable execution claim survived restart. An external effect may have occurred; Jarvis will not retry it automatically.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Text("execution: \(item.executionId.uuidString) | approval: \(item.approvalId.uuidString) | task: \(item.taskId.uuidString) | revision: \(item.revision) | detected: \(item.detectedAt)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                                Button {
+                                    acknowledgeWithoutRetry(item)
+                                } label: {
+                                    Label("Acknowledge Without Retry", systemImage: "checkmark.shield")
+                                }
+                                .buttonStyle(.bordered)
+                                .disabled(model.isLoading)
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                }
+
                 ForEach(model.pendingItems) { item in
                     VStack(alignment: .leading, spacing: 5) {
                         HStack {
@@ -2276,6 +2318,15 @@ struct ApprovalCenterView: View {
             .font(.caption2)
             .foregroundStyle(.secondary)
             .textSelection(.enabled)
+    }
+
+    private func acknowledgeWithoutRetry(_ item: JarvisApprovalExecutionAttentionItem) {
+        Task {
+            await model.acknowledgeExecutionWithoutRetry(
+                id: item.executionId,
+                expectedRevision: item.revision
+            )
+        }
     }
 
     private func reasonBinding(for id: UUID) -> Binding<String> {

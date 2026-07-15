@@ -28,7 +28,7 @@ use futures_util::StreamExt as FuturesStreamExt;
 
 use crate::storage::{
     installed_plugin_lifecycle_contract_sha256, installed_plugin_update_candidate_contract_sha256,
-    ApprovalExecutionClaim, ApprovalExecutionState,
+    ApprovalExecutionAttention, ApprovalExecutionClaim, ApprovalExecutionState,
     EmergencyPauseState as StoredEmergencyPauseState, InstalledPluginApprovalBinding,
     MemoryClassificationSummary, NewInstalledPluginApproval, NewMemoryItem, NewPendingApproval,
     PendingApproval, SchedulerNotificationOccurrence, SqliteRepository,
@@ -609,6 +609,30 @@ pub struct ApprovalExecutionResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub installed_plugin_result: Option<InstalledPluginRunResponse>,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalExecutionAttentionSummary {
+    pub generated_at: DateTime<Utc>,
+    pub attention_required: bool,
+    pub unacknowledged_count: usize,
+    pub returned_item_count: usize,
+    pub item_limit: usize,
+    pub items_truncated: bool,
+    pub items: Vec<ApprovalExecutionAttention>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalExecutionAttentionAcknowledgementRequest {
+    pub expected_revision: u64,
+    pub disposition: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalExecutionAttentionAcknowledgementResponse {
+    pub attention: ApprovalExecutionAttention,
+    pub proof_boundary: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1239,6 +1263,7 @@ impl IpcState {
     ) -> JarvisResult<Self> {
         let plugin_host = PluginHost::with_workspace_roots(workspace_roots)?;
         repository.reconcile_trusted_wake_events_on_startup()?;
+        repository.reconcile_approval_executions_on_startup()?;
         let stored_pause = repository.emergency_pause_state()?;
         let stored_scheduler_jobs = repository.list_scheduler_jobs_for_runtime()?;
         let scheduler = Scheduler::with_jobs(stored_scheduler_jobs);
@@ -1327,6 +1352,7 @@ impl IpcState {
                 "/permissions/policy-review".to_string(),
                 "/approvals".to_string(),
                 "/approvals/:id".to_string(),
+                "/approval-executions/attention".to_string(),
             ],
             features: contract_features(),
         }
@@ -1565,6 +1591,41 @@ impl IpcState {
         status: Option<ApprovalStatus>,
     ) -> JarvisResult<Vec<PendingApproval>> {
         self.using_repository(|repository| repository.list_pending_approvals(status))
+    }
+
+    pub fn approval_execution_attention(&self) -> JarvisResult<ApprovalExecutionAttentionSummary> {
+        self.using_repository(|repository| {
+            let items = repository.list_approval_execution_attention()?;
+            let unacknowledged_count = repository.approval_execution_attention_count()?;
+            Ok(ApprovalExecutionAttentionSummary {
+                generated_at: Utc::now(),
+                attention_required: unacknowledged_count > 0,
+                unacknowledged_count,
+                returned_item_count: items.len(),
+                item_limit: crate::MAX_APPROVAL_EXECUTION_ATTENTION_ITEMS,
+                items_truncated: unacknowledged_count > items.len(),
+                items,
+            })
+        })
+    }
+
+    pub fn acknowledge_approval_execution_attention(
+        &self,
+        execution_id: Uuid,
+        request: ApprovalExecutionAttentionAcknowledgementRequest,
+    ) -> JarvisResult<ApprovalExecutionAttentionAcknowledgementResponse> {
+        let attention = self.using_repository(|repository| {
+            repository.acknowledge_approval_execution_attention(
+                execution_id,
+                request.expected_revision,
+                &request.disposition,
+            )
+        })?;
+        Ok(ApprovalExecutionAttentionAcknowledgementResponse {
+            attention,
+            proof_boundary: "The acknowledgement records explicit operator review without retrying or entering plugin runtime. The unique approval execution claim remains permanently consumed, and acknowledgement cannot determine whether a pre-restart side effect occurred."
+                .to_string(),
+        })
     }
 
     pub fn permission_grant_summary(&self) -> JarvisResult<PermissionGrantSummary> {
@@ -5929,6 +5990,14 @@ pub fn router_with_auth(state: IpcState, auth: Option<IpcAuth>) -> Router {
         .route("/approvals/:id/approve", post(approve_approval))
         .route("/approvals/:id/deny", post(deny_approval))
         .route("/approvals/:id/execute", post(execute_approved_approval))
+        .route(
+            "/approval-executions/attention",
+            get(approval_execution_attention),
+        )
+        .route(
+            "/approval-executions/attention/:execution_id/acknowledge",
+            post(acknowledge_approval_execution_attention),
+        )
         .route("/plugins/manifests", get(list_plugin_manifests))
         .route("/plugins/manifests/:id", get(get_plugin_manifest))
         .route(
@@ -6672,6 +6741,29 @@ async fn execute_approved_approval(
         .map_err(error_response)
 }
 
+async fn approval_execution_attention(
+    State(state): State<IpcState>,
+) -> Result<Json<ApprovalExecutionAttentionSummary>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .approval_execution_attention()
+        .map(Json)
+        .map_err(error_response)
+}
+
+async fn acknowledge_approval_execution_attention(
+    State(state): State<IpcState>,
+    Path(execution_id): Path<Uuid>,
+    Json(request): Json<ApprovalExecutionAttentionAcknowledgementRequest>,
+) -> Result<
+    Json<ApprovalExecutionAttentionAcknowledgementResponse>,
+    (StatusCode, Json<ErrorResponse>),
+> {
+    state
+        .acknowledge_approval_execution_attention(execution_id, request)
+        .map(Json)
+        .map_err(error_response)
+}
+
 async fn list_plugin_manifests(
     State(state): State<IpcState>,
 ) -> Result<Json<Vec<PluginManifest>>, (StatusCode, Json<ErrorResponse>)> {
@@ -7120,6 +7212,13 @@ fn contract_endpoints() -> Vec<ContractEndpoint> {
         endpoint("POST", "/approvals/:id/approve", true, false),
         endpoint("POST", "/approvals/:id/deny", true, false),
         endpoint("POST", "/approvals/:id/execute", true, false),
+        endpoint("GET", "/approval-executions/attention", true, true),
+        endpoint(
+            "POST",
+            "/approval-executions/attention/:execution_id/acknowledge",
+            true,
+            true,
+        ),
         endpoint("GET", "/plugins/manifests", false, true),
         endpoint("GET", "/plugins/manifests/:id", false, true),
         endpoint("GET", "/plugins/installed", true, true),
@@ -9460,8 +9559,8 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "approval_execution",
             "implemented",
-            "Approved first-party and installed-plugin actions execute through `/approvals/:id/execute` only after matching approval_granted audit evidence plus current action, risk, scope, input-schema, and policy validation; schema-v15 installed bindings additionally protect canonical input, manifest/provenance, and execution grant. Missing, unrelated, or changed evidence fails before claim or plugin entry; current redacted and exact legacy raw-metadata audit shapes are accepted only when their authority and decision fields match. Schema-v13 atomically records a unique durable execution claim plus redacted policy/claim audits before plugin invocation; terminal state, task state, and terminal audits commit together. CLI and Swift attach a fresh cancellation UUID that is bound to the approved task and activated at claim, so authenticated cancellation can discard late output and durably terminalize only that active run as cancelled. Rust race/migration/grant-chain/cancellation tests, authenticated cross-process CLI IPC E2E, and Swift duplicate-submit/restart/request tests cover the one-shot boundary.",
-            "Every durable claim permanently consumes that approval. Failure, cancellation, timeout, storage interruption, or restart after claim may leave the effect ambiguous and automatic retry is forbidden; an operator must inspect audit evidence and create a new approval when appropriate. Grant/deny remains side-effect-free, the claim path never fabricates grant evidence, execution remains limited to explicitly approved first-party plugin commands, and this is not broad autonomous execution or distributed exactly-once delivery.",
+            "Approved first-party and installed-plugin actions execute through `/approvals/:id/execute` only after matching approval_granted audit evidence plus current action, risk, scope, input-schema, and policy validation; schema-v15 installed bindings additionally protect canonical input, manifest/provenance, and execution grant. Missing, unrelated, or changed evidence fails before claim or plugin entry; current redacted and exact legacy raw-metadata audit shapes are accepted only when their authority and decision fields match. Schema-v13 atomically records a unique durable execution claim plus redacted policy/claim audits before plugin invocation; terminal state, task state, and terminal audits commit together. Schema-v16 startup reconciliation inserts durable redacted attention once for unresolved claimed executions, safely fails a still-waiting task, and exposes exact-revision acknowledgement_without_retry through authenticated IPC, CLI, and Swift without entering plugin runtime or altering the claim. Rust migration/CAS/redaction tests, authenticated cross-process restart E2E, and Swift model/request tests cover the boundary.",
+            "Every durable claim permanently consumes that approval. Failure, cancellation, timeout, storage interruption, or restart after claim may leave the effect ambiguous and automatic retry is forbidden; acknowledgement records operator review only and cannot prove whether a pre-restart effect occurred. A deliberate new attempt requires a new approval. Grant/deny remains side-effect-free, the claim path never fabricates grant evidence, and this is not broad autonomous execution or distributed exactly-once delivery.",
         ),
         feature(
             "model_tool_catalog_grounding",
@@ -14446,6 +14545,79 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         }
     }
 
+    #[test]
+    fn approval_execution_attention_summary_reports_total_and_bounded_page() {
+        let repository = SqliteRepository::in_memory().unwrap();
+        for index in 0..(crate::MAX_APPROVAL_EXECUTION_ATTENTION_ITEMS + 1) {
+            let task = repository
+                .create_task(Uuid::new_v4(), format!("attention fixture {index}"))
+                .unwrap();
+            repository
+                .update_task_status(task.id, TaskStatus::WaitingForApproval)
+                .unwrap();
+            let approval = repository
+                .create_pending_approval(NewPendingApproval {
+                    task_id: task.id,
+                    action: "system_status.status".to_string(),
+                    requested_scopes: vec![
+                        CapabilityScope::PluginRun,
+                        CapabilityScope::Conversation,
+                    ],
+                    risk_tier: crate::RiskTier::Notify,
+                    sensitivity: Sensitivity::Workspace,
+                    reason: "bounded attention summary fixture".to_string(),
+                })
+                .unwrap();
+            let approval = repository
+                .decide_pending_approval(approval.id, ApprovalStatus::Approved, "test", None)
+                .unwrap();
+            let execution_id = Uuid::new_v4();
+            let policy_audit = AuditEntry::new(
+                Some(task.id),
+                "approval_execution_policy_evaluated",
+                "policy evaluated",
+                json!({"approval_id": approval.id, "input_redacted": true}),
+            );
+            let claim_audit = AuditEntry::new(
+                Some(task.id),
+                "approval_execution_claimed",
+                "execution claimed",
+                json!({
+                    "approval_id": approval.id,
+                    "execution_id": execution_id,
+                    "input_redacted": true,
+                }),
+            );
+            repository
+                .claim_approved_execution(
+                    approval.id,
+                    execution_id,
+                    task.id,
+                    &approval.action,
+                    &policy_audit,
+                    &claim_audit,
+                )
+                .unwrap();
+        }
+        let state = IpcState::with_repository(repository).unwrap();
+        let summary = state.approval_execution_attention().unwrap();
+        assert!(summary.attention_required);
+        assert_eq!(
+            summary.unacknowledged_count,
+            crate::MAX_APPROVAL_EXECUTION_ATTENTION_ITEMS + 1
+        );
+        assert_eq!(
+            summary.returned_item_count,
+            crate::MAX_APPROVAL_EXECUTION_ATTENTION_ITEMS
+        );
+        assert_eq!(
+            summary.item_limit,
+            crate::MAX_APPROVAL_EXECUTION_ATTENTION_ITEMS
+        );
+        assert!(summary.items_truncated);
+        assert_eq!(summary.items.len(), summary.returned_item_count);
+    }
+
     #[tokio::test]
     async fn permission_policy_review_summarizes_pending_approvals() {
         let repository = SqliteRepository::in_memory().unwrap();
@@ -16016,7 +16188,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .expect("diagnostics export");
         assert_eq!(export.health.status, "ok");
         assert!(export.repository_backed);
-        assert_eq!(export.schema_version, Some(15));
+        assert_eq!(export.schema_version, Some(16));
         assert_eq!(export.task_count, Some(1));
         assert!(export.audit_entry_count.unwrap_or_default() >= 2);
         assert_eq!(export.model_route_record_count, Some(1));

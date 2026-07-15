@@ -198,6 +198,15 @@ public struct JarvisContractResponse: Decodable, Equatable, Sendable {
         }
     }
 
+    public var exposesApprovalExecutionAttention: Bool {
+        let methodsByPath = Dictionary(grouping: endpoints, by: \.path)
+        return methodsByPath["/approval-executions/attention"]?.contains {
+            $0.method.uppercased() == "GET"
+        } == true && methodsByPath["/approval-executions/attention/:execution_id/acknowledge"]?.contains {
+            $0.method.uppercased() == "POST"
+        } == true
+    }
+
     public var exposesApprovalList: Bool {
         endpoints.contains { endpoint in
             endpoint.method.uppercased() == "GET" && endpoint.path == "/approvals"
@@ -1676,6 +1685,87 @@ public struct JarvisApprovalExecutionResponse: Decodable, Equatable, Sendable {
     }
 }
 
+/// Redacted recovery evidence for an approval whose durable claim survived a
+/// core restart. The approved input, decision text, and provenance digests are
+/// intentionally absent from this operator surface.
+public struct JarvisApprovalExecutionAttentionSummary: Decodable, Equatable, Sendable {
+    public var generatedAt: String
+    public var attentionRequired: Bool
+    public var unacknowledgedCount: Int
+    public var returnedItemCount: Int
+    public var itemLimit: Int
+    public var itemsTruncated: Bool
+    public var items: [JarvisApprovalExecutionAttentionItem]
+
+    enum CodingKeys: String, CodingKey {
+        case generatedAt = "generated_at"
+        case attentionRequired = "attention_required"
+        case unacknowledgedCount = "unacknowledged_count"
+        case returnedItemCount = "returned_item_count"
+        case itemLimit = "item_limit"
+        case itemsTruncated = "items_truncated"
+        case items
+    }
+}
+
+public struct JarvisApprovalExecutionAttentionItem: Codable, Equatable, Identifiable, Sendable {
+    public var executionId: UUID
+    public var approvalId: UUID
+    public var taskId: UUID
+    public var detectedAt: String
+    public var updatedAt: String
+    public var acknowledgedAt: String?
+    public var acknowledgedDisposition: String?
+    public var revision: UInt64
+    public var effectPossible: Bool
+    public var automaticRetry: Bool
+    public var actionRedacted: Bool
+
+    public var id: UUID { executionId }
+
+    enum CodingKeys: String, CodingKey {
+        case executionId = "execution_id"
+        case approvalId = "approval_id"
+        case taskId = "task_id"
+        case detectedAt = "detected_at"
+        case updatedAt = "updated_at"
+        case acknowledgedAt = "acknowledged_at"
+        case acknowledgedDisposition = "acknowledged_disposition"
+        case revision
+        case effectPossible = "effect_possible"
+        case automaticRetry = "automatic_retry"
+        case actionRedacted = "action_redacted"
+    }
+}
+
+public struct JarvisApprovalExecutionAcknowledgementRequest: Encodable, Equatable, Sendable {
+    public var expectedRevision: UInt64
+    public var disposition: String
+
+    public init(
+        expectedRevision: UInt64,
+        disposition: String = "acknowledged_without_retry"
+    ) {
+        self.expectedRevision = expectedRevision
+        self.disposition = disposition
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case expectedRevision = "expected_revision"
+        case disposition
+    }
+}
+
+public struct JarvisApprovalExecutionAcknowledgementResponse: Decodable, Equatable, Sendable {
+    public var attention: JarvisApprovalExecutionAttentionItem
+    public var proofBoundary: String
+
+    enum CodingKeys: String, CodingKey {
+        case attention
+        case proofBoundary = "proof_boundary"
+    }
+}
+
 private struct JarvisApprovalExecutionRequest: Encodable {
     var cancellationID: UUID
 
@@ -2258,6 +2348,11 @@ public protocol JarvisCoreClient: Sendable {
         id: UUID,
         cancellationID: UUID
     ) async throws -> JarvisApprovalExecutionResponse
+    func approvalExecutionAttention() async throws -> JarvisApprovalExecutionAttentionSummary
+    func acknowledgeApprovalExecution(
+        id: UUID,
+        request: JarvisApprovalExecutionAcknowledgementRequest
+    ) async throws -> JarvisApprovalExecutionAcknowledgementResponse
 }
 
 public extension JarvisCoreClient {
@@ -2653,6 +2748,21 @@ public final class JarvisIPCClient: JarvisCoreClient {
         let request = JarvisApprovalExecutionRequest(cancellationID: cancellationID)
         return try await send(
             path: "/approvals/\(id.uuidString)/execute",
+            method: "POST",
+            body: encoder.encode(request)
+        )
+    }
+
+    public func approvalExecutionAttention() async throws -> JarvisApprovalExecutionAttentionSummary {
+        try await send(path: "/approval-executions/attention", method: "GET", body: nil)
+    }
+
+    public func acknowledgeApprovalExecution(
+        id: UUID,
+        request: JarvisApprovalExecutionAcknowledgementRequest
+    ) async throws -> JarvisApprovalExecutionAcknowledgementResponse {
+        try await send(
+            path: "/approval-executions/attention/\(id.uuidString)/acknowledge",
             method: "POST",
             body: encoder.encode(request)
         )

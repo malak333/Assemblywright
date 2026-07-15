@@ -492,6 +492,24 @@ stage or when a PR needs focused evidence for one ownership slice.
   match actor/reason-presence booleans without raw keys; legacy evidence must
   match exact raw actor/reason values without redaction/presence keys;
   the claim path must never fabricate grant evidence.
+  Confirm restart projects a pre-existing unresolved claim into the redacted
+  approval-execution attention queue before serving IPC. Confirm the list omits
+  action/input/reason/actor/path/digest data and reports a consistent true
+  total, returned count, 100-item limit, and truncation flag; exact-revision
+  `acknowledged_without_retry` succeeds once; stale and replayed CAS requests
+  conflict; revision overflow is rejected before IPC; Swift requires the exact
+  successor revision and identical execution/approval/task IDs before clearing;
+  acknowledgement survives restart; and execution replay remains
+  HTTP 409. Acknowledgement must not invoke a plugin, mutate/delete the claim,
+  or create another approval.
+  Confirm file-backed startup acquires a secure sibling owner lease before
+  backup/version/migration and holds it for repository lifetime. A second core,
+  symlink lock, non-`0600` lock, hard link, wrong owner, or unsupported locking
+  platform must fail before database open/mutation; lease release must permit a
+  later clean owner. Confirm two-process same-database E2E keeps a live schema-v15
+  claim out of startup reconciliation until the first owner exits, then performs
+  the v16 migration/reconciliation once. Do not claim this advisory lease blocks
+  raw SQLite or other noncooperating writers.
 - Confirm `/permissions/grants` and `jarvis permissions grants` expose
   read-only approval history/counts plus installed-plugin grant state,
   provenance integrity status, unverified plugin counts, and the

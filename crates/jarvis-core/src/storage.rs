@@ -2,6 +2,12 @@ use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 
 use chrono::{DateTime, Utc};
 use rusqlite::{
@@ -32,12 +38,13 @@ use crate::{
     MAX_MEMORY_RETRIEVAL_CORPUS_BYTES,
 };
 
-const CURRENT_SCHEMA_VERSION: i64 = 15;
+const CURRENT_SCHEMA_VERSION: i64 = 16;
 pub(crate) const MAX_MODEL_PLANNED_WASM_CANDIDATES: usize = 64;
 pub const MAX_INSTALLED_PLUGIN_LIFECYCLE_HISTORY_ENTRIES: usize = 100;
 pub const MAX_PENDING_SCHEDULER_NOTIFICATION_OCCURRENCES: usize = 1_024;
 pub const MAX_ACKNOWLEDGED_SCHEDULER_NOTIFICATION_OCCURRENCES: usize = 1_024;
 pub const MAX_SCHEDULER_NOTIFICATION_OCCURRENCE_LIST_LIMIT: usize = 64;
+pub const MAX_APPROVAL_EXECUTION_ATTENTION_ITEMS: usize = 100;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SchedulerNotificationOccurrence {
@@ -181,6 +188,21 @@ pub struct ApprovalExecutionRecord {
     pub finished_at: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ApprovalExecutionAttention {
+    pub execution_id: Uuid,
+    pub approval_id: Uuid,
+    pub task_id: Uuid,
+    pub revision: u64,
+    pub detected_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub acknowledged_at: Option<DateTime<Utc>>,
+    pub acknowledged_disposition: Option<String>,
+    pub effect_possible: bool,
+    pub automatic_retry: bool,
+    pub action_redacted: bool,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct InstalledPluginApprovalBinding {
     pub approval_id: Uuid,
@@ -227,6 +249,12 @@ pub(crate) struct ApprovalExecutionClaim<'a> {
 pub struct SqliteRepository {
     conn: Connection,
     memory_index_path: Option<PathBuf>,
+    _lease: Option<Arc<RepositoryLease>>,
+}
+
+#[derive(Debug)]
+struct RepositoryLease {
+    _file: fs::File,
 }
 
 #[derive(Debug)]
@@ -264,6 +292,7 @@ impl SqliteRepository {
         let repo = Self {
             conn,
             memory_index_path: None,
+            _lease: None,
         };
         repo.configure()?;
         repo.migrate()?;
@@ -277,6 +306,7 @@ impl SqliteRepository {
         let repo = Self {
             conn,
             memory_index_path: Some(memory_index_path.into()),
+            _lease: None,
         };
         repo.configure()?;
         repo.migrate()?;
@@ -3526,6 +3556,256 @@ impl SqliteRepository {
             .map_err(storage_error)
     }
 
+    pub fn reconcile_approval_executions_on_startup(&self) -> JarvisResult<usize> {
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        let candidates = {
+            let mut statement = tx
+                .prepare(
+                    "SELECT executions.id, executions.approval_id, executions.task_id
+                     FROM approval_executions executions
+                     LEFT JOIN approval_execution_attention attention
+                       ON attention.execution_id = executions.id
+                     WHERE executions.state = 'claimed' AND attention.execution_id IS NULL
+                     ORDER BY executions.claimed_at ASC, executions.id ASC",
+                )
+                .map_err(storage_error)?;
+            let rows = statement
+                .query_map([], |row| {
+                    Ok((
+                        parse_uuid(&row.get::<_, String>(0)?)?,
+                        parse_uuid(&row.get::<_, String>(1)?)?,
+                        parse_uuid(&row.get::<_, String>(2)?)?,
+                    ))
+                })
+                .map_err(storage_error)?;
+            collect_rows(rows)?
+        };
+        let now = Utc::now();
+        let now_db = to_db_time(now);
+        for (execution_id, approval_id, task_id) in &candidates {
+            let inserted = tx
+                .execute(
+                    "INSERT INTO approval_execution_attention
+                     (execution_id, revision, detected_at, updated_at, acknowledged_at)
+                     VALUES (?1, 1, ?2, ?2, NULL)",
+                    params![execution_id.to_string(), &now_db],
+                )
+                .map_err(storage_error)?;
+            if inserted != 1 {
+                return Err(JarvisError::Storage(format!(
+                    "approval execution attention insert did not create one row: {execution_id}"
+                )));
+            }
+            let task_failed = tx
+                .execute(
+                    "UPDATE tasks SET status = 'failed', updated_at = ?1
+                     WHERE id = ?2 AND status = 'waiting_for_approval'",
+                    params![&now_db, task_id.to_string()],
+                )
+                .map_err(storage_error)?
+                == 1;
+            append_audit_entry_tx(
+                &tx,
+                &AuditEntry::new(
+                    Some(*task_id),
+                    "approval_execution_startup_ambiguous_attention_required",
+                    "startup found a claimed approval execution with an ambiguous outcome; automatic retry remains disabled",
+                    json!({
+                        "execution_id": execution_id,
+                        "approval_id": approval_id,
+                        "task_id": task_id,
+                        "revision": 1,
+                        "effect_possible": true,
+                        "automatic_retry": false,
+                        "task_failed_if_still_waiting": task_failed,
+                        "action_redacted": true,
+                        "input_redacted": true,
+                    }),
+                ),
+            )?;
+        }
+        tx.commit().map_err(storage_error)?;
+        Ok(candidates.len())
+    }
+
+    pub fn list_approval_execution_attention(
+        &self,
+    ) -> JarvisResult<Vec<ApprovalExecutionAttention>> {
+        let mut statement = self
+            .conn
+            .prepare(
+                "SELECT attention.execution_id, executions.approval_id, executions.task_id,
+                        attention.revision, attention.detected_at, attention.updated_at,
+                        attention.acknowledged_at, attention.acknowledged_disposition
+                 FROM approval_execution_attention attention
+                 JOIN approval_executions executions ON executions.id = attention.execution_id
+                 WHERE attention.acknowledged_at IS NULL
+                 ORDER BY attention.detected_at ASC, attention.execution_id ASC
+                 LIMIT ?1",
+            )
+            .map_err(storage_error)?;
+        let rows = statement
+            .query_map(
+                params![MAX_APPROVAL_EXECUTION_ATTENTION_ITEMS as i64],
+                approval_execution_attention_from_row,
+            )
+            .map_err(storage_error)?;
+        collect_rows(rows)
+    }
+
+    pub fn approval_execution_attention_count(&self) -> JarvisResult<usize> {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM approval_execution_attention
+                 WHERE acknowledged_at IS NULL",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(storage_error)
+            .and_then(|count| {
+                usize::try_from(count).map_err(|_| {
+                    JarvisError::Storage(
+                        "approval execution attention count exceeds platform range".to_string(),
+                    )
+                })
+            })
+    }
+
+    pub fn get_approval_execution_attention(
+        &self,
+        execution_id: Uuid,
+    ) -> JarvisResult<Option<ApprovalExecutionAttention>> {
+        self.conn
+            .query_row(
+                "SELECT attention.execution_id, executions.approval_id, executions.task_id,
+                        attention.revision, attention.detected_at, attention.updated_at,
+                        attention.acknowledged_at, attention.acknowledged_disposition
+                 FROM approval_execution_attention attention
+                 JOIN approval_executions executions ON executions.id = attention.execution_id
+                 WHERE attention.execution_id = ?1",
+                params![execution_id.to_string()],
+                approval_execution_attention_from_row,
+            )
+            .optional()
+            .map_err(storage_error)
+    }
+
+    pub fn acknowledge_approval_execution_attention(
+        &self,
+        execution_id: Uuid,
+        expected_revision: u64,
+        disposition: &str,
+    ) -> JarvisResult<ApprovalExecutionAttention> {
+        if disposition != "acknowledged_without_retry" {
+            return Err(JarvisError::Validation(
+                "approval execution attention disposition must be acknowledged_without_retry"
+                    .to_string(),
+            ));
+        }
+        let expected_revision = i64::try_from(expected_revision).map_err(|_| {
+            JarvisError::Validation(
+                "approval execution attention revision is out of range".to_string(),
+            )
+        })?;
+        if expected_revision < 1 {
+            return Err(JarvisError::Validation(
+                "approval execution attention revision must be greater than zero".to_string(),
+            ));
+        }
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        let current = tx
+            .query_row(
+                "SELECT attention.execution_id, executions.approval_id, executions.task_id,
+                        attention.revision, attention.detected_at, attention.updated_at,
+                        attention.acknowledged_at, attention.acknowledged_disposition
+                 FROM approval_execution_attention attention
+                 JOIN approval_executions executions ON executions.id = attention.execution_id
+                 WHERE attention.execution_id = ?1",
+                params![execution_id.to_string()],
+                approval_execution_attention_from_row,
+            )
+            .optional()
+            .map_err(storage_error)?
+            .ok_or_else(|| {
+                JarvisError::Conflict(format!(
+                    "approval execution attention is unknown: {execution_id}"
+                ))
+            })?;
+        if current.acknowledged_at.is_some() {
+            return Err(JarvisError::Conflict(format!(
+                "approval execution attention was already acknowledged without retry: {execution_id}"
+            )));
+        }
+        if i64::try_from(current.revision).unwrap_or(i64::MAX) != expected_revision {
+            return Err(JarvisError::Conflict(format!(
+                "approval execution attention revision changed: {execution_id}"
+            )));
+        }
+        let next_revision = expected_revision.checked_add(1).ok_or_else(|| {
+            JarvisError::Conflict(format!(
+                "approval execution attention revision cannot advance safely: {execution_id}"
+            ))
+        })?;
+        let acknowledged_at = Utc::now();
+        let changed = tx
+            .execute(
+                "UPDATE approval_execution_attention
+                 SET revision = ?1, updated_at = ?2, acknowledged_at = ?2,
+                     acknowledged_disposition = ?3
+                 WHERE execution_id = ?4 AND revision = ?5 AND acknowledged_at IS NULL",
+                params![
+                    next_revision,
+                    to_db_time(acknowledged_at),
+                    disposition,
+                    execution_id.to_string(),
+                    expected_revision,
+                ],
+            )
+            .map_err(storage_error)?;
+        if changed != 1 {
+            return Err(JarvisError::Conflict(format!(
+                "approval execution attention acknowledgement lost its compare-and-swap: {execution_id}"
+            )));
+        }
+        append_audit_entry_tx(
+            &tx,
+            &AuditEntry::new(
+                Some(current.task_id),
+                "approval_execution_attention_acknowledged_without_retry",
+                "operator acknowledged an ambiguous approval execution without retrying it",
+                json!({
+                    "execution_id": current.execution_id,
+                    "approval_id": current.approval_id,
+                    "task_id": current.task_id,
+                    "expected_revision": expected_revision,
+                    "disposition": disposition,
+                    "effect_possible": true,
+                    "automatic_retry": false,
+                    "plugin_runtime_started": false,
+                    "claim_altered": false,
+                    "action_redacted": true,
+                    "input_redacted": true,
+                }),
+            ),
+        )?;
+        let acknowledged = tx
+            .query_row(
+                "SELECT attention.execution_id, executions.approval_id, executions.task_id,
+                        attention.revision, attention.detected_at, attention.updated_at,
+                        attention.acknowledged_at, attention.acknowledged_disposition
+                 FROM approval_execution_attention attention
+                 JOIN approval_executions executions ON executions.id = attention.execution_id
+                 WHERE attention.execution_id = ?1",
+                params![execution_id.to_string()],
+                approval_execution_attention_from_row,
+            )
+            .map_err(storage_error)?;
+        tx.commit().map_err(storage_error)?;
+        Ok(acknowledged)
+    }
+
     pub fn claim_approved_execution(
         &self,
         approval_id: Uuid,
@@ -3904,6 +4184,9 @@ impl SqliteRepository {
         }
         if version < 15 {
             self.apply_migration_15()?;
+        }
+        if version < 16 {
+            self.apply_migration_16()?;
         }
 
         let migrated = self.schema_version()?;
@@ -4301,6 +4584,39 @@ impl SqliteRepository {
         tx.execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
             params![15, now],
+        )
+        .map_err(storage_error)?;
+        tx.commit().map_err(storage_error)?;
+        Ok(())
+    }
+
+    fn apply_migration_16(&self) -> JarvisResult<()> {
+        let now = to_db_time(Utc::now());
+        let tx = self.conn.unchecked_transaction().map_err(storage_error)?;
+        tx.execute_batch(
+            "
+            CREATE TABLE approval_execution_attention (
+                execution_id TEXT PRIMARY KEY NOT NULL
+                    REFERENCES approval_executions(id) ON DELETE RESTRICT,
+                revision INTEGER NOT NULL CHECK (revision >= 1),
+                detected_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                acknowledged_at TEXT NULL,
+                acknowledged_disposition TEXT NULL,
+                CHECK (
+                    (acknowledged_at IS NULL AND acknowledged_disposition IS NULL) OR
+                    (acknowledged_at IS NOT NULL AND
+                     acknowledged_disposition = 'acknowledged_without_retry')
+                )
+            );
+            CREATE INDEX idx_approval_execution_attention_pending
+                ON approval_execution_attention (acknowledged_at, detected_at, execution_id);
+            ",
+        )
+        .map_err(storage_error)?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+            params![16, now],
         )
         .map_err(storage_error)?;
         tx.commit().map_err(storage_error)?;
@@ -4718,21 +5034,38 @@ fn open_with_migration_backup_dir_and_hook(
     backup_dir: Option<impl AsRef<Path>>,
     before_open: impl FnOnce(&Path) -> JarvisResult<()>,
 ) -> JarvisResult<SqliteRepository> {
-    let path = path.as_ref();
+    let requested_path = path.as_ref();
     let backup_dir = backup_dir.as_ref().map(|dir| dir.as_ref());
+    validate_database_path_identity(requested_path)?;
+    let path = database_path_with_canonical_parent(requested_path)?;
+    let path = path.as_path();
+    let lease = Arc::new(acquire_repository_lease(path)?);
     let backup = prepare_migration_backup(path, backup_dir)?;
     before_open(path)?;
+    create_database_file_if_missing(path)?;
+    validate_database_path_identity(path)?;
 
-    let conn = match Connection::open(path).map_err(storage_error) {
+    let conn = match Connection::open_with_flags(
+        path,
+        OpenFlags::default() | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .map_err(storage_error)
+    {
         Ok(conn) => conn,
         Err(error) => {
             restore_after_open_failure(backup, error)?;
             unreachable!("restore_after_open_failure always returns Err");
         }
     };
+    if let Err(error) = validate_database_path_identity(path) {
+        drop(conn);
+        restore_after_open_failure(backup, error)?;
+        unreachable!("restore_after_open_failure always returns Err");
+    }
     let repo = SqliteRepository {
         conn,
         memory_index_path: Some(memory_index_path_for_database(path)),
+        _lease: Some(Arc::clone(&lease)),
     };
 
     if let Err(error) = repo.configure().and_then(|()| repo.migrate()) {
@@ -4742,6 +5075,190 @@ fn open_with_migration_backup_dir_and_hook(
     }
 
     Ok(repo)
+}
+
+fn database_path_with_canonical_parent(db_path: &Path) -> JarvisResult<PathBuf> {
+    let file_name = db_path
+        .file_name()
+        .ok_or_else(|| JarvisError::Storage("database path requires a file name".to_string()))?;
+    let parent = db_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    Ok(fs::canonicalize(parent)
+        .map_err(storage_io_error)?
+        .join(file_name))
+}
+
+#[cfg(unix)]
+fn create_database_file_if_missing(db_path: &Path) -> JarvisResult<()> {
+    match fs::symlink_metadata(db_path) {
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+            .open(db_path)
+            .map(|_| ())
+            .map_err(storage_io_error),
+        Err(error) => Err(storage_io_error(error)),
+    }
+}
+
+#[cfg(not(unix))]
+fn create_database_file_if_missing(db_path: &Path) -> JarvisResult<()> {
+    match fs::symlink_metadata(db_path) {
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(db_path)
+            .map(|_| ())
+            .map_err(storage_io_error),
+        Err(error) => Err(storage_io_error(error)),
+    }
+}
+
+#[cfg(unix)]
+fn validate_database_path_identity(db_path: &Path) -> JarvisResult<()> {
+    let metadata = match fs::symlink_metadata(db_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(storage_io_error(error)),
+    };
+    let expected_uid = unsafe { libc::geteuid() };
+    if metadata.file_type().is_symlink()
+        || !metadata.file_type().is_file()
+        || metadata.uid() != expected_uid
+        || metadata.nlink() != 1
+    {
+        return Err(JarvisError::Storage(format!(
+            "database path must be a regular current-owner non-hardlinked file: {}",
+            db_path.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_database_path_identity(db_path: &Path) -> JarvisResult<()> {
+    let metadata = match fs::symlink_metadata(db_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(storage_io_error(error)),
+    };
+    if !metadata.file_type().is_file() {
+        return Err(JarvisError::Storage(format!(
+            "database path must be a regular file: {}",
+            db_path.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn acquire_repository_lease(db_path: &Path) -> JarvisResult<RepositoryLease> {
+    let file_name = db_path.file_name().ok_or_else(|| {
+        JarvisError::Storage("database path requires a file name for owner locking".to_string())
+    })?;
+    let parent = db_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let canonical_parent = fs::canonicalize(parent).map_err(storage_io_error)?;
+    let mut lock_name = file_name.to_os_string();
+    lock_name.push(".owner.lock");
+    let lock_path = canonical_parent.join(lock_name);
+    let open_lock = |create_new: bool| {
+        let mut options = fs::OpenOptions::new();
+        options
+            .read(true)
+            .write(true)
+            .mode(0o600)
+            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+        if create_new {
+            options.create_new(true);
+        }
+        options.open(&lock_path)
+    };
+    let (file, created) = match open_lock(true) {
+        Ok(file) => (file, true),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (
+            open_lock(false).map_err(|error| {
+                JarvisError::Storage(format!(
+                    "open secure database owner lock {}: {error}",
+                    lock_path.display()
+                ))
+            })?,
+            false,
+        ),
+        Err(error) => {
+            return Err(JarvisError::Storage(format!(
+                "open secure database owner lock {}: {error}",
+                lock_path.display()
+            )))
+        }
+    };
+    let metadata = file.metadata().map_err(storage_io_error)?;
+    let expected_uid = unsafe { libc::geteuid() };
+    if !metadata.file_type().is_file()
+        || metadata.uid() != expected_uid
+        || metadata.nlink() != 1
+        || (!created && metadata.mode() & 0o777 != 0o600)
+    {
+        return Err(JarvisError::Storage(format!(
+            "database owner lock must be a regular exact-mode-0600 current-owner non-hardlinked file: {}",
+            lock_path.display()
+        )));
+    }
+    if created {
+        let chmod_result = unsafe { libc::fchmod(file.as_raw_fd(), 0o600) };
+        if chmod_result != 0 {
+            let error = std::io::Error::last_os_error();
+            return Err(JarvisError::Storage(format!(
+                "set database owner lock mode 0600 {}: {error}",
+                lock_path.display()
+            )));
+        }
+    }
+    let metadata = file.metadata().map_err(storage_io_error)?;
+    if !metadata.file_type().is_file()
+        || metadata.uid() != expected_uid
+        || metadata.nlink() != 1
+        || metadata.mode() & 0o777 != 0o600
+    {
+        return Err(JarvisError::Storage(format!(
+            "database owner lock must be a regular exact-mode-0600 current-owner non-hardlinked file: {}",
+            lock_path.display()
+        )));
+    }
+    let locked = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if locked != 0 {
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::EWOULDBLOCK)
+            || error.raw_os_error() == Some(libc::EAGAIN)
+        {
+            return Err(JarvisError::Conflict(format!(
+                "database is already owned by another Jarvis core: {}",
+                db_path.display()
+            )));
+        }
+        return Err(JarvisError::Storage(format!(
+            "acquire database owner lock {}: {error}",
+            lock_path.display()
+        )));
+    }
+    Ok(RepositoryLease { _file: file })
+}
+
+#[cfg(not(unix))]
+fn acquire_repository_lease(_db_path: &Path) -> JarvisResult<RepositoryLease> {
+    Err(JarvisError::Storage(
+        "file-backed repository ownership requires Unix file locking".to_string(),
+    ))
 }
 
 fn memory_index_path_for_database(db_path: &Path) -> PathBuf {
@@ -5378,6 +5895,34 @@ fn trusted_wake_attention_from_row(row: &Row<'_>) -> rusqlite::Result<TrustedWak
     })
 }
 
+fn approval_execution_attention_from_row(
+    row: &Row<'_>,
+) -> rusqlite::Result<ApprovalExecutionAttention> {
+    let revision = row.get::<_, i64>(3)?;
+    Ok(ApprovalExecutionAttention {
+        execution_id: parse_uuid(&row.get::<_, String>(0)?)?,
+        approval_id: parse_uuid(&row.get::<_, String>(1)?)?,
+        task_id: parse_uuid(&row.get::<_, String>(2)?)?,
+        revision: u64::try_from(revision).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                3,
+                rusqlite::types::Type::Integer,
+                Box::new(error),
+            )
+        })?,
+        detected_at: parse_db_time(&row.get::<_, String>(4)?)?,
+        updated_at: parse_db_time(&row.get::<_, String>(5)?)?,
+        acknowledged_at: row
+            .get::<_, Option<String>>(6)?
+            .map(|value| parse_db_time(&value))
+            .transpose()?,
+        acknowledged_disposition: row.get(7)?,
+        effect_possible: true,
+        automatic_retry: false,
+        action_redacted: true,
+    })
+}
+
 fn append_trusted_wake_mutation_audit(
     tx: &Transaction<'_>,
     event_type: &str,
@@ -6003,6 +6548,7 @@ mod tests {
         let repo = SqliteRepository {
             conn,
             memory_index_path: None,
+            _lease: None,
         };
         repo.configure().unwrap();
         repo.raw_connection()
@@ -6437,6 +6983,325 @@ mod tests {
     }
 
     #[test]
+    fn claimed_approval_restart_attention_is_insert_once_redacted_and_acknowledged_by_cas() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("approval-attention.sqlite");
+        let repo = SqliteRepository::open(&db_path).unwrap();
+        let (task, approval, execution, _, _) = claimed_approval_execution_fixture(&repo);
+
+        assert_eq!(repo.reconcile_approval_executions_on_startup().unwrap(), 1);
+        assert_eq!(
+            repo.get_task(task.id).unwrap().unwrap().status,
+            TaskStatus::Failed
+        );
+        let attention = repo.list_approval_execution_attention().unwrap();
+        assert_eq!(attention.len(), 1);
+        assert_eq!(attention[0].execution_id, execution.id);
+        assert_eq!(attention[0].approval_id, approval.id);
+        assert_eq!(attention[0].revision, 1);
+        assert!(attention[0].effect_possible);
+        assert!(!attention[0].automatic_retry);
+        assert!(attention[0].action_redacted);
+        assert_eq!(attention[0].acknowledged_disposition, None);
+        assert!(repo
+            .raw_connection()
+            .execute(
+                "UPDATE approval_execution_attention
+                 SET acknowledged_disposition = 'acknowledged_without_retry'
+                 WHERE execution_id = ?1",
+                params![execution.id.to_string()],
+            )
+            .is_err());
+
+        assert_eq!(repo.reconcile_approval_executions_on_startup().unwrap(), 0);
+        let audits = repo.list_audit_entries(Some(task.id)).unwrap();
+        assert_eq!(
+            audits
+                .iter()
+                .filter(|entry| {
+                    entry.event_type == "approval_execution_startup_ambiguous_attention_required"
+                })
+                .count(),
+            1
+        );
+        let startup_audits = audits
+            .iter()
+            .filter(|entry| {
+                entry.event_type == "approval_execution_startup_ambiguous_attention_required"
+            })
+            .collect::<Vec<_>>();
+        let encoded_startup_audits = serde_json::to_string(&startup_audits).unwrap();
+        assert!(!encoded_startup_audits.contains(&approval.action));
+        assert!(!encoded_startup_audits.contains("terminal transaction fixture"));
+
+        let stale = repo
+            .acknowledge_approval_execution_attention(execution.id, 2, "acknowledged_without_retry")
+            .expect_err("stale revision must conflict");
+        assert!(matches!(stale, JarvisError::Conflict(_)));
+        let invalid = repo
+            .acknowledge_approval_execution_attention(execution.id, 1, "retry")
+            .expect_err("implicit retry disposition must be rejected");
+        assert!(matches!(invalid, JarvisError::Validation(_)));
+
+        let acknowledged = repo
+            .acknowledge_approval_execution_attention(execution.id, 1, "acknowledged_without_retry")
+            .unwrap();
+        assert_eq!(acknowledged.revision, 2);
+        assert!(acknowledged.acknowledged_at.is_some());
+        assert_eq!(
+            acknowledged.acknowledged_disposition.as_deref(),
+            Some("acknowledged_without_retry")
+        );
+        assert!(repo.list_approval_execution_attention().unwrap().is_empty());
+        let replay = repo
+            .acknowledge_approval_execution_attention(execution.id, 1, "acknowledged_without_retry")
+            .expect_err("acknowledgement replay must conflict");
+        assert!(matches!(replay, JarvisError::Conflict(_)));
+        assert_eq!(
+            repo.get_approval_execution(approval.id)
+                .unwrap()
+                .unwrap()
+                .state,
+            ApprovalExecutionState::Claimed
+        );
+        drop(repo);
+
+        let reopened = SqliteRepository::open(&db_path).unwrap();
+        assert_eq!(
+            reopened.reconcile_approval_executions_on_startup().unwrap(),
+            0
+        );
+        let persisted = reopened
+            .get_approval_execution_attention(execution.id)
+            .unwrap()
+            .expect("acknowledged attention persists");
+        assert_eq!(persisted.revision, 2);
+        assert!(persisted.acknowledged_at.is_some());
+        assert!(reopened
+            .raw_connection()
+            .execute(
+                "UPDATE approval_execution_attention SET acknowledged_at = NULL
+                 WHERE execution_id = ?1",
+                params![execution.id.to_string()],
+            )
+            .is_err());
+        assert_eq!(
+            reopened
+                .get_approval_execution(approval.id)
+                .unwrap()
+                .unwrap()
+                .state,
+            ApprovalExecutionState::Claimed
+        );
+    }
+
+    #[test]
+    fn approval_execution_attention_count_is_not_limited_by_the_bounded_page() {
+        let repo = SqliteRepository::in_memory().unwrap();
+        for _ in 0..(MAX_APPROVAL_EXECUTION_ATTENTION_ITEMS + 1) {
+            claimed_approval_execution_fixture(&repo);
+        }
+        assert_eq!(
+            repo.reconcile_approval_executions_on_startup().unwrap(),
+            MAX_APPROVAL_EXECUTION_ATTENTION_ITEMS + 1
+        );
+        assert_eq!(
+            repo.approval_execution_attention_count().unwrap(),
+            MAX_APPROVAL_EXECUTION_ATTENTION_ITEMS + 1
+        );
+        assert_eq!(
+            repo.list_approval_execution_attention().unwrap().len(),
+            MAX_APPROVAL_EXECUTION_ATTENTION_ITEMS
+        );
+    }
+
+    #[test]
+    fn approval_execution_attention_revision_overflow_fails_closed() {
+        let repo = SqliteRepository::in_memory().unwrap();
+        let (_, _, execution, _, _) = claimed_approval_execution_fixture(&repo);
+        repo.reconcile_approval_executions_on_startup().unwrap();
+        repo.raw_connection()
+            .execute(
+                "UPDATE approval_execution_attention SET revision = ?1 WHERE execution_id = ?2",
+                params![i64::MAX, execution.id.to_string()],
+            )
+            .unwrap();
+        let error = repo
+            .acknowledge_approval_execution_attention(
+                execution.id,
+                i64::MAX as u64,
+                "acknowledged_without_retry",
+            )
+            .expect_err("revision overflow must fail closed");
+        assert!(matches!(error, JarvisError::Conflict(_)));
+        let persisted = repo
+            .get_approval_execution_attention(execution.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(persisted.revision, i64::MAX as u64);
+        assert!(persisted.acknowledged_at.is_none());
+        assert_eq!(persisted.acknowledged_disposition, None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_backed_repository_owner_lease_is_exclusive_and_released() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("jarvis.sqlite");
+        let first = SqliteRepository::open(&db_path).unwrap();
+        let version = first.schema_version().unwrap();
+        let error = SqliteRepository::open(&db_path).expect_err("second owner must fail closed");
+        assert!(matches!(error, JarvisError::Conflict(_)));
+        assert_eq!(first.schema_version().unwrap(), version);
+        drop(first);
+        let reopened = SqliteRepository::open(&db_path).expect("lease releases with repository");
+        assert_eq!(reopened.schema_version().unwrap(), version);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repository_owner_lease_serializes_preflight_backup_and_migration() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("jarvis.sqlite");
+        let repository = SqliteRepository::open(&db_path).unwrap();
+        drop(repository);
+        let connection = Connection::open(&db_path).unwrap();
+        connection
+            .execute_batch(
+                "DROP TABLE approval_execution_attention;
+                 DELETE FROM schema_migrations WHERE version = 16;",
+            )
+            .unwrap();
+        drop(connection);
+
+        let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(1);
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+        let first_path = db_path.clone();
+        let first = std::thread::spawn(move || {
+            open_with_migration_backup_dir_and_hook(&first_path, None::<&Path>, |_| {
+                entered_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Ok(())
+            })
+        });
+        entered_rx.recv().unwrap();
+        let second = SqliteRepository::open(&db_path)
+            .expect_err("second migration owner must fail before opening the database");
+        assert!(matches!(second, JarvisError::Conflict(_)));
+        release_tx.send(()).unwrap();
+        let migrated = first.join().unwrap().unwrap();
+        assert_eq!(migrated.schema_version().unwrap(), CURRENT_SCHEMA_VERSION);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repository_owner_lease_rejects_symlink_and_insecure_lock_before_database_creation() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("jarvis.sqlite");
+        let lock_path = temp.path().join("jarvis.sqlite.owner.lock");
+        let target = temp.path().join("attacker-target");
+        fs::write(&target, "not a lock").unwrap();
+        symlink(&target, &lock_path).unwrap();
+        assert!(SqliteRepository::open(&db_path).is_err());
+        assert!(!db_path.exists());
+
+        fs::remove_file(&lock_path).unwrap();
+        for insecure_mode in [0o644, 0o700] {
+            fs::write(&lock_path, "insecure lock").unwrap();
+            fs::set_permissions(&lock_path, fs::Permissions::from_mode(insecure_mode)).unwrap();
+            assert!(SqliteRepository::open(&db_path).is_err());
+            assert!(!db_path.exists());
+            assert_eq!(
+                fs::metadata(&lock_path).unwrap().permissions().mode() & 0o777,
+                insecure_mode,
+                "pre-existing insecure lock mode must not be normalized"
+            );
+            fs::remove_file(&lock_path).unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repository_owner_lease_new_lock_is_exact_mode_under_restrictive_umask() {
+        use std::os::unix::fs::PermissionsExt;
+
+        const CHILD_ENV: &str = "JARVIS_TEST_RESTRICTIVE_LOCK_UMASK_CHILD";
+        if std::env::var_os(CHILD_ENV).is_some() {
+            let temp = tempfile::tempdir().unwrap();
+            let db_path = temp.path().join("jarvis.sqlite");
+            let lock_path = temp.path().join("jarvis.sqlite.owner.lock");
+            unsafe {
+                libc::umask(0o777);
+            }
+            let lease = acquire_repository_lease(&db_path).unwrap();
+            assert_eq!(
+                fs::metadata(&lock_path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            drop(lease);
+            let reopened = acquire_repository_lease(&db_path).unwrap();
+            assert_eq!(
+                fs::metadata(&lock_path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            drop(reopened);
+            return;
+        }
+
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "storage::tests::repository_owner_lease_new_lock_is_exact_mode_under_restrictive_umask",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "restrictive-umask child failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_backed_repository_rejects_database_symlink_and_hardlink_aliases() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("jarvis.sqlite");
+        let repository = SqliteRepository::open(&db_path).unwrap();
+        let version = repository.schema_version().unwrap();
+
+        let symlink_alias = temp.path().join("jarvis-symlink.sqlite");
+        symlink(&db_path, &symlink_alias).unwrap();
+        let symlink_error = SqliteRepository::open(&symlink_alias)
+            .expect_err("database symlink alias must fail before acquiring a separate lease");
+        assert!(matches!(symlink_error, JarvisError::Storage(_)));
+        assert!(!temp
+            .path()
+            .join("jarvis-symlink.sqlite.owner.lock")
+            .exists());
+        fs::remove_file(&symlink_alias).unwrap();
+
+        let hardlink_alias = temp.path().join("jarvis-hardlink.sqlite");
+        fs::hard_link(&db_path, &hardlink_alias).unwrap();
+        let hardlink_error = SqliteRepository::open(&hardlink_alias)
+            .expect_err("database hardlink alias must fail before acquiring a separate lease");
+        assert!(matches!(hardlink_error, JarvisError::Storage(_)));
+        assert!(!temp
+            .path()
+            .join("jarvis-hardlink.sqlite.owner.lock")
+            .exists());
+        assert_eq!(repository.schema_version().unwrap(), version);
+        fs::remove_file(&hardlink_alias).unwrap();
+    }
+
+    #[test]
     fn migrating_legacy_file_database_creates_backup_snapshot() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("jarvis.sqlite");
@@ -6448,6 +7313,7 @@ mod tests {
                 "
                 DROP TRIGGER model_route_records_no_delete;
                 DROP TRIGGER model_route_records_no_update;
+                DROP TABLE approval_execution_attention;
                 DROP TABLE installed_plugin_approval_bindings;
                 DROP TABLE scheduler_notification_occurrences;
                 DROP TABLE model_route_records;
@@ -6455,7 +7321,7 @@ mod tests {
                 DROP TABLE trusted_wake_key_grants;
                 DROP TABLE trusted_wake_events;
                 DROP TABLE trusted_wake_rules;
-                DELETE FROM schema_migrations WHERE version IN (7, 8, 9, 10, 11, 12, 13, 14, 15);
+                DELETE FROM schema_migrations WHERE version IN (7, 8, 9, 10, 11, 12, 13, 14, 15, 16);
                 ",
             )
             .unwrap();
@@ -6521,6 +7387,7 @@ mod tests {
                 "
                 DROP TRIGGER model_route_records_no_delete;
                 DROP TRIGGER model_route_records_no_update;
+                DROP TABLE approval_execution_attention;
                 DROP TABLE installed_plugin_approval_bindings;
                 DROP TABLE scheduler_notification_occurrences;
                 DROP TABLE model_route_records;
@@ -6528,7 +7395,7 @@ mod tests {
                 DROP TABLE trusted_wake_key_grants;
                 DROP TABLE trusted_wake_events;
                 DROP TABLE trusted_wake_rules;
-                DELETE FROM schema_migrations WHERE version IN (7, 8, 9, 10, 11, 12, 13, 14, 15);
+                DELETE FROM schema_migrations WHERE version IN (7, 8, 9, 10, 11, 12, 13, 14, 15, 16);
                 ",
             )
             .unwrap();
@@ -7817,6 +8684,7 @@ mod tests {
         let repo = SqliteRepository {
             conn,
             memory_index_path: None,
+            _lease: None,
         };
         repo.configure().unwrap();
         repo.raw_connection()
@@ -7845,6 +8713,7 @@ mod tests {
                 12 => repo.apply_migration_12().unwrap(),
                 13 => repo.apply_migration_13().unwrap(),
                 14 => repo.apply_migration_14().unwrap(),
+                15 => repo.apply_migration_15().unwrap(),
                 _ => unreachable!("unsupported fixture version"),
             }
         }
@@ -8028,7 +8897,7 @@ mod tests {
                     )
                     .unwrap();
             }
-            8..=14 => {
+            8..=15 => {
                 let provenance = InstalledPluginProvenance {
                     provenance_schema_version: 1,
                     capture_method: "fixture_v8".to_string(),
@@ -8318,14 +9187,20 @@ mod tests {
                 sensitivity: Sensitivity::Personal,
             })
             .unwrap();
-        let second = SqliteRepository::open(&db_path).unwrap();
+        let second = Connection::open(&db_path).unwrap();
         let result = first.rebuild_memory_index_with_hook(|| {
             second
-                .update_memory_item(
-                    memory.id,
-                    "changed during rebuild",
-                    "other connection",
-                    Sensitivity::Personal,
+                .execute(
+                    "UPDATE memory_items
+                     SET value = ?1, provenance = ?2, sensitivity = 'personal',
+                         updated_at = ?3, reviewed_at = NULL
+                     WHERE id = ?4",
+                    params![
+                        "changed during rebuild",
+                        "other connection",
+                        to_db_time(Utc::now()),
+                        memory.id.to_string(),
+                    ],
                 )
                 .unwrap();
         });
@@ -8355,7 +9230,7 @@ mod tests {
         first.mark_memory_reviewed(memory.id).unwrap();
         first.rebuild_memory_index().unwrap();
 
-        let second = SqliteRepository::open(&db_path).unwrap();
+        let second = Connection::open(&db_path).unwrap();
         let mut control = || MemoryRetrievalControl::Continue;
         let result = first.retrieve_memory_context_with_control_and_hook(
             "prepare atlas release gate",
@@ -8363,11 +9238,17 @@ mod tests {
             &mut control,
             || {
                 second
-                    .update_memory_item(
-                        memory.id,
-                        "changed by another connection",
-                        "concurrent writer",
-                        Sensitivity::Workspace,
+                    .execute(
+                        "UPDATE memory_items
+                         SET value = ?1, provenance = ?2, sensitivity = 'workspace',
+                             updated_at = ?3, reviewed_at = NULL
+                         WHERE id = ?4",
+                        params![
+                            "changed by another connection",
+                            "concurrent writer",
+                            to_db_time(Utc::now()),
+                            memory.id.to_string(),
+                        ],
                     )
                     .unwrap();
             },

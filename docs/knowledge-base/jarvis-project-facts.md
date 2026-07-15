@@ -712,6 +712,32 @@ requires plugin-trust `generated_at`, `review_started_at`,
   evidence atomically. A crash, restart, or persistence failure after claim is
   effect-possible ambiguity, never permission to retry automatically; an
   operator must review evidence and create a new approval for another attempt.
+- Schema v16 adds a separate approval-execution attention ledger. Before a
+  repository-backed core accepts IPC, it projects pre-existing unresolved
+  claims into that ledger once. `GET /approval-executions/attention` and
+  `jarvis approvals attention` return only IDs, timestamps, revision, and fixed
+  effect-possible/no-automatic-retry/action-redacted evidence. Action text,
+  input, reason, actor, plugin paths, and provenance digests remain absent.
+  The summary exposes a true `unacknowledged_count`, `returned_item_count`,
+  fixed `item_limit: 100`, and `items_truncated`; Swift rejects inconsistent
+  metadata and shows the operator when additional rows require refresh.
+- `POST /approval-executions/attention/:execution_id/acknowledge`,
+  `jarvis approvals acknowledge-without-retry`, and the Swift Approval Center
+  require the exact observed revision plus `acknowledged_without_retry`.
+  The immediate-transaction CAS increments the attention revision and appends
+  redacted audit evidence atomically. It never invokes a plugin, changes or
+  deletes the permanent consumed claim, or creates/retries an approval.
+  Swift rejects revision overflow before IPC and clears a displayed row only
+  when the response returns the exact successor revision plus the same
+  execution, approval, and task IDs.
+- File-backed `SqliteRepository` startup acquires a sibling
+  `<database>.owner.lock` before backup/version/migration and retains its
+  nonblocking exclusive Unix lease for the repository lifetime. The no-follow,
+  close-on-exec lock must be a current-owner regular single-link `0600` file;
+  insecure metadata or a second core fails before database open. In-memory
+  repositories intentionally do not use this file lease.
+  The advisory lease serializes cooperating Jarvis owners; raw SQLite and
+  noncooperating writers are outside its enforcement boundary.
 - Claim-time grant-chain validation accepts the current redacted decision-audit
   shape and exact legacy raw-metadata audit evidence only when approval ID,
   task, action, approved status, risk, sensitivity, scopes, decision metadata,
