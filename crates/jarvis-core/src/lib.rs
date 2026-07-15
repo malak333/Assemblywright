@@ -59,14 +59,15 @@ pub use model::{
     ModelToolResult, OllamaHttpModel, ProviderConfig, ProviderStatus, RoutedModelExecutor,
 };
 pub use plugin::{
-    execute_installed_subprocess_plugin, plugin_permission_scopes, CancellationBehavior,
-    CancellationSignal, InProcessPlugin, InstalledPlugin, InstalledPluginExecutionGrant,
-    InstalledPluginIntegrityStatus, InstalledPluginProvenance, JsonSchema, PluginAccess,
-    PluginActionManifest, PluginCallMetadata, PluginCallRequest, PluginCallResult,
-    PluginCallStatus, PluginHost, PluginManifest, PluginNetworkAccess, PluginNetworkAccessMode,
-    PluginPermission, PluginProgressEvent, PluginPublisherSignature, PluginSource,
-    PluginSubprocessManifest, PluginSubprocessStream, PluginTimeout, PluginTimeoutAction,
-    PluginWasmAbi, PluginWasmManifest, StatusPlugin, SubprocessPluginExecution,
+    execute_installed_subprocess_plugin, execute_installed_subprocess_plugin_cancellable,
+    plugin_permission_scopes, CancellationBehavior, CancellationSignal, InProcessPlugin,
+    InstalledPlugin, InstalledPluginExecutionGrant, InstalledPluginIntegrityStatus,
+    InstalledPluginProvenance, JsonSchema, PluginAccess, PluginActionManifest, PluginCallMetadata,
+    PluginCallRequest, PluginCallResult, PluginCallStatus, PluginHost, PluginManifest,
+    PluginNetworkAccess, PluginNetworkAccessMode, PluginPermission, PluginProgressEvent,
+    PluginPublisherSignature, PluginSource, PluginSubprocessManifest, PluginSubprocessStream,
+    PluginTimeout, PluginTimeoutAction, PluginWasmAbi, PluginWasmManifest, StatusPlugin,
+    SubprocessControlState, SubprocessPluginExecution,
 };
 pub use policy::{
     ApprovalDecision, ApprovalGrant, CapabilityScope, PermissionEngine, PolicyDecision,

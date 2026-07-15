@@ -156,6 +156,18 @@ These notes capture durable facts for future agents working on this repository.
   validates manifest/provenance/grants and clears inherited environment
   variables without enforcing an OS sandbox or host-level egress policy. Those
   external controls remain part of plugin-trust QA evidence.
+- Installed subprocesses now start in dedicated Unix process groups. The runner
+  checks the shared active cancellation/pause state while the child runs and
+  routes cancellation, emergency pause, timeout, output-limit, pipe-failure,
+  and leader-exit cleanup through bounded TERM-to-KILL group termination,
+  direct-child reaping, and bounded I/O-worker joins. Unit tests cover a
+  TERM-ignoring in-group descendant plus blocked stdin/oversized output. The authenticated
+  `authenticated_approved_installed_execution_can_be_cancelled_after_claim` E2E
+  waits for an in-group descendant heartbeat, proves it stops before the plugin timeout,
+  verifies effect-possible/non-retryable terminal evidence, and rejects replay
+  after restart. This stops members that remain in the dedicated process group,
+  but cannot contain deliberate `setsid`/`setpgid` escape, undo an effect already
+  issued, or establish OS sandbox or egress enforcement.
 - Installed `local_wasm` plugins are a distinct compute-only runtime. They use
   the `wasm_compute` grant and custom `jarvis_json_v1` ABI with required
   `memory`, `jarvis_alloc`, and `jarvis_run` exports. Wasmi links no imports or
@@ -1727,6 +1739,14 @@ requires plugin-trust `generated_at`, `review_started_at`,
   results are removed from the command response. When completion wins, a later
   cancel is honestly not found. Swift shows Cancel only while its generated
   handle remains active.
+- For installed `local_subprocess` runs, the active handle is also polled inside
+  the worker wait loop. Cancellation or emergency pause terminates the full
+  dedicated process group, escalates TERM to KILL after a bounded grace, reaps
+  the leader, and joins stdin/stdout/stderr workers with a bound before returning.
+  This controls only processes that remain in the group; deliberate
+  `setsid`/`setpgid` escape remains unenforced without an OS-sandboxed helper.
+  Approved cancellation still records `effect_possible: true` and
+  `automatic_retry_allowed: false`; process termination is not effect rollback.
 - Focused Rust race tests, real-server CLI/Ollama-stub E2E, and Swift model tests
   cover targeted cancellation, active/not-found evidence, late-output
   suppression, and UI lifecycle. This remains process-local cooperative

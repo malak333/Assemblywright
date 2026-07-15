@@ -1334,6 +1334,25 @@ redaction/audit test before the full release gate:
 cargo test -p jarvis-core installed_plugin_runner_records_subprocess_progress_events_without_raw_stderr -- --nocapture
 ```
 
+For installed subprocess lifecycle or cancellation changes, run the bounded
+process-group unit lane and the authenticated approved-execution E2E before the
+full release gate:
+
+```sh
+cargo test -p jarvis-core local_subprocess_ -- --nocapture
+cargo test -p jarvis-cli --test local_ipc_e2e authenticated_approved_installed_execution_can_be_cancelled_after_claim -- --nocapture
+```
+
+The unit lane covers normal bounded output, output-limit cleanup while stdin is
+blocked, emergency pause, cancellation, TERM-ignoring in-group descendants,
+group KILL, and leader reaping. The authenticated E2E waits for an in-group
+descendant heartbeat, cancels the exact active approval handle, proves that
+fixture stops before the manifest timeout, persists effect-possible/non-retryable
+cancellation, and rejects replay after restart. It does not prove effect
+rollback, an OS sandbox, containment of deliberate `setsid`/`setpgid`
+process-group escape, host-level egress enforcement, publisher trust, or
+live-device behavior.
+
 ## Release Evidence Boundary
 
 Passing `./scripts/release-local.sh` proves the current Rust workspace builds,
@@ -1355,6 +1374,9 @@ permission policy review items, redacted scheduler trigger review items, fail-cl
 subprocess enablement, installed subprocess minimal environment isolation,
 installed subprocess stdout/stderr byte limits, installed subprocess
 output-limit fail-closed behavior through the CLI IPC path, installed subprocess
+process-group cancellation and in-group descendant cessation through
+authenticated IPC,
+non-retryable one-shot cancellation across restart, installed subprocess
 progress-frame response/audit redaction, repository-backed activity summary status,
 redacted recent task metadata, recent-audit evidence without recent task command
 bodies, bounded activity event streaming over server-sent events, redacted

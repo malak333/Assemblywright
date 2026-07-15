@@ -38,15 +38,16 @@ use crate::trusted_wake::{
     verify_key_control_proof, TRUSTED_WAKE_KEY_GRANT_TTL_SECONDS,
 };
 use crate::{
-    execute_installed_subprocess_plugin, execute_installed_wasm_plugin, plugin_permission_scopes,
-    read_wasm_artifact, ApprovalDecision, ApprovalGrant, ApprovalStatus, AuditEntry,
-    CapabilityScope, ConversationRuntime, InstalledPlugin, InstalledPluginExecutionGrant,
-    InstalledPluginIntegrityStatus, InstalledPluginRecord, JarvisError, JarvisResult,
-    LocalModelProviderKind, ModelRoute, ModelRouteRecord, PermissionEngine, PluginCallRequest,
-    PluginCallResult, PluginCallStatus, PluginHost, PluginManifest, PluginSource, PolicyRequest,
-    ProviderConfig, RoutedModelExecutor, RuntimeCommandRequest, RuntimeCommandStore, RuntimeConfig,
-    RuntimeControl, RuntimeStep, Scheduler, SchedulerJob, SchedulerJobSpec, SchedulerJobStatus,
-    Sensitivity, TaskRecord, TaskStatus, TriggerKind, WasmControlState, MAX_WASM_FUEL,
+    execute_installed_subprocess_plugin_cancellable, execute_installed_wasm_plugin,
+    plugin_permission_scopes, read_wasm_artifact, ApprovalDecision, ApprovalGrant, ApprovalStatus,
+    AuditEntry, CapabilityScope, ConversationRuntime, InstalledPlugin,
+    InstalledPluginExecutionGrant, InstalledPluginIntegrityStatus, InstalledPluginRecord,
+    JarvisError, JarvisResult, LocalModelProviderKind, ModelRoute, ModelRouteRecord,
+    PermissionEngine, PluginCallRequest, PluginCallResult, PluginCallStatus, PluginHost,
+    PluginManifest, PluginSource, PolicyRequest, ProviderConfig, RoutedModelExecutor,
+    RuntimeCommandRequest, RuntimeCommandStore, RuntimeConfig, RuntimeControl, RuntimeStep,
+    Scheduler, SchedulerJob, SchedulerJobSpec, SchedulerJobStatus, Sensitivity,
+    SubprocessControlState, TaskRecord, TaskStatus, TriggerKind, WasmControlState, MAX_WASM_FUEL,
     MAX_WASM_MEMORY_BYTES, MAX_WASM_MODULE_BYTES, MAX_WASM_OUTPUT_BYTES, MAX_WASM_REQUEST_BYTES,
     MAX_WASM_TABLE_ELEMENTS,
 };
@@ -3095,6 +3096,7 @@ impl IpcState {
         let mut wasm_fuel_consumed = None;
         let mut pending_approval = None;
         let mut pending_task = None;
+        let mut subprocess_control_termination = None;
         let approved_binding_current = match approved_execution.as_ref() {
             Some(context) => {
                 context.plugin_id == record.id
@@ -3325,11 +3327,24 @@ impl IpcState {
                     if let Some(guard) = cancellation_guard.as_mut() {
                         guard.activate();
                     }
-                    match execute_installed_subprocess_plugin(
+                    match execute_installed_subprocess_plugin_cancellable(
                         &record.manifest,
                         action,
                         std::path::Path::new(&record.source_path),
                         &request.input,
+                        || {
+                            let state = if self.runtime_control.is_emergency_paused() {
+                                SubprocessControlState::EmergencyPaused
+                            } else if cancellation_requested() {
+                                SubprocessControlState::Cancelled
+                            } else {
+                                SubprocessControlState::Continue
+                            };
+                            if state != SubprocessControlState::Continue {
+                                subprocess_control_termination = Some(state);
+                            }
+                            state
+                        },
                     ) {
                         Ok(execution) => {
                             stdout_bytes = Some(execution.stdout_bytes);
@@ -3343,7 +3358,14 @@ impl IpcState {
                                     .to_string(),
                             )
                         }
-                        Err(error) => ("failed".to_string(), error.to_string()),
+                        Err(error) => {
+                            let status = match subprocess_control_termination {
+                                Some(SubprocessControlState::EmergencyPaused) => "blocked",
+                                Some(SubprocessControlState::Cancelled) => "cancelled",
+                                _ => "failed",
+                            };
+                            (status.to_string(), error.to_string())
+                        }
                     }
                 }
             } else {
@@ -3359,17 +3381,37 @@ impl IpcState {
             )
         };
 
-        // Pause and record replacement dominate completion. Output from a late
-        // runtime is discarded before it reaches audit, IPC, or the caller.
-        if runtime_started && self.runtime_control.is_emergency_paused() {
-            status = "blocked".to_string();
-            reason = "installed plugin completion discarded by emergency pause".to_string();
-            output = None;
+        // Pause and cancellation dominate completion. Observe the post-run
+        // control state once so response status and audit evidence cannot
+        // disagree when control changes after the runner's final poll.
+        let post_runtime_control = if runtime_started && self.runtime_control.is_emergency_paused()
+        {
+            SubprocessControlState::EmergencyPaused
+        } else if runtime_started && cancellation_requested() {
+            SubprocessControlState::Cancelled
+        } else {
+            SubprocessControlState::Continue
+        };
+        if runtime_kind == "subprocess" && post_runtime_control != SubprocessControlState::Continue
+        {
+            subprocess_control_termination = Some(post_runtime_control);
         }
-        if runtime_started && cancellation_requested() {
-            status = "failed".to_string();
-            reason = "installed plugin completion discarded by cancellation".to_string();
-            output = None;
+        match post_runtime_control {
+            SubprocessControlState::EmergencyPaused => {
+                status = "blocked".to_string();
+                reason = "installed plugin completion discarded by emergency pause".to_string();
+                output = None;
+            }
+            SubprocessControlState::Cancelled => {
+                status = if runtime_kind == "subprocess" {
+                    "cancelled".to_string()
+                } else {
+                    "failed".to_string()
+                };
+                reason = "installed plugin completion discarded by cancellation".to_string();
+                output = None;
+            }
+            SubprocessControlState::Continue => {}
         }
         let snapshot_current = if runtime_started {
             self.using_repository(|repository| {
@@ -3401,8 +3443,18 @@ impl IpcState {
         let cancellation_observed = cancellation_guard
             .take()
             .is_some_and(|guard| guard.finalize());
-        if runtime_started && cancellation_observed {
-            status = "failed".to_string();
+        let emergency_pause_observed = post_runtime_control
+            == SubprocessControlState::EmergencyPaused
+            || subprocess_control_termination == Some(SubprocessControlState::EmergencyPaused);
+        if runtime_started && cancellation_observed && !emergency_pause_observed {
+            if runtime_kind == "subprocess" {
+                subprocess_control_termination = Some(SubprocessControlState::Cancelled);
+            }
+            status = if runtime_kind == "subprocess" {
+                "cancelled".to_string()
+            } else {
+                "failed".to_string()
+            };
             reason = "installed plugin completion discarded by cancellation".to_string();
             output = None;
         }
@@ -3411,6 +3463,7 @@ impl IpcState {
             ("wasm", "completed") => "installed_plugin_wasm_completed",
             ("wasm", "failed") => "installed_plugin_wasm_failed",
             ("subprocess", "completed") => "installed_plugin_subprocess_completed",
+            ("subprocess", "cancelled") => "installed_plugin_subprocess_cancelled",
             ("subprocess", "failed") => "installed_plugin_subprocess_failed",
             (_, "approval_required") => "installed_plugin_approval_required",
             (_, "dry_run") => "installed_plugin_contract_dry_run",
@@ -3438,7 +3491,13 @@ impl IpcState {
             "action": request.action,
             "session_id": request.session_id,
             "cancellation_id_present": request.cancellation_id.is_some(),
-            "cancellation_requested": cancellation_observed,
+            "cancellation_requested": if runtime_kind == "subprocess" {
+                subprocess_control_termination == Some(SubprocessControlState::Cancelled)
+            } else {
+                cancellation_observed
+            },
+            "subprocess_control_termination": subprocess_control_termination
+                .map(SubprocessControlState::as_str),
             "model_planned": model_task_id.is_some(),
             "approved_execution": approved_execution.as_ref().map(|context| json!({
                 "approval_id": context.approval_id,
@@ -12975,6 +13034,81 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             InstalledPluginIntegrityStatus::ChangedSinceInstall
         );
         assert!(!changed_response.side_effect_executed);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn installed_plugin_emergency_pause_records_typed_subprocess_audit() {
+        let repository = SqliteRepository::in_memory().unwrap();
+        let source_dir = tempfile::tempdir().unwrap();
+        let sentinel_dir = tempfile::tempdir().unwrap();
+        let sentinel = sentinel_dir.path().join("runtime-started");
+        let source_path_buf = source_dir.path().canonicalize().unwrap();
+        write_sentinel_plugin_script(&source_path_buf, &sentinel);
+        let source_path = source_path_buf.display().to_string();
+        let manifest_path = source_path_buf.join("jarvis-plugin.json");
+        std::fs::write(
+            &manifest_path,
+            serde_json::to_string(&local_subprocess_manifest(&source_path)).unwrap(),
+        )
+        .unwrap();
+        repository
+            .install_plugin_metadata(
+                InstalledPlugin::from_local_manifest_path(&manifest_path).unwrap(),
+            )
+            .unwrap();
+        let state = IpcState::with_repository(repository).expect("state");
+        state
+            .verify_installed_plugin_provenance("local_runner_test")
+            .expect("verify provenance");
+        state
+            .set_installed_plugin_execution(
+                "local_runner_test",
+                InstalledPluginExecutionRequest {
+                    execution_enabled: true,
+                    execution_grant: InstalledPluginExecutionGrant::SubprocessStdio,
+                },
+            )
+            .expect("enable subprocess");
+
+        let running_state = state.clone();
+        let execution = std::thread::spawn(move || {
+            running_state.run_installed_plugin(
+                "local_runner_test",
+                InstalledPluginRunRequest {
+                    action: "inspect".to_string(),
+                    input: json!({ "path": "cancel-after-claim" }),
+                    session_id: None,
+                    cancellation_id: Some(Uuid::new_v4()),
+                    sensitivity: Sensitivity::Workspace,
+                    dry_run: false,
+                },
+            )
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        while !sentinel.exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "subprocess did not start before emergency pause"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        state.pause("typed subprocess audit test").expect("pause");
+
+        let response = execution
+            .join()
+            .expect("execution thread")
+            .expect("blocked subprocess response");
+        assert_eq!(response.status, "blocked");
+        assert!(response.output.is_none());
+        assert_eq!(
+            response.audit_entry.payload["cancellation_requested"],
+            false
+        );
+        assert_eq!(
+            response.audit_entry.payload["subprocess_control_termination"],
+            "emergency_paused"
+        );
     }
 
     #[cfg(unix)]
