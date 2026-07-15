@@ -9,10 +9,10 @@ use base64::Engine as _;
 use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand, ValueEnum};
 use jarvis_core::{
-    ApprovalDecisionRequest, ApprovalExecutionRequest, CommandRequest, CreateMemoryItemRequest,
-    CreateSchedulerJobRequest, EmergencyPauseRequest, InstallPluginRequest,
-    InstalledPluginExecutionGrant, InstalledPluginExecutionRequest,
-    InstalledPluginPublisherSignatureVerificationRequest,
+    ApprovalDecisionRequest, ApprovalExecutionAttentionAcknowledgementRequest,
+    ApprovalExecutionRequest, CommandRequest, CreateMemoryItemRequest, CreateSchedulerJobRequest,
+    EmergencyPauseRequest, InstallPluginRequest, InstalledPluginExecutionGrant,
+    InstalledPluginExecutionRequest, InstalledPluginPublisherSignatureVerificationRequest,
     InstalledPluginPublisherVerificationRequest, InstalledPluginUpdateApplyRequest,
     InstalledPluginUpdatePreviewRequest, Sensitivity, TriggerKind, UpdateMemoryItemRequest,
 };
@@ -803,6 +803,19 @@ enum ApprovalsCommand {
         /// Client-generated handle accepted by `runtime cancel` while execution is active.
         #[arg(long)]
         cancellation_id: Option<Uuid>,
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    /// List ambiguous pre-restart approval executions that require operator attention.
+    Attention {
+        #[arg(long, default_value = "http://127.0.0.1:7787")]
+        endpoint: String,
+    },
+    /// Acknowledge an ambiguous execution without retrying or entering plugin runtime.
+    AcknowledgeWithoutRetry {
+        execution_id: Uuid,
+        #[arg(long = "revision")]
+        expected_revision: u64,
         #[arg(long, default_value = "http://127.0.0.1:7787")]
         endpoint: String,
     },
@@ -1961,6 +1974,37 @@ async fn main() -> anyhow::Result<()> {
                         "POST",
                         &format!("/approvals/{id}/execute"),
                         Some(&body)
+                    )?
+                );
+            }
+            ApprovalsCommand::Attention { endpoint } => {
+                println!(
+                    "{}",
+                    server_required_request(
+                        &endpoint,
+                        "GET",
+                        "/approval-executions/attention",
+                        None,
+                    )?
+                );
+            }
+            ApprovalsCommand::AcknowledgeWithoutRetry {
+                execution_id,
+                expected_revision,
+                endpoint,
+            } => {
+                let body =
+                    serde_json::to_string(&ApprovalExecutionAttentionAcknowledgementRequest {
+                        expected_revision,
+                        disposition: "acknowledged_without_retry".to_string(),
+                    })?;
+                println!(
+                    "{}",
+                    server_required_request(
+                        &endpoint,
+                        "POST",
+                        &format!("/approval-executions/attention/{execution_id}/acknowledge"),
+                        Some(&body),
                     )?
                 );
             }

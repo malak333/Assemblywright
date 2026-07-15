@@ -351,6 +351,27 @@ an external effect, Jarvis reports the outcome as ambiguous and requires an
 operator to review evidence and create a new approval rather than retrying
 automatically.
 
+At repository-backed core startup, schema v16 reconciles pre-existing claimed
+executions into a separate redacted attention ledger before accepting IPC. It
+does not re-enter the runtime or weaken the permanent replay guard. The queue
+omits action text, invocation input, decision text, and provenance digests.
+Its summary reports the true unacknowledged count, returned item count, fixed
+page limit, and truncation state separately; the bounded page must never be
+presented as the total backlog.
+An operator may acknowledge only the exact observed revision with the explicit
+`acknowledged_without_retry` disposition. That compare-and-swap increments the
+attention revision and appends audit evidence atomically, but does not mutate
+or delete the consumed execution claim and cannot create a replacement approval.
+
+Every file-backed repository acquires a sibling owner lease before backup,
+version inspection, or migration and retains it for the repository lifetime.
+The Unix lock file is opened with no-follow and close-on-exec, must be a regular
+single-link current-owner file with no group/other permissions, and uses a
+nonblocking exclusive advisory lock. Concurrent cores fail closed before
+opening SQLite; in-memory test repositories remain lease-free.
+This is a cooperating-Jarvis ownership boundary, not mandatory locking against
+raw SQLite clients or other noncooperating file writers.
+
 CLI and Swift approved-execution clients generate a fresh cancellation UUID.
 Rust registers the handle, binds it to the approved task, and activates it at
 the claim boundary. Authenticated cancellation can target only that exact

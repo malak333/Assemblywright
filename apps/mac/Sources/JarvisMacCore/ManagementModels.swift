@@ -1271,6 +1271,11 @@ public final class ApprovalManagementModel: ObservableObject {
     @Published public private(set) var permissionSurface: JarvisPermissionSurfaceState
     @Published public private(set) var lastDecision: JarvisPendingApproval?
     @Published public private(set) var lastExecution: JarvisApprovalExecutionResponse?
+    @Published public private(set) var executionAttention: [JarvisApprovalExecutionAttentionItem]
+    @Published public private(set) var executionAttentionUnacknowledgedCount: Int
+    @Published public private(set) var executionAttentionItemLimit: Int
+    @Published public private(set) var executionAttentionItemsTruncated: Bool
+    @Published public private(set) var lastAcknowledgedExecution: JarvisApprovalExecutionAttentionItem?
     @Published public private(set) var isLoading: Bool
     @Published public private(set) var lastError: String?
 
@@ -1280,6 +1285,10 @@ public final class ApprovalManagementModel: ObservableObject {
 
     public var supportsApprovalExecution: Bool {
         contract?.exposesApprovalExecuteAction == true
+    }
+
+    public var supportsApprovalExecutionAttention: Bool {
+        contract?.exposesApprovalExecutionAttention == true
     }
 
     public var limitationText: String? {
@@ -1302,6 +1311,11 @@ public final class ApprovalManagementModel: ObservableObject {
         self.permissionSurface = .empty
         self.lastDecision = nil
         self.lastExecution = nil
+        self.executionAttention = []
+        self.executionAttentionUnacknowledgedCount = 0
+        self.executionAttentionItemLimit = 0
+        self.executionAttentionItemsTruncated = false
+        self.lastAcknowledgedExecution = nil
         self.isLoading = false
         self.lastError = nil
         self.pluginManifests = []
@@ -1320,6 +1334,18 @@ public final class ApprovalManagementModel: ObservableObject {
             self.policyReview = loadedContract.exposesPermissionPolicyReview
                 ? try await self.client.permissionPolicyReview()
                 : nil
+            if loadedContract.exposesApprovalExecutionAttention {
+                let summary = try await self.loadApprovalExecutionAttention()
+                self.executionAttention = summary.items
+                self.executionAttentionUnacknowledgedCount = summary.unacknowledgedCount
+                self.executionAttentionItemLimit = summary.itemLimit
+                self.executionAttentionItemsTruncated = summary.itemsTruncated
+            } else {
+                self.executionAttention = []
+                self.executionAttentionUnacknowledgedCount = 0
+                self.executionAttentionItemLimit = 0
+                self.executionAttentionItemsTruncated = false
+            }
 
             if loadedContract.exposesApprovalList {
                 self.pendingItems = try await self.loadApprovalItems(contract: loadedContract)
@@ -1432,6 +1458,83 @@ public final class ApprovalManagementModel: ObservableObject {
         } catch {
             lastError = String(describing: error)
         }
+    }
+
+    public func acknowledgeExecutionWithoutRetry(
+        id: UUID,
+        expectedRevision: UInt64
+    ) async {
+        guard supportsApprovalExecutionAttention else {
+            lastError = "Core does not expose approval execution recovery actions."
+            return
+        }
+        let (acknowledgedRevision, overflow) = expectedRevision.addingReportingOverflow(1)
+        guard !overflow else {
+            lastError = "Approval execution attention revision cannot be acknowledged safely."
+            return
+        }
+        guard let expectedAttention = executionAttention.first(where: {
+            $0.executionId == id && $0.revision == expectedRevision
+        }) else {
+            lastError = "Approval execution attention changed before acknowledgement. Refresh and review it again."
+            return
+        }
+
+        await run {
+            let response = try await self.client.acknowledgeApprovalExecution(
+                id: id,
+                request: JarvisApprovalExecutionAcknowledgementRequest(
+                    expectedRevision: expectedRevision
+                )
+            )
+            let acknowledged = response.attention
+            guard acknowledged.executionId == expectedAttention.executionId,
+                  acknowledged.approvalId == expectedAttention.approvalId,
+                  acknowledged.taskId == expectedAttention.taskId,
+                  acknowledged.revision == acknowledgedRevision,
+                  acknowledged.acknowledgedAt != nil,
+                  acknowledged.acknowledgedDisposition == "acknowledged_without_retry",
+                  acknowledged.effectPossible,
+                  !acknowledged.automaticRetry,
+                  acknowledged.actionRedacted else {
+                throw JarvisIPCError.invalidResponse
+            }
+            guard self.executionAttention.contains(expectedAttention) else {
+                throw JarvisIPCError.invalidResponse
+            }
+            self.lastAcknowledgedExecution = acknowledged
+            self.executionAttention.removeAll { $0 == expectedAttention }
+            self.executionAttentionUnacknowledgedCount = max(
+                0,
+                self.executionAttentionUnacknowledgedCount - 1
+            )
+            self.executionAttentionItemsTruncated =
+                self.executionAttentionUnacknowledgedCount > self.executionAttention.count
+        }
+    }
+
+    private func loadApprovalExecutionAttention() async throws -> JarvisApprovalExecutionAttentionSummary {
+        let summary = try await client.approvalExecutionAttention()
+        let uniqueExecutionCount = Set(summary.items.map(\.executionId)).count
+        guard summary.itemLimit > 0,
+              summary.returnedItemCount == summary.items.count,
+              summary.returnedItemCount <= summary.itemLimit,
+              summary.unacknowledgedCount >= summary.returnedItemCount,
+              summary.attentionRequired == (summary.unacknowledgedCount > 0),
+              summary.itemsTruncated
+                  == (summary.unacknowledgedCount > summary.returnedItemCount),
+              (!summary.itemsTruncated || summary.returnedItemCount == summary.itemLimit),
+              uniqueExecutionCount == summary.returnedItemCount,
+              summary.items.allSatisfy({ item in
+                  item.acknowledgedAt == nil
+                      && item.acknowledgedDisposition == nil
+                      && item.effectPossible
+                      && !item.automaticRetry
+                      && item.actionRedacted
+              }) else {
+            throw JarvisIPCError.invalidResponse
+        }
+        return summary
     }
 
     private func decide(

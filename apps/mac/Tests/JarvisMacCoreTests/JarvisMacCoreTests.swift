@@ -2594,6 +2594,11 @@ struct JarvisMacCoreTests {
         )
         let approvalId = UUID()
         let taskId = UUID()
+        let attention = sampleApprovalExecutionAttention(
+            approvalId: approvalId,
+            taskId: taskId,
+            revision: 7
+        )
         var requests: [(method: String, path: String, query: String?, body: [String: Any]?)] = []
 
         IPCURLProtocol.handler = { request in
@@ -2625,6 +2630,20 @@ struct JarvisMacCoreTests {
                 return (response, pendingApprovalJSON(id: approvalId, taskId: taskId, status: "denied", decidedBy: "mac-ui", decisionReason: "too risky"))
             case "/approvals/\(approvalId.uuidString)/execute":
                 return (response, approvalExecutionJSON(approvalId: approvalId, taskId: taskId))
+            case "/approval-executions/attention":
+                let item = String(data: try! JSONEncoder().encode(attention), encoding: .utf8)!
+                return (response, Data("{\"generated_at\":\"2026-07-15T12:00:00Z\",\"attention_required\":true,\"unacknowledged_count\":1,\"returned_item_count\":1,\"item_limit\":100,\"items_truncated\":false,\"items\":[\(item)]}".utf8))
+            case "/approval-executions/attention/\(attention.executionId.uuidString)/acknowledge":
+                let acknowledged = sampleApprovalExecutionAttention(
+                    executionId: attention.executionId,
+                    approvalId: approvalId,
+                    taskId: taskId,
+                    revision: 8,
+                    acknowledgedAt: "2026-07-15T12:01:00Z",
+                    acknowledgedDisposition: "acknowledged_without_retry"
+                )
+                let item = String(data: try! JSONEncoder().encode(acknowledged), encoding: .utf8)!
+                return (response, Data("{\"attention\":\(item),\"proof_boundary\":\"review recorded without retry\"}".utf8))
             default:
                 return (response, Data("{}".utf8))
             }
@@ -2648,6 +2667,13 @@ struct JarvisMacCoreTests {
             id: approvalId,
             cancellationID: executionCancellationID
         )
+        let attentionSummary = try await client.approvalExecutionAttention()
+        let acknowledgement = try await client.acknowledgeApprovalExecution(
+            id: attention.executionId,
+            request: JarvisApprovalExecutionAcknowledgementRequest(
+                expectedRevision: attention.revision
+            )
+        )
 
         #expect(pending.first?.id == approvalId)
         #expect(grants.highRiskPendingCount == 1)
@@ -2656,7 +2682,13 @@ struct JarvisMacCoreTests {
         #expect(denied.status == "denied")
         #expect(executed.accepted)
         #expect(executed.auditEntry.eventType == "approval_executed")
-        #expect(requests.map(\.method) == ["GET", "GET", "GET", "GET", "POST", "POST", "POST"])
+        #expect(attentionSummary.items == [attention])
+        #expect(attentionSummary.unacknowledgedCount == 1)
+        #expect(attentionSummary.returnedItemCount == 1)
+        #expect(attentionSummary.itemLimit == 100)
+        #expect(!attentionSummary.itemsTruncated)
+        #expect(acknowledgement.attention.revision == 8)
+        #expect(requests.map(\.method) == ["GET", "GET", "GET", "GET", "POST", "POST", "POST", "GET", "POST"])
         #expect(requests.map(\.path) == [
             "/approvals",
             "/permissions/grants",
@@ -2664,7 +2696,9 @@ struct JarvisMacCoreTests {
             "/approvals/\(approvalId.uuidString)",
             "/approvals/\(approvalId.uuidString)/approve",
             "/approvals/\(approvalId.uuidString)/deny",
-            "/approvals/\(approvalId.uuidString)/execute"
+            "/approvals/\(approvalId.uuidString)/execute",
+            "/approval-executions/attention",
+            "/approval-executions/attention/\(attention.executionId.uuidString)/acknowledge"
         ])
         #expect(requests[0].query == "status=pending")
         #expect(requests[4].body?["decided_by"] as? String == "mac-ui")
@@ -2673,6 +2707,9 @@ struct JarvisMacCoreTests {
         let cancellationID = try #require(requests[6].body?["cancellation_id"] as? String)
         #expect(UUID(uuidString: cancellationID) == executionCancellationID)
         #expect(requests[6].body?.count == 1)
+        #expect(requests[8].body?["expected_revision"] as? Int == 7)
+        #expect(requests[8].body?["disposition"] as? String == "acknowledged_without_retry")
+        #expect(requests[8].body?.count == 2)
     }
 
     @MainActor
@@ -3821,6 +3858,195 @@ struct JarvisMacCoreTests {
         #expect(!model.isCancelling(id: approval.id))
         #expect(model.executionCancellationID(for: approval.id) == nil)
         #expect(model.pendingItems.isEmpty)
+    }
+
+    @MainActor
+    @Test("Approval management model exposes and acknowledges ambiguous execution without retry")
+    func approvalManagementModelAcknowledgesAmbiguousExecutionWithoutRetry() async {
+        let attention = sampleApprovalExecutionAttention(revision: 4)
+        let client = FakeCoreClient(
+            contractResponse: fullApprovalContract(),
+            approvalExecutionAttentionItems: [attention]
+        )
+        let model = ApprovalManagementModel(client: client)
+
+        await model.refresh()
+
+        #expect(model.supportsApprovalExecutionAttention)
+        #expect(model.executionAttention == [attention])
+        #expect(attention.effectPossible)
+        #expect(!attention.automaticRetry)
+        #expect(attention.actionRedacted)
+
+        await model.acknowledgeExecutionWithoutRetry(
+            id: attention.executionId,
+            expectedRevision: attention.revision
+        )
+
+        #expect(model.executionAttention.isEmpty)
+        #expect(model.lastAcknowledgedExecution?.revision == 5)
+        #expect(model.lastAcknowledgedExecution?.acknowledgedAt != nil)
+        #expect(client.approvalExecutionAcknowledgements == [
+            FakeCoreClient.ApprovalExecutionAcknowledgement(
+                id: attention.executionId,
+                request: JarvisApprovalExecutionAcknowledgementRequest(
+                    expectedRevision: 4,
+                    disposition: "acknowledged_without_retry"
+                )
+            )
+        ])
+        #expect(client.approvalExecutions.isEmpty)
+    }
+
+    @MainActor
+    @Test("Approval attention acknowledgement rejects an observed stale revision")
+    func approvalManagementModelRejectsStaleAttentionRevision() async {
+        let attention = sampleApprovalExecutionAttention(revision: 2)
+        let client = FakeCoreClient(
+            contractResponse: fullApprovalContract(),
+            approvalExecutionAttentionItems: [attention]
+        )
+        let model = ApprovalManagementModel(client: client)
+
+        await model.refresh()
+        await model.acknowledgeExecutionWithoutRetry(
+            id: attention.executionId,
+            expectedRevision: 1
+        )
+
+        #expect(model.executionAttention == [attention])
+        #expect(model.lastAcknowledgedExecution == nil)
+        #expect(model.lastError != nil)
+        #expect(client.approvalExecutionAcknowledgements.isEmpty)
+        #expect(client.approvalExecutions.isEmpty)
+    }
+
+    @MainActor
+    @Test("Approval attention acknowledgement rejects mismatched authority identifiers")
+    func approvalManagementModelRejectsMismatchedAcknowledgementIdentifiers() async {
+        let attention = sampleApprovalExecutionAttention(revision: 3)
+        let malformed = sampleApprovalExecutionAttention(
+            executionId: attention.executionId,
+            approvalId: UUID(),
+            taskId: UUID(),
+            revision: 4,
+            acknowledgedAt: "2026-07-15T12:01:00Z",
+            acknowledgedDisposition: "acknowledged_without_retry"
+        )
+        let client = FakeCoreClient(
+            contractResponse: fullApprovalContract(),
+            approvalExecutionAttentionItems: [attention],
+            approvalExecutionAcknowledgementOverride: malformed
+        )
+        let model = ApprovalManagementModel(client: client)
+
+        await model.refresh()
+        await model.acknowledgeExecutionWithoutRetry(
+            id: attention.executionId,
+            expectedRevision: attention.revision
+        )
+
+        #expect(model.executionAttention == [attention])
+        #expect(model.lastAcknowledgedExecution == nil)
+        #expect(model.lastError != nil)
+        #expect(client.approvalExecutionAcknowledgements.count == 1)
+        #expect(client.approvalExecutions.isEmpty)
+    }
+
+    @MainActor
+    @Test("Approval attention acknowledgement rejects a non-successor revision")
+    func approvalManagementModelRejectsAcknowledgementRevisionJump() async {
+        let attention = sampleApprovalExecutionAttention(revision: 8)
+        let malformed = sampleApprovalExecutionAttention(
+            executionId: attention.executionId,
+            approvalId: attention.approvalId,
+            taskId: attention.taskId,
+            revision: 10,
+            acknowledgedAt: "2026-07-15T12:01:00Z",
+            acknowledgedDisposition: "acknowledged_without_retry"
+        )
+        let client = FakeCoreClient(
+            contractResponse: fullApprovalContract(),
+            approvalExecutionAttentionItems: [attention],
+            approvalExecutionAcknowledgementOverride: malformed
+        )
+        let model = ApprovalManagementModel(client: client)
+
+        await model.refresh()
+        await model.acknowledgeExecutionWithoutRetry(
+            id: attention.executionId,
+            expectedRevision: attention.revision
+        )
+
+        #expect(model.executionAttention == [attention])
+        #expect(model.lastAcknowledgedExecution == nil)
+        #expect(model.lastError != nil)
+        #expect(client.approvalExecutionAcknowledgements.count == 1)
+        #expect(client.approvalExecutions.isEmpty)
+    }
+
+    @MainActor
+    @Test("Approval attention revision overflow rejects before IPC")
+    func approvalManagementModelRejectsAttentionRevisionOverflowBeforeRequest() async {
+        let attention = sampleApprovalExecutionAttention(revision: UInt64.max)
+        let client = FakeCoreClient(
+            contractResponse: fullApprovalContract(),
+            approvalExecutionAttentionItems: [attention]
+        )
+        let model = ApprovalManagementModel(client: client)
+
+        await model.refresh()
+        await model.acknowledgeExecutionWithoutRetry(
+            id: attention.executionId,
+            expectedRevision: attention.revision
+        )
+
+        #expect(model.executionAttention == [attention])
+        #expect(model.lastAcknowledgedExecution == nil)
+        #expect(model.lastError?.contains("cannot be acknowledged safely") == true)
+        #expect(client.approvalExecutionAcknowledgements.isEmpty)
+        #expect(client.approvalExecutions.isEmpty)
+    }
+
+    @MainActor
+    @Test("Approval attention preserves true total and truncation metadata")
+    func approvalManagementModelLoadsTruncatedAttentionPage() async {
+        let items = (0..<100).map { _ in sampleApprovalExecutionAttention() }
+        let client = FakeCoreClient(
+            contractResponse: fullApprovalContract(),
+            approvalExecutionAttentionItems: items,
+            approvalExecutionAttentionUnacknowledgedCount: 101,
+            approvalExecutionAttentionItemLimit: 100,
+            approvalExecutionAttentionItemsTruncated: true
+        )
+        let model = ApprovalManagementModel(client: client)
+
+        await model.refresh()
+
+        #expect(model.lastError == nil)
+        #expect(model.executionAttention.count == 100)
+        #expect(model.executionAttentionUnacknowledgedCount == 101)
+        #expect(model.executionAttentionItemLimit == 100)
+        #expect(model.executionAttentionItemsTruncated)
+    }
+
+    @MainActor
+    @Test("Approval attention rejects inconsistent truncation metadata")
+    func approvalManagementModelRejectsInconsistentAttentionPagination() async {
+        let client = FakeCoreClient(
+            contractResponse: fullApprovalContract(),
+            approvalExecutionAttentionItems: [sampleApprovalExecutionAttention()],
+            approvalExecutionAttentionUnacknowledgedCount: 2,
+            approvalExecutionAttentionItemLimit: 100,
+            approvalExecutionAttentionItemsTruncated: true
+        )
+        let model = ApprovalManagementModel(client: client)
+
+        await model.refresh()
+
+        #expect(model.executionAttention.isEmpty)
+        #expect(model.executionAttentionUnacknowledgedCount == 0)
+        #expect(model.lastError != nil)
     }
 
     @MainActor
@@ -6049,7 +6275,9 @@ private func fullApprovalContract() -> JarvisContractResponse {
                 { "method": "GET", "path": "/approvals/:id", "repository_required": true, "redacted": false },
                 { "method": "POST", "path": "/approvals/:id/approve", "repository_required": true, "redacted": false },
                 { "method": "POST", "path": "/approvals/:id/deny", "repository_required": true, "redacted": false },
-                { "method": "POST", "path": "/approvals/:id/execute", "repository_required": true, "redacted": false }
+                { "method": "POST", "path": "/approvals/:id/execute", "repository_required": true, "redacted": false },
+                { "method": "GET", "path": "/approval-executions/attention", "repository_required": true, "redacted": true },
+                { "method": "POST", "path": "/approval-executions/attention/:execution_id/acknowledge", "repository_required": true, "redacted": true }
               ],
               "safe_inspection_paths": ["/health", "/permissions/grants", "/permissions/policy-review", "/approvals"]
             }
@@ -6075,6 +6303,38 @@ private func samplePendingApproval(
             status: status,
             decidedBy: decidedBy,
             decisionReason: decisionReason
+        )
+    )
+}
+
+private func sampleApprovalExecutionAttention(
+    executionId: UUID = UUID(),
+    approvalId: UUID = UUID(),
+    taskId: UUID = UUID(),
+    revision: UInt64 = 0,
+    acknowledgedAt: String? = nil,
+    acknowledgedDisposition: String? = nil
+) -> JarvisApprovalExecutionAttentionItem {
+    let acknowledgement = acknowledgedAt.map { "\"\($0)\"" } ?? "null"
+    let disposition = acknowledgedDisposition.map { "\"\($0)\"" } ?? "null"
+    return try! JSONDecoder().decode(
+        JarvisApprovalExecutionAttentionItem.self,
+        from: Data(
+            """
+            {
+              "execution_id": "\(executionId.uuidString)",
+              "approval_id": "\(approvalId.uuidString)",
+              "task_id": "\(taskId.uuidString)",
+              "revision": \(revision),
+              "detected_at": "2026-07-15T12:00:00Z",
+              "updated_at": "2026-07-15T12:00:00Z",
+              "acknowledged_at": \(acknowledgement),
+              "acknowledged_disposition": \(disposition),
+              "effect_possible": true,
+              "automatic_retry": false,
+              "action_redacted": true
+            }
+            """.utf8
         )
     )
 }
@@ -10183,6 +10443,11 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         var reason: String?
     }
 
+    struct ApprovalExecutionAcknowledgement: Equatable {
+        var id: UUID
+        var request: JarvisApprovalExecutionAcknowledgementRequest
+    }
+
     private var healthResults: [Result<JarvisHealth, Error>]
     private var tasks: [JarvisTask]
     private var auditEntries: [JarvisAuditEntry]
@@ -10239,6 +10504,12 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     private(set) var approvalDecisions: [ApprovalDecision]
     private(set) var approvalExecutions: [UUID]
     private(set) var approvalExecutionCancellationIDs: [UUID]
+    private var approvalExecutionAttentionItems: [JarvisApprovalExecutionAttentionItem]
+    private let approvalExecutionAcknowledgementOverride: JarvisApprovalExecutionAttentionItem?
+    private let approvalExecutionAttentionUnacknowledgedCount: Int?
+    private let approvalExecutionAttentionItemLimit: Int
+    private let approvalExecutionAttentionItemsTruncated: Bool?
+    private(set) var approvalExecutionAcknowledgements: [ApprovalExecutionAcknowledgement]
     private let approvalExecutionDelayNanoseconds: UInt64
     private(set) var includeDeletedMemoryRequests: [Bool]
     private(set) var createdMemoryRequests: [JarvisCreateMemoryItemRequest]
@@ -10298,6 +10569,11 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         releaseSmokeMode: Bool = false,
         releaseSmokeFailureCall: String? = nil,
         approvalExecutionDelayNanoseconds: UInt64 = 0,
+        approvalExecutionAttentionItems: [JarvisApprovalExecutionAttentionItem] = [],
+        approvalExecutionAcknowledgementOverride: JarvisApprovalExecutionAttentionItem? = nil,
+        approvalExecutionAttentionUnacknowledgedCount: Int? = nil,
+        approvalExecutionAttentionItemLimit: Int = 100,
+        approvalExecutionAttentionItemsTruncated: Bool? = nil,
         commandCancellationDelayNanoseconds: UInt64 = 0,
         commandSubmissionDelayNanoseconds: UInt64 = 0
     ) {
@@ -10358,6 +10634,12 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         self.approvalDecisions = []
         self.approvalExecutions = []
         self.approvalExecutionCancellationIDs = []
+        self.approvalExecutionAttentionItems = approvalExecutionAttentionItems
+        self.approvalExecutionAcknowledgementOverride = approvalExecutionAcknowledgementOverride
+        self.approvalExecutionAttentionUnacknowledgedCount = approvalExecutionAttentionUnacknowledgedCount
+        self.approvalExecutionAttentionItemLimit = approvalExecutionAttentionItemLimit
+        self.approvalExecutionAttentionItemsTruncated = approvalExecutionAttentionItemsTruncated
+        self.approvalExecutionAcknowledgements = []
         self.approvalExecutionDelayNanoseconds = approvalExecutionDelayNanoseconds
         self.includeDeletedMemoryRequests = []
         self.createdMemoryRequests = []
@@ -10592,7 +10874,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     }
 
     func memoryClassification(includeDeleted: Bool) async throws -> JarvisMemoryClassificationSummary {
-        try JSONDecoder().decode(
+        return try JSONDecoder().decode(
             JarvisMemoryClassificationSummary.self,
             from: Data(
                 """
@@ -11263,6 +11545,55 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
             from: approval.action == "local_installed.confirm_action"
                 ? installedApprovalExecutionJSON(approval: approval)
                 : approvalExecutionJSON(approvalId: approval.id, taskId: approval.taskId)
+        )
+    }
+
+    func approvalExecutionAttention() async throws -> JarvisApprovalExecutionAttentionSummary {
+        let total = approvalExecutionAttentionUnacknowledgedCount
+            ?? approvalExecutionAttentionItems.count
+        let truncated = approvalExecutionAttentionItemsTruncated
+            ?? (total > approvalExecutionAttentionItems.count)
+        return try JSONDecoder().decode(
+            JarvisApprovalExecutionAttentionSummary.self,
+            from: Data(
+                """
+                {
+                  "generated_at": "2026-07-15T12:00:00Z",
+                  "attention_required": \(total > 0),
+                  "unacknowledged_count": \(total),
+                  "returned_item_count": \(approvalExecutionAttentionItems.count),
+                  "item_limit": \(approvalExecutionAttentionItemLimit),
+                  "items_truncated": \(truncated),
+                  "items": \(String(data: try JSONEncoder().encode(approvalExecutionAttentionItems), encoding: .utf8)!)
+                }
+                """.utf8
+            )
+        )
+    }
+
+    func acknowledgeApprovalExecution(
+        id: UUID,
+        request: JarvisApprovalExecutionAcknowledgementRequest
+    ) async throws -> JarvisApprovalExecutionAcknowledgementResponse {
+        guard request.disposition == "acknowledged_without_retry",
+              let index = approvalExecutionAttentionItems.firstIndex(where: {
+                  $0.executionId == id && $0.revision == request.expectedRevision
+              }) else {
+            throw URLError(.badServerResponse)
+        }
+        approvalExecutionAcknowledgements.append(.init(id: id, request: request))
+        let current = approvalExecutionAttentionItems.remove(at: index)
+        let acknowledged = sampleApprovalExecutionAttention(
+            executionId: current.executionId,
+            approvalId: current.approvalId,
+            taskId: current.taskId,
+            revision: current.revision + 1,
+            acknowledgedAt: "2026-07-15T12:01:00Z",
+            acknowledgedDisposition: "acknowledged_without_retry"
+        )
+        return JarvisApprovalExecutionAcknowledgementResponse(
+            attention: approvalExecutionAcknowledgementOverride ?? acknowledged,
+            proofBoundary: "Acknowledgement records review without retrying or changing the permanent claim."
         )
     }
 

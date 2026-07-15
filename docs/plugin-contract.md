@@ -326,6 +326,15 @@ to explain what happened:
   runtime; authenticated `/runtime/cancellations/:id` discards output and
   records a cancelled terminal claim when cancellation wins acceptance. The
   subprocess boundary still cannot reverse a side effect already performed.
+  If restart finds a pre-existing unresolved claim, schema v16 creates one
+  redacted approval-execution attention row before IPC starts. Inspection omits
+  the action, bound input, decision text, actor, paths, and provenance digests.
+  The response distinguishes the true unacknowledged total from the returned
+  count, 100-item limit, and explicit truncation flag.
+  `POST /approval-executions/attention/:execution_id/acknowledge` accepts only
+  the observed revision and explicit `acknowledged_without_retry` disposition;
+  its CAS records operator review without invoking the plugin, changing the
+  permanent consumed claim, or authorizing a retry.
 - Model-originated tool requests are stricter than direct plugin registry
   inspection. The default provider inventory contains only registered
   first-party actions, and `/tools/model` remains the redacted first-party

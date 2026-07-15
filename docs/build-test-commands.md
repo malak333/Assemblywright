@@ -634,7 +634,15 @@ state, task state, and terminal audits commit together. Any durable claim
 permanently consumes that approval: failure, cancellation, timeout, restart, or
 a storage interruption after claim can leave the effect ambiguous, and
 automatic retry is forbidden. Inspect audit evidence and create a new approval
-when another attempt is appropriate. Installed-plugin approvals additionally
+when another attempt is appropriate. On restart, schema v16 projects a
+pre-existing unresolved claim into a separate redacted attention ledger before
+IPC starts. `jarvis approvals attention` lists unacknowledged rows without
+action/input/reason/actor/path/digest data and distinguishes the true total from
+the returned count, 100-item limit, and truncation flag. `jarvis approvals
+acknowledge-without-retry <execution-id> --revision <observed-revision>` sends
+the exact revision plus the fixed `acknowledged_without_retry` disposition.
+The CAS records review but does not enter the plugin, alter/delete the consumed
+claim, create a new approval, or authorize a retry. Installed-plugin approvals additionally
 use a schema-v15 private binding over canonical input, manifest/provenance, and
 execution grant. The binding is revalidated before claim and its input/digests
 are redacted from public and audit surfaces.
@@ -662,6 +670,13 @@ cargo test -p jarvis-core approval_decision_and_redacted_audit_commit_or_roll_ba
 cargo test -p jarvis-core approved_row_without_matching_grant_audit_cannot_be_claimed -- --nocapture
 cargo test -p jarvis-core matching_legacy_raw_metadata_grant_audit_remains_claimable -- --nocapture
 cargo test -p jarvis-core migration_13_backfills_completed_approval_execution_as_consumed -- --nocapture
+cargo test -p jarvis-core claimed_approval_restart_attention_is_insert_once_redacted_and_acknowledged_by_cas -- --nocapture
+cargo test -p jarvis-core approval_execution_attention_count_is_not_limited_by_the_bounded_page -- --nocapture
+cargo test -p jarvis-core approval_execution_attention_revision_overflow_fails_closed -- --nocapture
+cargo test -p jarvis-core file_backed_repository_owner_lease_is_exclusive_and_released -- --nocapture
+cargo test -p jarvis-core repository_owner_lease_serializes_preflight_backup_and_migration -- --nocapture
+cargo test -p jarvis-core repository_owner_lease_rejects_symlink_and_insecure_lock_before_database_creation -- --nocapture
+cargo test -p jarvis-cli --test local_ipc_e2e file_backed_core_ownership_blocks_second_process_and_defers_live_claim_reconciliation -- --nocapture
 cargo test -p jarvis-core installed_plugin_pending_approval_binds_input_without_audit_disclosure -- --nocapture
 cargo test -p jarvis-core installed_plugin_confirm_invocation_requires_bound_one_shot_approval -- --nocapture
 cargo test -p jarvis-cli --test local_ipc_e2e authenticated_approved_installed_execution_can_be_cancelled_after_claim -- --nocapture
@@ -669,7 +684,7 @@ cargo test -p jarvis-cli --test local_ipc_e2e approval_decision_audit_failure_ro
 cargo test -p jarvis-cli --test local_ipc_e2e approved_row_without_grant_audit_cannot_claim_or_enter_plugin_across_restart -- --nocapture
 cargo test -p jarvis-cli --test local_ipc_e2e concurrent_approved_execution_is_one_shot_across_ipc_and_restart -- --nocapture
 cargo test -p jarvis-cli --test local_ipc_e2e serve_exposes_local_ipc_contract_and_persists_state -- --nocapture
-swift test --disable-sandbox --package-path apps/mac --filter ApprovalManagementModel
+swift test --disable-sandbox --package-path apps/mac --filter approvalManagementModel
 ```
 
 The storage decision test injects audit failure for both grant and denial and

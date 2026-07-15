@@ -440,12 +440,30 @@ replay fails with conflict/HTTP 409. Terminal execution state, task state, and
 terminal audit evidence commit together. Once claimed, an approval is consumed:
 failure, cancellation, timeout, restart, or a persistence interruption can make
 the effect ambiguous, so automatic retry is forbidden. Inspect the audit trail
-and create a new approval when another attempt is appropriate. The Swift
+and create a new approval when another attempt is appropriate. On core restart,
+schema v16 projects any pre-existing unresolved claim into the redacted
+`/approval-executions/attention` queue before serving IPC. The queue exposes
+identifiers, timestamps, revision, and fixed effect/retry/redaction booleans,
+never the action, approved input, reason, actor, or provenance digests. The
+summary reports the true outstanding count separately from the bounded 100-item
+page and explicitly marks truncation, so a large recovery backlog is never
+understated. CLI and
+the Swift Approval Center can acknowledge an observed revision explicitly with
+`acknowledged_without_retry`; the CAS records review but never invokes a plugin,
+changes or deletes the permanent claim, or creates another approval. The Swift
 Approval Center suppresses duplicate submits and hides approvals that have
-either claim or terminal execution evidence. Exact legacy raw-metadata audit
+either claim or terminal execution evidence while presenting unresolved claims
+in this separate recovery queue. Exact legacy raw-metadata audit
 evidence remains compatible when its approval ID, task, action, status, policy
 metadata, actor/reason, and non-execution fields match; missing or unrelated
 evidence cannot be substituted and Jarvis never fabricates a grant audit.
+File-backed SQLite startup first acquires and retains a nonblocking exclusive
+lease on the sibling owner-only `.owner.lock`. The lock is opened without
+following symlinks, must be a regular single-link current-owner `0600` file,
+and serializes backup, version inspection, migration, and the repository
+lifetime. A second core fails before database open instead of racing recovery.
+This lease coordinates cooperating Jarvis repository owners only; it does not
+OS-block a raw or noncooperating process from opening the SQLite file directly.
 Current CLI and Swift clients attach a fresh `cancellation_id` to approved
 execution. While that exact claimed run is active,
 `POST /runtime/cancellations/:id` binds cancellation to its approval task,

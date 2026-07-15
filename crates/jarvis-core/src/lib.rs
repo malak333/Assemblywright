@@ -18,12 +18,13 @@ pub mod workspace;
 
 pub use ipc::{
     router, router_with_auth, serve, serve_listener, serve_listener_with_auth, serve_with_auth,
-    ApprovalDecisionRequest, ApprovalExecutionRequest, ApprovalExecutionResponse,
-    ApprovalStatusCount, CommandRequest, CommandResponse, CreateMemoryItemRequest,
-    CreateSchedulerJobRequest, EmergencyPauseRequest, EmergencyPauseResponse, ErrorResponse,
-    HealthResponse, InstallPluginRequest, InstalledPluginExecutionRequest,
-    InstalledPluginGrantSurface, InstalledPluginLifecycleHistoryResponse,
-    InstalledPluginPublisherSignatureVerificationRequest,
+    ApprovalDecisionRequest, ApprovalExecutionAttentionAcknowledgementRequest,
+    ApprovalExecutionAttentionAcknowledgementResponse, ApprovalExecutionAttentionSummary,
+    ApprovalExecutionRequest, ApprovalExecutionResponse, ApprovalStatusCount, CommandRequest,
+    CommandResponse, CreateMemoryItemRequest, CreateSchedulerJobRequest, EmergencyPauseRequest,
+    EmergencyPauseResponse, ErrorResponse, HealthResponse, InstallPluginRequest,
+    InstalledPluginExecutionRequest, InstalledPluginGrantSurface,
+    InstalledPluginLifecycleHistoryResponse, InstalledPluginPublisherSignatureVerificationRequest,
     InstalledPluginPublisherVerificationRequest, InstalledPluginRunRequest,
     InstalledPluginRunResponse, InstalledPluginUpdateApplyRequest, InstalledPluginUpdatePreview,
     InstalledPluginUpdatePreviewRequest, IpcAuth, IpcState, ModelToolCatalogEntry,
@@ -91,11 +92,12 @@ pub use startup::{
     MAX_UNIX_SOCKET_PATH_BYTES, SERVE_STARTUP_CONFIG_VERSION,
 };
 pub use storage::{
-    ApprovalExecutionRecord, ApprovalExecutionState, EmergencyPauseState,
-    InstalledPluginLifecycleHistoryEntry, InstalledPluginRecord, MemoryItem, NewMemoryItem,
-    NewPendingApproval, PendingApproval, SchedulerNotificationOccurrence, SqliteRepository,
-    MAX_ACKNOWLEDGED_SCHEDULER_NOTIFICATION_OCCURRENCES,
-    MAX_INSTALLED_PLUGIN_LIFECYCLE_HISTORY_ENTRIES, MAX_PENDING_SCHEDULER_NOTIFICATION_OCCURRENCES,
+    ApprovalExecutionAttention, ApprovalExecutionRecord, ApprovalExecutionState,
+    EmergencyPauseState, InstalledPluginLifecycleHistoryEntry, InstalledPluginRecord, MemoryItem,
+    NewMemoryItem, NewPendingApproval, PendingApproval, SchedulerNotificationOccurrence,
+    SqliteRepository, MAX_ACKNOWLEDGED_SCHEDULER_NOTIFICATION_OCCURRENCES,
+    MAX_APPROVAL_EXECUTION_ATTENTION_ITEMS, MAX_INSTALLED_PLUGIN_LIFECYCLE_HISTORY_ENTRIES,
+    MAX_PENDING_SCHEDULER_NOTIFICATION_OCCURRENCES,
     MAX_SCHEDULER_NOTIFICATION_OCCURRENCE_LIST_LIMIT,
 };
 pub use storage::{MemoryClassificationCount, MemoryClassificationSummary};
