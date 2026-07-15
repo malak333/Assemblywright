@@ -388,6 +388,16 @@ stage or when a PR needs focused evidence for one ownership slice.
   isolation that prevents inherited app/core secrets from reaching plugins,
   durable audit evidence, and `side_effect_executed: false` when no side effect
   is allowed.
+- Confirm every installed subprocess starts in a dedicated Unix process group.
+  Active cancellation and emergency pause, plus timeout, output-limit,
+  input/output failure, and leader-exit cleanup, must terminate the full group
+  with bounded TERM-to-KILL escalation, reap the leader, join bounded I/O
+  workers, suppress output, and prevent the in-group descendant heartbeat from
+  after return. Authenticated approved-execution E2E must prove the cancellation
+  remains effect-possible, automatic retry stays disabled, and restart cannot
+  replay the consumed approval. Do not describe process-group termination as
+  containment of deliberate `setsid`/`setpgid` escape, effect rollback, OS
+  sandboxing, or host-level egress enforcement.
 - Confirm direct installed-plugin requests evaluate action risk and explicit
   sensitivity through `PermissionEngine`: contract dry runs remain
   non-executing, eligible Low/default-sensitivity actions remain compatible,

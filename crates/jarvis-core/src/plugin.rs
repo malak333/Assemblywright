@@ -5,15 +5,22 @@ use crate::{
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chrono::{DateTime, Utc};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+#[cfg(unix)]
+use rustix::{
+    io::Errno,
+    process::{kill_process_group, test_kill_process_group, Pid, Signal},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::{
     collections::{HashMap, HashSet},
     fs,
     io::{Read, Write},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc, Arc,
@@ -35,6 +42,16 @@ const MAX_PLUGIN_SOURCE_TREE_FILES: usize = 4_096;
 const MAX_PLUGIN_SOURCE_TREE_ENTRIES: usize = 8_192;
 const MAX_PLUGIN_SOURCE_TREE_DEPTH: usize = 64;
 const MAX_PLUGIN_SOURCE_TREE_BYTES: u64 = 64 * 1024 * 1024;
+#[cfg(unix)]
+const SUBPROCESS_TERMINATION_GRACE: Duration = Duration::from_millis(100);
+const SUBPROCESS_IO_JOIN_TIMEOUT: Duration = Duration::from_secs(1);
+#[cfg(unix)]
+const SUBPROCESS_GROUP_KILL_CONFIRM_TIMEOUT: Duration = Duration::from_millis(500);
+
+#[cfg(unix)]
+type SubprocessGroupId = Pid;
+#[cfg(not(unix))]
+type SubprocessGroupId = u32;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1299,6 +1316,23 @@ pub struct SubprocessPluginExecution {
     pub progress_events: Vec<PluginProgressEvent>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubprocessControlState {
+    Continue,
+    EmergencyPaused,
+    Cancelled,
+}
+
+impl SubprocessControlState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Continue => "continue",
+            Self::EmergencyPaused => "emergency_paused",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginProgressEvent {
     pub sequence: usize,
@@ -1311,6 +1345,18 @@ pub fn execute_installed_subprocess_plugin(
     action: &PluginActionManifest,
     source_path: &Path,
     input: &Value,
+) -> JarvisResult<SubprocessPluginExecution> {
+    execute_installed_subprocess_plugin_cancellable(manifest, action, source_path, input, || {
+        SubprocessControlState::Continue
+    })
+}
+
+pub fn execute_installed_subprocess_plugin_cancellable(
+    manifest: &PluginManifest,
+    action: &PluginActionManifest,
+    source_path: &Path,
+    input: &Value,
+    mut control: impl FnMut() -> SubprocessControlState,
 ) -> JarvisResult<SubprocessPluginExecution> {
     if manifest.source != PluginSource::LocalSubprocess {
         return Err(JarvisError::Validation(format!(
@@ -1348,6 +1394,8 @@ pub fn execute_installed_subprocess_plugin(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    #[cfg(unix)]
+    command.process_group(0);
     if let Some(path) = plugin_subprocess_path_env() {
         command.env("PATH", path);
     }
@@ -1356,11 +1404,7 @@ pub fn execute_installed_subprocess_plugin(
         .spawn()
         .map_err(|err| JarvisError::Plugin(format!("spawn subprocess plugin: {err}")))?;
 
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(&request_bytes)
-            .map_err(|err| JarvisError::Plugin(format!("write subprocess stdin: {err}")))?;
-    }
+    let process_group = subprocess_process_group(&child)?;
     let stdout = child
         .stdout
         .take()
@@ -1370,39 +1414,128 @@ pub fn execute_installed_subprocess_plugin(
         .take()
         .ok_or_else(|| JarvisError::Plugin("capture subprocess stderr".to_string()))?;
     let (output_tx, output_rx) = mpsc::channel();
-    spawn_bounded_output_reader(
+    let stdout_reader = spawn_bounded_output_reader(
         PluginOutputStream::Stdout,
         stdout,
         MAX_PLUGIN_STDOUT_BYTES,
         output_tx.clone(),
     );
-    spawn_bounded_output_reader(
+    let stderr_reader = spawn_bounded_output_reader(
         PluginOutputStream::Stderr,
         stderr,
         MAX_PLUGIN_STDERR_BYTES,
         output_tx,
     );
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| JarvisError::Plugin("capture subprocess stdin".to_string()))?;
+    let (stdin_tx, stdin_rx) = mpsc::channel();
+    let stdin_writer = thread::spawn(move || {
+        let mut stdin = stdin;
+        let result = stdin
+            .write_all(&request_bytes)
+            .map_err(|err| format!("write subprocess stdin: {err}"));
+        drop(stdin);
+        let _ = stdin_tx.send(result);
+    });
     let mut stdout_output: Option<Vec<u8>> = None;
     let mut stderr_output: Option<Vec<u8>> = None;
+    let mut stdin_complete = false;
 
     let deadline = Instant::now() + action.timeout.duration();
     loop {
-        handle_subprocess_output_events(
-            &mut child,
-            &output_rx,
-            &mut stdout_output,
-            &mut stderr_output,
-        )?;
-        if let Some(status) = child
-            .try_wait()
-            .map_err(|err| JarvisError::Plugin(format!("wait subprocess plugin: {err}")))?
+        if let Err(error) = ensure_subprocess_control(control()) {
+            return fail_subprocess_after_spawn(
+                error,
+                &mut child,
+                process_group,
+                stdin_writer,
+                stdout_reader,
+                stderr_reader,
+            );
+        }
+        if !stdin_complete {
+            match stdin_rx.try_recv() {
+                Ok(Ok(())) => stdin_complete = true,
+                Ok(Err(error)) => {
+                    return fail_subprocess_after_spawn(
+                        JarvisError::Plugin(error),
+                        &mut child,
+                        process_group,
+                        stdin_writer,
+                        stdout_reader,
+                        stderr_reader,
+                    );
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    return fail_subprocess_after_spawn(
+                        JarvisError::Plugin(
+                            "subprocess stdin writer stopped unexpectedly".to_string(),
+                        ),
+                        &mut child,
+                        process_group,
+                        stdin_writer,
+                        stdout_reader,
+                        stderr_reader,
+                    );
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        if let Err(error) =
+            handle_subprocess_output_events(&output_rx, &mut stdout_output, &mut stderr_output)
         {
+            return fail_subprocess_after_spawn(
+                error,
+                &mut child,
+                process_group,
+                stdin_writer,
+                stdout_reader,
+                stderr_reader,
+            );
+        }
+        let status = match child.try_wait() {
+            Ok(status) => status,
+            Err(error) => {
+                return fail_subprocess_after_spawn(
+                    JarvisError::Plugin(format!("wait subprocess plugin: {error}")),
+                    &mut child,
+                    process_group,
+                    stdin_writer,
+                    stdout_reader,
+                    stderr_reader,
+                );
+            }
+        };
+        if let Some(status) = status {
+            if let Err(error) = ensure_subprocess_control(control()) {
+                return fail_subprocess_after_spawn(
+                    error,
+                    &mut child,
+                    process_group,
+                    stdin_writer,
+                    stdout_reader,
+                    stderr_reader,
+                );
+            }
+            // A plugin leader may exit while a descendant keeps inherited pipes
+            // or continues work. End the dedicated group before collecting the
+            // final bounded output so the invocation cannot detach descendants.
+            close_subprocess_after_spawn(
+                &mut child,
+                process_group,
+                stdin_writer,
+                stdout_reader,
+                stderr_reader,
+            )?;
             collect_subprocess_outputs(
                 &output_rx,
                 &mut stdout_output,
                 &mut stderr_output,
                 Instant::now() + Duration::from_secs(1),
             )?;
+            require_subprocess_stdin_delivery(&stdin_rx, stdin_complete)?;
             if !status.success() {
                 return Err(JarvisError::Plugin(format!(
                     "subprocess plugin exited with status {status}"
@@ -1419,6 +1552,7 @@ pub fn execute_installed_subprocess_plugin(
             action
                 .output_schema
                 .validate_value(&format!("{}.{} output", manifest.id, action.name), &value)?;
+            ensure_subprocess_control(control())?;
             return Ok(SubprocessPluginExecution {
                 output: value,
                 stdout_bytes,
@@ -1428,14 +1562,247 @@ pub fn execute_installed_subprocess_plugin(
             });
         }
         if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(JarvisError::Plugin(format!(
-                "subprocess plugin timed out after {}ms",
-                action.timeout.timeout_ms
-            )));
+            return fail_subprocess_after_spawn(
+                JarvisError::Plugin(format!(
+                    "subprocess plugin timed out after {}ms",
+                    action.timeout.timeout_ms
+                )),
+                &mut child,
+                process_group,
+                stdin_writer,
+                stdout_reader,
+                stderr_reader,
+            );
         }
         std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn ensure_subprocess_control(state: SubprocessControlState) -> JarvisResult<()> {
+    match state {
+        SubprocessControlState::Continue => Ok(()),
+        SubprocessControlState::EmergencyPaused => Err(JarvisError::PolicyBlocked(
+            "subprocess execution cancelled by emergency pause".to_string(),
+        )),
+        SubprocessControlState::Cancelled => Err(JarvisError::Plugin(
+            "subprocess execution cancelled".to_string(),
+        )),
+    }
+}
+
+#[cfg(unix)]
+fn subprocess_process_group(child: &Child) -> JarvisResult<SubprocessGroupId> {
+    Ok(Pid::from_child(child))
+}
+
+#[cfg(not(unix))]
+fn subprocess_process_group(child: &Child) -> JarvisResult<SubprocessGroupId> {
+    Ok(child.id())
+}
+
+#[cfg(unix)]
+fn signal_subprocess_group(process_group: SubprocessGroupId, signal: Signal) -> JarvisResult<()> {
+    match kill_process_group(process_group, signal) {
+        Ok(()) | Err(Errno::SRCH) => Ok(()),
+        Err(error) => Err(JarvisError::Plugin(format!(
+            "signal subprocess process group: {error}"
+        ))),
+    }
+}
+
+#[cfg(unix)]
+fn subprocess_group_exists(process_group: SubprocessGroupId) -> JarvisResult<bool> {
+    match test_kill_process_group(process_group) {
+        Ok(()) => Ok(true),
+        Err(Errno::SRCH) => Ok(false),
+        Err(error) => Err(JarvisError::Plugin(format!(
+            "inspect subprocess process group: {error}"
+        ))),
+    }
+}
+
+#[cfg(unix)]
+fn terminate_subprocess_group(
+    child: &mut Child,
+    process_group: SubprocessGroupId,
+) -> JarvisResult<()> {
+    let mut cleanup_errors = Vec::new();
+    if let Err(error) = signal_subprocess_group(process_group, Signal::TERM) {
+        cleanup_errors.push(error.to_string());
+    }
+    let deadline = Instant::now() + SUBPROCESS_TERMINATION_GRACE;
+    while Instant::now() < deadline {
+        let leader_exited = match child.try_wait() {
+            Ok(status) => status.is_some(),
+            Err(error) => {
+                cleanup_errors.push(format!("wait subprocess plugin: {error}"));
+                false
+            }
+        };
+        match subprocess_group_exists(process_group) {
+            Ok(false) if leader_exited => break,
+            Ok(_) => {}
+            Err(error) => {
+                cleanup_errors.push(error.to_string());
+                break;
+            }
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    if let Err(error) = signal_subprocess_group(process_group, Signal::KILL) {
+        cleanup_errors.push(error.to_string());
+    }
+    let leader_still_running = match child.try_wait() {
+        Ok(status) => status.is_none(),
+        Err(error) => {
+            cleanup_errors.push(format!(
+                "wait subprocess plugin before fallback kill: {error}"
+            ));
+            true
+        }
+    };
+    if leader_still_running {
+        if let Err(error) = child.kill() {
+            cleanup_errors.push(format!("fallback kill subprocess leader: {error}"));
+        }
+    }
+    if let Err(error) = child.wait() {
+        cleanup_errors.push(format!("reap subprocess plugin: {error}"));
+    }
+
+    let confirmation_deadline = Instant::now() + SUBPROCESS_GROUP_KILL_CONFIRM_TIMEOUT;
+    loop {
+        match subprocess_group_exists(process_group) {
+            Ok(false) => break,
+            Ok(true) if Instant::now() < confirmation_deadline => {
+                thread::sleep(Duration::from_millis(5));
+            }
+            Ok(true) => {
+                cleanup_errors.push(
+                    "subprocess process group remained after bounded KILL confirmation".to_string(),
+                );
+                break;
+            }
+            Err(error) => {
+                cleanup_errors.push(error.to_string());
+                break;
+            }
+        }
+    }
+    cleanup_result(cleanup_errors)
+}
+
+#[cfg(not(unix))]
+fn terminate_subprocess_group(
+    child: &mut Child,
+    _process_group: SubprocessGroupId,
+) -> JarvisResult<()> {
+    let mut cleanup_errors = Vec::new();
+    if let Err(error) = child.kill() {
+        cleanup_errors.push(format!("terminate subprocess plugin: {error}"));
+    }
+    if let Err(error) = child.wait() {
+        cleanup_errors.push(format!("reap subprocess plugin: {error}"));
+    }
+    cleanup_result(cleanup_errors)
+}
+
+fn join_subprocess_io_threads(
+    stdin_writer: thread::JoinHandle<()>,
+    stdout_reader: thread::JoinHandle<()>,
+    stderr_reader: thread::JoinHandle<()>,
+) -> JarvisResult<()> {
+    let handles = [
+        ("stdin writer", stdin_writer),
+        ("stdout reader", stdout_reader),
+        ("stderr reader", stderr_reader),
+    ];
+    let deadline = Instant::now() + SUBPROCESS_IO_JOIN_TIMEOUT;
+    while handles.iter().any(|(_, handle)| !handle.is_finished()) && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(5));
+    }
+    let unfinished = handles
+        .iter()
+        .filter_map(|(label, handle)| (!handle.is_finished()).then_some(*label))
+        .collect::<Vec<_>>();
+    if !unfinished.is_empty() {
+        return Err(JarvisError::Plugin(format!(
+            "subprocess I/O workers did not stop after pipe closure: {}",
+            unfinished.join(", ")
+        )));
+    }
+    for (label, handle) in handles {
+        handle
+            .join()
+            .map_err(|_| JarvisError::Plugin(format!("subprocess {label} panicked")))?;
+    }
+    Ok(())
+}
+
+fn close_subprocess_after_spawn(
+    child: &mut Child,
+    process_group: SubprocessGroupId,
+    stdin_writer: thread::JoinHandle<()>,
+    stdout_reader: thread::JoinHandle<()>,
+    stderr_reader: thread::JoinHandle<()>,
+) -> JarvisResult<()> {
+    let termination = terminate_subprocess_group(child, process_group);
+    let io = join_subprocess_io_threads(stdin_writer, stdout_reader, stderr_reader);
+    match (termination, io) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+        (Err(termination), Err(io)) => Err(JarvisError::Plugin(format!(
+            "{termination}; additional subprocess I/O cleanup failure: {io}"
+        ))),
+    }
+}
+
+fn fail_subprocess_after_spawn<T>(
+    primary: JarvisError,
+    child: &mut Child,
+    process_group: SubprocessGroupId,
+    stdin_writer: thread::JoinHandle<()>,
+    stdout_reader: thread::JoinHandle<()>,
+    stderr_reader: thread::JoinHandle<()>,
+) -> JarvisResult<T> {
+    match close_subprocess_after_spawn(
+        child,
+        process_group,
+        stdin_writer,
+        stdout_reader,
+        stderr_reader,
+    ) {
+        Ok(()) => Err(primary),
+        Err(cleanup) => Err(JarvisError::Plugin(format!(
+            "{primary}; subprocess cleanup failure: {cleanup}"
+        ))),
+    }
+}
+
+fn cleanup_result(errors: Vec<String>) -> JarvisResult<()> {
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(JarvisError::Plugin(errors.join("; ")))
+    }
+}
+
+fn require_subprocess_stdin_delivery(
+    receiver: &mpsc::Receiver<Result<(), String>>,
+    already_complete: bool,
+) -> JarvisResult<()> {
+    if already_complete {
+        return Ok(());
+    }
+    match receiver.try_recv() {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(JarvisError::Plugin(error)),
+        Err(mpsc::TryRecvError::Disconnected) => Err(JarvisError::Plugin(
+            "subprocess stdin writer stopped unexpectedly".to_string(),
+        )),
+        Err(mpsc::TryRecvError::Empty) => Err(JarvisError::Plugin(
+            "subprocess stdin delivery did not complete".to_string(),
+        )),
     }
 }
 
@@ -1465,7 +1832,8 @@ fn spawn_bounded_output_reader<R>(
     mut reader: R,
     limit: usize,
     sender: mpsc::Sender<PluginOutputEvent>,
-) where
+) -> thread::JoinHandle<()>
+where
     R: Read + Send + 'static,
 {
     thread::spawn(move || {
@@ -1491,17 +1859,16 @@ fn spawn_bounded_output_reader<R>(
                 }
             }
         }
-    });
+    })
 }
 
 fn handle_subprocess_output_events(
-    child: &mut std::process::Child,
     receiver: &mpsc::Receiver<PluginOutputEvent>,
     stdout_output: &mut Option<Vec<u8>>,
     stderr_output: &mut Option<Vec<u8>>,
 ) -> JarvisResult<()> {
     while let Ok(event) = receiver.try_recv() {
-        handle_subprocess_output_event(child, event, stdout_output, stderr_output)?;
+        handle_subprocess_output_event(event, stdout_output, stderr_output)?;
     }
     Ok(())
 }
@@ -1529,7 +1896,6 @@ fn collect_subprocess_outputs(
 }
 
 fn handle_subprocess_output_event(
-    child: &mut std::process::Child,
     event: PluginOutputEvent,
     stdout_output: &mut Option<Vec<u8>>,
     stderr_output: &mut Option<Vec<u8>>,
@@ -1539,23 +1905,15 @@ fn handle_subprocess_output_event(
             store_subprocess_output(stream, output, stdout_output, stderr_output);
             Ok(())
         }
-        PluginOutputEvent::Exceeded(stream, observed) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            Err(JarvisError::Plugin(format!(
-                "subprocess plugin {} exceeded {} byte limit after at least {observed} bytes",
-                stream.label(),
-                output_limit_for_stream(stream)
-            )))
-        }
-        PluginOutputEvent::Error(stream, error) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            Err(JarvisError::Plugin(format!(
-                "read subprocess plugin {}: {error}",
-                stream.label()
-            )))
-        }
+        PluginOutputEvent::Exceeded(stream, observed) => Err(JarvisError::Plugin(format!(
+            "subprocess plugin {} exceeded {} byte limit after at least {observed} bytes",
+            stream.label(),
+            output_limit_for_stream(stream)
+        ))),
+        PluginOutputEvent::Error(stream, error) => Err(JarvisError::Plugin(format!(
+            "read subprocess plugin {}: {error}",
+            stream.label()
+        ))),
     }
 }
 
@@ -3116,6 +3474,85 @@ printf '%s\n' '{"ok":true}'
         assert_eq!(execution.progress_events[0].stage, "prepare");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn local_subprocess_cancellation_terminates_descendant_process_group() {
+        let fixture = local_subprocess_fixture(
+            r#"#!/bin/sh
+trap '' TERM
+(
+  trap '' TERM
+  while :; do
+    printf x >> "$JARVIS_PLUGIN_SOURCE_PATH/heartbeat"
+    sleep 0.01
+  done
+) &
+while :; do sleep 1; done
+"#,
+        );
+        let manifest = local_subprocess_manifest("cancel_process_group", "runner.sh");
+        let source_path = fixture.path().canonicalize().expect("canonical fixture");
+        let heartbeat = source_path.join("heartbeat");
+
+        let error = execute_installed_subprocess_plugin_cancellable(
+            &manifest,
+            &manifest.actions[0],
+            &source_path,
+            &json!({}),
+            || {
+                if fs::metadata(&heartbeat).is_ok_and(|metadata| metadata.len() >= 3) {
+                    SubprocessControlState::Cancelled
+                } else {
+                    SubprocessControlState::Continue
+                }
+            },
+        )
+        .expect_err("cancellation must terminate the subprocess group");
+
+        assert!(error.to_string().contains("cancelled"), "{error}");
+        let stopped_len = fs::metadata(&heartbeat).expect("heartbeat evidence").len();
+        thread::sleep(Duration::from_millis(200));
+        assert_eq!(
+            fs::metadata(&heartbeat).expect("stable heartbeat").len(),
+            stopped_len,
+            "a descendant continued running after cancellation returned"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_subprocess_emergency_pause_terminates_and_reaps_promptly() {
+        let fixture =
+            local_subprocess_fixture("#!/bin/sh\ntrap '' TERM\nwhile :; do sleep 1; done\n");
+        let manifest = local_subprocess_manifest("pause_process_group", "runner.sh");
+        let source_path = fixture.path().canonicalize().expect("canonical fixture");
+        let started = Instant::now();
+        let mut control_checks = 0;
+
+        let error = execute_installed_subprocess_plugin_cancellable(
+            &manifest,
+            &manifest.actions[0],
+            &source_path,
+            &json!({}),
+            || {
+                control_checks += 1;
+                if control_checks > 1 {
+                    SubprocessControlState::EmergencyPaused
+                } else {
+                    SubprocessControlState::Continue
+                }
+            },
+        )
+        .expect_err("emergency pause must terminate the subprocess group");
+
+        assert!(matches!(error, JarvisError::PolicyBlocked(_)), "{error}");
+        assert!(error.to_string().contains("emergency pause"), "{error}");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "pause waited for the plugin timeout instead of terminating it"
+        );
+    }
+
     #[test]
     fn local_subprocess_stdout_over_limit_fails_closed() {
         let fixture = local_subprocess_fixture(&format!(
@@ -3141,6 +3578,40 @@ PY
 
         assert!(error.to_string().contains("stdout exceeded"), "{error}");
         assert!(error.to_string().contains("byte limit"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_subprocess_output_limit_unblocks_pending_stdin_and_reaps() {
+        let fixture = local_subprocess_fixture(&format!(
+            r#"#!/bin/sh
+python3 - <<'PY'
+import sys
+sys.stdout.write("x" * {})
+sys.stdout.flush()
+PY
+sleep 30
+"#,
+            MAX_PLUGIN_STDOUT_BYTES + 1
+        ));
+        let manifest = local_subprocess_manifest("blocked_stdin_noisy_stdout", "runner.sh");
+        let source_path = fixture.path().canonicalize().expect("canonical fixture");
+        let oversized_request = json!({ "payload": "x".repeat(2 * 1024 * 1024) });
+        let started = Instant::now();
+
+        let error = execute_installed_subprocess_plugin(
+            &manifest,
+            &manifest.actions[0],
+            &source_path,
+            &oversized_request,
+        )
+        .expect_err("output limit must terminate a child blocked on unread stdin");
+
+        assert!(error.to_string().contains("stdout exceeded"), "{error}");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "blocked stdin prevented bounded process-group cleanup"
+        );
     }
 
     #[test]

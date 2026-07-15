@@ -8666,15 +8666,32 @@ fn authenticated_approved_installed_execution_can_be_cancelled_after_claim() {
     let execute_body = json!({ "cancellation_id": cancellation_id }).to_string();
     let execute_endpoint = endpoint.clone();
     let execute_authorization = authorization.clone();
-    let execution = thread::spawn(move || {
-        request_with_authorization_headers(
+    let (execution_tx, execution_rx) = std::sync::mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let response = request_with_authorization_headers(
             &execute_endpoint,
             "POST",
             &execute_path,
             Some(&execute_body),
             &[execute_authorization.as_str()],
-        )
+        );
+        execution_tx
+            .send(response)
+            .expect("send approved execution response");
     });
+
+    let heartbeat = temp.path().join("cancellation-heartbeat");
+    let heartbeat_deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if fs::metadata(&heartbeat).is_ok_and(|metadata| metadata.len() >= 3) {
+            break;
+        }
+        assert!(
+            Instant::now() < heartbeat_deadline,
+            "approved subprocess descendant never entered its active work loop"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
 
     let cancel_path = format!("/runtime/cancellations/{cancellation_id}");
     let deadline = Instant::now() + Duration::from_secs(2);
@@ -8698,15 +8715,44 @@ fn authenticated_approved_installed_execution_can_be_cancelled_after_claim() {
         thread::sleep(Duration::from_millis(10));
     };
     assert_eq!(cancellation["outcome"], "cancellation_requested");
-    let response = execution
-        .join()
-        .expect("join authenticated approved execution")
+    let response = execution_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("cancelled subprocess returned before its five-second timeout")
         .expect("approved execution response");
     let response: Value = serde_json::from_str(&response).expect("approved execution JSON");
     assert_eq!(response["accepted"], false);
     assert_eq!(response["task"]["status"], "cancelled");
     assert_eq!(response["installed_plugin_result"]["status"], "cancelled");
     assert!(response["installed_plugin_result"]["output"].is_null());
+    assert_eq!(
+        response["installed_plugin_result"]["audit_entry"]["event_type"],
+        "installed_plugin_subprocess_cancelled"
+    );
+    assert_eq!(
+        response["installed_plugin_result"]["audit_entry"]["payload"]["cancellation_requested"],
+        true
+    );
+    assert_eq!(
+        response["installed_plugin_result"]["audit_entry"]["payload"]
+            ["subprocess_control_termination"],
+        "cancelled"
+    );
+    assert_eq!(response["audit_entry"]["payload"]["effect_possible"], true);
+    assert_eq!(
+        response["audit_entry"]["payload"]["automatic_retry_allowed"],
+        false
+    );
+    let stopped_heartbeat_bytes = fs::metadata(&heartbeat)
+        .expect("descendant heartbeat evidence")
+        .len();
+    thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        fs::metadata(&heartbeat)
+            .expect("stable descendant heartbeat")
+            .len(),
+        stopped_heartbeat_bytes,
+        "approved cancellation returned while a subprocess descendant kept running"
+    );
     server.stop();
 
     let repository = SqliteRepository::open(&db_path).expect("reopen cancellation repository");
@@ -8718,6 +8764,23 @@ fn authenticated_approved_installed_execution_can_be_cancelled_after_claim() {
             .state,
         ApprovalExecutionState::Cancelled
     );
+    drop(repository);
+
+    let mut restarted = JarvisServer::start_authenticated(&db_path, token, 1);
+    let replay_error = request_with_authorization_headers(
+        &restarted.endpoint(),
+        "POST",
+        &format!("/approvals/{approval_id}/execute"),
+        Some(&json!({ "cancellation_id": uuid::Uuid::new_v4() }).to_string()),
+        &[authorization.as_str()],
+    )
+    .expect_err("cancelled one-shot approval cannot be replayed after restart");
+    assert!(replay_error.contains("409 Conflict"), "{replay_error}");
+    assert!(
+        replay_error.contains("already been claimed"),
+        "{replay_error}"
+    );
+    restarted.stop();
 }
 
 #[test]
@@ -13254,12 +13317,30 @@ fn write_executable_plugin_script(dir: &Path) {
         r#"#!/usr/bin/env python3
 import json
 import os
+import signal
+import subprocess
 import sys
 import time
 
 request = json.load(sys.stdin)
 if request["input"]["path"] == "cancel-after-claim":
-    time.sleep(0.5)
+    heartbeat = os.path.join(os.path.dirname(os.environ["JARVIS_PLUGIN_SOURCE_PATH"]), "cancellation-heartbeat")
+    descendant = r'''import os
+import signal
+import sys
+import time
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+while True:
+    with open(sys.argv[1], "a", encoding="utf-8") as stream:
+        stream.write("x")
+        stream.flush()
+    time.sleep(0.01)
+'''
+    subprocess.Popen([sys.executable, "-c", descendant, heartbeat])
+    deadline = time.monotonic() + 1
+    while (not os.path.exists(heartbeat) or os.path.getsize(heartbeat) < 3) and time.monotonic() < deadline:
+        time.sleep(0.01)
+    time.sleep(5)
 print('{"jarvis_progress":true,"stage":"prepare","message":"validated request"}', file=sys.stderr)
 print('raw stderr secret should stay redacted', file=sys.stderr)
 print('{"jarvis_progress":true,"stage":"complete","message":"writing validated output","payload":{"ignored":"not exposed"}}', file=sys.stderr)

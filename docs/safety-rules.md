@@ -186,8 +186,15 @@ release requirements, not optional UX guidance.
   `POST /runtime/cancellations/:id`; Wasmi observes it between fuel slices and
   before output acceptance. Only runs activated immediately before runtime
   entry accept cancellation; bounded registration alone does not. The active
-  registry is capped at 128 IDs and consumes each ID on exit. A legacy subprocess may already have caused
-  external effects before Jarvis discards its late result.
+  registry is capped at 128 IDs and consumes each ID on exit. Every installed
+  subprocess runs in a dedicated Unix process group. Active cancellation or
+  emergency pause and every timeout, output-limit, pipe-failure, or leader-exit
+  cleanup path must terminate that group with bounded TERM-to-KILL escalation,
+  reap the leader, join its bounded I/O workers, and suppress output before the
+  request completes. This controls descendants only while they remain in the
+  group; deliberate `setsid`/`setpgid` escape is unenforced until an OS-sandboxed
+  helper exists. A subprocess may already have caused an external effect before
+  termination; cancellation never claims to reverse it.
   Output acceptance atomically finalizes the active cancellation ID; requests
   arriving after that point report that no active execution was found.
   Model planning for these actions is disabled by default, local-model-only,
@@ -382,6 +389,11 @@ Safety regressions should fail release verification:
 - Installed subprocess plugin audit evidence that reports an OS sandbox as
   enforced when the runner only validated manifest/provenance/grants and
   cleared the inherited environment.
+- Installed subprocess cancellation, pause, timeout, or bounded-I/O failure
+  returning successfully while the direct child or an in-group descendant
+  continues running, retains an inherited pipe, or can keep producing the
+  in-group heartbeat fixture. A deliberate group escape must instead surface a
+  bounded cleanup failure and remains an explicit unenforced boundary.
 - WASM modules that import any host capability, omit the required
   `jarvis_json_v1` exports, exceed module/request/output/memory/fuel ceilings,
   request non-compute authority, run proactively, execute without

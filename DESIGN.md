@@ -66,6 +66,7 @@
 | Consume approved execution authority with a durable schema-v13 claim before plugin entry | Treat an approved row or an `approval_executed` audit lookup as a lock, hold the repository mutex across plugin execution, or retry an interrupted approval automatically | The replay path requires matching `approval_granted` authority evidence, then validates the approved record, still-waiting task, exact action, current risk and scopes, current manifest, input schema, and current policy before an immediate transaction inserts the unique `approval_executions` claim and redacted claim audit. Every compatible audit must match approval ID, task, action, approved status, risk, sensitivity, scopes, `side_effect_executed:false`, and be timestamped at or after the decision. The current redacted shape additionally requires matching actor/reason-presence booleans and forbids raw actor/reason keys. The exact prior raw-metadata shape forbids the redaction/presence keys and requires actor and reason values to equal the record. An approved row without that chain fails before plugin entry and does not fabricate evidence. The claim permanently consumes the approval. Terminal execution state, task state, and terminal audits commit together. A process loss or persistence failure after the claim leaves an ambiguous effect boundary and never authorizes automatic retry; an operator must review the evidence and create a new approval if another attempt is appropriate. |
 | Give diagnostics a dedicated redacted health projection | Reuse the full `/health` response inside diagnostics, redact arbitrary reason text by convention, or remove pause visibility entirely | Explicit health and pause-status surfaces retain the operator-entered emergency-pause reason, but `/diagnostics/export` uses a distinct type that can carry only pause state, update time, `emergency_pause_reason_present`, and the fixed `redacted` compatibility marker. This makes accidental raw-reason export structurally unavailable while preserving useful support evidence and the additive v1 response shape. |
 | Give every interactive command an optional client-generated cancellation handle | Cancel by connection lifetime, cancel the newest task, wait until a task ID is returned, permit overlapping console submits, or reuse installed-plugin-only cancellation | Swift and CLI generate a bounded UUID before `POST /commands`; the Swift console serializes submissions before mutating its active handle. Rust registers the UUID for the full active request, binds it to only the created task, propagates it through provider and tool cancellation, and uses guard finalization as the result-acceptance linearization point. Authenticated cancellation reports `cancellation_requested` only while that exact handle is active and `not_found` otherwise. The 1,024 most recently consumed UUIDs remain bounded FIFO tombstones to reject recent reuse; clients still require fresh random UUIDs because tombstones are process-local and eventually evicted. Cancellation cannot undo an external effect that already happened. |
+| Terminate installed subprocess process groups on cancellation and abnormal exit | Discard only the eventual result, kill only the direct child, or wait for the manifest timeout | Every installed subprocess starts as a dedicated Unix process group. Active cancellation and emergency pause, plus timeout, output-limit, input/output failure, and leader exit, close the invocation by signaling that group, escalating from TERM to KILL after a bounded grace, and reaping the leader before returning. Concurrent stdin/output workers are joined with a bound. This stops members that remain in the group but cannot contain a process that deliberately escapes with `setsid`/`setpgid`, undo an effect already issued, or establish an OS sandbox or egress boundary. |
 | Auditability as an architectural requirement | Best-effort logs after the fact | Jarvis must be able to explain why it acted, what data it used, and what permissions were involved. |
 | Bind live-device QA to the exact signed app executable and code identity | Treat bundle metadata or bundled-core identity as sufficient, or accept independent valid-looking reports | Signed provenance records the app executable path/SHA-256 plus Identifier, TeamIdentifier, and CDHash. Live-device QA rechecks the installed executable and the signed-provenance report, while final bundle, doctor, and Rust evidence-status validation require the two reports to agree. This prevents artifact mixing but remains point-in-time evidence, not continuous integrity or proof that installation preserved every byte. |
 
@@ -225,7 +226,13 @@ only candidates whose database record remains unchanged. Source-tree provenance
 is capped at 8,192 entries, 4,096 files, 64 levels, and 64 MiB.
 Installed-plugin callers attach a unique cancellation identifier and request
 it through local IPC. Wasmi observes it between fuel slices and before output
-acceptance; legacy subprocess effects may precede late-result suppression.
+acceptance. Installed subprocesses run in dedicated Unix process groups; active
+cancellation, emergency pause, timeout, bounded-I/O failure, and other abnormal
+exits terminate the group with bounded TERM-to-KILL escalation and reap the
+leader before returning. This stops descendants that remain in the group, but
+does not contain a process that deliberately escapes it with `setsid`/`setpgid`;
+that requires the planned OS-sandboxed helper. A subprocess effect issued before
+termination remains possible and cannot be reversed.
 
 Installed WASM model planning is disabled by default and requires the caller to
 set the per-command `installed_wasm_tools` opt-in. The runtime advertises these
@@ -578,6 +585,14 @@ wins final acceptance. Swift exposes Cancel only while its submission is
 active. Swift keeps the assistant transcript final-only and can inspect only
 redacted post-validation transport metadata; raw-token UI streaming remains an
 end-goal capability.
+Installed subprocess cancellation now reaches the active worker rather than
+only discarding its eventual response. Unit coverage proves pause/cancel,
+TERM-ignoring in-group descendants, blocked stdin with oversized output, and
+bounded reaping; authenticated cross-process approval coverage proves the
+in-group fixture stops, the terminal audit remains effect-possible and
+non-retryable, and the one-shot approval cannot replay after restart. This
+remains process control, not protection from deliberate process-group escape,
+effect rollback, OS sandboxing, or host-level egress enforcement.
 Installed plugin publisher-origin claims can be operator-pinned after local
 provenance matches the install snapshot and the supplied trusted origin exactly
 matches the manifest author claim. Signed manifests can also be verified with

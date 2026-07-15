@@ -75,12 +75,21 @@ request cancellation through `POST /runtime/cancellations/:id`. The Wasmi
 runner checks that shared cancellation state before compilation, between fuel
 slices, and before accepting output. Only a registered run activated
 immediately before runtime entry accepts a cancellation request; registration
-alone is not reported as cancellation. The registry is capped at 128 concurrent IDs and an RAII
-guard consumes each ID on every exit path. Output acceptance atomically
-finalizes the ID and returns its cancellation state, so a later request cannot
-claim to have cancelled an already-published completion. The legacy subprocess path cannot stop
-already-issued external effects; it only discards a late result after observed
-cancellation, so it remains outside the stronger Wasmi confinement claim.
+alone is not reported as cancellation. The registry is capped at 128 concurrent
+IDs and an RAII guard consumes each ID on every exit path. Output acceptance
+atomically finalizes the ID and returns its cancellation state, so a later
+request cannot claim to have cancelled an already-published completion.
+Installed subprocess invocations use a dedicated Unix process group. Once
+active cancellation or emergency pause is observed, Jarvis signals the whole
+group, gives it a bounded TERM grace, escalates remaining processes to KILL,
+reaps the leader, joins the bounded stdin/stdout/stderr workers, and suppresses
+output before returning. Timeout, output-limit, pipe failure, and leader-exit
+cleanup use the same group boundary so descendants cannot keep the invocation
+open by retaining inherited pipes while they remain members of that group. A
+plugin can deliberately escape with `setsid`/`setpgid`; the bounded I/O join
+then fails closed, but only an OS sandbox or helper can contain that escaped
+process. Group termination cannot reverse an external effect already issued, so
+subprocesses remain outside the stronger Wasmi confinement claim.
 
 The install snapshot binds the exact module bytes, not merely a path or source
 tree label. Schema v12 migrates existing installed-plugin rows without
@@ -95,6 +104,8 @@ same-user/process IPC isolation, publisher identity, marketplace approval,
 malware analysis, signing/notarization, or live-device evidence. The existing
 subprocess runner remains a separate repository-locked execution path and
 reports `os_sandbox_enforced: false` until a real OS policy proves otherwise.
+Process-group termination is lifecycle control, not filesystem confinement,
+malware trust, or host-level network egress enforcement.
 
 "Repository-locked" describes state authority, not lock lifetime. The runner
 snapshots and revalidates the installed record and current artifact provenance
