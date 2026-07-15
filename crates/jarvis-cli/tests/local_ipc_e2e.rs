@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use ed25519_dalek::{Signer, SigningKey};
@@ -8840,7 +8840,8 @@ fn app_supervised_unix_ipc_routes_authenticated_core_requests_without_tcp_argv()
         .write_all(startup.as_bytes())
         .expect("write startup envelope");
 
-    for _ in 0..200 {
+    let socket_deadline = Instant::now() + Duration::from_secs(10);
+    loop {
         if let Ok(metadata) = fs::symlink_metadata(&socket_path) {
             if metadata.permissions().mode() & 0o777 == 0o600 {
                 break;
@@ -8856,9 +8857,18 @@ fn app_supervised_unix_ipc_routes_authenticated_core_requests_without_tcp_argv()
                 .expect("read Unix IPC stderr");
             panic!("Unix IPC server exited early ({status}): {stderr}");
         }
+        if Instant::now() >= socket_deadline {
+            let _ = child.kill();
+            let output = child
+                .wait_with_output()
+                .expect("reap timed-out Unix IPC server");
+            panic!(
+                "Unix IPC socket was not created before the startup deadline: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
         thread::sleep(Duration::from_millis(10));
     }
-    assert!(socket_path.exists(), "Unix IPC socket was not created");
     let socket_metadata = fs::symlink_metadata(&socket_path).expect("Unix IPC socket metadata");
     assert_eq!(socket_metadata.permissions().mode() & 0o777, 0o600);
 
