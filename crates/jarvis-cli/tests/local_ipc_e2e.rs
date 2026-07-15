@@ -20,6 +20,9 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
+const SERVER_HEALTH_ATTEMPTS: usize = 400;
+const SERVER_HEALTH_RETRY_DELAY: Duration = Duration::from_millis(25);
+
 fn jarvis_cli_bin() -> PathBuf {
     static STABLE_BIN: OnceLock<PathBuf> = OnceLock::new();
     STABLE_BIN
@@ -8621,16 +8624,29 @@ fn authenticated_approved_installed_execution_can_be_cancelled_after_claim() {
                 .expect("load cancellable plugin"),
         )
         .expect("install cancellable plugin");
-    let setup = IpcState::with_repository(repository).expect("setup IPC state");
-    setup
+    repository
         .verify_installed_plugin_provenance("cancellable_approval_e2e")
         .expect("verify cancellable plugin");
+    let verified_record = repository
+        .get_installed_plugin("cancellable_approval_e2e")
+        .expect("read verified cancellable plugin")
+        .expect("verified cancellable plugin exists");
+    let verified_record_json =
+        serde_json::to_string(&verified_record).expect("serialize lifecycle contract");
+    let expected_lifecycle_contract_sha256 = format!(
+        "{:x}",
+        Sha256::digest(
+            format!("jarvis-installed-plugin-lifecycle-v1\n{verified_record_json}").as_bytes()
+        )
+    );
+    let setup = IpcState::with_repository(repository).expect("setup IPC state");
     setup
         .set_installed_plugin_execution(
             "cancellable_approval_e2e",
             InstalledPluginExecutionRequest {
                 execution_enabled: true,
                 execution_grant: InstalledPluginExecutionGrant::SubprocessStdio,
+                expected_lifecycle_contract_sha256,
             },
         )
         .expect("enable cancellable plugin");
@@ -11503,7 +11519,7 @@ impl JarvisServer {
 
     fn wait_until_healthy(&mut self) {
         let mut last_error = None;
-        for _ in 0..80 {
+        for _ in 0..SERVER_HEALTH_ATTEMPTS {
             if let Some(status) = self
                 .child
                 .as_mut()
@@ -11534,7 +11550,7 @@ impl JarvisServer {
                 }
                 Err(error) => {
                     last_error = Some(error);
-                    std::thread::sleep(Duration::from_millis(25));
+                    std::thread::sleep(SERVER_HEALTH_RETRY_DELAY);
                 }
             }
         }

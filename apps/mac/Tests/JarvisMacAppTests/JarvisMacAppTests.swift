@@ -6,6 +6,47 @@ import UserNotifications
 @MainActor
 @Suite("Jarvis Mac app release presentation")
 struct JarvisMacAppTests {
+    @Test("Plugin enablement confirmation states authority and containment boundaries")
+    func pluginEnablementConfirmationIsExplicit() {
+        let network = PluginEnablementConfirmation(
+            pluginID: "release_uploader",
+            pluginName: "Release Uploader",
+            grant: "subprocess_stdio_network",
+            lifecycleContractSha256: "network-lifecycle-digest",
+            declaredHosts: ["api.example.com"]
+        )
+        let local = PluginEnablementConfirmation(
+            pluginID: "local_worker",
+            pluginName: "Local Worker",
+            grant: "subprocess_stdio",
+            lifecycleContractSha256: "local-lifecycle-digest",
+            declaredHosts: []
+        )
+        let wasm = PluginEnablementConfirmation(
+            pluginID: "local_compute",
+            pluginName: "Local Compute",
+            grant: "wasm_compute",
+            lifecycleContractSha256: "wasm-lifecycle-digest",
+            declaredHosts: []
+        )
+
+        #expect(network.message.contains("api.example.com"))
+        #expect(network.message.contains("not OS sandboxed"))
+        #expect(network.message.contains("host-level egress is not enforced"))
+        #expect(network.message.contains("does not run the plugin"))
+        #expect(local.message.contains("No network hosts are declared"))
+        #expect(wasm.message.contains("WASM compute is confined"))
+        #expect(wasm.message.contains("no imports, filesystem, network, environment, clock, or process authority"))
+        #expect(!wasm.message.contains("Subprocess"))
+        #expect(!wasm.message.contains("not OS sandboxed"))
+        #expect(!wasm.message.contains("egress"))
+        #expect(wasm.message.contains("does not run the plugin"))
+        #expect(network.lifecycleContractSha256 == "network-lifecycle-digest")
+        #expect(local.lifecycleContractSha256 == "local-lifecycle-digest")
+        #expect(network.id.contains("network-lifecycle-digest"))
+        #expect(local.id.contains("local-lifecycle-digest"))
+    }
+
     @Test("Workspace grant presentation keeps the selected path hidden")
     func workspaceGrantPresentationIsRedacted() {
         let presentation = WorkspaceRootGrantPresentation(

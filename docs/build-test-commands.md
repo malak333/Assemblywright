@@ -691,9 +691,15 @@ surface: approval counts/history, high-risk pending count, installed-plugin
 require approval. Installed `local_subprocess` plugins remain disabled by
 default and execute only after an explicit `subprocess_stdio` grant through the
 constrained JSON stdin/stdout runner. The Swift Plugin tab reads the same
-installed registry records for read-only provenance/grant review, and its model
-keeps first-party manifests visible if the repository-backed registry endpoint
-is unavailable. The Swift app now exposes the
+installed registry records and adds typed, non-executing provenance
+verification plus explicit compatible-grant enable/disable controls. It
+serializes each plugin's mutations, shows exact declared permissions and hosts,
+binds enable/disable to the confirmed lifecycle-contract digest, refreshes the
+authoritative registry after every result, disables lifecycle actions while
+that registry is stale, and keeps first-party
+manifests visible if the repository-backed registry endpoint is unavailable.
+Rust commits each grant mutation and its redacted non-execution audit
+atomically. The Swift app now exposes the
 Speech/AVFoundation input adapter controls and AVFoundation speech-output
 preview controls, but release claims for real voice still require entitlement
 packaging, live microphone checks, live audio-output checks, and manual device
@@ -717,6 +723,25 @@ operator-reviewed. For signed manifests, use
 after provenance matches; this verifies the portable manifest identity
 signature against the explicit trusted key with local `source_path` omitted,
 but still does not prove marketplace approval or malware safety.
+
+Focused installed-plugin lifecycle verification:
+
+```sh
+cargo test -p jarvis-core installed_plugin_execution_authority_and_audit_commit_atomically -- --nocapture
+swift test --disable-sandbox --package-path apps/mac --filter pluginLifecycleClientUsesTypedContracts
+swift test --disable-sandbox --package-path apps/mac --filter pluginManager
+swift test --disable-sandbox --package-path apps/mac --filter pluginEnablementConfirmationIsExplicit
+swift test --disable-sandbox --package-path apps/mac --filter pluginManagerRealIPCLifecycleEndToEnd
+```
+
+The real-core Swift E2E uses the authenticated loopback-TCP compatibility path,
+not the packaged app's default peer-identity-validated Unix-domain socket. With
+a file-backed repository it verifies raw mutation-response redaction, exact
+digest compare-and-set rejection, malformed disabled-grant rejection, enabled
+restart persistence, disabled restart persistence, and audit evidence loaded
+after each restart. A sentinel proves lifecycle mutation never starts plugin
+code. This does not prove the default UDS transport, OS sandboxing, host-level egress enforcement,
+publisher/marketplace trust, malware safety, signing, or live-device behavior.
 Network-capable plugin actions must request `network` and declare
 `network_access.mode: declared_hosts` with exact plain-hostname
 `allowed_hosts`; policy review surfaces them as `network_plugin_action` items,

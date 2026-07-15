@@ -497,12 +497,31 @@ stage or when a PR needs focused evidence for one ownership slice.
   provenance integrity status, unverified plugin counts, and the
   `side_effects_require_approval` invariant. This inspection surface must not
   enable installed plugin code execution.
-- Confirm the Swift Plugin tab renders installed-plugin registry records
-  read-only, including source type, execution grant, provenance integrity,
+- Confirm the Swift Plugin tab renders installed-plugin registry records,
+  including source type, execution grant, provenance integrity,
   origin-review state, executable status, and redacted runtime confinement
   fields while omitting source/module/command paths and bytes, and that
   first-party manifests remain visible with a warning when the
   repository-backed installed registry endpoint is unavailable.
+- Confirm its lifecycle controls use typed provenance/execution endpoints,
+  serialize mutations per plugin, require matching provenance before enable,
+  require an explicit choice for mixed compatible grants, display exact
+  declared permissions and network hosts, bind the exact confirmed grant and
+  lifecycle-contract digest, reject stale/reinstalled records, disable only to
+  `metadata_only`, and refresh authoritative records after both success and
+  failure. A stale registry must disable all lifecycle actions. Verify and set
+  responses must retain the redacted inspection projection. The controls
+  must never install or run plugin code or optimistically update authority.
+  Confirm the current subprocess warning states that OS sandboxing and
+  host-level egress enforcement are absent.
+- Confirm Rust commits execution authority and the redacted
+  `installed_plugin_execution_authority_updated` audit in one immediate
+  transaction and rolls authority back when audit insertion fails. Run
+  `cargo test -p jarvis-core installed_plugin_execution_authority_and_audit_commit_atomically -- --nocapture`.
+- Confirm authenticated loopback-TCP compatibility E2E covers enabled restart,
+  disabled restart, persisted audit inspection after each restart, malformed
+  disabled-grant and stale-digest rejection, raw mutation-response redaction,
+  and a no-execution sentinel. Do not claim this as default-UDS transport proof.
 - Confirm installed `local_wasm` records require source `local_wasm`, grant
   `wasm_compute`, exact module-byte provenance, and `jarvis_json_v1` exports
   `memory`, `jarvis_alloc`, and `jarvis_run`; reject every import including
@@ -548,11 +567,14 @@ stage or when a PR needs focused evidence for one ownership slice.
   broadening existing grants, then preserves WASM grant/provenance state across
   restart. Run `cargo test -p jarvis-core wasm -- --nocapture` and
   `cargo test -p jarvis-cli --test local_ipc_e2e installed_wasm -- --nocapture`.
-- Confirm the Swift Plugin tab is inspection-only and presents redacted WASM
+- Confirm the Swift Plugin tab presents redacted WASM
   records as `WASM confined • no imports • no filesystem • no network`, while
-  presenting `local_subprocess` as `not OS sandboxed`. Run
+  presenting `local_subprocess` as `not OS sandboxed`; lifecycle actions change
+  authority only and do not install or execute code. Run
   `swift test --disable-sandbox --package-path apps/mac --filter
-  pluginManagerModelDecodesWasmConfinement`.
+  pluginManager` plus the focused typed-client, app-presentation, and
+  authenticated real-core lifecycle E2E filters documented in
+  `docs/build-test-commands.md`.
 - Do not use Wasmi evidence to claim an OS sandbox, host-egress enforcement,
   same-user IPC isolation, marketplace/publisher trust, malware analysis,
   signing/notarization, or live-device validation. Those remain separate

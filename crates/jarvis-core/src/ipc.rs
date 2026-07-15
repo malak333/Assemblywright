@@ -27,7 +27,7 @@ use uuid::Uuid;
 use futures_util::StreamExt as FuturesStreamExt;
 
 use crate::storage::{
-    ApprovalExecutionClaim, ApprovalExecutionState,
+    installed_plugin_lifecycle_contract_sha256, ApprovalExecutionClaim, ApprovalExecutionState,
     EmergencyPauseState as StoredEmergencyPauseState, InstalledPluginApprovalBinding,
     MemoryClassificationSummary, NewInstalledPluginApproval, NewMemoryItem, NewPendingApproval,
     PendingApproval, SchedulerNotificationOccurrence, SqliteRepository,
@@ -832,6 +832,7 @@ pub struct InstalledPluginExecutionRequest {
     pub execution_enabled: bool,
     #[serde(default)]
     pub execution_grant: InstalledPluginExecutionGrant,
+    pub expected_lifecycle_contract_sha256: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -921,6 +922,7 @@ pub struct InstalledPluginInspectionRecord {
     pub provenance: InstalledPluginProvenanceInspection,
     pub execution_enabled: bool,
     pub execution_grant: crate::InstalledPluginExecutionGrant,
+    pub lifecycle_contract_sha256: String,
     pub installed_at: DateTime<Utc>,
     pub local_paths_redacted: bool,
     pub provenance_hashes_redacted: bool,
@@ -1038,7 +1040,8 @@ pub struct InstalledPluginGrantSurface {
 
 fn installed_plugin_inspection_record(
     record: InstalledPluginRecord,
-) -> InstalledPluginInspectionRecord {
+) -> JarvisResult<InstalledPluginInspectionRecord> {
+    let lifecycle_contract_sha256 = installed_plugin_lifecycle_contract_sha256(&record)?;
     let provenance = installed_plugin_provenance_inspection(&record);
     let runtime_kind = installed_plugin_runtime_kind(record.manifest.source).to_string();
     let wasm_confinement_enforced = record.manifest.source == PluginSource::LocalWasm;
@@ -1048,19 +1051,20 @@ fn installed_plugin_inspection_record(
     manifest.wasm = None;
     manifest.publisher_signature = None;
 
-    InstalledPluginInspectionRecord {
+    Ok(InstalledPluginInspectionRecord {
         id: record.id,
         manifest,
         provenance,
         execution_enabled: record.execution_enabled,
         execution_grant: record.execution_grant,
+        lifecycle_contract_sha256,
         installed_at: record.installed_at,
         local_paths_redacted: true,
         provenance_hashes_redacted: true,
         runtime_kind,
         wasm_confinement_enforced,
         os_sandbox_enforced: false,
-    }
+    })
 }
 
 fn installed_plugin_runtime_kind(source: PluginSource) -> &'static str {
@@ -3654,11 +3658,37 @@ impl IpcState {
         id: &str,
         request: InstalledPluginExecutionRequest,
     ) -> JarvisResult<InstalledPluginRecord> {
+        if request.expected_lifecycle_contract_sha256.len() != 64
+            || !request
+                .expected_lifecycle_contract_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            return Err(JarvisError::Validation(
+                "expected_lifecycle_contract_sha256 must be a 64-character lowercase hexadecimal SHA-256 digest"
+                    .to_string(),
+            ));
+        }
+        if !request.execution_enabled
+            && request.execution_grant != InstalledPluginExecutionGrant::MetadataOnly
+        {
+            return Err(JarvisError::Validation(
+                "disabled installed plugin execution requires metadata_only grant".to_string(),
+            ));
+        }
         self.using_repository(|repository| {
             let record = repository
                 .get_installed_plugin(id)?
                 .ok_or_else(|| JarvisError::Storage(format!("installed plugin not found: {id}")))?;
             validate_installed_plugin_record(&record)?;
+            if installed_plugin_lifecycle_contract_sha256(&record)?
+                != request.expected_lifecycle_contract_sha256
+            {
+                return Err(JarvisError::Validation(
+                    "installed plugin lifecycle contract changed; refresh inspection before updating execution authority"
+                        .to_string(),
+                ));
+            }
 
             if request.execution_enabled {
                 let source_path = std::path::Path::new(&record.source_path);
@@ -3788,6 +3818,7 @@ impl IpcState {
                 id,
                 request.execution_enabled,
                 request.execution_grant,
+                &request.expected_lifecycle_contract_sha256,
             )
         })
     }
@@ -3828,24 +3859,7 @@ impl IpcState {
         &self,
         id: &str,
     ) -> JarvisResult<InstalledPluginRecord> {
-        self.using_repository(|repository| {
-            let record = repository.verify_installed_plugin_provenance(id)?;
-            let audit_entry = AuditEntry::new(
-                None,
-                "installed_plugin_provenance_verified",
-                "installed plugin local provenance snapshot was checked",
-                json!({
-                    "plugin_id": record.id,
-                    "manifest_version": record.manifest.version,
-                    "source": record.manifest.source,
-                    "integrity_status": record.provenance.integrity_status,
-                    "origin_claim_verified": record.provenance.origin_claim_verified,
-                    "local_paths_redacted": true,
-                }),
-            );
-            repository.append_audit_entry(&audit_entry)?;
-            Ok(record)
-        })
+        self.using_repository(|repository| repository.verify_installed_plugin_provenance(id))
     }
 
     pub fn verify_installed_plugin_publisher(
@@ -6617,7 +6631,7 @@ async fn list_installed_plugins(
 ) -> Result<Json<Vec<InstalledPluginInspectionRecord>>, (StatusCode, Json<ErrorResponse>)> {
     state
         .using_repository(SqliteRepository::list_installed_plugins)
-        .map(|records| {
+        .and_then(|records| {
             records
                 .into_iter()
                 .map(installed_plugin_inspection_record)
@@ -6637,7 +6651,7 @@ async fn get_installed_plugin(
                 .get_installed_plugin(&id)?
                 .ok_or_else(|| JarvisError::Storage(format!("installed plugin not found: {id}")))
         })
-        .map(installed_plugin_inspection_record)
+        .and_then(installed_plugin_inspection_record)
         .map(Json)
         .map_err(error_response)
 }
@@ -6658,9 +6672,10 @@ async fn set_installed_plugin_execution(
     State(state): State<IpcState>,
     Path(id): Path<String>,
     Json(request): Json<InstalledPluginExecutionRequest>,
-) -> Result<Json<InstalledPluginRecord>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<InstalledPluginInspectionRecord>, (StatusCode, Json<ErrorResponse>)> {
     state
         .set_installed_plugin_execution(&id, request)
+        .and_then(installed_plugin_inspection_record)
         .map(Json)
         .map_err(error_response)
 }
@@ -6668,9 +6683,10 @@ async fn set_installed_plugin_execution(
 async fn verify_installed_plugin_provenance(
     State(state): State<IpcState>,
     Path(id): Path<String>,
-) -> Result<Json<InstalledPluginRecord>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<InstalledPluginInspectionRecord>, (StatusCode, Json<ErrorResponse>)> {
     state
         .verify_installed_plugin_provenance(&id)
+        .and_then(installed_plugin_inspection_record)
         .map(Json)
         .map_err(error_response)
 }
@@ -9540,6 +9556,27 @@ mod tests {
     static RELEASE_EVIDENCE_ARTIFACT_FIXTURE_LOCK: Mutex<()> = Mutex::new(());
 
     const TEST_IPC_TOKEN: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+    fn installed_plugin_execution_request(
+        state: &IpcState,
+        id: &str,
+        execution_enabled: bool,
+        execution_grant: InstalledPluginExecutionGrant,
+    ) -> InstalledPluginExecutionRequest {
+        let expected_lifecycle_contract_sha256 = state
+            .using_repository(|repository| {
+                let record = repository.get_installed_plugin(id)?.ok_or_else(|| {
+                    JarvisError::Storage(format!("installed plugin not found: {id}"))
+                })?;
+                installed_plugin_lifecycle_contract_sha256(&record)
+            })
+            .expect("installed plugin lifecycle contract");
+        InstalledPluginExecutionRequest {
+            execution_enabled,
+            execution_grant,
+            expected_lifecycle_contract_sha256,
+        }
+    }
 
     #[test]
     fn ipc_auth_requires_one_exact_bearer_header() {
@@ -12931,10 +12968,12 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let unverified_error = state
             .set_installed_plugin_execution(
                 "local_runner_test",
-                InstalledPluginExecutionRequest {
-                    execution_enabled: true,
-                    execution_grant: InstalledPluginExecutionGrant::SubprocessStdio,
-                },
+                installed_plugin_execution_request(
+                    &state,
+                    "local_runner_test",
+                    true,
+                    InstalledPluginExecutionGrant::SubprocessStdio,
+                ),
             )
             .expect_err("unverified provenance cannot execute");
         assert!(unverified_error
@@ -12952,10 +12991,12 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let enabled = state
             .set_installed_plugin_execution(
                 "local_runner_test",
-                InstalledPluginExecutionRequest {
-                    execution_enabled: true,
-                    execution_grant: InstalledPluginExecutionGrant::SubprocessStdio,
-                },
+                installed_plugin_execution_request(
+                    &state,
+                    "local_runner_test",
+                    true,
+                    InstalledPluginExecutionGrant::SubprocessStdio,
+                ),
             )
             .expect("enable subprocess");
         assert!(enabled.execution_enabled);
@@ -13064,10 +13105,12 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         state
             .set_installed_plugin_execution(
                 "local_runner_test",
-                InstalledPluginExecutionRequest {
-                    execution_enabled: true,
-                    execution_grant: InstalledPluginExecutionGrant::SubprocessStdio,
-                },
+                installed_plugin_execution_request(
+                    &state,
+                    "local_runner_test",
+                    true,
+                    InstalledPluginExecutionGrant::SubprocessStdio,
+                ),
             )
             .expect("enable subprocess");
 
@@ -13134,10 +13177,12 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         state
             .set_installed_plugin_execution(
                 "local_runner_test",
-                InstalledPluginExecutionRequest {
-                    execution_enabled: true,
-                    execution_grant: InstalledPluginExecutionGrant::SubprocessStdio,
-                },
+                installed_plugin_execution_request(
+                    &state,
+                    "local_runner_test",
+                    true,
+                    InstalledPluginExecutionGrant::SubprocessStdio,
+                ),
             )
             .expect("enable subprocess");
 
@@ -13256,10 +13301,12 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         state
             .set_installed_plugin_execution(
                 "local_runner_test",
-                InstalledPluginExecutionRequest {
-                    execution_enabled: false,
-                    execution_grant: InstalledPluginExecutionGrant::MetadataOnly,
-                },
+                installed_plugin_execution_request(
+                    &state,
+                    "local_runner_test",
+                    false,
+                    InstalledPluginExecutionGrant::MetadataOnly,
+                ),
             )
             .expect("disable before approved execution");
         let changed_grant = state
@@ -13274,10 +13321,12 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         state
             .set_installed_plugin_execution(
                 "local_runner_test",
-                InstalledPluginExecutionRequest {
-                    execution_enabled: true,
-                    execution_grant: InstalledPluginExecutionGrant::SubprocessStdio,
-                },
+                installed_plugin_execution_request(
+                    &state,
+                    "local_runner_test",
+                    true,
+                    InstalledPluginExecutionGrant::SubprocessStdio,
+                ),
             )
             .expect("restore exact grant");
         let executed = state
@@ -13449,10 +13498,12 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         state
             .set_installed_plugin_execution(
                 "local_runner_test",
-                InstalledPluginExecutionRequest {
-                    execution_enabled: true,
-                    execution_grant: InstalledPluginExecutionGrant::SubprocessStdio,
-                },
+                installed_plugin_execution_request(
+                    &state,
+                    "local_runner_test",
+                    true,
+                    InstalledPluginExecutionGrant::SubprocessStdio,
+                ),
             )
             .expect("enable subprocess");
         let pending = state
@@ -13549,10 +13600,12 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         state
             .set_installed_plugin_execution(
                 "local_runner_test",
-                InstalledPluginExecutionRequest {
-                    execution_enabled: true,
-                    execution_grant: InstalledPluginExecutionGrant::SubprocessStdio,
-                },
+                installed_plugin_execution_request(
+                    &state,
+                    "local_runner_test",
+                    true,
+                    InstalledPluginExecutionGrant::SubprocessStdio,
+                ),
             )
             .expect("enable subprocess");
 
@@ -13642,15 +13695,80 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let error = state
             .set_installed_plugin_execution(
                 "local_runner_test",
-                InstalledPluginExecutionRequest {
-                    execution_enabled: true,
-                    execution_grant: InstalledPluginExecutionGrant::MetadataOnly,
-                },
+                installed_plugin_execution_request(
+                    &state,
+                    "local_runner_test",
+                    true,
+                    InstalledPluginExecutionGrant::MetadataOnly,
+                ),
             )
             .expect_err("metadata grant cannot execute");
         assert!(error
             .to_string()
             .contains("requires subprocess_stdio or subprocess_stdio_network grant"));
+    }
+
+    #[test]
+    fn installed_plugin_lifecycle_requires_exact_digest_and_canonical_disabled_grant() {
+        let repository = SqliteRepository::in_memory().unwrap();
+        let source_dir = tempfile::tempdir().unwrap();
+        let source_path = source_dir
+            .path()
+            .canonicalize()
+            .unwrap()
+            .display()
+            .to_string();
+        repository
+            .install_plugin_metadata(InstalledPlugin {
+                manifest: local_installed_manifest(&source_path),
+                source_path: source_path.clone(),
+                provenance: InstalledPluginProvenance::legacy_unverified(source_path, Utc::now()),
+                execution_enabled: false,
+                execution_grant: InstalledPluginExecutionGrant::MetadataOnly,
+            })
+            .unwrap();
+        let state = IpcState::with_repository(repository).expect("state");
+
+        let stale = state
+            .set_installed_plugin_execution(
+                "local_runner_test",
+                InstalledPluginExecutionRequest {
+                    execution_enabled: false,
+                    execution_grant: InstalledPluginExecutionGrant::MetadataOnly,
+                    expected_lifecycle_contract_sha256: "0".repeat(64),
+                },
+            )
+            .expect_err("stale lifecycle digest must fail closed");
+        assert!(stale.to_string().contains("lifecycle contract changed"));
+
+        let malformed_disabled = state
+            .set_installed_plugin_execution(
+                "local_runner_test",
+                installed_plugin_execution_request(
+                    &state,
+                    "local_runner_test",
+                    false,
+                    InstalledPluginExecutionGrant::SubprocessStdio,
+                ),
+            )
+            .expect_err("disabled state must reset authority to metadata-only");
+        assert!(malformed_disabled
+            .to_string()
+            .contains("disabled installed plugin execution requires metadata_only grant"));
+
+        let record = state
+            .using_repository(|repository| {
+                repository
+                    .get_installed_plugin("local_runner_test")?
+                    .ok_or_else(|| JarvisError::Storage("installed plugin missing".to_string()))
+            })
+            .unwrap();
+        let inspection = installed_plugin_inspection_record(record).unwrap();
+        assert_eq!(inspection.lifecycle_contract_sha256.len(), 64);
+        assert!(inspection.manifest.source_path.is_none());
+        assert!(inspection.manifest.subprocess.is_none());
+        assert!(inspection.local_paths_redacted);
+        assert!(inspection.provenance_hashes_redacted);
     }
 
     #[cfg(unix)]
@@ -13681,10 +13799,12 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let default_grant_error = state
             .set_installed_plugin_execution(
                 "local_runner_test",
-                InstalledPluginExecutionRequest {
-                    execution_enabled: true,
-                    execution_grant: InstalledPluginExecutionGrant::SubprocessStdio,
-                },
+                installed_plugin_execution_request(
+                    &state,
+                    "local_runner_test",
+                    true,
+                    InstalledPluginExecutionGrant::SubprocessStdio,
+                ),
             )
             .expect_err("network action requires network grant");
         assert!(default_grant_error
@@ -13693,10 +13813,15 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
 
         let stored = state
             .using_repository(|repository| {
+                let record = repository
+                    .get_installed_plugin("local_runner_test")?
+                    .ok_or_else(|| JarvisError::Storage("installed plugin missing".to_string()))?;
+                let expected = installed_plugin_lifecycle_contract_sha256(&record)?;
                 repository.set_installed_plugin_execution(
                     "local_runner_test",
                     true,
                     InstalledPluginExecutionGrant::SubprocessStdio,
+                    &expected,
                 )
             })
             .expect("force legacy grant for runtime regression coverage");
@@ -13744,10 +13869,15 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
 
         state
             .using_repository(|repository| {
+                let record = repository
+                    .get_installed_plugin("local_runner_test")?
+                    .ok_or_else(|| JarvisError::Storage("installed plugin missing".to_string()))?;
+                let expected = installed_plugin_lifecycle_contract_sha256(&record)?;
                 repository.set_installed_plugin_execution(
                     "local_runner_test",
                     true,
                     InstalledPluginExecutionGrant::SubprocessStdioNetwork,
+                    &expected,
                 )
             })
             .expect("force network grant");
@@ -13807,10 +13937,12 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let stdio_enabled = state
             .set_installed_plugin_execution(
                 "local_runner_test",
-                InstalledPluginExecutionRequest {
-                    execution_enabled: true,
-                    execution_grant: InstalledPluginExecutionGrant::SubprocessStdio,
-                },
+                installed_plugin_execution_request(
+                    &state,
+                    "local_runner_test",
+                    true,
+                    InstalledPluginExecutionGrant::SubprocessStdio,
+                ),
             )
             .expect("enable non-network execution for mixed plugin");
         assert_eq!(
@@ -13859,10 +13991,12 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let network_enabled = state
             .set_installed_plugin_execution(
                 "local_runner_test",
-                InstalledPluginExecutionRequest {
-                    execution_enabled: true,
-                    execution_grant: InstalledPluginExecutionGrant::SubprocessStdioNetwork,
-                },
+                installed_plugin_execution_request(
+                    &state,
+                    "local_runner_test",
+                    true,
+                    InstalledPluginExecutionGrant::SubprocessStdioNetwork,
+                ),
             )
             .expect("enable network execution for mixed plugin");
         assert_eq!(

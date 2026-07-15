@@ -211,6 +211,24 @@ release requirements, not optional UX guidance.
   holding the repository mutex, releases it before provenance hashing, and
   rechecks unchanged database state before advertisement. Source-tree
   provenance rejects more than 8,192 entries, 4,096 files, 64 levels, or 64 MiB.
+- Installed-plugin lifecycle controls may verify provenance and mutate only the
+  execution-enabled flag plus an exact runtime-compatible grant. Swift must
+  serialize each plugin's mutations, require matching provenance before
+  enablement, require explicit selection when more than one grant is eligible,
+  display declared permissions and exact network hosts, and refresh the
+  repository-backed record after success or failure. A stale or unavailable
+  registry disables verify, enable, and disable. Confirmation must bind the
+  exact reviewed grant and lifecycle-contract digest; the Rust mutation is a
+  compare-and-set that rejects stale inspection, including reinstall races.
+  Disabled state accepts only `metadata_only`. The lifecycle surface must not
+  install or execute plugin code and must not optimistically update authority.
+  Verify and set responses must use the same redacted inspection projection.
+  Rust must transactionally record provenance verification audit evidence and
+  must commit the grant mutation and a redacted
+  `installed_plugin_execution_authority_updated` audit atomically with
+  `side_effect_executed:false` and `plugin_runtime_started:false`; an audit
+  failure rolls the mutation back. Subprocess UI must continue to state that OS
+  sandboxing and host-level egress enforcement are absent.
 - Audit logs must explain model route, permission checks, tool calls,
   approvals, denials, files touched, external actions attempted, failures, and
   final state.
@@ -384,6 +402,12 @@ Safety regressions should fail release verification:
   grants executing network-declaring actions.
 - Installed subprocess plugin enablement or execution while provenance status
   is anything other than `matches_install_snapshot`.
+- Installed-plugin lifecycle UI that enables without explicit compatible grant
+  selection, hides declared network hosts or missing OS containment, mutates
+  optimistically, permits actions against a stale registry, overlaps mutations
+  for one plugin, accepts a stale lifecycle contract or a non-metadata disabled
+  grant, returns raw provenance paths/hashes, starts plugin code, or persists
+  provenance/authority changes without their transactional redacted audits.
 - Installed subprocess plugin execution that inherits unrelated app/core
   environment variables or secrets.
 - Installed subprocess plugin audit evidence that reports an OS sandbox as

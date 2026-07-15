@@ -359,7 +359,7 @@ flowchart TB
     MenuBar --> MacCore
     MacShell --> ActivityUI["Run activity summary, bounded event stream, and audit view"]
     MacShell --> MemoryUI["Memory CRUD, review, count-only index governance, and disabled-by-default local context toggle"]
-    MacShell --> PluginUI["Plugin manifest and installed registry/provenance view"]
+    MacShell --> PluginUI["Plugin registry, provenance verification, explicit grant enable, and disable controls"]
     MacShell --> WorkspaceGrantUI["opaque workspace grant add, remove, and restart controls"]
     WorkspaceGrantUI --> BookmarkStore["atomic restrictive security-scoped bookmark store"]
     BookmarkStore --> BookmarkResolve["fail-closed full-set resolution, bounded delivery, exit monitor, balanced access lifetime"]
@@ -436,6 +436,12 @@ flowchart TB
         ApprovalClaim --> ApprovalAmbiguous["claimed restart is effect-possible; no automatic retry"]
         IPC --> PublisherReview["/plugins/installed/:id/publisher/verify"]
         IPC --> PublisherSignature["/plugins/installed/:id/publisher/signature/verify"]
+        IPC --> InstalledProvenanceVerify["/plugins/installed/:id/provenance/verify"]
+        IPC --> InstalledAuthorityMutation["/plugins/installed/:id/execution"]
+        InstalledAuthorityMutation --> LifecycleCAS["exact confirmed grant plus lifecycle digest compare-and-set"]
+        InstalledAuthorityMutation --> InstalledAuthorityAudit["atomic grant mutation plus redacted side_effect_executed:false audit"]
+        InstalledProvenanceVerify --> RedactedLifecycleResponse["redacted inspection response plus transactional audit"]
+        InstalledAuthorityMutation --> RedactedLifecycleResponse
         IPC --> InstalledRunner["installed plugin execution boundary"]
         IPC --> PauseApi["/emergency-pause"]
         IPC --> SchedulerApi["/scheduler/jobs"]
@@ -499,6 +505,8 @@ flowchart TB
         InstalledRunner --> InstalledGrant["disabled-by-default metadata_only grant"]
         InstalledRunner --> InstalledEnable["/plugins/installed/:id/execution explicit subprocess grants"]
         ProvenanceCheck --> InstalledEnable
+        InstalledProvenanceVerify --> ProvenanceCheck
+        InstalledEnable --> InstalledAuthorityAudit
         ProvenanceCheck --> PublisherReview
         ProvenanceCheck --> PublisherSignature
         PublisherReview --> PublisherAudit["operator-pinned origin audit evidence"]
@@ -879,11 +887,20 @@ permission-grant, scheduler, plugin manifest, installed-plugin, and
 installed-plugin execution-grant inspection endpoints, so the CLI and Swift
 shell can inspect durable local state without reaching into SQLite directly.
 The Swift Plugin tab renders first-party manifests plus repository-backed
-installed-plugin records through the redacted inspection contract: local paths,
+installed-plugin records through the redacted inspection contract and owns
+typed verify, explicit compatible-grant enable, and disable controls. Local paths,
 subprocess command paths, publisher-signature material, and provenance hashes
 stay hidden, while execution grant, provenance integrity status,
 origin-review state, action metadata, executable status, and redaction markers
-remain visible. If the installed registry endpoint is unavailable, the tab
+remain visible. It shows exact declared permissions and network hosts, requires
+matching provenance and explicit selection for mixed grants, binds the exact
+confirmed grant and lifecycle-contract digest as a compare-and-set, serializes
+each plugin mutation, and refreshes the authoritative record after every
+outcome. A stale registry disables all lifecycle actions, and verify/set
+responses retain the redacted inspection projection. Rust transactionally
+records provenance audit evidence and atomically records each authority change
+with a redacted non-execution audit; Swift never installs or runs plugin code.
+If the installed registry endpoint is unavailable, the tab
 keeps first-party manifests visible and shows an installed-registry warning
 instead of failing the whole plugin surface.
 `/activity/summary` adds a repository-backed progress snapshot for current
@@ -1277,9 +1294,11 @@ flowchart TB
     MenuBarProd --> UX
     UX --> MemoryUX["memory create, edit, review, delete, restore/archive review"]
     UX --> ApprovalUI["approval prompts and permission center"]
+    UX --> PluginManagerProd["installed plugin verify, explicit grant enable, disable, trust review, and logs"]
     UX --> PauseUI["emergency pause and resume"]
     UX --> CancelUI["per-command Cancel while submission is active"]
     UX --> IPCClient["versioned IPC client"]
+    PluginManagerProd --> IPCClient
     MacApp --> Supervisor["app-supervised core process"]
     MacApp --> SchedulerAutomationProd["user-enabled scheduler automation and attention lifecycle"]
     SchedulerAutomationProd --> Supervisor
@@ -1324,6 +1343,8 @@ flowchart TB
         PluginHostProd --> InstalledPlugins["installed local plugins with manifests"]
         PluginHostProd --> ToolSandbox["declared scopes, schemas, timeouts, cancellation, future OS sandbox boundary"]
         InstalledPlugins --> InstalledPolicyProd["per-invocation risk, scope, sensitivity, pause, and provenance policy"]
+        InstalledPlugins --> InstalledLifecycleProd["audited provenance and execution-authority lifecycle"]
+        InstalledLifecycleProd --> RepoProd
         InstalledPolicyProd --> InstalledDirectProd["eligible Low direct invocation"]
         InstalledPolicyProd --> InstalledDryRunProd["non-executing contract dry run"]
         InstalledPolicyProd --> InstalledPendingProd["Confirm/sensitive pending approval with exact private input/contract/grant binding"]
@@ -1447,6 +1468,7 @@ external action, or broader production operation.
 
 | Area | Current implementation | Target production state | Phase |
 | --- | --- | --- | --- |
+| Installed-plugin lifecycle UX | The Swift Plugin tab uses typed provenance and execution-authority endpoints, shows redacted records plus exact declared permissions/hosts, requires matching provenance and explicit compatible-grant selection, binds confirmed grant plus lifecycle digest as a compare-and-set, serializes mutations per plugin, disables to `metadata_only`, refreshes authoritative state after every outcome, and disables actions while registry state is stale. It never installs or runs plugin code. Rust transactionally audits provenance and atomically commits each authority mutation with its redacted non-execution audit; storage failure injection and authenticated loopback-TCP compatibility E2E across enabled/disabled restarts prove rollback, persistence, post-restart audits, redaction, rejection, and zero execution. Default UDS transport proof remains separate. | Full trust review, publisher/marketplace policy, malware analysis, signed OS-sandboxed execution, and host-enforced declared-host egress integrate with the same explicit lifecycle UX without broadening authority silently. | Lifecycle UX and atomic audit boundary implemented; OS sandbox/egress enforcement and external plugin-trust evidence remain pending. |
 | Menu-bar presence | Native SwiftUI `MenuBarExtra` shares the existing app-owned supervisor, console, and model configuration state; it exposes a stable main-window route, conservative lifecycle status, health refresh, fail-closed start/stop availability, and quit. | Signed and installed `Jarvis.app` remains reachable after its main window closes, without creating a second core owner, and passes live Finder/LaunchServices window-reopen and lifecycle QA. | Swift scene/model contract and architecture implemented; signed installed-app GUI QA remains manual release evidence. |
 | Mac shell | Buildable Swift/SwiftUI shell with health, command transcript, pause/resume, activity/audit rendering, bounded activity event-stream watch, memory classification, redacted retention-plan review, and create/update/review/delete/restore controls, model/plugin/scheduler/diagnostics/release-readiness tabs, degraded-mode handling, and a `JarvisCoreSupervisor` abstraction for configured or bundled local core binaries. The Model tab decodes active provider/model health metadata, lists installed Ollama models from `/api/tags`, merges recommended downloadable Llama/Mistral/Phi/Gemma/Qwen options including Gemma 4, Gemma 3, Qwen3.6, Qwen3, Qwen2.5, Qwen2.5-Coder, and Qwen2.5-VL tags, shows RAM estimates from installed model size or curated pre-download estimates, pulls missing selections through `/api/pull`, starts/stops selected Ollama residency through `/api/generate` keep-alive requests, and restarts only the app-supervised core with selected model environment overrides. The Plugin tab renders first-party manifests plus redacted installed-plugin registry records with execution grant, provenance integrity, origin-review, action metadata, executable status, and redaction markers while omitting local paths, command paths, signature material, and provenance hashes; it degrades gracefully when the repository-backed installed registry is unavailable. The Scheduler tab can inspect/create/cancel jobs, request attention notifications, run due jobs through bounded `/scheduler/run-due`, and recover stale running jobs through bounded `/scheduler/recover-stale`, then refreshes jobs/attention, shows concise last-action state, and exposes delivered-notification evidence fields with reset/recapture controls without exposing scheduler command bodies. The Release tab renders `/release/readiness` blockers, external evidence-mode state, recommended commands, implemented proofs, pending features, proof boundary, `/release/evidence-status` file/report inventory plus invalid evidence details, and read-only signed-distribution/live-device/plugin-trust runbooks while preserving the explicit external-evidence production boundary; evidence rows label path, detail, and production/manual-gate context, present presence-only evidence rows show the caveat on the status line, runbook-load failures surface as warnings without hiding readiness/evidence status, and the production-ready display is fail-closed unless readiness is true, evidence status is complete, and the evidence view has no missing, invalid, stale refresh, or runbook warning state. The Voice tab gates capture behind permission state before start attempts, and the unsigned distribution launch check exercises the release-built `Jarvis.app` layout with temp-profile app-supervised core proof. | Packaged `Jarvis.app` supervises the core, owns voice/text UX, settings, memory and permission surfaces, diagnostics export, release-readiness review, and recovery states. | Shell supervision, Swift model selection/download/start/stop controls for app-supervised Ollama cores, Swift memory management including redacted retention-plan visibility, bounded activity event-stream watch, installed-plugin registry inspection surfaces, Swift scheduler run/recovery and notification evidence controls, Swift release-readiness/evidence-status/runbook inspection with runbook-load warnings, app-level Release row presentation coverage, explicit evidence-mode row coverage, voice permission-before-capture gating, and unsigned distribution launch proof implemented; Developer ID signing, notarization/stapling, signed installer validation, clean-profile /Applications install, Finder/LaunchServices launch, and manual production release QA pending. |
 | IPC boundary | App-supervised IPC defaults to a generation-random Unix socket in a current-owner `0700` runtime directory, with the socket `0600`. Strict startup stdin carries `unix_socket_peer_identity_v1`, the absolute bounded socket path, `peer_code_requirement`, `peer_identity_profile`, and a fresh 32-byte bearer. Both peers obtain `LOCAL_PEERTOKEN`, validate the running peer against the designated requirement through Security.framework before framing, and require current-EUID `getpeereid`; one four-byte big-endian length frames one strict bounded JSON request, the client must write-half close, trailing input is rejected before one response, and every router path still requires the bearer. `adhoc_exact` binds an exact cdhash; `developer_id_hardened` requires stable identifiers, same nonempty team, Developer ID Application requirements, and hardened runtime. The release-built smoke proves the full Swift route plus same-EUID wrong-code pre-frame rejection. Exact `JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true` retains weaker TCP/token compatibility. | Developer ID signed/notarized app and core exercise the hardened identity profile in a clean installed profile, retain the audit-token UDS boundary or move to XPC only if later lifecycle requirements demand it, add device-bound secret lifecycle and host sandbox/egress enforcement, and archive owner-recorded evidence. | Audit-token designated-requirement validation, default UDS, same-EUID and bearer defense in depth, strict framing, whole-router parity, stable package identifiers, wrong-code packaged rejection, explicit TCP/token compatibility, Swift tests, Rust cross-process E2E, and full Swift-client distribution-layout proof implemented. Repository ad-hoc evidence proves exact-build mechanics only; Developer ID/notarization, device authentication, App Sandbox/egress enforcement, and live-device evidence remain pending. |
