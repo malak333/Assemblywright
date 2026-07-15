@@ -774,6 +774,44 @@ requires plugin-trust `generated_at`, `review_started_at`,
   execution. This E2E is not evidence for the packaged app's default
   peer-identity UDS. The tab still degrades to a
   warning while keeping first-party manifests visible when the registry is unavailable.
+- Installed-plugin updates are explicit local operator actions, not remote
+  discovery or a marketplace. Replacement manifests, source trees, versions,
+  and publisher claims remain untrusted. New local installs require valid
+  SemVer 2.0.0. The candidate must retain the exact plugin identity, advance
+  its semantic version, match the currently inspected
+  lifecycle digest, and pass bounded manifest/provenance validation; success
+  captures a new snapshot and always resets execution to disabled
+  `metadata_only`. The new snapshot requires fresh provenance verification and
+  explicit compatible-grant enablement. Prior authority cannot carry forward.
+  A persisted pre-SemVer record may cross once to valid SemVer under the same
+  checks; all later updates use strict SemVer precedence.
+- The lifecycle-history surface is a bounded redacted projection of durable
+  state transitions. Each entry returns only entry ID, plugin ID, lifecycle
+  action, normalized outcome, and timestamp; the wrapper adds fixed
+  redaction/proof metadata. It omits paths, source/manifest hashes, signature
+  material, subprocess configuration, input/output, secrets, and free-form
+  operator text. It is not marketplace approval, publisher identity, malware
+  analysis, OS sandboxing, host-level egress enforcement, signing/notarization,
+  or live-device plugin-trust evidence.
+- The update contract separates redacted review from mutation:
+  `POST /plugins/installed/:id/update/preview` validates candidate identity,
+  version ordering, and lifecycle compare-and-set, then returns validated
+  `current_lifecycle_contract_sha256` and opaque
+  `candidate_update_contract_sha256`.
+  Explicitly confirmed `POST /plugins/installed/:id/update/apply` requires that
+  exact reviewed pair; clients never refresh or substitute either token. Rust reloads
+  the candidate and rejects exact-snapshot drift before the atomic reset. The
+  token is an aggregate integrity binding, not a raw component provenance hash,
+  publisher signature, trust verdict, or execution grant. Finally,
+  `GET /plugins/installed/:id/history` returns the redacted lifecycle ledger.
+- Focused storage proof covers atomic update persistence, install-time
+  preservation, disabled authority/publisher-review reset, candidate and
+  lifecycle drift, injected audit rollback, and the newest-first 100-entry
+  plugin-scoped history bound. Cross-process CLI E2E
+  `installed_plugin_update_preview_apply_history_is_cas_bound_redacted_and_persistent`
+  covers operator preview/apply/history, redaction, stale-token failures,
+  restart persistence, and re-verification before re-enable over authenticated
+  loopback compatibility; it is not default-UDS or external plugin-trust proof.
 - The CLI has matching `release readiness`, `release evidence-status`,
   `command`/`ask`, `tools`, `tasks`, `memory`, `scheduler`, `diagnostics`, and
   `plugins` subcommands, including

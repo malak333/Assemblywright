@@ -1289,6 +1289,7 @@ struct PluginManagerView: View {
     @State private var workspaceStatus: String?
     @State private var workspaceOperationInProgress = false
     @State private var pendingEnablement: PluginEnablementConfirmation?
+    @State private var pendingUpdate: PluginUpdateConfirmation?
 
     var body: some View {
         ManagementListView(
@@ -1380,6 +1381,15 @@ struct PluginManagerView: View {
                     }
                 }
 
+                if let warning = model.lifecycleHistoryWarning {
+                    Section("Plugin lifecycle history") {
+                        Text(warning)
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .textSelection(.enabled)
+                    }
+                }
+
                 if !model.installedPlugins.isEmpty {
                     Section("Installed") {
                         ForEach(model.installedPlugins, id: \.id) { (plugin: JarvisInstalledPluginRecord) in
@@ -1447,6 +1457,17 @@ struct PluginManagerView: View {
                                         .foregroundStyle(.orange)
                                 }
 
+                                if let preview = model.updatePreview(for: plugin.id) {
+                                    Text("Update preview: \(preview.currentVersion) → \(preview.candidateVersion). Applying disables execution and requires integrity review before re-enabling.")
+                                        .font(.caption2)
+                                        .foregroundStyle(.orange)
+                                        .textSelection(.enabled)
+                                    Text(preview.proofBoundary)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .textSelection(.enabled)
+                                }
+
                                 HStack {
                                     Button("Verify Integrity") {
                                         Task { await model.verifyProvenance(id: plugin.id) }
@@ -1477,10 +1498,37 @@ struct PluginManagerView: View {
                                     }
                                     .disabled(!model.canDisable(plugin))
 
+                                    Button("Preview Update") {
+                                        selectUpdateManifest(for: plugin)
+                                    }
+                                    .disabled(!model.canPreviewUpdate(plugin))
+
                                     if model.isMutating(id: plugin.id) {
                                         ProgressView().controlSize(.small)
                                     }
                                     Spacer()
+                                }
+
+                                let history = model.lifecycleHistory(for: plugin.id)
+                                if !history.isEmpty {
+                                    Divider()
+                                    Text("Lifecycle history")
+                                        .font(.caption)
+                                    ForEach(history.prefix(6)) { entry in
+                                        Text("\(entry.createdAt) • \(entry.action) • \(entry.outcome)")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                            .textSelection(.enabled)
+                                    }
+                                    Text("History is redacted: paths, hashes, manifests, payloads, and execution inputs are omitted.")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                    if let boundary = model.lifecycleHistoryProofBoundary(for: plugin.id) {
+                                        Text(boundary)
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                            .textSelection(.enabled)
+                                    }
                                 }
                             }
                             .padding(.vertical, 4)
@@ -1546,6 +1594,61 @@ struct PluginManagerView: View {
                     Text(pendingEnablement.message)
                 }
             }
+            .confirmationDialog(
+                "Apply plugin update?",
+                isPresented: Binding(
+                    get: { pendingUpdate != nil },
+                    set: {
+                        if !$0 {
+                            if let pluginID = pendingUpdate?.pluginID {
+                                model.cancelUpdatePreview(id: pluginID)
+                            }
+                            pendingUpdate = nil
+                        }
+                    }
+                ),
+                titleVisibility: .visible
+            ) {
+                if let pendingUpdate {
+                    Button("Update to \(pendingUpdate.candidateVersion)", role: .destructive) {
+                        let pluginID = pendingUpdate.pluginID
+                        self.pendingUpdate = nil
+                        Task { await model.applyUpdate(id: pluginID) }
+                    }
+                    Button("Cancel", role: .cancel) {
+                        model.cancelUpdatePreview(id: pendingUpdate.pluginID)
+                        self.pendingUpdate = nil
+                    }
+                }
+            } message: {
+                if let pendingUpdate {
+                    Text(pendingUpdate.message)
+                }
+            }
+        }
+    }
+
+    private func selectUpdateManifest(for plugin: JarvisInstalledPluginRecord) {
+        let panel = NSOpenPanel()
+        panel.title = "Select a newer plugin manifest"
+        panel.prompt = "Preview Update"
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        Task {
+            guard let preview = await model.previewUpdate(
+                id: plugin.id,
+                manifestPath: url.path
+            ) else { return }
+            pendingUpdate = PluginUpdateConfirmation(
+                pluginID: plugin.id,
+                pluginName: plugin.manifest.name,
+                currentVersion: preview.currentVersion,
+                candidateVersion: preview.candidateVersion
+            )
         }
     }
 
@@ -1647,6 +1750,19 @@ struct PluginEnablementConfirmation: Identifiable {
             "Runtime containment is not declared for this grant."
         }
         return "Enable \(pluginName) with \(grant)? \(hosts) \(containment) This action changes execution authority but does not run the plugin."
+    }
+}
+
+struct PluginUpdateConfirmation: Identifiable {
+    let pluginID: String
+    let pluginName: String
+    let currentVersion: String
+    let candidateVersion: String
+
+    var id: String { "\(pluginID):\(currentVersion):\(candidateVersion)" }
+
+    var message: String {
+        "Update \(pluginName) from \(currentVersion) to \(candidateVersion)? The core will revalidate the same plugin ID, newer version, selected manifest bytes, and current lifecycle contract. Execution will be disabled after the update; verify integrity and explicitly choose a grant before enabling it again."
     }
 }
 

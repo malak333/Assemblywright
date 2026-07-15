@@ -47,6 +47,24 @@ struct JarvisMacAppTests {
         #expect(local.id.contains("local-lifecycle-digest"))
     }
 
+    @Test("Plugin update confirmation states version and disabled-authority boundary")
+    func pluginUpdateConfirmationIsExplicitAndRedacted() {
+        let confirmation = PluginUpdateConfirmation(
+            pluginID: "local_worker",
+            pluginName: "Local Worker",
+            currentVersion: "1.0.0",
+            candidateVersion: "1.1.0"
+        )
+
+        #expect(confirmation.message.contains("from 1.0.0 to 1.1.0"))
+        #expect(confirmation.message.contains("same plugin ID"))
+        #expect(confirmation.message.contains("newer version"))
+        #expect(confirmation.message.contains("Execution will be disabled"))
+        #expect(confirmation.message.contains("verify integrity"))
+        #expect(!confirmation.message.contains("/Users/"))
+        #expect(!confirmation.id.contains("sha256"))
+    }
+
     @Test("Workspace grant presentation keeps the selected path hidden")
     func workspaceGrantPresentationIsRedacted() {
         let presentation = WorkspaceRootGrantPresentation(

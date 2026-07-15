@@ -229,6 +229,35 @@ release requirements, not optional UX guidance.
   `side_effect_executed:false` and `plugin_runtime_started:false`; an audit
   failure rolls the mutation back. Subprocess UI must continue to state that OS
   sandboxing and host-level egress enforcement are absent.
+- Installed-plugin local update must treat the replacement manifest, source
+  tree, version, and publisher claims as untrusted input. New local installs
+  must use valid SemVer 2.0.0. Update must retain the exact installed identity,
+  require a valid candidate version, and normally require strictly newer SemVer. A
+  persisted pre-SemVer record may cross once to valid SemVer under all other
+  update checks; every later update is strictly ordered. Update must bind
+  preview and apply to the inspected lifecycle digest, and return an opaque
+  `candidate_update_contract_sha256` from preview that apply must echo. Apply
+  must also echo the lifecycle digest returned in that same reviewed preview;
+  clients must not refresh or substitute either value automatically. Apply
+  must reload the candidate and reject if the recomputed exact-snapshot binding
+  differs, then pass the normal bounded validation/provenance capture path and
+  transactionally replace registry metadata plus a redacted
+  non-execution audit. A successful update always clears prior provenance
+  verification and sets `execution_enabled: false` with
+  `execution_grant: metadata_only`; the operator must verify and explicitly
+  re-enable the new snapshot. Validation or audit failure leaves the previous
+  record unchanged.
+- The candidate update token is an aggregate integrity binding, not a raw
+  manifest/source-tree/command/module provenance hash, publisher signature,
+  artifact trust verdict, or execution grant. Clients must treat it as opaque
+  compare-and-set data and must not infer trust or authority from possession.
+- Installed-plugin lifecycle history must be bounded and redacted. It may
+  expose only entry ID, plugin ID, lifecycle action, normalized outcome, and
+  timestamp per entry, plus fixed wrapper redaction/proof metadata, but must not
+  return local paths, source/manifest hashes, signature material,
+  subprocess configuration, input/output, secrets, or free-form operator text.
+  History is not marketplace, publisher, malware, OS-sandbox, egress, signing,
+  notarization, or live-device evidence.
 - Audit logs must explain model route, permission checks, tool calls,
   approvals, denials, files touched, external actions attempted, failures, and
   final state.
@@ -408,6 +437,12 @@ Safety regressions should fail release verification:
   for one plugin, accepts a stale lifecycle contract or a non-metadata disabled
   grant, returns raw provenance paths/hashes, starts plugin code, or persists
   provenance/authority changes without their transactional redacted audits.
+- Installed-plugin update that accepts a different plugin identity, carries
+  forward execution authority or provenance verification, applies without a
+  matching reviewed lifecycle/candidate token pair, silently refreshes either
+  preview token, mutates the installed
+  record before full validation, leaves a partially updated record after audit
+  failure, starts plugin code, or exposes sensitive lifecycle-history fields.
 - Installed subprocess plugin execution that inherits unrelated app/core
   environment variables or secrets.
 - Installed subprocess plugin audit evidence that reports an OS sandbox as

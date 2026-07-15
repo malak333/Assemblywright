@@ -183,6 +183,66 @@ request received
   -> audit entry records the decision and result
 ```
 
+## Local Update And Lifecycle History
+
+Installed-plugin update is an explicit local registry mutation, not remote
+discovery or marketplace installation. Jarvis treats the selected replacement
+manifest, its source tree, and all publisher/version claims as untrusted input.
+New local installations require valid SemVer 2.0.0. The candidate must pass
+normal bounded manifest/provenance validation, retain the exact installed
+plugin identity, advance its semantic version, and match
+the installed record's currently inspected lifecycle digest. A successful
+replacement captures a fresh provenance snapshot and atomically forces
+`execution_enabled: false`
+with `execution_grant: metadata_only`; prior verification, execution authority,
+and a previously reviewed lifecycle digest cannot carry forward. The operator
+must verify the new snapshot and explicitly choose and enable a compatible
+grant before execution becomes eligible again.
+
+For compatibility, a persisted pre-SemVer record may transition once to a
+valid SemVer candidate under all of the same identity, source-kind, lifecycle,
+candidate-snapshot, disablement, and audit checks. Every later update is
+strictly ordered by SemVer precedence.
+
+Update and lifecycle mutations append redacted evidence suitable for bounded
+history inspection. Each public history entry identifies only the entry ID,
+plugin ID, lifecycle action, normalized outcome, and timestamp. The response
+wrapper may add the requested plugin ID, redaction booleans, and a fixed proof
+boundary. It must omit local paths, manifest/source hashes, signature material,
+command configuration, plugin input/output,
+free-form operator text, and secrets. History is operational evidence only; it
+does not establish publisher identity, update authenticity, marketplace
+approval, malware safety, OS sandboxing, host-level egress enforcement,
+signing/notarization, or live-device trust.
+
+The typed IPC sequence is:
+
+```text
+POST /plugins/installed/:id/update/preview
+  -> validate candidate, identity, semantic version ordering, and lifecycle CAS
+  -> return redacted versions, disablement warning, current_lifecycle_contract_sha256,
+     and opaque candidate_update_contract_sha256 for visible review
+POST /plugins/installed/:id/update/apply
+  -> require the same manifest path and both exact reviewed preview tokens
+  -> require confirmed: true
+  -> never auto-refresh or substitute either reviewed token
+  -> reload the local candidate and reject if its exact snapshot binding changed
+  -> atomically replace, disable, reset to metadata_only, and append audit evidence
+GET /plugins/installed/:id/history
+  -> return bounded redacted id/plugin_id/action/outcome/created_at evidence
+```
+
+`candidate_update_contract_sha256` is an aggregate integrity token for the
+previewed candidate snapshot and the update-relevant contract. It is safe to
+echo only as opaque compare-and-set data. It is not any raw component
+provenance hash and must not be presented as a publisher signature, artifact
+trust verdict, or authorization grant.
+
+The lifecycle digest echoed by preview and the candidate binding form one
+review unit. A client must not fetch a new record, generate a new preview, or
+silently replace either value during apply; drift must fail closed and require
+another visible review.
+
 ## Required Audit Fields
 
 Plugin execution must emit enough information for the Activity and Audit view
@@ -233,6 +293,16 @@ to explain what happened:
   `matches_install_snapshot`.
   `wasm_compute` is separate from both subprocess grants and authorizes only a
   validated `local_wasm` module/action pair. No grant is a superset of another.
+- Installed plugin update requires an explicit local candidate, an exact plugin
+  identity match, a valid SemVer candidate, a matching inspected
+  lifecycle digest, a previewed candidate aggregate binding that is recomputed
+  at apply time, bounded manifest/provenance validation, and a transactional
+  fresh snapshot plus redacted audit. It must fail closed without changing the
+  existing record when validation or audit persistence fails. Success always
+  clears provenance verification and execution authority to disabled
+  `metadata_only`; re-verification and explicit re-enable are mandatory.
+  New installs require SemVer; a persisted pre-SemVer record may make one
+  fully governed transition to SemVer, after which strict precedence applies.
 - Installed plugin run requests go through an explicit fail-closed runner
   boundary. The boundary revalidates the stored manifest/version metadata,
   checks the requested action is declared, validates input schema, verifies the

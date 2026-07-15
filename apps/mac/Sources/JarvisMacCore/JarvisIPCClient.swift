@@ -1285,6 +1285,111 @@ public struct JarvisInstalledPluginExecutionRequest: Encodable, Equatable, Senda
     }
 }
 
+public struct JarvisInstalledPluginUpdatePreviewRequest: Encodable, Equatable, Sendable {
+    public var manifestPath: String
+    public var expectedLifecycleContractSha256: String
+
+    public init(manifestPath: String, expectedLifecycleContractSha256: String) {
+        self.manifestPath = manifestPath
+        self.expectedLifecycleContractSha256 = expectedLifecycleContractSha256
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case manifestPath = "manifest_path"
+        case expectedLifecycleContractSha256 = "expected_lifecycle_contract_sha256"
+    }
+}
+
+public struct JarvisInstalledPluginUpdateApplyRequest: Encodable, Equatable, Sendable {
+    public var manifestPath: String
+    public var expectedLifecycleContractSha256: String
+    public var expectedCandidateUpdateContractSha256: String
+    public var confirmed: Bool
+
+    public init(
+        manifestPath: String,
+        expectedLifecycleContractSha256: String,
+        expectedCandidateUpdateContractSha256: String,
+        confirmed: Bool
+    ) {
+        self.manifestPath = manifestPath
+        self.expectedLifecycleContractSha256 = expectedLifecycleContractSha256
+        self.expectedCandidateUpdateContractSha256 = expectedCandidateUpdateContractSha256
+        self.confirmed = confirmed
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case manifestPath = "manifest_path"
+        case expectedLifecycleContractSha256 = "expected_lifecycle_contract_sha256"
+        case expectedCandidateUpdateContractSha256 = "expected_candidate_update_contract_sha256"
+        case confirmed
+    }
+}
+
+/// Redacted update summary returned after the core validates the candidate
+/// manifest, plugin identity, semantic version ordering, and lifecycle CAS.
+public struct JarvisInstalledPluginUpdatePreview: Decodable, Equatable, Sendable {
+    public var pluginId: String
+    public var currentVersion: String
+    public var candidateVersion: String
+    public var currentLifecycleContractSha256: String
+    public var executionWillBeDisabled: Bool
+    public var confirmationRequired: Bool
+    public var candidateUpdateContractSha256: String
+    public var localPathsRedacted: Bool
+    public var provenanceHashesRedacted: Bool
+    public var proofBoundary: String
+
+    enum CodingKeys: String, CodingKey {
+        case pluginId = "plugin_id"
+        case currentVersion = "current_version"
+        case candidateVersion = "candidate_version"
+        case currentLifecycleContractSha256 = "current_lifecycle_contract_sha256"
+        case executionWillBeDisabled = "execution_will_be_disabled"
+        case confirmationRequired = "confirmation_required"
+        case candidateUpdateContractSha256 = "candidate_update_contract_sha256"
+        case localPathsRedacted = "local_paths_redacted"
+        case provenanceHashesRedacted = "provenance_hashes_redacted"
+        case proofBoundary = "proof_boundary"
+    }
+}
+
+/// Public lifecycle evidence intentionally excludes paths, digests, payloads,
+/// manifest bytes, and execution inputs.
+public struct JarvisInstalledPluginLifecycleHistoryEntry: Decodable, Equatable, Identifiable, Sendable {
+    public var id: String
+    public var pluginId: String
+    public var action: String
+    public var outcome: String
+    public var createdAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case pluginId = "plugin_id"
+        case action
+        case outcome
+        case createdAt = "created_at"
+    }
+}
+
+public struct JarvisInstalledPluginLifecycleHistory: Decodable, Equatable, Sendable {
+    public var pluginId: String
+    public var entries: [JarvisInstalledPluginLifecycleHistoryEntry]
+    public var localPathsRedacted: Bool
+    public var provenanceHashesRedacted: Bool
+    public var payloadsRedacted: Bool
+    public var proofBoundary: String
+
+    enum CodingKeys: String, CodingKey {
+        case pluginId = "plugin_id"
+        case entries
+        case localPathsRedacted = "local_paths_redacted"
+        case provenanceHashesRedacted = "provenance_hashes_redacted"
+        case payloadsRedacted = "payloads_redacted"
+        case proofBoundary = "proof_boundary"
+    }
+}
+
 public enum JarvisSchedulerTrigger: Codable, Equatable, Sendable {
     case manual
     case onceAt(runAt: String)
@@ -2114,6 +2219,15 @@ public protocol JarvisCoreClient: Sendable {
         id: String,
         request: JarvisInstalledPluginExecutionRequest
     ) async throws -> JarvisInstalledPluginRecord
+    func previewInstalledPluginUpdate(
+        id: String,
+        request: JarvisInstalledPluginUpdatePreviewRequest
+    ) async throws -> JarvisInstalledPluginUpdatePreview
+    func applyInstalledPluginUpdate(
+        id: String,
+        request: JarvisInstalledPluginUpdateApplyRequest
+    ) async throws -> JarvisInstalledPluginRecord
+    func installedPluginLifecycleHistory(id: String) async throws -> JarvisInstalledPluginLifecycleHistory
     func listSchedulerJobs() async throws -> [JarvisSchedulerJob]
     func schedulerAttention() async throws -> JarvisSchedulerAttentionSummary
     func pendingSchedulerNotificationOccurrences(limit: Int) async throws -> [JarvisSchedulerNotificationOccurrence]
@@ -2347,6 +2461,38 @@ public final class JarvisIPCClient: JarvisCoreClient {
             path: "/plugins/installed/\(id)/execution",
             method: "POST",
             body: encoder.encode(request)
+        )
+    }
+
+    public func previewInstalledPluginUpdate(
+        id: String,
+        request: JarvisInstalledPluginUpdatePreviewRequest
+    ) async throws -> JarvisInstalledPluginUpdatePreview {
+        try await send(
+            path: "/plugins/installed/\(id)/update/preview",
+            method: "POST",
+            body: encoder.encode(request)
+        )
+    }
+
+    public func applyInstalledPluginUpdate(
+        id: String,
+        request: JarvisInstalledPluginUpdateApplyRequest
+    ) async throws -> JarvisInstalledPluginRecord {
+        try await send(
+            path: "/plugins/installed/\(id)/update/apply",
+            method: "POST",
+            body: encoder.encode(request)
+        )
+    }
+
+    public func installedPluginLifecycleHistory(
+        id: String
+    ) async throws -> JarvisInstalledPluginLifecycleHistory {
+        try await send(
+            path: "/plugins/installed/\(id)/history",
+            method: "GET",
+            body: Optional<Data>.none
         )
     }
 

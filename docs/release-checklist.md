@@ -514,6 +514,60 @@ stage or when a PR needs focused evidence for one ownership slice.
   must never install or run plugin code or optimistically update authority.
   Confirm the current subprocess warning states that OS sandboxing and
   host-level egress enforcement are absent.
+- Confirm local plugin update requires an explicitly selected replacement
+  manifest, validates it as untrusted input, requires the exact installed
+  plugin identity and a valid SemVer candidate, and rejects same-version or
+  lower-precedence updates for SemVer records. Confirm new local installs reject
+  non-SemVer versions and a persisted pre-SemVer record can cross once to valid
+  SemVer without bypassing any identity, source-kind, CAS, snapshot, disablement,
+  or audit check. Confirm preview/apply binds to
+  the inspected lifecycle digest and opaque `candidate_update_contract_sha256`,
+  recomputes the exact candidate snapshot binding at apply time, captures fresh
+  provenance, and atomically resets the record to disabled `metadata_only` with
+  a redacted non-execution audit. Verify the
+  prior record survives validation/audit failure unchanged and no update path
+  starts plugin code. Confirm the new snapshot must be verified and explicitly
+  re-enabled; prior verification, grant, and lifecycle digest do not carry
+  forward.
+- Confirm `POST /plugins/installed/:id/update/preview` is inspection only,
+  `POST /plugins/installed/:id/update/apply` requires `confirmed: true`, and
+  `GET /plugins/installed/:id/history` entries return only entry ID, plugin ID,
+  lifecycle action, normalized outcome, and timestamp.
+- Confirm the candidate update token is exposed only as opaque aggregate
+  compare-and-set data, is not a raw component provenance hash or trust signal,
+  and rejects manifest/source/entrypoint drift between preview and apply.
+- Confirm preview echoes its validated lifecycle digest; CLI and Swift apply
+  must require that exact reviewed lifecycle/candidate token pair and must not
+  automatically fetch, preview, refresh, or substitute either value.
+- Exercise the operator flow against a repository-backed core:
+  `plugins update-preview`, then `plugins update-apply --confirm`, followed by
+  `plugins history`. Copy the preview's `current_lifecycle_contract_sha256`
+  into `--expected-lifecycle-contract-sha256` and its
+  `candidate_update_contract_sha256` into
+  `--expected-candidate-update-contract-sha256`; do not refresh either value.
+  Confirm the
+  applied record is disabled `metadata_only`, requires new verification, and
+  each history entry exposes only the five documented public fields.
+- Run `cargo test -p jarvis-core semantic_version_update -- --nocapture` and
+  `cargo test -p jarvis-core
+  installed_plugin_update_is_cas_bound_atomic_and_persistent -- --nocapture`,
+  `cargo test -p jarvis-core
+  installed_plugin_update_rejects_changed_candidate_and_rolls_back_on_audit_failure
+  -- --nocapture`, `cargo test -p jarvis-core
+  installed_plugin_history_is_plugin_scoped_newest_first_and_bounded --
+  --nocapture`, and `cargo test -p jarvis-cli --test local_ipc_e2e
+  installed_plugin_update_preview_apply_history_is_cas_bound_redacted_and_persistent
+  -- --nocapture`. Also run
+  the focused Swift filters `pluginUpdateClientUsesTypedRedactedContracts`,
+  `pluginManagerUpdateRequiresPreviewAndConfirmation`, and
+  `pluginLifecycleHistoryFailureDoesNotStaleRegistry`.
+- Confirm lifecycle-history inspection is bounded, ordered, and redacted: it
+  exposes only entry ID, plugin ID, lifecycle action, normalized outcome, and
+  timestamp per entry plus fixed wrapper redaction/proof metadata while omitting
+  paths, hashes, signature material, subprocess configuration,
+  input/output, secrets, and free-form operator text. Do not treat that history
+  as publisher identity, marketplace approval, malware analysis, OS-sandbox,
+  host-egress, signing/notarization, or live-device proof.
 - Confirm Rust commits execution authority and the redacted
   `installed_plugin_execution_authority_updated` audit in one immediate
   transaction and rolls authority back when audit insertion fails. Run
@@ -873,6 +927,8 @@ stage or when a PR needs focused evidence for one ownership slice.
   end-goal production diagram.
 - Current-vs-target implementation phase table is current.
 - Plugin contract is current.
+- Audited local plugin update and redacted lifecycle-history contracts are
+  current, and the current/end-goal diagrams preserve their trust boundary.
 - Production first-party inventory excludes `fake_*`, and configured-root
   workspace list/read coverage proves no-follow containment, secret/type/size
   denials, local-model-only results, cancellation/pause dominance, and

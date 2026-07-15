@@ -525,6 +525,30 @@ public struct JarvisInstalledPluginExecutionGrantOption: Equatable, Identifiable
     }
 }
 
+private struct JarvisInstalledPluginUpdateCandidate: Sendable {
+    let manifestPath: String
+    let expectedLifecycleContractSha256: String
+    let candidateUpdateContractSha256: String
+}
+
+public struct JarvisInstalledPluginUpdatePresentation: Equatable, Sendable {
+    public let pluginId: String
+    public let currentVersion: String
+    public let candidateVersion: String
+    public let executionWillBeDisabled: Bool
+    public let confirmationRequired: Bool
+    public let proofBoundary: String
+
+    fileprivate init(preview: JarvisInstalledPluginUpdatePreview) {
+        self.pluginId = preview.pluginId
+        self.currentVersion = preview.currentVersion
+        self.candidateVersion = preview.candidateVersion
+        self.executionWillBeDisabled = preview.executionWillBeDisabled
+        self.confirmationRequired = preview.confirmationRequired
+        self.proofBoundary = preview.proofBoundary
+    }
+}
+
 @MainActor
 public final class PluginManagerModel: ObservableObject {
     @Published public private(set) var manifests: [JarvisPluginManifest]
@@ -534,12 +558,17 @@ public final class PluginManagerModel: ObservableObject {
     @Published public private(set) var installedRegistryWarning: String?
     @Published public private(set) var installedRegistryIsFresh: Bool
     @Published public private(set) var selectedExecutionGrants: [String: String]
+    @Published public private(set) var updatePreviews: [String: JarvisInstalledPluginUpdatePresentation]
+    @Published public private(set) var lifecycleHistory: [String: [JarvisInstalledPluginLifecycleHistoryEntry]]
+    @Published public private(set) var lifecycleHistoryProofBoundaries: [String: String]
+    @Published public private(set) var lifecycleHistoryWarning: String?
     @Published public private(set) var mutatingPluginIDs: Set<String>
     @Published public private(set) var lastAction: String?
     @Published public private(set) var isLoading: Bool
     @Published public private(set) var lastError: String?
 
     private let client: any JarvisCoreClient
+    private var updateCandidates: [String: JarvisInstalledPluginUpdateCandidate]
 
     public init(client: any JarvisCoreClient = JarvisIPCClient()) {
         self.client = client
@@ -550,10 +579,15 @@ public final class PluginManagerModel: ObservableObject {
         self.installedRegistryWarning = nil
         self.installedRegistryIsFresh = false
         self.selectedExecutionGrants = [:]
+        self.updatePreviews = [:]
+        self.lifecycleHistory = [:]
+        self.lifecycleHistoryProofBoundaries = [:]
+        self.lifecycleHistoryWarning = nil
         self.mutatingPluginIDs = []
         self.lastAction = nil
         self.isLoading = false
         self.lastError = nil
+        self.updateCandidates = [:]
     }
 
     public func refresh() async {
@@ -584,6 +618,18 @@ public final class PluginManagerModel: ObservableObject {
             self.installedPlugins = []
             self.installedRegistryIsFresh = false
             self.installedRegistryWarning = "Installed plugin registry unavailable: \(error)"
+            self.lifecycleHistory = [:]
+            self.lifecycleHistoryProofBoundaries = [:]
+            self.lifecycleHistoryWarning = "Plugin lifecycle history unavailable until the installed registry refreshes."
+            return
+        }
+
+        do {
+            try await refreshLifecycleHistory()
+        } catch {
+            self.lifecycleHistory = [:]
+            self.lifecycleHistoryProofBoundaries = [:]
+            self.lifecycleHistoryWarning = "Plugin lifecycle history unavailable: \(error)"
         }
     }
 
@@ -667,6 +713,158 @@ public final class PluginManagerModel: ObservableObject {
 
     public func canVerify(_ plugin: JarvisInstalledPluginRecord) -> Bool {
         installedRegistryIsFresh && mutatingPluginIDs.isEmpty
+    }
+
+    public func canPreviewUpdate(_ plugin: JarvisInstalledPluginRecord) -> Bool {
+        installedRegistryIsFresh
+            && mutatingPluginIDs.isEmpty
+            && plugin.lifecycleContractSha256?.isEmpty == false
+    }
+
+    public func canApplyUpdate(_ plugin: JarvisInstalledPluginRecord) -> Bool {
+        guard installedRegistryIsFresh,
+              mutatingPluginIDs.isEmpty,
+              let digest = plugin.lifecycleContractSha256,
+              let candidate = updateCandidates[plugin.id],
+              let preview = updatePreviews[plugin.id] else {
+            return false
+        }
+        return candidate.expectedLifecycleContractSha256 == digest
+            && preview.pluginId == plugin.id
+            && preview.confirmationRequired
+            && preview.executionWillBeDisabled
+    }
+
+    public func updatePreview(for pluginID: String) -> JarvisInstalledPluginUpdatePresentation? {
+        updatePreviews[pluginID]
+    }
+
+    public func lifecycleHistory(for pluginID: String) -> [JarvisInstalledPluginLifecycleHistoryEntry] {
+        lifecycleHistory[pluginID] ?? []
+    }
+
+    public func lifecycleHistoryProofBoundary(for pluginID: String) -> String? {
+        lifecycleHistoryProofBoundaries[pluginID]
+    }
+
+    public func cancelUpdatePreview(id: String) {
+        updateCandidates.removeValue(forKey: id)
+        updatePreviews.removeValue(forKey: id)
+    }
+
+    @discardableResult
+    public func previewUpdate(
+        id: String,
+        manifestPath: String
+    ) async -> JarvisInstalledPluginUpdatePresentation? {
+        guard installedRegistryIsFresh,
+              mutatingPluginIDs.isEmpty,
+              !manifestPath.isEmpty,
+              let plugin = installedPlugins.first(where: { $0.id == id }),
+              let digest = plugin.lifecycleContractSha256,
+              !digest.isEmpty else {
+            lastError = "Refresh the installed plugin registry and select an update manifest before previewing."
+            return nil
+        }
+
+        mutatingPluginIDs.insert(id)
+        updateCandidates.removeValue(forKey: id)
+        updatePreviews.removeValue(forKey: id)
+        lastError = nil
+        lastAction = nil
+        defer { mutatingPluginIDs.remove(id) }
+
+        do {
+            let preview = try await client.previewInstalledPluginUpdate(
+                id: id,
+                request: JarvisInstalledPluginUpdatePreviewRequest(
+                    manifestPath: manifestPath,
+                    expectedLifecycleContractSha256: digest
+                )
+            )
+            guard preview.pluginId == id,
+                  preview.currentVersion == plugin.manifest.version,
+                  preview.currentLifecycleContractSha256 == digest,
+                  preview.confirmationRequired,
+                  preview.executionWillBeDisabled,
+                  preview.candidateUpdateContractSha256.count == 64,
+                  preview.candidateUpdateContractSha256.utf8.allSatisfy({ byte in
+                      (byte >= 48 && byte <= 57) || (byte >= 97 && byte <= 102)
+                  }),
+                  preview.localPathsRedacted,
+                  preview.provenanceHashesRedacted,
+                  !preview.proofBoundary.isEmpty else {
+                throw JarvisIPCError.invalidResponse
+            }
+            updateCandidates[id] = JarvisInstalledPluginUpdateCandidate(
+                manifestPath: manifestPath,
+                expectedLifecycleContractSha256: preview.currentLifecycleContractSha256,
+                candidateUpdateContractSha256: preview.candidateUpdateContractSha256
+            )
+            let presentation = JarvisInstalledPluginUpdatePresentation(preview: preview)
+            updatePreviews[id] = presentation
+            return presentation
+        } catch {
+            lastError = String(describing: error)
+            return nil
+        }
+    }
+
+    public func applyUpdate(id: String) async {
+        guard installedRegistryIsFresh,
+              mutatingPluginIDs.isEmpty,
+              let plugin = installedPlugins.first(where: { $0.id == id }),
+              let digest = plugin.lifecycleContractSha256,
+              let candidate = updateCandidates[id],
+              let preview = updatePreviews[id],
+              candidate.expectedLifecycleContractSha256 == digest,
+              preview.pluginId == id,
+              preview.confirmationRequired,
+              preview.executionWillBeDisabled else {
+            lastError = "The previewed plugin update is stale. Select the manifest and preview it again."
+            updateCandidates.removeValue(forKey: id)
+            updatePreviews.removeValue(forKey: id)
+            return
+        }
+
+        mutatingPluginIDs.insert(id)
+        lastError = nil
+        lastAction = nil
+        defer { mutatingPluginIDs.remove(id) }
+
+        do {
+            let updated = try await client.applyInstalledPluginUpdate(
+                id: id,
+                request: JarvisInstalledPluginUpdateApplyRequest(
+                    manifestPath: candidate.manifestPath,
+                    expectedLifecycleContractSha256: digest,
+                    expectedCandidateUpdateContractSha256: candidate.candidateUpdateContractSha256,
+                    confirmed: true
+                )
+            )
+            guard updated.id == id,
+                  updated.manifest.version == preview.candidateVersion,
+                  !updated.executionEnabled,
+                  updated.executionGrant == "metadata_only" else {
+                throw JarvisIPCError.invalidResponse
+            }
+            applyAuthoritativeInstalledPlugin(updated)
+            updateCandidates.removeValue(forKey: id)
+            updatePreviews.removeValue(forKey: id)
+            lastAction = "Plugin updated to \(updated.manifest.version). Execution remains disabled pending review and integrity verification."
+        } catch {
+            lastError = String(describing: error)
+            updateCandidates.removeValue(forKey: id)
+            updatePreviews.removeValue(forKey: id)
+        }
+
+        do {
+            try await refreshInstalledRegistry()
+        } catch {
+            installedRegistryIsFresh = false
+            installedRegistryWarning = "Installed plugin registry refresh failed after update; controls are disabled until refresh succeeds: \(error)"
+        }
+        await refreshLifecycleHistoryAfterMutation()
     }
 
     public func verifyProvenance(id: String) async {
@@ -796,6 +994,7 @@ public final class PluginManagerModel: ObservableObject {
             installedRegistryIsFresh = false
             installedRegistryWarning = "Installed plugin registry refresh failed after lifecycle action; controls are disabled until refresh succeeds: \(error)"
         }
+        await refreshLifecycleHistoryAfterMutation()
     }
 
     private func applyAuthoritativeInstalledPlugin(_ record: JarvisInstalledPluginRecord) {
@@ -812,6 +1011,8 @@ public final class PluginManagerModel: ObservableObject {
         self.installedPlugins = records
         self.installedRegistryIsFresh = true
         self.installedRegistryWarning = nil
+        updateCandidates = [:]
+        updatePreviews = [:]
         let validIDs = Set(records.map(\.id))
         selectedExecutionGrants = selectedExecutionGrants.filter { validIDs.contains($0.key) }
         for plugin in records {
@@ -822,6 +1023,37 @@ public final class PluginManagerModel: ObservableObject {
                       !options.contains(where: { $0.grant == selected }) {
                 selectedExecutionGrants.removeValue(forKey: plugin.id)
             }
+        }
+    }
+
+    private func refreshLifecycleHistory() async throws {
+        var history: [String: [JarvisInstalledPluginLifecycleHistoryEntry]] = [:]
+        var proofBoundaries: [String: String] = [:]
+        for plugin in installedPlugins {
+            let response = try await client.installedPluginLifecycleHistory(id: plugin.id)
+            guard response.pluginId == plugin.id,
+                  response.entries.allSatisfy({ $0.pluginId == plugin.id }),
+                  response.localPathsRedacted,
+                  response.provenanceHashesRedacted,
+                  response.payloadsRedacted,
+                  !response.proofBoundary.isEmpty else {
+                throw JarvisIPCError.invalidResponse
+            }
+            history[plugin.id] = response.entries
+            proofBoundaries[plugin.id] = response.proofBoundary
+        }
+        lifecycleHistory = history
+        lifecycleHistoryProofBoundaries = proofBoundaries
+        lifecycleHistoryWarning = nil
+    }
+
+    private func refreshLifecycleHistoryAfterMutation() async {
+        do {
+            try await refreshLifecycleHistory()
+        } catch {
+            lifecycleHistory = [:]
+            lifecycleHistoryProofBoundaries = [:]
+            lifecycleHistoryWarning = "Plugin lifecycle history refresh failed; lifecycle controls remain bound to the authoritative installed registry: \(error)"
         }
     }
 }

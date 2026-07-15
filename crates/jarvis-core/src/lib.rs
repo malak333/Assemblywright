@@ -22,10 +22,12 @@ pub use ipc::{
     ApprovalStatusCount, CommandRequest, CommandResponse, CreateMemoryItemRequest,
     CreateSchedulerJobRequest, EmergencyPauseRequest, EmergencyPauseResponse, ErrorResponse,
     HealthResponse, InstallPluginRequest, InstalledPluginExecutionRequest,
-    InstalledPluginGrantSurface, InstalledPluginPublisherSignatureVerificationRequest,
+    InstalledPluginGrantSurface, InstalledPluginLifecycleHistoryResponse,
+    InstalledPluginPublisherSignatureVerificationRequest,
     InstalledPluginPublisherVerificationRequest, InstalledPluginRunRequest,
-    InstalledPluginRunResponse, IpcAuth, IpcState, ModelToolCatalogEntry, ModelToolCatalogResponse,
-    ModelToolConstraints, PermissionGrantSummary, PermissionPolicyReview,
+    InstalledPluginRunResponse, InstalledPluginUpdateApplyRequest, InstalledPluginUpdatePreview,
+    InstalledPluginUpdatePreviewRequest, IpcAuth, IpcState, ModelToolCatalogEntry,
+    ModelToolCatalogResponse, ModelToolConstraints, PermissionGrantSummary, PermissionPolicyReview,
     PermissionPolicyReviewItem, ReleaseReadinessFeature, ReleaseReadinessResponse,
     RuntimeCancellationResponse, SchedulerAttentionItem, SchedulerAttentionSummary,
     SchedulerBackgroundConfig, SchedulerJobExecution, SchedulerNotificationAcknowledgementRequest,
@@ -89,11 +91,11 @@ pub use startup::{
     MAX_UNIX_SOCKET_PATH_BYTES, SERVE_STARTUP_CONFIG_VERSION,
 };
 pub use storage::{
-    ApprovalExecutionRecord, ApprovalExecutionState, EmergencyPauseState, InstalledPluginRecord,
-    MemoryItem, NewMemoryItem, NewPendingApproval, PendingApproval,
-    SchedulerNotificationOccurrence, SqliteRepository,
+    ApprovalExecutionRecord, ApprovalExecutionState, EmergencyPauseState,
+    InstalledPluginLifecycleHistoryEntry, InstalledPluginRecord, MemoryItem, NewMemoryItem,
+    NewPendingApproval, PendingApproval, SchedulerNotificationOccurrence, SqliteRepository,
     MAX_ACKNOWLEDGED_SCHEDULER_NOTIFICATION_OCCURRENCES,
-    MAX_PENDING_SCHEDULER_NOTIFICATION_OCCURRENCES,
+    MAX_INSTALLED_PLUGIN_LIFECYCLE_HISTORY_ENTRIES, MAX_PENDING_SCHEDULER_NOTIFICATION_OCCURRENCES,
     MAX_SCHEDULER_NOTIFICATION_OCCURRENCE_LIST_LIMIT,
 };
 pub use storage::{MemoryClassificationCount, MemoryClassificationSummary};

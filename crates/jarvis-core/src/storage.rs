@@ -12,6 +12,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use crate::plugin::{require_installed_plugin_update_version, require_valid_semantic_version};
 use crate::router::{
     ModelProvider as RouteModelProvider, ModelRouteRecord, RouteEvidence, RouteOutcome,
 };
@@ -33,6 +34,7 @@ use crate::{
 
 const CURRENT_SCHEMA_VERSION: i64 = 15;
 pub(crate) const MAX_MODEL_PLANNED_WASM_CANDIDATES: usize = 64;
+pub const MAX_INSTALLED_PLUGIN_LIFECYCLE_HISTORY_ENTRIES: usize = 100;
 pub const MAX_PENDING_SCHEDULER_NOTIFICATION_OCCURRENCES: usize = 1_024;
 pub const MAX_ACKNOWLEDGED_SCHEDULER_NOTIFICATION_OCCURRENCES: usize = 1_024;
 pub const MAX_SCHEDULER_NOTIFICATION_OCCURRENCE_LIST_LIMIT: usize = 64;
@@ -121,6 +123,15 @@ pub struct InstalledPluginRecord {
     pub execution_enabled: bool,
     pub execution_grant: InstalledPluginExecutionGrant,
     pub installed_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InstalledPluginLifecycleHistoryEntry {
+    pub id: Uuid,
+    pub plugin_id: String,
+    pub action: String,
+    pub outcome: String,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -2528,6 +2539,15 @@ impl SqliteRepository {
         &self,
         installed: InstalledPlugin,
     ) -> JarvisResult<InstalledPluginRecord> {
+        require_valid_semantic_version(&installed.manifest.version)?;
+        if installed.execution_enabled
+            || installed.execution_grant != InstalledPluginExecutionGrant::MetadataOnly
+        {
+            return Err(JarvisError::Validation(
+                "new installed plugins must start disabled with metadata_only authority"
+                    .to_string(),
+            ));
+        }
         let now = Utc::now();
         let manifest_json = serde_json::to_string(&installed.manifest).map_err(|err| {
             JarvisError::Storage(format!(
@@ -2541,37 +2561,234 @@ impl SqliteRepository {
                 installed.manifest.id
             ))
         })?;
-        self.conn
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        if tx
+            .query_row(
+                "SELECT 1 FROM installed_plugins WHERE id = ?1",
+                params![&installed.manifest.id],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(storage_error)?
+            .is_some()
+        {
+            return Err(JarvisError::Validation(format!(
+                "installed plugin {} already exists; use the audited update workflow",
+                installed.manifest.id
+            )));
+        }
+        tx
             .execute(
                 "INSERT INTO installed_plugins
                  (id, manifest_json, source_path, provenance_json, execution_enabled, execution_grant, installed_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-                 ON CONFLICT(id) DO UPDATE SET
-                    manifest_json = excluded.manifest_json,
-                    source_path = excluded.source_path,
-                    provenance_json = excluded.provenance_json,
-                    execution_enabled = 0,
-                    execution_grant = 'metadata_only',
-                    installed_at = excluded.installed_at",
+                 VALUES (?1, ?2, ?3, ?4, 0, 'metadata_only', ?5)",
                 params![
                     &installed.manifest.id,
                     manifest_json,
                     &installed.source_path,
                     provenance_json,
-                    if installed.execution_enabled { 1 } else { 0 },
-                    installed.execution_grant.as_str(),
                     to_db_time(now),
                 ],
             )
             .map_err(storage_error)?;
+        let record = tx
+            .query_row(
+                "SELECT id, manifest_json, source_path, provenance_json, execution_enabled, execution_grant, installed_at
+                 FROM installed_plugins WHERE id = ?1",
+                params![&installed.manifest.id],
+                installed_plugin_from_row,
+            )
+            .map_err(storage_error)?;
+        let audit_entry = AuditEntry::new(
+            None,
+            "installed_plugin_installed",
+            "installed plugin metadata was recorded without enabling or running plugin code",
+            json!({
+                "plugin_id": record.id,
+                "manifest_version": record.manifest.version,
+                "source": record.manifest.source,
+                "execution_enabled": false,
+                "execution_grant": InstalledPluginExecutionGrant::MetadataOnly,
+                "side_effect_executed": false,
+                "plugin_runtime_started": false,
+                "local_paths_redacted": true,
+                "provenance_hashes_redacted": true,
+            }),
+        );
+        append_audit_entry_tx(&tx, &audit_entry)?;
+        tx.commit().map_err(storage_error)?;
+        Ok(record)
+    }
 
-        self.get_installed_plugin(&installed.manifest.id)?
-            .ok_or_else(|| {
-                JarvisError::Storage(format!(
-                    "installed plugin not found after upsert: {}",
-                    installed.manifest.id
-                ))
-            })
+    pub fn validate_installed_plugin_update(
+        &self,
+        id: &str,
+        candidate: &InstalledPlugin,
+        expected_lifecycle_contract_sha256: &str,
+    ) -> JarvisResult<InstalledPluginRecord> {
+        let current = self
+            .get_installed_plugin(id)?
+            .ok_or_else(|| JarvisError::Storage(format!("installed plugin not found: {id}")))?;
+        validate_installed_plugin_update_candidate(
+            &current,
+            id,
+            candidate,
+            expected_lifecycle_contract_sha256,
+        )?;
+        Ok(current)
+    }
+
+    pub fn update_installed_plugin_metadata(
+        &self,
+        id: &str,
+        candidate: InstalledPlugin,
+        expected_lifecycle_contract_sha256: &str,
+        expected_candidate_update_contract_sha256: &str,
+    ) -> JarvisResult<InstalledPluginRecord> {
+        validate_sha256_contract(
+            expected_candidate_update_contract_sha256,
+            "expected_candidate_update_contract_sha256",
+        )?;
+        if installed_plugin_update_candidate_contract_sha256(&candidate)?
+            != expected_candidate_update_contract_sha256
+        {
+            return Err(JarvisError::Validation(
+                "installed plugin update candidate changed after preview; preview the current candidate again"
+                    .to_string(),
+            ));
+        }
+        let manifest_json = serde_json::to_string(&candidate.manifest).map_err(|err| {
+            JarvisError::Storage(format!("serialize plugin manifest {id}: {err}"))
+        })?;
+        let provenance_json = serde_json::to_string(&candidate.provenance).map_err(|err| {
+            JarvisError::Storage(format!("serialize plugin provenance {id}: {err}"))
+        })?;
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        let current = tx
+            .query_row(
+                "SELECT id, manifest_json, source_path, provenance_json, execution_enabled, execution_grant, installed_at
+                 FROM installed_plugins WHERE id = ?1",
+                params![id],
+                installed_plugin_from_row,
+            )
+            .optional()
+            .map_err(storage_error)?
+            .ok_or_else(|| JarvisError::Storage(format!("installed plugin not found: {id}")))?;
+        validate_installed_plugin_update_candidate(
+            &current,
+            id,
+            &candidate,
+            expected_lifecycle_contract_sha256,
+        )?;
+        tx.execute(
+            "UPDATE installed_plugins
+             SET manifest_json = ?2,
+                 source_path = ?3,
+                 provenance_json = ?4,
+                 execution_enabled = 0,
+                 execution_grant = 'metadata_only'
+             WHERE id = ?1",
+            params![id, manifest_json, &candidate.source_path, provenance_json,],
+        )
+        .map_err(storage_error)?;
+        let updated = tx
+            .query_row(
+                "SELECT id, manifest_json, source_path, provenance_json, execution_enabled, execution_grant, installed_at
+                 FROM installed_plugins WHERE id = ?1",
+                params![id],
+                installed_plugin_from_row,
+            )
+            .map_err(storage_error)?;
+        let audit_entry = AuditEntry::new(
+            None,
+            "installed_plugin_updated",
+            "installed plugin metadata and provenance were atomically updated without running plugin code",
+            json!({
+                "plugin_id": id,
+                "previous_version": current.manifest.version,
+                "manifest_version": updated.manifest.version,
+                "source": updated.manifest.source,
+                "previous_execution_enabled": current.execution_enabled,
+                "previous_execution_grant": current.execution_grant,
+                "execution_enabled": false,
+                "execution_grant": InstalledPluginExecutionGrant::MetadataOnly,
+                "integrity_status": updated.provenance.integrity_status,
+                "publisher_verification_reset": !updated.provenance.origin_claim_verified,
+                "side_effect_executed": false,
+                "plugin_runtime_started": false,
+                "local_paths_redacted": true,
+                "provenance_hashes_redacted": true,
+            }),
+        );
+        append_audit_entry_tx(&tx, &audit_entry)?;
+        tx.commit().map_err(storage_error)?;
+        Ok(updated)
+    }
+
+    pub fn list_installed_plugin_lifecycle_history(
+        &self,
+        id: &str,
+    ) -> JarvisResult<Vec<InstalledPluginLifecycleHistoryEntry>> {
+        if self.get_installed_plugin(id)?.is_none() {
+            return Err(JarvisError::Storage(format!(
+                "installed plugin not found: {id}"
+            )));
+        }
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, event_type, created_at
+                 FROM audit_entries
+                 WHERE event_type IN (
+                    'installed_plugin_installed',
+                    'installed_plugin_updated',
+                    'installed_plugin_execution_authority_updated',
+                    'installed_plugin_provenance_verified',
+                    'installed_plugin_publisher_verified',
+                    'installed_plugin_publisher_signature_verified'
+                 )
+                 AND json_extract(payload, '$.plugin_id') = ?1
+                 ORDER BY sequence DESC
+                 LIMIT ?2",
+            )
+            .map_err(storage_error)?;
+        let rows = stmt
+            .query_map(
+                params![id, MAX_INSTALLED_PLUGIN_LIFECYCLE_HISTORY_ENTRIES as i64],
+                |row| {
+                    let entry_id = row.get::<_, String>(0)?;
+                    let event_type = row.get::<_, String>(1)?;
+                    Ok((
+                        parse_uuid(&entry_id)?,
+                        event_type,
+                        parse_db_time(&row.get::<_, String>(2)?)?,
+                    ))
+                },
+            )
+            .map_err(storage_error)?;
+        let entries = collect_rows(rows)?;
+        Ok(entries
+            .into_iter()
+            .map(
+                |(entry_id, event_type, created_at)| InstalledPluginLifecycleHistoryEntry {
+                    id: entry_id,
+                    plugin_id: id.to_string(),
+                    outcome: match event_type.as_str() {
+                        "installed_plugin_installed" => "installed",
+                        "installed_plugin_updated" => "applied",
+                        "installed_plugin_provenance_verified"
+                        | "installed_plugin_publisher_verified"
+                        | "installed_plugin_publisher_signature_verified" => "verified",
+                        _ => "updated",
+                    }
+                    .to_string(),
+                    action: event_type,
+                    created_at,
+                },
+            )
+            .collect())
     }
 
     pub fn get_installed_plugin(&self, id: &str) -> JarvisResult<Option<InstalledPluginRecord>> {
@@ -5445,6 +5662,92 @@ pub(crate) fn installed_plugin_lifecycle_contract_sha256(
     )))
 }
 
+pub(crate) fn installed_plugin_update_candidate_contract_sha256(
+    candidate: &InstalledPlugin,
+) -> JarvisResult<String> {
+    let contract = json!({
+        "manifest": candidate.manifest,
+        "source_path": candidate.source_path,
+        "provenance": {
+            "provenance_schema_version": candidate.provenance.provenance_schema_version,
+            "capture_method": candidate.provenance.capture_method,
+            "manifest_path": candidate.provenance.manifest_path,
+            "manifest_sha256": candidate.provenance.manifest_sha256,
+            "source_path": candidate.provenance.source_path,
+            "source_path_canonicalized": candidate.provenance.source_path_canonicalized,
+            "source_tree_sha256": candidate.provenance.source_tree_sha256,
+            "source_tree_file_count": candidate.provenance.source_tree_file_count,
+            "subprocess_command_path": candidate.provenance.subprocess_command_path,
+            "subprocess_command_sha256": candidate.provenance.subprocess_command_sha256,
+            "wasm_module_path": candidate.provenance.wasm_module_path,
+            "wasm_module_sha256": candidate.provenance.wasm_module_sha256,
+            "origin_claim": candidate.provenance.origin_claim,
+            "origin_claim_verified": candidate.provenance.origin_claim_verified,
+        },
+        "execution_enabled": candidate.execution_enabled,
+        "execution_grant": candidate.execution_grant,
+    });
+    let encoded = serde_json::to_string(&contract).map_err(|error| {
+        JarvisError::Storage(format!(
+            "serialize installed plugin update candidate contract: {error}"
+        ))
+    })?;
+    Ok(sha256_storage_text(&format!(
+        "jarvis-installed-plugin-update-candidate-v1\n{encoded}"
+    )))
+}
+
+fn validate_sha256_contract(value: &str, field: &str) -> JarvisResult<()> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err(JarvisError::Validation(format!(
+            "{field} must be a 64-character lowercase hexadecimal SHA-256 digest"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_installed_plugin_update_candidate(
+    current: &InstalledPluginRecord,
+    requested_id: &str,
+    candidate: &InstalledPlugin,
+    expected_lifecycle_contract_sha256: &str,
+) -> JarvisResult<()> {
+    validate_sha256_contract(
+        expected_lifecycle_contract_sha256,
+        "expected_lifecycle_contract_sha256",
+    )?;
+    if installed_plugin_lifecycle_contract_sha256(current)? != expected_lifecycle_contract_sha256 {
+        return Err(JarvisError::Validation(
+            "installed plugin lifecycle contract changed; refresh inspection before applying the update"
+                .to_string(),
+        ));
+    }
+    if current.id != requested_id || candidate.manifest.id != requested_id {
+        return Err(JarvisError::Validation(
+            "installed plugin update manifest id must exactly match the requested installed plugin id"
+                .to_string(),
+        ));
+    }
+    if candidate.manifest.source != current.manifest.source {
+        return Err(JarvisError::Validation(
+            "installed plugin update cannot change the plugin source/runtime kind".to_string(),
+        ));
+    }
+    if candidate.execution_enabled
+        || candidate.execution_grant != InstalledPluginExecutionGrant::MetadataOnly
+    {
+        return Err(JarvisError::Validation(
+            "installed plugin update candidate must be disabled with metadata_only authority"
+                .to_string(),
+        ));
+    }
+    require_installed_plugin_update_version(&current.manifest.version, &candidate.manifest.version)
+}
+
 fn storage_io_error(error: std::io::Error) -> JarvisError {
     JarvisError::Storage(error.to_string())
 }
@@ -7009,6 +7312,334 @@ mod tests {
             persisted.manifest.source_path.as_deref(),
             Some(source_path.as_str())
         );
+    }
+
+    fn installed_update_candidate(
+        current: &InstalledPluginRecord,
+        version: &str,
+    ) -> InstalledPlugin {
+        let mut manifest = current.manifest.clone();
+        manifest.version = version.to_string();
+        InstalledPlugin {
+            manifest,
+            source_path: current.source_path.clone(),
+            provenance: InstalledPluginProvenance::legacy_unverified(
+                current.source_path.clone(),
+                Utc::now(),
+            ),
+            execution_enabled: false,
+            execution_grant: InstalledPluginExecutionGrant::MetadataOnly,
+        }
+    }
+
+    #[test]
+    fn installed_plugin_install_is_insert_only_and_audit_atomic() {
+        let dir = tempdir().unwrap();
+        let source_path = dir.path().canonicalize().unwrap().display().to_string();
+        let repo = SqliteRepository::in_memory().unwrap();
+        let installed = InstalledPlugin {
+            manifest: local_test_manifest(&source_path),
+            source_path: source_path.clone(),
+            provenance: InstalledPluginProvenance::legacy_unverified(
+                source_path.clone(),
+                Utc::now(),
+            ),
+            execution_enabled: false,
+            execution_grant: InstalledPluginExecutionGrant::MetadataOnly,
+        };
+        repo.install_plugin_metadata(installed.clone()).unwrap();
+        let duplicate = repo
+            .install_plugin_metadata(installed)
+            .expect_err("existing ids must use audited update");
+        assert!(duplicate.to_string().contains("audited update workflow"));
+        let mut invalid_manifest = local_test_manifest(&source_path);
+        invalid_manifest.id = "invalid_version_install".to_string();
+        invalid_manifest.version = "release-one".to_string();
+        let invalid_install = repo
+            .install_plugin_metadata(InstalledPlugin {
+                manifest: invalid_manifest,
+                source_path: source_path.clone(),
+                provenance: InstalledPluginProvenance::legacy_unverified(
+                    source_path.clone(),
+                    Utc::now(),
+                ),
+                execution_enabled: false,
+                execution_grant: InstalledPluginExecutionGrant::MetadataOnly,
+            })
+            .expect_err("new stored installs require SemVer");
+        assert!(invalid_install.to_string().contains("valid SemVer 2.0.0"));
+
+        let failing = SqliteRepository::in_memory().unwrap();
+        failing
+            .raw_connection()
+            .execute_batch(
+                "CREATE TRIGGER inject_plugin_install_audit_failure
+                 BEFORE INSERT ON audit_entries
+                 WHEN NEW.event_type = 'installed_plugin_installed'
+                 BEGIN
+                     SELECT RAISE(ABORT, 'injected plugin install audit failure');
+                 END;",
+            )
+            .unwrap();
+        let failed_install = InstalledPlugin {
+            manifest: local_test_manifest(&source_path),
+            source_path: source_path.clone(),
+            provenance: InstalledPluginProvenance::legacy_unverified(source_path, Utc::now()),
+            execution_enabled: false,
+            execution_grant: InstalledPluginExecutionGrant::MetadataOnly,
+        };
+        assert!(matches!(
+            failing.install_plugin_metadata(failed_install),
+            Err(JarvisError::Storage(_))
+        ));
+        assert!(failing
+            .get_installed_plugin("local_registry_test")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn installed_plugin_update_is_cas_bound_atomic_and_persistent() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("jarvis.sqlite");
+        let source_path = dir.path().canonicalize().unwrap().display().to_string();
+        let repo = SqliteRepository::open(&db_path).unwrap();
+        let original = repo
+            .install_plugin_metadata(InstalledPlugin {
+                manifest: local_test_manifest(&source_path),
+                source_path: source_path.clone(),
+                provenance: InstalledPluginProvenance::legacy_unverified(
+                    source_path.clone(),
+                    Utc::now(),
+                ),
+                execution_enabled: false,
+                execution_grant: InstalledPluginExecutionGrant::MetadataOnly,
+            })
+            .unwrap();
+        let original_contract = installed_plugin_lifecycle_contract_sha256(&original).unwrap();
+
+        for version in ["0.1.0", "0.0.9"] {
+            let candidate = installed_update_candidate(&original, version);
+            assert!(repo
+                .validate_installed_plugin_update(&original.id, &candidate, &original_contract,)
+                .unwrap_err()
+                .to_string()
+                .contains("strictly newer"));
+        }
+        let mut mismatched = installed_update_candidate(&original, "0.2.0");
+        mismatched.manifest.id = "other_plugin".to_string();
+        assert!(repo
+            .validate_installed_plugin_update(&original.id, &mismatched, &original_contract)
+            .unwrap_err()
+            .to_string()
+            .contains("manifest id"));
+
+        let candidate = installed_update_candidate(&original, "0.2.0");
+        let candidate_contract =
+            installed_plugin_update_candidate_contract_sha256(&candidate).unwrap();
+        let updated = repo
+            .update_installed_plugin_metadata(
+                &original.id,
+                candidate,
+                &original_contract,
+                &candidate_contract,
+            )
+            .unwrap();
+        assert_eq!(updated.manifest.version, "0.2.0");
+        assert_eq!(updated.installed_at, original.installed_at);
+        assert!(!updated.execution_enabled);
+        assert_eq!(
+            updated.execution_grant,
+            InstalledPluginExecutionGrant::MetadataOnly
+        );
+        assert_eq!(
+            updated.provenance.integrity_status,
+            InstalledPluginIntegrityStatus::NotVerified
+        );
+        assert!(!updated.provenance.origin_claim_verified);
+
+        let next = installed_update_candidate(&updated, "0.3.0");
+        let next_contract = installed_plugin_update_candidate_contract_sha256(&next).unwrap();
+        assert!(
+            repo.update_installed_plugin_metadata(
+                &updated.id,
+                next,
+                &original_contract,
+                &next_contract,
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("lifecycle contract changed")
+        );
+
+        drop(repo);
+        let reopened = SqliteRepository::open(db_path).unwrap();
+        let persisted = reopened
+            .get_installed_plugin(&original.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(persisted.manifest.version, "0.2.0");
+        let history = reopened
+            .list_installed_plugin_lifecycle_history(&original.id)
+            .unwrap();
+        assert_eq!(history[0].action, "installed_plugin_updated");
+        assert_eq!(history[0].outcome, "applied");
+        assert_eq!(history[1].action, "installed_plugin_installed");
+    }
+
+    #[test]
+    fn installed_plugin_update_migrates_persisted_legacy_version_once() {
+        let dir = tempdir().unwrap();
+        let source_path = dir.path().canonicalize().unwrap().display().to_string();
+        let repo = SqliteRepository::in_memory().unwrap();
+        let original = repo
+            .install_plugin_metadata(InstalledPlugin {
+                manifest: local_test_manifest(&source_path),
+                source_path: source_path.clone(),
+                provenance: InstalledPluginProvenance::legacy_unverified(source_path, Utc::now()),
+                execution_enabled: false,
+                execution_grant: InstalledPluginExecutionGrant::MetadataOnly,
+            })
+            .unwrap();
+        let mut legacy_manifest = original.manifest;
+        legacy_manifest.version = "legacy-release-one".to_string();
+        repo.raw_connection()
+            .execute(
+                "UPDATE installed_plugins SET manifest_json = ?2 WHERE id = ?1",
+                params![
+                    "local_registry_test",
+                    serde_json::to_string(&legacy_manifest).unwrap()
+                ],
+            )
+            .unwrap();
+        let legacy = repo
+            .get_installed_plugin("local_registry_test")
+            .unwrap()
+            .unwrap();
+        let lifecycle = installed_plugin_lifecycle_contract_sha256(&legacy).unwrap();
+        let candidate = installed_update_candidate(&legacy, "0.1.0");
+        let candidate_contract =
+            installed_plugin_update_candidate_contract_sha256(&candidate).unwrap();
+        let migrated = repo
+            .update_installed_plugin_metadata(
+                &legacy.id,
+                candidate,
+                &lifecycle,
+                &candidate_contract,
+            )
+            .unwrap();
+        assert_eq!(migrated.manifest.version, "0.1.0");
+
+        let migrated_lifecycle = installed_plugin_lifecycle_contract_sha256(&migrated).unwrap();
+        let same_version = installed_update_candidate(&migrated, "0.1.0");
+        assert!(repo
+            .validate_installed_plugin_update(&migrated.id, &same_version, &migrated_lifecycle,)
+            .unwrap_err()
+            .to_string()
+            .contains("strictly newer"));
+    }
+
+    #[test]
+    fn installed_plugin_update_rejects_changed_candidate_and_rolls_back_on_audit_failure() {
+        let dir = tempdir().unwrap();
+        let source_path = dir.path().canonicalize().unwrap().display().to_string();
+        let repo = SqliteRepository::in_memory().unwrap();
+        let original = repo
+            .install_plugin_metadata(InstalledPlugin {
+                manifest: local_test_manifest(&source_path),
+                source_path: source_path.clone(),
+                provenance: InstalledPluginProvenance::legacy_unverified(source_path, Utc::now()),
+                execution_enabled: false,
+                execution_grant: InstalledPluginExecutionGrant::MetadataOnly,
+            })
+            .unwrap();
+        let lifecycle = installed_plugin_lifecycle_contract_sha256(&original).unwrap();
+        let candidate = installed_update_candidate(&original, "0.2.0");
+        let preview_contract =
+            installed_plugin_update_candidate_contract_sha256(&candidate).unwrap();
+        let mut changed = candidate.clone();
+        changed.manifest.name = "Changed after preview".to_string();
+        assert!(repo
+            .update_installed_plugin_metadata(&original.id, changed, &lifecycle, &preview_contract,)
+            .unwrap_err()
+            .to_string()
+            .contains("changed after preview"));
+
+        repo.raw_connection()
+            .execute_batch(
+                "CREATE TRIGGER inject_plugin_update_audit_failure
+                 BEFORE INSERT ON audit_entries
+                 WHEN NEW.event_type = 'installed_plugin_updated'
+                 BEGIN
+                     SELECT RAISE(ABORT, 'injected plugin update audit failure');
+                 END;",
+            )
+            .unwrap();
+        assert!(matches!(
+            repo.update_installed_plugin_metadata(
+                &original.id,
+                candidate,
+                &lifecycle,
+                &preview_contract,
+            ),
+            Err(JarvisError::Storage(_))
+        ));
+        assert_eq!(
+            repo.get_installed_plugin(&original.id)
+                .unwrap()
+                .unwrap()
+                .manifest
+                .version,
+            original.manifest.version
+        );
+    }
+
+    #[test]
+    fn installed_plugin_history_is_plugin_scoped_newest_first_and_bounded() {
+        let dir = tempdir().unwrap();
+        let source_path = dir.path().canonicalize().unwrap().display().to_string();
+        let repo = SqliteRepository::in_memory().unwrap();
+        repo.install_plugin_metadata(InstalledPlugin {
+            manifest: local_test_manifest(&source_path),
+            source_path: source_path.clone(),
+            provenance: InstalledPluginProvenance::legacy_unverified(source_path, Utc::now()),
+            execution_enabled: false,
+            execution_grant: InstalledPluginExecutionGrant::MetadataOnly,
+        })
+        .unwrap();
+        for index in 0..105 {
+            repo.append_audit_entry(&AuditEntry::new(
+                None,
+                "installed_plugin_execution_authority_updated",
+                "bounded history fixture",
+                json!({"plugin_id": "local_registry_test", "index": index}),
+            ))
+            .unwrap();
+        }
+        repo.append_audit_entry(&AuditEntry::new(
+            None,
+            "installed_plugin_execution_authority_updated",
+            "foreign plugin fixture",
+            json!({"plugin_id": "other_plugin"}),
+        ))
+        .unwrap();
+
+        let history = repo
+            .list_installed_plugin_lifecycle_history("local_registry_test")
+            .unwrap();
+        assert_eq!(
+            history.len(),
+            MAX_INSTALLED_PLUGIN_LIFECYCLE_HISTORY_ENTRIES
+        );
+        assert!(history
+            .iter()
+            .all(|entry| entry.plugin_id == "local_registry_test"));
+        assert!(history
+            .windows(2)
+            .all(|entries| entries[0].created_at >= entries[1].created_at));
+        assert!(history
+            .iter()
+            .all(|entry| entry.action == "installed_plugin_execution_authority_updated"));
     }
 
     #[test]
