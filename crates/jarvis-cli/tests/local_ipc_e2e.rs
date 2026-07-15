@@ -753,8 +753,7 @@ fn release_readiness_cli_computes_production_ready_only_from_external_complete_e
 }
 
 #[test]
-fn release_readiness_external_mode_with_live_voice_evidence_but_incomplete_release_evidence_stays_not_production_ready(
-) {
+fn release_readiness_external_mode_live_voice_without_signed_provenance_stays_pending() {
     let temp_dir = tempfile::tempdir().expect("temp live-only release evidence");
     let db_path = temp_dir.path().join("jarvis-live-only-evidence.sqlite");
     let live_report_path = temp_dir.path().join("release-live-device-qa-report.json");
@@ -792,8 +791,8 @@ fn release_readiness_external_mode_with_live_voice_evidence_but_incomplete_relea
     assert_release_evidence_item_status(
         &evidence_status,
         "live_device_qa_report",
-        "present",
-        "valid live-device report should be accepted through repository-backed IPC",
+        "invalid",
+        "live-device report without configured signed provenance must fail closed",
     );
     assert!(
         evidence_status["missing_count"]
@@ -804,11 +803,12 @@ fn release_readiness_external_mode_with_live_voice_evidence_but_incomplete_relea
 
     let readiness = run_cli_json(["release", "readiness", "--endpoint", endpoint.as_str()]);
     assert_eq!(readiness["production_ready"], false);
-    assert!(readiness["pending_features"]
+    assert_array_contains(&readiness["pending_features"], "key", "live_voice_loop");
+    assert!(!readiness["implemented_features"]
         .as_array()
-        .expect("pending features")
-        .is_empty());
-    assert_array_contains(&readiness["implemented_features"], "key", "live_voice_loop");
+        .expect("implemented features")
+        .iter()
+        .any(|feature| feature["key"] == "live_voice_loop"));
     assert!(readiness["blocking_manual_gates"]
         .as_array()
         .expect("blocking gates")
@@ -830,8 +830,10 @@ fn release_readiness_external_mode_with_live_voice_evidence_but_incomplete_relea
 #[cfg(unix)]
 fn release_live_device_qa_script_generated_report_clears_evidence_status() {
     let temp_dir = tempfile::tempdir().expect("temp live-device script evidence");
-    let app_path = write_live_device_qa_app_fixture(temp_dir.path());
-    let live_report_path = temp_dir.path().join("release-live-device-qa-report.json");
+    let fixture = write_complete_release_evidence_fixture(temp_dir.path());
+    let app_path = Path::new(&fixture.dist_dir).join("Jarvis.app");
+    let live_report_path = PathBuf::from(&fixture.live_report_path);
+    let stub_path = write_live_device_identity_tool_stubs(temp_dir.path());
     let db_path = temp_dir
         .path()
         .join("jarvis-live-device-script-evidence.sqlite");
@@ -841,16 +843,16 @@ fn release_live_device_qa_script_generated_report_clears_evidence_status() {
         .expect("live report path is UTF-8")
         .to_string();
     let expected_version = env!("CARGO_PKG_VERSION");
-    let server_env = [
+    let mut server_env = fixture.env_refs_with_external_mode();
+    server_env.extend([
         ("JARVIS_QA_INSTALLED_APP_PATH", app_path_arg.as_str()),
         ("JARVIS_QA_REPORT_PATH", report_path_arg.as_str()),
         (
             "JARVIS_QA_EXPECTED_BUNDLE_ID",
-            "com.nobiletechnology.jarvis.selftest",
+            "com.nobiletechnology.jarvis",
         ),
         ("JARVIS_QA_EXPECTED_VERSION", expected_version),
-        ("JARVIS_RELEASE_READINESS_EVIDENCE_MODE", "external"),
-    ];
+    ]);
     let mut server = JarvisServer::start_with_env(&db_path, &server_env);
     let endpoint = server.endpoint();
 
@@ -872,8 +874,13 @@ fn release_live_device_qa_script_generated_report_clears_evidence_status() {
             ("JARVIS_QA_INSTALLED_APP_PATH", app_path_arg.as_str()),
             ("JARVIS_QA_REPORT_PATH", report_path_arg.as_str()),
             (
+                "JARVIS_QA_SIGNED_PROVENANCE_REPORT",
+                fixture.signed_provenance_path.as_str(),
+            ),
+            ("PATH", stub_path.as_str()),
+            (
                 "JARVIS_QA_EXPECTED_BUNDLE_ID",
-                "com.nobiletechnology.jarvis.selftest",
+                "com.nobiletechnology.jarvis",
             ),
             ("JARVIS_QA_EXPECTED_VERSION", expected_version),
             ("JARVIS_QA_CLEAN_PROFILE_VALIDATED", "true"),
@@ -974,7 +981,7 @@ fn release_live_device_qa_script_generated_report_clears_evidence_status() {
     assert_eq!(report["installed_app_path"], app_path_arg);
     assert_eq!(
         report["app_bundle"]["bundle_identifier"],
-        "com.nobiletechnology.jarvis.selftest"
+        "com.nobiletechnology.jarvis"
     );
     assert_eq!(
         report["voice_command_observation"]["command_result_evidence_id"],
@@ -1537,16 +1544,14 @@ fn release_readiness_rejects_missing_live_voice_evidence_fields() {
 }
 
 #[test]
+#[cfg(unix)]
 fn release_evidence_status_resolves_live_voice_command_result_against_repository() {
     let temp_dir = tempfile::tempdir().expect("temp live QA repository evidence");
+    let fixture = write_complete_release_evidence_fixture(temp_dir.path());
     let db_path = temp_dir.path().join("jarvis-e2e.sqlite");
-    let live_report_path = temp_dir.path().join("release-live-device-qa-report.json");
-    let report_path = live_report_path
-        .to_str()
-        .expect("live report path is UTF-8")
-        .to_string();
-    let mut server =
-        JarvisServer::start_with_env(&db_path, &[("JARVIS_QA_REPORT_PATH", report_path.as_str())]);
+    let live_report_path = Path::new(&fixture.live_report_path);
+    let base_live_report = read_json_file(live_report_path);
+    let mut server = JarvisServer::start_with_env(&db_path, &fixture.env_refs());
     let endpoint = server.endpoint();
 
     let command = run_cli_json([
@@ -1567,10 +1572,10 @@ fn release_evidence_status_resolves_live_voice_command_result_against_repository
         .expect("task audit id")
         .to_string();
 
-    let mut task_report = valid_live_device_qa_report();
+    let mut task_report = base_live_report.clone();
     task_report["voice_command_observation"]["command_result_evidence_id"] =
         json!(format!("task:{task_id}"));
-    write_live_device_qa_report(&live_report_path, task_report);
+    write_live_device_qa_report(live_report_path, task_report);
     let task_evidence_status = run_cli_json([
         "release",
         "evidence-status",
@@ -1584,10 +1589,10 @@ fn release_evidence_status_resolves_live_voice_command_result_against_repository
         "task evidence should resolve against the served repository",
     );
 
-    let mut audit_report = valid_live_device_qa_report();
+    let mut audit_report = base_live_report.clone();
     audit_report["voice_command_observation"]["command_result_evidence_id"] =
         json!(format!("audit:{task_audit_id}"));
-    write_live_device_qa_report(&live_report_path, audit_report);
+    write_live_device_qa_report(live_report_path, audit_report);
     let audit_evidence_status = run_cli_json([
         "release",
         "evidence-status",
@@ -1618,10 +1623,10 @@ fn release_evidence_status_resolves_live_voice_command_result_against_repository
         .and_then(|entry| entry["id"].as_str())
         .expect("unrelated task audit id")
         .to_string();
-    let mut wrong_task_report = valid_live_device_qa_report();
+    let mut wrong_task_report = base_live_report.clone();
     wrong_task_report["voice_command_observation"]["command_result_evidence_id"] =
         json!(format!("task:{unrelated_task_id}"));
-    write_live_device_qa_report(&live_report_path, wrong_task_report);
+    write_live_device_qa_report(live_report_path, wrong_task_report);
     let wrong_task_evidence_status = run_cli_json([
         "release",
         "evidence-status",
@@ -1653,10 +1658,10 @@ fn release_evidence_status_resolves_live_voice_command_result_against_repository
         "live_voice_loop",
     );
 
-    let mut wrong_audit_report = valid_live_device_qa_report();
+    let mut wrong_audit_report = base_live_report.clone();
     wrong_audit_report["voice_command_observation"]["command_result_evidence_id"] =
         json!(format!("audit:{unrelated_task_audit_id}"));
-    write_live_device_qa_report(&live_report_path, wrong_audit_report);
+    write_live_device_qa_report(live_report_path, wrong_audit_report);
     let wrong_audit_evidence_status = run_cli_json([
         "release",
         "evidence-status",
@@ -1688,10 +1693,10 @@ fn release_evidence_status_resolves_live_voice_command_result_against_repository
         "live_voice_loop",
     );
 
-    let mut missing_report = valid_live_device_qa_report();
+    let mut missing_report = base_live_report;
     missing_report["voice_command_observation"]["command_result_evidence_id"] =
         json!("task:00000000-0000-4000-8000-000000009999");
-    write_live_device_qa_report(&live_report_path, missing_report);
+    write_live_device_qa_report(live_report_path, missing_report);
     let missing_evidence_status = run_cli_json([
         "release",
         "evidence-status",
@@ -2609,7 +2614,14 @@ fn release_evidence_status_rejects_live_device_core_digest_mismatch() {
         &fixture.env_refs(),
     );
     let live_item = release_evidence_item(&evidence_status, "live_device_qa_report");
-    assert_eq!(live_item["status"], "present", "{live_item}");
+    assert_eq!(live_item["status"], "invalid", "{live_item}");
+    assert!(
+        live_item["detail"]
+            .as_str()
+            .expect("live detail")
+            .contains("bundled_core.sha256"),
+        "{live_item}"
+    );
     let bundle_item = release_evidence_item(&evidence_status, "release_evidence_bundle");
     assert_eq!(bundle_item["status"], "invalid", "{bundle_item}");
     assert!(
@@ -2619,6 +2631,82 @@ fn release_evidence_status_rejects_live_device_core_digest_mismatch() {
             .contains("bundled_core.sha256"),
         "{bundle_item}"
     );
+    server.stop();
+}
+
+#[test]
+#[cfg(unix)]
+fn release_evidence_status_rejects_live_app_executable_digest_mismatch() {
+    let temp_dir = tempfile::tempdir().expect("temp release evidence reports");
+    let fixture = write_complete_release_evidence_fixture(temp_dir.path());
+    let db_path = temp_dir.path().join("jarvis-live-app-mismatch.sqlite");
+    let mut server = JarvisServer::start_with_env(&db_path, &fixture.env_refs_with_external_mode());
+    let endpoint = server.endpoint();
+    let command = run_cli_json([
+        "command",
+        "status check",
+        "--json",
+        "--endpoint",
+        endpoint.as_str(),
+    ]);
+    let task_id = command["task"]["id"].as_str().expect("task id");
+    bind_complete_release_evidence_fixture_to_task(&fixture, task_id);
+
+    let mut live_report: Value = serde_json::from_str(
+        &fs::read_to_string(&fixture.live_report_path).expect("read live report"),
+    )
+    .expect("decode live report");
+    live_report["app_executable"]["sha256"] =
+        json!("fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210");
+    write_json_report(Path::new(&fixture.live_report_path), live_report);
+
+    let mut bundle_report: Value = serde_json::from_str(
+        &fs::read_to_string(&fixture.bundle_path).expect("read evidence bundle"),
+    )
+    .expect("decode evidence bundle");
+    bundle_report["reports"]["live_device_qa_sha256"] =
+        json!(file_sha256(Path::new(&fixture.live_report_path)));
+    write_json_report(Path::new(&fixture.bundle_path), bundle_report);
+
+    let evidence_status = run_cli_json_with_env(
+        [
+            "release",
+            "evidence-status",
+            "--endpoint",
+            endpoint.as_str(),
+        ],
+        &fixture.env_refs(),
+    );
+    let live_item = release_evidence_item(&evidence_status, "live_device_qa_report");
+    assert_eq!(live_item["status"], "invalid", "{live_item}");
+    assert!(
+        live_item["detail"]
+            .as_str()
+            .expect("live detail")
+            .contains("app executable SHA-256"),
+        "{live_item}"
+    );
+    let bundle_item = release_evidence_item(&evidence_status, "release_evidence_bundle");
+    assert_eq!(bundle_item["status"], "invalid", "{bundle_item}");
+    assert!(
+        bundle_item["detail"]
+            .as_str()
+            .expect("bundle detail")
+            .contains("app executable SHA-256"),
+        "{bundle_item}"
+    );
+    let readiness = run_cli_json(["release", "readiness", "--endpoint", endpoint.as_str()]);
+    let live_voice = readiness["pending_features"]
+        .as_array()
+        .expect("pending readiness features")
+        .iter()
+        .find(|feature| feature["key"] == "live_voice_loop")
+        .expect("pending live voice readiness feature");
+    assert_eq!(
+        live_voice["status"], "pending_manual_validation",
+        "{live_voice}"
+    );
+    assert_eq!(readiness["production_ready"], false, "{readiness}");
     server.stop();
 }
 
@@ -2861,16 +2949,20 @@ fn release_evidence_status_cli_falls_back_without_running_server() {
 }
 
 #[test]
+#[cfg(unix)]
 fn release_evidence_status_accepts_bundle_evidence_report_aliases() {
     let temp_dir = tempfile::tempdir().expect("temp evidence report");
+    let fixture = write_complete_release_evidence_fixture(temp_dir.path());
     let live_report_path = temp_dir.path().join("custom-live-report.json");
-    write_valid_live_device_qa_report(&live_report_path);
+    fs::copy(&fixture.live_report_path, &live_report_path).expect("copy custom live report");
     let report_path = live_report_path
         .to_str()
         .expect("live report path is UTF-8")
         .to_string();
     let db_path = temp_dir.path().join("jarvis-alias-evidence.sqlite");
-    let env = [("JARVIS_EVIDENCE_LIVE_QA_REPORT", report_path.as_str())];
+    let mut env = fixture.env_refs();
+    env.retain(|(key, _)| *key != "JARVIS_EVIDENCE_LIVE_QA_REPORT");
+    env.push(("JARVIS_EVIDENCE_LIVE_QA_REPORT", report_path.as_str()));
     let mut server = JarvisServer::start_with_env(&db_path, &env);
     let endpoint = server.endpoint();
     let command = run_cli_json([
@@ -12200,6 +12292,17 @@ fn valid_live_device_qa_report() -> Value {
             "microphone_usage_description": "Jarvis uses microphone input only when you explicitly start local voice capture.",
             "speech_recognition_usage_description": "Jarvis uses speech recognition only to turn your spoken command into a local assistant request."
         },
+        "app_executable": {
+            "executable_path": "/Applications/Jarvis.app/Contents/MacOS/JarvisMacApp",
+            "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "code_identifier": "com.nobiletechnology.jarvis",
+            "team_identifier": "9VZ742YKV4",
+            "cdhash": "0123456789abcdef0123456789abcdef01234567"
+        },
+        "signed_provenance": {
+            "report_path": "target/distribution/Jarvis-0.1.4-signed-provenance.json",
+            "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        },
         "bundled_core": {
             "executable_path": "/Applications/Jarvis.app/Contents/Resources/bin/jarvis-cli",
             "version": "jarvis 0.1.4",
@@ -12444,6 +12547,8 @@ fn valid_signed_distribution_provenance_report(
     zip_sha256: &str,
     pkg_sha256: &str,
 ) -> Value {
+    let app_executable_path = Path::new(app_path).join("Contents/MacOS/JarvisMacApp");
+    let app_executable_sha256 = file_sha256(&app_executable_path);
     let bundled_core_path = Path::new(app_path).join("Contents/Resources/bin/jarvis-cli");
     let bundled_core_sha256 = file_sha256(&bundled_core_path);
     let notary_log_dir = Path::new(zip_path)
@@ -12466,6 +12571,8 @@ fn valid_signed_distribution_provenance_report(
             "pkg_path": pkg_path,
             "zip_sha256": zip_sha256,
             "pkg_sha256": pkg_sha256,
+            "app_executable_path": app_executable_path.to_str().expect("app executable path utf8"),
+            "app_executable_sha256": app_executable_sha256,
             "bundled_core_path": bundled_core_path.to_str().expect("bundled core path utf8"),
             "bundled_core_sha256": bundled_core_sha256,
             "bundled_core_version": "jarvis 0.1.4"
@@ -12475,6 +12582,9 @@ fn valid_signed_distribution_provenance_report(
             "developer_id_installer_identity": "Developer ID Installer: Jarvis QA Fixture",
             "app_bundle_codesign": "Authority=Developer ID Application: Jarvis QA Fixture",
             "app_executable_codesign": "Authority=Developer ID Application: Jarvis QA Fixture",
+            "app_executable_identifier": "com.nobiletechnology.jarvis",
+            "app_executable_team_identifier": "9VZ742YKV4",
+            "app_executable_cdhash": "0123456789abcdef0123456789abcdef01234567",
             "bundled_core_codesign": "Authority=Developer ID Application: Jarvis QA Fixture",
             "installer_pkg_signature": "Developer ID Installer: Jarvis QA Fixture"
         },
@@ -12504,7 +12614,8 @@ fn valid_signed_distribution_provenance_report(
             "app_stapled": true,
             "installer_pkg_stapled": true,
             "gatekeeper_assessed": true,
-            "artifact_digests_recorded": true
+            "artifact_digests_recorded": true,
+            "app_executable_identity_recorded": true
         },
         "proof_boundary": "Signed distribution provenance fixture for CLI E2E."
     })
@@ -12586,11 +12697,10 @@ fn write_complete_release_evidence_fixture(root: &Path) -> CompleteReleaseEviden
     let signed_provenance_path = dist_dir.join("Jarvis-0.1.4-signed-provenance.json");
     let bundle_path = root.join("release-evidence-bundle.json");
 
+    let app_executable_path = dist_dir.join("Jarvis.app/Contents/MacOS/JarvisMacApp");
+    let app_executable_sha256 = file_sha256(&app_executable_path);
     let bundled_core_sha256 =
         file_sha256(&dist_dir.join("Jarvis.app/Contents/Resources/bin/jarvis-cli"));
-    let mut live_report = valid_live_device_qa_report();
-    live_report["bundled_core"]["sha256"] = json!(bundled_core_sha256);
-    write_json_report(&live_report_path, live_report);
     write_json_report(&plugin_report_path, valid_plugin_trust_qa_report());
     let zip_path = dist_dir.join("Jarvis-0.1.4.zip");
     let pkg_path = dist_dir.join("Jarvis-0.1.4.pkg");
@@ -12618,6 +12728,14 @@ fn write_complete_release_evidence_fixture(root: &Path) -> CompleteReleaseEviden
             &pkg_sha256,
         ),
     );
+    let mut live_report = valid_live_device_qa_report();
+    live_report["app_executable"]["sha256"] = json!(app_executable_sha256);
+    live_report["bundled_core"]["sha256"] = json!(bundled_core_sha256);
+    live_report["signed_provenance"]["report_path"] = json!(signed_provenance_path
+        .to_str()
+        .expect("signed provenance path utf8"));
+    live_report["signed_provenance"]["sha256"] = json!(file_sha256(&signed_provenance_path));
+    write_json_report(&live_report_path, live_report);
     write_json_report(
         &bundle_path,
         valid_release_evidence_bundle_for_paths(
@@ -12735,46 +12853,35 @@ fn make_executable(path: &Path) {
 }
 
 #[cfg(unix)]
-fn write_live_device_qa_app_fixture(root: &Path) -> PathBuf {
-    let app_path = root.join("Jarvis.app");
-    let macos_dir = app_path.join("Contents/MacOS");
-    let contents_dir = app_path.join("Contents");
-    let resources_dir = app_path.join("Contents/Resources/bin");
-    fs::create_dir_all(&macos_dir).expect("create live QA app executable dir");
-    fs::create_dir_all(&resources_dir).expect("create live QA bundled core dir");
+fn write_live_device_identity_tool_stubs(root: &Path) -> String {
+    let bin_dir = root.join("live-device-tool-stubs");
+    fs::create_dir_all(&bin_dir).expect("create live-device tool stub dir");
+    let codesign = bin_dir.join("codesign");
     fs::write(
-        contents_dir.join("Info.plist"),
-        format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleExecutable</key>
-  <string>JarvisMacApp</string>
-  <key>CFBundleIdentifier</key>
-  <string>com.nobiletechnology.jarvis.selftest</string>
-  <key>CFBundleShortVersionString</key>
-  <string>{version}</string>
-  <key>CFBundleVersion</key>
-  <string>{version}</string>
-  <key>NSMicrophoneUsageDescription</key>
-  <string>Jarvis uses microphone input only when you explicitly start local voice capture.</string>
-  <key>NSSpeechRecognitionUsageDescription</key>
-  <string>Jarvis uses speech recognition only to turn your spoken command into a local assistant request.</string>
-</dict>
-</plist>
+        &codesign,
+        r#"#!/bin/sh
+case " $* " in
+  *" -dv "*)
+    printf '%s\n' \
+      'Authority=Developer ID Application: Jarvis QA Fixture' \
+      'Identifier=com.nobiletechnology.jarvis' \
+      'TeamIdentifier=9VZ742YKV4' \
+      'CDHash=0123456789abcdef0123456789abcdef01234567' >&2
+    ;;
+esac
+exit 0
 "#,
-            version = env!("CARGO_PKG_VERSION")
-        ),
     )
-    .expect("write live QA Info.plist");
-    let app_executable = macos_dir.join("JarvisMacApp");
-    let bundled_core = resources_dir.join("jarvis-cli");
-    fs::write(&app_executable, "#!/bin/sh\n").expect("write live QA app executable");
-    write_fixture_bundled_core_executable(&bundled_core);
-    make_executable(&app_executable);
-    make_executable(&bundled_core);
-    app_path
+    .expect("write codesign stub");
+    let xcrun = bin_dir.join("xcrun");
+    fs::write(&xcrun, "#!/bin/sh\nexit 0\n").expect("write xcrun stub");
+    let spctl = bin_dir.join("spctl");
+    fs::write(&spctl, "#!/bin/sh\nexit 0\n").expect("write spctl stub");
+    make_executable(&codesign);
+    make_executable(&xcrun);
+    make_executable(&spctl);
+    let inherited = std::env::var("PATH").unwrap_or_default();
+    format!("{}:{inherited}", bin_dir.display())
 }
 
 #[cfg(unix)]

@@ -723,7 +723,9 @@ stage or when a PR needs focused evidence for one ownership slice.
   `thread_identifier: jarvis.scheduler`, confirm the live-device QA report
   matches the expected app bundle `Info.plist` bundle id/version/build and
   approved microphone/Speech privacy prompt copy, reject future-dated report
-  timestamps, require plugin-trust
+  timestamps, require the installed app executable SHA-256, code Identifier,
+  TeamIdentifier, and CDHash to match the exact signed-provenance report path
+  and SHA-256, reject cross-report artifact or identity drift, require plugin-trust
   `review_source: owner-asserted-manual-review`, verify signed-provenance zip/pkg/core/notary-log digests
   against the current artifact files and preserved notarytool logs, and write SHA-256 digests for the signed
   distribution artifacts, signed provenance, plus QA reports before writing evidence. The
@@ -936,7 +938,10 @@ Clean-profile and manual production gates not proven by this local smoke:
   can point that assertion at the release core so syntactically valid but
   unresolved task/audit evidence cannot pass. The
   report must bind the installed bundled core path, `jarvis <version>` output,
-  and SHA-256 digest. The report generation timestamp must be UTC, no earlier
+  and SHA-256 digest. It must also bind the installed app executable path,
+  SHA-256, code Identifier, TeamIdentifier, and CDHash to the exact
+  signed-provenance report path/SHA-256 after local codesign, stapler, and
+  Gatekeeper validation. The report generation timestamp must be UTC, no earlier
   than the completed voice check, and not future-dated. Confirm the generated
   report includes installed-app metadata, app microphone/Speech usage
   descriptions, `bundled_core`, all live-device validation flags, `voice_loop`,

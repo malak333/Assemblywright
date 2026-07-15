@@ -143,6 +143,14 @@ release requirements, not optional UX guidance.
   and resume verification over the default UDS. Any failure must suppress the
   marker, and cleanup after a successful pause must make a bounded best-effort
   resume attempt so the test path does not intentionally strand durable pause.
+- Signed release provenance must record the exact app executable path and
+  SHA-256 plus its code Identifier, ten-character TeamIdentifier, and CDHash.
+  Live-device QA must revalidate the installed executable and bind its report
+  to that signed-provenance report by path and SHA-256. Final bundling, doctor,
+  and Rust evidence-status validation must reject any executable digest or code
+  identity mismatch. This is point-in-time candidate evidence only; it does not
+  establish installation provenance, continuous runtime integrity, or Apple
+  attestation.
 - Only exact `JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true` may select the explicitly
   weaker authenticated loopback TCP and owner-only token-file compatibility
   path. `JARVIS_MAC_IPC_AUTH_FILE` may select an absolute override only in that

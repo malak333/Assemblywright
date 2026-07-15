@@ -294,6 +294,31 @@ assert_app_core_code_identifiers() {
   assert_code_identifier "$label bundled core" "$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" "$CORE_CODE_ID"
 }
 
+codesign_metadata_value() {
+  local label="$1"
+  local output="$2"
+  local key="$3"
+  local value
+  value="$(printf '%s\n' "$output" | awk -F= -v key="$key" '$1 == key { print substr($0, length(key) + 2); exit }')"
+  [[ -n "$value" ]] || fail "$label codesign evidence is missing $key"
+  printf '%s' "$value"
+}
+
+require_hex_identity_value() {
+  local label="$1"
+  local value="$2"
+  local minimum_length="$3"
+  require_command python3
+  python3 - "$label" "$value" "$minimum_length" <<'PY'
+import re
+import sys
+
+label, value, minimum_length = sys.argv[1:4]
+if not re.fullmatch(rf"[0-9A-Fa-f]{{{int(minimum_length)},64}}", value):
+    raise SystemExit(f"{label} must be a hexadecimal value between {minimum_length} and 64 characters")
+PY
+}
+
 write_signed_distribution_provenance() {
   local generated_at
   local zip_sha
@@ -301,9 +326,14 @@ write_signed_distribution_provenance() {
   local bundled_core_path
   local bundled_core_sha
   local bundled_core_version
+  local app_executable_path
+  local app_executable_sha
   local app_codesign
   local core_codesign
   local app_executable_codesign
+  local app_executable_identifier
+  local app_executable_team_identifier
+  local app_executable_cdhash
   local pkg_signature
   local app_staple
   local pkg_staple
@@ -330,9 +360,19 @@ write_signed_distribution_provenance() {
   bundled_core_sha="$(file_sha256 "$bundled_core_path")"
   bundled_core_version="$("$bundled_core_path" --version)"
   require_output_contains "bundled core version" "$bundled_core_version" "jarvis $VERSION"
-  app_codesign="$(codesign -dv "$APP_PATH" 2>&1)"
-  core_codesign="$(codesign -dv "$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" 2>&1)"
-  app_executable_codesign="$(codesign -dv "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME" 2>&1)"
+  app_executable_path="$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME"
+  app_executable_sha="$(file_sha256 "$app_executable_path")"
+  app_codesign="$(codesign -dv --verbose=4 "$APP_PATH" 2>&1)"
+  core_codesign="$(codesign -dv --verbose=4 "$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" 2>&1)"
+  app_executable_codesign="$(codesign -dv --verbose=4 "$app_executable_path" 2>&1)"
+  app_executable_identifier="$(codesign_metadata_value "app executable" "$app_executable_codesign" "Identifier")"
+  app_executable_team_identifier="$(codesign_metadata_value "app executable" "$app_executable_codesign" "TeamIdentifier")"
+  app_executable_cdhash="$(codesign_metadata_value "app executable" "$app_executable_codesign" "CDHash")"
+  [[ "$app_executable_identifier" == "$BUNDLE_ID" ]] ||
+    fail "app executable codesign identifier mismatch: expected $BUNDLE_ID, got $app_executable_identifier"
+  [[ "$app_executable_team_identifier" =~ ^[A-Z0-9]{10}$ ]] ||
+    fail "app executable codesign TeamIdentifier must be a 10-character Apple team identifier"
+  require_hex_identity_value "app executable codesign CDHash" "$app_executable_cdhash" 40
   pkg_signature="$(pkgutil --check-signature "$PKG_PATH" 2>&1)"
   app_staple="$(xcrun stapler validate "$APP_PATH" 2>&1)"
   pkg_staple="$(xcrun stapler validate "$PKG_PATH" 2>&1)"
@@ -379,10 +419,15 @@ write_signed_distribution_provenance() {
     PROVENANCE_BUNDLED_CORE_PATH="$bundled_core_path" \
     PROVENANCE_BUNDLED_CORE_SHA="$bundled_core_sha" \
     PROVENANCE_BUNDLED_CORE_VERSION="$bundled_core_version" \
+    PROVENANCE_APP_EXECUTABLE_PATH="$app_executable_path" \
+    PROVENANCE_APP_EXECUTABLE_SHA="$app_executable_sha" \
     PROVENANCE_DEVELOPER_ID_APPLICATION="$JARVIS_DEVELOPER_ID_APPLICATION" \
     PROVENANCE_DEVELOPER_ID_INSTALLER="$JARVIS_DEVELOPER_ID_INSTALLER" \
     PROVENANCE_APP_CODESIGN="$app_codesign" \
     PROVENANCE_APP_EXECUTABLE_CODESIGN="$app_executable_codesign" \
+    PROVENANCE_APP_EXECUTABLE_IDENTIFIER="$app_executable_identifier" \
+    PROVENANCE_APP_EXECUTABLE_TEAM_IDENTIFIER="$app_executable_team_identifier" \
+    PROVENANCE_APP_EXECUTABLE_CDHASH="$app_executable_cdhash" \
     PROVENANCE_CORE_CODESIGN="$core_codesign" \
     PROVENANCE_PKG_SIGNATURE="$pkg_signature" \
     PROVENANCE_ZIP_SUBMISSION_ID="$zip_submission_id" \
@@ -416,6 +461,8 @@ report = {
         "pkg_path": os.environ["PROVENANCE_PKG_PATH"],
         "zip_sha256": os.environ["PROVENANCE_ZIP_SHA"],
         "pkg_sha256": os.environ["PROVENANCE_PKG_SHA"],
+        "app_executable_path": os.environ["PROVENANCE_APP_EXECUTABLE_PATH"],
+        "app_executable_sha256": os.environ["PROVENANCE_APP_EXECUTABLE_SHA"],
         "bundled_core_path": os.environ["PROVENANCE_BUNDLED_CORE_PATH"],
         "bundled_core_sha256": os.environ["PROVENANCE_BUNDLED_CORE_SHA"],
         "bundled_core_version": os.environ["PROVENANCE_BUNDLED_CORE_VERSION"],
@@ -425,6 +472,9 @@ report = {
         "developer_id_installer_identity": os.environ["PROVENANCE_DEVELOPER_ID_INSTALLER"],
         "app_bundle_codesign": os.environ["PROVENANCE_APP_CODESIGN"],
         "app_executable_codesign": os.environ["PROVENANCE_APP_EXECUTABLE_CODESIGN"],
+        "app_executable_identifier": os.environ["PROVENANCE_APP_EXECUTABLE_IDENTIFIER"],
+        "app_executable_team_identifier": os.environ["PROVENANCE_APP_EXECUTABLE_TEAM_IDENTIFIER"],
+        "app_executable_cdhash": os.environ["PROVENANCE_APP_EXECUTABLE_CDHASH"],
         "bundled_core_codesign": os.environ["PROVENANCE_CORE_CODESIGN"],
         "installer_pkg_signature": os.environ["PROVENANCE_PKG_SIGNATURE"],
     },
@@ -455,6 +505,7 @@ report = {
         "installer_pkg_stapled": True,
         "gatekeeper_assessed": True,
         "artifact_digests_recorded": True,
+        "app_executable_identity_recorded": True,
     },
     "proof_boundary": os.environ["PROVENANCE_PROOF_BOUNDARY"],
 }
@@ -700,7 +751,13 @@ identifier="${JARVIS_PACKAGE_STUB_BUNDLE_ID:?}"
 if [[ "${*: -1}" == *"/jarvis-cli" ]]; then
   identifier="${identifier}.core"
 fi
-printf 'Executable=/fixture\nIdentifier=%s\nAuthority=Developer ID Application: Jarvis QA Fixture\n' "$identifier"
+if [[ "${*: -1}" == *"/JarvisMacApp" ]]; then
+  identifier="${JARVIS_PACKAGE_STUB_APP_EXECUTABLE_IDENTIFIER:-$identifier}"
+fi
+team_identifier="${JARVIS_PACKAGE_STUB_TEAM_IDENTIFIER:-9VZ742YKV4}"
+cdhash="${JARVIS_PACKAGE_STUB_CDHASH:-0123456789abcdef0123456789abcdef01234567}"
+printf 'Executable=/fixture\nIdentifier=%s\nAuthority=Developer ID Application: Jarvis QA Fixture\nTeamIdentifier=%s\nCDHash=%s\n' \
+  "$identifier" "$team_identifier" "$cdhash"
 SH
   cat >"$stub_dir/pkgutil" <<'SH'
 #!/usr/bin/env bash
@@ -748,11 +805,17 @@ assert data["version"] == version
 assert data["artifacts"]["app_path"] == app_path
 assert data["artifacts"]["zip_path"] == zip_path
 assert data["artifacts"]["pkg_path"] == pkg_path
+assert data["artifacts"]["app_executable_path"] == f"{app_path}/Contents/MacOS/JarvisMacApp"
+with open(data["artifacts"]["app_executable_path"], "rb") as handle:
+    assert data["artifacts"]["app_executable_sha256"] == hashlib.sha256(handle.read()).hexdigest()
 assert data["artifacts"]["bundled_core_version"] == f"jarvis {version}"
 assert data["signing"]["developer_id_application_identity"].startswith("Developer ID Application: ")
 assert data["signing"]["developer_id_installer_identity"].startswith("Developer ID Installer: ")
 for key in ("app_bundle_codesign", "app_executable_codesign", "bundled_core_codesign"):
     assert "Authority=Developer ID Application: " in data["signing"][key]
+assert data["signing"]["app_executable_identifier"] == "com.nobiletechnology.jarvis"
+assert data["signing"]["app_executable_team_identifier"] == "9VZ742YKV4"
+assert data["signing"]["app_executable_cdhash"] == "0123456789abcdef0123456789abcdef01234567"
 assert "Developer ID Installer: " in data["signing"]["installer_pkg_signature"]
 uuid.UUID(data["notarization"]["app_zip_submission_id"])
 uuid.UUID(data["notarization"]["installer_pkg_submission_id"])
@@ -771,6 +834,28 @@ assert data["gatekeeper"]["installer_pkg_assessment"].strip().endswith(": accept
 for key, value in data["validation_flags"].items():
     assert value is True, key
 PY
+
+  set +e
+  output="$(PATH="$stub_dir:$PATH" \
+    JARVIS_PACKAGE_STUB_BUNDLE_ID="$BUNDLE_ID" \
+    JARVIS_PACKAGE_STUB_VERSION="$VERSION" \
+    JARVIS_PACKAGE_STUB_APP_EXECUTABLE_IDENTIFIER="com.example.WrongJarvis" \
+    JARVIS_DEVELOPER_ID_APPLICATION="Developer ID Application: Jarvis QA Fixture" \
+    JARVIS_DEVELOPER_ID_INSTALLER="Developer ID Installer: Jarvis QA Fixture" \
+    write_signed_distribution_provenance 2>&1)"
+  set -e
+  require_output_contains "signed provenance app executable identifier self-test" "$output" "app executable codesign identifier mismatch"
+
+  set +e
+  output="$(PATH="$stub_dir:$PATH" \
+    JARVIS_PACKAGE_STUB_BUNDLE_ID="$BUNDLE_ID" \
+    JARVIS_PACKAGE_STUB_VERSION="$VERSION" \
+    JARVIS_PACKAGE_STUB_TEAM_IDENTIFIER="missing" \
+    JARVIS_DEVELOPER_ID_APPLICATION="Developer ID Application: Jarvis QA Fixture" \
+    JARVIS_DEVELOPER_ID_INSTALLER="Developer ID Installer: Jarvis QA Fixture" \
+    write_signed_distribution_provenance 2>&1)"
+  set -e
+  require_output_contains "signed provenance app executable team self-test" "$output" "TeamIdentifier must be a 10-character Apple team identifier"
 
   output="$(PATH="$stub_dir:$PATH" \
     JARVIS_PACKAGE_STUB_BUNDLE_ID="$BUNDLE_ID" \

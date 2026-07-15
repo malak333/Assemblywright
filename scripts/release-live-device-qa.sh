@@ -8,6 +8,7 @@ APP_PATH="${JARVIS_QA_INSTALLED_APP_PATH:-/Applications/Jarvis.app}"
 REPORT_PATH="${JARVIS_QA_REPORT_PATH:-$ROOT_DIR/target/release-live-device-qa-report.json}"
 EXPECTED_BUNDLE_ID="${JARVIS_QA_EXPECTED_BUNDLE_ID:-com.nobiletechnology.jarvis}"
 EXPECTED_VERSION="${JARVIS_QA_EXPECTED_VERSION:-$("$ROOT_DIR/scripts/release-version.sh")}"
+SIGNED_PROVENANCE_PATH="${JARVIS_QA_SIGNED_PROVENANCE_REPORT:-$ROOT_DIR/target/distribution/Jarvis-$EXPECTED_VERSION-signed-provenance.json}"
 EXPECTED_MICROPHONE_USAGE_DESCRIPTION="Jarvis uses microphone input only when you explicitly start local voice capture."
 EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION="Jarvis uses speech recognition only to turn your spoken command into a local assistant request."
 CHECK_ONLY=false
@@ -23,6 +24,12 @@ APP_SPEECH_USAGE=""
 APP_BUNDLED_CORE_PATH=""
 APP_BUNDLED_CORE_VERSION=""
 APP_BUNDLED_CORE_SHA256=""
+APP_EXECUTABLE_PATH=""
+APP_EXECUTABLE_SHA256=""
+APP_EXECUTABLE_IDENTIFIER=""
+APP_EXECUTABLE_TEAM_IDENTIFIER=""
+APP_EXECUTABLE_CDHASH=""
+SIGNED_PROVENANCE_SHA256=""
 
 usage() {
   cat <<'USAGE'
@@ -91,6 +98,8 @@ validated release machine, source it, and then run --assert-complete.
 Optional:
   JARVIS_QA_INSTALLED_APP_PATH     Defaults to /Applications/Jarvis.app
   JARVIS_QA_REPORT_PATH            Defaults to target/release-live-device-qa-report.json
+  JARVIS_QA_SIGNED_PROVENANCE_REPORT
+                                    Defaults to target/distribution/Jarvis-<version>-signed-provenance.json
   JARVIS_QA_EXPECTED_BUNDLE_ID     Defaults to com.nobiletechnology.jarvis
   JARVIS_QA_EXPECTED_VERSION       Defaults to the Rust package release version
 
@@ -107,6 +116,54 @@ fail() {
 
 require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "required command is missing: $1"
+}
+
+file_sha256() {
+  local path="$1"
+  shasum -a 256 "$path" | awk '{print $1}'
+}
+
+json_string_value() {
+  local path="$1"
+  local field="$2"
+  python3 - "$path" "$field" <<'PY'
+import json
+import sys
+
+path, field = sys.argv[1:3]
+with open(path, encoding="utf-8") as handle:
+    value = json.load(handle)
+for part in field.split("."):
+    if not isinstance(value, dict) or part not in value:
+        raise SystemExit(f"missing required signed provenance field: {field}")
+    value = value[part]
+if not isinstance(value, str) or not value.strip():
+    raise SystemExit(f"signed provenance field must be a non-empty string: {field}")
+print(value, end="")
+PY
+}
+
+codesign_metadata_value() {
+  local output="$1"
+  local key="$2"
+  local value
+  value="$(printf '%s\n' "$output" | awk -F= -v key="$key" '$1 == key { print substr($0, length(key) + 2); exit }')"
+  [[ -n "$value" ]] || fail "installed app executable codesign evidence is missing $key"
+  printf '%s' "$value"
+}
+
+require_hex_identity_value() {
+  local label="$1"
+  local value="$2"
+  local minimum_length="$3"
+  python3 - "$label" "$value" "$minimum_length" <<'PY'
+import re
+import sys
+
+label, value, minimum_length = sys.argv[1:4]
+if not re.fullmatch(rf"[0-9A-Fa-f]{{{int(minimum_length)},64}}", value):
+    raise SystemExit(f"{label} must be a hexadecimal value between {minimum_length} and 64 characters")
+PY
 }
 
 require_file_contains() {
@@ -324,6 +381,72 @@ validate_installed_app_bundle_metadata() {
   APP_BUNDLED_CORE_SHA256="$(shasum -a 256 "$core_path" | awk '{print $1}')"
 }
 
+validate_installed_app_executable_binding() {
+  local codesign_output
+  local provenance_app_path
+  local provenance_executable_path
+  local provenance_executable_sha256
+  local provenance_identifier
+  local provenance_team_identifier
+  local provenance_cdhash
+
+  require_command python3
+  require_command shasum
+  require_command codesign
+  require_command xcrun
+  require_command spctl
+  [[ -f "$SIGNED_PROVENANCE_PATH" ]] ||
+    fail "signed-distribution provenance report is missing: $SIGNED_PROVENANCE_PATH"
+
+  APP_EXECUTABLE_PATH="$APP_PATH/Contents/MacOS/JarvisMacApp"
+  [[ -x "$APP_EXECUTABLE_PATH" ]] ||
+    fail "installed app executable is missing or not executable: $APP_EXECUTABLE_PATH"
+  APP_EXECUTABLE_SHA256="$(file_sha256 "$APP_EXECUTABLE_PATH")"
+  SIGNED_PROVENANCE_SHA256="$(file_sha256 "$SIGNED_PROVENANCE_PATH")"
+
+  [[ "$(json_string_value "$SIGNED_PROVENANCE_PATH" evidence_type)" == "signed_distribution_provenance" ]] ||
+    fail "signed provenance evidence_type must be signed_distribution_provenance"
+  [[ "$(json_string_value "$SIGNED_PROVENANCE_PATH" version)" == "$EXPECTED_VERSION" ]] ||
+    fail "signed provenance version does not match $EXPECTED_VERSION"
+  [[ "$(json_string_value "$SIGNED_PROVENANCE_PATH" bundle_identifier)" == "$EXPECTED_BUNDLE_ID" ]] ||
+    fail "signed provenance bundle_identifier does not match $EXPECTED_BUNDLE_ID"
+
+  provenance_app_path="$(json_string_value "$SIGNED_PROVENANCE_PATH" artifacts.app_path)"
+  provenance_executable_path="$(json_string_value "$SIGNED_PROVENANCE_PATH" artifacts.app_executable_path)"
+  [[ "$provenance_executable_path" == "$provenance_app_path/Contents/MacOS/JarvisMacApp" ]] ||
+    fail "signed provenance artifacts.app_executable_path is not inside artifacts.app_path"
+  provenance_executable_sha256="$(json_string_value "$SIGNED_PROVENANCE_PATH" artifacts.app_executable_sha256)"
+  [[ "$APP_EXECUTABLE_SHA256" == "$provenance_executable_sha256" ]] ||
+    fail "installed app executable SHA-256 does not match signed provenance"
+
+  codesign --verify --deep --strict --verbose=2 "$APP_PATH" >/dev/null
+  codesign --verify --strict --verbose=2 "$APP_EXECUTABLE_PATH" >/dev/null
+  codesign_output="$(codesign -dv --verbose=4 "$APP_EXECUTABLE_PATH" 2>&1)"
+  [[ "$codesign_output" == *"Authority=Developer ID Application: "* ]] ||
+    fail "installed app executable is not signed by a Developer ID Application identity"
+  APP_EXECUTABLE_IDENTIFIER="$(codesign_metadata_value "$codesign_output" Identifier)"
+  APP_EXECUTABLE_TEAM_IDENTIFIER="$(codesign_metadata_value "$codesign_output" TeamIdentifier)"
+  APP_EXECUTABLE_CDHASH="$(codesign_metadata_value "$codesign_output" CDHash)"
+  [[ "$APP_EXECUTABLE_IDENTIFIER" == "$EXPECTED_BUNDLE_ID" ]] ||
+    fail "installed app executable identifier mismatch: expected $EXPECTED_BUNDLE_ID, got $APP_EXECUTABLE_IDENTIFIER"
+  [[ "$APP_EXECUTABLE_TEAM_IDENTIFIER" =~ ^[A-Z0-9]{10}$ ]] ||
+    fail "installed app executable TeamIdentifier must be a 10-character Apple team identifier"
+  require_hex_identity_value "installed app executable CDHash" "$APP_EXECUTABLE_CDHASH" 40
+
+  provenance_identifier="$(json_string_value "$SIGNED_PROVENANCE_PATH" signing.app_executable_identifier)"
+  provenance_team_identifier="$(json_string_value "$SIGNED_PROVENANCE_PATH" signing.app_executable_team_identifier)"
+  provenance_cdhash="$(json_string_value "$SIGNED_PROVENANCE_PATH" signing.app_executable_cdhash)"
+  [[ "$APP_EXECUTABLE_IDENTIFIER" == "$provenance_identifier" ]] ||
+    fail "installed app executable identifier does not match signed provenance"
+  [[ "$APP_EXECUTABLE_TEAM_IDENTIFIER" == "$provenance_team_identifier" ]] ||
+    fail "installed app executable TeamIdentifier does not match signed provenance"
+  [[ "$APP_EXECUTABLE_CDHASH" == "$provenance_cdhash" ]] ||
+    fail "installed app executable CDHash does not match signed provenance"
+
+  xcrun stapler validate "$APP_PATH" >/dev/null
+  spctl --assess --type execute --verbose "$APP_PATH" >/dev/null
+}
+
 json_escape() {
   printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
@@ -339,6 +462,13 @@ write_report() {
   local escaped_bundled_core_path
   local escaped_bundled_core_version
   local escaped_bundled_core_sha256
+  local escaped_app_executable_path
+  local escaped_app_executable_sha256
+  local escaped_app_executable_identifier
+  local escaped_app_executable_team_identifier
+  local escaped_app_executable_cdhash
+  local escaped_signed_provenance_path
+  local escaped_signed_provenance_sha256
   local escaped_owner_name
   local escaped_device_label
   local escaped_profile_label
@@ -385,6 +515,13 @@ write_report() {
   escaped_bundled_core_path="$(json_escape "$APP_BUNDLED_CORE_PATH")"
   escaped_bundled_core_version="$(json_escape "$APP_BUNDLED_CORE_VERSION")"
   escaped_bundled_core_sha256="$(json_escape "$APP_BUNDLED_CORE_SHA256")"
+  escaped_app_executable_path="$(json_escape "$APP_EXECUTABLE_PATH")"
+  escaped_app_executable_sha256="$(json_escape "$APP_EXECUTABLE_SHA256")"
+  escaped_app_executable_identifier="$(json_escape "$APP_EXECUTABLE_IDENTIFIER")"
+  escaped_app_executable_team_identifier="$(json_escape "$APP_EXECUTABLE_TEAM_IDENTIFIER")"
+  escaped_app_executable_cdhash="$(json_escape "$APP_EXECUTABLE_CDHASH")"
+  escaped_signed_provenance_path="$(json_escape "$SIGNED_PROVENANCE_PATH")"
+  escaped_signed_provenance_sha256="$(json_escape "$SIGNED_PROVENANCE_SHA256")"
   escaped_owner_name="$(json_escape "$JARVIS_QA_OWNER_NAME")"
   escaped_device_label="$(json_escape "$JARVIS_QA_DEVICE_LABEL")"
   escaped_profile_label="$(json_escape "$JARVIS_QA_PROFILE_LABEL")"
@@ -410,7 +547,7 @@ write_report() {
   escaped_observed_command_text="$(json_escape "$JARVIS_QA_OBSERVED_COMMAND_TEXT")"
   escaped_command_result_evidence_id="$(json_escape "$JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID")"
   escaped_audio_output_device_label="$(json_escape "$JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL")"
-  escaped_boundary="$(json_escape "Owner-recorded clean-profile install, Finder launch, microphone/Speech permission prompts, spoken transcript handoff into the command path, live audio output, notification, restart, and manual release QA flags only; no App Store review, marketplace trust, malware analysis, or OS-level sandbox/egress enforcement.")"
+  escaped_boundary="$(json_escape "Owner-recorded clean-profile install, Finder launch, microphone/Speech permission prompts, spoken transcript handoff into the command path, live audio output, notification, restart, and manual release QA flags bound at report generation to the exact installed app executable bytes and Developer ID code identity recorded by signed provenance. This is point-in-time candidate binding, not installation provenance, continuous filesystem integrity, App Store review, marketplace trust, malware analysis, or OS-level sandbox/egress enforcement.")"
 
   mkdir -p "$(dirname "$REPORT_PATH")"
   cat >"$REPORT_PATH" <<EOF
@@ -426,6 +563,17 @@ write_report() {
     "build_version": "$escaped_build_version",
     "microphone_usage_description": "$escaped_microphone_usage",
     "speech_recognition_usage_description": "$escaped_speech_usage"
+  },
+  "app_executable": {
+    "executable_path": "$escaped_app_executable_path",
+    "sha256": "$escaped_app_executable_sha256",
+    "code_identifier": "$escaped_app_executable_identifier",
+    "team_identifier": "$escaped_app_executable_team_identifier",
+    "cdhash": "$escaped_app_executable_cdhash"
+  },
+  "signed_provenance": {
+    "report_path": "$escaped_signed_provenance_path",
+    "sha256": "$escaped_signed_provenance_sha256"
   },
   "bundled_core": {
     "executable_path": "$escaped_bundled_core_path",
@@ -523,6 +671,7 @@ write_env_template() {
 
 JARVIS_QA_INSTALLED_APP_PATH="/Applications/Jarvis.app"
 JARVIS_QA_REPORT_PATH="target/release-live-device-qa-report.json"
+JARVIS_QA_SIGNED_PROVENANCE_REPORT="target/distribution/Jarvis-$EXPECTED_VERSION-signed-provenance.json"
 JARVIS_RELEASE_CORE_ENDPOINT="" # release core endpoint used for command evidence and external readiness checks
 JARVIS_IPC_TOKEN_FILE="\$HOME/Library/Application Support/Jarvis/ipc-session-auth.json" # path only; never copy the bearer value into this template
 JARVIS_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.jarvis"
@@ -636,7 +785,9 @@ if [[ "$SELF_TEST" == true ]]; then
   fixture_app="$tmp_dir/Jarvis.app"
   fixture_report="$tmp_dir/release-live-device-qa-report.json"
   fixture_template="$tmp_dir/release-live-device-qa.env"
-  mkdir -p "$fixture_app/Contents/MacOS" "$fixture_app/Contents/Resources/bin"
+  fixture_signed_provenance="$tmp_dir/Jarvis-$EXPECTED_VERSION-signed-provenance.json"
+  stub_dir="$tmp_dir/bin"
+  mkdir -p "$fixture_app/Contents/MacOS" "$fixture_app/Contents/Resources/bin" "$stub_dir"
   cat >"$fixture_app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -661,8 +812,56 @@ PLIST
   printf '#!/usr/bin/env sh\nprintf "jarvis %s\\n"\n' "$EXPECTED_VERSION" >"$fixture_app/Contents/Resources/bin/jarvis-cli"
   chmod 755 "$fixture_app/Contents/MacOS/JarvisMacApp" "$fixture_app/Contents/Resources/bin/jarvis-cli"
 
+  cat >"$stub_dir/codesign" <<'SH'
+#!/usr/bin/env bash
+if [[ " $* " == *" --verify "* ]]; then
+  exit 0
+fi
+identifier="${JARVIS_QA_STUB_APP_IDENTIFIER:-com.nobiletechnology.jarvis.selftest}"
+team_identifier="${JARVIS_QA_STUB_TEAM_IDENTIFIER:-9VZ742YKV4}"
+cdhash="${JARVIS_QA_STUB_CDHASH:-0123456789abcdef0123456789abcdef01234567}"
+printf 'Executable=/fixture/JarvisMacApp\nIdentifier=%s\nAuthority=Developer ID Application: Jarvis QA Fixture\nTeamIdentifier=%s\nCDHash=%s\n' \
+  "$identifier" "$team_identifier" "$cdhash"
+SH
+  cat >"$stub_dir/xcrun" <<'SH'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "stapler" && "${2:-}" == "validate" ]]; then
+  printf 'The validate action worked!\n'
+  exit 0
+fi
+exit 1
+SH
+  cat >"$stub_dir/spctl" <<'SH'
+#!/usr/bin/env bash
+printf '%s: accepted\n' "${*: -1}"
+SH
+  chmod 755 "$stub_dir/codesign" "$stub_dir/xcrun" "$stub_dir/spctl"
+  export PATH="$stub_dir:$PATH"
+
+  fixture_app_executable_sha256="$(file_sha256 "$fixture_app/Contents/MacOS/JarvisMacApp")"
+  cat >"$fixture_signed_provenance" <<JSON
+{
+  "schema_version": 1,
+  "evidence_type": "signed_distribution_provenance",
+  "version": "$EXPECTED_VERSION",
+  "bundle_identifier": "com.nobiletechnology.jarvis.selftest",
+  "artifacts": {
+    "app_path": "$fixture_app",
+    "app_executable_path": "$fixture_app/Contents/MacOS/JarvisMacApp",
+    "app_executable_sha256": "$fixture_app_executable_sha256"
+  },
+  "signing": {
+    "app_executable_identifier": "com.nobiletechnology.jarvis.selftest",
+    "app_executable_team_identifier": "9VZ742YKV4",
+    "app_executable_cdhash": "0123456789abcdef0123456789abcdef01234567"
+  }
+}
+JSON
+  export JARVIS_QA_SIGNED_PROVENANCE_REPORT="$fixture_signed_provenance"
+
   "$0" --write-template "$fixture_template" >/dev/null
   require_file_contains "live QA env template" "$fixture_template" "JARVIS_QA_EXPECTED_VERSION=\"$EXPECTED_VERSION\""
+  require_file_contains "live QA env template" "$fixture_template" "JARVIS_QA_SIGNED_PROVENANCE_REPORT=\"target/distribution/Jarvis-$EXPECTED_VERSION-signed-provenance.json\""
   if grep -F 'JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION"' "$fixture_template" >/dev/null 2>&1; then
     fail "live QA self-test expected env template to materialize the expected version"
   fi
@@ -741,6 +940,12 @@ PLIST
   require_file_contains "live QA self-test report" "$fixture_report" "$EXPECTED_MICROPHONE_USAGE_DESCRIPTION"
   require_file_contains "live QA self-test report" "$fixture_report" "$EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION"
   require_file_contains "live QA self-test report" "$fixture_report" '"bundled_core"'
+  require_file_contains "live QA self-test report" "$fixture_report" '"app_executable"'
+  require_file_contains "live QA self-test report" "$fixture_report" '"code_identifier": "com.nobiletechnology.jarvis.selftest"'
+  require_file_contains "live QA self-test report" "$fixture_report" '"team_identifier": "9VZ742YKV4"'
+  require_file_contains "live QA self-test report" "$fixture_report" '"cdhash": "0123456789abcdef0123456789abcdef01234567"'
+  require_file_contains "live QA self-test report" "$fixture_report" '"signed_provenance"'
+  require_file_contains "live QA self-test report" "$fixture_report" "\"report_path\": \"$fixture_signed_provenance\""
   require_file_contains "live QA self-test report" "$fixture_report" '"executable_path"'
   require_file_contains "live QA self-test report" "$fixture_report" "\"version\": \"jarvis $EXPECTED_VERSION\""
   require_file_contains "live QA self-test report" "$fixture_report" '"sha256"'
@@ -824,6 +1029,41 @@ with open(path, "wb") as handle:
     plistlib.dump(data, handle)
 PY
   }
+
+  cp "$fixture_app/Contents/MacOS/JarvisMacApp" "$tmp_dir/JarvisMacApp.original"
+  printf 'mutated after signed provenance\n' >>"$fixture_app/Contents/MacOS/JarvisMacApp"
+  if run_fixture_assertion "$tmp_dir/mutated-app-executable.json" >/dev/null 2>"$tmp_dir/mutated-app-executable.err"; then
+    fail "live QA self-test expected mutated app executable to fail"
+  fi
+  require_file_contains "live QA self-test mutated app executable error" \
+    "$tmp_dir/mutated-app-executable.err" "installed app executable SHA-256 does not match signed provenance"
+  mv "$tmp_dir/JarvisMacApp.original" "$fixture_app/Contents/MacOS/JarvisMacApp"
+  chmod 755 "$fixture_app/Contents/MacOS/JarvisMacApp"
+
+  if run_fixture_assertion "$tmp_dir/mismatched-app-identity.json" \
+    JARVIS_QA_STUB_APP_IDENTIFIER="com.example.WrongJarvis" >/dev/null 2>"$tmp_dir/mismatched-app-identity.err"; then
+    fail "live QA self-test expected mismatched app executable identity to fail"
+  fi
+  require_file_contains "live QA self-test mismatched app executable identity error" \
+    "$tmp_dir/mismatched-app-identity.err" "installed app executable identifier mismatch"
+
+  python3 - "$fixture_signed_provenance" "$tmp_dir/mismatched-team-signed-provenance.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+with open(source, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["signing"]["app_executable_team_identifier"] = "AAAAAAAAAA"
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(data, handle)
+PY
+  if run_fixture_assertion "$tmp_dir/mismatched-provenance-team.json" \
+    JARVIS_QA_SIGNED_PROVENANCE_REPORT="$tmp_dir/mismatched-team-signed-provenance.json" >/dev/null 2>"$tmp_dir/mismatched-provenance-team.err"; then
+    fail "live QA self-test expected mismatched signed provenance team identifier to fail"
+  fi
+  require_file_contains "live QA self-test mismatched signed provenance team error" \
+    "$tmp_dir/mismatched-provenance-team.err" "TeamIdentifier does not match signed provenance"
 
   set_fixture_plist_value NSMicrophoneUsageDescription "Jarvis microphone fixture"
   if run_fixture_assertion "$tmp_dir/mismatched-microphone-usage.json" >/dev/null 2>"$tmp_dir/mismatched-microphone-usage.err"; then
@@ -1303,6 +1543,7 @@ fi
 [[ -x "$APP_PATH/Contents/MacOS/JarvisMacApp" ]] || fail "installed app executable is missing or not executable"
 [[ -x "$APP_PATH/Contents/Resources/bin/jarvis-cli" ]] || fail "bundled core executable is missing or not executable"
 validate_installed_app_bundle_metadata
+validate_installed_app_executable_binding
 
 require_true JARVIS_QA_CLEAN_PROFILE_VALIDATED
 require_true JARVIS_QA_FINDER_LAUNCH_VALIDATED
@@ -1349,10 +1590,14 @@ cat <<EOF
 Jarvis live-device QA assertion: complete
 Installed app: $APP_PATH
 Bundle: $APP_BUNDLE_ID $APP_SHORT_VERSION ($APP_BUILD_VERSION)
+App executable SHA-256: $APP_EXECUTABLE_SHA256
+Signed provenance: $SIGNED_PROVENANCE_PATH
 Report: $REPORT_PATH
 Proof boundary: owner-recorded clean-profile install, Finder launch,
 microphone/Speech permission prompts, spoken transcript handoff into the command
-path, live audio output, structured scheduler notification observation, restart, and manual release QA flags
-only; this still does not prove App Store review, marketplace trust, malware
+path, live audio output, structured scheduler notification observation, restart,
+and manual release QA flags bound at report generation to the signed candidate's
+app executable bytes and code identity only; this is not installation provenance,
+continuous filesystem integrity, App Store review, marketplace trust, malware
 analysis, or OS-level sandbox/egress enforcement.
 EOF
