@@ -123,6 +123,12 @@ core before sending a request.
 
 Packaging assigns stable code identifiers `com.nobiletechnology.jarvis` and
 `com.nobiletechnology.jarvis.core`; alternate package identifiers are rejected.
+Artifact-producing packaging refuses to remove or replace the configured
+distribution bundle while that exact app or bundled-core executable is active,
+with quit-or-alternate-output guidance. This prevents the normal local release
+workflow from invalidating the on-disk identity of a surviving app process; it
+does not weaken runtime signature validation or claim to eliminate the narrow
+process-inspection race.
 The `adhoc_exact` profile admits
 only exact cdhash designated requirements and proves local mechanics for one
 build, not publisher identity. `developer_id_hardened` additionally requires

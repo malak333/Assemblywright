@@ -246,6 +246,8 @@ stage or when a PR needs focused evidence for one ownership slice.
 - `./scripts/package-distribution.sh --entitlements-policy-self-test`
 - `./scripts/package-distribution.sh --version-consistency-self-test`
 - `./scripts/package-distribution.sh --provenance-self-test`
+- `./scripts/package-distribution.sh --running-app-guard-self-test`
+- `./scripts/package-distribution.sh --running-app-guard-e2e`
 - `./scripts/package-distribution.sh --unsigned-launch-check`
 - `cargo run -p jarvis-cli -- release signed-distribution-runbook`
 - `cargo run -p jarvis-cli -- release live-device-runbook`

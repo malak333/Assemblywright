@@ -183,8 +183,11 @@ struct JarvisMacApp: App {
                 Button("Refresh Health") {
                     Task {
                         await supervisor.refreshHealth()
-                        await console.refreshHealth()
-                        modelConfiguration.applyHealth(console.health)
+                        await synchronizeConsoleWithSupervisor(
+                            supervisor: supervisor,
+                            console: console,
+                            modelConfiguration: modelConfiguration
+                        )
                     }
                 }
                 .keyboardShortcut("r", modifiers: [.command])
@@ -242,7 +245,11 @@ struct JarvisShellView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            CoreStatusBanner(supervisor: supervisor, modelConfiguration: modelConfiguration)
+            CoreStatusBanner(
+                supervisor: supervisor,
+                console: console,
+                modelConfiguration: modelConfiguration
+            )
 
             TabView {
                 CommandConsoleView(model: console)
@@ -259,6 +266,7 @@ struct JarvisShellView: View {
                     model: plugins,
                     workspaceRoots: workspaceRoots,
                     supervisor: supervisor,
+                    console: console,
                     modelConfiguration: modelConfiguration
                 )
                     .tabItem { Text("Plugins") }
@@ -272,6 +280,7 @@ struct JarvisShellView: View {
                     automation: schedulerAutomation,
                     attentionCoordinator: schedulerAttentionCoordinator,
                     supervisor: supervisor,
+                    console: console,
                     modelConfiguration: modelConfiguration
                 )
                     .tabItem { Text("Scheduler") }
@@ -443,6 +452,7 @@ final class MacSystemWakeCoordinator: ObservableObject {
 
 struct CoreStatusBanner: View {
     @ObservedObject var supervisor: JarvisCoreSupervisor
+    @ObservedObject var console: CommandConsoleModel
     @ObservedObject var modelConfiguration: ModelConfigurationModel
 
     var body: some View {
@@ -462,12 +472,27 @@ struct CoreStatusBanner: View {
                 .foregroundStyle(.secondary)
 
             Button("Start") {
-                Task { await supervisor.start(environmentOverrides: modelConfiguration.launchEnvironmentOverrides) }
+                Task {
+                    await supervisor.start(
+                        environmentOverrides: modelConfiguration.launchEnvironmentOverrides
+                    )
+                    await synchronizeConsoleWithSupervisor(
+                        supervisor: supervisor,
+                        console: console,
+                        modelConfiguration: modelConfiguration
+                    )
+                }
             }
             .disabled(supervisor.isAvailable)
 
             Button("Stop") {
-                Task { _ = await supervisor.stop() }
+                Task {
+                    guard await supervisor.stop() else {
+                        console.markDegraded("Jarvis core did not stop before the shutdown timeout.")
+                        return
+                    }
+                    console.markDegraded("Jarvis core was stopped from the main window.")
+                }
             }
         }
         .padding(.horizontal)
@@ -500,6 +525,45 @@ struct CoreStatusBanner: View {
             return AnyShapeStyle(Color.secondary.opacity(0.10))
         }
     }
+}
+
+struct CoreConsoleSynchronizationPresentation: Equatable {
+    let shouldRefreshHealth: Bool
+    let unavailableReason: String?
+
+    init(mode: JarvisCoreMode) {
+        switch mode {
+        case .available:
+            shouldRefreshHealth = true
+            unavailableReason = nil
+        case let .degraded(reason):
+            shouldRefreshHealth = false
+            unavailableReason = reason
+        case .stopped:
+            shouldRefreshHealth = false
+            unavailableReason = "Jarvis core is stopped."
+        case .starting:
+            shouldRefreshHealth = false
+            unavailableReason = "Jarvis core is still starting."
+        }
+    }
+}
+
+@MainActor
+func synchronizeConsoleWithSupervisor(
+    supervisor: JarvisCoreSupervisor,
+    console: CommandConsoleModel,
+    modelConfiguration: ModelConfigurationModel
+) async {
+    let presentation = CoreConsoleSynchronizationPresentation(mode: supervisor.mode)
+    guard presentation.shouldRefreshHealth else {
+        console.markDegraded(presentation.unavailableReason ?? "Jarvis core is unavailable.")
+        modelConfiguration.applyHealth(nil)
+        return
+    }
+
+    await console.refreshHealth()
+    modelConfiguration.applyHealth(console.health)
 }
 
 struct CommandConsoleView: View {
@@ -542,8 +606,13 @@ struct CommandConsoleView: View {
                     .textFieldStyle(.roundedBorder)
                     .focused($inputFocused)
                     .onSubmit(send)
+                    .disabled(model.isWorking || model.isDegraded)
                 Button("Send", action: send)
-                    .disabled(model.isWorking || input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(
+                        model.isWorking
+                            || model.isDegraded
+                            || input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    )
                 if model.activeCancellationID != nil {
                     Button(model.isCancelling ? "Cancelling…" : "Cancel") {
                         Task { await model.cancelActiveCommand() }
@@ -614,7 +683,7 @@ struct CommandConsoleView: View {
     }
 
     private func send() {
-        guard !model.isWorking, model.activeCancellationID == nil else { return }
+        guard !model.isWorking, !model.isDegraded, model.activeCancellationID == nil else { return }
         let command = input
         input = ""
         Task {
@@ -660,8 +729,11 @@ struct ModelConfigurationView: View {
                 Button("Refresh") {
                     Task {
                         await supervisor.refreshHealth()
-                        await console.refreshHealth()
-                        model.applyHealth(console.health)
+                        await synchronizeConsoleWithSupervisor(
+                            supervisor: supervisor,
+                            console: console,
+                            modelConfiguration: model
+                        )
                         await model.refreshAvailableModels()
                     }
                 }
@@ -778,16 +850,22 @@ struct ModelConfigurationView: View {
                         model.saveEnteredCodexCredentialIfNeeded()
                         await model.ensureSelectedModelAvailable()
                         guard await supervisor.stop() else {
-                            await console.refreshHealth()
-                            model.applyHealth(console.health)
+                            await synchronizeConsoleWithSupervisor(
+                                supervisor: supervisor,
+                                console: console,
+                                modelConfiguration: model
+                            )
                             return
                         }
                         await supervisor.start(
                             environmentOverrides: model.launchEnvironmentOverrides,
                             requireMatchingConfiguration: true
                         )
-                        await console.refreshHealth()
-                        model.applyHealth(console.health)
+                        await synchronizeConsoleWithSupervisor(
+                            supervisor: supervisor,
+                            console: console,
+                            modelConfiguration: model
+                        )
                     }
                 }
 
@@ -1306,6 +1384,7 @@ struct PluginManagerView: View {
     @ObservedObject var model: PluginManagerModel
     @ObservedObject var workspaceRoots: JarvisWorkspaceRootBookmarkCoordinator
     @ObservedObject var supervisor: JarvisCoreSupervisor
+    @ObservedObject var console: CommandConsoleModel
     @ObservedObject var modelConfiguration: ModelConfigurationModel
     @State private var workspaceStatus: String?
     @State private var workspaceOperationInProgress = false
@@ -1705,12 +1784,22 @@ struct PluginManagerView: View {
             return
         }
         guard await supervisor.stop() else {
+            await synchronizeConsoleWithSupervisor(
+                supervisor: supervisor,
+                console: console,
+                modelConfiguration: modelConfiguration
+            )
             workspaceStatus = "The supervised core did not stop, so the workspace grant was not removed."
             return
         }
         do {
             try workspaceRoots.removeRoot(id: id)
         } catch {
+            await synchronizeConsoleWithSupervisor(
+                supervisor: supervisor,
+                console: console,
+                modelConfiguration: modelConfiguration
+            )
             workspaceStatus = String(describing: error)
             return
         }
@@ -1727,6 +1816,11 @@ struct PluginManagerView: View {
             return
         }
         guard await supervisor.stop() else {
+            await synchronizeConsoleWithSupervisor(
+                supervisor: supervisor,
+                console: console,
+                modelConfiguration: modelConfiguration
+            )
             workspaceStatus = "The supervised core did not stop; workspace authority was not relaunched."
             return
         }
@@ -1737,6 +1831,11 @@ struct PluginManagerView: View {
         await supervisor.start(
             environmentOverrides: modelConfiguration.launchEnvironmentOverrides,
             requireMatchingConfiguration: true
+        )
+        await synchronizeConsoleWithSupervisor(
+            supervisor: supervisor,
+            console: console,
+            modelConfiguration: modelConfiguration
         )
         if supervisor.isAvailable {
             workspaceStatus = WorkspaceRootActivationPresentation(
@@ -1793,6 +1892,7 @@ struct SchedulerJobsView: View {
     @ObservedObject var automation: SchedulerAutomationSettingsModel
     @ObservedObject var attentionCoordinator: SchedulerAttentionCoordinator
     @ObservedObject var supervisor: JarvisCoreSupervisor
+    @ObservedObject var console: CommandConsoleModel
     @ObservedObject var modelConfiguration: ModelConfigurationModel
     @State private var name = "manual check"
     @State private var command = "status check"
@@ -1888,12 +1988,26 @@ struct SchedulerJobsView: View {
                                 guard !supervisor.isAvailable || supervisor.isSupervisingCoreProcess else {
                                     return
                                 }
-                                guard await supervisor.stop() else { return }
+                                guard await supervisor.stop() else {
+                                    await synchronizeConsoleWithSupervisor(
+                                        supervisor: supervisor,
+                                        console: console,
+                                        modelConfiguration: modelConfiguration
+                                    )
+                                    return
+                                }
                                 await supervisor.start(
                                     environmentOverrides: modelConfiguration.launchEnvironmentOverrides,
                                     requireMatchingConfiguration: true
                                 )
-                                await model.refresh()
+                                await synchronizeConsoleWithSupervisor(
+                                    supervisor: supervisor,
+                                    console: console,
+                                    modelConfiguration: modelConfiguration
+                                )
+                                if supervisor.isAvailable {
+                                    await model.refresh()
+                                }
                             }
                         }
                         .disabled(

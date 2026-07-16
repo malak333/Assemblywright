@@ -64,6 +64,8 @@ expected_local_gate_commands=(
   "run ./scripts/package-distribution.sh --entitlements-policy-self-test"
   "run ./scripts/package-distribution.sh --version-consistency-self-test"
   "run ./scripts/package-distribution.sh --provenance-self-test"
+  "run ./scripts/package-distribution.sh --running-app-guard-self-test"
+  "run ./scripts/package-distribution.sh --running-app-guard-e2e"
   "run ./scripts/package-distribution.sh --unsigned-launch-check"
   "run cargo run -p jarvis-cli -- release signed-distribution-runbook"
   "run cargo run -p jarvis-cli -- release live-device-runbook"

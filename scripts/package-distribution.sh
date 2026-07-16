@@ -28,10 +28,12 @@ CHECK_GUIDANCE_SELF_TEST=false
 ENTITLEMENTS_POLICY_SELF_TEST=false
 VERSION_CONSISTENCY_SELF_TEST=false
 PROVENANCE_SELF_TEST=false
+RUNNING_APP_GUARD_SELF_TEST=false
+RUNNING_APP_GUARD_E2E=false
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/package-distribution.sh [--check] [--unsigned-structure-check] [--unsigned-launch-check] [--check-guidance-self-test] [--entitlements-policy-self-test] [--version-consistency-self-test] [--provenance-self-test]
+Usage: scripts/package-distribution.sh [--check] [--unsigned-structure-check] [--unsigned-launch-check] [--check-guidance-self-test] [--entitlements-policy-self-test] [--version-consistency-self-test] [--provenance-self-test] [--running-app-guard-self-test] [--running-app-guard-e2e]
 
 Build a distribution-shaped Jarvis.app bundle, sign it with Developer ID, zip it,
 submit it for notarization, staple the ticket, then build, sign, notarize, and
@@ -70,6 +72,12 @@ without signing, notarizing, or building distribution artifacts.
 --provenance-self-test verifies signed-provenance schema and semantic Apple
 tool-output guards with stubbed local commands. It does not sign, notarize,
 staple, launch, install, or manually validate artifacts.
+--running-app-guard-self-test verifies that packaging refuses to replace the
+exact distribution bundle while its app or bundled core executable is running.
+It uses synthetic process records and does not launch or stop Jarvis.
+--running-app-guard-e2e launches harmless temporary app/core executable copies,
+proves the real process inspection refuses replacement, stops only those test
+processes, and proves the same temporary bundle is then accepted.
 USAGE
 }
 
@@ -81,6 +89,81 @@ run() {
 fail() {
   printf 'error: %s\n' "$1" >&2
   exit 1
+}
+
+running_distribution_processes_from_lsof() {
+  local app_executable_path="$1"
+  local core_executable_path="$2"
+  local current_pid=""
+  local field
+  local executable_path
+
+  while IFS= read -r field; do
+    case "$field" in
+      p*)
+        current_pid="${field#p}"
+        ;;
+      n*)
+        executable_path="${field#n}"
+        if [[ -n "$current_pid" ]] &&
+          [[ "$executable_path" == "$app_executable_path" || "$executable_path" == "$core_executable_path" ]]; then
+          printf '%s\t%s\n' "$current_pid" "$executable_path"
+        fi
+        ;;
+    esac
+  done
+}
+
+reject_running_distribution_processes() {
+  local matches="$1"
+  local pids
+  [[ -z "$matches" ]] && return 0
+
+  pids="$(printf '%s\n' "$matches" | awk -F '\t' '!seen[$1]++ { printf "%s%s", separator, $1; separator="," }')"
+  fail "refusing to replace $APP_PATH while Jarvis is running from that bundle (PID(s): $pids); quit Jarvis with Command-Q, then retry, or use a different JARVIS_DISTRIBUTION_DIR"
+}
+
+run_running_app_guard_self_test() {
+  local fixture_root="/tmp/Jarvis guard fixture"
+  local fixture_app="$fixture_root/Jarvis.app/Contents/MacOS/$APP_EXECUTABLE_NAME"
+  local fixture_core="$fixture_root/Jarvis.app/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
+  local records
+  local matches
+  local output
+
+  records="$(cat <<EOF
+p101
+ftxt
+n$fixture_app
+p102
+ftxt
+n$fixture_core
+p103
+ftxt
+n$fixture_root/Jarvis.app.backup/Contents/MacOS/$APP_EXECUTABLE_NAME
+p104
+ftxt
+n/bin/zsh
+EOF
+)"
+  matches="$(printf '%s\n' "$records" | running_distribution_processes_from_lsof "$fixture_app" "$fixture_core")"
+  require_output_contains "running app guard app match" "$matches" $'101\t'"$fixture_app"
+  require_output_contains "running app guard core match" "$matches" $'102\t'"$fixture_core"
+  if [[ "$matches" == *$'103\t'* || "$matches" == *$'104\t'* ]]; then
+    fail "running app guard self-test accepted a near-match executable path"
+  fi
+
+  output=""
+  if output="$(APP_PATH="$fixture_root/Jarvis.app" reject_running_distribution_processes "$matches" 2>&1)"; then
+    fail "running app guard self-test expected an active distribution process to block replacement"
+  fi
+  require_output_contains "running app guard rejection" "$output" "refusing to replace $fixture_root/Jarvis.app"
+  require_output_contains "running app guard rejection" "$output" "PID(s): 101,102"
+  require_output_contains "running app guard rejection" "$output" "quit Jarvis with Command-Q"
+
+  reject_running_distribution_processes ""
+  printf '\nJarvis running app guard self-test: ok\n'
+  printf 'Proof boundary: synthetic active-executable detection and refusal messaging only; no app was built, replaced, launched, stopped, signed, notarized, stapled, installed, or manually validated.\n'
 }
 
 if [[ -n "${JARVIS_BUNDLE_ID:-}" && "$JARVIS_BUNDLE_ID" != "$BUNDLE_ID" ]]; then
@@ -563,6 +646,14 @@ while [[ $# -gt 0 ]]; do
       PROVENANCE_SELF_TEST=true
       shift
       ;;
+    --running-app-guard-self-test)
+      RUNNING_APP_GUARD_SELF_TEST=true
+      shift
+      ;;
+    --running-app-guard-e2e)
+      RUNNING_APP_GUARD_E2E=true
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -574,13 +665,18 @@ while [[ $# -gt 0 ]]; do
 done
 
 selected_mode_count=0
-for selected_mode in "$CHECK_ONLY" "$UNSIGNED_STRUCTURE_CHECK" "$UNSIGNED_LAUNCH_CHECK" "$CHECK_GUIDANCE_SELF_TEST" "$ENTITLEMENTS_POLICY_SELF_TEST" "$VERSION_CONSISTENCY_SELF_TEST" "$PROVENANCE_SELF_TEST"; do
+for selected_mode in "$CHECK_ONLY" "$UNSIGNED_STRUCTURE_CHECK" "$UNSIGNED_LAUNCH_CHECK" "$CHECK_GUIDANCE_SELF_TEST" "$ENTITLEMENTS_POLICY_SELF_TEST" "$VERSION_CONSISTENCY_SELF_TEST" "$PROVENANCE_SELF_TEST" "$RUNNING_APP_GUARD_SELF_TEST" "$RUNNING_APP_GUARD_E2E"; do
   if [[ "$selected_mode" == true ]]; then
     selected_mode_count=$((selected_mode_count + 1))
   fi
 done
 if [[ "$selected_mode_count" -gt 1 ]]; then
-  fail "--check, --unsigned-structure-check, --unsigned-launch-check, --check-guidance-self-test, --entitlements-policy-self-test, --version-consistency-self-test, and --provenance-self-test are mutually exclusive"
+  fail "--check, --unsigned-structure-check, --unsigned-launch-check, --check-guidance-self-test, --entitlements-policy-self-test, --version-consistency-self-test, --provenance-self-test, --running-app-guard-self-test, and --running-app-guard-e2e are mutually exclusive"
+fi
+
+if [[ "$RUNNING_APP_GUARD_SELF_TEST" == true ]]; then
+  run_running_app_guard_self_test
+  exit 0
 fi
 
 if [[ "$CHECK_GUIDANCE_SELF_TEST" == true ]]; then
@@ -674,6 +770,143 @@ assert_package_version_consistency
 require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "required command is missing: $1"
 }
+
+canonical_path() {
+  python3 - "$1" <<'PY'
+import os
+import sys
+
+print(os.path.realpath(os.path.abspath(sys.argv[1])))
+PY
+}
+
+assert_distribution_bundle_not_running() {
+  local canonical_app_path
+  local app_executable_path
+  local core_executable_path
+  local candidate_pids=""
+  local name
+  local name_pids
+  local probe_status
+  local pid
+  local process_records=""
+  local pid_records
+  local matches
+
+  require_command lsof
+  require_command pgrep
+  require_command python3
+
+  canonical_app_path="$(canonical_path "$APP_PATH")"
+  app_executable_path="$canonical_app_path/Contents/MacOS/$APP_EXECUTABLE_NAME"
+  core_executable_path="$canonical_app_path/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
+
+  for name in "$APP_EXECUTABLE_NAME" "$CORE_EXECUTABLE_NAME"; do
+    set +e
+    name_pids="$(pgrep -x "$name" 2>/dev/null)"
+    probe_status=$?
+    set -e
+    if [[ "$probe_status" -gt 1 ]]; then
+      fail "could not inspect running $name processes before replacing $APP_PATH"
+    fi
+    if [[ -n "$name_pids" ]]; then
+      candidate_pids+="${candidate_pids:+$'\n'}$name_pids"
+    fi
+  done
+
+  candidate_pids="$(printf '%s\n' "$candidate_pids" | awk 'NF && !seen[$1]++ { print $1 }')"
+  while IFS= read -r pid; do
+    [[ -n "$pid" ]] || continue
+    set +e
+    pid_records="$(lsof -a -nP -p "$pid" -d txt -Fpn 2>/dev/null)"
+    probe_status=$?
+    set -e
+    if [[ "$probe_status" -ne 0 ]]; then
+      if kill -0 "$pid" 2>/dev/null; then
+        fail "could not inspect candidate Jarvis process $pid before replacing $APP_PATH"
+      fi
+      continue
+    fi
+    process_records+="${process_records:+$'\n'}$pid_records"
+  done <<<"$candidate_pids"
+
+  matches="$(printf '%s\n' "$process_records" |
+    running_distribution_processes_from_lsof "$app_executable_path" "$core_executable_path")"
+  reject_running_distribution_processes "$matches"
+}
+
+run_running_app_guard_e2e() (
+  local tmp_dir
+  local fixture_bundle
+  local fixture_app
+  local fixture_core
+  local app_pid=""
+  local core_pid=""
+  local output=""
+  local detected=false
+  local attempt
+
+  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/jarvis-running-app-guard-e2e.XXXXXX")"
+  fixture_bundle="$tmp_dir/Jarvis.app"
+  fixture_app="$fixture_bundle/Contents/MacOS/$APP_EXECUTABLE_NAME"
+  fixture_core="$fixture_bundle/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
+
+  cleanup_running_app_guard_e2e() {
+    if [[ -n "$app_pid" ]]; then
+      kill "$app_pid" 2>/dev/null || true
+      wait "$app_pid" 2>/dev/null || true
+    fi
+    if [[ -n "$core_pid" ]]; then
+      kill "$core_pid" 2>/dev/null || true
+      wait "$core_pid" 2>/dev/null || true
+    fi
+    rm -rf "$tmp_dir"
+  }
+  trap cleanup_running_app_guard_e2e EXIT
+
+  require_command clang
+  mkdir -p "$(dirname "$fixture_app")" "$(dirname "$fixture_core")"
+  clang -O0 "$ROOT_DIR/scripts/fixtures/running-app-guard-process.c" -o "$fixture_app"
+  clang -O0 "$ROOT_DIR/scripts/fixtures/running-app-guard-process.c" -o "$fixture_core"
+  "$fixture_app" &
+  app_pid=$!
+  "$fixture_core" &
+  core_pid=$!
+
+  for attempt in $(seq 1 100); do
+    output=""
+    if ! output="$(APP_PATH="$fixture_bundle" assert_distribution_bundle_not_running 2>&1)"; then
+      if [[ "$output" == *"refusing to replace $fixture_bundle"* ]]; then
+        detected=true
+        break
+      fi
+      printf '%s\n' "$output" >&2
+      fail "running app guard E2E encountered an unexpected inspection failure"
+    fi
+    sleep 0.02
+  done
+
+  [[ "$detected" == true ]] || fail "running app guard E2E did not detect the temporary live bundle"
+  require_output_contains "running app guard E2E app PID" "$output" "$app_pid"
+  require_output_contains "running app guard E2E core PID" "$output" "$core_pid"
+  require_output_contains "running app guard E2E guidance" "$output" "quit Jarvis with Command-Q"
+
+  kill "$app_pid" "$core_pid"
+  wait "$app_pid" 2>/dev/null || true
+  wait "$core_pid" 2>/dev/null || true
+  app_pid=""
+  core_pid=""
+
+  APP_PATH="$fixture_bundle" assert_distribution_bundle_not_running
+
+  printf '\nJarvis running app guard E2E: ok\n'
+  printf 'Proof boundary: real process-name and text-vnode inspection against temporary app/core stand-ins only; no Jarvis process or distribution artifact was launched, stopped, replaced, signed, notarized, stapled, installed, or manually validated.\n'
+)
+
+if [[ "$RUNNING_APP_GUARD_E2E" == true ]]; then
+  run_running_app_guard_e2e
+  exit 0
+fi
 
 run_provenance_self_test() {
   local tmp_dir
@@ -974,6 +1207,7 @@ LOG
 }
 
 build_app_bundle() {
+  assert_distribution_bundle_not_running
   rm -rf "$DIST_DIR"
   mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources/bin"
 

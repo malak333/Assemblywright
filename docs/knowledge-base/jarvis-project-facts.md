@@ -1295,8 +1295,25 @@ requires plugin-trust `generated_at`, `review_started_at`,
   app and bundled-core entitlement templates. Its
   `--entitlements-policy-self-test` is part of `./scripts/release-local.sh` and
   proves the app entitlement template keeps microphone access while the bundled
-  core template does not. Its `--unsigned-structure-check` mode builds release Rust/Swift
-  artifacts, assembles `target/distribution/Jarvis.app`, optionally ad-hoc signs
+  core template does not. Its `--running-app-guard-self-test` is also part of
+  the local gate and proves that exact app/core executable matches block bundle
+  replacement without launching or stopping Jarvis. The companion
+  `--running-app-guard-e2e` launches temporary harmless app/core executable
+  copies and proves the real process-name plus text-vnode inspection blocks
+  that live fixture, then accepts the same bundle after the fixtures stop.
+  Every artifact-producing
+  mode now inspects the configured distribution bundle immediately before
+  deletion and fails with quit-or-alternate-directory guidance when that exact
+  app or bundled core is active. This preserves strict runtime signature
+  validation and prevents the common rebuild-while-running failure, while the
+  narrow inspection/delete race remains explicit. When the UI shows Core
+  `invalidSignature` and then `credentialUnavailable`, treat the signature
+  failure as primary: the strict identity check stopped launch before IPC
+  credential rotation, so the credential error is secondary. Check whether a
+  running bundle was rebuilt or replaced, then quit and reopen Jarvis; rebuild
+  only if signature validation still fails. Its
+  `--unsigned-structure-check` mode builds release Rust/Swift artifacts,
+  assembles `target/distribution/Jarvis.app`, optionally ad-hoc signs
   when `codesign` is available, creates an unsigned `/Applications` installer
   package, inspects the package payload for the app executable, bundled core,
   and `Info.plist`, and validates package identifier, version, and

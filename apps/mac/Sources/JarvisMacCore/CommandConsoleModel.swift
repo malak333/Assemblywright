@@ -76,6 +76,10 @@ public final class CommandConsoleModel: ObservableObject {
     ) async {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        guard !isDegraded else {
+            lastError = degradedReason ?? "Jarvis core is unavailable."
+            return
+        }
         guard activeCancellationID == nil, !isWorking else {
             lastError = "A command is already active; cancel it or wait for completion before submitting another."
             return

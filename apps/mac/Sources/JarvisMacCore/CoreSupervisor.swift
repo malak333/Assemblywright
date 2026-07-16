@@ -381,6 +381,14 @@ public final class JarvisCoreSupervisor: ObservableObject {
         return false
     }
 
+    static func degradedReason(for error: Error) -> String {
+        if let identityError = error as? JarvisIPCPeerIdentityError,
+           identityError == .invalidSignature {
+            return "Jarvis could not validate the app/core code signature. The app bundle may have been rebuilt or replaced while Jarvis was running. Quit Jarvis with Command-Q and reopen it; if the error remains, rebuild the app bundle."
+        }
+        return String(describing: error)
+    }
+
     public var isSupervisingCoreProcess: Bool {
         process?.isRunning == true
     }
@@ -563,7 +571,7 @@ public final class JarvisCoreSupervisor: ObservableObject {
                 ipcAuthorization.clear(generation: generation)
             }
             activeIPCAuthorizationGeneration = nil
-            mode = .degraded(reason: String(describing: error))
+            mode = .degraded(reason: Self.degradedReason(for: error))
         }
     }
 

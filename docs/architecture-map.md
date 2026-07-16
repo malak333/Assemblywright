@@ -330,6 +330,8 @@ flowchart TB
     LocalGate --> PackageEntitlementsPolicy["package-distribution.sh entitlements-policy-self-test"]
     LocalGate --> PackageVersionSelfTest["package-distribution.sh version-consistency-self-test"]
     LocalGate --> PackageProvenanceSelfTest["package-distribution.sh provenance-self-test"]
+    LocalGate --> PackageRunningAppGuard["package-distribution.sh running-app-guard-self-test"]
+    LocalGate --> PackageRunningAppGuardE2E["package-distribution.sh running-app-guard-e2e"]
     LocalGate --> UnsignedStructure["package-distribution.sh unsigned-structure-check"]
     LocalGate --> UnsignedLaunch["package-distribution.sh unsigned-launch-check"]
     LocalGate --> SignedDistributionRunbook["jarvis release signed-distribution-runbook read-only signed artifact triage"]

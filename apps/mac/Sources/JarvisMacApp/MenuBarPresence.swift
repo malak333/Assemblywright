@@ -63,8 +63,11 @@ struct JarvisMenuBarView: View {
         Button("Refresh Health") {
             Task {
                 await supervisor.refreshHealth()
-                await console.refreshHealth()
-                modelConfiguration.applyHealth(console.health)
+                await synchronizeConsoleWithSupervisor(
+                    supervisor: supervisor,
+                    console: console,
+                    modelConfiguration: modelConfiguration
+                )
             }
         }
 
@@ -73,8 +76,11 @@ struct JarvisMenuBarView: View {
                 await supervisor.start(
                     environmentOverrides: modelConfiguration.launchEnvironmentOverrides
                 )
-                await console.refreshHealth()
-                modelConfiguration.applyHealth(console.health)
+                await synchronizeConsoleWithSupervisor(
+                    supervisor: supervisor,
+                    console: console,
+                    modelConfiguration: modelConfiguration
+                )
             }
         }
         .disabled(!presentation.canStartCore)

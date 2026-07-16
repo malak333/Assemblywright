@@ -2778,6 +2778,22 @@ struct JarvisMacCoreTests {
     }
 
     @MainActor
+    @Test("Command console refuses submissions while the core is degraded")
+    func commandConsoleRejectsSubmitWhileDegraded() async {
+        let client = FakeCoreClient()
+        let console = CommandConsoleModel(client: client)
+        let reason = "The app bundle changed while Jarvis was running."
+        console.markDegraded(reason)
+
+        await console.submit(input: "you there?", dryRun: true)
+
+        #expect(client.submittedCommands.isEmpty)
+        #expect(console.transcript.isEmpty)
+        #expect(console.lastError == reason)
+        #expect(console.degradedReason == reason)
+    }
+
+    @MainActor
     @Test("Command console exposes cancellation only while its generated handle is active")
     func commandConsoleCancelsItsActiveSubmission() async throws {
         let client = FakeCoreClient(commandSubmissionDelayNanoseconds: 150_000_000)
@@ -8706,6 +8722,42 @@ struct IPCBearerAuthorizationTests {
         #expect(!supervisor.isAvailable)
     }
 
+    @Test("Supervisor explains an invalid app signature without creating IPC authority")
+    func supervisorExplainsInvalidSignatureBeforeLaunch() async throws {
+        let directory = try shortUnixTestDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let authorization = makeUnixSocketAuthorization(
+            socketDirectoryURL: directory.appending(path: "run"),
+            tokenFileRoot: directory,
+            socketIdentifier: { "invalid-signature" }
+        )
+        let launcher = FakeProcessLauncher()
+        let supervisor = JarvisCoreSupervisor(
+            configuration: JarvisCoreSupervisorConfiguration(
+                executableURL: URL(fileURLWithPath: "/tmp/jarvis-cli"), databaseURL: nil
+            ),
+            client: FakeCoreClient(healthResults: [.failure(URLError(.cannotConnectToHost))]),
+            processLauncher: launcher,
+            workspaceRootProvider: FakeWorkspaceRootGrantProvider(roots: []),
+            ipcAuthorization: authorization,
+            peerIdentityPolicyProvider: FakePeerIdentityPolicyProvider(
+                failure: .invalidSignature
+            )
+        )
+
+        await supervisor.start()
+
+        #expect(launcher.launches.isEmpty)
+        #expect(authorization.activeGeneration == nil)
+        if case let .degraded(reason) = supervisor.mode {
+            #expect(reason.contains("may have been rebuilt or replaced"))
+            #expect(reason.contains("Command-Q"))
+            #expect(!reason.contains("credentialUnavailable"))
+        } else {
+            Issue.record("expected invalid signature to degrade the supervisor")
+        }
+    }
+
     @Test("UDS run directory rejects symlink, file, and permissive preexisting state")
     func unixSocketDirectorySafety() throws {
         let root = try shortUnixTestDirectory()
@@ -12121,8 +12173,12 @@ private func samplePeerIdentityPolicy() -> JarvisIPCPeerIdentityPolicy {
 
 private struct FakePeerIdentityPolicyProvider: JarvisIPCPeerIdentityPolicyProviding {
     var shouldFail = false
+    var failure: JarvisIPCPeerIdentityError? = nil
 
     func policy(forCoreExecutable executableURL: URL) throws -> JarvisIPCPeerIdentityPolicy {
+        if let failure {
+            throw failure
+        }
         if shouldFail {
             throw JarvisIPCPeerIdentityError.unavailable
         }

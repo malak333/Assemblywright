@@ -147,6 +147,14 @@ release requirements, not optional UX guidance.
   `com.nobiletechnology.jarvis.core` identifier. Alternate package bundle
   identifiers are rejected because they cannot satisfy the fixed production
   code-identity contract.
+- Artifact-producing distribution packaging must inspect the exact configured
+  `Jarvis.app` and bundled-core executable immediately before removing the
+  distribution directory. If either executable is active, packaging fails
+  closed with guidance to quit Jarvis or use a different
+  `JARVIS_DISTRIBUTION_DIR`; it must not terminate the app, replace the live
+  bundle, or weaken dynamic signature validation. A signature failure remains
+  degraded and actionable, and the command console must not append or send a
+  new command while already degraded.
 - Exact release-smoke mode may emit only a fixed non-secret success marker, and
   only after the app-owned Swift client completes authenticated health,
   dry-run command, task/audit inspection, diagnostics, pause, blocked-command,

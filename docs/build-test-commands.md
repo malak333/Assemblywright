@@ -44,6 +44,8 @@ cargo run -p jarvis-cli -- smoke
 ./scripts/package-distribution.sh --entitlements-policy-self-test
 ./scripts/package-distribution.sh --version-consistency-self-test
 ./scripts/package-distribution.sh --provenance-self-test
+./scripts/package-distribution.sh --running-app-guard-self-test
+./scripts/package-distribution.sh --running-app-guard-e2e
 ./scripts/package-distribution.sh --unsigned-launch-check
 cargo run -p jarvis-cli -- release signed-distribution-runbook
 cargo run -p jarvis-cli -- release live-device-runbook
@@ -1193,6 +1195,8 @@ cargo test -p jarvis-cli --test local_ipc_e2e -- --ignored
 ./scripts/release-operator-qa-smoke.sh
 ./scripts/packaged-supervision-proof.sh
 ./scripts/package-distribution.sh --check
+./scripts/package-distribution.sh --running-app-guard-self-test
+./scripts/package-distribution.sh --running-app-guard-e2e
 ./scripts/package-distribution.sh --unsigned-structure-check
 ./scripts/package-distribution.sh --unsigned-launch-check
 swift test --package-path apps/mac --filter JarvisMacCoreTests
@@ -1248,8 +1252,19 @@ final bundle handoff. The final bundle handoff printed by `--check` ends with
 `./scripts/release-evidence-doctor.sh --assert-complete` after the read-only
 doctor inventory check, so the package preflight guidance carries the same
 final assertion as the release evidence bundle and doctor lanes. Its
-`--unsigned-structure-check`
-mode builds and inspects the release app/pkg structure without Developer ID
+`--running-app-guard-self-test` locks the fail-closed parser and refusal message
+used before any artifact-producing lane removes the distribution directory.
+`--running-app-guard-e2e` additionally launches temporary harmless executables
+at the exact app/core bundle paths, proves real process-name plus text-vnode
+inspection blocks replacement, stops only those fixtures, and proves the bundle
+is accepted afterward.
+Packaging now refuses to replace the exact configured `Jarvis.app` while its
+app or bundled-core executable is running, and tells the operator to quit the
+app or select a different `JARVIS_DISTRIBUTION_DIR`. This prevents a surviving
+process from observing a different on-disk signed bundle; it does not weaken
+the runtime code-identity check or eliminate the narrow process-check race.
+Its `--unsigned-structure-check` mode builds and inspects the release app/pkg
+structure without Developer ID
 credentials, including unsigned package identifier, version, and `/Applications`
 install-location metadata. Its `--unsigned-launch-check` mode also validates
 that package metadata, launches the release-built app executable with an

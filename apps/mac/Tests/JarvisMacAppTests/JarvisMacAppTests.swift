@@ -135,6 +135,23 @@ struct JarvisMacAppTests {
         #expect(degraded.canStopCore)
     }
 
+    @Test("Console synchronization never probes IPC after a pre-authority failure")
+    func consoleSynchronizationPreservesSupervisorFailure() {
+        let failure = "Jarvis app signature validation failed; quit and reopen Jarvis."
+        let available = CoreConsoleSynchronizationPresentation(mode: .available)
+        let degraded = CoreConsoleSynchronizationPresentation(
+            mode: .degraded(reason: failure)
+        )
+        let stopped = CoreConsoleSynchronizationPresentation(mode: .stopped)
+
+        #expect(available.shouldRefreshHealth)
+        #expect(available.unavailableReason == nil)
+        #expect(!degraded.shouldRefreshHealth)
+        #expect(degraded.unavailableReason == failure)
+        #expect(!stopped.shouldRefreshHealth)
+        #expect(stopped.unavailableReason == "Jarvis core is stopped.")
+    }
+
     @Test("Model tab presentation gates start and download around installed state")
     func modelTabPresentationGatesStartAndDownloadAroundInstalledState() {
         let missingModel = ModelConfigurationPresentation(
