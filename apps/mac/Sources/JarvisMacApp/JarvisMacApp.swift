@@ -632,10 +632,12 @@ struct ModelConfigurationView: View {
     @ObservedObject var model: ModelConfigurationModel
     @ObservedObject var supervisor: JarvisCoreSupervisor
     @ObservedObject var console: CommandConsoleModel
+    @State private var showingOllamaUpgradeConfirmation = false
 
     private var controlsPresentation: ModelConfigurationPresentation {
         ModelConfigurationPresentation(
             canControlSelectedModelRuntime: model.canControlSelectedModelRuntime,
+            canUpgradeLocalOllama: model.canUpgradeLocalOllama,
             isWorking: model.isWorking,
             selectedModelIsInstalled: model.selectedModelIsInstalled,
             downloadProgress: model.downloadProgress
@@ -704,6 +706,10 @@ struct ModelConfigurationView: View {
                             Task { await model.refreshAvailableModels() }
                         }
                         .disabled(model.isWorking)
+                        Button("Upgrade Ollama…") {
+                            showingOllamaUpgradeConfirmation = true
+                        }
+                        .disabled(!controlsPresentation.canUpgradeOllama)
                     }
 
                     ScrollView {
@@ -833,6 +839,18 @@ struct ModelConfigurationView: View {
         .task {
             await model.refreshAvailableModels()
         }
+        .confirmationDialog(
+            "Upgrade Ollama with Homebrew?",
+            isPresented: $showingOllamaUpgradeConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Upgrade and Restart Ollama") {
+                Task { await model.upgradeOllama() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Jarvis will upgrade the Homebrew-managed Ollama formula. If its Homebrew service is running, Jarvis will restart that service. Model downloads remain a separate action.")
+        }
     }
 
     private var activeRuntimeText: String {
@@ -913,11 +931,13 @@ struct ModelConfigurationPresentation: Equatable {
     var canStartModel: Bool
     var canDownloadSelected: Bool
     var canStopModel: Bool
+    var canUpgradeOllama: Bool
     var progressValue: Double?
     var progressDetailLine: String?
 
     init(
         canControlSelectedModelRuntime: Bool,
+        canUpgradeLocalOllama: Bool,
         isWorking: Bool,
         selectedModelIsInstalled: Bool,
         downloadProgress: JarvisOllamaPullProgress?
@@ -925,6 +945,7 @@ struct ModelConfigurationPresentation: Equatable {
         canStartModel = canControlSelectedModelRuntime && !isWorking && selectedModelIsInstalled
         canDownloadSelected = canControlSelectedModelRuntime && !isWorking && !selectedModelIsInstalled
         canStopModel = canControlSelectedModelRuntime && !isWorking
+        canUpgradeOllama = canUpgradeLocalOllama && !isWorking
         progressValue = downloadProgress?.fractionCompleted
         progressDetailLine = downloadProgress?.detailLine
     }

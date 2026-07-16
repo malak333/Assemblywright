@@ -949,8 +949,15 @@ requires plugin-trust `generated_at`, `review_started_at`,
   separate terminal-owned `jarvis serve` process; that external core must be
   stopped before the app can relaunch a supervised core with new model settings.
   If Ollama returns a `/api/pull` 412 update-required error for a newer model
-  family, Jarvis surfaces a normalized "Update Ollama before retrying" failure;
-  the fix is to update and restart Ollama before retrying the same model pull.
+  family, Jarvis surfaces a normalized "Update Ollama before retrying" failure.
+  For loopback endpoints, the Model tab exposes a separately confirmed
+  **Upgrade Ollama…** action for Homebrew formula installations. It resolves
+  only the fixed Apple Silicon/Intel Homebrew executable locations, invokes no
+  shell or user-derived arguments, passes a minimal environment, verifies the
+  installed formula version before and after upgrade, and restarts the Ollama
+  Homebrew service only if it was already running. Remote endpoints,
+  non-Homebrew installations, and failures remain manual and visible; Jarvis
+  never silently starts a stopped service.
 - The Swift Model tab exposes separate `OpenAI API` and `Codex account`
   provider selections for approved ChatGPT/OpenAI-compatible cloud routing.
   Both disable the local provider for the app-supervised core, set
@@ -1108,8 +1115,17 @@ requires plugin-trust `generated_at`, `review_started_at`,
   `:latest` alias matching, RAM estimate display, missing-model
   auto-download-on-select, streamed download progress, automatic inventory reload
   after pull completion, supervised-core launch environment overrides, and
-  selected-model start/stop. `JarvisMacAppTests` covers the visible Model tab
-  Start/Download/Stop gating and progress presentation, while the
+  selected-model start/stop. The same focused model coverage pins loopback-only
+  Homebrew upgrade availability, exact no-shell command sequencing, filtered
+  environment inheritance, pre/post version checks, already-running service
+  restart, stopped-service preservation, and non-formula failure guidance.
+  `ollamaUpgradeProcessEndToEnd` closes the app-side E2E gap by running
+  `ModelConfigurationModel` through `FoundationJarvisCommandRunner` into a
+  temporary executable fake Homebrew command, then asserting the observed
+  version transition, service-restart sentinel, exact command log, and final UI
+  status without modifying the real Homebrew/Ollama installation.
+  `JarvisMacAppTests` covers the visible Model tab
+  Start/Download/Stop/Upgrade gating and progress presentation, while the
   `OllamaModelRuntimeController` HTTP test uses an injected `URLSession` to
   assert streamed `/api/pull`, update-required pull-error normalization, plus
   `/api/tags` and `/api/generate` keep-alive request shape without requiring a

@@ -308,9 +308,23 @@ another terminal already owns the core port, stop that external `jarvis serve`
 process before applying the Model tab restart.
 
 If a Model tab download fails with `pull model manifest: 412` and says the model
-requires a newer version of Ollama, update and restart Ollama before retrying the
-same model. Jarvis normalizes that provider error, but it cannot make an older
-Ollama daemon pull a model that requires newer manifest/runtime support.
+requires a newer version of Ollama, use **Upgrade Ollama…** and confirm the
+Homebrew mutation before retrying the same model. The button is enabled only for
+a loopback endpoint and a non-busy Model tab. It verifies a Homebrew formula,
+invokes a fixed Homebrew executable without a shell, filters unrelated inherited
+environment values, verifies the version after upgrade, and restarts the Ollama
+Homebrew service only when it was already running. Remote or non-Homebrew Ollama
+installations remain manual update paths and a stopped service is not silently
+started.
+
+The focused process-level E2E uses a temporary fake Homebrew executable, not the
+machine's real package manager, while exercising the Model configuration model,
+real Foundation process runner, version transition, exact command order, and
+already-running service restart:
+
+```sh
+swift test --disable-sandbox --package-path apps/mac --filter ollamaUpgradeProcessEndToEnd
+```
 
 Live local testing with `llama3.2` has proven this Ollama route can complete
 real model commands. Local model behavior is still model-dependent, so the
@@ -1508,7 +1522,12 @@ production/manual-gate context,
 shows Model tab streamed Ollama download progress, automatic inventory reload,
 `:latest` installed-model alias handling, and Start/Download gating through
 focused model and app presentation tests, including normalized update-required
-pull failures,
+pull failures plus confirmed loopback-only Homebrew upgrade command sequencing,
+minimal-environment enforcement, version verification, and no-start behavior for
+an already stopped service. A process-level E2E additionally drives the model
+through a real Foundation child process backed by a temporary fake Homebrew
+executable and verifies the resulting version file, restart sentinel, and exact
+command log without changing the host installation,
 exposes management models for
 approval evidence, memory classification summary, memory policy review counts,
 memory create/update/review/delete/restore state, runs/audit,

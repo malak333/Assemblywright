@@ -29,6 +29,16 @@ release requirements, not optional UX guidance.
   cancels active non-critical tasks, and requires deliberate resume.
 - Cancellation must propagate across tasks, tool calls, scheduled jobs, and
   proactive triggers.
+- Ollama package upgrades from the Swift Model tab require an explicit visible
+  confirmation and a configured loopback endpoint. The app may invoke only an
+  executable Homebrew binary at `/opt/homebrew/bin/brew` or
+  `/usr/local/bin/brew`, without a shell or user-derived command arguments, and
+  with unrelated environment values removed. It must verify that Ollama is a
+  Homebrew formula, check the installed version before and after upgrade, and
+  restart the Homebrew service only if it was already running. Remote endpoints,
+  missing or non-formula installations, failed service inspection, upgrade
+  failure, and post-upgrade verification failure must remain visible and fail
+  closed. The action must never silently start a stopped service.
 - Interactive `POST /commands` accepts an optional client-generated UUID
   `cancellation_id` for backward compatibility. Swift and CLI clients must
   generate the handle before submission so Cancel does not depend on a task ID

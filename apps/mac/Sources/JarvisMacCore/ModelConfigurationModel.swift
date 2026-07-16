@@ -175,6 +175,231 @@ public protocol JarvisLocalModelRuntimeControlling: Sendable {
     func unloadOllamaModel(model: String, baseURL: URL) async throws
 }
 
+public struct JarvisCommandResult: Equatable, Sendable {
+    public var exitCode: Int32
+    public var output: String
+
+    public init(exitCode: Int32, output: String) {
+        self.exitCode = exitCode
+        self.output = output
+    }
+}
+
+public protocol JarvisCommandRunning: Sendable {
+    func run(
+        executableURL: URL,
+        arguments: [String],
+        environment: [String: String]
+    ) async throws -> JarvisCommandResult
+}
+
+public struct FoundationJarvisCommandRunner: JarvisCommandRunning {
+    private static let maximumCapturedOutputBytes = 64 * 1024
+
+    public init() {}
+
+    public func run(
+        executableURL: URL,
+        arguments: [String],
+        environment: [String: String]
+    ) async throws -> JarvisCommandResult {
+        try await Task.detached(priority: .userInitiated) {
+            let process = Process()
+            let outputPipe = Pipe()
+            process.executableURL = executableURL
+            process.arguments = arguments
+            process.environment = environment
+            process.standardOutput = outputPipe
+            process.standardError = outputPipe
+
+            try process.run()
+            try? outputPipe.fileHandleForWriting.close()
+            let rawOutput = outputPipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+
+            let wasTruncated = rawOutput.count > Self.maximumCapturedOutputBytes
+            let boundedOutput = rawOutput.prefix(Self.maximumCapturedOutputBytes)
+            var output = String(decoding: boundedOutput, as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if wasTruncated {
+                output += output.isEmpty ? "Output truncated." : "\nOutput truncated."
+            }
+            return JarvisCommandResult(exitCode: process.terminationStatus, output: output)
+        }.value
+    }
+}
+
+public struct JarvisOllamaUpgradeResult: Equatable, Sendable {
+    public var previousVersion: String
+    public var installedVersion: String
+    public var serviceRestarted: Bool
+
+    public init(previousVersion: String, installedVersion: String, serviceRestarted: Bool) {
+        self.previousVersion = previousVersion
+        self.installedVersion = installedVersion
+        self.serviceRestarted = serviceRestarted
+    }
+}
+
+public protocol JarvisOllamaUpdating: Sendable {
+    func upgradeOllama(
+        progress: @escaping @Sendable (String) async -> Void
+    ) async throws -> JarvisOllamaUpgradeResult
+}
+
+public struct HomebrewOllamaUpdater: JarvisOllamaUpdating {
+    private let commandRunner: any JarvisCommandRunning
+    private let brewCandidates: [URL]
+    private let executableExists: @Sendable (String) -> Bool
+    private let environment: [String: String]
+
+    public init(
+        commandRunner: any JarvisCommandRunning = FoundationJarvisCommandRunner(),
+        brewCandidates: [URL] = [
+            URL(fileURLWithPath: "/opt/homebrew/bin/brew"),
+            URL(fileURLWithPath: "/usr/local/bin/brew")
+        ],
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        executableExists: @escaping @Sendable (String) -> Bool = {
+            FileManager.default.isExecutableFile(atPath: $0)
+        }
+    ) {
+        self.commandRunner = commandRunner
+        self.brewCandidates = brewCandidates
+        self.executableExists = executableExists
+        self.environment = Self.commandEnvironment(from: environment, brewCandidates: brewCandidates)
+    }
+
+    public func upgradeOllama(
+        progress: @escaping @Sendable (String) async -> Void
+    ) async throws -> JarvisOllamaUpgradeResult {
+        guard let brewURL = brewCandidates.first(where: { executableExists($0.path) }) else {
+            throw OllamaUpgradeError.homebrewUnavailable
+        }
+
+        await progress("Checking the Homebrew Ollama installation…")
+        let before = try await commandRunner.run(
+            executableURL: brewURL,
+            arguments: ["list", "--formula", "--versions", "ollama"],
+            environment: environment
+        )
+        guard before.exitCode == 0,
+              let previousVersion = Self.ollamaVersion(from: before.output)
+        else {
+            throw OllamaUpgradeError.notHomebrewManaged
+        }
+
+        let services = try await checkedRun(
+            brewURL,
+            arguments: ["services", "list"],
+            action: "inspect the Ollama service"
+        )
+        let serviceWasRunning = Self.ollamaServiceIsRunning(in: services.output)
+
+        await progress("Upgrading Ollama with Homebrew…")
+        _ = try await checkedRun(
+            brewURL,
+            arguments: ["upgrade", "ollama"],
+            action: "upgrade Ollama"
+        )
+
+        let after = try await checkedRun(
+            brewURL,
+            arguments: ["list", "--formula", "--versions", "ollama"],
+            action: "verify the upgraded Ollama formula"
+        )
+        guard let installedVersion = Self.ollamaVersion(from: after.output) else {
+            throw OllamaUpgradeError.versionUnavailableAfterUpgrade
+        }
+
+        if serviceWasRunning {
+            await progress("Restarting the Ollama Homebrew service…")
+            _ = try await checkedRun(
+                brewURL,
+                arguments: ["services", "restart", "ollama"],
+                action: "restart the Ollama service"
+            )
+        }
+
+        return JarvisOllamaUpgradeResult(
+            previousVersion: previousVersion,
+            installedVersion: installedVersion,
+            serviceRestarted: serviceWasRunning
+        )
+    }
+
+    private func checkedRun(
+        _ executableURL: URL,
+        arguments: [String],
+        action: String
+    ) async throws -> JarvisCommandResult {
+        let result = try await commandRunner.run(
+            executableURL: executableURL,
+            arguments: arguments,
+            environment: environment
+        )
+        guard result.exitCode == 0 else {
+            throw OllamaUpgradeError.commandFailed(action: action, detail: result.output)
+        }
+        return result
+    }
+
+    private static func commandEnvironment(
+        from environment: [String: String],
+        brewCandidates: [URL]
+    ) -> [String: String] {
+        let allowedKeys = ["HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "LC_ALL"]
+        var filtered = environment.filter { allowedKeys.contains($0.key) }
+        let brewDirectories = brewCandidates.map { $0.deletingLastPathComponent().path }
+        filtered["PATH"] = (brewDirectories + ["/usr/bin", "/bin", "/usr/sbin", "/sbin"])
+            .joined(separator: ":")
+        filtered["HOMEBREW_NO_ANALYTICS"] = "1"
+        filtered["HOMEBREW_NO_ENV_HINTS"] = "1"
+        return filtered
+    }
+
+    private static func ollamaVersion(from output: String) -> String? {
+        output
+            .split(whereSeparator: \.isNewline)
+            .first(where: { $0.split(whereSeparator: \.isWhitespace).first == "ollama" })?
+            .split(whereSeparator: \.isWhitespace)
+            .dropFirst()
+            .first
+            .map(String.init)
+    }
+
+    private static func ollamaServiceIsRunning(in output: String) -> Bool {
+        for line in output.split(whereSeparator: \.isNewline) {
+            let fields = line.split(whereSeparator: \.isWhitespace)
+            if fields.count >= 2 && fields[0] == "ollama" && fields[1] == "started" {
+                return true
+            }
+        }
+        return false
+    }
+}
+
+private enum OllamaUpgradeError: LocalizedError {
+    case homebrewUnavailable
+    case notHomebrewManaged
+    case versionUnavailableAfterUpgrade
+    case commandFailed(action: String, detail: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .homebrewUnavailable:
+            return "Homebrew was not found in /opt/homebrew/bin or /usr/local/bin. Update Ollama using its original installer."
+        case .notHomebrewManaged:
+            return "Ollama is not installed as a Homebrew formula. Update Ollama using its original installer."
+        case .versionUnavailableAfterUpgrade:
+            return "Homebrew finished, but the installed Ollama version could not be verified."
+        case let .commandFailed(action, detail):
+            let suffix = detail.isEmpty ? "" : " \(detail)"
+            return "Homebrew could not \(action).\(suffix)"
+        }
+    }
+}
+
 public struct OllamaModelRuntimeController: JarvisLocalModelRuntimeControlling {
     private let urlSession: URLSession
 
@@ -440,15 +665,18 @@ public final class ModelConfigurationModel: ObservableObject {
     @Published public private(set) var downloadProgress: JarvisOllamaPullProgress?
 
     private let controller: any JarvisLocalModelRuntimeControlling
+    private let ollamaUpdater: any JarvisOllamaUpdating
     private let credentialStore: any JarvisCredentialStore
 
     public init(
         configuration: JarvisModelConfiguration = .fromEnvironment(),
         controller: any JarvisLocalModelRuntimeControlling = OllamaModelRuntimeController(),
+        ollamaUpdater: any JarvisOllamaUpdating = HomebrewOllamaUpdater(),
         credentialStore: any JarvisCredentialStore = KeychainJarvisCredentialStore()
     ) {
         self.configuration = configuration
         self.controller = controller
+        self.ollamaUpdater = ollamaUpdater
         self.credentialStore = credentialStore
         self.availableModels = []
         self.activeProvider = nil
@@ -472,6 +700,15 @@ public final class ModelConfigurationModel: ObservableObject {
     public var selectedModelIsInstalled: Bool {
         let selected = configuration.sanitizedModel
         return availableModels.contains { $0.matches(name: selected) && $0.installed }
+    }
+
+    public var canUpgradeLocalOllama: Bool {
+        guard configuration.provider == .ollama,
+              let host = URL(string: configuration.sanitizedOllamaBaseURL)?.host?.lowercased()
+        else {
+            return false
+        }
+        return host == "127.0.0.1" || host == "localhost" || host == "::1"
     }
 
     public func applyHealth(_ health: JarvisHealth?) {
@@ -575,6 +812,35 @@ public final class ModelConfigurationModel: ObservableObject {
             try await refreshAvailableModelsAfterDownload()
         }
         downloadProgress = nil
+    }
+
+    public func upgradeOllama() async {
+        guard canUpgradeLocalOllama else {
+            statusMessage = "Ollama can be upgraded here only when the configured endpoint is on this Mac."
+            return
+        }
+
+        isWorking = true
+        statusMessage = "Preparing to upgrade Ollama…"
+        defer { isWorking = false }
+
+        do {
+            let result = try await ollamaUpdater.upgradeOllama { [weak self] progress in
+                await MainActor.run {
+                    self?.statusMessage = progress
+                }
+            }
+            let versionSummary = result.previousVersion == result.installedVersion
+                ? "Ollama \(result.installedVersion) is already current."
+                : "Ollama upgraded from \(result.previousVersion) to \(result.installedVersion)."
+            if result.serviceRestarted {
+                statusMessage = "\(versionSummary) The Homebrew service restarted; retry the model download."
+            } else {
+                statusMessage = "\(versionSummary) Ollama was not running as a Homebrew service; restart Ollama manually before retrying the model download."
+            }
+        } catch {
+            statusMessage = "Ollama upgrade failed: \(Self.errorMessage(error))"
+        }
     }
 
     public func ensureSelectedModelAvailable() async {

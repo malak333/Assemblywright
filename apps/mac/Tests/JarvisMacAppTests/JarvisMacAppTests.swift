@@ -139,18 +139,21 @@ struct JarvisMacAppTests {
     func modelTabPresentationGatesStartAndDownloadAroundInstalledState() {
         let missingModel = ModelConfigurationPresentation(
             canControlSelectedModelRuntime: true,
+            canUpgradeLocalOllama: true,
             isWorking: false,
             selectedModelIsInstalled: false,
             downloadProgress: nil
         )
         let installedModel = ModelConfigurationPresentation(
             canControlSelectedModelRuntime: true,
+            canUpgradeLocalOllama: true,
             isWorking: false,
             selectedModelIsInstalled: true,
             downloadProgress: nil
         )
         let busyModel = ModelConfigurationPresentation(
             canControlSelectedModelRuntime: true,
+            canUpgradeLocalOllama: true,
             isWorking: true,
             selectedModelIsInstalled: true,
             downloadProgress: nil
@@ -159,18 +162,21 @@ struct JarvisMacAppTests {
         #expect(!missingModel.canStartModel)
         #expect(missingModel.canDownloadSelected)
         #expect(missingModel.canStopModel)
+        #expect(missingModel.canUpgradeOllama)
         #expect(installedModel.canStartModel)
         #expect(!installedModel.canDownloadSelected)
         #expect(installedModel.canStopModel)
         #expect(!busyModel.canStartModel)
         #expect(!busyModel.canDownloadSelected)
         #expect(!busyModel.canStopModel)
+        #expect(!busyModel.canUpgradeOllama)
     }
 
     @Test("Model tab presentation exposes streamed download progress")
     func modelTabPresentationExposesStreamedDownloadProgress() {
         let presentation = ModelConfigurationPresentation(
             canControlSelectedModelRuntime: true,
+            canUpgradeLocalOllama: true,
             isWorking: true,
             selectedModelIsInstalled: false,
             downloadProgress: JarvisOllamaPullProgress(

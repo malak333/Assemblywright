@@ -439,6 +439,17 @@ the Jarvis boundary: shell, unified execution, code-host, app/plugin, browser,
 computer, web-search, image-generation, multi-agent, and workspace-dependency
 tool features are disabled before redacted context is sent.
 
+The Model tab may perform one explicit local integration-maintenance action:
+upgrading a Homebrew-managed Ollama formula after a visible confirmation. The
+action is available only for a loopback Ollama endpoint, resolves Homebrew from
+the fixed Apple Silicon or Intel installation locations, invokes it directly
+without a shell or user-derived arguments, passes a minimal environment,
+verifies the formula version before and after mutation, and restarts the Ollama
+Homebrew service only when that service was already running. A remote endpoint,
+missing Homebrew, non-formula Ollama installation, failed version check, or
+failed command remains visible and fail-closed; the UI does not silently start
+a stopped service or claim that an app-installed Ollama was upgraded.
+
 Diagnostics do not embed the full health response. Their dedicated health
 projection exposes `emergency_paused`, `emergency_pause_updated_at`, and
 `emergency_pause_reason_present`; the legacy reason field is either null or the

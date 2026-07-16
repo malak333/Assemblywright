@@ -5774,6 +5774,216 @@ struct JarvisMacCoreTests {
         #expect(model.downloadProgress == nil)
     }
 
+    @MainActor
+    @Test("Model configuration upgrades only a local Ollama installation")
+    func modelConfigurationUpgradesOnlyLocalOllama() async {
+        let updater = CapturingOllamaUpdater(result: JarvisOllamaUpgradeResult(
+            previousVersion: "0.21.2",
+            installedVersion: "0.32.0",
+            serviceRestarted: true
+        ))
+        let model = ModelConfigurationModel(
+            configuration: JarvisModelConfiguration(
+                provider: .ollama,
+                localModel: "gemma4:26b-mlx",
+                ollamaBaseURL: "http://127.0.0.1:11434"
+            ),
+            controller: CapturingModelRuntimeController(),
+            ollamaUpdater: updater
+        )
+
+        #expect(model.canUpgradeLocalOllama)
+        await model.upgradeOllama()
+
+        #expect(updater.requestCount == 1)
+        #expect(!model.isWorking)
+        #expect(model.statusMessage == "Ollama upgraded from 0.21.2 to 0.32.0. The Homebrew service restarted; retry the model download.")
+
+        model.configuration.ollamaBaseURL = "https://remote.example.com"
+        #expect(!model.canUpgradeLocalOllama)
+        await model.upgradeOllama()
+        #expect(updater.requestCount == 1)
+        #expect(model.statusMessage?.contains("only when the configured endpoint is on this Mac") == true)
+    }
+
+    @Test("Homebrew Ollama updater upgrades and restarts an existing service without a shell")
+    func homebrewOllamaUpdaterRunsExpectedCommands() async throws {
+        let runner = SequencedCommandRunner(results: [
+            JarvisCommandResult(exitCode: 0, output: "ollama 0.21.2_1"),
+            JarvisCommandResult(exitCode: 0, output: "Name Status User File\nollama started test ~/Library/LaunchAgents/homebrew.mxcl.ollama.plist"),
+            JarvisCommandResult(exitCode: 0, output: "Upgrading ollama"),
+            JarvisCommandResult(exitCode: 0, output: "ollama 0.32.0"),
+            JarvisCommandResult(exitCode: 0, output: "Successfully restarted ollama")
+        ])
+        let brewURL = URL(fileURLWithPath: "/test/homebrew/bin/brew")
+        let updater = HomebrewOllamaUpdater(
+            commandRunner: runner,
+            brewCandidates: [brewURL],
+            environment: [
+                "HOME": "/Users/test",
+                "LANG": "en_US.UTF-8",
+                "JARVIS_SECRET_SENTINEL": "must-not-be-inherited"
+            ],
+            executableExists: { $0 == brewURL.path }
+        )
+        let progress = CapturingTextProgressRecorder()
+
+        let result = try await updater.upgradeOllama { message in
+            await progress.append(message)
+        }
+
+        #expect(result == JarvisOllamaUpgradeResult(
+            previousVersion: "0.21.2_1",
+            installedVersion: "0.32.0",
+            serviceRestarted: true
+        ))
+        #expect(runner.requests.map(\.executableURL) == Array(repeating: brewURL, count: 5))
+        #expect(runner.requests.map(\.arguments) == [
+            ["list", "--formula", "--versions", "ollama"],
+            ["services", "list"],
+            ["upgrade", "ollama"],
+            ["list", "--formula", "--versions", "ollama"],
+            ["services", "restart", "ollama"]
+        ])
+        #expect(runner.requests.allSatisfy { $0.environment["JARVIS_SECRET_SENTINEL"] == nil })
+        #expect(runner.requests.allSatisfy { $0.environment["HOME"] == "/Users/test" })
+        #expect(await progress.messages == [
+            "Checking the Homebrew Ollama installation…",
+            "Upgrading Ollama with Homebrew…",
+            "Restarting the Ollama Homebrew service…"
+        ])
+    }
+
+    @Test("Homebrew Ollama updater rejects an installation not managed by Homebrew")
+    func homebrewOllamaUpdaterRejectsNonFormulaInstallation() async {
+        let runner = SequencedCommandRunner(results: [
+            JarvisCommandResult(exitCode: 1, output: "Error: No such keg: ollama")
+        ])
+        let brewURL = URL(fileURLWithPath: "/test/homebrew/bin/brew")
+        let updater = HomebrewOllamaUpdater(
+            commandRunner: runner,
+            brewCandidates: [brewURL],
+            executableExists: { $0 == brewURL.path }
+        )
+
+        do {
+            _ = try await updater.upgradeOllama { _ in }
+            Issue.record("expected a non-Homebrew installation failure")
+        } catch {
+            #expect(error.localizedDescription.contains("not installed as a Homebrew formula"))
+        }
+        #expect(runner.requests.map(\.arguments) == [
+            ["list", "--formula", "--versions", "ollama"]
+        ])
+    }
+
+    @Test("Homebrew Ollama updater does not start a service that was stopped")
+    func homebrewOllamaUpdaterDoesNotStartStoppedService() async throws {
+        let runner = SequencedCommandRunner(results: [
+            JarvisCommandResult(exitCode: 0, output: "ollama 0.21.2_1"),
+            JarvisCommandResult(exitCode: 0, output: "Name Status User File\nollama stopped"),
+            JarvisCommandResult(exitCode: 0, output: "Upgrading ollama"),
+            JarvisCommandResult(exitCode: 0, output: "ollama 0.32.0")
+        ])
+        let brewURL = URL(fileURLWithPath: "/test/homebrew/bin/brew")
+        let updater = HomebrewOllamaUpdater(
+            commandRunner: runner,
+            brewCandidates: [brewURL],
+            executableExists: { $0 == brewURL.path }
+        )
+
+        let result = try await updater.upgradeOllama { _ in }
+
+        #expect(!result.serviceRestarted)
+        #expect(runner.requests.map(\.arguments) == [
+            ["list", "--formula", "--versions", "ollama"],
+            ["services", "list"],
+            ["upgrade", "ollama"],
+            ["list", "--formula", "--versions", "ollama"]
+        ])
+    }
+
+    @Test("Foundation command runner captures output and exit status")
+    func foundationCommandRunnerCapturesOutputAndExitStatus() async throws {
+        let result = try await FoundationJarvisCommandRunner().run(
+            executableURL: URL(fileURLWithPath: "/usr/bin/printf"),
+            arguments: ["runner-ok"],
+            environment: [:]
+        )
+
+        #expect(result == JarvisCommandResult(exitCode: 0, output: "runner-ok"))
+    }
+
+    @MainActor
+    @Test("Model configuration upgrades Ollama end to end through a Homebrew process")
+    func ollamaUpgradeProcessEndToEnd() async throws {
+        let directory = try temporaryDirectory(name: "jarvis-ollama-upgrade-e2e")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let brewURL = directory.appending(path: "brew")
+        let versionURL = directory.appending(path: "ollama-version")
+        let restartURL = directory.appending(path: "ollama-restarted")
+        let commandLogURL = directory.appending(path: "brew-commands")
+        try Data(
+            """
+            #!/bin/sh
+            set -eu
+            printf '%s\n' "$*" >> "$HOME/brew-commands"
+            if [ "$1" = "list" ]; then
+              if [ -f "$HOME/ollama-version" ]; then
+                cat "$HOME/ollama-version"
+              else
+                printf 'ollama 0.21.2_1\n'
+              fi
+            elif [ "$1" = "services" ] && [ "$2" = "list" ]; then
+              printf 'Name Status User File\nollama started test test.plist\n'
+            elif [ "$1" = "upgrade" ] && [ "$2" = "ollama" ]; then
+              printf 'ollama 0.32.0\n' > "$HOME/ollama-version"
+              printf 'Upgraded ollama\n'
+            elif [ "$1" = "services" ] && [ "$2" = "restart" ]; then
+              : > "$HOME/ollama-restarted"
+              printf 'Restarted ollama\n'
+            else
+              printf 'unexpected fake brew command: %s\n' "$*" >&2
+              exit 64
+            fi
+            """.utf8
+        ).write(to: brewURL)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: brewURL.path)
+
+        let updater = HomebrewOllamaUpdater(
+            commandRunner: FoundationJarvisCommandRunner(),
+            brewCandidates: [brewURL],
+            environment: [
+                "HOME": directory.path,
+                "USER": "test",
+                "LOGNAME": "test",
+                "JARVIS_E2E_SECRET_SENTINEL": "must-not-reach-fake-brew"
+            ]
+        )
+        let model = ModelConfigurationModel(
+            configuration: JarvisModelConfiguration(
+                provider: .ollama,
+                localModel: "gemma4:26b-mlx",
+                ollamaBaseURL: "http://localhost:11434"
+            ),
+            controller: CapturingModelRuntimeController(),
+            ollamaUpdater: updater
+        )
+
+        await model.upgradeOllama()
+
+        #expect(model.statusMessage == "Ollama upgraded from 0.21.2_1 to 0.32.0. The Homebrew service restarted; retry the model download.")
+        #expect(try String(contentsOf: versionURL, encoding: .utf8) == "ollama 0.32.0\n")
+        #expect(FileManager.default.fileExists(atPath: restartURL.path))
+        #expect(try String(contentsOf: commandLogURL, encoding: .utf8).split(whereSeparator: \.isNewline) == [
+            "list --formula --versions ollama",
+            "services list",
+            "upgrade ollama",
+            "list --formula --versions ollama",
+            "services restart ollama"
+        ])
+    }
+
     @Test("Ollama runtime controller sends inventory, pull, load, and unload HTTP requests")
     func ollamaRuntimeControllerSendsExpectedHTTPRequests() async throws {
         let configuration = URLSessionConfiguration.ephemeral
@@ -10304,6 +10514,64 @@ private final class CapturingModelRuntimeController: JarvisLocalModelRuntimeCont
 
     func unloadOllamaModel(model: String, baseURL: URL) async throws {
         unloadRequests.append(Request(model: model, baseURL: baseURL.absoluteString))
+    }
+}
+
+private final class CapturingOllamaUpdater: JarvisOllamaUpdating, @unchecked Sendable {
+    private(set) var requestCount = 0
+    private let result: JarvisOllamaUpgradeResult
+
+    init(result: JarvisOllamaUpgradeResult) {
+        self.result = result
+    }
+
+    func upgradeOllama(
+        progress: @escaping @Sendable (String) async -> Void
+    ) async throws -> JarvisOllamaUpgradeResult {
+        requestCount += 1
+        await progress("Upgrading Ollama with Homebrew…")
+        await progress("Restarting the Ollama Homebrew service…")
+        return result
+    }
+}
+
+private final class SequencedCommandRunner: JarvisCommandRunning, @unchecked Sendable {
+    struct Request: Equatable {
+        var executableURL: URL
+        var arguments: [String]
+        var environment: [String: String]
+    }
+
+    private(set) var requests: [Request] = []
+    private var results: [JarvisCommandResult]
+
+    init(results: [JarvisCommandResult]) {
+        self.results = results
+    }
+
+    func run(
+        executableURL: URL,
+        arguments: [String],
+        environment: [String: String]
+    ) async throws -> JarvisCommandResult {
+        requests.append(Request(
+            executableURL: executableURL,
+            arguments: arguments,
+            environment: environment
+        ))
+        return results.removeFirst()
+    }
+}
+
+private actor CapturingTextProgressRecorder {
+    private var capturedMessages: [String] = []
+
+    var messages: [String] {
+        capturedMessages
+    }
+
+    func append(_ message: String) {
+        capturedMessages.append(message)
     }
 }
 
