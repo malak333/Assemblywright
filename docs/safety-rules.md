@@ -155,6 +155,15 @@ release requirements, not optional UX guidance.
   bundle, or weaken dynamic signature validation. A signature failure remains
   degraded and actionable, and the command console must not append or send a
   new command while already degraded.
+- An authenticated app-supervised core must receive and validate the direct
+  Swift parent PID before opening the database, then exit and release its Unix
+  socket and database owner lease when that parent relationship disappears.
+  The PID is non-secret launch metadata; bearer authority remains confined to
+  startup stdin. A mismatched, init-owned, or otherwise invalid parent fails
+  closed before storage opens. Manual or externally supervised `jarvis serve`
+  processes are not silently adopted or killed. An early supervised-core exit
+  must remain actionable in the UI, and the command console must stay gated
+  instead of masking the primary failure as `credentialUnavailable`.
 - Exact release-smoke mode may emit only a fixed non-secret success marker, and
   only after the app-owned Swift client completes authenticated health,
   dry-run command, task/audit inspection, diagnostics, pause, blocked-command,

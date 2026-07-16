@@ -121,6 +121,15 @@ requires `getpeereid` to match the current EUID and the bearer on every router
 path. Swift applies the same audit-token/requirement validation to the connected
 core before sending a request.
 
+Authenticated app-supervised launches also pass the Swift app's direct process
+identifier through the non-secret `--supervised-parent-pid` argument. The core
+validates that identifier against its direct parent before opening SQLite and
+then watches the relationship for the lifetime of the server. If the app exits
+or is killed, the core drops the server and releases its socket and database
+owner lease instead of surviving as an orphan that blocks the next launch.
+Manual or externally supervised `jarvis serve` processes do not opt into this
+parent binding and remain operator-owned.
+
 Packaging assigns stable code identifiers `com.nobiletechnology.jarvis` and
 `com.nobiletechnology.jarvis.core`; alternate package identifiers are rejected.
 Artifact-producing packaging refuses to remove or replace the configured

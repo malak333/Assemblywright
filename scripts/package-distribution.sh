@@ -1470,6 +1470,7 @@ run_unsigned_launch_check() {
 
   stop_launch() {
     local child_pids=()
+    local orphaned_child=false
     if [[ -n "$APP_PID" ]]; then
       while IFS= read -r pid; do
         if [[ -n "$pid" ]]; then
@@ -1478,16 +1479,10 @@ run_unsigned_launch_check() {
       done < <(pgrep -P "$APP_PID" 2>/dev/null || true)
     fi
     if [[ -n "$APP_PID" ]] && kill -0 "$APP_PID" 2>/dev/null; then
-      kill "$APP_PID" 2>/dev/null || true
+      kill -KILL "$APP_PID" 2>/dev/null || true
       wait "$APP_PID" 2>/dev/null || true
     fi
     APP_PID=""
-
-    for pid in "${child_pids[@]}"; do
-      if kill -0 "$pid" 2>/dev/null; then
-        kill "$pid" 2>/dev/null || true
-      fi
-    done
 
     for _ in {1..40}; do
       local child_alive=false
@@ -1504,9 +1499,14 @@ run_unsigned_launch_check() {
     done
     for pid in "${child_pids[@]}"; do
       if kill -0 "$pid" 2>/dev/null; then
-        return 1
+        orphaned_child=true
+        kill "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
       fi
     done
+    if [[ "$orphaned_child" == true ]]; then
+      return 1
+    fi
 
     while IFS= read -r pid; do
       if [[ -n "$pid" ]]; then
@@ -1584,6 +1584,7 @@ run_unsigned_launch_check() {
   require_output_contains "app-supervised core scheduler interval" "$CORE_COMMAND" "--scheduler-interval-ms 1000"
   require_output_contains "app-supervised core scheduler limit" "$CORE_COMMAND" "--scheduler-limit 16"
   require_output_contains "app-supervised core stale recovery" "$CORE_COMMAND" "--scheduler-recover-stale-on-startup"
+  require_output_contains "app-supervised core parent liveness" "$CORE_COMMAND" "--supervised-parent-pid $APP_PID"
   [[ "$(stat -f '%Lp' "$APP_IPC_RUN_DIR")" == "700" ]] || fail "default app IPC run directory is not mode 0700"
   [[ "$(stat -f '%Lp' "$DEFAULT_IPC_SOCKET")" == "600" ]] || fail "default app IPC socket is not mode 0600"
   [[ "$(stat -f '%u' "$APP_IPC_RUN_DIR")" == "$(id -u)" ]] || fail "default app IPC run directory is not owned by the current user"
@@ -1644,7 +1645,7 @@ PY
   (( DEFAULT_PAUSE_AUDIT_COUNT >= 1 )) || fail "default Unix IPC route sequence did not persist pause audit evidence"
   (( DEFAULT_BLOCK_AUDIT_COUNT >= 1 )) || fail "default Unix IPC route sequence did not persist blocked-command audit evidence"
   [[ "$DEFAULT_PAUSE_STATE" == "0" ]] || fail "default Unix IPC route sequence did not leave the durable emergency pause resumed"
-  stop_launch || fail "release app or supervised core did not exit cleanly"
+  stop_launch || fail "supervised core remained orphaned after abrupt app termination"
   [[ ! -e "$DEFAULT_IPC_SOCKET" ]] || fail "default app supervised Unix socket was not cleaned up"
 
   APP_LOG="$LAUNCH_TMP_DIR/JarvisMacApp-explicit-cli-handoff.log"
@@ -1720,7 +1721,7 @@ PY
   printf 'Pkg: %s\n' "$PKG_PATH"
   printf 'Signing: %s\n' "$SIGNING_STATUS"
   printf 'Clean HOME database: %s\n' "$APP_DB"
-  printf 'Proof boundary: release-built app executable, bundled core, stable ad-hoc app/core identifiers, exact-build audit-token designated-requirement acceptance plus same-EUID wrong-code pre-frame rejection, unsigned installer payload structure, isolated HOME default owner-only Unix socket plus memory-only bearer launch with no TCP listener or CLI file, authenticated Swift-client health/command/task/audit/diagnostics/background-scheduler/pause/block/resume route sequence with durable scheduler completion, redacted audit, durable outbox suppression acknowledgement, and explicit owner-only loopback TCP CLI handoff relaunch. The outbox proof is at-least-once app handoff only. Ad-hoc cdhash evidence does not prove Developer ID publisher identity, and this lane does not prove Developer ID signing, notarization, stapling, /Applications install, Finder/LaunchServices validation, device authentication, App Sandbox, live macOS notification display, exactly-once delivery, OS wake reliability, live microphone/Speech validation, spoken transcript handoff, live audio-output validation, App Store validation, or manual QA.\n'
+  printf 'Proof boundary: release-built app executable, bundled core, stable ad-hoc app/core identifiers, exact-build audit-token designated-requirement acceptance plus same-EUID wrong-code pre-frame rejection, unsigned installer payload structure, isolated HOME default owner-only Unix socket plus memory-only bearer launch with no TCP listener or CLI file, authenticated Swift-client health/command/task/audit/diagnostics/background-scheduler/pause/block/resume route sequence with durable scheduler completion, redacted audit, durable outbox suppression acknowledgement, abrupt app termination followed by supervised-core self-exit, UDS/database-owner-lease release and same-database relaunch, and explicit owner-only loopback TCP CLI handoff relaunch. The outbox proof is at-least-once app handoff only. Ad-hoc cdhash evidence does not prove Developer ID publisher identity, and this lane does not prove Developer ID signing, notarization, stapling, /Applications install, Finder/LaunchServices validation, device authentication, App Sandbox, live macOS notification display, exactly-once delivery, OS wake reliability, live microphone/Speech validation, spoken transcript handoff, live audio-output validation, App Store validation, or manual QA.\n'
 }
 
 if [[ "$UNSIGNED_STRUCTURE_CHECK" == true ]]; then

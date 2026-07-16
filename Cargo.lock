@@ -974,6 +974,7 @@ dependencies = [
  "clap",
  "ed25519-dalek",
  "jarvis-core",
+ "libc",
  "p256",
  "rusqlite",
  "rustix",

@@ -101,6 +101,14 @@ require_text "core app-supervised IPC audit-token proof" "$CORE_IPC" "LOCAL_PEER
 require_text "core app-supervised IPC Security.framework proof" "$CORE_IPC" "Security.framework designated requirement"
 require_text "core app-supervised IPC wrong-code proof" "$CORE_IPC" "same-EUID wrong-code pre-frame rejection"
 require_text "core app-supervised IPC default transport proof" "$CORE_IPC" "default owner-only Unix socket plus memory-only bearer path has no TCP listener or credential handoff file"
+for file in "$BUILD_DOCS" "$CHECKLIST" "$KB"; do
+  require_text "app-supervised parent PID contract" "$file" "--supervised-parent-pid"
+done
+require_text "app-supervised parent lifetime design" "$DESIGN" "watches the relationship"
+require_text "app-supervised parent lifetime safety" "$SAFETY_RULES" "database owner lease"
+require_text "app-supervised parent lifetime architecture" "$ARCHITECTURE" "core self-exit; UDS and database lease release; same-DB relaunch"
+require_text "app-supervised crash E2E" "$BUILD_DOCS" "Abrupt app termination"
+require_text "orphaned core diagnostic" "$KB" "parent PID 1"
 require_text "core approval grant-chain proof" "$CORE_IPC" "matching approval_granted audit evidence"
 require_text "core approval no-fabrication boundary" "$CORE_IPC" "never fabricates grant evidence"
 forbid_text "obsolete same-EUID code-sign boundary" "$CORE_IPC" "Same-EUID plus bearer defense in depth does not prove peer PID, intended process or code-sign identity"

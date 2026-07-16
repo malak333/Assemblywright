@@ -68,6 +68,9 @@ enum CliCommand {
         /// Read strict v1 workspace-root and optional trusted-wake startup configuration from bounded stdin.
         #[arg(long)]
         startup_config_stdin: bool,
+        /// Exit when this validated direct parent app process is no longer supervising the core.
+        #[arg(long)]
+        supervised_parent_pid: Option<u32>,
         #[arg(long)]
         scheduler_background: bool,
         #[arg(long, default_value_t = jarvis_core::DEFAULT_SCHEDULER_BACKGROUND_INTERVAL_MS)]
@@ -835,6 +838,38 @@ enum PermissionsCommand {
     },
 }
 
+#[cfg(unix)]
+fn current_parent_process_id() -> u32 {
+    let parent_pid = unsafe { libc::getppid() };
+    u32::try_from(parent_pid).unwrap_or(0)
+}
+
+#[cfg(not(unix))]
+fn current_parent_process_id() -> u32 {
+    0
+}
+
+fn validate_supervised_parent_pid(expected_parent_pid: u32) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        expected_parent_pid > 1 && expected_parent_pid <= i32::MAX as u32,
+        "supervised parent PID must name a valid non-init process"
+    );
+    anyhow::ensure!(
+        current_parent_process_id() == expected_parent_pid,
+        "supervised parent PID does not match the core's direct parent"
+    );
+    Ok(())
+}
+
+async fn wait_for_supervised_parent_exit(expected_parent_pid: u32) {
+    loop {
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        if current_parent_process_id() != expected_parent_pid {
+            return;
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_env_filter("info").init();
@@ -858,6 +893,7 @@ async fn main() -> anyhow::Result<()> {
             db_path,
             workspace_roots,
             startup_config_stdin,
+            supervised_parent_pid,
             scheduler_background,
             scheduler_interval_ms,
             scheduler_limit,
@@ -880,6 +916,12 @@ async fn main() -> anyhow::Result<()> {
                 anyhow::bail!(
                     "startup configuration stdin cannot be combined with legacy trusted-wake stdin or --workspace-root"
                 );
+            }
+            if supervised_parent_pid.is_some() && !startup_config_stdin {
+                anyhow::bail!("--supervised-parent-pid requires --startup-config-stdin");
+            }
+            if let Some(parent_pid) = supervised_parent_pid {
+                validate_supervised_parent_pid(parent_pid)?;
             }
 
             let (workspace_roots, trusted_wake, ipc_auth, ipc_transport) = if startup_config_stdin {
@@ -985,7 +1027,7 @@ async fn main() -> anyhow::Result<()> {
                     scheduler_stale_recovery_limit,
                 )?;
             }
-            let _scheduler_loop = if scheduler_background {
+            let scheduler_loop = if scheduler_background {
                 let config = jarvis_core::SchedulerBackgroundConfig::new(
                     std::time::Duration::from_millis(scheduler_interval_ms),
                     scheduler_limit,
@@ -994,37 +1036,56 @@ async fn main() -> anyhow::Result<()> {
             } else {
                 None
             };
-            match ipc_transport {
-                Some(jarvis_core::ServeIpcTransport::UnixSocketV1 { socket_path }) => {
-                    let auth = ipc_auth.ok_or_else(|| {
-                        anyhow::anyhow!("startup Unix-socket transport requires IPC authentication")
-                    })?;
-                    jarvis_core::serve_unix_socket(socket_path, state, auth).await?;
-                }
-                Some(jarvis_core::ServeIpcTransport::UnixSocketPeerIdentityV1 {
-                    socket_path,
-                    peer_code_requirement,
-                    peer_identity_profile,
-                }) => {
-                    let auth = ipc_auth.ok_or_else(|| {
-                        anyhow::anyhow!("startup Unix-socket transport requires IPC authentication")
-                    })?;
-                    jarvis_core::serve_unix_socket_with_peer_identity(
+            let server = async move {
+                match ipc_transport {
+                    Some(jarvis_core::ServeIpcTransport::UnixSocketV1 { socket_path }) => {
+                        let auth = ipc_auth.ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "startup Unix-socket transport requires IPC authentication"
+                            )
+                        })?;
+                        jarvis_core::serve_unix_socket(socket_path, state, auth).await?;
+                    }
+                    Some(jarvis_core::ServeIpcTransport::UnixSocketPeerIdentityV1 {
                         socket_path,
-                        state,
-                        auth,
-                        &peer_code_requirement,
+                        peer_code_requirement,
                         peer_identity_profile,
-                    )
-                    .await?;
-                }
-                None => {
-                    let bind = tcp_bind.expect("TCP bind was prevalidated");
-                    match ipc_auth {
-                        Some(auth) => jarvis_core::serve_with_auth(bind, state, auth).await?,
-                        None => jarvis_core::serve(bind, state).await?,
+                    }) => {
+                        let auth = ipc_auth.ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "startup Unix-socket transport requires IPC authentication"
+                            )
+                        })?;
+                        jarvis_core::serve_unix_socket_with_peer_identity(
+                            socket_path,
+                            state,
+                            auth,
+                            &peer_code_requirement,
+                            peer_identity_profile,
+                        )
+                        .await?;
+                    }
+                    None => {
+                        let bind = tcp_bind.expect("TCP bind was prevalidated");
+                        match ipc_auth {
+                            Some(auth) => jarvis_core::serve_with_auth(bind, state, auth).await?,
+                            None => jarvis_core::serve(bind, state).await?,
+                        }
                     }
                 }
+                Ok::<(), anyhow::Error>(())
+            };
+            if let Some(parent_pid) = supervised_parent_pid {
+                tokio::select! {
+                    result = server => result?,
+                    () = wait_for_supervised_parent_exit(parent_pid) => {}
+                }
+            } else {
+                server.await?;
+            }
+            if let Some(scheduler_loop) = scheduler_loop {
+                scheduler_loop.abort();
+                let _ = scheduler_loop.await;
             }
         }
         CliCommand::Health { endpoint } => {
@@ -3699,7 +3760,10 @@ fn require_number_at_least(
 
 #[cfg(test)]
 mod tests {
-    use super::{is_transport_unavailable, InstalledPluginLifecycleInspection};
+    use super::{
+        current_parent_process_id, is_transport_unavailable, validate_supervised_parent_pid,
+        InstalledPluginLifecycleInspection,
+    };
     use jarvis_core::{InstalledPluginExecutionGrant, InstalledPluginExecutionRequest};
 
     #[test]
@@ -3728,6 +3792,21 @@ mod tests {
 
         let server_error = anyhow::anyhow!("HTTP/1.1 500 Internal Server Error");
         assert!(!is_transport_unavailable(&server_error));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn supervised_parent_pid_must_match_the_direct_non_init_parent() {
+        let parent_pid = current_parent_process_id();
+        assert!(parent_pid > 1);
+        validate_supervised_parent_pid(parent_pid).unwrap();
+        assert!(validate_supervised_parent_pid(1).is_err());
+        let mismatch = if parent_pid == i32::MAX as u32 {
+            parent_pid - 1
+        } else {
+            parent_pid + 1
+        };
+        assert!(validate_supervised_parent_pid(mismatch).is_err());
     }
 
     #[test]

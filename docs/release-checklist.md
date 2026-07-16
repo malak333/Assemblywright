@@ -273,6 +273,10 @@ stage or when a PR needs focused evidence for one ownership slice.
   `./scripts/package-distribution.sh --check`
 - Unsigned distribution launch proof is part of the default local gate:
   `./scripts/package-distribution.sh --unsigned-launch-check`
+- Confirm that unsigned launch proof passes the exact
+  `--supervised-parent-pid`, abruptly kills the app, requires the core to
+  self-exit and release its UDS/database owner lease, and relaunches against the
+  same database without manual cleanup.
 - Live-device QA preflight is part of the default local gate:
   `./scripts/release-live-device-qa.sh --check`
 - Live-device QA operator runbook and current evidence status are available

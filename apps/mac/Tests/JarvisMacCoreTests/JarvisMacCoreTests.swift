@@ -8492,6 +8492,13 @@ struct IPCBearerAuthorizationTests {
             "JARVIS_MAC_IPC_AUTH_FILE": "/tmp/must-not-reach-server"
         ])
         let first = try ipcAuth(from: #require(launcher.launches.first?.standardInput))
+        let parentPIDIndex = try #require(
+            launcher.launches[0].arguments.firstIndex(of: "--supervised-parent-pid")
+        )
+        #expect(
+            launcher.launches[0].arguments[parentPIDIndex + 1]
+                == String(ProcessInfo.processInfo.processIdentifier)
+        )
         #expect(!launcher.launches[0].arguments.joined().contains(first.token))
         #expect(!launcher.launches[0].environment.description.contains(first.token))
         #expect(launcher.launches[0].environment["JARVIS_IPC_TOKEN_FILE"] == nil)
@@ -8756,6 +8763,18 @@ struct IPCBearerAuthorizationTests {
         } else {
             Issue.record("expected invalid signature to degrade the supervisor")
         }
+    }
+
+    @Test("Supervisor explains an early core exit as a possible orphaned database owner")
+    func supervisorExplainsEarlyCoreExit() {
+        let reason = JarvisCoreSupervisor.degradedReason(
+            for: JarvisCoreSupervisorError.launchedProcessExited
+        )
+
+        #expect(reason.contains("older Jarvis core"))
+        #expect(reason.contains("database"))
+        #expect(reason.contains("press Start again"))
+        #expect(!reason.contains("credentialUnavailable"))
     }
 
     @Test("UDS run directory rejects symlink, file, and permissive preexisting state")

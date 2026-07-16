@@ -386,6 +386,10 @@ public final class JarvisCoreSupervisor: ObservableObject {
            identityError == .invalidSignature {
             return "Jarvis could not validate the app/core code signature. The app bundle may have been rebuilt or replaced while Jarvis was running. Quit Jarvis with Command-Q and reopen it; if the error remains, rebuild the app bundle."
         }
+        if let supervisorError = error as? JarvisCoreSupervisorError,
+           supervisorError == .launchedProcessExited {
+            return "The Jarvis core exited during startup. An older Jarvis core may still own the database from a previous app session. Quit any older Jarvis process and press Start again; if the error remains, quit and reopen Jarvis."
+        }
         return String(describing: error)
     }
 
@@ -532,6 +536,12 @@ public final class JarvisCoreSupervisor: ObservableObject {
                 || peerIdentityPolicy != nil
             {
                 launchArguments.append("--startup-config-stdin")
+            }
+            if ipcAuthorization.mode == .appSupervised, launchAuthorization != nil {
+                launchArguments.append(contentsOf: [
+                    "--supervised-parent-pid",
+                    String(ProcessInfo.processInfo.processIdentifier)
+                ])
             }
             process = try await processLauncher.launch(
                 executableURL: executableURL,

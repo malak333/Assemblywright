@@ -1311,7 +1311,18 @@ requires plugin-trust `generated_at`, `review_started_at`,
   failure as primary: the strict identity check stopped launch before IPC
   credential rotation, so the credential error is secondary. Check whether a
   running bundle was rebuilt or replaced, then quit and reopen Jarvis; rebuild
-  only if signature validation still fails. Its
+  only if signature validation still fails. If Core instead shows
+  `launchedProcessExited` and Console shows `credentialUnavailable`, treat the
+  core exit as primary. A previously launched core with parent PID 1 may still
+  own `jarvis.sqlite.owner.lock`, the SQLite WAL/SHM files, and the old UDS
+  socket, causing the replacement core to exit before it can rotate an IPC
+  credential. Stop only that confirmed orphan, then press Start or reopen
+  Jarvis. New authenticated app-supervised launches carry
+  `--supervised-parent-pid`, validate the direct parent before opening SQLite,
+  and self-exit when the app disappears; manual/external cores remain explicit
+  operator-owned processes. The crash-style unsigned launch E2E kills the app
+  abruptly, requires core self-exit and socket cleanup, and relaunches on the
+  same database to prove the owner lease was released. Its
   `--unsigned-structure-check` mode builds release Rust/Swift artifacts,
   assembles `target/distribution/Jarvis.app`, optionally ad-hoc signs
   when `codesign` is available, creates an unsigned `/Applications` installer

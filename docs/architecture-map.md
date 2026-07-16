@@ -334,6 +334,7 @@ flowchart TB
     LocalGate --> PackageRunningAppGuardE2E["package-distribution.sh running-app-guard-e2e"]
     LocalGate --> UnsignedStructure["package-distribution.sh unsigned-structure-check"]
     LocalGate --> UnsignedLaunch["package-distribution.sh unsigned-launch-check"]
+    UnsignedLaunch --> ParentLiveness["authenticated direct-parent binding; SIGKILL app; core self-exit; UDS and database lease release; same-DB relaunch"]
     LocalGate --> SignedDistributionRunbook["jarvis release signed-distribution-runbook read-only signed artifact triage"]
     LocalGate --> LiveDeviceQA["release-live-device-qa.sh check/self-test preflight"]
     LocalGate --> PluginTrustRunbook["jarvis release plugin-trust-runbook read-only plugin trust triage"]

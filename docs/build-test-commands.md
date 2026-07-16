@@ -171,6 +171,13 @@ uses that path only for the enabled owner-only handoff file. The supervisor
 removes `JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF`, `JARVIS_MAC_IPC_AUTH_FILE`,
 `JARVIS_MAC_RELEASE_SMOKE`, and `JARVIS_IPC_TOKEN_FILE` from the child server environment. Normal packaged
 launches use UDS and do not create a handoff file or TCP listener.
+Authenticated app-supervised launches include the non-secret
+`--supervised-parent-pid <swift-app-pid>` argument. The core validates it is a
+non-init direct parent before opening SQLite and watches that relationship for
+the server lifetime. Abrupt app termination therefore drops the IPC server and
+releases the database owner lease; manual or externally supervised `jarvis
+serve` processes omit this argument and remain operator-owned. Bearer authority
+continues to arrive only through bounded startup stdin.
 The unsigned launch lane sets exact `JARVIS_MAC_RELEASE_SMOKE=true` only on the
 app and requires its non-secret readiness line, which is emitted only after the
 Swift client completes authenticated health, dry-run command, task and audit
@@ -197,6 +204,9 @@ generation cleanup and restart invalidation. The distribution lane must prove
 the release-built app and Swift client traverse health, command, task/audit,
 diagnostics, pause/block/resume over that same default UDS, persist the expected
 task/audit state, and finish durably resumed before teardown. It must separately prove that the
+app launch includes its exact direct parent PID, abrupt app termination makes
+the supervised core self-exit and release the database owner lease, and a
+second launch can open the same database without manual cleanup. It must also prove that the
 exact opt-in selects loopback TCP, creates and lifecycle-clears the hardened
 file, accepts only an absolute override, strips app-only variables from the
 child, and preserves no-downgrade behavior. The unsigned/ad-hoc lane verifies
@@ -1258,6 +1268,12 @@ used before any artifact-producing lane removes the distribution directory.
 at the exact app/core bundle paths, proves real process-name plus text-vnode
 inspection blocks replacement, stops only those fixtures, and proves the bundle
 is accepted afterward.
+The same `--unsigned-launch-check` crash-style E2E sends `SIGKILL` to the
+release-built app, requires its authenticated core to self-exit within a
+bounded interval, verifies the UDS is removed, and then relaunches against the
+same SQLite database. This is repository-owned proof that new app-supervised
+cores do not survive an abrupt app loss; it does not terminate or claim control
+over older/manual cores that were launched without the parent contract.
 Packaging now refuses to replace the exact configured `Jarvis.app` while its
 app or bundled-core executable is running, and tells the operator to quit the
 app or select a different `JARVIS_DISTRIBUTION_DIR`. This prevents a surviving
