@@ -176,9 +176,14 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   `cargo test -p jarvis-protocol --test distributed_protocol_contract_e2e --locked`
   and confirm the serialized Windows-master/Mac-worker handshake, capability,
   leased-job, exact-result, and wrong-lease rejection story remains green.
-  Treat this as portable contract E2E only; Windows authority, network/mTLS,
-  enrollment, live MLX inference, Codex execution, and cross-machine recovery
-  remain unimplemented and unproven.
+  Then run
+  `cargo test -p jarvis-master --test master_lifecycle_e2e --locked` and confirm
+  the file-backed fake worker proves durable success, cancellation, expiry,
+  capability bounds, restart abandonment, late-result rejection, and safe
+  reissue. Treat these as portable in-process foundation E2E only; a Windows
+  service executable, process ownership, network/mTLS, enrollment CA, live MLX
+  inference, unified state migration, Codex execution, and cross-machine
+  recovery remain unimplemented and unproven.
 - For workspace grants, confirm app-selected paths are absent from child argv,
   environment, health, UI presentation, diagnostics, and audit; malformed or
   stale bookmarks block the complete launch; trusted-wake restarts share the

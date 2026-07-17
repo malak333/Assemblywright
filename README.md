@@ -18,17 +18,26 @@ repository-backed activity summary and activity event stream, conservative
 release-readiness inspection, read-only release runbook IPC surfaces, and CLI smoke paths for the Swift shell
 and local packaged app proof.
 
-The workspace also contains a portable `jarvis-protocol` crate as a dormant
-distributed-development seam. It defines versioned, bounded handshake,
-capability, job, lease, cancellation, and result contracts and is checked by a
-protocol-only Windows CI lane. No Windows master, network transport, worker,
-remote inference, or Codex dispatch is implemented by that foundation slice;
-the existing macOS runtime and release boundary remain authoritative. The
+The workspace also contains a portable `jarvis-protocol` crate and a portable,
+library-only `jarvis-master` durable state kernel as default-inert
+distributed-development seams. The protocol crate defines versioned, bounded
+handshake, capability, job, lease, cancellation, and result contracts. The
+master kernel adds an isolated SQLite schema for explicitly registered device
+metadata, connection epochs and sequence high-water marks, queued steps,
+leased attempts, cancellation, expiry, exact result acceptance, capability
+limits, disconnect handling, and restart reconciliation. Both are checked by
+the Windows distributed gate. No Windows service executable, network
+transport, mTLS, enrollment CA, live worker, remote inference, repository
+authority, or Codex dispatch is implemented by these foundation slices; the
+existing macOS runtime and release boundary remain authoritative. The
 accepted target and migration boundaries are recorded in
 [Distributed Developer Mode Design](docs/distributed-developer-mode-design.md).
-The portable seam has a named serialized contract E2E covering handshake,
-capability selection, leased work, result acceptance, and wrong-lease denial;
-it does not claim a live distributed runtime.
+The protocol seam has a named serialized contract E2E. The master kernel has a
+file-backed fake-worker lifecycle E2E covering durable enqueue/lease/result,
+wrong-lease and duplicate denial, cancellation, expiry, capability-specific
+bounds, connection loss, late output rejection, restart abandonment, and safe
+reissue. These tests are in-process and do not claim a live distributed
+runtime or authenticated cross-device proof.
 
 Trusted macOS system-wake events are a disabled-by-default local foundation.
 Swift stores a P-256 private key and monotonic counter in device-only Keychain

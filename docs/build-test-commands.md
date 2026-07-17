@@ -26,23 +26,41 @@ marketplace trust review.
 `/contract` and release readiness expose this lane as `release_ci_gate` with
 the same boundary.
 
-The first distributed-development slice has a separate portable protocol gate:
+The portable distributed-development foundation has a separate Windows gate:
+
+For a fresh Windows checkout, install the MSVC Rust toolchain pinned by
+`rust-toolchain.toml` after the Visual Studio C++ Build Tools and Windows SDK
+are present:
+
+```powershell
+rustup toolchain install 1.95.0 --profile minimal --component clippy --component rustfmt
+```
+
+Restart PowerShell and Codex after installation so they inherit
+`%USERPROFILE%\.cargo\bin` on `PATH`. If a long-running Codex process still has
+the pre-install environment, use
+`C:\Users\mike\.cargo\bin\cargo.exe` for the current validation run, then
+restart Codex before subsequent development.
 
 ```sh
 cargo fmt --all --check
 cargo clippy -p jarvis-protocol --all-targets --locked -- -D warnings
+cargo clippy -p jarvis-master --all-targets --locked -- -D warnings
 cargo test -p jarvis-protocol --locked
 cargo test -p jarvis-protocol --test distributed_protocol_contract_e2e --locked
+cargo test -p jarvis-master --locked
+cargo test -p jarvis-master --test master_lifecycle_e2e --locked
 cargo check -p jarvis-core --features distributed-development --locked
 ```
 
-`.github/workflows/windows-protocol.yml` runs the formatting, lint, and protocol
-test commands on `windows-latest`. The final feature-gated core check is a local
-integration check on a supported host; it proves only that `jarvis-core` can
-consume the dormant contracts. The Windows job deliberately does not build the
-current Unix/macOS runtime, start a network listener, establish mTLS, enroll a
-device, dispatch work, mutate a repository, or exercise a Codex account.
-Those capabilities remain gated target architecture in
+`.github/workflows/windows-protocol.yml` runs formatting plus the protocol and
+master-kernel lint/test commands on `windows-latest`. The final feature-gated
+core check is a local integration check on a supported host; it proves only
+that `jarvis-core` can consume the dormant contracts. The Windows job
+deliberately does not build the current Unix/macOS runtime or a Windows service
+executable, start a network listener, establish mTLS, operate an enrollment CA,
+run a live worker, mutate a repository, or exercise a Codex account. Those
+capabilities remain gated target architecture in
 `docs/distributed-developer-mode-design.md`.
 Wire consumers must use each top-level message's `decode_frame` entry point so
 the raw byte ceiling is checked before Serde decoding and semantic validation.
@@ -53,6 +71,15 @@ a Mac worker advertises an MLX capability, a Windows master accepts it, issues
 a digest-bound leased job, accepts the exact result, and rejects the same
 result under a different lease. This is serialized contract E2E coverage, not
 a network, process, mTLS, live-model, or cross-device runtime test.
+`master_lifecycle_e2e` exercises the second implemented seam against a
+file-backed SQLite database and in-process fake worker. It covers explicit
+device registration, exact handshake acceptance, monotonic connection epochs
+and sequence high-water, durable enqueue/lease/result, global and
+capability-specific bounds, duplicate/wrong-lease/cancelled/expired/late result
+denial, disconnect/restart abandonment, and reissue only after the earlier
+attempt is durably non-accepting. It does not prove process exclusivity,
+network transport, device authentication, worker cleanup, or unified migration
+of the existing Mac-owned task, policy, audit, scheduler, and memory state.
 
 ```sh
 ./scripts/release-version-consistency.sh --check
@@ -106,8 +133,8 @@ This smoke verifies the pinned GitHub workflow still runs the canonical
 `./scripts/release-local.sh` gate, enforces the CI heartbeat environment, and
 runs `./scripts/release-local.sh --heartbeat-self-test` without recursively
 running the full release gate. It also verifies the SHA-pinned
-`windows-protocol.yml` workflow keeps the portable crate's format, clippy, and
-test commands intact.
+`windows-protocol.yml` workflow keeps the portable protocol and master-kernel
+format, clippy, and test commands intact.
 
 Focused release-doc drift check:
 
@@ -1357,7 +1384,7 @@ Store review, spoken transcript handoff, or live audio-output validation.
 `./scripts/release-version-consistency.sh --check` derives that release version
 from Rust package metadata and is part of `./scripts/release-local.sh`, so
 package, live QA, evidence bundle, and evidence doctor defaults cannot silently
-drift from the protocol/core/CLI crate and local dependency versions.
+drift from the protocol/master/core/CLI crate and local dependency versions.
 `./scripts/release-live-device-qa.sh --check` keeps the live-device QA runbook
 in the default release gate. It validates the repo-owned entitlement/checklist
 preconditions and prints the required clean-profile install, Finder launch,

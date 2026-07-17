@@ -1,6 +1,6 @@
 # Architecture Map
 
-## Distributed development protocol foundation
+## Distributed development portable foundation
 
 Current implementation:
 
@@ -8,8 +8,11 @@ Current implementation:
 flowchart LR
   Fixture["Versioned JSON golden fixture"] --> Protocol["Portable jarvis-protocol crate"]
   Protocol --> Bounds["Strict identifiers, unknown-field rejection, payload ceilings, leases, deadlines, and exact result identity"]
+  Protocol --> Master["Portable jarvis-master SQLite lifecycle kernel"]
+  Master --> Durable["Registered devices, epochs, queue, attempts, cancellation, expiry, restart reconciliation, exact results"]
   Protocol --> Feature["Dormant jarvis-core distributed-development feature"]
-  Protocol --> Windows["Windows protocol-only format, clippy, and test gate"]
+  Protocol --> Windows["Windows distributed format, clippy, protocol, and master-kernel gate"]
+  Master --> Windows
 ```
 
 Target development-mode architecture:
@@ -25,21 +28,35 @@ flowchart LR
   Codex --> Windows
 ```
 
-The repository now owns only the portable contract seam: protocol version 1,
-typed device/task/step/attempt/lease/cancellation identifiers, bounded
-capability advertisements, handshake messages, job and result envelopes,
-strict bound-before-decode JSON entry points, nil-identity rejection, a golden compatibility fixture, and a Windows CI lane
-that builds only this portable crate. `jarvis-core` re-exports the contracts
-only when the default-off `distributed-development` feature is selected.
+The repository now owns a portable contract seam and a library-only durable
+master kernel. The contract seam provides protocol version 1, typed
+device/task/step/attempt/lease/cancellation identifiers, bounded capability
+advertisements, handshake messages, job and result envelopes, strict
+bound-before-decode JSON entry points, nil-identity rejection, and a golden
+compatibility fixture. `jarvis-master` schema version 1 persists explicitly
+registered device metadata, active connection epoch and sequence state, queued
+steps, immutable leased job envelopes, attempts, cancellation/expiry outcome,
+and accepted payload digests. It enforces the 256-step admission ceiling, four
+global leases, one live lease per device connection, registered capability
+context/result limits, exact leased-attempt result identity, and durable
+abandon-before-reissue on disconnect or restart. `jarvis-core` re-exports the
+contracts only when the default-off `distributed-development` feature is
+selected; it does not yet consume `jarvis-master`.
 The `distributed_protocol_contract_e2e` test serializes the current seam from
 Mac capability advertisement through master acceptance, leased job, exact
-result acceptance, and wrong-lease rejection. It does not start either host or
-cross a real transport.
+result acceptance, and wrong-lease rejection. The
+`master_lifecycle_e2e` suite adds file-backed fake-worker coverage for durable
+success, duplicate and wrong-lease denial, cancellation, expiry,
+capability-specific bounds, restart abandonment, late-result rejection, and
+safe reissue. Neither suite starts a host process or crosses a real transport.
 
-This slice does not make Windows the runtime authority yet. It adds no network
-listener, mTLS identity, enrollment, discovery, queue, scheduler, remote lease
-manager, Windows SQLite authority, worker process, Codex dispatch, repository
-mutation, or UI. Existing Unix-domain-socket supervision and macOS release
+This slice does not make Windows the runtime authority yet. It adds no service
+executable, process-ownership lock, network listener, mTLS identity, enrollment
+CA, discovery, live scheduler loop, remote lease transport, worker process,
+Codex dispatch, integration with the existing task/policy/audit/memory store,
+repository mutation, or UI. The new SQLite data is an isolated distributed
+lifecycle kernel, not the final unified Windows authority. Existing
+Unix-domain-socket supervision and macOS release
 evidence remain unchanged. Future transport and runtime work must preserve
 fail-closed policy, planning/action separation, sensitivity and redaction,
 explicit cancellation, emergency pause, durable audit evidence, bounded

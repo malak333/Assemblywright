@@ -52,11 +52,24 @@ These notes capture durable facts for future agents working on this repository.
   clean-profile install, Finder launch, live-device QA, or plugin marketplace trust evidence.
   The same boundary is exposed as the `release_ci_gate` feature in `/contract`
   and release readiness.
+- On the owner's Windows development machine, install the repo-pinned Rust
+  `1.95.0-x86_64-pc-windows-msvc` toolchain through `rustup` with the minimal
+  profile plus `clippy` and `rustfmt`. Visual Studio 2022 Build Tools with the
+  C++ toolchain and Windows SDK are prerequisites. Restart PowerShell and Codex
+  so `%USERPROFILE%\.cargo\bin` reaches `PATH`; an already-running Codex process
+  can temporarily invoke `C:\Users\mike\.cargo\bin\cargo.exe` directly.
+- A feature or phase is not complete merely because its code passes focused
+  tests. Before merge, update the applicable implementation and boundary docs,
+  add durable facts here, add or name matching E2E/focused integration proof,
+  and extend the docs-drift/workflow guards when a new proof lane is introduced.
+  If a broader E2E cannot exist yet, record the exact unimplemented boundary
+  instead of making a broader readiness claim.
 - The product direction is a local-first macOS assistant foundation, legally
   distinct from Marvel/JARVIS branding and assets.
 - The current repo contains a Rust workspace with `jarvis-core` and
-  `jarvis-cli`, plus a portable `jarvis-protocol` crate and a Swift shell under
-  `apps/mac` with management tabs, core
+  `jarvis-cli`, plus portable `jarvis-protocol` and library-only
+  `jarvis-master` crates and a Swift shell under `apps/mac` with management
+  tabs, core
   supervision, voice input/output adapters, release/evidence-status
   inspection, scheduler notifications, Keychain credential launch injection,
   and packaged-smoke support.
@@ -67,16 +80,33 @@ These notes capture durable facts for future agents working on this repository.
   lease/deadline ceilings, exact leased-attempt result binding, and a golden
   mac-bridge handshake fixture. `jarvis-core` exposes those contracts
   only through the default-off `distributed-development` feature.
-- `.github/workflows/windows-protocol.yml` runs portable protocol formatting,
-  clippy, and tests on `windows-latest`. It does not compile the current
-  Unix/macOS runtime and does not prove a Windows master, worker transport,
-  mTLS, enrollment, queueing, remote inference, Codex-account dispatch,
-  repository mutation, signing, or live-device behavior.
+- The second distributed-development slice is the portable, library-only
+  `jarvis-master` schema-v1 lifecycle kernel. It persists explicit device
+  registrations, revocation state, connection epochs and sequence high-water,
+  queued steps, immutable leased job envelopes, attempts, cancellation,
+  expiry, terminal payload digests, and restart reconciliation in an isolated
+  SQLite database. It enforces the 256-step nonterminal admission ceiling,
+  four global leases, one live lease per device connection, exact registered
+  capability matching and context/result limits, and abandon-before-reissue.
+  It is not wired into `jarvis-core` and is not the final unified Windows state
+  store.
+- `.github/workflows/windows-protocol.yml` runs portable protocol and master
+  kernel formatting, clippy, and tests on `windows-latest`. It does not compile
+  the current Unix/macOS runtime and does not prove a Windows service process,
+  single-process ownership, worker transport, mTLS, enrollment CA, live remote
+  inference, Codex-account dispatch, repository mutation, signing, or
+  live-device behavior.
 - `distributed_protocol_contract_e2e` is the phase E2E for the implemented
   portable seam. It serializes a Mac MLX capability handshake, Windows-master
   acceptance, one digest-bound leased job, exact result acceptance, and
   wrong-lease rejection. It is not process, network, mTLS, live-model,
   cross-device, or recovery proof.
+- `master_lifecycle_e2e` is the phase E2E for the durable kernel. It uses a
+  file-backed SQLite database plus an in-process fake worker to prove durable
+  enqueue/lease/result, duplicate/wrong-lease/cancelled/expired/late rejection,
+  capability-specific limits, restart abandonment, connection-epoch advance,
+  and safe reissue. It is not an executable, process lock, network, mTLS,
+  enrollment, cross-device, live-model, or worker-residue proof.
 - Durable target decision from the distributed-development design: Windows is
   the sole stateful master for tasks, policy, audit, memory, repositories,
   worktrees, Git, utilities, and future orchestration. Its weaker GPU may remain
@@ -1418,8 +1448,8 @@ requires plugin-trust `generated_at`, `review_started_at`,
   `./scripts/release-version-consistency.sh --check` derives the
   release version from Rust package metadata and keeps package, live QA,
   evidence bundle, and evidence doctor defaults aligned with the
-  protocol/core/CLI crate and local dependency versions in the default local
-  release gate. The unsigned structure and launch
+  protocol/master/core/CLI crate and local dependency versions in the default
+  local release gate. The unsigned structure and launch
   checks still do not prove Developer
   ID signing, notarization, stapling, installation, Finder launch, live
   microphone/Speech validation, spoken transcript handoff, App Store review,

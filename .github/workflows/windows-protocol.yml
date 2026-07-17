@@ -1,4 +1,4 @@
-name: Jarvis Windows Protocol Gate
+name: Jarvis Windows Distributed Gate
 
 on:
   pull_request:
@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   protocol-windows:
-    name: Portable protocol contracts
+    name: Portable protocol and master kernel
     runs-on: windows-latest
     timeout-minutes: 20
 
@@ -41,5 +41,11 @@ jobs:
       - name: Lint portable protocol contracts
         run: cargo clippy -p jarvis-protocol --all-targets --locked -- -D warnings
 
+      - name: Lint portable master kernel
+        run: cargo clippy -p jarvis-master --all-targets --locked -- -D warnings
+
       - name: Test portable protocol contracts
         run: cargo test -p jarvis-protocol --locked
+
+      - name: Test portable master kernel
+        run: cargo test -p jarvis-master --locked

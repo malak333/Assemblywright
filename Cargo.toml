@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/jarvis-protocol",
+  "crates/jarvis-master",
   "crates/jarvis-core",
   "crates/jarvis-cli",
 ]

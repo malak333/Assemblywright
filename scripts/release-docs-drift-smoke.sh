@@ -15,9 +15,11 @@ DESIGN="DESIGN.md"
 SAFETY_RULES="docs/safety-rules.md"
 DISTRIBUTED_DESIGN="docs/distributed-developer-mode-design.md"
 PROTOCOL_CRATE="crates/jarvis-protocol/src/lib.rs"
+MASTER_CRATE="crates/jarvis-master/src/lib.rs"
 WINDOWS_PROTOCOL_WORKFLOW=".github/workflows/windows-protocol.yml"
 RELEASE_VERSION_SCRIPT="scripts/release-version.sh"
 PROTOCOL_E2E="crates/jarvis-protocol/tests/distributed_protocol_contract_e2e.rs"
+MASTER_E2E="crates/jarvis-master/tests/master_lifecycle_e2e.rs"
 
 fail() {
   printf 'error: %s\n' "$1" >&2
@@ -57,17 +59,23 @@ require_file "$DESIGN"
 require_file "$SAFETY_RULES"
 require_file "$DISTRIBUTED_DESIGN"
 require_file "$PROTOCOL_CRATE"
+require_file "$MASTER_CRATE"
 require_file "$WINDOWS_PROTOCOL_WORKFLOW"
 require_file "$RELEASE_VERSION_SCRIPT"
 require_file "$PROTOCOL_E2E"
+require_file "$MASTER_E2E"
 
 for file in "$BUILD_DOCS" "$ARCHITECTURE" "$KB" "$README"; do
   require_text "distributed protocol crate" "$file" "jarvis-protocol"
 done
 require_text "build docs Windows protocol workflow" "$BUILD_DOCS" "windows-protocol.yml"
+require_text "build docs Windows rustup bootstrap" "$BUILD_DOCS" "rustup toolchain install 1.95.0 --profile minimal --component clippy --component rustfmt"
+require_text "build docs Windows Cargo PATH" "$BUILD_DOCS" 'C:\Users\mike\.cargo\bin\cargo.exe'
 require_text "architecture dormant distributed feature" "$ARCHITECTURE" "distributed-development"
 require_text "architecture distributed non-goal" "$ARCHITECTURE" "This slice does not make Windows the runtime authority yet."
 require_text "knowledge base Windows protocol workflow" "$KB" "windows-protocol.yml"
+require_text "knowledge base phase completion rule" "$KB" "A feature or phase is not complete"
+require_text "knowledge base Windows Cargo PATH" "$KB" 'C:\Users\mike\.cargo\bin\cargo.exe'
 require_text "distributed design Windows authority" "$DISTRIBUTED_DESIGN" 'jarvis-master` is the sole authoritative service'
 require_text "distributed design Codex account boundary" "$DISTRIBUTED_DESIGN" "Codex account"
 require_text "distributed design current-default boundary" "$DISTRIBUTED_DESIGN" "current app-supervised Mac architecture remains the release default"
@@ -76,14 +84,22 @@ require_text "protocol frame bound" "$PROTOCOL_CRATE" "pub const MAX_WIRE_FRAME_
 require_text "protocol bound-before-decode API" "$PROTOCOL_CRATE" "pub fn decode_frame(frame: &[u8])"
 require_text "protocol nil identity rejection" "$PROTOCOL_CRATE" "NilIdentifier"
 require_text "release version protocol package check" "$RELEASE_VERSION_SCRIPT" 'crates/jarvis-protocol/Cargo.toml'
+require_text "release version master package check" "$RELEASE_VERSION_SCRIPT" 'crates/jarvis-master/Cargo.toml'
+require_text "release version master dependency check" "$RELEASE_VERSION_SCRIPT" "MASTER_PROTOCOL_DEPENDENCY_VERSION"
 require_text "release version protocol dependency check" "$RELEASE_VERSION_SCRIPT" "CORE_PROTOCOL_DEPENDENCY_VERSION"
 require_text "protocol E2E master-worker story" "$PROTOCOL_E2E" "windows_master_and_mac_worker_complete_one_bounded_protocol_story"
 require_text "protocol E2E wrong-lease denial" "$PROTOCOL_E2E" "ResultIdentityMismatch"
+require_text "master schema version" "$MASTER_CRATE" "pub const MASTER_SCHEMA_VERSION: i64 = 1;"
+require_text "master queue ceiling" "$MASTER_CRATE" "pub const MAX_QUEUED_OR_LEASED_STEPS: u64 = 256;"
+require_text "master E2E durable story" "$MASTER_E2E" "windows_master_kernel_accepts_fake_worker_result_durably"
+require_text "master E2E restart story" "$MASTER_E2E" "windows_master_kernel_reconciles_fake_worker_across_restart"
 for file in "$BUILD_DOCS" "$CHECKLIST" "$ARCHITECTURE" "$KB"; do
   require_text "distributed protocol E2E documentation" "$file" "distributed_protocol_contract_e2e"
+  require_text "distributed master E2E documentation" "$file" "master_lifecycle_e2e"
 done
 require_text "Windows protocol runner" "$WINDOWS_PROTOCOL_WORKFLOW" "runs-on: windows-latest"
 require_text "Windows protocol tests" "$WINDOWS_PROTOCOL_WORKFLOW" "cargo test -p jarvis-protocol --locked"
+require_text "Windows master tests" "$WINDOWS_PROTOCOL_WORKFLOW" "cargo test -p jarvis-master --locked"
 
 for file in "$BUILD_DOCS" "$CHECKLIST" "$README"; do
   require_text "atomic approval decision" "$file" "redacted decision audit"

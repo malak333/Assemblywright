@@ -1022,6 +1022,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "jarvis-master"
+version = "0.1.4"
+dependencies = [
+ "jarvis-protocol",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
 name = "jarvis-protocol"
 version = "0.1.4"
 dependencies = [
