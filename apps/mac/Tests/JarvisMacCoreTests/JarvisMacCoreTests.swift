@@ -5281,7 +5281,8 @@ struct JarvisMacCoreTests {
                   "chatgpt_enabled": true,
                   "chatgpt_auth_mode": "codex_account",
                   "chatgpt_model": "gpt-test",
-                  "chatgpt_requires_approval": true
+                  "chatgpt_requires_approval": false,
+                  "chatgpt_reasoning_effort": "high"
                 }
                 """.utf8
             )
@@ -5293,7 +5294,8 @@ struct JarvisMacCoreTests {
         #expect(health.chatgptEnabled)
         #expect(health.chatgptAuthMode == "codex_account")
         #expect(health.chatgptModel == "gpt-test")
-        #expect(health.chatgptRequiresApproval)
+        #expect(!health.chatgptRequiresApproval)
+        #expect(health.chatgptReasoningEffort == "high")
     }
 
     @Test("Model configuration maps selected Ollama model to launch environment")
@@ -5341,7 +5343,8 @@ struct JarvisMacCoreTests {
         #expect(environment["JARVIS_CHATGPT_MODEL"] == "gpt-codex-test")
         #expect(environment["JARVIS_OPENAI_BASE_URL"] == "https://api.openai.test/v1")
         #expect(environment["JARVIS_CHATGPT_TIMEOUT_MS"] == "45000")
-        #expect(environment["JARVIS_CHATGPT_REQUIRES_APPROVAL"] == "true")
+        #expect(environment["JARVIS_CHATGPT_REQUIRES_APPROVAL"] == "false")
+        #expect(environment["JARVIS_CHATGPT_REASONING_EFFORT"] == "medium")
         #expect(environment["JARVIS_OPENAI_API_KEY"] == nil)
     }
 
@@ -5349,8 +5352,9 @@ struct JarvisMacCoreTests {
     func modelConfigurationMapsCodexAccountSelectionToEnvironment() {
         let configuration = JarvisModelConfiguration(
             provider: .codexAccount,
-            codexModel: " gpt-5.5 ",
+            codexModel: " gpt-5.6-terra ",
             codexExecutable: " /Applications/Codex.app/Contents/Resources/codex ",
+            reasoningEffort: .xhigh,
             timeoutMilliseconds: "45000"
         )
 
@@ -5359,12 +5363,25 @@ struct JarvisMacCoreTests {
         #expect(environment["JARVIS_LOCAL_MODEL_ENABLED"] == "false")
         #expect(environment["JARVIS_CHATGPT_ENABLED"] == "true")
         #expect(environment["JARVIS_CHATGPT_AUTH"] == "codex_account")
-        #expect(environment["JARVIS_CHATGPT_MODEL"] == "gpt-5.5")
+        #expect(environment["JARVIS_CHATGPT_MODEL"] == "gpt-5.6-terra")
         #expect(environment["JARVIS_CODEX_EXECUTABLE"] == "/Applications/Codex.app/Contents/Resources/codex")
         #expect(environment["JARVIS_CHATGPT_TIMEOUT_MS"] == "45000")
-        #expect(environment["JARVIS_CHATGPT_REQUIRES_APPROVAL"] == "true")
+        #expect(environment["JARVIS_CHATGPT_REQUIRES_APPROVAL"] == "false")
+        #expect(environment["JARVIS_CHATGPT_REASONING_EFFORT"] == "xhigh")
         #expect(environment["JARVIS_OPENAI_API_KEY"] == nil)
         #expect(environment["JARVIS_OPENAI_BASE_URL"] == nil)
+    }
+
+    @Test("Codex account configuration exposes current model and per-model effort choices")
+    func codexAccountConfigurationExposesModelAndEffortChoices() {
+        var configuration = JarvisModelConfiguration(provider: .codexAccount, codexModel: "gpt-5.6-sol")
+
+        #expect(JarvisModelConfiguration.codexAccountModels.contains("gpt-5.6-sol"))
+        #expect(JarvisModelConfiguration.codexAccountModels.contains("gpt-5.5"))
+        #expect(configuration.supportedReasoningEfforts == [.low, .medium, .high, .xhigh, .max, .ultra])
+
+        configuration.codexModel = "gpt-5.5"
+        #expect(configuration.supportedReasoningEfforts == [.low, .medium, .high, .xhigh])
     }
 
     @MainActor
@@ -5548,7 +5565,8 @@ struct JarvisMacCoreTests {
             chatgptEnabled: true,
             chatgptAuthMode: "codex_account",
             chatgptModel: "gpt-codex-test",
-            chatgptRequiresApproval: true
+            chatgptRequiresApproval: false,
+            chatgptReasoningEffort: "high"
         )
         let supervisor = JarvisCoreSupervisor(
             configuration: JarvisCoreSupervisorConfiguration(
@@ -5571,7 +5589,8 @@ struct JarvisMacCoreTests {
                 "JARVIS_CHATGPT_ENABLED": "true",
                 "JARVIS_CHATGPT_AUTH": "codex_account",
                 "JARVIS_CHATGPT_MODEL": "gpt-codex-test",
-                "JARVIS_CHATGPT_REQUIRES_APPROVAL": "true"
+                "JARVIS_CHATGPT_REQUIRES_APPROVAL": "false",
+                "JARVIS_CHATGPT_REASONING_EFFORT": "high"
             ],
             requireMatchingConfiguration: true
         )

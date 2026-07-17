@@ -2875,6 +2875,7 @@ mod tests {
                 api_key: Some("test-token-value".to_string()),
                 codex_executable: "codex".to_string(),
                 requires_approval: true,
+                reasoning_effort: crate::ChatGptReasoningEffort::Medium,
                 timeout_ms: 2_000,
             },
         };

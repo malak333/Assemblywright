@@ -425,6 +425,7 @@ pub struct HealthResponse {
     pub chatgpt_auth_mode: crate::ChatGptAuthMode,
     pub chatgpt_model: String,
     pub chatgpt_requires_approval: bool,
+    pub chatgpt_reasoning_effort: crate::ChatGptReasoningEffort,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -462,6 +463,7 @@ pub struct DiagnosticHealthResponse {
     pub chatgpt_auth_mode: crate::ChatGptAuthMode,
     pub chatgpt_model: String,
     pub chatgpt_requires_approval: bool,
+    pub chatgpt_reasoning_effort: crate::ChatGptReasoningEffort,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -495,6 +497,7 @@ impl From<HealthResponse> for DiagnosticHealthResponse {
             chatgpt_auth_mode: health.chatgpt_auth_mode,
             chatgpt_model: health.chatgpt_model,
             chatgpt_requires_approval: health.chatgpt_requires_approval,
+            chatgpt_reasoning_effort: health.chatgpt_reasoning_effort,
         }
     }
 }
@@ -1383,6 +1386,7 @@ impl IpcState {
             chatgpt_auth_mode: self.provider_config.chatgpt.auth_mode,
             chatgpt_model: self.provider_config.chatgpt.model.clone(),
             chatgpt_requires_approval: self.provider_config.chatgpt.requires_approval,
+            chatgpt_reasoning_effort: self.provider_config.chatgpt.reasoning_effort,
         }
     }
 
@@ -14431,6 +14435,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 api_key: Some("test-token".to_string()),
                 codex_executable: "codex".to_string(),
                 requires_approval: true,
+                reasoning_effort: crate::ChatGptReasoningEffort::Medium,
                 timeout_ms: 2_000,
             },
         });

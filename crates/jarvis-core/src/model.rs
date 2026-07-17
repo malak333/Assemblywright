@@ -103,7 +103,46 @@ pub struct ChatGptProviderConfig {
     pub api_key: Option<String>,
     pub codex_executable: String,
     pub requires_approval: bool,
+    pub reasoning_effort: ChatGptReasoningEffort,
     pub timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatGptReasoningEffort {
+    Low,
+    Medium,
+    High,
+    Xhigh,
+    Max,
+    Ultra,
+}
+
+impl ChatGptReasoningEffort {
+    fn parse(value: &str) -> JarvisResult<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "low" | "light" => Ok(Self::Low),
+            "medium" => Ok(Self::Medium),
+            "high" => Ok(Self::High),
+            "xhigh" | "extra_high" | "extra-high" => Ok(Self::Xhigh),
+            "max" => Ok(Self::Max),
+            "ultra" => Ok(Self::Ultra),
+            other => Err(JarvisError::Validation(format!(
+                "unsupported ChatGPT reasoning effort: {other}"
+            ))),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Xhigh => "xhigh",
+            Self::Max => "max",
+            Self::Ultra => "ultra",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -138,6 +177,7 @@ impl Default for ChatGptProviderConfig {
             api_key: None,
             codex_executable: "codex".to_string(),
             requires_approval: true,
+            reasoning_effort: ChatGptReasoningEffort::Medium,
             timeout_ms: 30_000,
         }
     }
@@ -252,11 +292,15 @@ impl ProviderConfig {
                 parse_bool("JARVIS_CHATGPT_REQUIRES_APPROVAL", &value)?;
         }
 
+        if let Some(value) = get("JARVIS_CHATGPT_REASONING_EFFORT") {
+            config.chatgpt.reasoning_effort = ChatGptReasoningEffort::parse(&value)?;
+        }
+
         if config.chatgpt.enabled {
             if config.chatgpt.model == "chatgpt-disabled" {
                 config.chatgpt.model = match config.chatgpt.auth_mode {
                     ChatGptAuthMode::ApiKey => "gpt-4.1-mini".to_string(),
-                    ChatGptAuthMode::CodexAccount => "gpt-5.5".to_string(),
+                    ChatGptAuthMode::CodexAccount => "gpt-5.6-sol".to_string(),
                 };
             }
             if config.chatgpt.auth_mode == ChatGptAuthMode::ApiKey
@@ -264,12 +308,6 @@ impl ProviderConfig {
             {
                 return Err(JarvisError::Validation(
                     "JARVIS_CHATGPT_ENABLED requires JARVIS_OPENAI_API_KEY".to_string(),
-                ));
-            }
-            if !config.chatgpt.requires_approval {
-                return Err(JarvisError::Validation(
-                    "JARVIS_CHATGPT_REQUIRES_APPROVAL must remain enabled for ChatGPT routing"
-                        .to_string(),
                 ));
             }
         }
@@ -321,6 +359,7 @@ pub struct ProviderStatus {
     pub chatgpt_enabled: bool,
     pub chatgpt_model: String,
     pub chatgpt_requires_approval: bool,
+    pub chatgpt_reasoning_effort: ChatGptReasoningEffort,
 }
 
 impl ProviderStatus {
@@ -333,6 +372,7 @@ impl ProviderStatus {
             chatgpt_enabled: config.chatgpt.enabled,
             chatgpt_model: config.chatgpt.model.clone(),
             chatgpt_requires_approval: config.chatgpt.requires_approval,
+            chatgpt_reasoning_effort: config.chatgpt.reasoning_effort,
         }
     }
 }
@@ -896,6 +936,7 @@ pub struct ChatGptHttpModel {
     base_url: String,
     api_key: String,
     timeout: Duration,
+    reasoning_effort: ChatGptReasoningEffort,
     client: reqwest::Client,
 }
 
@@ -905,11 +946,6 @@ impl ChatGptHttpModel {
             return Err(JarvisError::Validation(
                 "ChatGPT provider is disabled; set JARVIS_CHATGPT_ENABLED=true to opt in"
                     .to_string(),
-            ));
-        }
-        if !config.requires_approval {
-            return Err(JarvisError::Validation(
-                "ChatGPT provider requires explicit route approval".to_string(),
             ));
         }
         let api_key = config.api_key.clone().ok_or_else(|| {
@@ -932,6 +968,7 @@ impl ChatGptHttpModel {
             base_url: config.base_url.trim_end_matches('/').to_string(),
             api_key,
             timeout,
+            reasoning_effort: config.reasoning_effort,
             client,
         })
     }
@@ -974,26 +1011,31 @@ impl ChatGptHttpModel {
             })?;
         headers.insert(AUTHORIZATION, auth_value);
 
+        let mut request_body = json!({
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are Jarvis. Use only the redacted context supplied by the route guardrail. Do not request secrets or claim access to hidden local state. Prefer the provided first-party tools when a tool is needed. If native tool calls are unavailable, reply only with JSON using an exact provided plugin_id and action: {\"message\":\"short reason\",\"complete\":false,\"tool_requests\":[{\"plugin_id\":\"<provided plugin_id>\",\"action\":\"<provided action>\",\"input\":{}}]}. If no provided tool fits, answer directly without tool_requests."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            "temperature": 0.2,
+            "tools": openai_first_party_tools(&request.first_party_tools),
+            "tool_choice": "auto",
+        });
+        if self.model.trim().to_ascii_lowercase().starts_with("gpt-5") {
+            request_body["reasoning_effort"] = json!(self.reasoning_effort.as_str());
+        }
+
         let response = self
             .client
             .post(&endpoint)
             .headers(headers)
-            .json(&json!({
-                "model": self.model,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": "You are Jarvis. Use only the redacted context supplied by the route guardrail. Do not request secrets or claim access to hidden local state. Prefer the provided first-party tools when a tool is needed. If native tool calls are unavailable, reply only with JSON using an exact provided plugin_id and action: {\"message\":\"short reason\",\"complete\":false,\"tool_requests\":[{\"plugin_id\":\"<provided plugin_id>\",\"action\":\"<provided action>\",\"input\":{}}]}. If no provided tool fits, answer directly without tool_requests."
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ],
-                "temperature": 0.2,
-                "tools": openai_first_party_tools(&request.first_party_tools),
-                "tool_choice": "auto",
-            }))
+            .json(&request_body)
             .send()
             .await
             .map_err(|error| {
@@ -1103,6 +1145,7 @@ pub struct CodexAccountModel {
     model: String,
     executable: String,
     timeout: Duration,
+    reasoning_effort: ChatGptReasoningEffort,
 }
 
 impl CodexAccountModel {
@@ -1111,11 +1154,6 @@ impl CodexAccountModel {
             return Err(JarvisError::Validation(
                 "Codex account provider is disabled; set JARVIS_CHATGPT_ENABLED=true to opt in"
                     .to_string(),
-            ));
-        }
-        if !config.requires_approval {
-            return Err(JarvisError::Validation(
-                "Codex account provider requires explicit route approval".to_string(),
             ));
         }
         if config.model.trim().is_empty() || config.model == "chatgpt-disabled" {
@@ -1134,6 +1172,7 @@ impl CodexAccountModel {
             model: config.model.clone(),
             executable: config.codex_executable.clone(),
             timeout: Duration::from_millis(config.timeout_ms),
+            reasoning_effort: config.reasoning_effort,
         })
     }
 
@@ -1200,6 +1239,11 @@ impl CodexAccountModel {
         command
             .arg("-c")
             .arg("approval_policy=\"never\"")
+            .arg("-c")
+            .arg(format!(
+                "model_reasoning_effort=\"{}\"",
+                self.reasoning_effort.as_str()
+            ))
             .arg("-c")
             .arg("web_search=\"disabled\"")
             .arg("--color")
@@ -1983,17 +2027,21 @@ mod tests {
     }
 
     #[test]
-    fn provider_config_rejects_chatgpt_without_approval_guardrail() {
-        let error = ProviderConfig::from_env_values(|key| match key {
+    fn provider_config_allows_normal_cloud_prompts_without_repeated_approval() {
+        let config = ProviderConfig::from_env_values(|key| match key {
             "JARVIS_CHATGPT_ENABLED" => Some("true".to_string()),
             "JARVIS_OPENAI_API_KEY" => Some("test-token-value".to_string()),
             "JARVIS_CHATGPT_REQUIRES_APPROVAL" => Some("false".to_string()),
+            "JARVIS_CHATGPT_REASONING_EFFORT" => Some("xhigh".to_string()),
             _ => None,
         })
-        .expect_err("approval guardrail cannot be disabled");
+        .expect("normal prompt approval policy should be configurable");
 
-        assert!(error.to_string().contains("must remain enabled"));
-        assert!(!error.to_string().contains("test-token-value"));
+        assert!(!config.chatgpt.requires_approval);
+        assert_eq!(
+            config.chatgpt.reasoning_effort,
+            ChatGptReasoningEffort::Xhigh
+        );
     }
 
     #[test]
@@ -2169,6 +2217,7 @@ mod tests {
             api_key: Some("test-token".to_string()),
             codex_executable: "codex".to_string(),
             requires_approval: true,
+            reasoning_effort: ChatGptReasoningEffort::Medium,
             timeout_ms: 100,
         };
         let route = test_chatgpt_route(&api_config, "redacted route context");
@@ -2682,6 +2731,7 @@ mod tests {
             api_key: Some("test-token-value".to_string()),
             codex_executable: "codex".to_string(),
             requires_approval: true,
+            reasoning_effort: ChatGptReasoningEffort::Medium,
             timeout_ms: 2_000,
         };
         let model = ChatGptHttpModel::from_config(&config).expect("chatgpt model");
@@ -2769,6 +2819,7 @@ mod tests {
             api_key: Some("test-token-value".to_string()),
             codex_executable: "codex".to_string(),
             requires_approval: true,
+            reasoning_effort: ChatGptReasoningEffort::Medium,
             timeout_ms: 2_000,
         };
         let model = ChatGptHttpModel::from_config(&config).expect("chatgpt model");
@@ -2841,6 +2892,7 @@ mod tests {
             api_key: Some("test-token-value".to_string()),
             codex_executable: "codex".to_string(),
             requires_approval: true,
+            reasoning_effort: ChatGptReasoningEffort::Medium,
             timeout_ms: 2_000,
         };
         let model = ChatGptHttpModel::from_config(&config).expect("chatgpt model");
@@ -2894,6 +2946,7 @@ mod tests {
             api_key: Some("test-token-value".to_string()),
             codex_executable: "codex".to_string(),
             requires_approval: true,
+            reasoning_effort: ChatGptReasoningEffort::Medium,
             timeout_ms: 2_000,
         };
         let model = ChatGptHttpModel::from_config(&config).expect("chatgpt model");
@@ -2958,13 +3011,21 @@ mod tests {
             &executable,
             r#"#!/bin/sh
 out=""
+saw_reasoning_effort=false
 while [ "$#" -gt 0 ]; do
-  if [ "$1" = "--output-last-message" ]; then
-    shift
-    out="$1"
-  fi
+  case "$1" in
+    -c)
+      shift
+      case "$1" in model_reasoning_effort=*high*) saw_reasoning_effort=true ;; esac
+      ;;
+    --output-last-message)
+      shift
+      out="$1"
+      ;;
+  esac
   shift
 done
+[ "$saw_reasoning_effort" = true ] || exit 58
 printf 'codex account ok' > "$out"
 printf '{"type":"done"}\n'
 "#,
@@ -2987,6 +3048,7 @@ printf '{"type":"done"}\n'
             api_key: None,
             codex_executable: executable.to_string_lossy().to_string(),
             requires_approval: true,
+            reasoning_effort: ChatGptReasoningEffort::High,
             // This fixture exercises adapter success, not timeout behavior. Keep
             // enough separation from parallel CI scheduler contention that the
             // synthetic shell process can be spawned and reaped deterministically.
@@ -3058,6 +3120,7 @@ done
             api_key: None,
             codex_executable: executable.to_string_lossy().to_string(),
             requires_approval: true,
+            reasoning_effort: ChatGptReasoningEffort::High,
             // This fixture exercises the output cap, not timeout behavior. A
             // wider bound prevents parallel CI load from masking the assertion.
             timeout_ms: 10_000,
@@ -3127,6 +3190,7 @@ exec /bin/dd if=/dev/zero of="$out" bs=1048577 count=1 2>/dev/null
             api_key: None,
             codex_executable: executable.to_string_lossy().to_string(),
             requires_approval: true,
+            reasoning_effort: ChatGptReasoningEffort::High,
             // Leave enough headroom for a contended full-workspace test run;
             // the assertion below still proves the response monitor wins well
             // before the provider timeout while stdin delivery is blocked.

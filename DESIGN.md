@@ -54,7 +54,8 @@
 | App-supervised core first | LaunchAgent from day one | Reduces v1 complexity while preserving a path to stronger background reliability later. |
 | Keep app-supervised scheduler automation explicit and bounded | Always run persisted schedules whenever the app launches, or leave all due execution manual | A persisted user toggle enables the existing audited Rust background loop only while `Jarvis.app` supervises the core. Fixed interval/limit ceilings, bounded stale recovery, cancellable redacted attention polling, and separately authorized notifications preserve user intent without claiming LaunchAgent or OS-wake reliability. |
 | Local-model first with ChatGPT as the only approved cloud model | Cloud-first routing, provider-agnostic cloud routing | Matches the privacy posture while allowing explicit escalation for harder reasoning tasks. |
-| Support both OpenAI API-key and logged-in Codex-account authentication inside the approved ChatGPT route | API-key only, unaudited general Codex agent execution | Account authentication avoids a second stored Platform key while retaining the same sensitivity gate, route evidence, approval requirement, redacted request context, and failure audit. The Codex subprocess must ignore user/project rules, disable tool capabilities mechanically, minimize inherited environment, bound output, and fail closed when its constrained CLI contract is unavailable. |
+| Support both OpenAI API-key and logged-in Codex-account authentication inside the approved ChatGPT route | API-key only, unaudited general Codex agent execution | Account authentication avoids a second stored Platform key while retaining the same sensitivity gate, route evidence, configured cloud-approval policy, redacted request context, and failure audit. The Codex subprocess must ignore user/project rules, disable tool capabilities mechanically, minimize inherited environment, bound output, and fail closed when its constrained CLI contract is unavailable. |
+| Let an operator skip repeated approval for ordinary cloud conversation and select the Codex model plus reasoning effort | Require a one-shot decision for every typed prompt, hard-code one model/effort, or remove cloud safety gates | Explicit cloud-provider selection plus an `Ask before every cloud prompt` control is sufficient for ordinary Public, Workspace, and Personal conversation. Private and Credential-adjacent routes keep command-scoped approval, Restricted routes remain blocked, proactive routes cannot consume the grant, and tool/action approval is unchanged. Model and effort are runtime-verified through health; Codex-account execution passes the selected effort through strict CLI config while its internal approval policy stays `never` and tool features stay disabled. |
 | Capability scopes plus risk tiers | Simple allow/deny prompts, risk tiers only | High autonomy needs both explicit permission boundaries and per-action risk evaluation. |
 | SQLite as primary structured storage | Flat files only, external database | SQLite is durable, inspectable, easy to migrate, and enough for single-user v1. |
 | macOS Keychain for secrets | Store credentials in SQLite or config files | Secrets should use the platform credential store. |
@@ -454,11 +455,19 @@ the Jarvis boundary: shell, unified execution, code-host, app/plugin, browser,
 computer, web-search, image-generation, multi-agent, and workspace-dependency
 tool features are disabled before redacted context is sent.
 
-When policy stops a Console command at the cloud boundary, Swift exposes a
-one-shot `Approve & Send` action for that exact prompt. The retry carries an
-explicit command-scoped approval bit over authenticated local IPC; Rust converts
-it into a cloud-model approval grant only for a non-proactive request. A new
-command requires a new decision, and Restricted content remains blocked.
+The Model tab lets the operator choose whether every cloud prompt should require
+approval. With that toggle off, ordinary Public, Workspace, and Personal
+conversation uses the already explicit cloud-provider selection without a
+repeated prompt. Private and Credential-adjacent commands still stop at the
+cloud boundary, where Swift exposes a one-shot `Approve & Send` action for that
+exact prompt. The retry carries an explicit command-scoped approval bit over
+authenticated local IPC; Rust converts it into a cloud-model approval grant
+only for a non-proactive request. Restricted content remains blocked, proactive
+cloud execution cannot reuse the grant, and tool/action approvals are unchanged.
+The same tab exposes the selected Codex-account model and compatible reasoning
+effort; Rust passes the effort through the constrained CLI config while keeping
+the CLI's internal approval policy fixed to `never` and its tool features
+disabled.
 
 The Model tab may perform one explicit local integration-maintenance action:
 upgrading a Homebrew-managed Ollama formula after a visible confirmation. The

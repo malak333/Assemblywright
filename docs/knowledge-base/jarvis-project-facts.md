@@ -962,8 +962,17 @@ requires plugin-trust `generated_at`, `review_started_at`,
   provider selections for approved ChatGPT/OpenAI-compatible cloud routing.
   Both disable the local provider for the app-supervised core, set
   `JARVIS_CHATGPT_ENABLED=true`, pass the chosen `JARVIS_CHATGPT_MODEL` and
-  `JARVIS_CHATGPT_TIMEOUT_MS`, and keep
-  `JARVIS_CHATGPT_REQUIRES_APPROVAL=true`. `OpenAI API` sets
+  `JARVIS_CHATGPT_TIMEOUT_MS`, and pass the Model-tab choices for
+  `JARVIS_CHATGPT_REASONING_EFFORT` and
+  `JARVIS_CHATGPT_REQUIRES_APPROVAL`. The Codex-account picker includes the
+  current installed catalog (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`,
+  `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, and
+  `gpt-5.3-codex-spark`) and filters effort choices to the selected model.
+  Turning `Ask before every cloud prompt` off lets ordinary Public, Workspace,
+  and Personal conversation use the explicitly selected cloud provider without
+  a repeated prompt. Private and Credential-adjacent routes keep one-shot
+  approval, Restricted routes remain blocked, proactive routes cannot consume
+  the command grant, and tool/action approvals are unchanged. `OpenAI API` sets
   `JARVIS_CHATGPT_AUTH=api_key`, passes `JARVIS_OPENAI_BASE_URL`, and receives a
   Keychain-backed OpenAI credential injected by `JarvisCoreCredentialProvider`.
   `Codex account` sets `JARVIS_CHATGPT_AUTH=codex_account` and
@@ -980,8 +989,8 @@ requires plugin-trust `generated_at`, `review_started_at`,
   route context, while Codex may still add its own runtime/system context. A CLI
   lacking the complete constrained argument contract fails closed before model
   execution. `/health` now reports
-  `chatgpt_enabled`, `chatgpt_auth_mode`, `chatgpt_model`, and
-  `chatgpt_requires_approval`, so the Swift Model tab can display the active
+  `chatgpt_enabled`, `chatgpt_auth_mode`, `chatgpt_model`,
+  `chatgpt_requires_approval`, and `chatgpt_reasoning_effort`, so the Swift Model tab can display the active
   cloud provider/model and reject an already-running core with the wrong auth
   mode. CLI E2E starts a real `jarvis serve` with the same API-key cloud
   environment, checks the `routed-codex-cloud-model+first-party-plugins`
@@ -995,7 +1004,8 @@ requires plugin-trust `generated_at`, `review_started_at`,
   health before reporting it available; it does not accept stale health from a
   terminating core, and a shutdown timeout aborts restart without replacing the
   still-running process handle.
-- A Swift Console command stopped by the cloud-route policy exposes a one-shot
+- A Swift Console command stopped by the sensitive cloud-route policy (or by
+  the operator-selected every-prompt policy) exposes a one-shot
   `Approve & Send` action instead of a sensitivity selector. Swift retains the
   pending command in memory and retries it with `cloud_route_approved=true`;
   Rust accepts that approval only for the current non-proactive request, records
@@ -1004,9 +1014,10 @@ requires plugin-trust `generated_at`, `review_started_at`,
   browser/device login, which establishes account authentication but does not
   approve later Jarvis prompts. It is also distinct from tool/plugin approvals,
   which stay in the Approval Center and retain their durable decision/execution
-  workflow. The real-server Codex-account IPC E2E proves an unapproved Personal
-  command waits, the approved exact retry executes, and the next unapproved
-  command waits again.
+  workflow. The real-server Codex-account IPC E2E proves a normal Personal
+  command runs without repeated approval when configured, a Private command
+  waits, and the approved exact Private retry executes. The stub also verifies
+  the selected reasoning effort reaches the constrained Codex CLI config.
 - Codex-account selection must not read the OpenAI API-key Keychain item.
   `CoreSupervisor` resolves model environment overrides before credential
   injection, `JarvisCoreCredentialProvider` injects the API key only for an

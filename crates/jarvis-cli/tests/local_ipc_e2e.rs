@@ -11264,6 +11264,7 @@ saw_browser_disabled=false
 saw_computer_disabled=false
 saw_strict_config=false
 saw_web_search_disabled=false
+saw_reasoning_effort=false
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --ask-for-approval) exit 41 ;;
@@ -11285,6 +11286,7 @@ while [ "$#" -gt 0 ]; do
       shift
       case "$1" in
         approval_policy=*never*) saw_approval_policy=true ;;
+        model_reasoning_effort=*xhigh*) saw_reasoning_effort=true ;;
         web_search=*disabled*) saw_web_search_disabled=true ;;
       esac
       ;;
@@ -11306,6 +11308,7 @@ done
 [ "$saw_computer_disabled" = true ] || exit 54
 [ "$saw_strict_config" = true ] || exit 55
 [ "$saw_web_search_disabled" = true ] || exit 56
+[ "$saw_reasoning_effort" = true ] || exit 57
 [ -n "$out" ] || exit 45
 [ -z "${JARVIS_OPENAI_API_KEY+x}" ] || exit 46
 [ -z "${JARVIS_SECRET_LEAK_TEST+x}" ] || exit 47
@@ -11330,7 +11333,8 @@ printf '{"type":"done"}\n'
             ("JARVIS_CHATGPT_MODEL", "gpt-codex-account-e2e"),
             ("JARVIS_CODEX_EXECUTABLE", executable),
             ("JARVIS_CHATGPT_TIMEOUT_MS", "10000"),
-            ("JARVIS_CHATGPT_REQUIRES_APPROVAL", "true"),
+            ("JARVIS_CHATGPT_REQUIRES_APPROVAL", "false"),
+            ("JARVIS_CHATGPT_REASONING_EFFORT", "xhigh"),
             ("JARVIS_OPENAI_API_KEY", "must-not-reach-codex-child"),
             ("JARVIS_SECRET_LEAK_TEST", "must-not-reach-codex-child"),
         ],
@@ -11341,74 +11345,69 @@ printf '{"type":"done"}\n'
     assert_eq!(health["chatgpt_enabled"], true);
     assert_eq!(health["chatgpt_auth_mode"], "codex_account");
     assert_eq!(health["chatgpt_model"], "gpt-codex-account-e2e");
+    assert_eq!(health["chatgpt_requires_approval"], false);
+    assert_eq!(health["chatgpt_reasoning_effort"], "xhigh");
 
-    let command_body = |cloud_route_approved| {
+    let command_body = |sensitivity, cloud_route_approved| {
         json!({
             "input": "answer through the logged-in Codex account",
             "context": {"surface": "mac_console_e2e"},
             "dry_run": false,
             "proactive": false,
             "cloud_route_approved": cloud_route_approved,
-            "sensitivity": "personal"
+            "sensitivity": sensitivity
         })
         .to_string()
     };
-
-    let waiting: Value = serde_json::from_str(
-        &request(
-            endpoint.as_str(),
-            "POST",
-            "/commands",
-            Some(&command_body(false)),
-        )
-        .expect("unapproved Codex account command"),
-    )
-    .expect("waiting command JSON");
-    assert_eq!(waiting["accepted"], false, "{waiting}");
-    assert_eq!(waiting["task"]["status"], "waiting_for_approval");
-    assert_eq!(waiting["route_evidence"]["outcome"], "needs_approval");
-    assert_eq!(waiting["route_evidence"]["approval_status"], "pending");
-    assert!(waiting["steps"].as_array().is_some_and(Vec::is_empty));
 
     let command: Value = serde_json::from_str(
         &request(
             endpoint.as_str(),
             "POST",
             "/commands",
-            Some(&command_body(true)),
+            Some(&command_body("personal", false)),
         )
-        .expect("approved Codex account command"),
+        .expect("normal Codex account command"),
     )
-    .expect("approved command JSON");
+    .expect("normal command JSON");
     assert_eq!(command["accepted"], true, "{command}");
     assert_eq!(command["task"]["status"], "completed", "{command}");
     assert_eq!(command["route"]["provider"], "chat_gpt");
     assert_eq!(command["route"]["model"], "gpt-codex-account-e2e");
     assert_eq!(command["route_evidence"]["outcome"], "selected");
-    assert_eq!(command["route_evidence"]["approval_status"], "approved");
+    assert_eq!(command["route_evidence"]["approval_status"], "not_required");
     assert_eq!(command["message"], "codex account e2e ok");
     let encoded = serde_json::to_string(&command).expect("command JSON");
     assert!(!encoded.contains("must-not-reach-codex-child"));
     assert!(!encoded.contains(executable));
 
-    let waiting_again: Value = serde_json::from_str(
+    let waiting: Value = serde_json::from_str(
         &request(
             endpoint.as_str(),
             "POST",
             "/commands",
-            Some(&command_body(false)),
+            Some(&command_body("private", false)),
         )
-        .expect("second unapproved Codex account command"),
+        .expect("private Codex account command"),
     )
-    .expect("second waiting command JSON");
-    assert_eq!(
-        waiting_again["task"]["status"], "waiting_for_approval",
-        "approval must not carry over to the next command: {waiting_again}"
-    );
-    assert_eq!(
-        waiting_again["route_evidence"]["approval_status"],
-        "pending"
-    );
+    .expect("private waiting command JSON");
+    assert_eq!(waiting["accepted"], false, "{waiting}");
+    assert_eq!(waiting["task"]["status"], "waiting_for_approval");
+    assert_eq!(waiting["route_evidence"]["outcome"], "needs_approval");
+    assert_eq!(waiting["route_evidence"]["approval_status"], "pending");
+
+    let approved: Value = serde_json::from_str(
+        &request(
+            endpoint.as_str(),
+            "POST",
+            "/commands",
+            Some(&command_body("private", true)),
+        )
+        .expect("approved private Codex account command"),
+    )
+    .expect("approved private command JSON");
+    assert_eq!(approved["task"]["status"], "completed", "{approved}");
+    assert_eq!(approved["route_evidence"]["approval_status"], "approved");
 
     server.stop();
 }

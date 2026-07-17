@@ -9,7 +9,11 @@ release requirements, not optional UX guidance.
 - ChatGPT is the only approved cloud model and must be explicitly routed.
 - Restricted, credential-adjacent, private personal, and sensitive system data
   cannot be sent to ChatGPT without explicit approval for that task.
-- The Swift command Console may retry a cloud-blocked prompt only after an
+- Selecting a cloud provider is an explicit operator opt-in. The Model tab may
+  disable repeated approval for ordinary Public, Workspace, and
+  Personal conversation, but Private and Credential-adjacent routes retain the
+  per-task approval gate and Restricted routes remain blocked.
+- The Swift command Console may retry a sensitive cloud-blocked prompt only after an
   explicit one-shot `Approve & Send` decision. The authenticated retry must be
   bound to that exact non-proactive command; it cannot approve later prompts or
   override the Restricted cloud block.

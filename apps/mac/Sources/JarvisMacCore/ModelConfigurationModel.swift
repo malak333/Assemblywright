@@ -22,6 +22,28 @@ public enum JarvisModelProviderSelection: String, CaseIterable, Identifiable, Se
     }
 }
 
+public enum JarvisReasoningEffort: String, CaseIterable, Identifiable, Sendable {
+    case low
+    case medium
+    case high
+    case xhigh
+    case max
+    case ultra
+
+    public var id: String { rawValue }
+
+    public var label: String {
+        switch self {
+        case .low: return "Light"
+        case .medium: return "Medium"
+        case .high: return "High"
+        case .xhigh: return "Extra High"
+        case .max: return "Max"
+        case .ultra: return "Ultra"
+        }
+    }
+}
+
 public struct JarvisModelConfiguration: Equatable, Sendable {
     public var provider: JarvisModelProviderSelection
     public var localModel: String
@@ -29,6 +51,8 @@ public struct JarvisModelConfiguration: Equatable, Sendable {
     public var codexModel: String
     public var codexBaseURL: String
     public var codexExecutable: String
+    public var reasoningEffort: JarvisReasoningEffort
+    public var requiresCloudPromptApproval: Bool
     public var timeoutMilliseconds: String
 
     public init(
@@ -38,6 +62,8 @@ public struct JarvisModelConfiguration: Equatable, Sendable {
         codexModel: String = "gpt-4.1-mini",
         codexBaseURL: String = "https://api.openai.com/v1",
         codexExecutable: String = JarvisModelConfiguration.defaultCodexExecutable(),
+        reasoningEffort: JarvisReasoningEffort = .medium,
+        requiresCloudPromptApproval: Bool = false,
         timeoutMilliseconds: String = "60000"
     ) {
         self.provider = provider
@@ -46,6 +72,8 @@ public struct JarvisModelConfiguration: Equatable, Sendable {
         self.codexModel = codexModel
         self.codexBaseURL = codexBaseURL
         self.codexExecutable = codexExecutable
+        self.reasoningEffort = reasoningEffort
+        self.requiresCloudPromptApproval = requiresCloudPromptApproval
         self.timeoutMilliseconds = timeoutMilliseconds
     }
 
@@ -65,6 +93,11 @@ public struct JarvisModelConfiguration: Equatable, Sendable {
         let codexBaseURL = (environment["JARVIS_OPENAI_BASE_URL"] ?? environment["JARVIS_CHATGPT_BASE_URL"])?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let codexExecutable = environment["JARVIS_CODEX_EXECUTABLE"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let reasoningEffort = environment["JARVIS_CHATGPT_REASONING_EFFORT"]
+            .flatMap { JarvisReasoningEffort(rawValue: $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) }
+            ?? .medium
+        let requiresCloudPromptApproval = environment["JARVIS_CHATGPT_REQUIRES_APPROVAL"]
+            .flatMap(Bool.init) ?? false
         let timeout = (provider == .codex || provider == .codexAccount
             ? environment["JARVIS_CHATGPT_TIMEOUT_MS"]
             : environment["JARVIS_LOCAL_MODEL_TIMEOUT_MS"])?
@@ -74,9 +107,11 @@ public struct JarvisModelConfiguration: Equatable, Sendable {
             provider: provider,
             localModel: model?.isEmpty == false ? model! : (provider == .ollama ? "llama3.2" : "fake-local-model"),
             ollamaBaseURL: baseURL?.isEmpty == false ? baseURL! : "http://127.0.0.1:11434",
-            codexModel: codexModel?.isEmpty == false ? codexModel! : (provider == .codexAccount ? "gpt-5.5" : "gpt-4.1-mini"),
+            codexModel: codexModel?.isEmpty == false ? codexModel! : (provider == .codexAccount ? "gpt-5.6-sol" : "gpt-4.1-mini"),
             codexBaseURL: codexBaseURL?.isEmpty == false ? codexBaseURL! : "https://api.openai.com/v1",
             codexExecutable: codexExecutable?.isEmpty == false ? codexExecutable! : defaultCodexExecutable(),
+            reasoningEffort: reasoningEffort,
+            requiresCloudPromptApproval: requiresCloudPromptApproval,
             timeoutMilliseconds: timeout?.isEmpty == false ? timeout! : "60000"
         )
     }
@@ -91,7 +126,8 @@ public struct JarvisModelConfiguration: Equatable, Sendable {
                 "JARVIS_CHATGPT_MODEL": sanitizedCodexModel,
                 "JARVIS_CODEX_EXECUTABLE": sanitizedCodexExecutable,
                 "JARVIS_CHATGPT_TIMEOUT_MS": sanitizedTimeoutMilliseconds,
-                "JARVIS_CHATGPT_REQUIRES_APPROVAL": "true"
+                "JARVIS_CHATGPT_REQUIRES_APPROVAL": requiresCloudPromptApproval ? "true" : "false",
+                "JARVIS_CHATGPT_REASONING_EFFORT": reasoningEffort.rawValue
             ]
         case .codex:
             return [
@@ -101,7 +137,8 @@ public struct JarvisModelConfiguration: Equatable, Sendable {
                 "JARVIS_CHATGPT_MODEL": sanitizedCodexModel,
                 "JARVIS_OPENAI_BASE_URL": sanitizedCodexBaseURL,
                 "JARVIS_CHATGPT_TIMEOUT_MS": sanitizedTimeoutMilliseconds,
-                "JARVIS_CHATGPT_REQUIRES_APPROVAL": "true"
+                "JARVIS_CHATGPT_REQUIRES_APPROVAL": requiresCloudPromptApproval ? "true" : "false",
+                "JARVIS_CHATGPT_REASONING_EFFORT": reasoningEffort.rawValue
             ]
         case .fake:
             return [
@@ -134,7 +171,28 @@ public struct JarvisModelConfiguration: Equatable, Sendable {
 
     public var sanitizedCodexModel: String {
         let trimmed = codexModel.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? (provider == .codexAccount ? "gpt-5.5" : "gpt-4.1-mini") : trimmed
+        return trimmed.isEmpty ? (provider == .codexAccount ? "gpt-5.6-sol" : "gpt-4.1-mini") : trimmed
+    }
+
+    public static let codexAccountModels = [
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "gpt-5.5",
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.3-codex-spark"
+    ]
+
+    public var supportedReasoningEfforts: [JarvisReasoningEffort] {
+        switch sanitizedCodexModel {
+        case "gpt-5.6-sol", "gpt-5.6-terra":
+            return [.low, .medium, .high, .xhigh, .max, .ultra]
+        case "gpt-5.6-luna":
+            return [.low, .medium, .high, .xhigh, .max]
+        default:
+            return [.low, .medium, .high, .xhigh]
+        }
     }
 
     public var sanitizedCodexBaseURL: String {
@@ -658,6 +716,8 @@ public final class ModelConfigurationModel: ObservableObject {
     @Published public private(set) var availableModels: [JarvisOllamaModelInfo]
     @Published public private(set) var activeProvider: String?
     @Published public private(set) var activeModel: String?
+    @Published public private(set) var activeReasoningEffort: String?
+    @Published public private(set) var activeCloudPromptApprovalRequired: Bool?
     @Published public private(set) var statusMessage: String?
     @Published public var codexAPIKeyEntry: String
     @Published public private(set) var hasStoredCodexCredential: Bool
@@ -681,6 +741,8 @@ public final class ModelConfigurationModel: ObservableObject {
         self.availableModels = []
         self.activeProvider = nil
         self.activeModel = nil
+        self.activeReasoningEffort = nil
+        self.activeCloudPromptApprovalRequired = nil
         self.statusMessage = nil
         self.codexAPIKeyEntry = ""
         self.hasStoredCodexCredential = false
@@ -715,9 +777,13 @@ public final class ModelConfigurationModel: ObservableObject {
         if health?.chatgptEnabled == true {
             activeProvider = health?.chatgptAuthMode == "codex_account" ? "codex account" : "openai api"
             activeModel = health?.chatgptModel
+            activeReasoningEffort = health?.chatgptReasoningEffort
+            activeCloudPromptApprovalRequired = health?.chatgptRequiresApproval
         } else {
             activeProvider = health?.localModelProvider
             activeModel = health?.localModel
+            activeReasoningEffort = nil
+            activeCloudPromptApprovalRequired = nil
         }
     }
 

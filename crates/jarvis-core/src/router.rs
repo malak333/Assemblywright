@@ -133,7 +133,10 @@ impl ModelRouter {
             action: "route to ChatGPT".to_string(),
             requested_scopes: required_scopes,
             granted_scopes: request.granted_scopes.clone(),
-            risk_tier: Self::cloud_risk_tier(request.sensitivity),
+            risk_tier: Self::cloud_risk_tier(
+                request.sensitivity,
+                request.provider_status.chatgpt_requires_approval,
+            ),
             sensitivity: request.sensitivity,
             emergency_paused: request.emergency_paused,
             approval: request.approval.clone(),
@@ -143,12 +146,17 @@ impl ModelRouter {
         match policy.decision {
             ApprovalDecision::AllowSilently | ApprovalDecision::AllowWithNotification => {
                 let redacted = redact_for_chatgpt(&request.context_preview);
+                let reason = if policy.approval_status == ApprovalStatus::Approved {
+                    "ChatGPT selected after explicit policy approval"
+                } else {
+                    "ChatGPT selected by configured cloud prompt policy"
+                };
                 ModelRouteRecord {
                     id: Uuid::new_v4(),
                     task_id: request.task_id,
                     outcome: RouteOutcome::Selected,
                     selected_provider: Some(ModelProvider::ChatGpt),
-                    reason: "ChatGPT selected after explicit policy approval".to_string(),
+                    reason: reason.to_string(),
                     sensitivity: request.sensitivity,
                     approval_status: policy.approval_status,
                     redaction_applied: redacted != request.context_preview,
@@ -192,9 +200,10 @@ impl ModelRouter {
         }
     }
 
-    fn cloud_risk_tier(sensitivity: Sensitivity) -> RiskTier {
+    fn cloud_risk_tier(sensitivity: Sensitivity, require_every_prompt_approval: bool) -> RiskTier {
         match sensitivity {
             Sensitivity::Public | Sensitivity::Workspace => RiskTier::Notify,
+            Sensitivity::Personal if !require_every_prompt_approval => RiskTier::Notify,
             Sensitivity::Personal | Sensitivity::Private | Sensitivity::CredentialAdjacent => {
                 RiskTier::Confirm
             }
@@ -322,6 +331,29 @@ mod tests {
 
         assert_eq!(record.outcome, RouteOutcome::NeedsApproval);
         assert_eq!(record.selected_provider, None);
+        assert_eq!(record.approval_status, ApprovalStatus::Pending);
+    }
+
+    #[test]
+    fn personal_chatgpt_route_runs_without_repeated_approval_when_configured() {
+        let mut request = chatgpt_request(Sensitivity::Personal);
+        request.provider_status.chatgpt_requires_approval = false;
+
+        let record = ModelRouter::route(&request);
+
+        assert_eq!(record.outcome, RouteOutcome::Selected);
+        assert_eq!(record.selected_provider, Some(ModelProvider::ChatGpt));
+        assert_eq!(record.approval_status, ApprovalStatus::NotRequired);
+    }
+
+    #[test]
+    fn private_chatgpt_route_still_requires_approval_when_normal_prompts_do_not() {
+        let mut request = chatgpt_request(Sensitivity::Private);
+        request.provider_status.chatgpt_requires_approval = false;
+
+        let record = ModelRouter::route(&request);
+
+        assert_eq!(record.outcome, RouteOutcome::NeedsApproval);
         assert_eq!(record.approval_status, ApprovalStatus::Pending);
     }
 

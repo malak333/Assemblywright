@@ -104,11 +104,17 @@ HTTP provider. ChatGPT execution is disabled by default and requires explicit
 typed env opt-in. The Platform API-key path uses
 `JARVIS_CHATGPT_ENABLED=true`, `JARVIS_CHATGPT_AUTH=api_key`,
 `JARVIS_OPENAI_API_KEY`, and optional `JARVIS_CHATGPT_MODEL`,
-`JARVIS_OPENAI_BASE_URL`, and `JARVIS_CHATGPT_TIMEOUT_MS`. The Codex account
+`JARVIS_CHATGPT_REASONING_EFFORT`, `JARVIS_OPENAI_BASE_URL`, and
+`JARVIS_CHATGPT_TIMEOUT_MS`. The Codex account
 path uses a logged-in Codex CLI instead: run `codex login --device-auth`, then
 launch with `JARVIS_CHATGPT_ENABLED=true`,
 `JARVIS_CHATGPT_AUTH=codex_account`, and optional `JARVIS_CODEX_EXECUTABLE`,
-`JARVIS_CHATGPT_MODEL`, and `JARVIS_CHATGPT_TIMEOUT_MS`. Route policy still
+`JARVIS_CHATGPT_MODEL`, `JARVIS_CHATGPT_REASONING_EFFORT`, and
+`JARVIS_CHATGPT_TIMEOUT_MS`. Set `JARVIS_CHATGPT_REQUIRES_APPROVAL=false` to
+send normal conversation without a repeated prompt; Private and
+Credential-adjacent commands still require one-shot approval, proactive cloud
+commands still cannot use that grant, and Restricted content remains blocked.
+Route policy still
 blocks restricted data and sends only redacted route context. Provider failures
 return failed command responses with redacted diagnostics instead of becoming
 IPC transport errors. Provider text responses may also use a strict JSON
@@ -137,8 +143,13 @@ Activity and Swift surfaces receive redacted byte/character metadata only after
 that validation. This is native transport streaming, not partial assistant
 transcript rendering or raw-token UI streaming.
 The macOS Model tab exposes separate approved cloud routes for `OpenAI API` and
-`Codex account`: both disable the local provider for the app-supervised core
-and keep `JARVIS_CHATGPT_REQUIRES_APPROVAL=true`. `OpenAI API` stores the
+`Codex account`: both disable the local provider for the app-supervised core.
+The `Ask before every cloud prompt` toggle controls
+`JARVIS_CHATGPT_REQUIRES_APPROVAL`; it defaults off for normal conversation
+without weakening sensitive-route, proactive, tool-action, or Restricted-data
+gates. The Codex-account surface offers the current installed account-model
+choices plus model-compatible reasoning-effort choices, propagated through
+`JARVIS_CHATGPT_REASONING_EFFORT`. `OpenAI API` stores the
 application credential in Keychain instead of SQLite or docs, while `Codex
 account` shells through the logged-in Codex CLI and does not require an OpenAI
 Platform API key. Jarvis launches that subprocess from a temporary directory,
@@ -156,7 +167,7 @@ adds its own runtime/system context. A CLI that does not support the constrained
 argument contract fails closed before model execution; update the bundled
 Codex/ChatGPT app or CLI before retrying. Use `OpenAI API` when a non-agentic
 HTTP provider boundary is required.
-When an enabled cloud route requires approval, the macOS Console presents a
+When an enabled cloud route still requires approval, the macOS Console presents a
 one-shot `Approve & Send` action for the blocked prompt. Approval is carried on
 the authenticated retry, audited by the Rust route policy, is ignored for
 proactive commands, and is not reusable by later prompts. Restricted content

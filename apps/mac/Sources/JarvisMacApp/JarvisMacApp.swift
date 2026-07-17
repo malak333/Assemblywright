@@ -626,7 +626,7 @@ struct CommandConsoleView: View {
                 HStack(spacing: 10) {
                     Image(systemName: "lock.shield")
                         .foregroundStyle(.orange)
-                    Text("Send this prompt to the active cloud model? This approval applies once.")
+                    Text("Cloud policy requires approval for this prompt. This approval applies once.")
                         .font(.caption)
                     Spacer()
                     Button("Cancel") {
@@ -764,9 +764,30 @@ struct ModelConfigurationView: View {
                 }
                 .pickerStyle(.segmented)
 
-                TextField("Codex model", text: codexModelBinding)
-                    .textFieldStyle(.roundedBorder)
-                    .disabled(!selectedProviderUsesCodexModel)
+                if model.configuration.provider == .codexAccount {
+                    Picker("Codex model", selection: codexModelBinding) {
+                        ForEach(JarvisModelConfiguration.codexAccountModels, id: \.self) { modelName in
+                            Text(modelName).tag(modelName)
+                        }
+                    }
+
+                    Picker("Reasoning effort", selection: reasoningEffortBinding) {
+                        ForEach(model.configuration.supportedReasoningEfforts) { effort in
+                            Text(effort.label).tag(effort)
+                        }
+                    }
+                } else {
+                    TextField("OpenAI model", text: codexModelBinding)
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(!selectedProviderUsesCodexModel)
+                }
+
+                Toggle(
+                    "Ask before every cloud prompt",
+                    isOn: $model.configuration.requiresCloudPromptApproval
+                )
+                .disabled(!selectedProviderUsesCodexModel)
+                .help("When off, normal conversation is sent without a repeated approval. Private, credential-adjacent, restricted, proactive, and side-effecting requests keep their existing safety gates.")
 
                 TextField("OpenAI API URL", text: codexBaseURLBinding)
                     .textFieldStyle(.roundedBorder)
@@ -951,7 +972,11 @@ struct ModelConfigurationView: View {
     private var activeRuntimeText: String {
         let provider = model.activeProvider ?? "unknown provider"
         let activeModel = model.activeModel ?? "unknown model"
-        return "Active: \(provider) / \(activeModel)"
+        guard let effort = model.activeReasoningEffort else {
+            return "Active: \(provider) / \(activeModel)"
+        }
+        let approval = model.activeCloudPromptApprovalRequired == true ? "ask every prompt" : "ask for sensitive prompts"
+        return "Active: \(provider) / \(activeModel) / \(effort) / \(approval)"
     }
 
     private var providerBinding: Binding<JarvisModelProviderSelection> {
@@ -965,9 +990,9 @@ struct ModelConfigurationView: View {
                     model.configuration.localModel = "llama3.2"
                 }
                 if provider == .codexAccount && model.configuration.codexModel == "gpt-4.1-mini" {
-                    model.configuration.codexModel = "gpt-5.5"
+                    model.configuration.codexModel = "gpt-5.6-sol"
                 }
-                if provider == .codex && model.configuration.codexModel == "gpt-5.5" {
+                if provider == .codex && JarvisModelConfiguration.codexAccountModels.contains(model.configuration.codexModel) {
                     model.configuration.codexModel = "gpt-4.1-mini"
                 }
                 model.refreshCodexCredentialState()
@@ -982,7 +1007,19 @@ struct ModelConfigurationView: View {
     private var codexModelBinding: Binding<String> {
         Binding(
             get: { model.configuration.codexModel },
-            set: { model.configuration.codexModel = $0 }
+            set: { selectedModel in
+                model.configuration.codexModel = selectedModel
+                if !model.configuration.supportedReasoningEfforts.contains(model.configuration.reasoningEffort) {
+                    model.configuration.reasoningEffort = .medium
+                }
+            }
+        )
+    }
+
+    private var reasoningEffortBinding: Binding<JarvisReasoningEffort> {
+        Binding(
+            get: { model.configuration.reasoningEffort },
+            set: { model.configuration.reasoningEffort = $0 }
         )
     }
 

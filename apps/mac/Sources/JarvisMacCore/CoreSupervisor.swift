@@ -900,10 +900,16 @@ public final class JarvisCoreSupervisor: ObservableObject {
             let expectedModel = environment["JARVIS_CHATGPT_MODEL"]?.trimmingCharacters(in: .whitespacesAndNewlines)
             let expectedAuthMode = (environment["JARVIS_CHATGPT_AUTH"] ?? environment["JARVIS_CHATGPT_AUTH_MODE"])?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+            let expectedApproval = environment["JARVIS_CHATGPT_REQUIRES_APPROVAL"]
+                .flatMap(Bool.init)
+            let expectedReasoningEffort = environment["JARVIS_CHATGPT_REASONING_EFFORT"]?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             return health.chatgptEnabled
-                && health.chatgptRequiresApproval
+                && (expectedApproval == nil || health.chatgptRequiresApproval == expectedApproval)
                 && (expectedAuthMode?.isEmpty != false || health.chatgptAuthMode == expectedAuthMode)
                 && (expectedModel?.isEmpty != false || health.chatgptModel == expectedModel)
+                && (expectedReasoningEffort?.isEmpty != false
+                    || health.chatgptReasoningEffort == expectedReasoningEffort)
         }
 
         if environment["JARVIS_CHATGPT_ENABLED"] == "false", health.chatgptEnabled {

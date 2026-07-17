@@ -57,9 +57,10 @@ pub use memory_index::{
 };
 pub use model::{
     redact_url_credentials, ChatGptAuthMode, ChatGptHttpModel, ChatGptProviderConfig,
-    FakeLocalModel, LocalModelConfig, LocalModelExecutor, LocalModelProviderKind, ModelExecutor,
-    ModelProvider, ModelRequest, ModelResponse, ModelRoute, ModelToolDefinition, ModelToolRequest,
-    ModelToolResult, OllamaHttpModel, ProviderConfig, ProviderStatus, RoutedModelExecutor,
+    ChatGptReasoningEffort, FakeLocalModel, LocalModelConfig, LocalModelExecutor,
+    LocalModelProviderKind, ModelExecutor, ModelProvider, ModelRequest, ModelResponse, ModelRoute,
+    ModelToolDefinition, ModelToolRequest, ModelToolResult, OllamaHttpModel, ProviderConfig,
+    ProviderStatus, RoutedModelExecutor,
 };
 pub use plugin::{
     execute_installed_subprocess_plugin, execute_installed_subprocess_plugin_cancellable,

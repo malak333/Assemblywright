@@ -474,13 +474,17 @@ codex login --device-auth
 JARVIS_LOCAL_MODEL_ENABLED=false \
 JARVIS_CHATGPT_ENABLED=true \
 JARVIS_CHATGPT_AUTH=codex_account \
-JARVIS_CHATGPT_MODEL=gpt-5.5 \
+JARVIS_CHATGPT_MODEL=gpt-5.6-sol \
+JARVIS_CHATGPT_REASONING_EFFORT=medium \
+JARVIS_CHATGPT_REQUIRES_APPROVAL=false \
 JARVIS_CODEX_EXECUTABLE="$(command -v codex)" \
 cargo run -p jarvis-cli -- serve
 ```
 
-If a macOS Console command stops at `waiting_for_approval`, choose `Approve &
-Send` to retry that exact command with `cloud_route_approved=true`. The approval
+If a sensitive macOS Console command stops at `waiting_for_approval`, choose
+`Approve & Send` to retry that exact command with `cloud_route_approved=true`.
+The Model tab's `Ask before every cloud prompt` toggle may also deliberately
+apply that flow to ordinary conversation. The approval
 is one-shot, accepted only for a non-proactive request over authenticated local
 IPC, and does not override the Restricted cloud block.
 

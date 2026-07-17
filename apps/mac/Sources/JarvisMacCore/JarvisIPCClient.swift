@@ -37,6 +37,7 @@ public struct JarvisHealth: Decodable, Equatable, Sendable {
     public var chatgptAuthMode: String
     public var chatgptModel: String
     public var chatgptRequiresApproval: Bool
+    public var chatgptReasoningEffort: String
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -54,6 +55,7 @@ public struct JarvisHealth: Decodable, Equatable, Sendable {
         chatgptAuthMode = try container.decodeIfPresent(String.self, forKey: .chatgptAuthMode) ?? "api_key"
         chatgptModel = try container.decodeIfPresent(String.self, forKey: .chatgptModel) ?? "chatgpt-disabled"
         chatgptRequiresApproval = try container.decodeIfPresent(Bool.self, forKey: .chatgptRequiresApproval) ?? true
+        chatgptReasoningEffort = try container.decodeIfPresent(String.self, forKey: .chatgptReasoningEffort) ?? "medium"
     }
 
     public init(
@@ -70,7 +72,8 @@ public struct JarvisHealth: Decodable, Equatable, Sendable {
         chatgptEnabled: Bool = false,
         chatgptAuthMode: String = "api_key",
         chatgptModel: String = "chatgpt-disabled",
-        chatgptRequiresApproval: Bool = true
+        chatgptRequiresApproval: Bool = true,
+        chatgptReasoningEffort: String = "medium"
     ) {
         self.status = status
         self.version = version
@@ -86,6 +89,7 @@ public struct JarvisHealth: Decodable, Equatable, Sendable {
         self.chatgptAuthMode = chatgptAuthMode
         self.chatgptModel = chatgptModel
         self.chatgptRequiresApproval = chatgptRequiresApproval
+        self.chatgptReasoningEffort = chatgptReasoningEffort
     }
 
     enum CodingKeys: String, CodingKey {
@@ -103,6 +107,7 @@ public struct JarvisHealth: Decodable, Equatable, Sendable {
         case chatgptAuthMode = "chatgpt_auth_mode"
         case chatgptModel = "chatgpt_model"
         case chatgptRequiresApproval = "chatgpt_requires_approval"
+        case chatgptReasoningEffort = "chatgpt_reasoning_effort"
     }
 }
 
@@ -424,6 +429,7 @@ public struct JarvisDiagnosticHealth: Decodable, Equatable, Sendable {
     public var chatgptAuthMode: String
     public var chatgptModel: String
     public var chatgptRequiresApproval: Bool
+    public var chatgptReasoningEffort: String
 
     public var emergencyPauseSummary: String {
         guard emergencyPaused else { return "not paused" }
@@ -458,6 +464,7 @@ public struct JarvisDiagnosticHealth: Decodable, Equatable, Sendable {
         chatgptAuthMode = try container.decodeIfPresent(String.self, forKey: .chatgptAuthMode) ?? "api_key"
         chatgptModel = try container.decodeIfPresent(String.self, forKey: .chatgptModel) ?? "chatgpt-disabled"
         chatgptRequiresApproval = try container.decodeIfPresent(Bool.self, forKey: .chatgptRequiresApproval) ?? true
+        chatgptReasoningEffort = try container.decodeIfPresent(String.self, forKey: .chatgptReasoningEffort) ?? "medium"
     }
 
     enum CodingKeys: String, CodingKey {
@@ -477,6 +484,7 @@ public struct JarvisDiagnosticHealth: Decodable, Equatable, Sendable {
         case chatgptAuthMode = "chatgpt_auth_mode"
         case chatgptModel = "chatgpt_model"
         case chatgptRequiresApproval = "chatgpt_requires_approval"
+        case chatgptReasoningEffort = "chatgpt_reasoning_effort"
     }
 }
 
