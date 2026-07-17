@@ -995,6 +995,26 @@ requires plugin-trust `generated_at`, `review_started_at`,
   health before reporting it available; it does not accept stale health from a
   terminating core, and a shutdown timeout aborts restart without replacing the
   still-running process handle.
+- A Swift Console command stopped by the cloud-route policy exposes a one-shot
+  `Approve & Send` action instead of a sensitivity selector. Swift retains the
+  pending command in memory and retries it with `cloud_route_approved=true`;
+  Rust accepts that approval only for the current non-proactive request, records
+  it in route audit evidence, and continues to block Restricted content. This
+  is the per-command data-routing decision; it is distinct from the Codex CLI's
+  browser/device login, which establishes account authentication but does not
+  approve later Jarvis prompts. It is also distinct from tool/plugin approvals,
+  which stay in the Approval Center and retain their durable decision/execution
+  workflow. The real-server Codex-account IPC E2E proves an unapproved Personal
+  command waits, the approved exact retry executes, and the next unapproved
+  command waits again.
+- Codex-account selection must not read the OpenAI API-key Keychain item.
+  `CoreSupervisor` resolves model environment overrides before credential
+  injection, `JarvisCoreCredentialProvider` injects the API key only for an
+  enabled `api_key` route, and `ModelConfigurationModel` reads or writes that
+  Keychain item only while the `OpenAI API` provider is selected. A stale macOS
+  SecurityAgent dialog can outlive the process that requested it; dismissing
+  that already-issued dialog is not evidence that the current Codex-account
+  core attempted a Keychain read.
 - The Swift shell exposes production-facing management tabs for approval
   evidence, runs/audit, scheduler create/inspect/cancel/run-due/recover-stale,
   redacted diagnostics, release readiness, and voice state. Voice supports typed transcript staging,

@@ -454,6 +454,12 @@ the Jarvis boundary: shell, unified execution, code-host, app/plugin, browser,
 computer, web-search, image-generation, multi-agent, and workspace-dependency
 tool features are disabled before redacted context is sent.
 
+When policy stops a Console command at the cloud boundary, Swift exposes a
+one-shot `Approve & Send` action for that exact prompt. The retry carries an
+explicit command-scoped approval bit over authenticated local IPC; Rust converts
+it into a cloud-model approval grant only for a non-proactive request. A new
+command requires a new decision, and Restricted content remains blocked.
+
 The Model tab may perform one explicit local integration-maintenance action:
 upgrading a Homebrew-managed Ollama formula after a visible confirmation. The
 action is available only for a loopback Ollama endpoint, resolves Homebrew from

@@ -472,8 +472,9 @@ public final class JarvisCoreSupervisor: ObservableObject {
         var peerIdentityPolicy: JarvisIPCPeerIdentityPolicy?
         do {
             try createDatabaseDirectoryIfNeeded()
-            var environment = credentialProvider.launchEnvironment(base: ProcessInfo.processInfo.environment)
+            var environment = ProcessInfo.processInfo.environment
             environment.merge(environmentOverrides) { _, override in override }
+            environment = credentialProvider.launchEnvironment(base: environment)
             environment.removeValue(forKey: "JARVIS_IPC_TOKEN_FILE")
             environment.removeValue(forKey: JarvisIPCCLIHandoffConfiguration.enableEnvironmentKey)
             environment.removeValue(forKey: JarvisIPCCLIHandoffConfiguration.fileEnvironmentKey)

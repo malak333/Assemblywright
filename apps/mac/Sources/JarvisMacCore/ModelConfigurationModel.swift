@@ -722,6 +722,10 @@ public final class ModelConfigurationModel: ObservableObject {
     }
 
     public func refreshCodexCredentialState() {
+        guard configuration.provider == .codex else {
+            hasStoredCodexCredential = false
+            return
+        }
         hasStoredCodexCredential = ((try? credentialStore.readCredential(.openAIAPIKey)) ?? nil)?
             .isEmpty == false
     }
@@ -759,7 +763,7 @@ public final class ModelConfigurationModel: ObservableObject {
 
     public func saveEnteredCodexCredentialIfNeeded() {
         guard configuration.provider == .codex else {
-            refreshCodexCredentialState()
+            hasStoredCodexCredential = false
             return
         }
         guard !codexAPIKeyEntry.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {

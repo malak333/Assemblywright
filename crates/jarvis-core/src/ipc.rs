@@ -574,6 +574,8 @@ pub struct CommandRequest {
     #[serde(default)]
     pub cancellation_id: Option<Uuid>,
     #[serde(default)]
+    pub cloud_route_approved: bool,
+    #[serde(default)]
     pub sensitivity: Option<Sensitivity>,
 }
 
@@ -2739,6 +2741,7 @@ impl IpcState {
                     .with_memory_context(request.memory_context)
                     .with_installed_wasm_tools(request.installed_wasm_tools)
                     .with_cancellation_id(request.cancellation_id)
+                    .with_cloud_route_approval(request.cloud_route_approved)
                     .with_expected_workspace_request(expected_workspace_request),
             )
             .await?;
@@ -4809,6 +4812,7 @@ impl IpcState {
                 memory_context: false,
                 installed_wasm_tools: false,
                 cancellation_id: None,
+                cloud_route_approved: false,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await?;
@@ -4932,6 +4936,7 @@ impl IpcState {
                     memory_context: false,
                     installed_wasm_tools: false,
                     cancellation_id: None,
+                    cloud_route_approved: false,
                     sensitivity: Some(Sensitivity::Workspace),
                 })
                 .await?;
@@ -14325,6 +14330,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 memory_context: false,
                 installed_wasm_tools: false,
                 cancellation_id: None,
+                cloud_route_approved: false,
                 sensitivity: None,
             })
             .await
@@ -14439,6 +14445,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 memory_context: false,
                 installed_wasm_tools: false,
                 cancellation_id: None,
+                cloud_route_approved: false,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -14632,6 +14639,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 memory_context: false,
                 installed_wasm_tools: false,
                 cancellation_id: None,
+                cloud_route_approved: false,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -14669,6 +14677,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 memory_context: false,
                 installed_wasm_tools: false,
                 cancellation_id: None,
+                cloud_route_approved: false,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -14732,6 +14741,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 memory_context: false,
                 installed_wasm_tools: false,
                 cancellation_id: None,
+                cloud_route_approved: false,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -14803,6 +14813,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 memory_context: false,
                 installed_wasm_tools: false,
                 cancellation_id: None,
+                cloud_route_approved: false,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -14854,6 +14865,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 memory_context: false,
                 installed_wasm_tools: false,
                 cancellation_id: None,
+                cloud_route_approved: false,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -15086,6 +15098,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 memory_context: false,
                 installed_wasm_tools: false,
                 cancellation_id: None,
+                cloud_route_approved: false,
                 sensitivity: None,
             })
             .await
@@ -15121,6 +15134,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 memory_context: false,
                 installed_wasm_tools: false,
                 cancellation_id: None,
+                cloud_route_approved: false,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -15152,6 +15166,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 memory_context: false,
                 installed_wasm_tools: false,
                 cancellation_id: None,
+                cloud_route_approved: false,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -15194,6 +15209,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 memory_context: false,
                 installed_wasm_tools: false,
                 cancellation_id: None,
+                cloud_route_approved: false,
                 sensitivity: Some(Sensitivity::Workspace),
             })
             .await
@@ -16171,6 +16187,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 memory_context: false,
                 installed_wasm_tools: false,
                 cancellation_id: None,
+                cloud_route_approved: false,
                 sensitivity: Some(Sensitivity::Private),
             })
             .await
@@ -16226,6 +16243,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 memory_context: false,
                 installed_wasm_tools: false,
                 cancellation_id: None,
+                cloud_route_approved: false,
                 sensitivity: Some(Sensitivity::Private),
             })
             .await
@@ -16380,6 +16398,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 memory_context: false,
                 installed_wasm_tools: false,
                 cancellation_id: None,
+                cloud_route_approved: false,
                 sensitivity: None,
             })
             .await
@@ -16436,6 +16455,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 memory_context: false,
                 installed_wasm_tools: false,
                 cancellation_id: None,
+                cloud_route_approved: false,
                 sensitivity: None,
             })
             .await

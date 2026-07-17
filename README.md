@@ -156,6 +156,11 @@ adds its own runtime/system context. A CLI that does not support the constrained
 argument contract fails closed before model execution; update the bundled
 Codex/ChatGPT app or CLI before retrying. Use `OpenAI API` when a non-agentic
 HTTP provider boundary is required.
+When an enabled cloud route requires approval, the macOS Console presents a
+one-shot `Approve & Send` action for the blocked prompt. Approval is carried on
+the authenticated retry, audited by the Rust route policy, is ignored for
+proactive commands, and is not reusable by later prompts. Restricted content
+remains blocked from cloud routing.
 Plugin availability for model planning means the `/tools/model` first-party
 catalog by default. `jarvis tools list`, `jarvis tools model`, and
 `jarvis tools catalog` all print that same default catalog. A command can pass

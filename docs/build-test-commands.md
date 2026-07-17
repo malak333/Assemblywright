@@ -479,6 +479,11 @@ JARVIS_CODEX_EXECUTABLE="$(command -v codex)" \
 cargo run -p jarvis-cli -- serve
 ```
 
+If a macOS Console command stops at `waiting_for_approval`, choose `Approve &
+Send` to retry that exact command with `cloud_route_approved=true`. The approval
+is one-shot, accepted only for a non-proactive request over authenticated local
+IPC, and does not override the Restricted cloud block.
+
 Jarvis sends the redacted request to this subprocess over stdin, uses a private
 temporary final-message file, clears unrelated inherited environment values,
 ignores user config and project rules, disables approvals, and requests the
@@ -494,7 +499,17 @@ older or incompatible CLI fails closed with update/login guidance before model
 execution. The CLI E2E suite exercises the real
 `jarvis serve` boundary with a stub Codex executable and verifies the expected
 argument contract, health auth-mode reporting, prompt stdin, environment
-minimization, response routing, and path/secret redaction.
+minimization, response routing, and path/secret redaction. It also proves the
+Console approval contract across IPC: a Personal command first stops at
+`waiting_for_approval`, the exact retry with `cloud_route_approved=true`
+executes, and a later unapproved command stops again because the grant is not
+session-wide.
+
+Focused Codex-account approval E2E:
+
+```sh
+cargo test -p jarvis-cli --test local_ipc_e2e serve_executes_codex_account_through_constrained_cli_subprocess -- --nocapture
+```
 
 If the selected local or ChatGPT/OpenAI-compatible provider fails during
 execution, `/commands` now returns a normal failed command response with

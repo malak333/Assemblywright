@@ -11342,23 +11342,73 @@ printf '{"type":"done"}\n'
     assert_eq!(health["chatgpt_auth_mode"], "codex_account");
     assert_eq!(health["chatgpt_model"], "gpt-codex-account-e2e");
 
-    let command = run_cli_json([
-        "command",
-        "answer through the logged-in Codex account",
-        "--sensitivity",
-        "workspace",
-        "--endpoint",
-        endpoint.as_str(),
-    ]);
+    let command_body = |cloud_route_approved| {
+        json!({
+            "input": "answer through the logged-in Codex account",
+            "context": {"surface": "mac_console_e2e"},
+            "dry_run": false,
+            "proactive": false,
+            "cloud_route_approved": cloud_route_approved,
+            "sensitivity": "personal"
+        })
+        .to_string()
+    };
 
+    let waiting: Value = serde_json::from_str(
+        &request(
+            endpoint.as_str(),
+            "POST",
+            "/commands",
+            Some(&command_body(false)),
+        )
+        .expect("unapproved Codex account command"),
+    )
+    .expect("waiting command JSON");
+    assert_eq!(waiting["accepted"], false, "{waiting}");
+    assert_eq!(waiting["task"]["status"], "waiting_for_approval");
+    assert_eq!(waiting["route_evidence"]["outcome"], "needs_approval");
+    assert_eq!(waiting["route_evidence"]["approval_status"], "pending");
+    assert!(waiting["steps"].as_array().is_some_and(Vec::is_empty));
+
+    let command: Value = serde_json::from_str(
+        &request(
+            endpoint.as_str(),
+            "POST",
+            "/commands",
+            Some(&command_body(true)),
+        )
+        .expect("approved Codex account command"),
+    )
+    .expect("approved command JSON");
     assert_eq!(command["accepted"], true, "{command}");
     assert_eq!(command["task"]["status"], "completed", "{command}");
     assert_eq!(command["route"]["provider"], "chat_gpt");
     assert_eq!(command["route"]["model"], "gpt-codex-account-e2e");
+    assert_eq!(command["route_evidence"]["outcome"], "selected");
+    assert_eq!(command["route_evidence"]["approval_status"], "approved");
     assert_eq!(command["message"], "codex account e2e ok");
     let encoded = serde_json::to_string(&command).expect("command JSON");
     assert!(!encoded.contains("must-not-reach-codex-child"));
     assert!(!encoded.contains(executable));
+
+    let waiting_again: Value = serde_json::from_str(
+        &request(
+            endpoint.as_str(),
+            "POST",
+            "/commands",
+            Some(&command_body(false)),
+        )
+        .expect("second unapproved Codex account command"),
+    )
+    .expect("second waiting command JSON");
+    assert_eq!(
+        waiting_again["task"]["status"], "waiting_for_approval",
+        "approval must not carry over to the next command: {waiting_again}"
+    );
+    assert_eq!(
+        waiting_again["route_evidence"]["approval_status"],
+        "pending"
+    );
 
     server.stop();
 }

@@ -1226,6 +1226,7 @@ async fn main() -> anyhow::Result<()> {
                 memory_context,
                 installed_wasm_tools,
                 cancellation_id: Some(cancellation_id),
+                cloud_route_approved: false,
                 sensitivity: sensitivity.as_deref().map(parse_sensitivity).transpose()?,
             })?;
             let response = server_required_request(&endpoint, "POST", "/commands", Some(&body))?;
@@ -3486,6 +3487,7 @@ async fn run_smoke() -> anyhow::Result<()> {
             memory_context: false,
             installed_wasm_tools: false,
             cancellation_id: Some(Uuid::new_v4()),
+            cloud_route_approved: false,
             sensitivity: None,
         })
     };

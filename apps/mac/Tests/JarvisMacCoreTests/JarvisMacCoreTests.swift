@@ -301,13 +301,15 @@ private final class FakeSchedulerNotificationAdapter: JarvisSchedulerNotificatio
 
 private final class FakeCredentialStore: JarvisCredentialStore, @unchecked Sendable {
     var values: [JarvisCredentialKey: String]
+    private(set) var readKeys: [JarvisCredentialKey] = []
 
     init(values: [JarvisCredentialKey: String] = [:]) {
         self.values = values
     }
 
     func readCredential(_ key: JarvisCredentialKey) throws -> String? {
-        values[key]
+        readKeys.append(key)
+        return values[key]
     }
 
     func saveCredential(_ value: String, for key: JarvisCredentialKey) throws {
@@ -712,7 +714,8 @@ struct JarvisMacCoreTests {
             dryRun: true,
             memoryContext: true,
             installedWasmTools: true,
-            cancellationID: cancellationID
+            cancellationID: cancellationID,
+            cloudRouteApproved: true
         )
         let data = try JSONEncoder().encode(request)
         let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -722,6 +725,7 @@ struct JarvisMacCoreTests {
         #expect(json["memory_context"] as? Bool == true)
         #expect(json["installed_wasm_tools"] as? Bool == true)
         #expect(json["cancellation_id"] as? String == cancellationID.uuidString)
+        #expect(json["cloud_route_approved"] as? Bool == true)
     }
 
     @Test("IPC client targets the authenticated runtime cancellation endpoint")
@@ -2761,6 +2765,55 @@ struct JarvisMacCoreTests {
     }
 
     @MainActor
+    @Test("Command console retries a cloud route only after one-shot approval")
+    func commandConsoleApprovesPendingCloudRouteOnce() async {
+        let client = FakeCoreClient(commandStatus: "waiting_for_approval")
+        let console = CommandConsoleModel(client: client)
+
+        await console.submit(input: "use the cloud route")
+        #expect(console.cloudRouteApprovalPending)
+
+        await console.approvePendingCloudRoute()
+
+        #expect(client.submittedCommandsWithoutCancellationIDs == [
+            JarvisCommandRequest(input: "use the cloud route"),
+            JarvisCommandRequest(input: "use the cloud route", cloudRouteApproved: true)
+        ])
+        #expect(!console.cloudRouteApprovalPending)
+        #expect(console.transcript.filter { $0.role == .user }.map(\.text) == ["use the cloud route"])
+    }
+
+    @MainActor
+    @Test("Command console can dismiss a pending cloud route without retrying")
+    func commandConsoleDismissesPendingCloudRoute() async {
+        let client = FakeCoreClient(commandStatus: "waiting_for_approval")
+        let console = CommandConsoleModel(client: client)
+
+        await console.submit(input: "do not send this")
+        console.dismissPendingCloudRouteApproval()
+        await console.approvePendingCloudRoute()
+
+        #expect(!console.cloudRouteApprovalPending)
+        #expect(client.submittedCommandsWithoutCancellationIDs == [
+            JarvisCommandRequest(input: "do not send this")
+        ])
+    }
+
+    @MainActor
+    @Test("Command console leaves plugin approvals in the approval center")
+    func commandConsoleDoesNotTreatPluginApprovalAsCloudRouteApproval() async {
+        let client = FakeCoreClient(
+            commandStatus: "waiting_for_approval",
+            commandWaitingIsCloudRoute: false
+        )
+        let console = CommandConsoleModel(client: client)
+
+        await console.submit(input: "plugin action needs approval")
+
+        #expect(!console.cloudRouteApprovalPending)
+    }
+
+    @MainActor
     @Test("Command console can submit non-dry-run requests when explicitly requested")
     func commandConsoleSubmitsExplicitNonDryRunRequests() async {
         let client = FakeCoreClient()
@@ -3203,6 +3256,7 @@ struct JarvisMacCoreTests {
         #expect(requests.map(\.path) == ["/commands"])
         #expect(requests.first?.body?["input"] as? String == "status check")
         #expect(requests.first?.body?["dry_run"] as? Bool == true)
+        #expect(requests.first?.body?["cloud_route_approved"] as? Bool == false)
         #expect(console.transcript.map(\.text) == [
             "status check",
             "local response: status check"
@@ -5101,16 +5155,34 @@ struct JarvisMacCoreTests {
 
     @Test("Credential provider injects missing provider secrets without overriding explicit environment")
     func credentialProviderInjectsMissingProviderSecrets() {
-        let provider = JarvisCoreCredentialProvider(
-            store: FakeCredentialStore(values: [.openAIAPIKey: "keychain-token"])
-        )
+        let store = FakeCredentialStore(values: [.openAIAPIKey: "keychain-token"])
+        let provider = JarvisCoreCredentialProvider(store: store)
 
-        let injected = provider.launchEnvironment(base: ["JARVIS_CHATGPT_ENABLED": "true"])
+        let injected = provider.launchEnvironment(base: [
+            "JARVIS_CHATGPT_ENABLED": "true",
+            "JARVIS_CHATGPT_AUTH": "api_key"
+        ])
         #expect(injected["JARVIS_OPENAI_API_KEY"] == "keychain-token")
         #expect(injected["JARVIS_CHATGPT_ENABLED"] == "true")
 
-        let explicit = provider.launchEnvironment(base: ["JARVIS_OPENAI_API_KEY": "env-token"])
+        let explicit = provider.launchEnvironment(base: [
+            "JARVIS_CHATGPT_ENABLED": "true",
+            "JARVIS_CHATGPT_AUTH": "api_key",
+            "JARVIS_OPENAI_API_KEY": "env-token"
+        ])
         #expect(explicit["JARVIS_OPENAI_API_KEY"] == "env-token")
+
+        let codexAccount = provider.launchEnvironment(base: [
+            "JARVIS_CHATGPT_ENABLED": "true",
+            "JARVIS_CHATGPT_AUTH": "codex_account"
+        ])
+        #expect(codexAccount["JARVIS_OPENAI_API_KEY"] == nil)
+
+        let cloudDisabled = provider.launchEnvironment(base: [
+            "JARVIS_CHATGPT_ENABLED": "false"
+        ])
+        #expect(cloudDisabled["JARVIS_OPENAI_API_KEY"] == nil)
+        #expect(store.readKeys == [.openAIAPIKey])
     }
 
     @Test("Supervisor resolves configured executable before packaged candidates")
@@ -5299,9 +5371,13 @@ struct JarvisMacCoreTests {
     @Test("Model configuration manages Codex application credential through credential store")
     func modelConfigurationManagesCodexCredential() {
         let store = FakeCredentialStore()
-        let model = ModelConfigurationModel(credentialStore: store)
+        let model = ModelConfigurationModel(
+            configuration: JarvisModelConfiguration(provider: .codex),
+            credentialStore: store
+        )
 
         #expect(!model.hasStoredCodexCredential)
+        #expect(store.readKeys == [.openAIAPIKey])
 
         model.codexAPIKeyEntry = " test-key "
         model.saveCodexCredential()
@@ -5313,6 +5389,22 @@ struct JarvisMacCoreTests {
         model.deleteCodexCredential()
 
         #expect(store.values[.openAIAPIKey] == nil)
+        #expect(!model.hasStoredCodexCredential)
+    }
+
+    @MainActor
+    @Test("Codex account model configuration never reads the OpenAI API key")
+    func codexAccountModelConfigurationSkipsOpenAIKeychainRead() {
+        let store = FakeCredentialStore(values: [.openAIAPIKey: "unused-api-key"])
+        let model = ModelConfigurationModel(
+            configuration: JarvisModelConfiguration(provider: .codexAccount),
+            credentialStore: store
+        )
+
+        model.refreshCodexCredentialState()
+        model.saveEnteredCodexCredentialIfNeeded()
+
+        #expect(store.readKeys.isEmpty)
         #expect(!model.hasStoredCodexCredential)
     }
 
@@ -5385,7 +5477,10 @@ struct JarvisMacCoreTests {
             credentialProvider: credentialProvider
         )
 
-        await supervisor.start()
+        await supervisor.start(environmentOverrides: [
+            "JARVIS_CHATGPT_ENABLED": "true",
+            "JARVIS_CHATGPT_AUTH": "api_key"
+        ])
 
         #expect(supervisor.mode == .available)
         #expect(launcher.launches.count == 1)
@@ -7650,10 +7745,17 @@ private func installedWasmPluginJSON() -> Data {
     )
 }
 
-private func commandResponseJSON(input: String, status: String = "completed") -> Data {
+private func commandResponseJSON(
+    input: String,
+    status: String = "completed",
+    routeNeedsApproval: Bool = false
+) -> Data {
     let taskId = UUID()
     let sessionId = UUID()
     let auditId = UUID()
+    let routeEvidence = routeNeedsApproval
+        ? "\"route_evidence\": { \"outcome\": \"needs_approval\", \"approval_status\": \"pending\" },"
+        : ""
     return Data(
         """
         {
@@ -7680,6 +7782,7 @@ private func commandResponseJSON(input: String, status: String = "completed") ->
             "model": "fake-local-model",
             "reason": "local model is the default route for v1 commands"
           },
+          \(routeEvidence)
           "steps": [
             { "index": 0, "message": "local response: \(input)", "complete": true }
           ],
@@ -10792,6 +10895,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
     private var auditEntries: [JarvisAuditEntry]
     private var activityEvents: [JarvisActivityEvent]
     private var commandStatus: String
+    private let commandWaitingIsCloudRoute: Bool
     private(set) var submittedCommands: [JarvisCommandRequest]
     var submittedCommandsWithoutCancellationIDs: [JarvisCommandRequest] {
         submittedCommands.map { command in
@@ -10872,6 +10976,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         auditEntries: [JarvisAuditEntry] = [],
         activityEvents: [JarvisActivityEvent] = [],
         commandStatus: String = "completed",
+        commandWaitingIsCloudRoute: Bool = true,
         contractResponse: JarvisContractResponse? = nil,
         releaseReadiness: JarvisReleaseReadiness? = nil,
         releaseReadinessResults: [Result<JarvisReleaseReadiness, Error>] = [],
@@ -10921,6 +11026,7 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         self.auditEntries = auditEntries
         self.activityEvents = activityEvents
         self.commandStatus = commandStatus
+        self.commandWaitingIsCloudRoute = commandWaitingIsCloudRoute
         self.submittedCommands = []
         self.commandCancellationRequests = []
         self.commandCancellationDelayNanoseconds = commandCancellationDelayNanoseconds
@@ -11078,11 +11184,19 @@ private final class FakeCoreClient: JarvisCoreClient, @unchecked Sendable {
         }
         let call = releaseSmokePaused ? "submitPaused" : "submitInitial"
         try recordReleaseSmokeCall(call)
+        let responseStatus = commandStatus == "waiting_for_approval" && command.cloudRouteApproved
+            ? "completed"
+            : commandStatus
         let response = try JSONDecoder().decode(
             JarvisCommandResponse.self,
             from: releaseSmokePaused
                 ? releaseSmokeBlockedCommandResponseJSON(input: command.input)
-                : commandResponseJSON(input: command.input, status: commandStatus)
+                : commandResponseJSON(
+                    input: command.input,
+                    status: responseStatus,
+                    routeNeedsApproval: commandWaitingIsCloudRoute
+                        && responseStatus == "waiting_for_approval"
+                )
         )
         if releaseSmokeMode {
             tasks.append(response.task)

@@ -20,7 +20,7 @@ use crate::router::{
 };
 use crate::storage::SqliteRepository;
 use crate::types::{AuditEntry, JarvisResult, Sensitivity, TaskRecord, TaskStatus};
-use crate::{CapabilityScope, JarvisError, MemoryRetrieval, MemoryRetrievalControl};
+use crate::{ApprovalGrant, CapabilityScope, JarvisError, MemoryRetrieval, MemoryRetrievalControl};
 
 const MAX_TASK_TOOL_OUTPUT_BYTES: usize = 128 * 1024;
 const MAX_ACTIVE_RUNTIME_CANCELLATIONS: usize = 128;
@@ -84,6 +84,8 @@ pub struct CommandRequest {
     #[serde(default)]
     pub cancellation_id: Option<Uuid>,
     #[serde(default)]
+    pub cloud_route_approved: bool,
+    #[serde(default)]
     pub expected_workspace_request: Option<serde_json::Value>,
 }
 
@@ -98,6 +100,7 @@ impl CommandRequest {
             memory_context: false,
             installed_wasm_tools: false,
             cancellation_id: None,
+            cloud_route_approved: false,
             expected_workspace_request: None,
         }
     }
@@ -134,6 +137,11 @@ impl CommandRequest {
 
     pub fn with_cancellation_id(mut self, cancellation_id: Option<Uuid>) -> Self {
         self.cancellation_id = cancellation_id;
+        self
+    }
+
+    pub fn with_cloud_route_approval(mut self, approved: bool) -> Self {
+        self.cloud_route_approved = approved;
         self
     }
 
@@ -610,6 +618,7 @@ where
                     "session_id": task.session_id,
                     "sensitivity": request.sensitivity,
                     "installed_wasm_tools_requested": request.installed_wasm_tools,
+                    "cloud_route_approved": request.cloud_route_approved,
                 }),
             ),
         )?;
@@ -671,7 +680,13 @@ where
             local_sufficient: self.config.provider_config.local.enabled,
             provider_status: crate::ProviderStatus::from_config(&self.config.provider_config),
             emergency_paused: self.control.is_emergency_paused(),
-            approval: None,
+            approval: (request.cloud_route_approved && !request.proactive).then(|| {
+                ApprovalGrant::approved(vec![
+                    CapabilityScope::Conversation,
+                    CapabilityScope::LocalModel,
+                    CapabilityScope::CloudModel,
+                ])
+            }),
             context_preview: task.user_input.clone(),
         });
         self.command_store
@@ -2744,7 +2759,8 @@ mod tests {
         let response = runtime
             .execute_command(
                 CommandRequest::new("summarize restricted credential material")
-                    .with_sensitivity(Sensitivity::Restricted),
+                    .with_sensitivity(Sensitivity::Restricted)
+                    .with_cloud_route_approval(true),
             )
             .await
             .expect("restricted route block should return structured response");
@@ -2757,6 +2773,71 @@ mod tests {
         assert!(route.reason.contains("restricted data"));
         assert!(route.evidence.chatgpt_enabled);
         assert!(route.evidence.restricted_cloud_block);
+    }
+
+    #[tokio::test]
+    async fn personal_cloud_route_executes_only_after_one_shot_command_approval() {
+        let executions = Arc::new(AtomicUsize::new(0));
+        let runtime = ConversationRuntime::with_parts(
+            RuntimeConfig::default().with_provider_config(
+                ProviderConfig::local_only()
+                    .without_local()
+                    .with_chatgpt_enabled("chatgpt-approved-test"),
+            ),
+            RuntimeControl::default(),
+            CountingModel {
+                executions: Arc::clone(&executions),
+            },
+            NoopRuntimeHooks,
+        );
+
+        let waiting = runtime
+            .execute_command(CommandRequest::new("personal cloud request"))
+            .await
+            .expect("unapproved cloud route should return structured response");
+        assert_eq!(waiting.task.status, TaskStatus::WaitingForApproval);
+        assert_eq!(executions.load(Ordering::SeqCst), 0);
+
+        let approved = runtime
+            .execute_command(
+                CommandRequest::new("personal cloud request").with_cloud_route_approval(true),
+            )
+            .await
+            .expect("approved cloud route should execute");
+        assert_eq!(approved.task.status, TaskStatus::Completed);
+        assert_eq!(executions.load(Ordering::SeqCst), 1);
+        let route = approved.route_evidence.expect("approved route evidence");
+        assert_eq!(route.outcome, RouteOutcome::Selected);
+        assert_eq!(route.approval_status, crate::ApprovalStatus::Approved);
+    }
+
+    #[tokio::test]
+    async fn proactive_cloud_route_ignores_command_approval() {
+        let executions = Arc::new(AtomicUsize::new(0));
+        let runtime = ConversationRuntime::with_parts(
+            RuntimeConfig::default().with_provider_config(
+                ProviderConfig::local_only()
+                    .without_local()
+                    .with_chatgpt_enabled("chatgpt-proactive-test"),
+            ),
+            RuntimeControl::default(),
+            CountingModel {
+                executions: Arc::clone(&executions),
+            },
+            NoopRuntimeHooks,
+        );
+
+        let response = runtime
+            .execute_command(
+                CommandRequest::new("proactive cloud request")
+                    .with_proactive(true)
+                    .with_cloud_route_approval(true),
+            )
+            .await
+            .expect("proactive approval should fail closed");
+
+        assert_eq!(response.task.status, TaskStatus::WaitingForApproval);
+        assert_eq!(executions.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

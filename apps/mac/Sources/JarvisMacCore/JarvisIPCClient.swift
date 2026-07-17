@@ -512,19 +512,22 @@ public struct JarvisCommandRequest: Encodable, Equatable, Sendable {
     public var memoryContext: Bool
     public var installedWasmTools: Bool
     public var cancellationID: UUID?
+    public var cloudRouteApproved: Bool
 
     public init(
         input: String,
         dryRun: Bool = true,
         memoryContext: Bool = false,
         installedWasmTools: Bool = false,
-        cancellationID: UUID? = nil
+        cancellationID: UUID? = nil,
+        cloudRouteApproved: Bool = false
     ) {
         self.input = input
         self.dryRun = dryRun
         self.memoryContext = memoryContext
         self.installedWasmTools = installedWasmTools
         self.cancellationID = cancellationID
+        self.cloudRouteApproved = cloudRouteApproved
     }
 
     enum CodingKeys: String, CodingKey {
@@ -533,6 +536,7 @@ public struct JarvisCommandRequest: Encodable, Equatable, Sendable {
         case memoryContext = "memory_context"
         case installedWasmTools = "installed_wasm_tools"
         case cancellationID = "cancellation_id"
+        case cloudRouteApproved = "cloud_route_approved"
     }
 }
 
@@ -806,6 +810,16 @@ public struct JarvisModelRoute: Decodable, Equatable, Sendable {
     public var provider: String
     public var model: String
     public var reason: String
+}
+
+public struct JarvisModelRouteEvidence: Decodable, Equatable, Sendable {
+    public var outcome: String
+    public var approvalStatus: String
+
+    enum CodingKeys: String, CodingKey {
+        case outcome
+        case approvalStatus = "approval_status"
+    }
 }
 
 public struct JarvisPluginCallMetadata: Decodable, Equatable, Sendable {
@@ -1646,6 +1660,7 @@ public struct JarvisCommandResponse: Decodable, Equatable, Sendable {
     public var auditEntry: JarvisAuditEntry
     public var auditEntries: [JarvisAuditEntry]
     public var route: JarvisModelRoute?
+    public var routeEvidence: JarvisModelRouteEvidence?
     public var steps: [JarvisRuntimeStep]
     public var pluginResults: [JarvisPluginCallResult]
     public var message: String
@@ -1657,6 +1672,7 @@ public struct JarvisCommandResponse: Decodable, Equatable, Sendable {
         case auditEntry = "audit_entry"
         case auditEntries = "audit_entries"
         case route
+        case routeEvidence = "route_evidence"
         case steps
         case pluginResults = "plugin_results"
         case message

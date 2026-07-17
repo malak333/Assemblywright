@@ -622,6 +622,23 @@ struct CommandConsoleView: View {
                 }
             }
             .padding()
+            if model.cloudRouteApprovalPending {
+                HStack(spacing: 10) {
+                    Image(systemName: "lock.shield")
+                        .foregroundStyle(.orange)
+                    Text("Send this prompt to the active cloud model? This approval applies once.")
+                        .font(.caption)
+                    Spacer()
+                    Button("Cancel") {
+                        model.dismissPendingCloudRouteApproval()
+                    }
+                    Button("Approve & Send") {
+                        Task { await model.approvePendingCloudRoute() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                .padding(.horizontal)
+            }
             Toggle("Use reviewed local memory", isOn: $model.memoryContextEnabled)
                 .toggleStyle(.switch)
                 .help("Opt in to bounded reviewed Public, Workspace, or Personal memory for local-model commands only.")

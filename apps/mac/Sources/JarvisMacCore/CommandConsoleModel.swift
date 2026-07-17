@@ -1,5 +1,12 @@
 import Foundation
 
+private struct PendingCloudRouteCommand {
+    var input: String
+    var dryRun: Bool
+    var memoryContext: Bool
+    var installedWasmTools: Bool
+}
+
 @MainActor
 public final class CommandConsoleModel: ObservableObject {
     @Published public private(set) var health: JarvisHealth?
@@ -17,8 +24,10 @@ public final class CommandConsoleModel: ObservableObject {
     @Published public var memoryContextEnabled: Bool
     @Published public var installedWasmToolsEnabled: Bool
     @Published public var toolExecutionEnabled: Bool
+    @Published public private(set) var cloudRouteApprovalPending: Bool
 
     private let client: any JarvisCoreClient
+    private var pendingCloudRouteCommand: PendingCloudRouteCommand?
 
     public init(client: any JarvisCoreClient = JarvisIPCClient()) {
         self.client = client
@@ -36,6 +45,8 @@ public final class CommandConsoleModel: ObservableObject {
         self.memoryContextEnabled = false
         self.installedWasmToolsEnabled = false
         self.toolExecutionEnabled = false
+        self.cloudRouteApprovalPending = false
+        self.pendingCloudRouteCommand = nil
     }
 
     public func refreshHealth() async {
@@ -74,6 +85,43 @@ public final class CommandConsoleModel: ObservableObject {
         memoryContext: Bool? = nil,
         installedWasmTools: Bool? = nil
     ) async {
+        pendingCloudRouteCommand = nil
+        cloudRouteApprovalPending = false
+        await submitCommand(
+            input: input,
+            dryRun: dryRun,
+            memoryContext: memoryContext ?? memoryContextEnabled,
+            installedWasmTools: installedWasmTools ?? installedWasmToolsEnabled,
+            cloudRouteApproved: false,
+            appendUserTranscript: true
+        )
+    }
+
+    public func approvePendingCloudRoute() async {
+        guard let pendingCloudRouteCommand else { return }
+        await submitCommand(
+            input: pendingCloudRouteCommand.input,
+            dryRun: pendingCloudRouteCommand.dryRun,
+            memoryContext: pendingCloudRouteCommand.memoryContext,
+            installedWasmTools: pendingCloudRouteCommand.installedWasmTools,
+            cloudRouteApproved: true,
+            appendUserTranscript: false
+        )
+    }
+
+    public func dismissPendingCloudRouteApproval() {
+        pendingCloudRouteCommand = nil
+        cloudRouteApprovalPending = false
+    }
+
+    private func submitCommand(
+        input: String,
+        dryRun: Bool,
+        memoryContext: Bool,
+        installedWasmTools: Bool,
+        cloudRouteApproved: Bool,
+        appendUserTranscript: Bool
+    ) async {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         guard !isDegraded else {
@@ -85,7 +133,9 @@ public final class CommandConsoleModel: ObservableObject {
             return
         }
 
-        transcript.append(TranscriptEntry(role: .user, text: trimmed))
+        if appendUserTranscript {
+            transcript.append(TranscriptEntry(role: .user, text: trimmed))
+        }
         let cancellationID = UUID()
         activeCancellationID = cancellationID
         cancellationStatus = nil
@@ -99,15 +149,28 @@ public final class CommandConsoleModel: ObservableObject {
                 JarvisCommandRequest(
                     input: trimmed,
                     dryRun: dryRun,
-                    memoryContext: memoryContext ?? self.memoryContextEnabled,
-                    installedWasmTools: installedWasmTools ?? self.installedWasmToolsEnabled,
-                    cancellationID: cancellationID
+                    memoryContext: memoryContext,
+                    installedWasmTools: installedWasmTools,
+                    cancellationID: cancellationID,
+                    cloudRouteApproved: cloudRouteApproved
                 )
             )
             self.transcript.append(
                 TranscriptEntry(role: .assistant, text: response.message)
             )
             self.activity.insert(contentsOf: ActivityEntry.entries(from: response), at: 0)
+            if response.routeEvidence?.outcome == "needs_approval" {
+                self.pendingCloudRouteCommand = PendingCloudRouteCommand(
+                    input: trimmed,
+                    dryRun: dryRun,
+                    memoryContext: memoryContext,
+                    installedWasmTools: installedWasmTools
+                )
+                self.cloudRouteApprovalPending = true
+            } else {
+                self.pendingCloudRouteCommand = nil
+                self.cloudRouteApprovalPending = false
+            }
         }
     }
 

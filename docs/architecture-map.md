@@ -700,8 +700,17 @@ and `JARVIS_CHATGPT_REQUIRES_APPROVAL=true`. `OpenAI API` uses the configured
 OpenAI-compatible base URL and a Keychain-injected OpenAI API key. `Codex
 account` uses `JARVIS_CHATGPT_AUTH=codex_account` and shells through the
 logged-in Codex CLI selected by `JARVIS_CODEX_EXECUTABLE`, so it does not
-require an OpenAI Platform API key. Jarvis passes redacted context over stdin,
-uses a private temporary response file, clears unrelated inherited environment
+require an OpenAI Platform API key.
+
+When Rust returns `waiting_for_approval` for a Console cloud route, Swift retains
+only the pending command in memory and exposes `Approve & Send` or `Cancel`.
+Approval retries the exact command with `cloud_route_approved=true` over the
+authenticated IPC boundary. Rust creates a command-scoped cloud approval grant
+only for non-proactive execution; the next command starts unapproved and
+Restricted content remains cloud-blocked.
+
+Jarvis passes redacted context over stdin, uses a private temporary response
+file, clears unrelated inherited environment
 values, ignores user config/project rules, fixes approval policy to `never`,
 requests the CLI read-only sandbox, uses strict config with web search disabled,
 mechanically disables the current CLI tool/integration feature set, discards

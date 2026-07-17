@@ -48,6 +48,9 @@ public struct JarvisCoreCredentialProvider: Sendable {
     public func launchEnvironment(base: [String: String]) -> [String: String] {
         var environment = base
         for key in JarvisCredentialKey.allCases {
+            guard shouldLoad(key, into: environment) else {
+                continue
+            }
             guard environment[key.environmentKey, default: ""].isEmpty else {
                 continue
             }
@@ -57,6 +60,21 @@ public struct JarvisCoreCredentialProvider: Sendable {
             environment[key.environmentKey] = credential
         }
         return environment
+    }
+
+    private func shouldLoad(_ key: JarvisCredentialKey, into environment: [String: String]) -> Bool {
+        switch key {
+        case .openAIAPIKey:
+            guard environment["JARVIS_CHATGPT_ENABLED"] == "true" else {
+                return false
+            }
+            let authMode = (environment["JARVIS_CHATGPT_AUTH"]
+                ?? environment["JARVIS_CHATGPT_AUTH_MODE"]
+                ?? "api_key")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            return authMode != "codex_account"
+        }
     }
 }
 
