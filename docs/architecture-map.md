@@ -9,10 +9,12 @@ flowchart LR
   Fixture["Versioned JSON golden fixture"] --> Protocol["Portable jarvis-protocol crate"]
   Protocol --> Bounds["Strict identifiers, unknown-field rejection, payload ceilings, leases, deadlines, and exact result identity"]
   Protocol --> Master["Portable jarvis-master SQLite lifecycle kernel"]
+  Master --> Process["Headless single-owner master process"]
+  Process --> Local["Authenticated loopback development transport and fixture worker"]
   Master --> Durable["Registered devices, epochs, queue, attempts, cancellation, expiry, restart reconciliation, exact results"]
   Protocol --> Feature["Dormant jarvis-core distributed-development feature"]
-  Protocol --> Windows["Windows distributed format, clippy, protocol, and master-kernel gate"]
-  Master --> Windows
+  Protocol --> Windows["Windows distributed format, clippy, protocol, and master-process gate"]
+  Process --> Windows
 ```
 
 Target development-mode architecture:
@@ -28,8 +30,8 @@ flowchart LR
   Codex --> Windows
 ```
 
-The repository now owns a portable contract seam and a library-only durable
-master kernel. The contract seam provides protocol version 1, typed
+The repository now owns a portable contract seam, a durable master kernel, and
+a headless master executable. The contract seam provides protocol version 1, typed
 device/task/step/attempt/lease/cancellation identifiers, bounded capability
 advertisements, handshake messages, job and result envelopes, strict
 bound-before-decode JSON entry points, nil-identity rejection, and a golden
@@ -48,14 +50,19 @@ result acceptance, and wrong-lease rejection. The
 `master_lifecycle_e2e` suite adds file-backed fake-worker coverage for durable
 success, duplicate and wrong-lease denial, cancellation, expiry,
 capability-specific bounds, restart abandonment, late-result rejection, and
-safe reissue. Neither suite starts a host process or crosses a real transport.
+safe reissue. `master_process_e2e` additionally starts the actual master and
+fixture-worker child processes, proves one-owner database exclusion, bearer
+non-disclosure, unauthorized and oversized-body denial, authenticated loopback
+health and job completion, and restart reconciliation.
 
-This slice does not make Windows the runtime authority yet. It adds no service
-executable, process-ownership lock, network listener, mTLS identity, enrollment
-CA, discovery, live scheduler loop, remote lease transport, worker process,
-Codex dispatch, integration with the existing task/policy/audit/memory store,
-repository mutation, or UI. The new SQLite data is an isolated distributed
-lifecycle kernel, not the final unified Windows authority. Existing
+This slice does not make Windows the runtime authority yet. It adds a foreground
+headless executable, process-ownership lock, authenticated loopback development
+listener, and deterministic fixture-worker process. It adds no Windows service
+installation, mTLS identity, enrollment CA, discovery, live scheduler loop,
+remote lease transport, live inference worker, Codex dispatch, integration with
+the existing task/policy/audit/memory store, repository mutation, or UI. The new
+SQLite data is an isolated distributed lifecycle kernel, not the final unified
+Windows authority. Existing
 Unix-domain-socket supervision and macOS release
 evidence remain unchanged. Future transport and runtime work must preserve
 fail-closed policy, planning/action separation, sensitivity and redaction,

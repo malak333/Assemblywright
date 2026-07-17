@@ -90,12 +90,34 @@ These notes capture durable facts for future agents working on this repository.
   capability matching and context/result limits, and abandon-before-reissue.
   It is not wired into `jarvis-core` and is not the final unified Windows state
   store.
+- The third distributed-development slice adds a foreground `jarvis-master`
+  executable around that kernel. `setup` creates the isolated database and a
+  256-bit development bearer without printing the secret; `serve` holds an
+  exclusive data-directory owner lease and binds only to loopback; `health`
+  returns schema, startup reconciliation, and bounded state counts; and
+  `fixture-worker` completes one deterministic inference-shaped job from a
+  separate process. Every route requires the bearer with digest comparison.
+  This is local development transport, not Windows service installation, mTLS,
+  device enrollment, remote trust, live inference, or unified authority.
+- `master_process_e2e` is the phase E2E for the executable boundary. It starts
+  real child processes, rejects a second owner for the same database, completes
+  one authenticated loopback fake-worker job, proves the generated bearer is
+  absent from setup output, rejects missing authorization and an oversized
+  request body, checks durable state counts, and restarts against the same
+  database to verify connection reconciliation.
 - `.github/workflows/windows-protocol.yml` runs portable protocol and master
-  kernel formatting, clippy, and tests on `windows-latest`. It does not compile
-  the current Unix/macOS runtime and does not prove a Windows service process,
-  single-process ownership, worker transport, mTLS, enrollment CA, live remote
-  inference, Codex-account dispatch, repository mutation, signing, or
-  live-device behavior.
+  process formatting, clippy, and tests on `windows-latest`. It proves the
+  foreground executable, single-process ownership, authenticated loopback
+  development transport, fixture worker, and restart boundary described above.
+  It does not compile the current Unix/macOS runtime and does not prove Windows
+  service installation, mTLS, enrollment CA, live remote inference,
+  Codex-account dispatch, repository mutation, signing, or live-device behavior.
+- On Windows, do not include
+  `cargo check -p jarvis-core --features distributed-development --locked` in
+  the portable master gate. The existing `jarvis-core` release runtime imports
+  Unix-domain sockets and Unix filesystem APIs, so that dormant-feature
+  consumption check belongs on a supported macOS host. The Windows gate is
+  formatting, clippy, and tests for `jarvis-protocol` and `jarvis-master`.
 - `distributed_protocol_contract_e2e` is the phase E2E for the implemented
   portable seam. It serializes a Mac MLX capability handshake, Windows-master
   acceptance, one digest-bound leased job, exact result acceptance, and

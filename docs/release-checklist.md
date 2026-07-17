@@ -180,8 +180,13 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   `cargo test -p jarvis-master --test master_lifecycle_e2e --locked` and confirm
   the file-backed fake worker proves durable success, cancellation, expiry,
   capability bounds, restart abandonment, late-result rejection, and safe
-  reissue. Treat these as portable in-process foundation E2E only; a Windows
-  service executable, process ownership, network/mTLS, enrollment CA, live MLX
+  reissue. Then run
+  `cargo test -p jarvis-master --test master_process_e2e --locked` and confirm
+  the real master and fixture-worker child processes prove exclusive database
+  ownership, bearer non-disclosure, unauthorized and oversized-body denial,
+  authenticated loopback health, bounded job completion, and restart
+  reconciliation. Treat this as a local development boundary only; Windows
+  service installation, remote transport, mTLS, enrollment CA, live MLX
   inference, unified state migration, Codex execution, and cross-machine
   recovery remain unimplemented and unproven.
 - For workspace grants, confirm app-selected paths are absent from child argv,

@@ -8,9 +8,13 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBe
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::path::Path;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
+
+use fs2::FileExt;
 
 pub const MASTER_SCHEMA_VERSION: i64 = 1;
 pub const MAX_QUEUED_OR_LEASED_STEPS: u64 = 256;
@@ -81,9 +85,14 @@ pub enum MasterError {
     InvalidStoredState(String),
     #[error("system clock is before the Unix epoch or exceeds the durable range")]
     InvalidSystemClock,
+    #[error("master filesystem error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("another jarvis-master process already owns {lock_path}")]
+    OwnerAlreadyActive { lock_path: PathBuf },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DeviceRegistration {
     pub device_id: DeviceId,
     pub device_name: String,
@@ -92,7 +101,8 @@ pub struct DeviceRegistration {
     pub capabilities: Vec<CapabilityDescriptor>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NewStep {
     pub task_id: TaskId,
     pub step_id: StepId,
@@ -176,7 +186,7 @@ impl AttemptStatus {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StepSnapshot {
     pub task_id: TaskId,
     pub step_id: StepId,
@@ -184,7 +194,7 @@ pub struct StepSnapshot {
     pub accepted_payload_sha256: Option<[u8; 32]>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AcceptedResult {
     pub task_id: TaskId,
     pub step_id: StepId,
@@ -192,14 +202,14 @@ pub struct AcceptedResult {
     pub payload_sha256: [u8; 32],
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StartupReconciliation {
     pub disconnected_connections: u64,
     pub abandoned_attempts: u64,
     pub requeued_steps: u64,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LeaseReconciliation {
     pub expired_attempts: u64,
     pub requeued_steps: u64,
@@ -208,6 +218,78 @@ pub struct LeaseReconciliation {
 pub struct MasterKernel {
     connection: Connection,
     startup_reconciliation: StartupReconciliation,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MasterHealthSnapshot {
+    pub registered_devices: u64,
+    pub active_connections: u64,
+    pub queued_steps: u64,
+    pub leased_steps: u64,
+    pub terminal_steps: u64,
+    pub active_attempts: u64,
+}
+
+pub struct MasterProcess {
+    _owner_lock: File,
+    data_dir: PathBuf,
+    database_path: PathBuf,
+    kernel: MasterKernel,
+}
+
+impl MasterProcess {
+    pub fn acquire(data_dir: impl AsRef<Path>) -> Result<Self, MasterError> {
+        fs::create_dir_all(data_dir.as_ref())?;
+        let data_dir = fs::canonicalize(data_dir.as_ref())?;
+        let lock_path = data_dir.join("master.owner.lock");
+        let mut owner_lock = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&lock_path)?;
+        if let Err(error) = owner_lock.try_lock_exclusive() {
+            if error.kind() == std::io::ErrorKind::WouldBlock || error.raw_os_error() == Some(33) {
+                return Err(MasterError::OwnerAlreadyActive { lock_path });
+            }
+            return Err(MasterError::Io(error));
+        }
+
+        owner_lock.set_len(0)?;
+        owner_lock.seek(SeekFrom::Start(0))?;
+        writeln!(
+            owner_lock,
+            "{{\"pid\":{},\"acquired_at_ms\":{}}}",
+            std::process::id(),
+            current_time_ms()?
+        )?;
+        owner_lock.flush()?;
+
+        let database_path = data_dir.join("master.sqlite3");
+        let kernel = MasterKernel::open(&database_path)?;
+        Ok(Self {
+            _owner_lock: owner_lock,
+            data_dir,
+            database_path,
+            kernel,
+        })
+    }
+
+    pub fn data_dir(&self) -> &Path {
+        &self.data_dir
+    }
+
+    pub fn database_path(&self) -> &Path {
+        &self.database_path
+    }
+
+    pub fn kernel(&self) -> &MasterKernel {
+        &self.kernel
+    }
+
+    pub fn kernel_mut(&mut self) -> &mut MasterKernel {
+        &mut self.kernel
+    }
 }
 
 impl MasterKernel {
@@ -242,6 +324,37 @@ impl MasterKernel {
 
     pub fn startup_reconciliation(&self) -> StartupReconciliation {
         self.startup_reconciliation
+    }
+
+    pub fn health_snapshot(&self) -> Result<MasterHealthSnapshot, MasterError> {
+        fn count(connection: &Connection, sql: &str) -> Result<u64, MasterError> {
+            let value: i64 = connection.query_row(sql, [], |row| row.get(0))?;
+            u64::try_from(value).map_err(|_| MasterError::IntegerOutOfRange)
+        }
+
+        Ok(MasterHealthSnapshot {
+            registered_devices: count(&self.connection, "SELECT COUNT(*) FROM master_devices")?,
+            active_connections: count(
+                &self.connection,
+                "SELECT COUNT(*) FROM master_connections WHERE active = 1",
+            )?,
+            queued_steps: count(
+                &self.connection,
+                "SELECT COUNT(*) FROM master_steps WHERE status = 'queued'",
+            )?,
+            leased_steps: count(
+                &self.connection,
+                "SELECT COUNT(*) FROM master_steps WHERE status = 'leased'",
+            )?,
+            terminal_steps: count(
+                &self.connection,
+                "SELECT COUNT(*) FROM master_steps WHERE status IN ('succeeded', 'failed', 'cancelled')",
+            )?,
+            active_attempts: count(
+                &self.connection,
+                "SELECT COUNT(*) FROM master_attempts WHERE status = 'leased'",
+            )?,
+        })
     }
 
     pub fn register_device(
@@ -1193,7 +1306,7 @@ fn is_constraint_violation(error: &rusqlite::Error) -> bool {
     )
 }
 
-fn current_time_ms() -> Result<u64, MasterError> {
+pub fn current_time_ms() -> Result<u64, MasterError> {
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| MasterError::InvalidSystemClock)?;

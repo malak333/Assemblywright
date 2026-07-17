@@ -16,10 +16,12 @@ SAFETY_RULES="docs/safety-rules.md"
 DISTRIBUTED_DESIGN="docs/distributed-developer-mode-design.md"
 PROTOCOL_CRATE="crates/jarvis-protocol/src/lib.rs"
 MASTER_CRATE="crates/jarvis-master/src/lib.rs"
+MASTER_PROCESS="crates/jarvis-master/src/main.rs"
 WINDOWS_PROTOCOL_WORKFLOW=".github/workflows/windows-protocol.yml"
 RELEASE_VERSION_SCRIPT="scripts/release-version.sh"
 PROTOCOL_E2E="crates/jarvis-protocol/tests/distributed_protocol_contract_e2e.rs"
 MASTER_E2E="crates/jarvis-master/tests/master_lifecycle_e2e.rs"
+MASTER_PROCESS_E2E="crates/jarvis-master/tests/master_process_e2e.rs"
 
 fail() {
   printf 'error: %s\n' "$1" >&2
@@ -64,6 +66,8 @@ require_file "$WINDOWS_PROTOCOL_WORKFLOW"
 require_file "$RELEASE_VERSION_SCRIPT"
 require_file "$PROTOCOL_E2E"
 require_file "$MASTER_E2E"
+require_file "$MASTER_PROCESS"
+require_file "$MASTER_PROCESS_E2E"
 
 for file in "$BUILD_DOCS" "$ARCHITECTURE" "$KB" "$README"; do
   require_text "distributed protocol crate" "$file" "jarvis-protocol"
@@ -93,9 +97,14 @@ require_text "master schema version" "$MASTER_CRATE" "pub const MASTER_SCHEMA_VE
 require_text "master queue ceiling" "$MASTER_CRATE" "pub const MAX_QUEUED_OR_LEASED_STEPS: u64 = 256;"
 require_text "master E2E durable story" "$MASTER_E2E" "windows_master_kernel_accepts_fake_worker_result_durably"
 require_text "master E2E restart story" "$MASTER_E2E" "windows_master_kernel_reconciles_fake_worker_across_restart"
+require_text "master process loopback restriction" "$MASTER_PROCESS" "Windows master development transport must use a loopback address"
+require_text "master process E2E" "$MASTER_PROCESS_E2E" "windows_master_process_owns_state_and_completes_cross_process_fixture"
+require_text "master process E2E bearer non-disclosure" "$MASTER_PROCESS_E2E" "setup receipt exposed the development bearer"
+require_text "master process E2E body bound" "$MASTER_PROCESS_E2E" "HTTP/1.1 413 Payload Too Large"
 for file in "$BUILD_DOCS" "$CHECKLIST" "$ARCHITECTURE" "$KB"; do
   require_text "distributed protocol E2E documentation" "$file" "distributed_protocol_contract_e2e"
   require_text "distributed master E2E documentation" "$file" "master_lifecycle_e2e"
+  require_text "distributed master process E2E documentation" "$file" "master_process_e2e"
 done
 require_text "Windows protocol runner" "$WINDOWS_PROTOCOL_WORKFLOW" "runs-on: windows-latest"
 require_text "Windows protocol tests" "$WINDOWS_PROTOCOL_WORKFLOW" "cargo test -p jarvis-protocol --locked"

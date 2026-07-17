@@ -50,16 +50,23 @@ cargo test -p jarvis-protocol --locked
 cargo test -p jarvis-protocol --test distributed_protocol_contract_e2e --locked
 cargo test -p jarvis-master --locked
 cargo test -p jarvis-master --test master_lifecycle_e2e --locked
-cargo check -p jarvis-core --features distributed-development --locked
+cargo test -p jarvis-master --test master_process_e2e --locked
 ```
 
 `.github/workflows/windows-protocol.yml` runs formatting plus the protocol and
-master-kernel lint/test commands on `windows-latest`. The final feature-gated
-core check is a local integration check on a supported host; it proves only
-that `jarvis-core` can consume the dormant contracts. The Windows job
-deliberately does not build the current Unix/macOS runtime or a Windows service
-executable, start a network listener, establish mTLS, operate an enrollment CA,
-run a live worker, mutate a repository, or exercise a Codex account. Those
+master-process lint/test commands on `windows-latest`. The existing
+`jarvis-core` runtime is Unix/macOS-only and does not compile on Windows because
+its current release path requires Unix-domain sockets and Unix filesystem APIs.
+On a supported macOS host, the additional feature-gated integration check is:
+
+```sh
+cargo check -p jarvis-core --features distributed-development --locked
+```
+
+That check proves only that `jarvis-core` can consume the dormant contracts.
+The Windows job deliberately does not build the current Unix/macOS runtime or a
+Windows service installation, establish mTLS, operate an enrollment CA, run a
+live model, mutate a repository, or exercise a Codex account. Those
 capabilities remain gated target architecture in
 `docs/distributed-developer-mode-design.md`.
 Wire consumers must use each top-level message's `decode_frame` entry point so
@@ -80,6 +87,34 @@ denial, disconnect/restart abandonment, and reissue only after the earlier
 attempt is durably non-accepting. It does not prove process exclusivity,
 network transport, device authentication, worker cleanup, or unified migration
 of the existing Mac-owned task, policy, audit, scheduler, and memory state.
+`master_process_e2e` starts the actual `jarvis-master` binary and a separate
+fixture-worker process. It proves setup receipts, exclusive database ownership,
+bearer non-disclosure, unauthorized and oversized-body denial, authenticated
+loopback health, one bounded enqueue/lease/result story, durable health counters,
+and restart reconciliation. Its generated bearer is a local development
+bootstrap secret, not mTLS, device enrollment, remote-worker trust, or a
+production service credential.
+
+Use these PowerShell commands for a manual Windows process smoke:
+
+```powershell
+$jarvisData = Join-Path $env:LOCALAPPDATA 'Jarvis\master'
+cargo run -p jarvis-master -- --data-dir $jarvisData setup
+cargo run -p jarvis-master -- --data-dir $jarvisData serve
+```
+
+Then, from a second PowerShell window:
+
+```powershell
+$jarvisData = Join-Path $env:LOCALAPPDATA 'Jarvis\master'
+cargo run -p jarvis-master -- --data-dir $jarvisData health
+cargo run -p jarvis-master -- --data-dir $jarvisData fixture-worker
+```
+
+The executable rejects non-loopback binds, requires its generated development
+token on every route, and refuses a second process for the same data directory.
+It is a foreground developer process; Windows service installation and remote
+device authentication remain later slices.
 
 ```sh
 ./scripts/release-version-consistency.sh --check
