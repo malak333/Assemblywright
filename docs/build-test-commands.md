@@ -51,6 +51,7 @@ cargo test -p jarvis-protocol --test distributed_protocol_contract_e2e --locked
 cargo test -p jarvis-master --locked
 cargo test -p jarvis-master --test master_lifecycle_e2e --locked
 cargo test -p jarvis-master --test master_process_e2e --locked
+cargo test -p jarvis-master --test enrollment_identity_e2e --locked
 ```
 
 `.github/workflows/windows-protocol.yml` runs formatting plus the protocol and
@@ -65,8 +66,10 @@ cargo check -p jarvis-core --features distributed-development --locked
 
 That check proves only that `jarvis-core` can consume the dormant contracts.
 The Windows job deliberately does not build the current Unix/macOS runtime or a
-Windows service installation, establish mTLS, operate an enrollment CA, run a
-live model, mutate a repository, or exercise a Codex account. Those
+Windows service installation, establish an mTLS transport, run a live model,
+mutate a repository, or exercise a Codex account. It does operate the local
+Windows enrollment CA under a temporary test identity and proves real DPAPI
+round-trip protection. Remote authentication and cross-device exchange remain
 capabilities remain gated target architecture in
 `docs/distributed-developer-mode-design.md`.
 Wire consumers must use each top-level message's `decode_frame` entry point so
@@ -94,6 +97,15 @@ loopback health, one bounded enqueue/lease/result story, durable health counters
 and restart reconciliation. Its generated bearer is a local development
 bootstrap secret, not mTLS, device enrollment, remote-worker trust, or a
 production service credential.
+`enrollment_identity_e2e` exercises the fourth implemented seam. On every host
+it proves digest-only single-use grant storage, signed-CSR verification,
+server-selected identity, 10-minute expiry, replay denial, 30-day certificate
+issuance, rotation, revocation, and schema-v1-to-v2 migration with an injected
+test protector. On Windows it additionally calls DPAPI directly and starts the
+real CLI to prove initialization receipts, secret-bearing issuance through
+stdin rather than argv, and protected-key non-equivalence. It is local identity
+proof, not TLS 1.3/mTLS transport, channel binding, overlay reachability, or a
+live Mac enrollment exchange.
 
 Use these PowerShell commands for a manual Windows process smoke:
 
@@ -115,6 +127,25 @@ The executable rejects non-loopback binds, requires its generated development
 token on every route, and refuses a second process for the same data directory.
 It is a foreground developer process; Windows service installation and remote
 device authentication remain later slices.
+
+Initialize or verify the Windows enrollment authority separately:
+
+```powershell
+$jarvisData = Join-Path $env:LOCALAPPDATA 'Jarvis\master'
+cargo run -p jarvis-master -- --data-dir $jarvisData enrollment initialize
+cargo run -p jarvis-master -- --data-dir $jarvisData enrollment grant --device-name owner-mac-bridge --role mac-bridge --capabilities-file .\capabilities.json --confirm
+```
+
+The grant command prints its 256-bit secret exactly once for direct transfer to
+the enrolling client. The master stores only its SHA-256 digest. The client
+generates and retains its private key, submits a signed CSR, and sends the
+strict `EnrollmentRequest` JSON document through stdin to
+`enrollment issue --request-stdin`; never place the grant secret or CSR in argv,
+an environment variable, a log, or an intermediate file. `rotate-grant` binds a
+new one-time grant to the existing device. `revoke --confirm` disables the
+device and every active certificate immediately. These commands require the
+foreground master to be stopped because the local operator CLI takes the same
+exclusive data-directory ownership lease.
 
 ```sh
 ./scripts/release-version-consistency.sh --check

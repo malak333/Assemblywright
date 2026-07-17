@@ -16,7 +16,16 @@ use uuid::Uuid;
 
 use fs2::FileExt;
 
-pub const MASTER_SCHEMA_VERSION: i64 = 1;
+mod identity;
+
+pub use identity::{
+    EnrollmentGrantReceipt, EnrollmentGrantSpec, EnrollmentOperation, EnrollmentRequest,
+    IdentityAuthority, IdentityAuthorityReceipt, IdentityError, IssuedDeviceCertificate,
+    PlatformSecretProtector, SecretProtector, DEVICE_CERTIFICATE_LIFETIME_MS,
+    ENROLLMENT_GRANT_TTL_MS, MAX_ENROLLED_DEVICES,
+};
+
+pub const MASTER_SCHEMA_VERSION: i64 = 2;
 pub const MAX_QUEUED_OR_LEASED_STEPS: u64 = 256;
 pub const MAX_CONCURRENT_JOBS: u64 = 4;
 
@@ -89,6 +98,24 @@ pub enum MasterError {
     Io(#[from] std::io::Error),
     #[error("another jarvis-master process already owns {lock_path}")]
     OwnerAlreadyActive { lock_path: PathBuf },
+    #[error(transparent)]
+    Identity(#[from] IdentityError),
+    #[error("the enrolled-device limit has been reached")]
+    EnrolledDeviceLimit,
+    #[error("the outstanding enrollment-grant limit has been reached")]
+    EnrollmentGrantLimit,
+    #[error("enrollment grant was not found")]
+    EnrollmentGrantNotFound,
+    #[error("enrollment grant secret is invalid")]
+    InvalidEnrollmentGrantSecret,
+    #[error("enrollment grant has expired")]
+    EnrollmentGrantExpired,
+    #[error("enrollment grant was already consumed")]
+    EnrollmentGrantConsumed,
+    #[error("enrollment grant state is invalid: {0}")]
+    InvalidEnrollmentGrant(String),
+    #[error("device certificate was not found")]
+    DeviceCertificateNotFound,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -223,6 +250,8 @@ pub struct MasterKernel {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MasterHealthSnapshot {
     pub registered_devices: u64,
+    pub active_device_certificates: u64,
+    pub unconsumed_enrollment_grants: u64,
     pub active_connections: u64,
     pub queued_steps: u64,
     pub leased_steps: u64,
@@ -334,6 +363,14 @@ impl MasterKernel {
 
         Ok(MasterHealthSnapshot {
             registered_devices: count(&self.connection, "SELECT COUNT(*) FROM master_devices")?,
+            active_device_certificates: count(
+                &self.connection,
+                "SELECT COUNT(*) FROM master_device_certificates WHERE revoked_at_ms IS NULL",
+            )?,
+            unconsumed_enrollment_grants: count(
+                &self.connection,
+                "SELECT COUNT(*) FROM master_enrollment_grants WHERE consumed_at_ms IS NULL",
+            )?,
             active_connections: count(
                 &self.connection,
                 "SELECT COUNT(*) FROM master_connections WHERE active = 1",
@@ -371,6 +408,13 @@ impl MasterKernel {
         };
         validation.validate()?;
 
+        let registered: i64 =
+            self.connection
+                .query_row("SELECT COUNT(*) FROM master_devices", [], |row| row.get(0))?;
+        if i64_to_u64(registered)? >= MAX_ENROLLED_DEVICES {
+            return Err(MasterError::EnrolledDeviceLimit);
+        }
+
         let role_json = serde_json::to_string(&registration.role)?;
         let capabilities_json = serde_json::to_string(&registration.capabilities)?;
         let result = self.connection.execute(
@@ -393,6 +437,16 @@ impl MasterKernel {
     }
 
     pub fn revoke_device(&mut self, device_id: DeviceId, now_ms: u64) -> Result<(), MasterError> {
+        self.revoke_device_with_reason(device_id, now_ms, "device_revoked")
+    }
+
+    pub fn revoke_device_with_reason(
+        &mut self,
+        device_id: DeviceId,
+        now_ms: u64,
+        reason: &str,
+    ) -> Result<(), MasterError> {
+        identity::validate_revocation_reason(reason)?;
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -403,6 +457,14 @@ impl MasterKernel {
         if changed == 0 {
             return Err(MasterError::DeviceNotRegistered);
         }
+        tx.execute(
+            "UPDATE master_device_certificates\n             SET revoked_at_ms = ?1, revocation_reason = ?2\n             WHERE device_id = ?3 AND revoked_at_ms IS NULL",
+            params![
+                u64_to_i64(now_ms)?,
+                reason,
+                device_id.0.to_string(),
+            ],
+        )?;
         if let Some(epoch) = active_connection_epoch(&tx, device_id)? {
             disconnect_device_tx(&tx, device_id, epoch, now_ms)?;
         }
@@ -905,7 +967,89 @@ impl MasterKernel {
                    ON master_steps(status, created_at_ms, step_id);\n\
                  CREATE INDEX master_attempts_status_device_idx\n\
                    ON master_attempts(status, device_id, connection_epoch);\n\
-                 PRAGMA user_version = 1;\n\
+                 CREATE TABLE master_identity_authority (\n\
+                   authority_id INTEGER PRIMARY KEY NOT NULL CHECK (authority_id = 1),\n\
+                   ca_fingerprint_sha256 BLOB NOT NULL UNIQUE,\n\
+                   created_at_ms INTEGER NOT NULL,\n\
+                   not_after_ms INTEGER NOT NULL,\n\
+                   key_protection TEXT NOT NULL\n\
+                 );\n\
+                 CREATE TABLE master_enrollment_grants (\n\
+                   grant_id TEXT PRIMARY KEY NOT NULL,\n\
+                   operation TEXT NOT NULL CHECK (operation IN ('enroll', 'rotate')),\n\
+                   secret_sha256 BLOB NOT NULL,\n\
+                   device_id TEXT NOT NULL,\n\
+                   device_name TEXT NOT NULL,\n\
+                   role_json TEXT NOT NULL,\n\
+                   registry_revision INTEGER NOT NULL,\n\
+                   capabilities_json TEXT NOT NULL,\n\
+                   created_at_ms INTEGER NOT NULL,\n\
+                   expires_at_ms INTEGER NOT NULL,\n\
+                   consumed_at_ms INTEGER,\n\
+                   CHECK (expires_at_ms > created_at_ms)\n\
+                 );\n\
+                 CREATE INDEX master_enrollment_grants_pending_idx\n\
+                   ON master_enrollment_grants(consumed_at_ms, expires_at_ms);\n\
+                 CREATE TABLE master_device_certificates (\n\
+                   serial_hex TEXT PRIMARY KEY NOT NULL,\n\
+                   device_id TEXT NOT NULL REFERENCES master_devices(device_id),\n\
+                   certificate_sha256 BLOB NOT NULL UNIQUE,\n\
+                   issued_at_ms INTEGER NOT NULL,\n\
+                   not_after_ms INTEGER NOT NULL,\n\
+                   revoked_at_ms INTEGER,\n\
+                   revocation_reason TEXT,\n\
+                   replaced_by_serial_hex TEXT REFERENCES master_device_certificates(serial_hex),\n\
+                   CHECK ((revoked_at_ms IS NULL AND revocation_reason IS NULL) OR\n\
+                          (revoked_at_ms IS NOT NULL AND revocation_reason IS NOT NULL))\n\
+                 );\n\
+                 CREATE INDEX master_device_certificates_active_idx\n\
+                   ON master_device_certificates(device_id, revoked_at_ms);\n\
+                 PRAGMA user_version = 2;\n\
+                 COMMIT;",
+            )?;
+            return Ok(());
+        }
+        if version == 1 {
+            self.connection.execute_batch(
+                "BEGIN IMMEDIATE;\n\
+                 CREATE TABLE master_identity_authority (\n\
+                   authority_id INTEGER PRIMARY KEY NOT NULL CHECK (authority_id = 1),\n\
+                   ca_fingerprint_sha256 BLOB NOT NULL UNIQUE,\n\
+                   created_at_ms INTEGER NOT NULL,\n\
+                   not_after_ms INTEGER NOT NULL,\n\
+                   key_protection TEXT NOT NULL\n\
+                 );\n\
+                 CREATE TABLE master_enrollment_grants (\n\
+                   grant_id TEXT PRIMARY KEY NOT NULL,\n\
+                   operation TEXT NOT NULL CHECK (operation IN ('enroll', 'rotate')),\n\
+                   secret_sha256 BLOB NOT NULL,\n\
+                   device_id TEXT NOT NULL,\n\
+                   device_name TEXT NOT NULL,\n\
+                   role_json TEXT NOT NULL,\n\
+                   registry_revision INTEGER NOT NULL,\n\
+                   capabilities_json TEXT NOT NULL,\n\
+                   created_at_ms INTEGER NOT NULL,\n\
+                   expires_at_ms INTEGER NOT NULL,\n\
+                   consumed_at_ms INTEGER,\n\
+                   CHECK (expires_at_ms > created_at_ms)\n\
+                 );\n\
+                 CREATE INDEX master_enrollment_grants_pending_idx\n\
+                   ON master_enrollment_grants(consumed_at_ms, expires_at_ms);\n\
+                 CREATE TABLE master_device_certificates (\n\
+                   serial_hex TEXT PRIMARY KEY NOT NULL,\n\
+                   device_id TEXT NOT NULL REFERENCES master_devices(device_id),\n\
+                   certificate_sha256 BLOB NOT NULL UNIQUE,\n\
+                   issued_at_ms INTEGER NOT NULL,\n\
+                   not_after_ms INTEGER NOT NULL,\n\
+                   revoked_at_ms INTEGER,\n\
+                   revocation_reason TEXT,\n\
+                   replaced_by_serial_hex TEXT REFERENCES master_device_certificates(serial_hex),\n\
+                   CHECK ((revoked_at_ms IS NULL AND revocation_reason IS NULL) OR\n\
+                          (revoked_at_ms IS NOT NULL AND revocation_reason IS NOT NULL))\n\
+                 );\n\
+                 CREATE INDEX master_device_certificates_active_idx\n\
+                   ON master_device_certificates(device_id, revoked_at_ms);\n\
+                 PRAGMA user_version = 2;\n\
                  COMMIT;",
             )?;
             return Ok(());

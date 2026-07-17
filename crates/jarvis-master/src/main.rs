@@ -3,10 +3,11 @@ use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use jarvis_master::{
-    current_time_ms, AcceptedResult, DeviceRegistration, MasterHealthSnapshot, MasterProcess,
-    NewStep, StartupReconciliation,
+    current_time_ms, AcceptedResult, DeviceRegistration, EnrollmentGrantSpec, EnrollmentRequest,
+    IdentityAuthority, MasterHealthSnapshot, MasterProcess, NewStep, PlatformSecretProtector,
+    StartupReconciliation,
 };
 use jarvis_protocol::{
     CapabilityDescriptor, CapabilityKind, DeviceId, DeviceRole, HandshakeRequest,
@@ -18,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -67,6 +68,69 @@ enum Command {
         #[arg(long, default_value = "prove the Windows master process boundary")]
         prompt: String,
     },
+    /// Manage the Windows enrollment identity and short-lived device grants.
+    Enrollment {
+        #[command(subcommand)]
+        command: EnrollmentCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum EnrollmentCommand {
+    /// Initialize or verify the DPAPI-protected master enrollment CA.
+    Initialize,
+    /// Create one ten-minute, single-use enrollment grant.
+    Grant {
+        #[arg(long)]
+        device_name: String,
+        #[arg(long, value_enum)]
+        role: CliDeviceRole,
+        /// JSON file containing an array of capability descriptors.
+        #[arg(long)]
+        capabilities_file: PathBuf,
+        /// Confirm this local operator enrollment action.
+        #[arg(long)]
+        confirm: bool,
+    },
+    /// Create a key-rotation grant for an existing non-revoked device.
+    RotateGrant {
+        #[arg(long)]
+        device_id: Uuid,
+        /// Confirm this local operator rotation action.
+        #[arg(long)]
+        confirm: bool,
+    },
+    /// Verify a CSR and consume one grant from a bounded JSON document on stdin.
+    Issue {
+        /// Required acknowledgement that the secret-bearing request is supplied on stdin.
+        #[arg(long)]
+        request_stdin: bool,
+    },
+    /// Revoke a device and all active certificates immediately.
+    Revoke {
+        #[arg(long)]
+        device_id: Uuid,
+        #[arg(long)]
+        reason: String,
+        /// Confirm this local operator revocation action.
+        #[arg(long)]
+        confirm: bool,
+    },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CliDeviceRole {
+    MacBridge,
+    InferenceWorker,
+}
+
+impl From<CliDeviceRole> for DeviceRole {
+    fn from(value: CliDeviceRole) -> Self {
+        match value {
+            CliDeviceRole::MacBridge => Self::MacBridge,
+            CliDeviceRole::InferenceWorker => Self::InferenceWorker,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -149,6 +213,7 @@ async fn main() -> anyhow::Result<()> {
         Command::FixtureWorker { endpoint, prompt } => {
             fixture_worker(&data_dir, endpoint, prompt).await
         }
+        Command::Enrollment { command } => enrollment(&data_dir, command),
     }
 }
 
@@ -174,10 +239,128 @@ fn setup(data_dir: &Path) -> anyhow::Result<()> {
         database_path: process.database_path().to_path_buf(),
         development_token_file: token_path,
         boundary:
-            "loopback development transport only; mTLS and device enrollment are not implemented",
+            "loopback development transport only; enrollment identity is a separate Windows CLI flow and mTLS is not implemented",
     };
     println!("{}", serde_json::to_string(&receipt)?);
     Ok(())
+}
+
+fn enrollment(data_dir: &Path, command: EnrollmentCommand) -> anyhow::Result<()> {
+    let now_ms = current_time_ms()?;
+    let mut process = MasterProcess::acquire(data_dir)?;
+    let protector = PlatformSecretProtector;
+    let authority = if process.kernel().identity_authority_recorded()? {
+        IdentityAuthority::open_existing(process.data_dir(), &protector, now_ms)?
+    } else {
+        IdentityAuthority::open_or_initialize(process.data_dir(), &protector, now_ms)?
+    };
+    process
+        .kernel_mut()
+        .record_identity_authority(authority.receipt())?;
+
+    match command {
+        EnrollmentCommand::Initialize => {
+            println!("{}", serde_json::to_string(authority.receipt())?);
+        }
+        EnrollmentCommand::Grant {
+            device_name,
+            role,
+            capabilities_file,
+            confirm,
+        } => {
+            require_operator_confirmation(confirm, "device enrollment grant")?;
+            let capabilities_bytes = read_bounded_file(&capabilities_file)?;
+            let capabilities: Vec<CapabilityDescriptor> =
+                serde_json::from_slice(&capabilities_bytes).with_context(|| {
+                    format!(
+                        "decode capability array from {}",
+                        capabilities_file.display()
+                    )
+                })?;
+            let receipt = process.kernel_mut().create_enrollment_grant(
+                EnrollmentGrantSpec {
+                    device_name,
+                    role: role.into(),
+                    capabilities,
+                },
+                now_ms,
+            )?;
+            println!("{}", serde_json::to_string(&receipt)?);
+        }
+        EnrollmentCommand::RotateGrant { device_id, confirm } => {
+            require_operator_confirmation(confirm, "device certificate rotation grant")?;
+            let receipt = process
+                .kernel_mut()
+                .create_rotation_grant(DeviceId::new(device_id), now_ms)?;
+            println!("{}", serde_json::to_string(&receipt)?);
+        }
+        EnrollmentCommand::Issue { request_stdin } => {
+            if !request_stdin {
+                bail!(
+                    "enrollment issue requires --request-stdin; grant secrets must not be passed in argv"
+                );
+            }
+            let request_bytes = read_bounded_stdin()?;
+            let request: EnrollmentRequest = serde_json::from_slice(&request_bytes)
+                .context("decode strict enrollment request from stdin")?;
+            let certificate = process
+                .kernel_mut()
+                .issue_device_certificate(&authority, &request, now_ms)?;
+            println!("{}", serde_json::to_string(&certificate)?);
+        }
+        EnrollmentCommand::Revoke {
+            device_id,
+            reason,
+            confirm,
+        } => {
+            require_operator_confirmation(confirm, "device revocation")?;
+            process.kernel_mut().revoke_device_with_reason(
+                DeviceId::new(device_id),
+                now_ms,
+                &reason,
+            )?;
+            println!(
+                "{}",
+                serde_json::to_string(&json!({
+                    "status": "device_revoked",
+                    "device_id": device_id,
+                    "revoked_at_ms": now_ms,
+                    "reason": reason,
+                }))?
+            );
+        }
+    }
+    Ok(())
+}
+
+fn require_operator_confirmation(confirmed: bool, action: &str) -> anyhow::Result<()> {
+    if !confirmed {
+        bail!("{action} requires explicit --confirm");
+    }
+    Ok(())
+}
+
+fn read_bounded_file(path: &Path) -> anyhow::Result<Vec<u8>> {
+    let metadata = fs::metadata(path)
+        .with_context(|| format!("inspect bounded input file {}", path.display()))?;
+    if metadata.len() > MAX_WIRE_FRAME_BYTES as u64 {
+        bail!("input file exceeds the wire-frame limit");
+    }
+    fs::read(path).with_context(|| format!("read bounded input file {}", path.display()))
+}
+
+fn read_bounded_stdin() -> anyhow::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    std::io::stdin()
+        .take((MAX_WIRE_FRAME_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > MAX_WIRE_FRAME_BYTES {
+        bail!("stdin document exceeds the wire-frame limit");
+    }
+    if bytes.is_empty() {
+        bail!("stdin document is empty");
+    }
+    Ok(bytes)
 }
 
 async fn serve(data_dir: &Path, bind: SocketAddr) -> anyhow::Result<()> {

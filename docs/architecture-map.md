@@ -11,6 +11,9 @@ flowchart LR
   Protocol --> Master["Portable jarvis-master SQLite lifecycle kernel"]
   Master --> Process["Headless single-owner master process"]
   Process --> Local["Authenticated loopback development transport and fixture worker"]
+  Process --> Identity["Windows enrollment CLI and DPAPI-protected P-256 CA"]
+  Identity --> Grants["Ten-minute single-use digest-only grants and verified CSRs"]
+  Grants --> Certificates["30-day device certificates, rotation, and revocation"]
   Master --> Durable["Registered devices, epochs, queue, attempts, cancellation, expiry, restart reconciliation, exact results"]
   Protocol --> Feature["Dormant jarvis-core distributed-development feature"]
   Protocol --> Windows["Windows distributed format, clippy, protocol, and master-process gate"]
@@ -35,10 +38,12 @@ a headless master executable. The contract seam provides protocol version 1, typ
 device/task/step/attempt/lease/cancellation identifiers, bounded capability
 advertisements, handshake messages, job and result envelopes, strict
 bound-before-decode JSON entry points, nil-identity rejection, and a golden
-compatibility fixture. `jarvis-master` schema version 1 persists explicitly
+compatibility fixture. `jarvis-master` schema version 2 persists explicitly
 registered device metadata, active connection epoch and sequence state, queued
 steps, immutable leased job envelopes, attempts, cancellation/expiry outcome,
-and accepted payload digests. It enforces the 256-step admission ceiling, four
+accepted payload digests, the enrollment authority binding, digest-only grants,
+and device-certificate serial/revocation state. It migrates existing schema-v1
+databases transactionally. It enforces the 256-step admission ceiling, four
 global leases, one live lease per device connection, registered capability
 context/result limits, exact leased-attempt result identity, and durable
 abandon-before-reissue on disconnect or restart. `jarvis-core` re-exports the
@@ -54,12 +59,24 @@ safe reissue. `master_process_e2e` additionally starts the actual master and
 fixture-worker child processes, proves one-owner database exclusion, bearer
 non-disclosure, unauthorized and oversized-body denial, authenticated loopback
 health and job completion, and restart reconciliation.
+`enrollment_identity_e2e` proves digest-only grants, signed-CSR issuance,
+expiry/replay denial, rotation, revocation, schema-v1-to-v2 migration, real
+Windows DPAPI round trips, and the real CLI stdin boundary.
 
 This slice does not make Windows the runtime authority yet. It adds a foreground
 headless executable, process-ownership lock, authenticated loopback development
-listener, and deterministic fixture-worker process. It adds no Windows service
-installation, mTLS identity, enrollment CA, discovery, live scheduler loop,
-remote lease transport, live inference worker, Codex dispatch, integration with
+listener, deterministic fixture-worker process, and a separate local enrollment
+CLI. The identity flow creates or reloads an ECDSA P-256 CA whose PKCS#8 private
+key is protected by Windows DPAPI for the current operator identity; SQLite
+contains only its public fingerprint. Enrollment grants are server-created,
+ten-minute, single-use, role/capability-bound, and persisted only as SHA-256
+digests. Issuance accepts the secret-bearing strict JSON request only on stdin,
+verifies the client CSR signature, ignores client-requested identity fields, and
+issues a 30-day client-auth certificate bound to the durable server-selected
+device ID. Rotation revokes the replaced serial and revocation disables the
+device plus every active serial. It adds no Windows service installation,
+remote listener, TLS 1.3/mTLS handshake, channel binding, discovery, live
+scheduler loop, remote lease transport, live inference worker, Codex dispatch, integration with
 the existing task/policy/audit/memory store, repository mutation, or UI. The new
 SQLite data is an isolated distributed lifecycle kernel, not the final unified
 Windows authority. Existing
