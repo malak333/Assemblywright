@@ -16,6 +16,9 @@ pub mod types;
 pub mod wasm_plugin;
 pub mod workspace;
 
+#[cfg(feature = "distributed-development")]
+pub use jarvis_protocol as distributed_protocol;
+
 pub use ipc::{
     router, router_with_auth, serve, serve_listener, serve_listener_with_auth, serve_with_auth,
     ApprovalDecisionRequest, ApprovalExecutionAttentionAcknowledgementRequest,

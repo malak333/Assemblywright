@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 WORKFLOW=".github/workflows/release-local.yml"
+WINDOWS_PROTOCOL_WORKFLOW=".github/workflows/windows-protocol.yml"
 LOCAL_GATE="scripts/release-local.sh"
 
 require_file() {
@@ -24,6 +25,7 @@ require_text() {
 }
 
 require_file "$WORKFLOW"
+require_file "$WINDOWS_PROTOCOL_WORKFLOW"
 require_file "$LOCAL_GATE"
 
 require_text "name: Jarvis Release Local Gate" "$WORKFLOW"
@@ -39,6 +41,19 @@ require_text "components: clippy,rustfmt" "$WORKFLOW"
 require_text "swift --version" "$WORKFLOW"
 require_text "JARVIS_RELEASE_LOCAL_HEARTBEAT_SECONDS: \"60\"" "$WORKFLOW"
 require_text "run: ./scripts/release-local.sh" "$WORKFLOW"
+require_text "name: Jarvis Windows Protocol Gate" "$WINDOWS_PROTOCOL_WORKFLOW"
+require_text "pull_request:" "$WINDOWS_PROTOCOL_WORKFLOW"
+require_text "push:" "$WINDOWS_PROTOCOL_WORKFLOW"
+require_text "workflow_dispatch:" "$WINDOWS_PROTOCOL_WORKFLOW"
+require_text "contents: read" "$WINDOWS_PROTOCOL_WORKFLOW"
+require_text "runs-on: windows-latest" "$WINDOWS_PROTOCOL_WORKFLOW"
+require_text "uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd" "$WINDOWS_PROTOCOL_WORKFLOW"
+require_text "uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8" "$WINDOWS_PROTOCOL_WORKFLOW"
+require_text "toolchain: 1.95.0" "$WINDOWS_PROTOCOL_WORKFLOW"
+require_text "components: clippy,rustfmt" "$WINDOWS_PROTOCOL_WORKFLOW"
+require_text "cargo fmt --all --check" "$WINDOWS_PROTOCOL_WORKFLOW"
+require_text "cargo clippy -p jarvis-protocol --all-targets --locked -- -D warnings" "$WINDOWS_PROTOCOL_WORKFLOW"
+require_text "cargo test -p jarvis-protocol --locked" "$WINDOWS_PROTOCOL_WORKFLOW"
 require_text "still running after" "$LOCAL_GATE"
 require_text "completed in" "$LOCAL_GATE"
 require_text "command failed after" "$LOCAL_GATE"

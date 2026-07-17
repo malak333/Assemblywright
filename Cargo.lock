@@ -1000,6 +1000,7 @@ dependencies = [
  "core-foundation-sys",
  "ed25519-dalek",
  "futures-util",
+ "jarvis-protocol",
  "libc",
  "p256",
  "reqwest",
@@ -1018,6 +1019,17 @@ dependencies = [
  "uuid",
  "wasmi",
  "wat",
+]
+
+[[package]]
+name = "jarvis-protocol"
+version = "0.1.4"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "uuid",
 ]
 
 [[package]]

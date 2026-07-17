@@ -18,6 +18,18 @@ repository-backed activity summary and activity event stream, conservative
 release-readiness inspection, read-only release runbook IPC surfaces, and CLI smoke paths for the Swift shell
 and local packaged app proof.
 
+The workspace also contains a portable `jarvis-protocol` crate as a dormant
+distributed-development seam. It defines versioned, bounded handshake,
+capability, job, lease, cancellation, and result contracts and is checked by a
+protocol-only Windows CI lane. No Windows master, network transport, worker,
+remote inference, or Codex dispatch is implemented by that foundation slice;
+the existing macOS runtime and release boundary remain authoritative. The
+accepted target and migration boundaries are recorded in
+[Distributed Developer Mode Design](docs/distributed-developer-mode-design.md).
+The portable seam has a named serialized contract E2E covering handshake,
+capability selection, leased work, result acceptance, and wrong-lease denial;
+it does not claim a live distributed runtime.
+
 Trusted macOS system-wake events are a disabled-by-default local foundation.
 Swift stores a P-256 private key and monotonic counter in device-only Keychain
 items. Normal startup does not touch that Keychain material; an explicit

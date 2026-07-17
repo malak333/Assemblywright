@@ -6,6 +6,7 @@ cd "$ROOT_DIR"
 
 version="$("$ROOT_DIR/scripts/release-version.sh")"
 package_dir="$ROOT_DIR/target/package"
+protocol_crate="$package_dir/jarvis-protocol-$version.crate"
 core_crate="$package_dir/jarvis-core-$version.crate"
 cli_crate="$package_dir/jarvis-cli-$version.crate"
 
@@ -27,6 +28,11 @@ run() {
 
 run cargo package --workspace --allow-dirty --no-verify
 
+if [[ ! -f "$protocol_crate" ]]; then
+  printf 'error: expected packaged protocol crate at %s\n' "$protocol_crate" >&2
+  exit 1
+fi
+
 if [[ ! -f "$core_crate" ]]; then
   printf 'error: expected packaged core crate at %s\n' "$core_crate" >&2
   exit 1
@@ -37,16 +43,24 @@ if [[ ! -f "$cli_crate" ]]; then
   exit 1
 fi
 
+tar -xzf "$protocol_crate" -C "$tmp_dir"
 tar -xzf "$core_crate" -C "$tmp_dir"
 tar -xzf "$cli_crate" -C "$tmp_dir"
 
+protocol_dir="$tmp_dir/jarvis-protocol-$version"
 cli_dir="$tmp_dir/jarvis-cli-$version"
 core_dir="$tmp_dir/jarvis-core-$version"
 
-if [[ ! -d "$cli_dir" || ! -d "$core_dir" ]]; then
+if [[ ! -d "$protocol_dir" || ! -d "$cli_dir" || ! -d "$core_dir" ]]; then
   printf 'error: packaged crate extraction did not produce expected directories in %s\n' "$tmp_dir" >&2
   exit 1
 fi
+
+cat >>"$core_dir/Cargo.toml" <<PATCH
+
+[patch.crates-io]
+jarvis-protocol = { path = "../jarvis-protocol-$version" }
+PATCH
 
 cat >>"$cli_dir/Cargo.toml" <<PATCH
 
@@ -54,6 +68,7 @@ cat >>"$cli_dir/Cargo.toml" <<PATCH
 jarvis-core = { path = "../jarvis-core-$version" }
 PATCH
 
+run cargo check --manifest-path "$core_dir/Cargo.toml" --all-targets --features distributed-development
 run cargo check --manifest-path "$cli_dir/Cargo.toml" --all-targets
 
 if [[ "$keep_temp" == true ]]; then

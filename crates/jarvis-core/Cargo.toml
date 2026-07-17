@@ -7,6 +7,10 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+default = []
+distributed-development = ["dep:jarvis-protocol"]
+
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
@@ -15,6 +19,7 @@ base64.workspace = true
 chrono.workspace = true
 ed25519-dalek.workspace = true
 futures-util.workspace = true
+jarvis-protocol = { path = "../jarvis-protocol", version = "0.1.4", optional = true }
 libc.workspace = true
 p256.workspace = true
 rusqlite.workspace = true

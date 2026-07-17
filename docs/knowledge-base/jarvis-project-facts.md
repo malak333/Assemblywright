@@ -55,10 +55,41 @@ These notes capture durable facts for future agents working on this repository.
 - The product direction is a local-first macOS assistant foundation, legally
   distinct from Marvel/JARVIS branding and assets.
 - The current repo contains a Rust workspace with `jarvis-core` and
-  `jarvis-cli`, plus a Swift shell under `apps/mac` with management tabs, core
+  `jarvis-cli`, plus a portable `jarvis-protocol` crate and a Swift shell under
+  `apps/mac` with management tabs, core
   supervision, voice input/output adapters, release/evidence-status
   inspection, scheduler notifications, Keychain credential launch injection,
   and packaged-smoke support.
+- The first distributed-development implementation slice is contracts only.
+  `jarvis-protocol` owns protocol version 1, typed cross-device identifiers,
+  bounded capability/handshake/job/result envelopes, strict unknown-field
+  rejection, bound-before-decode raw frame ceilings, nil-identity rejection,
+  lease/deadline ceilings, exact leased-attempt result binding, and a golden
+  mac-bridge handshake fixture. `jarvis-core` exposes those contracts
+  only through the default-off `distributed-development` feature.
+- `.github/workflows/windows-protocol.yml` runs portable protocol formatting,
+  clippy, and tests on `windows-latest`. It does not compile the current
+  Unix/macOS runtime and does not prove a Windows master, worker transport,
+  mTLS, enrollment, queueing, remote inference, Codex-account dispatch,
+  repository mutation, signing, or live-device behavior.
+- `distributed_protocol_contract_e2e` is the phase E2E for the implemented
+  portable seam. It serializes a Mac MLX capability handshake, Windows-master
+  acceptance, one digest-bound leased job, exact result acceptance, and
+  wrong-lease rejection. It is not process, network, mTLS, live-model,
+  cross-device, or recovery proof.
+- Durable target decision from the distributed-development design: Windows is
+  the sole stateful master for tasks, policy, audit, memory, repositories,
+  worktrees, Git, utilities, and future orchestration. Its weaker GPU may remain
+  a restricted co-located inference capability; placement does not grant that
+  worker master authority.
+- Durable target decision: the M1 Mac remains the primary native interface,
+  Apple-capability bridge, and stronger stateless MLX inference worker. Future
+  workers join through the same capability/job protocol rather than becoming
+  additional masters.
+- Durable target decision: cloud coding uses the owner's Codex account/CLI
+  workflow as an on-demand capability. Jarvis will not use the OpenAI Platform
+  API path for this design. Full-agent Codex remains a future gated Developer
+  capability on Windows and is not enabled by the protocol foundation.
 - Implemented `jarvis-core` surfaces include shared task/audit/safety types,
   a shared Axum router served by default over app-supervised UDS and by an
   explicit loopback compatibility server, runtime-backed command execution with
@@ -1386,8 +1417,9 @@ requires plugin-trust `generated_at`, `review_started_at`,
   negated Gatekeeper, and nested app-zip negative fixtures.
   `./scripts/release-version-consistency.sh --check` derives the
   release version from Rust package metadata and keeps package, live QA,
-  evidence bundle, and evidence doctor defaults aligned with the CLI/core crate
-  versions in the default local release gate. The unsigned structure and launch
+  evidence bundle, and evidence doctor defaults aligned with the
+  protocol/core/CLI crate and local dependency versions in the default local
+  release gate. The unsigned structure and launch
   checks still do not prove Developer
   ID signing, notarization, stapling, installation, Finder launch, live
   microphone/Speech validation, spoken transcript handoff, App Store review,

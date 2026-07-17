@@ -172,6 +172,13 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   knowledge-base facts were added, and matching E2E or focused integration
   coverage exists. If coverage does not exist, add it for behavior changes or
   record the blocker before using broader readiness language.
+- For the distributed protocol foundation, run
+  `cargo test -p jarvis-protocol --test distributed_protocol_contract_e2e --locked`
+  and confirm the serialized Windows-master/Mac-worker handshake, capability,
+  leased-job, exact-result, and wrong-lease rejection story remains green.
+  Treat this as portable contract E2E only; Windows authority, network/mTLS,
+  enrollment, live MLX inference, Codex execution, and cross-machine recovery
+  remain unimplemented and unproven.
 - For workspace grants, confirm app-selected paths are absent from child argv,
   environment, health, UI presentation, diagnostics, and audit; malformed or
   stale bookmarks block the complete launch; trusted-wake restarts share the

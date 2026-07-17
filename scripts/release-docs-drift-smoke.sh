@@ -13,6 +13,11 @@ README="README.md"
 CORE_IPC="crates/jarvis-core/src/ipc.rs"
 DESIGN="DESIGN.md"
 SAFETY_RULES="docs/safety-rules.md"
+DISTRIBUTED_DESIGN="docs/distributed-developer-mode-design.md"
+PROTOCOL_CRATE="crates/jarvis-protocol/src/lib.rs"
+WINDOWS_PROTOCOL_WORKFLOW=".github/workflows/windows-protocol.yml"
+RELEASE_VERSION_SCRIPT="scripts/release-version.sh"
+PROTOCOL_E2E="crates/jarvis-protocol/tests/distributed_protocol_contract_e2e.rs"
 
 fail() {
   printf 'error: %s\n' "$1" >&2
@@ -50,6 +55,35 @@ require_file "$README"
 require_file "$CORE_IPC"
 require_file "$DESIGN"
 require_file "$SAFETY_RULES"
+require_file "$DISTRIBUTED_DESIGN"
+require_file "$PROTOCOL_CRATE"
+require_file "$WINDOWS_PROTOCOL_WORKFLOW"
+require_file "$RELEASE_VERSION_SCRIPT"
+require_file "$PROTOCOL_E2E"
+
+for file in "$BUILD_DOCS" "$ARCHITECTURE" "$KB" "$README"; do
+  require_text "distributed protocol crate" "$file" "jarvis-protocol"
+done
+require_text "build docs Windows protocol workflow" "$BUILD_DOCS" "windows-protocol.yml"
+require_text "architecture dormant distributed feature" "$ARCHITECTURE" "distributed-development"
+require_text "architecture distributed non-goal" "$ARCHITECTURE" "This slice does not make Windows the runtime authority yet."
+require_text "knowledge base Windows protocol workflow" "$KB" "windows-protocol.yml"
+require_text "distributed design Windows authority" "$DISTRIBUTED_DESIGN" 'jarvis-master` is the sole authoritative service'
+require_text "distributed design Codex account boundary" "$DISTRIBUTED_DESIGN" "Codex account"
+require_text "distributed design current-default boundary" "$DISTRIBUTED_DESIGN" "current app-supervised Mac architecture remains the release default"
+require_text "protocol version constant" "$PROTOCOL_CRATE" "pub const PROTOCOL_VERSION: u16 = 1;"
+require_text "protocol frame bound" "$PROTOCOL_CRATE" "pub const MAX_WIRE_FRAME_BYTES: usize = 1024 * 1024;"
+require_text "protocol bound-before-decode API" "$PROTOCOL_CRATE" "pub fn decode_frame(frame: &[u8])"
+require_text "protocol nil identity rejection" "$PROTOCOL_CRATE" "NilIdentifier"
+require_text "release version protocol package check" "$RELEASE_VERSION_SCRIPT" 'crates/jarvis-protocol/Cargo.toml'
+require_text "release version protocol dependency check" "$RELEASE_VERSION_SCRIPT" "CORE_PROTOCOL_DEPENDENCY_VERSION"
+require_text "protocol E2E master-worker story" "$PROTOCOL_E2E" "windows_master_and_mac_worker_complete_one_bounded_protocol_story"
+require_text "protocol E2E wrong-lease denial" "$PROTOCOL_E2E" "ResultIdentityMismatch"
+for file in "$BUILD_DOCS" "$CHECKLIST" "$ARCHITECTURE" "$KB"; do
+  require_text "distributed protocol E2E documentation" "$file" "distributed_protocol_contract_e2e"
+done
+require_text "Windows protocol runner" "$WINDOWS_PROTOCOL_WORKFLOW" "runs-on: windows-latest"
+require_text "Windows protocol tests" "$WINDOWS_PROTOCOL_WORKFLOW" "cargo test -p jarvis-protocol --locked"
 
 for file in "$BUILD_DOCS" "$CHECKLIST" "$README"; do
   require_text "atomic approval decision" "$file" "redacted decision audit"
