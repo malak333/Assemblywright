@@ -28,10 +28,15 @@ leased attempts, cancellation, expiry, exact result acceptance, capability
 limits, disconnect handling, and restart reconciliation. The executable adds
 single-process database ownership, setup/serve/health operator commands, an
 authenticated loopback-only development transport, and a separate deterministic
-fake-worker process. These surfaces are checked by the Windows distributed
-gate. No installed Windows service, remote transport, mTLS, enrollment CA,
-live model inference, repository authority, or Codex dispatch is implemented
-by these foundation slices; the
+fake-worker process. A Windows-only enrollment CLI adds a DPAPI-current-user
+protected ECDSA P-256 enrollment CA, ten-minute single-use digest-only grants,
+verified client CSRs, 30-day client certificates, server-bound device identity,
+rotation, and immediate certificate/device revocation. Schema v2 migrates the
+existing lifecycle database transactionally and retains the v1 state. These
+surfaces are checked by the Windows distributed gate. No installed Windows
+service, remote listener, TLS 1.3/mTLS session, channel binding, live model
+inference, repository authority, or Codex dispatch is implemented by these
+foundation slices; the
 existing macOS runtime and release boundary remain authoritative. The
 accepted target and migration boundaries are recorded in
 [Distributed Developer Mode Design](docs/distributed-developer-mode-design.md).
@@ -44,6 +49,11 @@ exclusive state ownership, bearer non-disclosure and unauthorized rejection,
 oversized-body denial, one authenticated loopback fake-worker job, and restart
 reconciliation. This remains local development transport proof, not
 authenticated cross-device or production-service proof.
+`enrollment_identity_e2e` proves DPAPI round-trip protection on Windows,
+digest-only grant persistence, strict stdin issuance, signed-CSR verification,
+expiry and replay denial, rotation, revocation, the 16-device ceiling, and the
+schema-v1-to-v2 migration. It proves local identity issuance, not an mTLS
+transport or a live Mac enrollment exchange.
 
 Trusted macOS system-wake events are a disabled-by-default local foundation.
 Swift stores a P-256 private key and monotonic counter in device-only Keychain

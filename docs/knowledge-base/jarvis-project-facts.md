@@ -67,7 +67,7 @@ These notes capture durable facts for future agents working on this repository.
 - The product direction is a local-first macOS assistant foundation, legally
   distinct from Marvel/JARVIS branding and assets.
 - The current repo contains a Rust workspace with `jarvis-core` and
-  `jarvis-cli`, plus portable `jarvis-protocol` and library-only
+  `jarvis-cli`, plus portable `jarvis-protocol` and headless executable
   `jarvis-master` crates and a Swift shell under `apps/mac` with management
   tabs, core
   supervision, voice input/output adapters, release/evidence-status
@@ -98,19 +98,45 @@ These notes capture durable facts for future agents working on this repository.
   `fixture-worker` completes one deterministic inference-shaped job from a
   separate process. Every route requires the bearer with digest comparison.
   This is local development transport, not Windows service installation, mTLS,
-  device enrollment, remote trust, live inference, or unified authority.
+  remote trust, live inference, or unified authority. Device enrollment is a
+  separate local operator CLI foundation and is not accepted by this listener.
 - `master_process_e2e` is the phase E2E for the executable boundary. It starts
   real child processes, rejects a second owner for the same database, completes
   one authenticated loopback fake-worker job, proves the generated bearer is
   absent from setup output, rejects missing authorization and an oversized
   request body, checks durable state counts, and restarts against the same
   database to verify connection reconciliation.
+- The fourth distributed-development slice advances `jarvis-master` to schema
+  version 2 and adds a Windows enrollment-identity CLI. Its ECDSA P-256 CA key
+  is serialized only long enough to be protected by current-user Windows DPAPI;
+  disk stores the DPAPI blob, public CA certificate, and public metadata, while
+  SQLite stores only the CA fingerprint. Partial authority files fail closed
+  instead of silently regenerating a new CA.
+- Initial enrollment grants reserve a server-selected device ID, name, role,
+  registry revision, and exact capability set. They carry 256 bits of random
+  secret material, expire after ten minutes, are single-use, and store only a
+  SHA-256 digest. At most 16 devices and 32 outstanding grants are accepted.
+  Grant secrets are returned once to the local operator and accepted for
+  issuance only in a strict bounded stdin document, never as CLI arguments.
+- Device issuance verifies the client CSR signature but discards every
+  client-requested identity field. The master emits its own CN and
+  `urn:jarvis:device:<uuid>` SAN, client-auth usage, random 20-byte serial, and
+  30-day validity. The client private key remains client-owned. Rotation uses a
+  new grant bound to the unchanged device registry and revokes the replaced
+  serial; device revocation disables all active serials and disconnects active
+  work through the existing abandonment path.
+- `enrollment_identity_e2e` proves grant secrecy, invalid-secret and replay
+  denial, expiry, invalid-CSR recovery, issuance, rotation, revocation, and
+  transactional schema-v1-to-v2 migration on every supported host through an
+  injected protector. On Windows it additionally exercises real DPAPI and the
+  real CLI stdin boundary. This is local identity issuance proof, not an mTLS
+  listener, TLS channel binding, overlay discovery, or live Mac enrollment.
 - `.github/workflows/windows-protocol.yml` runs portable protocol and master
   process formatting, clippy, and tests on `windows-latest`. It proves the
   foreground executable, single-process ownership, authenticated loopback
   development transport, fixture worker, and restart boundary described above.
   It does not compile the current Unix/macOS runtime and does not prove Windows
-  service installation, mTLS, enrollment CA, live remote inference,
+  service installation, mTLS transport, live remote inference,
   Codex-account dispatch, repository mutation, signing, or live-device behavior.
 - On Windows, do not include
   `cargo check -p jarvis-core --features distributed-development --locked` in

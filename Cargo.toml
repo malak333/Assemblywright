@@ -28,6 +28,7 @@ getrandom = "0.3"
 libc = "0.2"
 p256 = { version = "0.13", features = ["ecdsa"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+rcgen = { version = "0.14.8", features = ["x509-parser", "zeroize"] }
 rusqlite = { version = "0.32", features = ["bundled", "chrono", "serde_json"] }
 rustix = { version = "1.1", features = ["fs", "process"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -35,6 +36,7 @@ serde_json = "1.0"
 sha2 = "0.10"
 tempfile = "3.13"
 thiserror = "2.0"
+time = "0.3"
 tokio = { version = "1.41", features = ["macros", "net", "process", "rt-multi-thread", "signal", "time"] }
 tokio-stream = "0.1"
 tower = { version = "0.5", features = ["util"] }
@@ -44,3 +46,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"]
 uuid = { version = "1.11", features = ["serde", "v4"] }
 wasmi = { version = "1.1", default-features = false, features = ["std", "extra-checks"] }
 wat = "1.0"
+x509-parser = "0.18"
+zeroize = "1.8"
+
+[workspace.dependencies.windows-sys]
+version = "0.61"
+features = [
+  "Win32_Foundation",
+  "Win32_Security_Cryptography",
+]
