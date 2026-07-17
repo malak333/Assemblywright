@@ -20,9 +20,10 @@ mod identity;
 
 pub use identity::{
     EnrollmentGrantReceipt, EnrollmentGrantSpec, EnrollmentOperation, EnrollmentRequest,
-    IdentityAuthority, IdentityAuthorityReceipt, IdentityError, IssuedDeviceCertificate,
-    PlatformSecretProtector, SecretProtector, DEVICE_CERTIFICATE_LIFETIME_MS,
-    ENROLLMENT_GRANT_TTL_MS, MAX_ENROLLED_DEVICES,
+    EphemeralServerIdentity, IdentityAuthority, IdentityAuthorityReceipt, IdentityError,
+    IssuedDeviceCertificate, PlatformSecretProtector, SecretProtector,
+    DEVICE_CERTIFICATE_LIFETIME_MS, ENROLLMENT_GRANT_TTL_MS, MAX_ENROLLED_DEVICES,
+    SERVER_CERTIFICATE_LIFETIME_MS,
 };
 
 pub const MASTER_SCHEMA_VERSION: i64 = 2;

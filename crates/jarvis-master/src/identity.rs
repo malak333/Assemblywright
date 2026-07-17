@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -20,6 +21,7 @@ use zeroize::Zeroizing;
 
 pub const ENROLLMENT_GRANT_TTL_MS: u64 = 10 * 60 * 1_000;
 pub const DEVICE_CERTIFICATE_LIFETIME_MS: u64 = 30 * 24 * 60 * 60 * 1_000;
+pub const SERVER_CERTIFICATE_LIFETIME_MS: u64 = 24 * 60 * 60 * 1_000;
 pub const MAX_ENROLLED_DEVICES: u64 = 16;
 const MAX_OUTSTANDING_ENROLLMENT_GRANTS: u64 = 32;
 const MAX_CSR_PEM_BYTES: usize = 64 * 1_024;
@@ -255,6 +257,21 @@ pub struct IssuedDeviceCertificate {
     pub ca_certificate_pem: String,
 }
 
+pub struct EphemeralServerIdentity {
+    certificate_chain_der: Vec<Vec<u8>>,
+    private_key_der: Zeroizing<Vec<u8>>,
+}
+
+impl EphemeralServerIdentity {
+    pub fn certificate_chain_der(&self) -> &[Vec<u8>] {
+        &self.certificate_chain_der
+    }
+
+    pub fn private_key_der(&self) -> &[u8] {
+        self.private_key_der.as_slice()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct AuthorityMetadata {
@@ -412,6 +429,49 @@ impl IdentityAuthority {
 
     pub fn receipt(&self) -> &IdentityAuthorityReceipt {
         &self.receipt
+    }
+
+    pub fn issue_ephemeral_server_identity(
+        &self,
+        server_ip: IpAddr,
+        now_ms: u64,
+    ) -> Result<EphemeralServerIdentity, IdentityError> {
+        self.require_current(now_ms)?;
+        let requested_not_after_ms = now_ms
+            .checked_add(SERVER_CERTIFICATE_LIFETIME_MS)
+            .ok_or(IdentityError::InvalidTimestamp)?;
+        let not_after_ms = requested_not_after_ms.min(self.receipt.not_after_ms);
+        if not_after_ms <= now_ms {
+            return Err(IdentityError::AuthorityExpired);
+        }
+
+        let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
+        let private_key_der = Zeroizing::new(key.serialize_der());
+        let mut params = CertificateParams::default();
+        params.not_before = timestamp(now_ms.saturating_sub(CLOCK_SKEW_MS))?;
+        params.not_after = timestamp(not_after_ms)?;
+        params.serial_number = Some(random_serial()?.into());
+        params.distinguished_name = distinguished_name("Jarvis Windows Master");
+        params.subject_alt_names = vec![SanType::IpAddress(server_ip)];
+        if server_ip.is_loopback() {
+            params.subject_alt_names.push(SanType::DnsName(
+                "localhost"
+                    .try_into()
+                    .map_err(|_| IdentityError::InvalidCertificateRequest)?,
+            ));
+        }
+        params.is_ca = IsCa::NoCa;
+        params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+        params.use_authority_key_identifier_extension = true;
+        let certificate = params.signed_by(&key, &self.issuer)?;
+        Ok(EphemeralServerIdentity {
+            certificate_chain_der: vec![
+                certificate.der().to_vec(),
+                pem_certificate_der(&self.ca_certificate_pem)?,
+            ],
+            private_key_der,
+        })
     }
 
     fn require_current(&self, now_ms: u64) -> Result<(), IdentityError> {
@@ -696,6 +756,43 @@ impl MasterKernel {
             |row| row.get(0),
         )?;
         Ok(active)
+    }
+
+    pub fn authenticate_device_certificate(
+        &self,
+        device_id: DeviceId,
+        serial_hex: &str,
+        certificate_sha256: &[u8; 32],
+        now_ms: u64,
+    ) -> Result<DeviceRegistration, MasterError> {
+        let stored = self
+            .connection
+            .query_row(
+                "SELECT d.device_name, d.role_json, d.registry_revision, d.capabilities_json\n                 FROM master_device_certificates c\n                 JOIN master_devices d ON d.device_id = c.device_id\n                 WHERE c.device_id = ?1 AND c.serial_hex = ?2\n                   AND c.certificate_sha256 = ?3 AND c.revoked_at_ms IS NULL\n                   AND c.issued_at_ms <= ?4 AND c.not_after_ms > ?4 AND d.revoked = 0",
+                params![
+                    device_id.0.to_string(),
+                    serial_hex,
+                    certificate_sha256.as_slice(),
+                    u64_to_i64(now_ms)?,
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or(MasterError::DeviceCertificateNotFound)?;
+        Ok(DeviceRegistration {
+            device_id,
+            device_name: stored.0,
+            role: serde_json::from_str(&stored.1)?,
+            registry_revision: i64_to_u64(stored.2)?,
+            capabilities: serde_json::from_str(&stored.3)?,
+        })
     }
 }
 

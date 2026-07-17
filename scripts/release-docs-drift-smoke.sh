@@ -24,6 +24,7 @@ PROTOCOL_E2E="crates/jarvis-protocol/tests/distributed_protocol_contract_e2e.rs"
 MASTER_E2E="crates/jarvis-master/tests/master_lifecycle_e2e.rs"
 MASTER_PROCESS_E2E="crates/jarvis-master/tests/master_process_e2e.rs"
 MASTER_IDENTITY_E2E="crates/jarvis-master/tests/enrollment_identity_e2e.rs"
+MASTER_REMOTE_MTLS_E2E="crates/jarvis-master/tests/remote_mtls_e2e.rs"
 
 fail() {
   printf 'error: %s\n' "$1" >&2
@@ -72,6 +73,7 @@ require_file "$MASTER_PROCESS"
 require_file "$MASTER_PROCESS_E2E"
 require_file "$MASTER_IDENTITY"
 require_file "$MASTER_IDENTITY_E2E"
+require_file "$MASTER_REMOTE_MTLS_E2E"
 
 for file in "$BUILD_DOCS" "$ARCHITECTURE" "$KB" "$README"; do
   require_text "distributed protocol crate" "$file" "jarvis-protocol"
@@ -108,6 +110,9 @@ require_text "master process E2E body bound" "$MASTER_PROCESS_E2E" "HTTP/1.1 413
 require_text "master DPAPI protector" "$MASTER_IDENTITY" "windows_dpapi_current_user"
 require_text "master enrollment grant TTL" "$MASTER_IDENTITY" "pub const ENROLLMENT_GRANT_TTL_MS: u64 = 10 * 60 * 1_000;"
 require_text "master enrolled device ceiling" "$MASTER_IDENTITY" "pub const MAX_ENROLLED_DEVICES: u64 = 16;"
+require_text "master TLS exporter label" "$MASTER_PROCESS" "EXPORTER-Jarvis-Developer-Mode-v1"
+require_text "master TLS 1.3 restriction" "$MASTER_PROCESS" "rustls::version::TLS13"
+require_text "master remote mTLS E2E" "$MASTER_REMOTE_MTLS_E2E" "remote_listener_requires_enrollment_tls13_and_channel_bound_identity"
 require_text "master enrollment E2E" "$MASTER_IDENTITY_E2E" "enrollment_grants_issue_rotate_and_revoke_exact_device_identity"
 require_text "master enrollment DPAPI E2E" "$MASTER_IDENTITY_E2E" "windows_dpapi_protector_round_trips_without_plaintext_equivalence"
 require_text "master enrollment schema migration E2E" "$MASTER_IDENTITY_E2E" "schema_v1_migrates_transactionally_to_enrollment_identity_v2"
@@ -116,6 +121,7 @@ for file in "$BUILD_DOCS" "$CHECKLIST" "$ARCHITECTURE" "$KB"; do
   require_text "distributed master E2E documentation" "$file" "master_lifecycle_e2e"
   require_text "distributed master process E2E documentation" "$file" "master_process_e2e"
   require_text "distributed enrollment identity E2E documentation" "$file" "enrollment_identity_e2e"
+  require_text "distributed remote mTLS E2E documentation" "$file" "remote_mtls_e2e"
 done
 require_text "Windows protocol runner" "$WINDOWS_PROTOCOL_WORKFLOW" "runs-on: windows-latest"
 require_text "Windows protocol tests" "$WINDOWS_PROTOCOL_WORKFLOW" "cargo test -p jarvis-protocol --locked"

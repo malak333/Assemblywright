@@ -52,6 +52,7 @@ cargo test -p jarvis-master --locked
 cargo test -p jarvis-master --test master_lifecycle_e2e --locked
 cargo test -p jarvis-master --test master_process_e2e --locked
 cargo test -p jarvis-master --test enrollment_identity_e2e --locked
+cargo test -p jarvis-master --test remote_mtls_e2e --locked
 ```
 
 `.github/workflows/windows-protocol.yml` runs formatting plus the protocol and
@@ -66,11 +67,11 @@ cargo check -p jarvis-core --features distributed-development --locked
 
 That check proves only that `jarvis-core` can consume the dormant contracts.
 The Windows job deliberately does not build the current Unix/macOS runtime or a
-Windows service installation, establish an mTLS transport, run a live model,
-mutate a repository, or exercise a Codex account. It does operate the local
-Windows enrollment CA under a temporary test identity and proves real DPAPI
-round-trip protection. Remote authentication and cross-device exchange remain
-capabilities remain gated target architecture in
+Windows service installation, run a live model, mutate a repository, or exercise
+a Codex account. It operates the local Windows enrollment CA under a temporary
+test identity, proves real DPAPI round-trip protection, and exercises the real
+master process over a loopback TLS 1.3 mutual-authentication connection. Private
+overlay reachability and a live Mac exchange remain gated target architecture in
 `docs/distributed-developer-mode-design.md`.
 Wire consumers must use each top-level message's `decode_frame` entry point so
 the raw byte ceiling is checked before Serde decoding and semantic validation.
@@ -104,8 +105,16 @@ issuance, rotation, revocation, and schema-v1-to-v2 migration with an injected
 test protector. On Windows it additionally calls DPAPI directly and starts the
 real CLI to prove initialization receipts, secret-bearing issuance through
 stdin rather than argv, and protected-key non-equivalence. It is local identity
-proof, not TLS 1.3/mTLS transport, channel binding, overlay reachability, or a
-live Mac enrollment exchange.
+proof and supplies the authority used by the separate transport test.
+`remote_mtls_e2e` is the fifth implemented seam and runs only on Windows. It
+issues real DPAPI-backed enrolled and revoked client certificates, starts the
+real master with loopback and remote listeners, negotiates TLS 1.3 with mutual
+certificate authentication, checks enrolled health, binds the strict
+application handshake to a per-connection TLS exporter digest, rejects replay
+on a different channel, advances the durable connection epoch after socket-close
+reconciliation, and denies the revoked certificate. It is process/network proof
+against a generated Rust client on one Windows host, not private-overlay setup,
+live Mac Keychain enrollment, service installation, or remote-device reliability.
 
 Use these PowerShell commands for a manual Windows process smoke:
 
@@ -125,8 +134,8 @@ cargo run -p jarvis-master -- --data-dir $jarvisData fixture-worker
 
 The executable rejects non-loopback binds, requires its generated development
 token on every route, and refuses a second process for the same data directory.
-It is a foreground developer process; Windows service installation and remote
-device authentication remain later slices.
+It is a foreground developer process; Windows service installation remains a
+later slice.
 
 Initialize or verify the Windows enrollment authority separately:
 
@@ -146,6 +155,22 @@ new one-time grant to the existing device. `revoke --confirm` disables the
 device and every active certificate immediately. These commands require the
 foreground master to be stopped because the local operator CLI takes the same
 exclusive data-directory ownership lease.
+
+After initialization and client certificate issuance, start the optional remote
+listener on one concrete local or private-overlay address. Unspecified and
+multicast binds are rejected because the ephemeral CA-signed server certificate
+contains the exact bind IP as its SAN:
+
+```powershell
+$jarvisData = Join-Path $env:LOCALAPPDATA 'Jarvis\master'
+cargo run -p jarvis-master -- --data-dir $jarvisData serve --remote-bind 100.64.0.10:7792
+```
+
+The remote API uses `/health` and `/v1/distributed/*`; it does not accept the
+development bearer. Every connection must present an active enrolled certificate
+and complete `AuthenticatedHandshakeRequest` with the exact TLS exporter digest
+before step, lease, or result operations. Only the enrolled Mac-bridge role may
+enqueue steps. The ordinary loopback listener remains available on `127.0.0.1:7791`.
 
 ```sh
 ./scripts/release-version-consistency.sh --check

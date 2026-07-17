@@ -14,6 +14,8 @@ flowchart LR
   Process --> Identity["Windows enrollment CLI and DPAPI-protected P-256 CA"]
   Identity --> Grants["Ten-minute single-use digest-only grants and verified CSRs"]
   Grants --> Certificates["30-day device certificates, rotation, and revocation"]
+  Certificates --> Remote["Optional TLS 1.3 mTLS listener with exact-IP ephemeral server identity"]
+  Remote --> Binding["Certificate registry checks, TLS exporter binding, role and epoch enforcement"]
   Master --> Durable["Registered devices, epochs, queue, attempts, cancellation, expiry, restart reconciliation, exact results"]
   Protocol --> Feature["Dormant jarvis-core distributed-development feature"]
   Protocol --> Windows["Windows distributed format, clippy, protocol, and master-process gate"]
@@ -62,11 +64,17 @@ health and job completion, and restart reconciliation.
 `enrollment_identity_e2e` proves digest-only grants, signed-CSR issuance,
 expiry/replay denial, rotation, revocation, schema-v1-to-v2 migration, real
 Windows DPAPI round trips, and the real CLI stdin boundary.
+`remote_mtls_e2e` adds a real master process and generated enrolled client over
+loopback TLS 1.3. It proves mutual certificate authentication, durable
+certificate/device checks, exporter-bound application handshake replay denial,
+reconnect epoch advance, socket-close reconciliation, and revoked-certificate
+denial.
 
 This slice does not make Windows the runtime authority yet. It adds a foreground
 headless executable, process-ownership lock, authenticated loopback development
-listener, deterministic fixture-worker process, and a separate local enrollment
-CLI. The identity flow creates or reloads an ECDSA P-256 CA whose PKCS#8 private
+listener, deterministic fixture-worker process, a separate local enrollment
+CLI, and an explicit optional remote listener. The identity flow creates or
+reloads an ECDSA P-256 CA whose PKCS#8 private
 key is protected by Windows DPAPI for the current operator identity; SQLite
 contains only its public fingerprint. Enrollment grants are server-created,
 ten-minute, single-use, role/capability-bound, and persisted only as SHA-256
@@ -74,9 +82,14 @@ digests. Issuance accepts the secret-bearing strict JSON request only on stdin,
 verifies the client CSR signature, ignores client-requested identity fields, and
 issues a 30-day client-auth certificate bound to the durable server-selected
 device ID. Rotation revokes the replaced serial and revocation disables the
-device plus every active serial. It adds no Windows service installation,
-remote listener, TLS 1.3/mTLS handshake, channel binding, discovery, live
-scheduler loop, remote lease transport, live inference worker, Codex dispatch, integration with
+device plus every active serial. `serve --remote-bind` issues an in-memory-key,
+24-hour server-auth certificate for the exact concrete bind IP, restricts rustls
+to TLS 1.3, requires a CA-valid enrolled client certificate, rechecks exact
+certificate serial/digest/device revocation state on every request, binds the
+application handshake to the TLS exporter, and reconciles an accepted epoch on
+socket close. It adds no Windows service installation, private-overlay discovery
+or live cross-device reliability, live scheduler loop, live inference worker,
+Codex dispatch, integration with
 the existing task/policy/audit/memory store, repository mutation, or UI. The new
 SQLite data is an isolated distributed lifecycle kernel, not the final unified
 Windows authority. Existing

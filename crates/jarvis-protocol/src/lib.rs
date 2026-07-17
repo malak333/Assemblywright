@@ -55,6 +55,8 @@ pub enum ProtocolError {
     ResultIdentityMismatch,
     #[error("{field} does not match the SHA-256 digest of its payload")]
     PayloadDigestMismatch { field: &'static str },
+    #[error("TLS channel binding must not be all zeroes")]
+    InvalidChannelBinding,
 }
 
 macro_rules! uuid_id {
@@ -182,6 +184,37 @@ impl HandshakeRequest {
             }
         }
         validate_serialized_limit("handshake", self, MAX_HANDSHAKE_FRAME_BYTES)
+    }
+}
+
+/// Cross-device handshake envelope bound to the authenticated TLS 1.3 session.
+///
+/// The digest is SHA-256 over 32 bytes exported with the fixed Jarvis exporter
+/// label. Keeping this value inside the bounded application handshake prevents
+/// a valid device handshake from being replayed on another TLS connection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthenticatedHandshakeRequest {
+    pub handshake: HandshakeRequest,
+    pub tls_exporter_sha256: [u8; 32],
+}
+
+impl AuthenticatedHandshakeRequest {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_and_validate_frame(
+            "authenticated_handshake",
+            frame,
+            MAX_HANDSHAKE_FRAME_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        self.handshake.validate()?;
+        if self.tls_exporter_sha256.iter().all(|byte| *byte == 0) {
+            return Err(ProtocolError::InvalidChannelBinding);
+        }
+        validate_serialized_limit("authenticated_handshake", self, MAX_HANDSHAKE_FRAME_BYTES)
     }
 }
 

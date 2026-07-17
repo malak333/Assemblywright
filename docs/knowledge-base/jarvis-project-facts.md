@@ -129,14 +129,37 @@ These notes capture durable facts for future agents working on this repository.
   denial, expiry, invalid-CSR recovery, issuance, rotation, revocation, and
   transactional schema-v1-to-v2 migration on every supported host through an
   injected protector. On Windows it additionally exercises real DPAPI and the
-  real CLI stdin boundary. This is local identity issuance proof, not an mTLS
-  listener, TLS channel binding, overlay discovery, or live Mac enrollment.
+  real CLI stdin boundary. This is local identity issuance proof and supplies
+  the authority used by the separate remote transport proof.
+- The fifth distributed-development slice keeps the bearer-authenticated
+  loopback listener as the default and adds explicit
+  `serve --remote-bind <concrete-ip>:<port>`. The single foreground master then
+  serves both listeners. Remote bind rejects unspecified and multicast IPs; the
+  master creates a fresh 24-hour ECDSA P-256 server key in memory and a CA-signed
+  server-auth certificate whose SAN is the exact bind IP. Rustls is restricted
+  to TLS 1.3 and requires a client certificate under the private enrollment CA.
+- After the TLS handshake, the master extracts exactly one
+  `urn:jarvis:device:<uuid>` SAN, serial, and certificate digest, then requires
+  that exact certificate/device tuple to remain active in SQLite. The strict
+  `AuthenticatedHandshakeRequest` must repeat the server-owned registration and
+  SHA-256 digest of the fixed-label 32-byte TLS exporter. Replaying it on a new
+  TLS channel fails. Subsequent requests are bound to the accepted connection
+  epoch and certificate device; only a Mac-bridge certificate may enqueue work.
+  Socket close durably disconnects the epoch and abandons affected work through
+  the existing reconciliation path.
+- `remote_mtls_e2e` is the phase E2E for this transport. On Windows it uses real
+  DPAPI identity material and real master/client processes to prove TLS 1.3
+  mutual authentication, enrolled health, exporter replay denial, epoch advance
+  after disconnect, and revoked-certificate denial. It is same-host loopback
+  proof with a generated Rust client, not private-overlay discovery/reachability,
+  live Mac Keychain enrollment, Windows service installation, or live inference.
 - `.github/workflows/windows-protocol.yml` runs portable protocol and master
   process formatting, clippy, and tests on `windows-latest`. It proves the
   foreground executable, single-process ownership, authenticated loopback
-  development transport, fixture worker, and restart boundary described above.
+  development transport, enrollment identity, TLS 1.3 mTLS transport, fixture
+  worker, and restart boundaries described above.
   It does not compile the current Unix/macOS runtime and does not prove Windows
-  service installation, mTLS transport, live remote inference,
+  service installation, private-overlay reliability, live Mac exchange/inference,
   Codex-account dispatch, repository mutation, signing, or live-device behavior.
 - On Windows, do not include
   `cargo check -p jarvis-core --features distributed-development --locked` in

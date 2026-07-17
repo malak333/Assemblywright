@@ -2,18 +2,24 @@ use anyhow::{bail, Context};
 use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
-use axum::{Json, Router};
+use axum::{Extension, Json, Router};
 use clap::{Parser, Subcommand, ValueEnum};
+use hyper::server::conn::http1;
+use hyper_util::rt::TokioIo;
+use hyper_util::service::TowerToHyperService;
 use jarvis_master::{
     current_time_ms, AcceptedResult, DeviceRegistration, EnrollmentGrantSpec, EnrollmentRequest,
-    IdentityAuthority, MasterHealthSnapshot, MasterProcess, NewStep, PlatformSecretProtector,
-    StartupReconciliation,
+    EphemeralServerIdentity, IdentityAuthority, MasterHealthSnapshot, MasterProcess, NewStep,
+    PlatformSecretProtector, StartupReconciliation,
 };
 use jarvis_protocol::{
-    CapabilityDescriptor, CapabilityKind, DeviceId, DeviceRole, HandshakeRequest,
-    HandshakeResponse, HandshakeStatus, JobEnvelope, JobResultEnvelope, JobResultStatus,
-    Sensitivity, StepId, TaskId, MAX_WIRE_FRAME_BYTES, PROTOCOL_VERSION,
+    AuthenticatedHandshakeRequest, CapabilityDescriptor, CapabilityKind, DeviceId, DeviceRole,
+    HandshakeRequest, HandshakeResponse, HandshakeStatus, JobEnvelope, JobResultEnvelope,
+    JobResultStatus, Sensitivity, StepId, TaskId, MAX_WIRE_FRAME_BYTES, PROTOCOL_VERSION,
 };
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+use rustls::server::WebPkiClientVerifier;
+use rustls::{RootCertStore, ServerConfig};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -24,10 +30,15 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio_rustls::TlsAcceptor;
 use tracing::info;
 use uuid::Uuid;
+use x509_parser::extensions::GeneralName;
+use x509_parser::prelude::FromDer;
 
 const DEFAULT_BIND: &str = "127.0.0.1:7791";
+const TLS_EXPORTER_LABEL: &[u8] = b"EXPORTER-Jarvis-Developer-Mode-v1";
+const TLS_EXPORTER_BYTES: usize = 32;
 const DEVELOPMENT_TOKEN_FILE: &str = "development.token";
 const MIN_TOKEN_BYTES: usize = 32;
 const MAX_TOKEN_BYTES: usize = 256;
@@ -55,6 +66,9 @@ enum Command {
     Serve {
         #[arg(long, default_value = DEFAULT_BIND)]
         bind: SocketAddr,
+        /// Optional concrete IP endpoint for TLS 1.3 enrolled-device traffic.
+        #[arg(long)]
+        remote_bind: Option<SocketAddr>,
     },
     /// Query the running master health boundary.
     Health {
@@ -140,6 +154,15 @@ struct AppState {
     started_at_ms: u64,
 }
 
+#[derive(Clone)]
+struct RemoteSession {
+    registration: DeviceRegistration,
+    certificate_serial_hex: String,
+    certificate_sha256: [u8; 32],
+    tls_exporter_sha256: [u8; 32],
+    accepted_epoch: Arc<Mutex<Option<u64>>>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HealthResponse {
@@ -208,7 +231,7 @@ async fn main() -> anyhow::Result<()> {
     let data_dir = resolve_data_dir(cli.data_dir)?;
     match cli.command {
         Command::Setup => setup(&data_dir),
-        Command::Serve { bind } => serve(&data_dir, bind).await,
+        Command::Serve { bind, remote_bind } => serve(&data_dir, bind, remote_bind).await,
         Command::Health { endpoint } => health(&data_dir, endpoint).await,
         Command::FixtureWorker { endpoint, prompt } => {
             fixture_worker(&data_dir, endpoint, prompt).await
@@ -239,7 +262,7 @@ fn setup(data_dir: &Path) -> anyhow::Result<()> {
         database_path: process.database_path().to_path_buf(),
         development_token_file: token_path,
         boundary:
-            "loopback development transport only; enrollment identity is a separate Windows CLI flow and mTLS is not implemented",
+            "loopback development transport is default; optional remote TLS 1.3 mTLS requires an initialized enrollment authority and explicit --remote-bind",
     };
     println!("{}", serde_json::to_string(&receipt)?);
     Ok(())
@@ -363,10 +386,30 @@ fn read_bounded_stdin() -> anyhow::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-async fn serve(data_dir: &Path, bind: SocketAddr) -> anyhow::Result<()> {
+async fn serve(
+    data_dir: &Path,
+    bind: SocketAddr,
+    remote_bind: Option<SocketAddr>,
+) -> anyhow::Result<()> {
     require_loopback(bind)?;
-    let process = MasterProcess::acquire(data_dir)?;
+    if let Some(remote_bind) = remote_bind {
+        require_concrete_remote_bind(remote_bind)?;
+    }
+    let mut process = MasterProcess::acquire(data_dir)?;
     let token = read_development_token(&process.data_dir().join(DEVELOPMENT_TOKEN_FILE))?;
+    let remote_acceptor = if let Some(remote_bind) = remote_bind {
+        let now_ms = current_time_ms()?;
+        let protector = PlatformSecretProtector;
+        let authority = IdentityAuthority::open_existing(process.data_dir(), &protector, now_ms)
+            .context("open the initialized Windows enrollment authority for remote TLS")?;
+        process
+            .kernel_mut()
+            .record_identity_authority(authority.receipt())?;
+        let identity = authority.issue_ephemeral_server_identity(remote_bind.ip(), now_ms)?;
+        Some(build_tls_acceptor(&identity)?)
+    } else {
+        None
+    };
     let state = AppState {
         process: Arc::new(Mutex::new(process)),
         token_sha256: Sha256::digest(token.as_bytes()).into(),
@@ -381,29 +424,344 @@ async fn serve(data_dir: &Path, bind: SocketAddr) -> anyhow::Result<()> {
         .route("/v1/development/leases/next", post(lease_next))
         .route("/v1/development/results", post(accept_result))
         .layer(DefaultBodyLimit::max(MAX_WIRE_FRAME_BYTES))
-        .with_state(state);
+        .with_state(state.clone());
 
     let listener = tokio::net::TcpListener::bind(bind).await?;
     let local_addr = listener.local_addr()?;
+    let remote_listener = if let Some(remote_bind) = remote_bind {
+        Some(tokio::net::TcpListener::bind(remote_bind).await?)
+    } else {
+        None
+    };
+    let remote_addr = remote_listener
+        .as_ref()
+        .map(tokio::net::TcpListener::local_addr)
+        .transpose()?;
     println!(
         "{}",
         serde_json::to_string(&json!({
             "status": "ready",
             "endpoint": local_addr.to_string(),
+            "remote_endpoint": remote_addr.map(|address| address.to_string()),
             "process_id": std::process::id(),
-            "boundary": "authenticated_loopback_development_only"
+            "boundary": if remote_addr.is_some() {
+                "authenticated_loopback_plus_tls13_mtls_enrolled_devices"
+            } else {
+                "authenticated_loopback_development_only"
+            }
         }))?
     );
     std::io::stdout().flush()?;
-    info!(endpoint = %local_addr, "Windows master process ready");
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    info!(endpoint = %local_addr, remote_endpoint = ?remote_addr, "Windows master process ready");
+    if let (Some(remote_listener), Some(remote_acceptor)) = (remote_listener, remote_acceptor) {
+        tokio::select! {
+            result = axum::serve(listener, app) => result?,
+            result = serve_remote(remote_listener, remote_acceptor, state) => result?,
+            _ = shutdown_signal() => {}
+        }
+    } else {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(shutdown_signal())
+            .await?;
+    }
     Ok(())
+}
+
+fn build_tls_acceptor(identity: &EphemeralServerIdentity) -> anyhow::Result<TlsAcceptor> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let certificate_chain = identity
+        .certificate_chain_der()
+        .iter()
+        .cloned()
+        .map(CertificateDer::from)
+        .collect::<Vec<_>>();
+    let ca_certificate = certificate_chain
+        .last()
+        .cloned()
+        .context("ephemeral server identity omitted its enrollment CA")?;
+    let mut roots = RootCertStore::empty();
+    roots
+        .add(ca_certificate)
+        .context("add enrollment CA to the remote client trust store")?;
+    let client_verifier = WebPkiClientVerifier::builder(Arc::new(roots))
+        .build()
+        .context("build enrolled-device client certificate verifier")?;
+    let private_key = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(
+        identity.private_key_der().to_vec(),
+    ));
+    let mut config = ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+        .with_client_cert_verifier(client_verifier)
+        .with_single_cert(certificate_chain, private_key)
+        .context("build TLS 1.3 remote server configuration")?;
+    config.alpn_protocols = vec![b"http/1.1".to_vec()];
+    Ok(TlsAcceptor::from(Arc::new(config)))
+}
+
+async fn serve_remote(
+    listener: tokio::net::TcpListener,
+    acceptor: TlsAcceptor,
+    state: AppState,
+) -> anyhow::Result<()> {
+    loop {
+        let (stream, peer) = listener.accept().await?;
+        let acceptor = acceptor.clone();
+        let state = state.clone();
+        tokio::spawn(async move {
+            let result = serve_remote_connection(stream, acceptor, state).await;
+            if let Err(error) = result {
+                info!(peer = %peer, error = %error, "remote TLS connection rejected or closed");
+            }
+        });
+    }
+}
+
+async fn serve_remote_connection(
+    stream: tokio::net::TcpStream,
+    acceptor: TlsAcceptor,
+    state: AppState,
+) -> anyhow::Result<()> {
+    let tls_stream = acceptor
+        .accept(stream)
+        .await
+        .context("complete TLS 1.3 mutual-authentication handshake")?;
+    let connection = tls_stream.get_ref().1;
+    if connection.protocol_version() != Some(rustls::ProtocolVersion::TLSv1_3) {
+        bail!("remote connection did not negotiate TLS 1.3");
+    }
+    let peer_certificate = connection
+        .peer_certificates()
+        .and_then(|certificates| certificates.first())
+        .context("remote connection omitted its enrolled device certificate")?;
+    let (device_id, certificate_serial_hex) = parse_device_certificate(peer_certificate.as_ref())?;
+    let certificate_sha256: [u8; 32] = Sha256::digest(peer_certificate.as_ref()).into();
+    let mut exporter = [0_u8; TLS_EXPORTER_BYTES];
+    connection
+        .export_keying_material(&mut exporter, TLS_EXPORTER_LABEL, None)
+        .context("derive the TLS channel exporter")?;
+    let tls_exporter_sha256: [u8; 32] = Sha256::digest(exporter).into();
+    let registration = {
+        let process =
+            lock_process(&state).map_err(|(_, Json(error))| anyhow::anyhow!(error.error))?;
+        process.kernel().authenticate_device_certificate(
+            device_id,
+            &certificate_serial_hex,
+            &certificate_sha256,
+            current_time_ms()?,
+        )?
+    };
+    let accepted_epoch = Arc::new(Mutex::new(None));
+    let session = RemoteSession {
+        registration,
+        certificate_serial_hex,
+        certificate_sha256,
+        tls_exporter_sha256,
+        accepted_epoch: accepted_epoch.clone(),
+    };
+    let service = remote_router(state.clone()).layer(Extension(session.clone()));
+    let result = http1::Builder::new()
+        .serve_connection(TokioIo::new(tls_stream), TowerToHyperService::new(service))
+        .await;
+
+    let epoch = accepted_epoch.lock().ok().and_then(|guard| *guard);
+    if let Some(epoch) = epoch {
+        if let Ok(mut process) = state.process.lock() {
+            let _ = process.kernel_mut().disconnect_device(
+                session.registration.device_id,
+                epoch,
+                current_time_ms().unwrap_or(u64::MAX),
+            );
+        }
+    }
+    result.context("serve authenticated remote HTTP connection")
+}
+
+fn parse_device_certificate(certificate_der: &[u8]) -> anyhow::Result<(DeviceId, String)> {
+    let (_, certificate) = x509_parser::certificate::X509Certificate::from_der(certificate_der)
+        .map_err(|_| anyhow::anyhow!("parse enrolled device certificate"))?;
+    let san = certificate
+        .subject_alternative_name()
+        .map_err(|_| anyhow::anyhow!("parse enrolled device certificate SAN"))?
+        .context("enrolled device certificate omitted its SAN")?;
+    let mut device_ids = san
+        .value
+        .general_names
+        .iter()
+        .filter_map(|name| match name {
+            GeneralName::URI(uri) => uri.strip_prefix("urn:jarvis:device:"),
+            _ => None,
+        });
+    let device_id = device_ids
+        .next()
+        .context("enrolled device certificate omitted its Jarvis device URI")?;
+    if device_ids.next().is_some() {
+        bail!("enrolled device certificate contains multiple Jarvis device URIs");
+    }
+    let device_id =
+        DeviceId::new(Uuid::parse_str(device_id).context("parse certificate device ID")?);
+    Ok((device_id, hex(certificate.raw_serial())))
+}
+
+fn remote_router(state: AppState) -> Router {
+    Router::new()
+        .route("/health", get(remote_get_health))
+        .route(
+            "/v1/distributed/connections/accept",
+            post(remote_accept_handshake),
+        )
+        .route("/v1/distributed/steps", post(remote_enqueue_step))
+        .route("/v1/distributed/leases/next", post(remote_lease_next))
+        .route("/v1/distributed/results", post(remote_accept_result))
+        .layer(DefaultBodyLimit::max(MAX_WIRE_FRAME_BYTES))
+        .with_state(state)
 }
 
 async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
+}
+
+async fn remote_get_health(
+    State(state): State<AppState>,
+    Extension(session): Extension<RemoteSession>,
+) -> ApiResult<HealthResponse> {
+    revalidate_remote_session(&state, &session)?;
+    let process = lock_process(&state)?;
+    Ok(Json(HealthResponse {
+        status: "ok".to_string(),
+        mode: "developer_remote_master".to_string(),
+        protocol_version: PROTOCOL_VERSION,
+        schema_version: process.kernel().schema_version().map_err(api_error)?,
+        process_id: std::process::id(),
+        started_at_ms: state.started_at_ms,
+        startup_reconciliation: process.kernel().startup_reconciliation(),
+        state: process.kernel().health_snapshot().map_err(api_error)?,
+        boundary: "TLS 1.3 mutual authentication with enrolled-device certificate and durable revocation checks"
+            .to_string(),
+    }))
+}
+
+async fn remote_accept_handshake(
+    State(state): State<AppState>,
+    Extension(session): Extension<RemoteSession>,
+    Json(request): Json<AuthenticatedHandshakeRequest>,
+) -> ApiResult<HandshakeResponse> {
+    request.validate().map_err(api_error)?;
+    let registration = revalidate_remote_session(&state, &session)?;
+    if request.handshake.device_id != registration.device_id
+        || request.handshake.device_name != registration.device_name
+        || request.handshake.role != registration.role
+        || request.handshake.registry_revision != registration.registry_revision
+        || request.handshake.capabilities != registration.capabilities
+    {
+        return Err(unauthorized());
+    }
+    if !constant_time_equal(&request.tls_exporter_sha256, &session.tls_exporter_sha256) {
+        return Err(unauthorized());
+    }
+    {
+        let accepted = session
+            .accepted_epoch
+            .lock()
+            .map_err(|_| internal_error())?;
+        if accepted.is_some() {
+            return Err(api_error(
+                "this TLS connection already accepted a handshake",
+            ));
+        }
+    }
+    let response = lock_process(&state)?
+        .kernel_mut()
+        .accept_handshake(&request.handshake, current_time_ms().map_err(api_error)?)
+        .map_err(api_error)?;
+    if response.status == HandshakeStatus::Accepted {
+        *session
+            .accepted_epoch
+            .lock()
+            .map_err(|_| internal_error())? = Some(response.connection_epoch);
+    }
+    Ok(Json(response))
+}
+
+async fn remote_enqueue_step(
+    State(state): State<AppState>,
+    Extension(session): Extension<RemoteSession>,
+    Json(step): Json<NewStep>,
+) -> ApiResult<AcceptedResponse> {
+    let registration = require_remote_application_session(&state, &session, None)?;
+    if registration.role != DeviceRole::MacBridge {
+        return Err(unauthorized());
+    }
+    lock_process(&state)?
+        .kernel_mut()
+        .enqueue_step(&step, current_time_ms().map_err(api_error)?)
+        .map_err(api_error)?;
+    Ok(Json(AcceptedResponse { accepted: true }))
+}
+
+async fn remote_lease_next(
+    State(state): State<AppState>,
+    Extension(session): Extension<RemoteSession>,
+    Json(request): Json<LeaseRequest>,
+) -> ApiResult<JobEnvelope> {
+    let registration =
+        require_remote_application_session(&state, &session, Some(request.connection_epoch))?;
+    if request.device_id != registration.device_id {
+        return Err(unauthorized());
+    }
+    let job = lock_process(&state)?
+        .kernel_mut()
+        .lease_next_step(
+            registration.device_id,
+            request.connection_epoch,
+            current_time_ms().map_err(api_error)?,
+        )
+        .map_err(api_error)?;
+    Ok(Json(job))
+}
+
+async fn remote_accept_result(
+    State(state): State<AppState>,
+    Extension(session): Extension<RemoteSession>,
+    Json(result): Json<JobResultEnvelope>,
+) -> ApiResult<AcceptedResult> {
+    require_remote_application_session(&state, &session, Some(result.connection_epoch))?;
+    let accepted = lock_process(&state)?
+        .kernel_mut()
+        .accept_result(&result, current_time_ms().map_err(api_error)?)
+        .map_err(api_error)?;
+    Ok(Json(accepted))
+}
+
+fn revalidate_remote_session(
+    state: &AppState,
+    session: &RemoteSession,
+) -> Result<DeviceRegistration, ApiError> {
+    let process = lock_process(state)?;
+    process
+        .kernel()
+        .authenticate_device_certificate(
+            session.registration.device_id,
+            &session.certificate_serial_hex,
+            &session.certificate_sha256,
+            current_time_ms().map_err(api_error)?,
+        )
+        .map_err(|_| unauthorized())
+}
+
+fn require_remote_application_session(
+    state: &AppState,
+    session: &RemoteSession,
+    requested_epoch: Option<u64>,
+) -> Result<DeviceRegistration, ApiError> {
+    let registration = revalidate_remote_session(state, session)?;
+    let epoch = session
+        .accepted_epoch
+        .lock()
+        .map_err(|_| internal_error())?
+        .ok_or_else(unauthorized)?;
+    if requested_epoch.is_some_and(|requested| requested != epoch) {
+        return Err(unauthorized());
+    }
+    Ok(registration)
 }
 
 async fn get_health(
@@ -535,6 +893,15 @@ fn api_error(error: impl std::fmt::Display) -> ApiError {
         StatusCode::CONFLICT,
         Json(ErrorResponse {
             error: error.to_string(),
+        }),
+    )
+}
+
+fn internal_error() -> ApiError {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(ErrorResponse {
+            error: "master process state is unavailable".to_string(),
         }),
     )
 }
@@ -736,6 +1103,15 @@ fn require_loopback(address: SocketAddr) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn require_concrete_remote_bind(address: SocketAddr) -> anyhow::Result<()> {
+    if address.ip().is_unspecified() || address.ip().is_multicast() {
+        bail!(
+            "remote TLS bind must use a concrete local or private-overlay IP so the server certificate has an exact IP SAN"
+        );
+    }
+    Ok(())
+}
+
 fn ensure_development_token(path: &Path) -> anyhow::Result<()> {
     if path.exists() {
         read_development_token(path)?;
@@ -811,6 +1187,13 @@ mod tests {
     fn external_bind_is_rejected() {
         assert!(require_loopback("0.0.0.0:7791".parse().unwrap()).is_err());
         assert!(require_loopback("127.0.0.1:7791".parse().unwrap()).is_ok());
+    }
+
+    #[test]
+    fn remote_bind_requires_a_concrete_certificate_identity() {
+        assert!(require_concrete_remote_bind("0.0.0.0:7792".parse().unwrap()).is_err());
+        assert!(require_concrete_remote_bind("127.0.0.1:7792".parse().unwrap()).is_ok());
+        assert!(require_concrete_remote_bind("100.64.0.10:7792".parse().unwrap()).is_ok());
     }
 
     #[test]

@@ -1,8 +1,9 @@
 use jarvis_protocol::{
-    AttemptId, CancellationId, CapabilityDescriptor, CapabilityKind, ContextHandlingPolicy,
-    DeviceId, DeviceRole, HandshakeRequest, HandshakeResponse, JobEnvelope, JobResultEnvelope,
-    JobResultStatus, LeaseId, ProtocolError, Sensitivity, StepId, TaskId, MAX_JOB_CONTEXT_BYTES,
-    MAX_JOB_RESULT_BYTES, MAX_LEASE_DURATION_MS, MAX_WIRE_FRAME_BYTES, PROTOCOL_VERSION,
+    AttemptId, AuthenticatedHandshakeRequest, CancellationId, CapabilityDescriptor, CapabilityKind,
+    ContextHandlingPolicy, DeviceId, DeviceRole, HandshakeRequest, HandshakeResponse, JobEnvelope,
+    JobResultEnvelope, JobResultStatus, LeaseId, ProtocolError, Sensitivity, StepId, TaskId,
+    MAX_JOB_CONTEXT_BYTES, MAX_JOB_RESULT_BYTES, MAX_LEASE_DURATION_MS, MAX_WIRE_FRAME_BYTES,
+    PROTOCOL_VERSION,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -52,6 +53,32 @@ fn mac_bridge_handshake_matches_v1_golden_fixture() {
     let expected: Value = serde_json::from_str(fixture).expect("decode golden JSON");
     let encoded = serde_json::to_value(request).expect("encode handshake");
     assert_eq!(encoded, expected);
+}
+
+#[test]
+fn authenticated_handshake_requires_a_bounded_nonzero_tls_exporter_digest() {
+    let handshake = HandshakeRequest::decode_frame(
+        include_str!("fixtures/mac_bridge_hello_v1.json").as_bytes(),
+    )
+    .expect("decode handshake fixture");
+    let request = AuthenticatedHandshakeRequest {
+        handshake: handshake.clone(),
+        tls_exporter_sha256: [7; 32],
+    };
+    let encoded = serde_json::to_vec(&request).expect("encode authenticated handshake");
+    assert_eq!(
+        AuthenticatedHandshakeRequest::decode_frame(&encoded).expect("decode envelope"),
+        request
+    );
+
+    let unbound = AuthenticatedHandshakeRequest {
+        handshake,
+        tls_exporter_sha256: [0; 32],
+    };
+    assert_eq!(
+        unbound.validate(),
+        Err(ProtocolError::InvalidChannelBinding)
+    );
 }
 
 #[test]

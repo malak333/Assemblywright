@@ -27,14 +27,19 @@ metadata, connection epochs and sequence high-water marks, queued steps,
 leased attempts, cancellation, expiry, exact result acceptance, capability
 limits, disconnect handling, and restart reconciliation. The executable adds
 single-process database ownership, setup/serve/health operator commands, an
-authenticated loopback-only development transport, and a separate deterministic
+authenticated loopback development transport, and a separate deterministic
 fake-worker process. A Windows-only enrollment CLI adds a DPAPI-current-user
 protected ECDSA P-256 enrollment CA, ten-minute single-use digest-only grants,
 verified client CSRs, 30-day client certificates, server-bound device identity,
 rotation, and immediate certificate/device revocation. Schema v2 migrates the
-existing lifecycle database transactionally and retains the v1 state. These
-surfaces are checked by the Windows distributed gate. No installed Windows
-service, remote listener, TLS 1.3/mTLS session, channel binding, live model
+existing lifecycle database transactionally and retains the v1 state. An
+explicit `serve --remote-bind <concrete-ip>:<port>` additionally starts a TLS
+1.3-only listener beside the loopback listener. It requires enrolled client
+certificates, rechecks durable certificate/device revocation on every request,
+binds the application handshake to the TLS exporter, enforces certificate-owned
+device identity and role, and reconciles the accepted connection when its TLS
+socket closes. These surfaces are checked by the Windows distributed gate. No
+installed Windows service, private-overlay discovery, live Mac client, live model
 inference, repository authority, or Codex dispatch is implemented by these
 foundation slices; the
 existing macOS runtime and release boundary remain authoritative. The
@@ -52,8 +57,12 @@ authenticated cross-device or production-service proof.
 `enrollment_identity_e2e` proves DPAPI round-trip protection on Windows,
 digest-only grant persistence, strict stdin issuance, signed-CSR verification,
 expiry and replay denial, rotation, revocation, the 16-device ceiling, and the
-schema-v1-to-v2 migration. It proves local identity issuance, not an mTLS
-transport or a live Mac enrollment exchange.
+schema-v1-to-v2 migration. `remote_mtls_e2e` provisions that real Windows
+identity, starts the real master child process, negotiates TLS 1.3 mutual
+authentication, proves enrolled health, channel-exporter replay denial,
+monotonic reconnect epochs, socket-close reconciliation, and revoked-certificate
+denial. It is loopback cross-process transport proof with a generated test
+client, not private-overlay reachability or a live Mac enrollment exchange.
 
 Trusted macOS system-wake events are a disabled-by-default local foundation.
 Swift stores a P-256 private key and monotonic counter in device-only Keychain

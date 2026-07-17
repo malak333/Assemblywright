@@ -190,9 +190,14 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   confirm digest-only ten-minute grants, CSR signature verification,
   server-selected identity, certificate expiry/rotation/revocation,
   schema-v1-to-v2 migration, Windows DPAPI protection, and stdin-only real-CLI
-  issuance remain green. Treat these as local development and identity
-  boundaries only; Windows service installation, remote transport, TLS 1.3/mTLS
-  sessions and channel binding, live MLX
+  issuance remain green. Then run
+  `cargo test -p jarvis-master --test remote_mtls_e2e --locked` on Windows and
+  confirm the real master and generated enrolled client prove TLS 1.3-only
+  mutual authentication, exact certificate/device registry checks,
+  exporter-bound handshake replay denial, reconnect epoch advance,
+  socket-close reconciliation, and revoked-certificate denial. Treat this as
+  same-host loopback process/network proof; Windows service installation,
+  private-overlay reachability, live Mac enrollment/Keychain identity, live MLX
   inference, unified state migration, Codex execution, and cross-machine
   recovery remain unimplemented and unproven.
 - For workspace grants, confirm app-selected paths are absent from child argv,
