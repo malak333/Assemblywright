@@ -16,6 +16,8 @@ flowchart LR
   Grants --> Certificates["30-day device certificates, rotation, and revocation"]
   Certificates --> Remote["Optional TLS 1.3 mTLS listener with exact-IP ephemeral server identity"]
   Remote --> Binding["Certificate registry checks, TLS exporter binding, role and epoch enforcement"]
+  Process --> Service["Windows SCM host: automatic start, bounded recovery, status, maintenance, uninstall"]
+  Service --> Maintenance["Durable fail-closed marker blocks new enqueue and lease admission"]
   Master --> Durable["Registered devices, epochs, queue, attempts, cancellation, expiry, restart reconciliation, exact results"]
   Protocol --> Feature["Dormant jarvis-core distributed-development feature"]
   Protocol --> Windows["Windows distributed format, clippy, protocol, and master-process gate"]
@@ -69,11 +71,16 @@ loopback TLS 1.3. It proves mutual certificate authentication, durable
 certificate/device checks, exporter-bound application handshake replay denial,
 reconnect epoch advance, socket-close reconciliation, and revoked-certificate
 denial.
+`windows_service_lifecycle_e2e` installs a unique real SCM service on an elevated
+Windows runner and proves automatic-start/recovery configuration, LocalSystem
+loopback hosting, SCM plus runtime health, durable maintenance admission denial,
+resume, recovery, uninstall, and state preservation.
 
 This slice does not make Windows the runtime authority yet. It adds a foreground
 headless executable, process-ownership lock, authenticated loopback development
 listener, deterministic fixture-worker process, a separate local enrollment
-CLI, and an explicit optional remote listener. The identity flow creates or
+CLI, an explicit optional remote listener, and an explicit Windows SCM lifecycle.
+The identity flow creates or
 reloads an ECDSA P-256 CA whose PKCS#8 private
 key is protected by Windows DPAPI for the current operator identity; SQLite
 contains only its public fingerprint. Enrollment grants are server-created,
@@ -87,8 +94,14 @@ device plus every active serial. `serve --remote-bind` issues an in-memory-key,
 to TLS 1.3, requires a CA-valid enrolled client certificate, rechecks exact
 certificate serial/digest/device revocation state on every request, binds the
 application handshake to the TLS exporter, and reconciles an accepted epoch on
-socket close. It adds no Windows service installation, private-overlay discovery
-or live cross-device reliability, live scheduler loop, live inference worker,
+socket close. The Windows service path retains the same single-owner runtime,
+adds automatic start and bounded restart recovery, exposes explicit
+install/start/stop/status/maintenance/recover/uninstall commands, and persists a
+fail-closed maintenance marker that blocks only new enqueue/lease admission.
+LocalSystem is loopback-only; remote mTLS requires the same owner account as the
+DPAPI CA and accepts credentials only through bounded stdin. It adds no
+private-overlay discovery or live cross-device reliability, owner-account/remote
+service E2E, host hardening, upgrade/backup/restore automation, live scheduler loop, live inference worker,
 Codex dispatch, integration with
 the existing task/policy/audit/memory store, repository mutation, or UI. The new
 SQLite data is an isolated distributed lifecycle kernel, not the final unified

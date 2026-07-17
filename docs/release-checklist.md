@@ -195,8 +195,15 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   confirm the real master and generated enrolled client prove TLS 1.3-only
   mutual authentication, exact certificate/device registry checks,
   exporter-bound handshake replay denial, reconnect epoch advance,
-  socket-close reconciliation, and revoked-certificate denial. Treat this as
-  same-host loopback process/network proof; Windows service installation,
+  socket-close reconciliation, and revoked-certificate denial. Then run
+  `cargo test -p jarvis-master --test windows_service_lifecycle_e2e --locked -- --ignored --nocapture`
+  in an elevated Windows environment with
+  `JARVIS_REQUIRE_WINDOWS_SERVICE_E2E=1`. Confirm it installs a unique real SCM
+  service, verifies automatic start and bounded recovery receipt, starts the
+  LocalSystem loopback master, exposes SCM/runtime health, blocks new work in
+  durable maintenance, resumes and completes work, recovers through restart,
+  uninstalls, and preserves master state. Treat these as same-host Windows
+  process/network/service proofs; owner-account remote-service identity,
   private-overlay reachability, live Mac enrollment/Keychain identity, live MLX
   inference, unified state migration, Codex execution, and cross-machine
   recovery remain unimplemented and unproven.

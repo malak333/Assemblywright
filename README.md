@@ -39,8 +39,15 @@ certificates, rechecks durable certificate/device revocation on every request,
 binds the application handshake to the TLS exporter, enforces certificate-owned
 device identity and role, and reconciles the accepted connection when its TLS
 socket closes. These surfaces are checked by the Windows distributed gate. No
-installed Windows service, private-overlay discovery, live Mac client, live model
-inference, repository authority, or Codex dispatch is implemented by these
+Windows service lifecycle adds explicit install/start/stop/status,
+maintenance-enter/exit, recovery, and uninstall commands. The SCM service uses
+automatic start, bounded 5/15/60-second restart attempts, the existing
+single-owner/reconciliation path, and a durable fail-closed maintenance marker
+that blocks new enqueue/lease admission while allowing already-started results
+to settle. LocalSystem is loopback-only; remote mTLS requires explicit
+owner-account credentials through bounded stdin so the service can access that
+owner's DPAPI CA. Private-overlay discovery, live Mac client, live model
+inference, repository authority, or Codex dispatch is not implemented by these
 foundation slices; the
 existing macOS runtime and release boundary remain authoritative. The
 accepted target and migration boundaries are recorded in
@@ -63,6 +70,14 @@ authentication, proves enrolled health, channel-exporter replay denial,
 monotonic reconnect epochs, socket-close reconciliation, and revoked-certificate
 denial. It is loopback cross-process transport proof with a generated test
 client, not private-overlay reachability or a live Mac enrollment exchange.
+`windows_service_lifecycle_e2e` installs a unique temporary real SCM service on
+the Windows CI runner, proves automatic-start configuration, starts the master
+under LocalSystem, checks runtime health, maintenance admission denial and
+resume, restart/reconciliation recovery, uninstall, and preservation of master
+state. The test is ignored by ordinary test runs and is required explicitly by
+the elevated Windows gate; it does not prove owner-account credential policy,
+remote mTLS under that account, OS hardening, upgrades, backup/restore, or live
+cross-device reliability.
 
 Trusted macOS system-wake events are a disabled-by-default local foundation.
 Swift stores a P-256 private key and monotonic counter in device-only Keychain

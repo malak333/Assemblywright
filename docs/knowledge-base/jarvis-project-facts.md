@@ -153,14 +153,47 @@ These notes capture durable facts for future agents working on this repository.
   after disconnect, and revoked-certificate denial. It is same-host loopback
   proof with a generated Rust client, not private-overlay discovery/reachability,
   live Mac Keychain enrollment, Windows service installation, or live inference.
+- The sixth distributed-development slice adds an explicit Windows Service
+  Control Manager lifecycle without removing foreground mode. The same
+  single-owner master runtime can be installed, started, stopped, inspected,
+  placed into/out of maintenance, recovered through stop/start reconciliation,
+  and uninstalled. SCM configuration uses automatic start and bounded restart
+  delays of 5, 15, and 60 seconds, then stops retrying until the 24-hour failure
+  window resets. Incomplete post-create configuration attempts delete the
+  partially installed service.
+- LocalSystem service identity is deliberately loopback-only because it cannot
+  decrypt the interactive owner's DPAPI-current-user enrollment CA. Remote mTLS
+  installation requires the same owner account and accepts account/password only
+  through a strict bounded stdin document. Password bytes and the parsed password
+  are zeroized after SCM configuration and never enter argv, environment, files,
+  receipts, health, or logs. The service executable and initialized data directory
+  are canonicalized before registration.
+- Service maintenance uses `maintenance-mode.json` in the master data directory.
+  Missing means inactive; malformed, oversized, or non-regular marker state fails
+  closed as active. SCM Pause/Continue updates both service state and the runtime
+  marker. Maintenance blocks new enqueue and lease requests with HTTP 503 while
+  keeping health, result acceptance, stop, recovery, and explicit exit available.
+  Health exposes bounded host-mode, service-identity, maintenance-active, and
+  maintenance-reason evidence. Uninstall deletes only SCM registration and never
+  deletes master data.
+- `windows_service_lifecycle_e2e` is the phase E2E for the SCM boundary. It is
+  ignored by ordinary test runs because installation needs elevation. The Windows
+  CI job sets `JARVIS_REQUIRE_WINDOWS_SERVICE_E2E=1` and runs it explicitly, making
+  SCM access denial a failure. It installs a UUID-suffixed temporary LocalSystem
+  service, proves automatic-start/recovery receipt, real service health,
+  maintenance denial/resume, completed work, recovery, uninstall, and data
+  preservation. A non-elevated manual run reports a skip. Owner-account remote
+  mTLS, host hardening, crash-loop timing, upgrades, backup/restore, and live
+  cross-device behavior remain separate evidence gates.
 - `.github/workflows/windows-protocol.yml` runs portable protocol and master
   process formatting, clippy, and tests on `windows-latest`. It proves the
   foreground executable, single-process ownership, authenticated loopback
-  development transport, enrollment identity, TLS 1.3 mTLS transport, fixture
-  worker, and restart boundaries described above.
-  It does not compile the current Unix/macOS runtime and does not prove Windows
-  service installation, private-overlay reliability, live Mac exchange/inference,
-  Codex-account dispatch, repository mutation, signing, or live-device behavior.
+  development transport, enrollment identity, TLS 1.3 mTLS transport, real SCM
+  service lifecycle, fixture worker, and restart boundaries described above.
+  It does not compile the current Unix/macOS runtime and does not prove
+  owner-account remote-service identity, private-overlay reliability, live Mac
+  exchange/inference, Codex-account dispatch, repository mutation, signing, or
+  live-device behavior.
 - On Windows, do not include
   `cargo check -p jarvis-core --features distributed-development --locked` in
   the portable master gate. The existing `jarvis-core` release runtime imports

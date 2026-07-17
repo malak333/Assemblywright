@@ -56,6 +56,8 @@ require_text "cargo clippy -p jarvis-protocol --all-targets --locked -- -D warni
 require_text "cargo clippy -p jarvis-master --all-targets --locked -- -D warnings" "$WINDOWS_PROTOCOL_WORKFLOW"
 require_text "cargo test -p jarvis-protocol --locked" "$WINDOWS_PROTOCOL_WORKFLOW"
 require_text "cargo test -p jarvis-master --locked" "$WINDOWS_PROTOCOL_WORKFLOW"
+require_text 'JARVIS_REQUIRE_WINDOWS_SERVICE_E2E: "1"' "$WINDOWS_PROTOCOL_WORKFLOW"
+require_text "cargo test -p jarvis-master --test windows_service_lifecycle_e2e --locked -- --ignored --nocapture" "$WINDOWS_PROTOCOL_WORKFLOW"
 require_text "still running after" "$LOCAL_GATE"
 require_text "completed in" "$LOCAL_GATE"
 require_text "command failed after" "$LOCAL_GATE"

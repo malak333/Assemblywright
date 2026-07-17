@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   protocol-windows:
-    name: Protocol, master process, identity, and mTLS
+    name: Protocol, master, identity, mTLS, and SCM
     runs-on: windows-latest
     timeout-minutes: 20
 
@@ -49,3 +49,8 @@ jobs:
 
       - name: Test master process, identity, and mTLS transport
         run: cargo test -p jarvis-master --locked
+
+      - name: Test real Windows service lifecycle
+        env:
+          JARVIS_REQUIRE_WINDOWS_SERVICE_E2E: "1"
+        run: cargo test -p jarvis-master --test windows_service_lifecycle_e2e --locked -- --ignored --nocapture

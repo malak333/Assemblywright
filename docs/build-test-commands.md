@@ -53,6 +53,7 @@ cargo test -p jarvis-master --test master_lifecycle_e2e --locked
 cargo test -p jarvis-master --test master_process_e2e --locked
 cargo test -p jarvis-master --test enrollment_identity_e2e --locked
 cargo test -p jarvis-master --test remote_mtls_e2e --locked
+cargo test -p jarvis-master --test windows_service_lifecycle_e2e --locked -- --ignored --nocapture
 ```
 
 `.github/workflows/windows-protocol.yml` runs formatting plus the protocol and
@@ -66,9 +67,9 @@ cargo check -p jarvis-core --features distributed-development --locked
 ```
 
 That check proves only that `jarvis-core` can consume the dormant contracts.
-The Windows job deliberately does not build the current Unix/macOS runtime or a
-Windows service installation, run a live model, mutate a repository, or exercise
-a Codex account. It operates the local Windows enrollment CA under a temporary
+The Windows job deliberately does not build the current Unix/macOS runtime, run
+a live model, mutate a repository, or exercise a Codex account. It operates the
+local Windows enrollment CA under a temporary
 test identity, proves real DPAPI round-trip protection, and exercises the real
 master process over a loopback TLS 1.3 mutual-authentication connection. Private
 overlay reachability and a live Mac exchange remain gated target architecture in
@@ -115,6 +116,17 @@ on a different channel, advances the durable connection epoch after socket-close
 reconciliation, and denies the revoked certificate. It is process/network proof
 against a generated Rust client on one Windows host, not private-overlay setup,
 live Mac Keychain enrollment, service installation, or remote-device reliability.
+`windows_service_lifecycle_e2e` is the sixth implemented seam. The ordinary test
+suite compiles but ignores it because SCM mutation requires elevation. The
+Windows CI job sets `JARVIS_REQUIRE_WINDOWS_SERVICE_E2E=1` and runs the ignored
+test explicitly, so access denial fails the gate. The test installs one
+UUID-suffixed temporary LocalSystem service, verifies automatic start and bounded
+5/15/60-second recovery configuration, starts the real master, checks SCM plus
+runtime health, enters durable maintenance and proves new work receives 503,
+resumes and completes work, performs stop/start recovery, uninstalls, and proves
+the SQLite database and development token remain. A non-elevated manual run
+prints an explicit skip. This does not prove owner-account logon policy, remote
+mTLS from the service, host hardening, upgrade/backup/restore, or live devices.
 
 Use these PowerShell commands for a manual Windows process smoke:
 
@@ -134,8 +146,7 @@ cargo run -p jarvis-master -- --data-dir $jarvisData fixture-worker
 
 The executable rejects non-loopback binds, requires its generated development
 token on every route, and refuses a second process for the same data directory.
-It is a foreground developer process; Windows service installation remains a
-later slice.
+Foreground execution remains supported beside the explicit Windows service path.
 
 Initialize or verify the Windows enrollment authority separately:
 
@@ -171,6 +182,46 @@ development bearer. Every connection must present an active enrolled certificate
 and complete `AuthenticatedHandshakeRequest` with the exact TLS exporter digest
 before step, lease, or result operations. Only the enrolled Mac-bridge role may
 enqueue steps. The ordinary loopback listener remains available on `127.0.0.1:7791`.
+
+Build a stable release executable before installing the Windows service. Service
+installation and removal require an elevated PowerShell. LocalSystem is suitable
+only for the loopback listener because it cannot decrypt the interactive owner's
+DPAPI enrollment CA:
+
+```powershell
+$jarvisData = Join-Path $env:LOCALAPPDATA 'Jarvis\master'
+cargo build -p jarvis-master --release --locked
+$jarvisMaster = Resolve-Path '.\target\release\jarvis-master.exe'
+& $jarvisMaster --data-dir $jarvisData service install --identity local-system --confirm
+& $jarvisMaster --data-dir $jarvisData service start
+& $jarvisMaster --data-dir $jarvisData service status
+& $jarvisMaster --data-dir $jarvisData service maintenance-enter --reason upgrade --confirm
+& $jarvisMaster --data-dir $jarvisData service maintenance-exit --confirm
+& $jarvisMaster --data-dir $jarvisData service recover --confirm
+& $jarvisMaster --data-dir $jarvisData service stop
+& $jarvisMaster --data-dir $jarvisData service uninstall --confirm
+```
+
+For remote mTLS, install under the same Windows owner account that initialized
+the DPAPI CA. The password exists only in the bounded stdin document and is
+zeroized after SCM configuration; it never enters argv, an environment variable,
+or a file:
+
+```powershell
+$credential = Get-Credential
+$credentialsDocument = @{
+  account_name = $credential.UserName
+  password = $credential.GetNetworkCredential().Password
+} | ConvertTo-Json -Compress
+$credentialsDocument | & $jarvisMaster --data-dir $jarvisData service install --identity owner-account --credentials-stdin --remote-bind 100.64.0.10:7792 --confirm
+Remove-Variable credentialsDocument
+```
+
+Maintenance is durable across service restarts. Health reports host mode,
+service identity, active maintenance state, and its bounded reason. New enqueue
+and lease requests receive `503 maintenance_mode_blocks_new_work`; result
+acceptance remains available so already-authorized work can settle. Uninstall
+removes only SCM registration and preserves master data.
 
 ```sh
 ./scripts/release-version-consistency.sh --check
