@@ -36,6 +36,7 @@ use tracing::info;
 use uuid::Uuid;
 use x509_parser::extensions::GeneralName;
 use x509_parser::prelude::FromDer;
+#[cfg(windows)]
 use zeroize::Zeroize;
 
 #[cfg(windows)]
@@ -198,6 +199,7 @@ enum CliMaintenanceReason {
 }
 
 impl CliMaintenanceReason {
+    #[cfg(windows)]
     fn as_str(self) -> &'static str {
         match self {
             Self::OperatorRequest => "operator_request",
@@ -208,6 +210,7 @@ impl CliMaintenanceReason {
     }
 }
 
+#[cfg(windows)]
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ServiceCredentialsDocument {
@@ -599,6 +602,7 @@ impl RuntimeLifecycle {
         (active, reason)
     }
 
+    #[cfg(windows)]
     fn enter_maintenance(&self, data_dir: &Path) {
         let (marker_active, marker_reason) = maintenance_snapshot(data_dir);
         let reason = marker_reason.unwrap_or_else(|| "operator_request".to_string());
@@ -615,6 +619,7 @@ impl RuntimeLifecycle {
         }
     }
 
+    #[cfg(windows)]
     fn exit_maintenance(&self, data_dir: &Path) -> anyhow::Result<()> {
         clear_maintenance_marker(data_dir)?;
         self.maintenance_active.store(false, Ordering::SeqCst);
@@ -649,6 +654,7 @@ fn maintenance_snapshot(data_dir: &Path) -> (bool, Option<String>) {
     }
 }
 
+#[cfg(any(windows, test))]
 fn write_maintenance_marker(data_dir: &Path, reason: &str) -> anyhow::Result<()> {
     if !is_valid_maintenance_reason(reason) {
         bail!("invalid maintenance reason");
@@ -675,6 +681,7 @@ fn write_maintenance_marker(data_dir: &Path, reason: &str) -> anyhow::Result<()>
     Ok(())
 }
 
+#[cfg(any(windows, test))]
 fn clear_maintenance_marker(data_dir: &Path) -> anyhow::Result<()> {
     let path = data_dir.join(MAINTENANCE_MARKER_FILE);
     match fs::remove_file(&path) {
@@ -1574,12 +1581,14 @@ async fn fetch_health(data_dir: &Path, endpoint: SocketAddr) -> anyhow::Result<H
     get_json(endpoint, "/health", &token).await
 }
 
+#[cfg(windows)]
 async fn fetch_health_value(data_dir: &Path, endpoint: SocketAddr) -> anyhow::Result<Value> {
     Ok(serde_json::to_value(
         fetch_health(data_dir, endpoint).await?,
     )?)
 }
 
+#[cfg(windows)]
 async fn wait_for_runtime_health(
     data_dir: &Path,
     endpoint: SocketAddr,
