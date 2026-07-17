@@ -25,6 +25,8 @@ MASTER_E2E="crates/jarvis-master/tests/master_lifecycle_e2e.rs"
 MASTER_PROCESS_E2E="crates/jarvis-master/tests/master_process_e2e.rs"
 MASTER_IDENTITY_E2E="crates/jarvis-master/tests/enrollment_identity_e2e.rs"
 MASTER_REMOTE_MTLS_E2E="crates/jarvis-master/tests/remote_mtls_e2e.rs"
+MASTER_SERVICE_HOST="crates/jarvis-master/src/windows_service_host.rs"
+MASTER_SERVICE_E2E="crates/jarvis-master/tests/windows_service_lifecycle_e2e.rs"
 
 fail() {
   printf 'error: %s\n' "$1" >&2
@@ -74,6 +76,8 @@ require_file "$MASTER_PROCESS_E2E"
 require_file "$MASTER_IDENTITY"
 require_file "$MASTER_IDENTITY_E2E"
 require_file "$MASTER_REMOTE_MTLS_E2E"
+require_file "$MASTER_SERVICE_HOST"
+require_file "$MASTER_SERVICE_E2E"
 
 for file in "$BUILD_DOCS" "$ARCHITECTURE" "$KB" "$README"; do
   require_text "distributed protocol crate" "$file" "jarvis-protocol"
@@ -113,6 +117,10 @@ require_text "master enrolled device ceiling" "$MASTER_IDENTITY" "pub const MAX_
 require_text "master TLS exporter label" "$MASTER_PROCESS" "EXPORTER-Jarvis-Developer-Mode-v1"
 require_text "master TLS 1.3 restriction" "$MASTER_PROCESS" "rustls::version::TLS13"
 require_text "master remote mTLS E2E" "$MASTER_REMOTE_MTLS_E2E" "remote_listener_requires_enrollment_tls13_and_channel_bound_identity"
+require_text "master SCM automatic start" "$MASTER_SERVICE_HOST" "ServiceStartType::AutoStart"
+require_text "master SCM bounded recovery" "$MASTER_SERVICE_HOST" "Duration::from_secs(60)"
+require_text "master maintenance admission block" "$MASTER_PROCESS" "maintenance_mode_blocks_new_work"
+require_text "master service lifecycle E2E" "$MASTER_SERVICE_E2E" "windows_service_install_maintenance_recovery_and_uninstall_preserve_master_state"
 require_text "master enrollment E2E" "$MASTER_IDENTITY_E2E" "enrollment_grants_issue_rotate_and_revoke_exact_device_identity"
 require_text "master enrollment DPAPI E2E" "$MASTER_IDENTITY_E2E" "windows_dpapi_protector_round_trips_without_plaintext_equivalence"
 require_text "master enrollment schema migration E2E" "$MASTER_IDENTITY_E2E" "schema_v1_migrates_transactionally_to_enrollment_identity_v2"
@@ -122,10 +130,13 @@ for file in "$BUILD_DOCS" "$CHECKLIST" "$ARCHITECTURE" "$KB"; do
   require_text "distributed master process E2E documentation" "$file" "master_process_e2e"
   require_text "distributed enrollment identity E2E documentation" "$file" "enrollment_identity_e2e"
   require_text "distributed remote mTLS E2E documentation" "$file" "remote_mtls_e2e"
+  require_text "distributed Windows service E2E documentation" "$file" "windows_service_lifecycle_e2e"
 done
 require_text "Windows protocol runner" "$WINDOWS_PROTOCOL_WORKFLOW" "runs-on: windows-latest"
 require_text "Windows protocol tests" "$WINDOWS_PROTOCOL_WORKFLOW" "cargo test -p jarvis-protocol --locked"
 require_text "Windows master tests" "$WINDOWS_PROTOCOL_WORKFLOW" "cargo test -p jarvis-master --locked"
+require_text "Windows service E2E required flag" "$WINDOWS_PROTOCOL_WORKFLOW" 'JARVIS_REQUIRE_WINDOWS_SERVICE_E2E: "1"'
+require_text "Windows service E2E command" "$WINDOWS_PROTOCOL_WORKFLOW" "cargo test -p jarvis-master --test windows_service_lifecycle_e2e --locked -- --ignored --nocapture"
 
 for file in "$BUILD_DOCS" "$CHECKLIST" "$README"; do
   require_text "atomic approval decision" "$file" "redacted decision audit"

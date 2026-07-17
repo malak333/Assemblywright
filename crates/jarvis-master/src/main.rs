@@ -28,6 +28,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio_rustls::TlsAcceptor;
@@ -35,6 +36,10 @@ use tracing::info;
 use uuid::Uuid;
 use x509_parser::extensions::GeneralName;
 use x509_parser::prelude::FromDer;
+use zeroize::Zeroize;
+
+#[cfg(windows)]
+mod windows_service_host;
 
 const DEFAULT_BIND: &str = "127.0.0.1:7791";
 const TLS_EXPORTER_LABEL: &[u8] = b"EXPORTER-Jarvis-Developer-Mode-v1";
@@ -42,6 +47,8 @@ const TLS_EXPORTER_BYTES: usize = 32;
 const DEVELOPMENT_TOKEN_FILE: &str = "development.token";
 const MIN_TOKEN_BYTES: usize = 32;
 const MAX_TOKEN_BYTES: usize = 256;
+const DEFAULT_SERVICE_NAME: &str = "JarvisMaster";
+const MAINTENANCE_MARKER_FILE: &str = "maintenance-mode.json";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -87,6 +94,133 @@ enum Command {
         #[command(subcommand)]
         command: EnrollmentCommand,
     },
+    /// Install and operate the Windows Service Control Manager host.
+    Service {
+        #[command(subcommand)]
+        command: ServiceCommand,
+    },
+    /// Internal Service Control Manager entry point. Do not invoke directly.
+    #[command(hide = true)]
+    ServiceRun {
+        #[arg(long, default_value = DEFAULT_SERVICE_NAME)]
+        service_name: String,
+        #[arg(long, default_value = DEFAULT_BIND)]
+        bind: SocketAddr,
+        #[arg(long)]
+        remote_bind: Option<SocketAddr>,
+        #[arg(long)]
+        service_identity: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ServiceCommand {
+    /// Install an automatic-start Windows service with bounded crash recovery.
+    Install {
+        #[arg(long, default_value = DEFAULT_SERVICE_NAME)]
+        service_name: String,
+        #[arg(long, default_value = DEFAULT_BIND)]
+        bind: SocketAddr,
+        #[arg(long)]
+        remote_bind: Option<SocketAddr>,
+        #[arg(long, value_enum, default_value_t = CliServiceIdentity::OwnerAccount)]
+        identity: CliServiceIdentity,
+        /// Read owner-account name and password from one bounded JSON document on stdin.
+        #[arg(long)]
+        credentials_stdin: bool,
+        #[arg(long)]
+        confirm: bool,
+    },
+    /// Start the installed service and wait for its SCM state to settle.
+    Start {
+        #[arg(long, default_value = DEFAULT_SERVICE_NAME)]
+        service_name: String,
+    },
+    /// Stop the installed service gracefully and wait for it to stop.
+    Stop {
+        #[arg(long, default_value = DEFAULT_SERVICE_NAME)]
+        service_name: String,
+    },
+    /// Inspect SCM state, configured identity, runtime health, and maintenance state.
+    Status {
+        #[arg(long, default_value = DEFAULT_SERVICE_NAME)]
+        service_name: String,
+        #[arg(long, default_value = DEFAULT_BIND)]
+        endpoint: SocketAddr,
+    },
+    /// Enter durable maintenance mode and block new enqueue and lease work.
+    MaintenanceEnter {
+        #[arg(long, default_value = DEFAULT_SERVICE_NAME)]
+        service_name: String,
+        #[arg(long, value_enum)]
+        reason: CliMaintenanceReason,
+        #[arg(long)]
+        confirm: bool,
+    },
+    /// Exit durable maintenance mode after operator validation.
+    MaintenanceExit {
+        #[arg(long, default_value = DEFAULT_SERVICE_NAME)]
+        service_name: String,
+        #[arg(long)]
+        confirm: bool,
+    },
+    /// Restart the service through durable startup reconciliation and verify health.
+    Recover {
+        #[arg(long, default_value = DEFAULT_SERVICE_NAME)]
+        service_name: String,
+        #[arg(long, default_value = DEFAULT_BIND)]
+        endpoint: SocketAddr,
+        #[arg(long)]
+        confirm: bool,
+    },
+    /// Stop and remove the installed service registration without deleting master data.
+    Uninstall {
+        #[arg(long, default_value = DEFAULT_SERVICE_NAME)]
+        service_name: String,
+        #[arg(long)]
+        confirm: bool,
+    },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CliServiceIdentity {
+    OwnerAccount,
+    LocalSystem,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum CliMaintenanceReason {
+    OperatorRequest,
+    Upgrade,
+    Restore,
+    Recovery,
+}
+
+impl CliMaintenanceReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::OperatorRequest => "operator_request",
+            Self::Upgrade => "upgrade",
+            Self::Restore => "restore",
+            Self::Recovery => "recovery",
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ServiceCredentialsDocument {
+    account_name: String,
+    password: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MaintenanceMarker {
+    schema_version: u16,
+    active: bool,
+    reason: String,
 }
 
 #[derive(Debug, Subcommand)]
@@ -152,7 +286,19 @@ struct AppState {
     process: Arc<Mutex<MasterProcess>>,
     token_sha256: [u8; 32],
     started_at_ms: u64,
+    lifecycle: RuntimeLifecycle,
 }
+
+#[derive(Clone)]
+struct RuntimeLifecycle {
+    host_mode: String,
+    service_identity: String,
+    maintenance_active: Arc<AtomicBool>,
+    maintenance_reason: Arc<Mutex<Option<String>>>,
+}
+
+type ReadyCallback =
+    Box<dyn FnOnce(SocketAddr, Option<SocketAddr>, &RuntimeLifecycle) -> anyhow::Result<()> + Send>;
 
 #[derive(Clone)]
 struct RemoteSession {
@@ -168,6 +314,10 @@ struct RemoteSession {
 struct HealthResponse {
     status: String,
     mode: String,
+    host_mode: String,
+    service_identity: String,
+    maintenance_active: bool,
+    maintenance_reason: Option<String>,
     protocol_version: u16,
     schema_version: i64,
     process_id: u32,
@@ -237,7 +387,444 @@ async fn main() -> anyhow::Result<()> {
             fixture_worker(&data_dir, endpoint, prompt).await
         }
         Command::Enrollment { command } => enrollment(&data_dir, command),
+        Command::Service { command } => service_command(&data_dir, command).await,
+        Command::ServiceRun {
+            service_name,
+            bind,
+            remote_bind,
+            service_identity,
+        } => run_service_host(data_dir, service_name, bind, remote_bind, service_identity),
     }
+}
+
+async fn service_command(data_dir: &Path, command: ServiceCommand) -> anyhow::Result<()> {
+    #[cfg(not(windows))]
+    {
+        let _ = (data_dir, command);
+        bail!("Windows service management is available only on Windows");
+    }
+
+    #[cfg(windows)]
+    {
+        let receipt = match command {
+            ServiceCommand::Install {
+                service_name,
+                bind,
+                remote_bind,
+                identity,
+                credentials_stdin,
+                confirm,
+            } => {
+                require_operator_confirmation(confirm, "Windows service installation")?;
+                require_loopback(bind)?;
+                if let Some(remote_bind) = remote_bind {
+                    require_concrete_remote_bind(remote_bind)?;
+                }
+                validate_initialized_service_data(data_dir, identity, remote_bind)?;
+                match identity {
+                    CliServiceIdentity::OwnerAccount => {
+                        if !credentials_stdin {
+                            bail!(
+                                "owner-account service installation requires --credentials-stdin; passwords must not be passed in argv"
+                            );
+                        }
+                        let mut bytes = read_bounded_stdin()?;
+                        let mut credentials: ServiceCredentialsDocument =
+                            match serde_json::from_slice(&bytes) {
+                                Ok(credentials) => credentials,
+                                Err(error) => {
+                                    bytes.zeroize();
+                                    return Err(error)
+                                        .context("decode strict service credentials document");
+                                }
+                            };
+                        bytes.zeroize();
+                        if credentials.account_name.trim().is_empty()
+                            || credentials.account_name.len() > 256
+                            || credentials.password.is_empty()
+                            || credentials.password.len() > 1024
+                            || credentials.account_name.contains('\0')
+                            || credentials.password.contains('\0')
+                        {
+                            credentials.password.zeroize();
+                            bail!("service credentials violate the bounded input contract");
+                        }
+                        let result = windows_service_host::install(
+                            &service_name,
+                            data_dir,
+                            bind,
+                            remote_bind,
+                            Some(&credentials.account_name),
+                            Some(&credentials.password),
+                        );
+                        credentials.password.zeroize();
+                        result?
+                    }
+                    CliServiceIdentity::LocalSystem => {
+                        if credentials_stdin {
+                            bail!("LocalSystem installation does not accept credentials stdin");
+                        }
+                        if remote_bind.is_some() {
+                            bail!(
+                                "LocalSystem service identity is loopback-only because it cannot use the owner's DPAPI-current-user enrollment authority"
+                            );
+                        }
+                        windows_service_host::install(
+                            &service_name,
+                            data_dir,
+                            bind,
+                            None,
+                            None,
+                            None,
+                        )?
+                    }
+                }
+            }
+            ServiceCommand::Start { service_name } => windows_service_host::start(&service_name)?,
+            ServiceCommand::Stop { service_name } => windows_service_host::stop(&service_name)?,
+            ServiceCommand::Status {
+                service_name,
+                endpoint,
+            } => {
+                let service = windows_service_host::status(&service_name)?;
+                let runtime = fetch_health_value(data_dir, endpoint).await.ok();
+                let runtime_health_available = runtime.is_some();
+                json!({
+                    "status": "service_status",
+                    "service": service,
+                    "runtime_health": runtime,
+                    "runtime_health_available": runtime_health_available
+                })
+            }
+            ServiceCommand::MaintenanceEnter {
+                service_name,
+                reason,
+                confirm,
+            } => {
+                require_operator_confirmation(confirm, "enter maintenance mode")?;
+                write_maintenance_marker(data_dir, reason.as_str())?;
+                match windows_service_host::pause(&service_name) {
+                    Ok(mut receipt) => {
+                        if let Some(object) = receipt.as_object_mut() {
+                            object.insert("reason".to_string(), json!(reason.as_str()));
+                        }
+                        receipt
+                    }
+                    Err(error) => {
+                        let _ = clear_maintenance_marker(data_dir);
+                        return Err(error);
+                    }
+                }
+            }
+            ServiceCommand::MaintenanceExit {
+                service_name,
+                confirm,
+            } => {
+                require_operator_confirmation(confirm, "exit maintenance mode")?;
+                let receipt = windows_service_host::resume(&service_name)?;
+                clear_maintenance_marker(data_dir)?;
+                receipt
+            }
+            ServiceCommand::Recover {
+                service_name,
+                endpoint,
+                confirm,
+            } => {
+                require_operator_confirmation(confirm, "Windows service recovery")?;
+                let service = windows_service_host::recover(&service_name)?;
+                let runtime =
+                    wait_for_runtime_health(data_dir, endpoint, Duration::from_secs(30)).await?;
+                json!({
+                    "status": "service_recovered",
+                    "service": service,
+                    "runtime_health": runtime,
+                    "maintenance_preserved": maintenance_snapshot(data_dir).0
+                })
+            }
+            ServiceCommand::Uninstall {
+                service_name,
+                confirm,
+            } => {
+                require_operator_confirmation(confirm, "Windows service uninstallation")?;
+                windows_service_host::uninstall(&service_name)?
+            }
+        };
+        println!("{}", serde_json::to_string(&receipt)?);
+        Ok(())
+    }
+}
+
+fn run_service_host(
+    data_dir: PathBuf,
+    service_name: String,
+    bind: SocketAddr,
+    remote_bind: Option<SocketAddr>,
+    service_identity: String,
+) -> anyhow::Result<()> {
+    #[cfg(not(windows))]
+    {
+        let _ = (data_dir, service_name, bind, remote_bind, service_identity);
+        bail!("Windows service runtime is available only on Windows");
+    }
+    #[cfg(windows)]
+    {
+        windows_service_host::run_dispatcher(windows_service_host::ServiceRuntimeConfig {
+            service_name,
+            data_dir,
+            bind,
+            remote_bind,
+            service_identity,
+        })
+    }
+}
+
+impl RuntimeLifecycle {
+    fn load(data_dir: &Path, host_mode: &str, service_identity: &str) -> anyhow::Result<Self> {
+        let (maintenance_active, maintenance_reason) = maintenance_snapshot(data_dir);
+        Ok(Self {
+            host_mode: host_mode.to_string(),
+            service_identity: service_identity.to_string(),
+            maintenance_active: Arc::new(AtomicBool::new(maintenance_active)),
+            maintenance_reason: Arc::new(Mutex::new(maintenance_reason)),
+        })
+    }
+
+    fn maintenance_snapshot(&self) -> (bool, Option<String>) {
+        let active = self.maintenance_active.load(Ordering::SeqCst);
+        let reason = self
+            .maintenance_reason
+            .lock()
+            .ok()
+            .and_then(|reason| reason.clone());
+        (active, reason)
+    }
+
+    fn enter_maintenance(&self, data_dir: &Path) {
+        let (marker_active, marker_reason) = maintenance_snapshot(data_dir);
+        let reason = marker_reason.unwrap_or_else(|| "operator_request".to_string());
+        if !marker_active && write_maintenance_marker(data_dir, &reason).is_err() {
+            self.maintenance_active.store(true, Ordering::SeqCst);
+            if let Ok(mut current) = self.maintenance_reason.lock() {
+                *current = Some("persistence_error".to_string());
+            }
+            return;
+        }
+        self.maintenance_active.store(true, Ordering::SeqCst);
+        if let Ok(mut current) = self.maintenance_reason.lock() {
+            *current = Some(reason);
+        }
+    }
+
+    fn exit_maintenance(&self, data_dir: &Path) -> anyhow::Result<()> {
+        clear_maintenance_marker(data_dir)?;
+        self.maintenance_active.store(false, Ordering::SeqCst);
+        *self
+            .maintenance_reason
+            .lock()
+            .map_err(|_| anyhow::anyhow!("maintenance state lock poisoned"))? = None;
+        Ok(())
+    }
+}
+
+fn maintenance_snapshot(data_dir: &Path) -> (bool, Option<String>) {
+    let path = data_dir.join(MAINTENANCE_MARKER_FILE);
+    let Ok(metadata) = fs::symlink_metadata(&path) else {
+        return (false, None);
+    };
+    if !metadata.file_type().is_file() || metadata.len() > 4096 {
+        return (true, Some("invalid_marker".to_string()));
+    }
+    match fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<MaintenanceMarker>(&bytes).ok())
+    {
+        Some(marker)
+            if marker.schema_version == 1
+                && marker.active
+                && is_valid_maintenance_reason(&marker.reason) =>
+        {
+            (true, Some(marker.reason))
+        }
+        _ => (true, Some("invalid_marker".to_string())),
+    }
+}
+
+fn write_maintenance_marker(data_dir: &Path, reason: &str) -> anyhow::Result<()> {
+    if !is_valid_maintenance_reason(reason) {
+        bail!("invalid maintenance reason");
+    }
+    fs::create_dir_all(data_dir)?;
+    let path = data_dir.join(MAINTENANCE_MARKER_FILE);
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&path)
+        .with_context(|| format!("write maintenance marker {}", path.display()))?;
+    serde_json::to_writer(
+        &mut file,
+        &MaintenanceMarker {
+            schema_version: 1,
+            active: true,
+            reason: reason.to_string(),
+        },
+    )?;
+    file.write_all(b"\n")?;
+    file.flush()?;
+    file.sync_all()?;
+    Ok(())
+}
+
+fn clear_maintenance_marker(data_dir: &Path) -> anyhow::Result<()> {
+    let path = data_dir.join(MAINTENANCE_MARKER_FILE);
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => {
+            Err(error).with_context(|| format!("remove maintenance marker {}", path.display()))
+        }
+    }
+}
+
+fn is_valid_maintenance_reason(reason: &str) -> bool {
+    matches!(
+        reason,
+        "operator_request" | "upgrade" | "restore" | "recovery"
+    )
+}
+
+#[cfg(windows)]
+fn run_windows_service_runtime(
+    config: windows_service_host::ServiceRuntimeConfig,
+    mut control_rx: tokio::sync::mpsc::UnboundedReceiver<
+        windows_service_host::ServiceRuntimeControl,
+    >,
+    status_handle: windows_service::service_control_handler::ServiceStatusHandle,
+) -> anyhow::Result<()> {
+    use windows_service::service::{ServiceControlAccept, ServiceExitCode, ServiceState};
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("create the Jarvis master service runtime")?;
+    let lifecycle = RuntimeLifecycle::load(
+        &config.data_dir,
+        "windows_service",
+        &config.service_identity,
+    )?;
+    let control_lifecycle = lifecycle.clone();
+    let control_data_dir = config.data_dir.clone();
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    runtime.block_on(async move {
+        tokio::spawn(async move {
+            while let Some(control) = control_rx.recv().await {
+                match control {
+                    windows_service_host::ServiceRuntimeControl::Stop => {
+                        let _ =
+                            status_handle.set_service_status(windows_service_host::service_status(
+                                ServiceState::StopPending,
+                                ServiceControlAccept::empty(),
+                                ServiceExitCode::NO_ERROR,
+                                1,
+                                Duration::from_secs(30),
+                            ));
+                        let _ = shutdown_tx.send(true);
+                        break;
+                    }
+                    windows_service_host::ServiceRuntimeControl::EnterMaintenance => {
+                        control_lifecycle.enter_maintenance(&control_data_dir);
+                        let _ =
+                            status_handle.set_service_status(windows_service_host::service_status(
+                                ServiceState::Paused,
+                                ServiceControlAccept::STOP
+                                    | ServiceControlAccept::SHUTDOWN
+                                    | ServiceControlAccept::PAUSE_CONTINUE,
+                                ServiceExitCode::NO_ERROR,
+                                0,
+                                Duration::default(),
+                            ));
+                    }
+                    windows_service_host::ServiceRuntimeControl::ExitMaintenance => {
+                        if control_lifecycle
+                            .exit_maintenance(&control_data_dir)
+                            .is_ok()
+                        {
+                            let _ = status_handle.set_service_status(
+                                windows_service_host::service_status(
+                                    ServiceState::Running,
+                                    ServiceControlAccept::STOP
+                                        | ServiceControlAccept::SHUTDOWN
+                                        | ServiceControlAccept::PAUSE_CONTINUE,
+                                    ServiceExitCode::NO_ERROR,
+                                    0,
+                                    Duration::default(),
+                                ),
+                            );
+                        }
+                    }
+                }
+            }
+        });
+
+        let ready_status_handle = status_handle;
+        let ready_callback = Box::new(
+            move |_local_addr: SocketAddr,
+                  _remote_addr: Option<SocketAddr>,
+                  lifecycle: &RuntimeLifecycle| {
+                let state = if lifecycle.maintenance_snapshot().0 {
+                    ServiceState::Paused
+                } else {
+                    ServiceState::Running
+                };
+                ready_status_handle
+                    .set_service_status(windows_service_host::service_status(
+                        state,
+                        ServiceControlAccept::STOP
+                            | ServiceControlAccept::SHUTDOWN
+                            | ServiceControlAccept::PAUSE_CONTINUE,
+                        ServiceExitCode::NO_ERROR,
+                        0,
+                        Duration::default(),
+                    ))
+                    .context("report the ready Jarvis master service state")
+            },
+        );
+        serve_runtime(
+            &config.data_dir,
+            config.bind,
+            config.remote_bind,
+            lifecycle,
+            shutdown_rx,
+            Some(ready_callback),
+        )
+        .await
+    })
+}
+
+#[cfg(windows)]
+fn validate_initialized_service_data(
+    data_dir: &Path,
+    identity: CliServiceIdentity,
+    remote_bind: Option<SocketAddr>,
+) -> anyhow::Result<()> {
+    let mut process = MasterProcess::acquire(data_dir)
+        .context("validate exclusive access to initialized master data before installation")?;
+    let token_path = process.data_dir().join(DEVELOPMENT_TOKEN_FILE);
+    let _ = read_development_token(&token_path)
+        .context("service installation requires prior `jarvis-master setup`")?;
+    if remote_bind.is_some() {
+        if !matches!(identity, CliServiceIdentity::OwnerAccount) {
+            bail!("remote mTLS requires the owner-account service identity");
+        }
+        let now_ms = current_time_ms()?;
+        let protector = PlatformSecretProtector;
+        let authority = IdentityAuthority::open_existing(process.data_dir(), &protector, now_ms)
+            .context("validate owner DPAPI enrollment authority before service installation")?;
+        process
+            .kernel_mut()
+            .record_identity_authority(authority.receipt())?;
+    }
+    Ok(())
 }
 
 fn resolve_data_dir(explicit: Option<PathBuf>) -> anyhow::Result<PathBuf> {
@@ -391,6 +978,23 @@ async fn serve(
     bind: SocketAddr,
     remote_bind: Option<SocketAddr>,
 ) -> anyhow::Result<()> {
+    let lifecycle = RuntimeLifecycle::load(data_dir, "foreground", "interactive_operator")?;
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        let _ = shutdown_tx.send(true);
+    });
+    serve_runtime(data_dir, bind, remote_bind, lifecycle, shutdown_rx, None).await
+}
+
+async fn serve_runtime(
+    data_dir: &Path,
+    bind: SocketAddr,
+    remote_bind: Option<SocketAddr>,
+    lifecycle: RuntimeLifecycle,
+    shutdown_rx: tokio::sync::watch::Receiver<bool>,
+    ready_callback: Option<ReadyCallback>,
+) -> anyhow::Result<()> {
     require_loopback(bind)?;
     if let Some(remote_bind) = remote_bind {
         require_concrete_remote_bind(remote_bind)?;
@@ -414,6 +1018,7 @@ async fn serve(
         process: Arc::new(Mutex::new(process)),
         token_sha256: Sha256::digest(token.as_bytes()).into(),
         started_at_ms: current_time_ms()?,
+        lifecycle,
     };
 
     let app = Router::new()
@@ -437,6 +1042,9 @@ async fn serve(
         .as_ref()
         .map(tokio::net::TcpListener::local_addr)
         .transpose()?;
+    if let Some(ready_callback) = ready_callback {
+        ready_callback(local_addr, remote_addr, &state.lifecycle)?;
+    }
     println!(
         "{}",
         serde_json::to_string(&json!({
@@ -457,14 +1065,25 @@ async fn serve(
         tokio::select! {
             result = axum::serve(listener, app) => result?,
             result = serve_remote(remote_listener, remote_acceptor, state) => result?,
-            _ = shutdown_signal() => {}
+            _ = wait_for_shutdown(shutdown_rx) => {}
         }
     } else {
         axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown_signal())
+            .with_graceful_shutdown(wait_for_shutdown(shutdown_rx))
             .await?;
     }
     Ok(())
+}
+
+async fn wait_for_shutdown(mut shutdown_rx: tokio::sync::watch::Receiver<bool>) {
+    if *shutdown_rx.borrow() {
+        return;
+    }
+    while shutdown_rx.changed().await.is_ok() {
+        if *shutdown_rx.borrow() {
+            return;
+        }
+    }
 }
 
 fn build_tls_acceptor(identity: &EphemeralServerIdentity) -> anyhow::Result<TlsAcceptor> {
@@ -624,10 +1243,15 @@ async fn remote_get_health(
     Extension(session): Extension<RemoteSession>,
 ) -> ApiResult<HealthResponse> {
     revalidate_remote_session(&state, &session)?;
+    let (maintenance_active, maintenance_reason) = state.lifecycle.maintenance_snapshot();
     let process = lock_process(&state)?;
     Ok(Json(HealthResponse {
-        status: "ok".to_string(),
+        status: if maintenance_active { "maintenance" } else { "ok" }.to_string(),
         mode: "developer_remote_master".to_string(),
+        host_mode: state.lifecycle.host_mode.clone(),
+        service_identity: state.lifecycle.service_identity.clone(),
+        maintenance_active,
+        maintenance_reason,
         protocol_version: PROTOCOL_VERSION,
         schema_version: process.kernel().schema_version().map_err(api_error)?,
         process_id: std::process::id(),
@@ -686,6 +1310,7 @@ async fn remote_enqueue_step(
     Extension(session): Extension<RemoteSession>,
     Json(step): Json<NewStep>,
 ) -> ApiResult<AcceptedResponse> {
+    require_work_admission(&state)?;
     let registration = require_remote_application_session(&state, &session, None)?;
     if registration.role != DeviceRole::MacBridge {
         return Err(unauthorized());
@@ -702,6 +1327,7 @@ async fn remote_lease_next(
     Extension(session): Extension<RemoteSession>,
     Json(request): Json<LeaseRequest>,
 ) -> ApiResult<JobEnvelope> {
+    require_work_admission(&state)?;
     let registration =
         require_remote_application_session(&state, &session, Some(request.connection_epoch))?;
     if request.device_id != registration.device_id {
@@ -769,10 +1395,15 @@ async fn get_health(
     headers: HeaderMap,
 ) -> ApiResult<HealthResponse> {
     authorize(&headers, &state)?;
+    let (maintenance_active, maintenance_reason) = state.lifecycle.maintenance_snapshot();
     let process = lock_process(&state)?;
     Ok(Json(HealthResponse {
-        status: "ok".to_string(),
+        status: if maintenance_active { "maintenance" } else { "ok" }.to_string(),
         mode: "developer_foundation".to_string(),
+        host_mode: state.lifecycle.host_mode.clone(),
+        service_identity: state.lifecycle.service_identity.clone(),
+        maintenance_active,
+        maintenance_reason,
         protocol_version: PROTOCOL_VERSION,
         schema_version: process.kernel().schema_version().map_err(api_error)?,
         process_id: std::process::id(),
@@ -817,6 +1448,7 @@ async fn enqueue_step(
     Json(step): Json<NewStep>,
 ) -> ApiResult<AcceptedResponse> {
     authorize(&headers, &state)?;
+    require_work_admission(&state)?;
     let now_ms = current_time_ms().map_err(api_error)?;
     lock_process(&state)?
         .kernel_mut()
@@ -831,6 +1463,7 @@ async fn lease_next(
     Json(request): Json<LeaseRequest>,
 ) -> ApiResult<JobEnvelope> {
     authorize(&headers, &state)?;
+    require_work_admission(&state)?;
     let now_ms = current_time_ms().map_err(api_error)?;
     let job = lock_process(&state)?
         .kernel_mut()
@@ -866,6 +1499,18 @@ fn authorize(headers: &HeaderMap, state: &AppState) -> Result<(), ApiError> {
     let candidate: [u8; 32] = Sha256::digest(token.as_bytes()).into();
     if !constant_time_equal(&candidate, &state.token_sha256) {
         return Err(unauthorized());
+    }
+    Ok(())
+}
+
+fn require_work_admission(state: &AppState) -> Result<(), ApiError> {
+    if state.lifecycle.maintenance_active.load(Ordering::SeqCst) {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: "maintenance_mode_blocks_new_work".to_string(),
+            }),
+        ));
     }
     Ok(())
 }
@@ -918,11 +1563,38 @@ fn lock_process(state: &AppState) -> Result<std::sync::MutexGuard<'_, MasterProc
 }
 
 async fn health(data_dir: &Path, endpoint: SocketAddr) -> anyhow::Result<()> {
-    require_loopback(endpoint)?;
-    let token = read_development_token(&data_dir.join(DEVELOPMENT_TOKEN_FILE))?;
-    let response: HealthResponse = get_json(endpoint, "/health", &token).await?;
+    let response = fetch_health(data_dir, endpoint).await?;
     println!("{}", serde_json::to_string(&response)?);
     Ok(())
+}
+
+async fn fetch_health(data_dir: &Path, endpoint: SocketAddr) -> anyhow::Result<HealthResponse> {
+    require_loopback(endpoint)?;
+    let token = read_development_token(&data_dir.join(DEVELOPMENT_TOKEN_FILE))?;
+    get_json(endpoint, "/health", &token).await
+}
+
+async fn fetch_health_value(data_dir: &Path, endpoint: SocketAddr) -> anyhow::Result<Value> {
+    Ok(serde_json::to_value(
+        fetch_health(data_dir, endpoint).await?,
+    )?)
+}
+
+async fn wait_for_runtime_health(
+    data_dir: &Path,
+    endpoint: SocketAddr,
+    timeout: Duration,
+) -> anyhow::Result<Value> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if let Ok(health) = fetch_health_value(data_dir, endpoint).await {
+            return Ok(health);
+        }
+        if std::time::Instant::now() >= deadline {
+            bail!("service reached its SCM state but runtime health did not become available");
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
 }
 
 async fn fixture_worker(
@@ -1204,5 +1876,31 @@ mod tests {
         let token = read_development_token(&token_path).unwrap();
         assert_eq!(token.len(), 64);
         assert!(token.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn maintenance_marker_is_durable_and_invalid_state_fails_closed() {
+        let directory = tempfile::tempdir().unwrap();
+        assert_eq!(maintenance_snapshot(directory.path()), (false, None));
+
+        write_maintenance_marker(directory.path(), "upgrade").unwrap();
+        assert_eq!(
+            maintenance_snapshot(directory.path()),
+            (true, Some("upgrade".to_string()))
+        );
+        let lifecycle =
+            RuntimeLifecycle::load(directory.path(), "windows_service", "LocalSystem").unwrap();
+        assert_eq!(
+            lifecycle.maintenance_snapshot(),
+            (true, Some("upgrade".to_string()))
+        );
+
+        clear_maintenance_marker(directory.path()).unwrap();
+        assert_eq!(maintenance_snapshot(directory.path()), (false, None));
+        fs::write(directory.path().join(MAINTENANCE_MARKER_FILE), b"invalid").unwrap();
+        assert_eq!(
+            maintenance_snapshot(directory.path()),
+            (true, Some("invalid_marker".to_string()))
+        );
     }
 }
