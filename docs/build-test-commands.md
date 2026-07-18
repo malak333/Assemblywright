@@ -113,9 +113,11 @@ real master with loopback and remote listeners, negotiates TLS 1.3 with mutual
 certificate authentication, checks enrolled health, binds the strict
 application handshake to a per-connection TLS exporter digest, rejects replay
 on a different channel, advances the durable connection epoch after socket-close
-reconciliation, and denies the revoked certificate. It is process/network proof
-against a generated Rust client on one Windows host, not private-overlay setup,
-live Mac Keychain enrollment, service installation, or remote-device reliability.
+reconciliation, denies the revoked certificate, and uses persistent authenticated
+sessions to prove MacBridge enqueue succeeds while inference-worker enqueue is
+unauthorized. It is process/network proof against generated Rust clients on one
+Windows host, not private-overlay setup, live Mac Keychain enrollment, service
+installation, or remote-device reliability.
 `windows_service_lifecycle_e2e` is the sixth implemented seam. The ordinary test
 suite compiles but ignores it because SCM mutation requires elevation. The
 Windows CI job sets `JARVIS_REQUIRE_WINDOWS_SERVICE_E2E=1` and runs the ignored
@@ -123,10 +125,12 @@ test explicitly, so access denial fails the gate. The test installs one
 UUID-suffixed temporary LocalSystem service, verifies automatic start and bounded
 5/15/60-second recovery configuration, starts the real master, checks SCM plus
 runtime health, enters durable maintenance and proves new work receives 503,
-resumes and completes work, performs stop/start recovery, uninstalls, and proves
-the SQLite database and development token remain. A non-elevated manual run
-prints an explicit skip. This does not prove owner-account logon policy, remote
-mTLS from the service, host hardening, upgrade/backup/restore, or live devices.
+recovers while the marker is active and proves both maintenance health and 503
+admission survive the restart, resumes and completes work, directly verifies
+stop/status/start health transitions, uninstalls, and proves the SQLite database
+and development token remain. A non-elevated manual run prints an explicit skip.
+This does not prove owner-account logon policy, remote mTLS from the service,
+host hardening, upgrade/backup/restore, or live devices.
 
 Use these PowerShell commands for a manual Windows process smoke:
 

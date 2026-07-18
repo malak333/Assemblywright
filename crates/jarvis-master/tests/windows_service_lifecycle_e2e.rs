@@ -168,6 +168,56 @@ fn windows_service_install_maintenance_recovery_and_uninstall_preserve_master_st
         String::from_utf8_lossy(&blocked.stderr)
     );
 
+    let maintenance_recover = run(
+        binary,
+        directory.path(),
+        &[
+            "service",
+            "recover",
+            "--service-name",
+            &service_name,
+            "--endpoint",
+            &endpoint.to_string(),
+            "--confirm",
+        ],
+    );
+    assert_success(
+        &maintenance_recover,
+        "recover Windows service during maintenance",
+    );
+    let maintenance_recover_receipt: Value = decode(&maintenance_recover);
+    assert_eq!(maintenance_recover_receipt["status"], "service_recovered");
+    assert_eq!(maintenance_recover_receipt["maintenance_preserved"], true);
+    assert_eq!(
+        maintenance_recover_receipt["runtime_health"]["status"],
+        "maintenance"
+    );
+    assert_eq!(
+        maintenance_recover_receipt["runtime_health"]["maintenance_reason"],
+        "upgrade"
+    );
+
+    let blocked_after_restart = run(
+        binary,
+        directory.path(),
+        &[
+            "fixture-worker",
+            "--endpoint",
+            &endpoint.to_string(),
+            "--prompt",
+            "maintenance must survive service restart",
+        ],
+    );
+    assert!(
+        !blocked_after_restart.status.success(),
+        "service restart cleared maintenance admission control"
+    );
+    assert!(
+        String::from_utf8_lossy(&blocked_after_restart.stderr).contains("503 Service Unavailable"),
+        "unexpected post-restart maintenance rejection: {}",
+        String::from_utf8_lossy(&blocked_after_restart.stderr)
+    );
+
     assert_success(
         &run(
             binary,
@@ -197,23 +247,60 @@ fn windows_service_install_maintenance_recovery_and_uninstall_preserve_master_st
         "complete work after maintenance",
     );
 
-    let recover = run(
+    let stop = run(
+        binary,
+        directory.path(),
+        &["service", "stop", "--service-name", &service_name],
+    );
+    assert_success(&stop, "stop Windows service");
+    let stop_receipt: Value = decode(&stop);
+    assert_eq!(stop_receipt["status"], "service_stopped");
+    assert_eq!(stop_receipt["scm_state"], "stopped");
+
+    let stopped_status = run(
         binary,
         directory.path(),
         &[
             "service",
-            "recover",
+            "status",
             "--service-name",
             &service_name,
             "--endpoint",
             &endpoint.to_string(),
-            "--confirm",
         ],
     );
-    assert_success(&recover, "recover Windows service");
-    let recover_receipt: Value = decode(&recover);
-    assert_eq!(recover_receipt["status"], "service_recovered");
-    assert_eq!(recover_receipt["runtime_health"]["status"], "ok");
+    assert_success(&stopped_status, "inspect stopped Windows service");
+    let stopped_status_receipt: Value = decode(&stopped_status);
+    assert_eq!(stopped_status_receipt["service"]["scm_state"], "stopped");
+    assert_eq!(stopped_status_receipt["runtime_health_available"], false);
+
+    let restart = run(
+        binary,
+        directory.path(),
+        &["service", "start", "--service-name", &service_name],
+    );
+    assert_success(&restart, "restart Windows service after direct stop");
+    let restart_receipt: Value = decode(&restart);
+    assert_eq!(restart_receipt["status"], "service_started");
+    assert_eq!(restart_receipt["scm_state"], "running");
+
+    let restarted_status = run(
+        binary,
+        directory.path(),
+        &[
+            "service",
+            "status",
+            "--service-name",
+            &service_name,
+            "--endpoint",
+            &endpoint.to_string(),
+        ],
+    );
+    assert_success(&restarted_status, "inspect restarted Windows service");
+    let restarted_status_receipt: Value = decode(&restarted_status);
+    assert_eq!(restarted_status_receipt["service"]["scm_state"], "running");
+    assert_eq!(restarted_status_receipt["runtime_health_available"], true);
+    assert_eq!(restarted_status_receipt["runtime_health"]["status"], "ok");
 
     let uninstall = guard.uninstall();
     assert_success(&uninstall, "uninstall Windows service");

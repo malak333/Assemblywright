@@ -70,11 +70,13 @@ Windows DPAPI round trips, and the real CLI stdin boundary.
 loopback TLS 1.3. It proves mutual certificate authentication, durable
 certificate/device checks, exporter-bound application handshake replay denial,
 reconnect epoch advance, socket-close reconciliation, and revoked-certificate
-denial.
+denial. A persistent authenticated session also proves a MacBridge certificate
+may enqueue while an enrolled inference-worker certificate cannot.
 `windows_service_lifecycle_e2e` installs a unique real SCM service on an elevated
 Windows runner and proves automatic-start/recovery configuration, LocalSystem
 loopback hosting, SCM plus runtime health, durable maintenance admission denial,
-resume, recovery, uninstall, and state preservation.
+maintenance preservation through recovery restart, resume, explicit
+stop/status/start health transitions, uninstall, and state preservation.
 
 This slice does not make Windows the runtime authority yet. It adds a foreground
 headless executable, process-ownership lock, authenticated loopback development

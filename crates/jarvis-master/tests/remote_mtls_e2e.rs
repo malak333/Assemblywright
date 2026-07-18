@@ -2,12 +2,12 @@
 
 use jarvis_master::{
     current_time_ms, EnrollmentGrantSpec, EnrollmentRequest, IdentityAuthority, MasterProcess,
-    PlatformSecretProtector,
+    NewStep, PlatformSecretProtector,
 };
 use jarvis_protocol::{
     AuthenticatedHandshakeRequest, CapabilityDescriptor, CapabilityKind, DeviceRole,
-    HandshakeRequest, HandshakeResponse, HandshakeStatus, MAX_JOB_CONTEXT_BYTES,
-    MAX_JOB_RESULT_BYTES, PROTOCOL_VERSION,
+    HandshakeRequest, HandshakeResponse, HandshakeStatus, Sensitivity, StepId, TaskId,
+    MAX_JOB_CONTEXT_BYTES, MAX_JOB_RESULT_BYTES, PROTOCOL_VERSION,
 };
 use rcgen::{CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
@@ -23,6 +23,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_rustls::TlsConnector;
+use uuid::Uuid;
 
 const TLS_EXPORTER_LABEL: &[u8] = b"EXPORTER-Jarvis-Developer-Mode-v1";
 
@@ -57,8 +58,24 @@ async fn remote_listener_requires_enrollment_tls13_and_channel_bound_identity() 
         .expect("run setup");
     assert_success(&setup, "setup");
 
-    let valid = enroll_client(directory.path(), "owner-mac-bridge", false);
-    let revoked = enroll_client(directory.path(), "revoked-worker", true);
+    let valid = enroll_client(
+        directory.path(),
+        "owner-mac-bridge",
+        DeviceRole::MacBridge,
+        false,
+    );
+    let inference_worker = enroll_client(
+        directory.path(),
+        "inference-worker",
+        DeviceRole::InferenceWorker,
+        false,
+    );
+    let revoked = enroll_client(
+        directory.path(),
+        "revoked-worker",
+        DeviceRole::InferenceWorker,
+        true,
+    );
     let local_endpoint = unused_loopback_addr();
     let remote_endpoint = unused_loopback_addr();
     let mut server = spawn_server(binary, directory.path(), local_endpoint, remote_endpoint);
@@ -170,6 +187,34 @@ async fn remote_listener_requires_enrollment_tls13_and_channel_bound_identity() 
     assert_eq!(second.status, HandshakeStatus::Accepted);
     assert!(second.connection_epoch > first.connection_epoch);
 
+    let (bridge_handshake, bridge_enqueue) = authenticated_application_request(
+        remote_endpoint,
+        &valid,
+        "POST",
+        "/v1/distributed/steps",
+        &test_step("bridge may enqueue"),
+    )
+    .await;
+    assert_eq!(bridge_handshake.status, HandshakeStatus::Accepted);
+    assert!(
+        bridge_enqueue.starts_with("HTTP/1.1 200 OK"),
+        "{bridge_enqueue}"
+    );
+
+    let (worker_handshake, worker_enqueue) = authenticated_application_request(
+        remote_endpoint,
+        &inference_worker,
+        "POST",
+        "/v1/distributed/steps",
+        &test_step("worker must not enqueue"),
+    )
+    .await;
+    assert_eq!(worker_handshake.status, HandshakeStatus::Accepted);
+    assert!(
+        worker_enqueue.starts_with("HTTP/1.1 401 Unauthorized"),
+        "{worker_enqueue}"
+    );
+
     let revoked_result = try_tls_request(
         remote_endpoint,
         revoked.config,
@@ -186,7 +231,7 @@ async fn remote_listener_requires_enrollment_tls13_and_channel_bound_identity() 
     );
 }
 
-fn enroll_client(data_dir: &Path, name: &str, revoke: bool) -> EnrolledClient {
+fn enroll_client(data_dir: &Path, name: &str, role: DeviceRole, revoke: bool) -> EnrolledClient {
     let now_ms = current_time_ms().expect("current time");
     let protector = PlatformSecretProtector;
     let mut process = MasterProcess::acquire(data_dir).expect("acquire enrollment owner");
@@ -209,7 +254,7 @@ fn enroll_client(data_dir: &Path, name: &str, revoke: bool) -> EnrolledClient {
         .create_enrollment_grant(
             EnrollmentGrantSpec {
                 device_name: name.to_string(),
-                role: DeviceRole::MacBridge,
+                role,
                 capabilities: capabilities.clone(),
             },
             now_ms,
@@ -287,6 +332,18 @@ fn enroll_client(data_dir: &Path, name: &str, revoke: bool) -> EnrolledClient {
     }
 }
 
+fn test_step(prompt: &str) -> NewStep {
+    NewStep {
+        task_id: TaskId::new(Uuid::new_v4()),
+        step_id: StepId::new(Uuid::new_v4()),
+        capability_id: "mlx.reasoning".to_string(),
+        sensitivity: Sensitivity::Workspace,
+        context: serde_json::json!({"prompt": prompt, "retain": false}),
+        lease_duration_ms: 60_000,
+        deadline_after_ms: 300_000,
+    }
+}
+
 async fn tls_request<T: Serialize + ?Sized>(
     endpoint: SocketAddr,
     config: Arc<ClientConfig>,
@@ -337,6 +394,47 @@ async fn tls_request_with_body<T: Serialize>(
     (response, exporter)
 }
 
+async fn authenticated_application_request<T: Serialize + ?Sized>(
+    endpoint: SocketAddr,
+    client: &EnrolledClient,
+    method: &str,
+    path: &str,
+    body: &T,
+) -> (HandshakeResponse, String) {
+    let stream = tokio::net::TcpStream::connect(endpoint)
+        .await
+        .expect("connect remote listener for authenticated application request");
+    let server_name = ServerName::IpAddress(endpoint.ip().into());
+    let mut stream = TlsConnector::from(client.config.clone())
+        .connect(server_name, stream)
+        .await
+        .expect("complete mutual TLS application handshake");
+    let handshake_body = serde_json::to_vec(&AuthenticatedHandshakeRequest {
+        handshake: client.handshake.clone(),
+        tls_exporter_sha256: exporter_digest(stream.get_ref().1),
+    })
+    .expect("serialize authenticated handshake");
+    let handshake_response = send_http_keep_alive(
+        &mut stream,
+        endpoint,
+        "POST",
+        "/v1/distributed/connections/accept",
+        &handshake_body,
+    )
+    .await
+    .expect("accept application handshake on persistent TLS connection");
+    assert!(
+        handshake_response.starts_with("HTTP/1.1 200 OK"),
+        "{handshake_response}"
+    );
+    let handshake = response_json(&handshake_response);
+    let body = serde_json::to_vec(body).expect("serialize authenticated application request");
+    let response = send_http(&mut stream, endpoint, method, path, &body)
+        .await
+        .expect("complete authenticated application request");
+    (handshake, response)
+}
+
 async fn tls_request_bytes(
     endpoint: SocketAddr,
     config: Arc<ClientConfig>,
@@ -383,6 +481,43 @@ async fn send_http(
     stream.flush().await?;
     let mut response = Vec::new();
     stream.read_to_end(&mut response).await?;
+    Ok(String::from_utf8_lossy(&response).into_owned())
+}
+
+async fn send_http_keep_alive(
+    stream: &mut tokio_rustls::client::TlsStream<tokio::net::TcpStream>,
+    endpoint: SocketAddr,
+    method: &str,
+    path: &str,
+    body: &[u8],
+) -> std::io::Result<String> {
+    let request = format!(
+        "{method} {path} HTTP/1.1\r\nHost: {endpoint}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n",
+        body.len()
+    );
+    stream.write_all(request.as_bytes()).await?;
+    stream.write_all(body).await?;
+    stream.flush().await?;
+
+    let mut response = Vec::new();
+    while !response.ends_with(b"\r\n\r\n") {
+        let mut byte = [0_u8; 1];
+        stream.read_exact(&mut byte).await?;
+        response.push(byte[0]);
+    }
+    let headers = String::from_utf8_lossy(&response);
+    let content_length = headers
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse::<usize>().ok())
+                .flatten()
+        })
+        .unwrap_or(0);
+    let mut response_body = vec![0_u8; content_length];
+    stream.read_exact(&mut response_body).await?;
+    response.extend_from_slice(&response_body);
     Ok(String::from_utf8_lossy(&response).into_owned())
 }
 

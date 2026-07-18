@@ -150,9 +150,11 @@ These notes capture durable facts for future agents working on this repository.
 - `remote_mtls_e2e` is the phase E2E for this transport. On Windows it uses real
   DPAPI identity material and real master/client processes to prove TLS 1.3
   mutual authentication, enrolled health, exporter replay denial, epoch advance
-  after disconnect, and revoked-certificate denial. It is same-host loopback
-  proof with a generated Rust client, not private-overlay discovery/reachability,
-  live Mac Keychain enrollment, Windows service installation, or live inference.
+  after disconnect, revoked-certificate denial, and the role boundary on a
+  persistent authenticated connection: MacBridge enqueue succeeds and enrolled
+  inference-worker enqueue is unauthorized. It is same-host loopback proof with
+  generated Rust clients, not private-overlay discovery/reachability, live Mac
+  Keychain enrollment, Windows service installation, or live inference.
 - The sixth distributed-development slice adds an explicit Windows Service
   Control Manager lifecycle without removing foreground mode. The same
   single-owner master runtime can be installed, started, stopped, inspected,
@@ -181,10 +183,12 @@ These notes capture durable facts for future agents working on this repository.
   CI job sets `JARVIS_REQUIRE_WINDOWS_SERVICE_E2E=1` and runs it explicitly, making
   SCM access denial a failure. It installs a UUID-suffixed temporary LocalSystem
   service, proves automatic-start/recovery receipt, real service health,
-  maintenance denial/resume, completed work, recovery, uninstall, and data
-  preservation. A non-elevated manual run reports a skip. Owner-account remote
-  mTLS, host hardening, crash-loop timing, upgrades, backup/restore, and live
-  cross-device behavior remain separate evidence gates.
+  maintenance denial, recovery-restart preservation of the active maintenance
+  reason and admission block, resume and completed work, explicit
+  stop/status/start health transitions, uninstall, and data preservation. A
+  non-elevated manual run reports a skip. Owner-account remote mTLS, host
+  hardening, crash-loop timing, upgrades, backup/restore, and live cross-device
+  behavior remain separate evidence gates.
 - `.github/workflows/windows-protocol.yml` runs portable protocol and master
   process formatting, clippy, and tests on `windows-latest`. It proves the
   foreground executable, single-process ownership, authenticated loopback

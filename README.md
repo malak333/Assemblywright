@@ -67,13 +67,15 @@ expiry and replay denial, rotation, revocation, the 16-device ceiling, and the
 schema-v1-to-v2 migration. `remote_mtls_e2e` provisions that real Windows
 identity, starts the real master child process, negotiates TLS 1.3 mutual
 authentication, proves enrolled health, channel-exporter replay denial,
-monotonic reconnect epochs, socket-close reconciliation, and revoked-certificate
-denial. It is loopback cross-process transport proof with a generated test
-client, not private-overlay reachability or a live Mac enrollment exchange.
+monotonic reconnect epochs, socket-close reconciliation, revoked-certificate
+denial, and the MacBridge-only enqueue boundary against an enrolled inference
+worker. It is loopback cross-process transport proof with generated test clients,
+not private-overlay reachability or a live Mac enrollment exchange.
 `windows_service_lifecycle_e2e` installs a unique temporary real SCM service on
 the Windows CI runner, proves automatic-start configuration, starts the master
-under LocalSystem, checks runtime health, maintenance admission denial and
-resume, restart/reconciliation recovery, uninstall, and preservation of master
+under LocalSystem, checks runtime health, proves maintenance admission denial
+survives recovery restart, resumes and completes work, directly verifies
+stop/status/start health transitions, then uninstalls while preserving master
 state. The test is ignored by ordinary test runs and is required explicitly by
 the elevated Windows gate; it does not prove owner-account credential policy,
 remote mTLS under that account, OS hardening, upgrades, backup/restore, or live

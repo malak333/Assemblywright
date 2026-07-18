@@ -121,6 +121,9 @@ require_text "master SCM automatic start" "$MASTER_SERVICE_HOST" "ServiceStartTy
 require_text "master SCM bounded recovery" "$MASTER_SERVICE_HOST" "Duration::from_secs(60)"
 require_text "master maintenance admission block" "$MASTER_PROCESS" "maintenance_mode_blocks_new_work"
 require_text "master service lifecycle E2E" "$MASTER_SERVICE_E2E" "windows_service_install_maintenance_recovery_and_uninstall_preserve_master_state"
+require_text "master remote role-boundary E2E" "$MASTER_REMOTE_MTLS_E2E" "worker must not enqueue"
+require_text "master service maintenance-restart E2E" "$MASTER_SERVICE_E2E" "maintenance must survive service restart"
+require_text "master service direct-stop E2E" "$MASTER_SERVICE_E2E" '"service", "stop"'
 require_text "master enrollment E2E" "$MASTER_IDENTITY_E2E" "enrollment_grants_issue_rotate_and_revoke_exact_device_identity"
 require_text "master enrollment DPAPI E2E" "$MASTER_IDENTITY_E2E" "windows_dpapi_protector_round_trips_without_plaintext_equivalence"
 require_text "master enrollment schema migration E2E" "$MASTER_IDENTITY_E2E" "schema_v1_migrates_transactionally_to_enrollment_identity_v2"
