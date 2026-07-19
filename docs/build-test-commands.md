@@ -209,7 +209,10 @@ $jarvisMaster = Resolve-Path '.\target\release\jarvis-master.exe'
 For remote mTLS, install under the same Windows owner account that initialized
 the DPAPI CA. The password exists only in the bounded stdin document and is
 zeroized after SCM configuration; it never enters argv, an environment variable,
-or a file:
+or a file. The confirmed elevated install resolves the account SID and
+idempotently grants the Windows `SeServiceLogonRight` policy before returning
+success. If that policy mutation fails, the partially installed service is
+deleted:
 
 ```powershell
 $credential = Get-Credential
@@ -220,6 +223,13 @@ $credentialsDocument = @{
 $credentialsDocument | & $jarvisMaster --data-dir $jarvisData service install --identity owner-account --credentials-stdin --remote-bind 100.64.0.10:7792 --confirm
 Remove-Variable credentialsDocument
 ```
+
+The elevated Windows CI gate separately grants and enumerates that exact right
+for its current runner account. The real lifecycle E2E remains LocalSystem and
+therefore does not prove an operator-supplied password or remote mTLS from an
+owner-account service. Uninstall preserves the account right because Windows
+rights may be shared by other services; review local policy explicitly before
+revoking it after Jarvis removal.
 
 Maintenance is durable across service restarts. Health reports host mode,
 service identity, active maintenance state, and its bounded reason. New enqueue

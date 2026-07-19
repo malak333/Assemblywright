@@ -15,11 +15,24 @@ use windows_service::service_control_handler::{self, ServiceControlHandlerResult
 use windows_service::service_dispatcher;
 use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
 use windows_service::{define_windows_service, Error as WindowsServiceError};
+#[cfg(test)]
+use windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND;
+use windows_sys::Win32::Foundation::{GetLastError, ERROR_INSUFFICIENT_BUFFER};
+use windows_sys::Win32::Security::Authentication::Identity::{
+    LsaAddAccountRights, LsaClose, LsaNtStatusToWinError, LsaOpenPolicy, LSA_HANDLE,
+    LSA_OBJECT_ATTRIBUTES, LSA_UNICODE_STRING, POLICY_CREATE_ACCOUNT, POLICY_LOOKUP_NAMES,
+};
+#[cfg(test)]
+use windows_sys::Win32::Security::Authentication::Identity::{
+    LsaEnumerateAccountRights, LsaFreeMemory,
+};
+use windows_sys::Win32::Security::{LookupAccountNameW, SID_NAME_USE};
 
 const SERVICE_DISPLAY_NAME: &str = "Jarvis Developer Mode Master";
 const SERVICE_DESCRIPTION: &str =
     "Headless Jarvis Developer Mode Windows master with durable reconciliation.";
 const SERVICE_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
+const SERVICE_LOGON_RIGHT: &str = "SeServiceLogonRight";
 
 #[derive(Debug, Clone)]
 pub struct ServiceRuntimeConfig {
@@ -198,6 +211,13 @@ pub fn install(
         let _ = service.delete();
         return Err(error).context("roll back incomplete Jarvis master service installation");
     }
+    if let Some(account_name) = account_name {
+        if let Err(error) = ensure_service_logon_right(account_name) {
+            let _ = service.delete();
+            return Err(error)
+                .context("grant the owner account the Windows 'Log on as a service' user right");
+        }
+    }
 
     Ok(json!({
         "status": "service_installed",
@@ -209,12 +229,215 @@ pub fn install(
         "data_dir": data_dir,
         "bind": bind,
         "remote_bind": remote_bind,
+        "service_logon_right": if account_name.is_some() { "ensured" } else { "not_required" },
         "recovery": {
             "reset_after_seconds": 86400,
             "restart_delays_seconds": [5, 15, 60],
             "stop_after_bounded_retries": true
         }
     }))
+}
+
+struct LsaPolicyHandle(LSA_HANDLE);
+
+impl Drop for LsaPolicyHandle {
+    fn drop(&mut self) {
+        // SAFETY: the handle was returned by LsaOpenPolicy and is owned by this guard.
+        unsafe {
+            let _ = LsaClose(self.0);
+        }
+    }
+}
+
+fn ensure_service_logon_right(account_name: &str) -> anyhow::Result<()> {
+    let mut sid = lookup_account_sid(account_name)?;
+    let object_attributes = LSA_OBJECT_ATTRIBUTES {
+        Length: std::mem::size_of::<LSA_OBJECT_ATTRIBUTES>() as u32,
+        ..Default::default()
+    };
+    let mut raw_policy = 0;
+    // SAFETY: object_attributes and raw_policy are valid for the duration of the call; a null
+    // system name selects the local policy database.
+    let status = unsafe {
+        LsaOpenPolicy(
+            std::ptr::null(),
+            &object_attributes,
+            (POLICY_LOOKUP_NAMES | POLICY_CREATE_ACCOUNT) as u32,
+            &mut raw_policy,
+        )
+    };
+    check_lsa_status(status, "open the local Windows security policy")?;
+    let policy = LsaPolicyHandle(raw_policy);
+    let (_right_storage, right) = lsa_unicode_string(SERVICE_LOGON_RIGHT)?;
+    // SAFETY: sid and right_storage remain alive for the call, the SID came from
+    // LookupAccountNameW, and policy owns a valid local LSA policy handle.
+    let status = unsafe { LsaAddAccountRights(policy.0, sid.as_mut_ptr().cast(), &right, 1) };
+    check_lsa_status(status, "grant SeServiceLogonRight to the owner account")
+}
+
+fn lookup_account_sid(account_name: &str) -> anyhow::Result<Vec<u8>> {
+    let account_name_wide = wide_null(account_name)?;
+    let mut sid_bytes = 0;
+    let mut domain_chars = 0;
+    let mut account_kind: SID_NAME_USE = 0;
+    // SAFETY: this sizing call intentionally supplies null output buffers and valid size fields.
+    let sized = unsafe {
+        LookupAccountNameW(
+            std::ptr::null(),
+            account_name_wide.as_ptr(),
+            std::ptr::null_mut(),
+            &mut sid_bytes,
+            std::ptr::null_mut(),
+            &mut domain_chars,
+            &mut account_kind,
+        )
+    };
+    if sized != 0 {
+        bail!("Windows service account SID sizing unexpectedly succeeded without a buffer");
+    }
+    // SAFETY: GetLastError reads the calling thread's error value immediately after the failed
+    // LookupAccountNameW sizing call.
+    let sizing_error = unsafe { GetLastError() };
+    if sizing_error != ERROR_INSUFFICIENT_BUFFER {
+        return Err(std::io::Error::from_raw_os_error(sizing_error as i32))
+            .with_context(|| format!("resolve Windows service account {account_name}"));
+    }
+    if sid_bytes == 0 {
+        bail!("Windows service account resolved to an empty SID");
+    }
+    let mut sid = vec![0_u8; sid_bytes as usize];
+    let mut domain = vec![0_u16; domain_chars as usize];
+    let domain_ptr = if domain.is_empty() {
+        std::ptr::null_mut()
+    } else {
+        domain.as_mut_ptr()
+    };
+    // SAFETY: both output buffers match the sizes returned by the first call.
+    let resolved = unsafe {
+        LookupAccountNameW(
+            std::ptr::null(),
+            account_name_wide.as_ptr(),
+            sid.as_mut_ptr().cast(),
+            &mut sid_bytes,
+            domain_ptr,
+            &mut domain_chars,
+            &mut account_kind,
+        )
+    };
+    if resolved == 0 {
+        return Err(std::io::Error::last_os_error())
+            .context("resolve the Windows service account SID");
+    }
+    sid.truncate(sid_bytes as usize);
+    Ok(sid)
+}
+
+fn wide_null(value: &str) -> anyhow::Result<Vec<u16>> {
+    if value.contains('\0') {
+        bail!("Windows account name contains a null character");
+    }
+    Ok(value.encode_utf16().chain(std::iter::once(0)).collect())
+}
+
+fn lsa_unicode_string(value: &str) -> anyhow::Result<(Vec<u16>, LSA_UNICODE_STRING)> {
+    let storage = wide_null(value)?;
+    let length_bytes = (storage.len() - 1)
+        .checked_mul(std::mem::size_of::<u16>())
+        .and_then(|length| u16::try_from(length).ok())
+        .context("Windows policy right name is too long")?;
+    let maximum_length = storage
+        .len()
+        .checked_mul(std::mem::size_of::<u16>())
+        .and_then(|length| u16::try_from(length).ok())
+        .context("Windows policy right buffer is too long")?;
+    let value = LSA_UNICODE_STRING {
+        Length: length_bytes,
+        MaximumLength: maximum_length,
+        Buffer: storage.as_ptr().cast_mut(),
+    };
+    Ok((storage, value))
+}
+
+fn check_lsa_status(status: i32, operation: &str) -> anyhow::Result<()> {
+    if status == 0 {
+        return Ok(());
+    }
+    // SAFETY: translating an NTSTATUS value has no additional preconditions.
+    let win32_error = unsafe { LsaNtStatusToWinError(status) };
+    Err(std::io::Error::from_raw_os_error(win32_error as i32)).context(operation.to_string())
+}
+
+#[cfg(test)]
+struct LsaMemory(*mut std::ffi::c_void);
+
+#[cfg(test)]
+impl Drop for LsaMemory {
+    fn drop(&mut self) {
+        // SAFETY: the buffer was allocated by LsaEnumerateAccountRights and is owned here.
+        unsafe {
+            let _ = LsaFreeMemory(self.0);
+        }
+    }
+}
+
+#[cfg(test)]
+fn account_rights(account_name: &str) -> anyhow::Result<Vec<String>> {
+    let mut sid = lookup_account_sid(account_name)?;
+    let object_attributes = LSA_OBJECT_ATTRIBUTES {
+        Length: std::mem::size_of::<LSA_OBJECT_ATTRIBUTES>() as u32,
+        ..Default::default()
+    };
+    let mut raw_policy = 0;
+    // SAFETY: object_attributes and raw_policy are valid for this local-policy lookup.
+    let status = unsafe {
+        LsaOpenPolicy(
+            std::ptr::null(),
+            &object_attributes,
+            POLICY_LOOKUP_NAMES as u32,
+            &mut raw_policy,
+        )
+    };
+    check_lsa_status(
+        status,
+        "open the local Windows security policy for verification",
+    )?;
+    let policy = LsaPolicyHandle(raw_policy);
+    let mut rights = std::ptr::null_mut();
+    let mut count = 0;
+    // SAFETY: the SID is valid, and rights/count are writable output fields.
+    let status = unsafe {
+        LsaEnumerateAccountRights(policy.0, sid.as_mut_ptr().cast(), &mut rights, &mut count)
+    };
+    if status != 0 {
+        // SAFETY: translating an NTSTATUS value has no additional preconditions.
+        let win32_error = unsafe { LsaNtStatusToWinError(status) };
+        if win32_error == ERROR_FILE_NOT_FOUND {
+            return Ok(Vec::new());
+        }
+        return Err(std::io::Error::from_raw_os_error(win32_error as i32))
+            .context("enumerate Windows account rights");
+    }
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    if rights.is_null() {
+        bail!("Windows returned account-right entries without a buffer");
+    }
+    let _memory = LsaMemory(rights.cast());
+    // SAFETY: LsaEnumerateAccountRights returned `count` entries in `rights` on success.
+    let rights = unsafe { std::slice::from_raw_parts(rights, count as usize) };
+    rights
+        .iter()
+        .map(|right| {
+            if right.Length % 2 != 0 {
+                bail!("Windows account right has an odd UTF-16 byte length");
+            }
+            let length = usize::from(right.Length / 2);
+            // SAFETY: each returned LSA_UNICODE_STRING owns at least Length readable bytes.
+            let value = unsafe { std::slice::from_raw_parts(right.Buffer, length) };
+            String::from_utf16(value).context("decode Windows account right")
+        })
+        .collect()
 }
 
 pub fn start(service_name: &str) -> anyhow::Result<Value> {
@@ -500,5 +723,40 @@ mod tests {
         assert!(validate_service_name("Jarvis Master").is_err());
         assert!(validate_service_name("JarvisMaster;Remove-Item").is_err());
         assert!(validate_service_name(&"x".repeat(65)).is_err());
+    }
+
+    #[test]
+    fn service_logon_right_uses_exact_bounded_utf16_contract() {
+        let (storage, value) = lsa_unicode_string(SERVICE_LOGON_RIGHT).unwrap();
+        assert_eq!(storage.last(), Some(&0));
+        assert_eq!(value.Length as usize, SERVICE_LOGON_RIGHT.len() * 2);
+        assert_eq!(value.MaximumLength as usize, storage.len() * 2);
+        assert_eq!(
+            String::from_utf16(&storage[..storage.len() - 1]).unwrap(),
+            SERVICE_LOGON_RIGHT
+        );
+    }
+
+    #[test]
+    fn windows_account_strings_reject_embedded_nulls() {
+        assert!(wide_null("MIKE-PC\\mike").is_ok());
+        assert!(wide_null("MIKE-PC\\mi\0ke").is_err());
+    }
+
+    #[test]
+    #[ignore = "requires elevated access to the local Windows security policy"]
+    fn service_logon_right_is_ensured_for_current_account() {
+        let username = std::env::var("USERNAME").expect("read current Windows username");
+        let domain = std::env::var("USERDOMAIN").ok();
+        let account_name = domain
+            .filter(|domain| !domain.is_empty())
+            .map(|domain| format!("{domain}\\{username}"))
+            .unwrap_or(username);
+        ensure_service_logon_right(&account_name).expect("grant service logon right");
+        let rights = account_rights(&account_name).expect("enumerate account rights");
+        assert!(
+            rights.iter().any(|right| right == SERVICE_LOGON_RIGHT),
+            "{account_name} rights omitted {SERVICE_LOGON_RIGHT}: {rights:?}"
+        );
     }
 }

@@ -169,7 +169,12 @@ These notes capture durable facts for future agents working on this repository.
   through a strict bounded stdin document. Password bytes and the parsed password
   are zeroized after SCM configuration and never enter argv, environment, files,
   receipts, health, or logs. The service executable and initialized data directory
-  are canonicalized before registration.
+  are canonicalized before registration. A confirmed elevated owner-account
+  install resolves the exact account SID and idempotently grants
+  `SeServiceLogonRight` through the native LSA policy API after SCM recovery
+  configuration succeeds. Failure deletes the partially installed service.
+  Uninstall preserves that account right because other Windows services may
+  share it; revocation requires a separate explicit local-policy review.
 - Service maintenance uses `maintenance-mode.json` in the master data directory.
   Missing means inactive; malformed, oversized, or non-regular marker state fails
   closed as active. SCM Pause/Continue updates both service state and the runtime
@@ -186,9 +191,18 @@ These notes capture durable facts for future agents working on this repository.
   maintenance denial, recovery-restart preservation of the active maintenance
   reason and admission block, resume and completed work, explicit
   stop/status/start health transitions, uninstall, and data preservation. A
-  non-elevated manual run reports a skip. Owner-account remote mTLS, host
+  non-elevated manual run reports a skip. The same elevated workflow separately
+  grants and enumerates `SeServiceLogonRight` for the current runner account,
+  proving the native policy boundary without receiving or persisting a password.
+  Supplied-password owner-account startup, remote mTLS under that account, host
   hardening, crash-loop timing, upgrades, backup/restore, and live cross-device
   behavior remain separate evidence gates.
+- A 2026-07-18 live Windows owner-host acceptance installed the service under the
+  same interactive account that owns the DPAPI CA, bound the exact private-overlay
+  address, survived recovery while durable maintenance remained active, rejected
+  new work with HTTP 503, resumed and completed work, and retained overlay TCP
+  reachability. This is local operator evidence, not a repeatable enrolled-Mac
+  mTLS or cross-device release gate.
 - `.github/workflows/windows-protocol.yml` runs portable protocol and master
   process formatting, clippy, and tests on `windows-latest`. It proves the
   foreground executable, single-process ownership, authenticated loopback

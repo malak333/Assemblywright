@@ -101,10 +101,12 @@ adds automatic start and bounded restart recovery, exposes explicit
 install/start/stop/status/maintenance/recover/uninstall commands, and persists a
 fail-closed maintenance marker that blocks only new enqueue/lease admission.
 LocalSystem is loopback-only; remote mTLS requires the same owner account as the
-DPAPI CA and accepts credentials only through bounded stdin. It adds no
-private-overlay discovery or live cross-device reliability, owner-account/remote
-service E2E, host hardening, upgrade/backup/restore automation, live scheduler loop, live inference worker,
-Codex dispatch, integration with
+DPAPI CA and accepts credentials only through bounded stdin. Installation
+resolves that account to its exact SID and idempotently grants the native
+`SeServiceLogonRight`; failure rolls back the partial service. It adds no
+private-overlay discovery or live cross-device reliability, supplied-password or
+owner-account remote-mTLS E2E, host hardening, upgrade/backup/restore automation,
+live scheduler loop, live inference worker, Codex dispatch, integration with
 the existing task/policy/audit/memory store, repository mutation, or UI. The new
 SQLite data is an isolated distributed lifecycle kernel, not the final unified
 Windows authority. Existing

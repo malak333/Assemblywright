@@ -124,6 +124,7 @@ require_text "master service lifecycle E2E" "$MASTER_SERVICE_E2E" "windows_servi
 require_text "master remote role-boundary E2E" "$MASTER_REMOTE_MTLS_E2E" "worker must not enqueue"
 require_text "master service maintenance-restart E2E" "$MASTER_SERVICE_E2E" "maintenance must survive service restart"
 require_text "master service direct-stop E2E" "$MASTER_SERVICE_E2E" '"service", "stop"'
+require_text "master owner service logon right" "$MASTER_SERVICE_HOST" "SeServiceLogonRight"
 require_text "master enrollment E2E" "$MASTER_IDENTITY_E2E" "enrollment_grants_issue_rotate_and_revoke_exact_device_identity"
 require_text "master enrollment DPAPI E2E" "$MASTER_IDENTITY_E2E" "windows_dpapi_protector_round_trips_without_plaintext_equivalence"
 require_text "master enrollment schema migration E2E" "$MASTER_IDENTITY_E2E" "schema_v1_migrates_transactionally_to_enrollment_identity_v2"
@@ -140,6 +141,7 @@ require_text "Windows protocol tests" "$WINDOWS_PROTOCOL_WORKFLOW" "cargo test -
 require_text "Windows master tests" "$WINDOWS_PROTOCOL_WORKFLOW" "cargo test -p jarvis-master --locked"
 require_text "Windows service E2E required flag" "$WINDOWS_PROTOCOL_WORKFLOW" 'JARVIS_REQUIRE_WINDOWS_SERVICE_E2E: "1"'
 require_text "Windows service E2E command" "$WINDOWS_PROTOCOL_WORKFLOW" "cargo test -p jarvis-master --test windows_service_lifecycle_e2e --locked -- --ignored --nocapture"
+require_text "Windows owner service right command" "$WINDOWS_PROTOCOL_WORKFLOW" "service_logon_right_is_ensured_for_current_account"
 
 for file in "$BUILD_DOCS" "$CHECKLIST" "$README"; do
   require_text "atomic approval decision" "$file" "redacted decision audit"

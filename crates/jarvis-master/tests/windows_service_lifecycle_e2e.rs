@@ -88,6 +88,7 @@ fn windows_service_install_maintenance_recovery_and_uninstall_preserve_master_st
     assert_eq!(install_receipt["status"], "service_installed");
     assert_eq!(install_receipt["start_type"], "automatic");
     assert_eq!(install_receipt["service_identity"], "LocalSystem");
+    assert_eq!(install_receipt["service_logon_right"], "not_required");
     assert_eq!(
         install_receipt["recovery"]["restart_delays_seconds"],
         serde_json::json!([5, 15, 60])

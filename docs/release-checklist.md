@@ -198,6 +198,10 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   socket-close reconciliation, revoked-certificate denial, MacBridge enqueue
   acceptance, and enrolled inference-worker enqueue rejection on persistent
   authenticated sessions. Then run
+  `cargo test -p jarvis-master --bin jarvis-master service_logon_right_is_ensured_for_current_account --locked -- --ignored --nocapture`
+  in an elevated Windows environment and confirm it resolves the current account
+  SID, idempotently grants `SeServiceLogonRight`, and enumerates the exact right.
+  Then run
   `cargo test -p jarvis-master --test windows_service_lifecycle_e2e --locked -- --ignored --nocapture`
   in an elevated Windows environment with
   `JARVIS_REQUIRE_WINDOWS_SERVICE_E2E=1`. Confirm it installs a unique real SCM
@@ -207,10 +211,11 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   through recovery restart, resumes and completes work, proves direct
   stop/status/start health transitions, uninstalls, and preserves master state.
   Treat these as same-host Windows
-  process/network/service proofs; owner-account remote-service identity,
-  private-overlay reachability, live Mac enrollment/Keychain identity, live MLX
-  inference, unified state migration, Codex execution, and cross-machine
-  recovery remain unimplemented and unproven.
+  process/network/service proofs, including the native owner-account policy
+  mutation but not a supplied password; repeatable owner-account remote-service
+  mTLS, private-overlay reachability from another device, live Mac
+  enrollment/Keychain identity, live MLX inference, unified state migration,
+  Codex execution, and cross-machine recovery remain unimplemented and unproven.
 - For workspace grants, confirm app-selected paths are absent from child argv,
   environment, health, UI presentation, diagnostics, and audit; malformed or
   stale bookmarks block the complete launch; trusted-wake restarts share the

@@ -38,7 +38,7 @@ explicit `serve --remote-bind <concrete-ip>:<port>` additionally starts a TLS
 certificates, rechecks durable certificate/device revocation on every request,
 binds the application handshake to the TLS exporter, enforces certificate-owned
 device identity and role, and reconciles the accepted connection when its TLS
-socket closes. These surfaces are checked by the Windows distributed gate. No
+socket closes. These surfaces are checked by the Windows distributed gate. The
 Windows service lifecycle adds explicit install/start/stop/status,
 maintenance-enter/exit, recovery, and uninstall commands. The SCM service uses
 automatic start, bounded 5/15/60-second restart attempts, the existing
@@ -46,10 +46,12 @@ single-owner/reconciliation path, and a durable fail-closed maintenance marker
 that blocks new enqueue/lease admission while allowing already-started results
 to settle. LocalSystem is loopback-only; remote mTLS requires explicit
 owner-account credentials through bounded stdin so the service can access that
-owner's DPAPI CA. Private-overlay discovery, live Mac client, live model
-inference, repository authority, or Codex dispatch is not implemented by these
-foundation slices; the
-existing macOS runtime and release boundary remain authoritative. The
+owner's DPAPI CA. Owner-account installation resolves the exact Windows SID and
+idempotently grants `SeServiceLogonRight` through the native LSA policy API;
+failure removes the partially installed service. Private-overlay discovery,
+live Mac client, live model inference, repository authority, or Codex dispatch
+is not implemented by these foundation slices; the existing macOS runtime and
+release boundary remain authoritative. The
 accepted target and migration boundaries are recorded in
 [Distributed Developer Mode Design](docs/distributed-developer-mode-design.md).
 The protocol seam has a named serialized contract E2E. The master kernel has a
@@ -76,10 +78,11 @@ the Windows CI runner, proves automatic-start configuration, starts the master
 under LocalSystem, checks runtime health, proves maintenance admission denial
 survives recovery restart, resumes and completes work, directly verifies
 stop/status/start health transitions, then uninstalls while preserving master
-state. The test is ignored by ordinary test runs and is required explicitly by
-the elevated Windows gate; it does not prove owner-account credential policy,
-remote mTLS under that account, OS hardening, upgrades, backup/restore, or live
-cross-device reliability.
+state. A separate ignored elevated unit proof grants and enumerates the exact
+owner-account service-logon right. Both are required explicitly by the Windows
+gate; they do not prove the supplied owner password, remote mTLS under that
+account, OS hardening, upgrades, backup/restore, or live cross-device
+reliability.
 
 Trusted macOS system-wake events are a disabled-by-default local foundation.
 Swift stores a P-256 private key and monotonic counter in device-only Keychain

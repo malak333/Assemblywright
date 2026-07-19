@@ -58,5 +58,7 @@ zeroize = "1.8"
 version = "0.61"
 features = [
   "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authentication_Identity",
   "Win32_Security_Cryptography",
 ]
