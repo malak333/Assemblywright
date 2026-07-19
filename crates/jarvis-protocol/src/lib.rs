@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
+use std::net::SocketAddr;
 use uuid::Uuid;
 
 pub const PROTOCOL_VERSION: u16 = 1;
@@ -16,6 +17,11 @@ pub const MAX_JOB_RESULT_BYTES: usize = 768 * 1024;
 pub const MAX_WIRE_FRAME_BYTES: usize = 1024 * 1024;
 pub const MAX_LEASE_DURATION_MS: u64 = 10 * 60 * 1000;
 pub const MAX_STEP_DEADLINE_MS: u64 = 2 * 60 * 60 * 1000;
+pub const ENROLLMENT_PAIRING_SCHEMA_VERSION: u16 = 1;
+pub const MAX_ENROLLMENT_CSR_PEM_BYTES: usize = 64 * 1024;
+pub const MAX_ENROLLMENT_PAIRING_FRAME_BYTES: usize = 64 * 1024;
+pub const ENROLLMENT_INVITATION_READY_STATUS: &str = "enrollment_invitation_ready";
+pub const ENROLLMENT_CSR_READY_STATUS: &str = "enrollment_csr_ready";
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ProtocolError {
@@ -57,6 +63,18 @@ pub enum ProtocolError {
     PayloadDigestMismatch { field: &'static str },
     #[error("TLS channel binding must not be all zeroes")]
     InvalidChannelBinding,
+    #[error("unsupported {field}: expected {expected}, received {received}")]
+    UnsupportedFixedValue {
+        field: &'static str,
+        expected: String,
+        received: String,
+    },
+    #[error("{field} must be a concrete IP endpoint with a nonzero port")]
+    InvalidSocketEndpoint { field: &'static str },
+    #[error("{field} must be a lowercase 64-character SHA-256 hex digest")]
+    InvalidSha256Hex { field: &'static str },
+    #[error("enrollment invitation is expired")]
+    EnrollmentInvitationExpired,
 }
 
 macro_rules! uuid_id {
@@ -124,6 +142,138 @@ pub struct CapabilityDescriptor {
     pub max_result_bytes: u32,
 }
 
+/// Secret-free Windows-to-Mac invitation for one interactive enrollment.
+///
+/// The corresponding grant secret never crosses the pairing boundary. The
+/// Windows master retains it only until a matching CSR reply is validated and
+/// issued or this process is interrupted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EnrollmentInvitation {
+    pub schema_version: u16,
+    pub status: String,
+    pub grant_id: Uuid,
+    pub device_id: DeviceId,
+    pub device_name: String,
+    pub role: DeviceRole,
+    pub registry_revision: u64,
+    pub expires_at_ms: u64,
+    pub capabilities: Vec<CapabilityDescriptor>,
+    pub master_endpoint: SocketAddr,
+    pub ca_fingerprint_sha256: String,
+}
+
+impl EnrollmentInvitation {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_and_validate_frame(
+            "enrollment_invitation",
+            frame,
+            MAX_ENROLLMENT_PAIRING_FRAME_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_fixed_value(
+            "schema_version",
+            self.schema_version.to_string(),
+            ENROLLMENT_PAIRING_SCHEMA_VERSION.to_string(),
+        )?;
+        validate_fixed_value(
+            "status",
+            self.status.clone(),
+            ENROLLMENT_INVITATION_READY_STATUS.to_string(),
+        )?;
+        validate_uuid("grant_id", self.grant_id)?;
+        validate_uuid("device_id", self.device_id.0)?;
+        validate_text("device_name", &self.device_name, MAX_DEVICE_NAME_BYTES)?;
+        if self.role != DeviceRole::MacBridge {
+            return Err(ProtocolError::UnsupportedFixedValue {
+                field: "role",
+                expected: "mac_bridge".to_string(),
+                received: "inference_worker".to_string(),
+            });
+        }
+        if self.registry_revision == 0 {
+            return Err(ProtocolError::InvalidLimit {
+                field: "registry_revision",
+                maximum: u64::MAX,
+            });
+        }
+        if self.capabilities.is_empty() {
+            return Err(ProtocolError::EmptyField {
+                field: "capabilities",
+            });
+        }
+        validate_capabilities(&self.capabilities)?;
+        if self.expires_at_ms == 0 {
+            return Err(ProtocolError::InvalidLimit {
+                field: "expires_at_ms",
+                maximum: u64::MAX,
+            });
+        }
+        validate_socket_endpoint("master_endpoint", self.master_endpoint)?;
+        validate_sha256_hex("ca_fingerprint_sha256", &self.ca_fingerprint_sha256)?;
+        validate_serialized_limit(
+            "enrollment_invitation",
+            self,
+            MAX_ENROLLMENT_PAIRING_FRAME_BYTES,
+        )
+    }
+
+    pub fn validate_at(&self, now_ms: u64) -> Result<(), ProtocolError> {
+        self.validate()?;
+        if now_ms >= self.expires_at_ms {
+            return Err(ProtocolError::EnrollmentInvitationExpired);
+        }
+        Ok(())
+    }
+}
+
+/// Mac-to-Windows reply containing only the public-key certificate request and
+/// exact invitation identifiers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EnrollmentCsrReply {
+    pub schema_version: u16,
+    pub status: String,
+    pub grant_id: Uuid,
+    pub device_id: DeviceId,
+    pub csr_pem: String,
+}
+
+impl EnrollmentCsrReply {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_and_validate_frame(
+            "enrollment_csr_reply",
+            frame,
+            MAX_ENROLLMENT_PAIRING_FRAME_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_fixed_value(
+            "schema_version",
+            self.schema_version.to_string(),
+            ENROLLMENT_PAIRING_SCHEMA_VERSION.to_string(),
+        )?;
+        validate_fixed_value(
+            "status",
+            self.status.clone(),
+            ENROLLMENT_CSR_READY_STATUS.to_string(),
+        )?;
+        validate_uuid("grant_id", self.grant_id)?;
+        validate_uuid("device_id", self.device_id.0)?;
+        validate_text("csr_pem", &self.csr_pem, MAX_ENROLLMENT_CSR_PEM_BYTES)?;
+        validate_serialized_limit(
+            "enrollment_csr_reply",
+            self,
+            MAX_ENROLLMENT_PAIRING_FRAME_BYTES,
+        )
+    }
+}
+
 impl CapabilityDescriptor {
     pub fn validate(&self) -> Result<(), ProtocolError> {
         validate_identifier("capability.id", &self.id, MAX_CAPABILITY_ID_BYTES)?;
@@ -171,18 +321,7 @@ impl HandshakeRequest {
         validate_version(self.protocol_version)?;
         validate_uuid("device_id", self.device_id.0)?;
         validate_text("device_name", &self.device_name, MAX_DEVICE_NAME_BYTES)?;
-        if self.capabilities.len() > MAX_CAPABILITIES_PER_DEVICE {
-            return Err(ProtocolError::TooManyCapabilities {
-                maximum: MAX_CAPABILITIES_PER_DEVICE,
-            });
-        }
-        let mut ids = HashSet::with_capacity(self.capabilities.len());
-        for capability in &self.capabilities {
-            capability.validate()?;
-            if !ids.insert(capability.id.as_str()) {
-                return Err(ProtocolError::DuplicateCapability(capability.id.clone()));
-            }
-        }
+        validate_capabilities(&self.capabilities)?;
         validate_serialized_limit("handshake", self, MAX_HANDSHAKE_FRAME_BYTES)
     }
 }
@@ -378,6 +517,58 @@ fn validate_version(received: u16) -> Result<(), ProtocolError> {
             expected: PROTOCOL_VERSION,
             received,
         });
+    }
+    Ok(())
+}
+
+fn validate_fixed_value(
+    field: &'static str,
+    received: String,
+    expected: String,
+) -> Result<(), ProtocolError> {
+    if received != expected {
+        return Err(ProtocolError::UnsupportedFixedValue {
+            field,
+            expected,
+            received,
+        });
+    }
+    Ok(())
+}
+
+fn validate_capabilities(capabilities: &[CapabilityDescriptor]) -> Result<(), ProtocolError> {
+    if capabilities.len() > MAX_CAPABILITIES_PER_DEVICE {
+        return Err(ProtocolError::TooManyCapabilities {
+            maximum: MAX_CAPABILITIES_PER_DEVICE,
+        });
+    }
+    let mut ids = HashSet::with_capacity(capabilities.len());
+    for capability in capabilities {
+        capability.validate()?;
+        if !ids.insert(capability.id.as_str()) {
+            return Err(ProtocolError::DuplicateCapability(capability.id.clone()));
+        }
+    }
+    Ok(())
+}
+
+fn validate_socket_endpoint(
+    field: &'static str,
+    endpoint: SocketAddr,
+) -> Result<(), ProtocolError> {
+    if endpoint.port() == 0 || endpoint.ip().is_unspecified() || endpoint.ip().is_multicast() {
+        return Err(ProtocolError::InvalidSocketEndpoint { field });
+    }
+    Ok(())
+}
+
+fn validate_sha256_hex(field: &'static str, value: &str) -> Result<(), ProtocolError> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(ProtocolError::InvalidSha256Hex { field });
     }
     Ok(())
 }

@@ -194,10 +194,21 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   `cargo test -p jarvis-master --test remote_mtls_e2e --locked` on Windows and
   confirm the real master and generated enrolled client prove TLS 1.3-only
   mutual authentication, exact certificate/device registry checks,
+  pre-handshake health denial and exporter-authenticated health,
   exporter-bound handshake replay denial, reconnect epoch advance,
   socket-close reconciliation, revoked-certificate denial, MacBridge enqueue
   acceptance, and enrolled inference-worker enqueue rejection on persistent
-  authenticated sessions. Then run
+  authenticated sessions. On macOS, run
+  `swift test --disable-sandbox --package-path apps/mac --filter DeveloperBridgeTests`
+  and confirm strict secret-free invitation/CSR decoding, staged enrollment
+  mismatch denial, exporter-bound handshake encoding, exact registry-revision
+  acceptance, and channel cancellation remain green. Build
+  `swift build --package-path apps/mac --product jarvis-mac-bridge` so the real
+  Security/Keychain and Network.framework adapters compile. Run
+  `./scripts/mac-windows-bridge-live-e2e.sh --check` in repository validation.
+  After owner enrollment, run `./scripts/mac-windows-bridge-live-e2e.sh --run`
+  and archive its fixed success receipt as live-device evidence; do not treat a
+  skipped or not-enrolled result as passing. Then run
   `cargo test -p jarvis-master --bin jarvis-master service_logon_right_is_ensured_for_current_account --locked -- --ignored --nocapture`
   in an elevated Windows environment and confirm it resolves the current account
   SID, idempotently grants `SeServiceLogonRight`, and enumerates the exact right.
@@ -211,10 +222,10 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   through recovery restart, resumes and completes work, proves direct
   stop/status/start health transitions, uninstalls, and preserves master state.
   Treat these as same-host Windows
-  process/network/service proofs, including the native owner-account policy
-  mutation but not a supplied password; repeatable owner-account remote-service
-  mTLS, private-overlay reachability from another device, live Mac
-  enrollment/Keychain identity, live MLX inference, unified state migration,
+  process/network/service and Mac contract/adapter compilation proofs, including
+  the native owner-account policy mutation but not a supplied password;
+  repeatable owner-account remote-service mTLS, private-overlay reachability
+  from another device, live Mac enrollment/Keychain identity, live MLX inference, unified state migration,
   Codex execution, and cross-machine recovery remain unimplemented and unproven.
 - For workspace grants, confirm app-selected paths are absent from child argv,
   environment, health, UI presentation, diagnostics, and audit; malformed or

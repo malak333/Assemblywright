@@ -9,7 +9,8 @@ let package = Package(
     ],
     products: [
         .library(name: "JarvisMacCore", targets: ["JarvisMacCore"]),
-        .executable(name: "JarvisMacApp", targets: ["JarvisMacApp"])
+        .executable(name: "JarvisMacApp", targets: ["JarvisMacApp"]),
+        .executable(name: "jarvis-mac-bridge", targets: ["JarvisMacBridgeCLI"])
     ],
     targets: [
         .target(
@@ -18,6 +19,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "JarvisMacApp",
+            dependencies: ["JarvisMacCore"]
+        ),
+        .executableTarget(
+            name: "JarvisMacBridgeCLI",
             dependencies: ["JarvisMacCore"]
         ),
         .testTarget(

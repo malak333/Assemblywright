@@ -123,7 +123,7 @@ async fn remote_listener_requires_enrollment_tls13_and_channel_bound_identity() 
         "remote listener negotiated a protocol below TLS 1.3"
     );
 
-    let (health, _) = tls_request(
+    let (pre_handshake_health, _) = tls_request(
         remote_endpoint,
         valid.config.clone(),
         "GET",
@@ -131,8 +131,23 @@ async fn remote_listener_requires_enrollment_tls13_and_channel_bound_identity() 
         None::<&Value>,
     )
     .await;
+    assert!(
+        pre_handshake_health.starts_with("HTTP/1.1 401 Unauthorized"),
+        "{pre_handshake_health}"
+    );
+
+    let (health_handshake, health) = authenticated_application_request(
+        remote_endpoint,
+        &valid,
+        "GET",
+        "/health",
+        &serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(health_handshake.status, HandshakeStatus::Accepted);
     assert!(health.starts_with("HTTP/1.1 200 OK"), "{health}");
     assert!(health.contains("developer_remote_master"), "{health}");
+    tokio::time::sleep(Duration::from_millis(50)).await;
 
     let (first_response, first_exporter) = tls_request_with_body(
         remote_endpoint,

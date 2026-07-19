@@ -75,6 +75,30 @@ release requirements, not optional UX guidance.
   transport and dominate a simultaneous model completion before exposure.
 - Degraded modes must be visible when local models, microphone access, TTS,
   ChatGPT, plugins, persistence, or IPC are unavailable.
+- Developer Mode enrollment must remain an explicit, bounded two-host ceremony.
+  The confirmed Windows pairing process may persist only the grant digest and
+  must never print, log, place in argv/environment, or write the raw 256-bit
+  grant secret to a file. It emits a strict secret-free invitation, keeps the
+  raw grant only in bounded process memory, accepts one strict CSR reply on
+  stdin, and issues only when the grant, device, expiry, role, registry
+  revision, endpoint, and CSR match. Interruption leaves no transferable
+  secret and the digest-only grant expires without automatic retry.
+- The Mac Developer Mode identity must use a distinct device-only Keychain
+  namespace. Its P-256 private key is generated as a permanent non-exported
+  Keychain key and must never enter SQLite, files, argv, environment, logs,
+  diagnostics, jobs, or enrollment output. Certificate installation must fail
+  before promotion unless the signed leaf matches the staged public key and
+  invitation device, role, registry revision, validity, endpoint, and pinned CA
+  fingerprint. Pending enrollment material must not authorize a connection.
+- Every Mac-to-Windows Developer Mode session must be outbound, use the exact
+  private-overlay IP from enrollment, pin the enrolled CA, present the enrolled
+  client identity, require TLS 1.3, and bind the strict application handshake
+  to SHA-256 of 32 bytes exported with
+  `EXPORTER-Jarvis-Developer-Mode-v1` on that same persistent connection.
+  Missing channel binding, ordinary system trust without the pinned CA,
+  certificate/key mismatch, expiry, revocation, role or capability drift,
+  registry-revision mismatch, replay, or non-accepted handshake fails closed
+  and cancels the channel. Tailscale reachability is never Jarvis authority.
 - Model-originated tool calls must be constrained to runtime-derived inventory.
   The default inventory is the registered first-party `PluginHost` manifests.
   A separate installed-tool catalog may be added only when the individual

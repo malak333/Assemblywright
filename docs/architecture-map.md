@@ -68,7 +68,8 @@ expiry/replay denial, rotation, revocation, schema-v1-to-v2 migration, real
 Windows DPAPI round trips, and the real CLI stdin boundary.
 `remote_mtls_e2e` adds a real master process and generated enrolled client over
 loopback TLS 1.3. It proves mutual certificate authentication, durable
-certificate/device checks, exporter-bound application handshake replay denial,
+certificate/device checks, pre-handshake health denial, exporter-bound health
+and application-handshake replay denial,
 reconnect epoch advance, socket-close reconciliation, and revoked-certificate
 denial. A persistent authenticated session also proves a MacBridge certificate
 may enqueue while an enrolled inference-worker certificate cannot.
@@ -77,6 +78,18 @@ Windows runner and proves automatic-start/recovery configuration, LocalSystem
 loopback hosting, SCM plus runtime health, durable maintenance admission denial,
 maintenance preservation through recovery restart, resume, explicit
 stop/status/start health transitions, uninstall, and state preservation.
+`DeveloperBridgeTests` covers the Mac consumer of the next seam. The shared
+protocol adds strict, bounded, secret-free enrollment invitation and CSR reply
+documents. A confirmed Windows `enrollment pair` process retains and zeroizes
+the raw grant without emitting it. Swift stages a non-exported Secure Enclave
+P-256 key plus public binding journal in device-only Keychain items, validates
+the issued certificate against that key and pinned CA, and uses
+Network.framework for a TLS 1.3-only, client-authenticated, exporter-bound
+handshake on one persistent outbound connection.
+The separate `mac-windows-bridge-live-e2e.sh` harness uses that production CLI
+and installed Keychain identity to prove the real Tailscale path and
+authenticated health after owner enrollment; CI uses its `--check` preflight
+and retains live execution as external device evidence.
 
 This slice does not make Windows the runtime authority yet. It adds a foreground
 headless executable, process-ownership lock, authenticated loopback development
@@ -103,11 +116,14 @@ fail-closed maintenance marker that blocks only new enqueue/lease admission.
 LocalSystem is loopback-only; remote mTLS requires the same owner account as the
 DPAPI CA and accepts credentials only through bounded stdin. Installation
 resolves that account to its exact SID and idempotently grants the native
-`SeServiceLogonRight`; failure rolls back the partial service. It adds no
-private-overlay discovery or live cross-device reliability, supplied-password or
+`SeServiceLogonRight`; failure rolls back the partial service. The Mac bridge
+uses an explicitly configured private-overlay IP and provides authenticated
+health proof, but adds no discovery or continuous agent supervision. It adds no
+live cross-device reliability claim, supplied-password or
 owner-account remote-mTLS E2E, host hardening, upgrade/backup/restore automation,
 live scheduler loop, live inference worker, Codex dispatch, integration with
-the existing task/policy/audit/memory store, repository mutation, or UI. The new
+the existing task/policy/audit/memory store, repository mutation, or Connection
+Setup UI. The new
 SQLite data is an isolated distributed lifecycle kernel, not the final unified
 Windows authority. Existing
 Unix-domain-socket supervision and macOS release

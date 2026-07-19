@@ -49,9 +49,18 @@ owner-account credentials through bounded stdin so the service can access that
 owner's DPAPI CA. Owner-account installation resolves the exact Windows SID and
 idempotently grants `SeServiceLogonRight` through the native LSA policy API;
 failure removes the partially installed service. Private-overlay discovery,
-live Mac client, live model inference, repository authority, or Codex dispatch
-is not implemented by these foundation slices; the existing macOS runtime and
-release boundary remain authoritative. The
+live model inference, repository authority, or Codex dispatch is not
+implemented by these foundation slices; the existing macOS runtime and release
+boundary remain authoritative. The Mac package now adds a default-inert
+Developer Mode enrollment and bridge client. A Windows-local `enrollment pair`
+process retains the raw single-use grant, emits only a strict public invitation,
+and accepts one public CSR reply. Swift generates a non-exported Secure Enclave
+P-256 key, journals enrollment metadata and installed certificates in a
+distinct device-only Keychain namespace, pins the invitation CA and endpoint,
+requires TLS 1.3 mutual authentication, derives the fixed TLS exporter, and
+accepts the application session only when the master returns the exact registry
+revision. This is authenticated bridge health, not a continuously supervised
+agent or inference worker. The
 accepted target and migration boundaries are recorded in
 [Distributed Developer Mode Design](docs/distributed-developer-mode-design.md).
 The protocol seam has a named serialized contract E2E. The master kernel has a
@@ -68,11 +77,37 @@ digest-only grant persistence, strict stdin issuance, signed-CSR verification,
 expiry and replay denial, rotation, revocation, the 16-device ceiling, and the
 schema-v1-to-v2 migration. `remote_mtls_e2e` provisions that real Windows
 identity, starts the real master child process, negotiates TLS 1.3 mutual
-authentication, proves enrolled health, channel-exporter replay denial,
+authentication, denies pre-handshake health, proves exporter-bound health, channel-exporter replay denial,
 monotonic reconnect epochs, socket-close reconciliation, revoked-certificate
 denial, and the MacBridge-only enqueue boundary against an enrolled inference
 worker. It is loopback cross-process transport proof with generated test clients,
 not private-overlay reachability or a live Mac enrollment exchange.
+`DeveloperBridgeTests` adds the Mac-side contract proof: exact secret-free
+invitation and CSR documents, Keychain staging/install fail-closed seams,
+exporter-bound handshake encoding, registry-revision matching, and channel
+cancellation on missing binding or rejected acceptance. The production
+Keychain and Network.framework adapters are compiled on macOS; a separate
+owner-run two-device ceremony is still required to claim live Tailscale and
+Keychain/mTLS evidence.
+
+Focused Mac bridge commands are:
+
+```sh
+swift test --disable-sandbox --package-path apps/mac --filter DeveloperBridgeTests
+swift run --package-path apps/mac jarvis-mac-bridge status
+swift run --package-path apps/mac jarvis-mac-bridge connect
+./scripts/mac-windows-bridge-live-e2e.sh --check
+```
+
+The complete secret-free Windows/Mac pairing ceremony is documented in
+`docs/build-test-commands.md`. Enrollment documents are accepted only on stdin;
+the CLI has no grant-secret argument or environment-variable path.
+After owner enrollment, `./scripts/mac-windows-bridge-live-e2e.sh --run` is the
+repeatable live-device E2E. It proves Tailscale reachability, the exact installed
+Keychain identity, TLS 1.3 mTLS plus exporter-bound application acceptance,
+authenticated health, and a positive connection epoch while forbidding secret
+and raw maintenance-reason fields from its receipt. It is owner/device evidence,
+not a hermetic CI test.
 `windows_service_lifecycle_e2e` installs a unique temporary real SCM service on
 the Windows CI runner, proves automatic-start configuration, starts the master
 under LocalSystem, checks runtime health, proves maintenance admission denial

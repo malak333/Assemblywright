@@ -80,6 +80,7 @@ fi
 run ./scripts/release-version-consistency.sh --check
 run ./scripts/release-ci-workflow-smoke.sh
 run ./scripts/release-docs-drift-smoke.sh
+run ./scripts/mac-windows-bridge-live-e2e.sh --check
 run cargo fmt --check
 run cargo clippy --workspace --all-targets -- -D warnings
 run cargo test --workspace

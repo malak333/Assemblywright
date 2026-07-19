@@ -1,9 +1,11 @@
 use jarvis_protocol::{
     AttemptId, AuthenticatedHandshakeRequest, CancellationId, CapabilityDescriptor, CapabilityKind,
-    ContextHandlingPolicy, DeviceId, DeviceRole, HandshakeRequest, HandshakeResponse, JobEnvelope,
-    JobResultEnvelope, JobResultStatus, LeaseId, ProtocolError, Sensitivity, StepId, TaskId,
-    MAX_JOB_CONTEXT_BYTES, MAX_JOB_RESULT_BYTES, MAX_LEASE_DURATION_MS, MAX_WIRE_FRAME_BYTES,
-    PROTOCOL_VERSION,
+    ContextHandlingPolicy, DeviceId, DeviceRole, EnrollmentCsrReply, EnrollmentInvitation,
+    HandshakeRequest, HandshakeResponse, JobEnvelope, JobResultEnvelope, JobResultStatus, LeaseId,
+    ProtocolError, Sensitivity, StepId, TaskId, ENROLLMENT_CSR_READY_STATUS,
+    ENROLLMENT_INVITATION_READY_STATUS, ENROLLMENT_PAIRING_SCHEMA_VERSION,
+    MAX_ENROLLMENT_CSR_PEM_BYTES, MAX_ENROLLMENT_PAIRING_FRAME_BYTES, MAX_JOB_CONTEXT_BYTES,
+    MAX_JOB_RESULT_BYTES, MAX_LEASE_DURATION_MS, MAX_WIRE_FRAME_BYTES, PROTOCOL_VERSION,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -37,6 +39,150 @@ fn sample_job() -> JobEnvelope {
         context_sha256: digest_json(&context),
         context,
     }
+}
+
+fn sample_invitation() -> EnrollmentInvitation {
+    EnrollmentInvitation {
+        schema_version: ENROLLMENT_PAIRING_SCHEMA_VERSION,
+        status: ENROLLMENT_INVITATION_READY_STATUS.to_string(),
+        grant_id: fixed_uuid("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+        device_id: DeviceId::new(fixed_uuid("11111111-1111-4111-8111-111111111111")),
+        device_name: "owner-mac-bridge".to_string(),
+        role: DeviceRole::MacBridge,
+        registry_revision: 1,
+        expires_at_ms: 2_000_000,
+        capabilities: vec![CapabilityDescriptor {
+            id: "m1.reasoning".to_string(),
+            kind: CapabilityKind::LocalInference,
+            provider: "mlx".to_string(),
+            model: "qwen3.6-27b".to_string(),
+            max_context_bytes: 262_144,
+            max_result_bytes: 786_432,
+        }],
+        master_endpoint: "100.64.23.14:7792".parse().expect("fixed endpoint"),
+        ca_fingerprint_sha256: "ab".repeat(32),
+    }
+}
+
+#[test]
+fn enrollment_pairing_documents_have_exact_secret_free_v1_json() {
+    let invitation = sample_invitation();
+    invitation.validate_at(1_999_999).expect("valid invitation");
+    let encoded = serde_json::to_value(&invitation).expect("encode invitation");
+    assert_eq!(
+        encoded,
+        json!({
+            "schema_version": 1,
+            "status": "enrollment_invitation_ready",
+            "grant_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            "device_id": "11111111-1111-4111-8111-111111111111",
+            "device_name": "owner-mac-bridge",
+            "role": "mac_bridge",
+            "registry_revision": 1,
+            "expires_at_ms": 2_000_000,
+            "capabilities": [{
+                "id": "m1.reasoning",
+                "kind": "local_inference",
+                "provider": "mlx",
+                "model": "qwen3.6-27b",
+                "max_context_bytes": 262_144,
+                "max_result_bytes": 786_432
+            }],
+            "master_endpoint": "100.64.23.14:7792",
+            "ca_fingerprint_sha256": "ab".repeat(32)
+        })
+    );
+    assert!(encoded.get("grant_secret").is_none());
+
+    let reply = EnrollmentCsrReply {
+        schema_version: ENROLLMENT_PAIRING_SCHEMA_VERSION,
+        status: ENROLLMENT_CSR_READY_STATUS.to_string(),
+        grant_id: invitation.grant_id,
+        device_id: invitation.device_id,
+        csr_pem: "-----BEGIN CERTIFICATE REQUEST-----\npublic-key-only\n-----END CERTIFICATE REQUEST-----".to_string(),
+    };
+    assert_eq!(
+        serde_json::to_value(&reply).expect("encode CSR reply"),
+        json!({
+            "schema_version": 1,
+            "status": "enrollment_csr_ready",
+            "grant_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            "device_id": "11111111-1111-4111-8111-111111111111",
+            "csr_pem": "-----BEGIN CERTIFICATE REQUEST-----\npublic-key-only\n-----END CERTIFICATE REQUEST-----"
+        })
+    );
+}
+
+#[test]
+fn enrollment_pairing_documents_fail_closed_on_expiry_identity_and_bounds() {
+    let invitation = sample_invitation();
+    assert_eq!(
+        invitation.validate_at(invitation.expires_at_ms),
+        Err(ProtocolError::EnrollmentInvitationExpired)
+    );
+
+    let mut invalid_endpoint = invitation.clone();
+    invalid_endpoint.master_endpoint = "0.0.0.0:7792".parse().unwrap();
+    assert_eq!(
+        invalid_endpoint.validate(),
+        Err(ProtocolError::InvalidSocketEndpoint {
+            field: "master_endpoint"
+        })
+    );
+
+    let mut invalid_fingerprint = invitation.clone();
+    invalid_fingerprint.ca_fingerprint_sha256 = "A".repeat(64);
+    assert_eq!(
+        invalid_fingerprint.validate(),
+        Err(ProtocolError::InvalidSha256Hex {
+            field: "ca_fingerprint_sha256"
+        })
+    );
+
+    let mut wrong_role = invitation.clone();
+    wrong_role.role = DeviceRole::InferenceWorker;
+    assert!(matches!(
+        wrong_role.validate(),
+        Err(ProtocolError::UnsupportedFixedValue { field: "role", .. })
+    ));
+
+    let mut empty_capabilities = invitation.clone();
+    empty_capabilities.capabilities.clear();
+    assert_eq!(
+        empty_capabilities.validate(),
+        Err(ProtocolError::EmptyField {
+            field: "capabilities"
+        })
+    );
+
+    let mut unknown = serde_json::to_value(&invitation).expect("encode invitation");
+    unknown["grant_secret"] = json!("must-never-cross-this-boundary");
+    assert!(matches!(
+        EnrollmentInvitation::decode_frame(&serde_json::to_vec(&unknown).unwrap()),
+        Err(ProtocolError::Deserialization { .. })
+    ));
+
+    let oversized_reply = EnrollmentCsrReply {
+        schema_version: ENROLLMENT_PAIRING_SCHEMA_VERSION,
+        status: ENROLLMENT_CSR_READY_STATUS.to_string(),
+        grant_id: invitation.grant_id,
+        device_id: invitation.device_id,
+        csr_pem: "x".repeat(MAX_ENROLLMENT_CSR_PEM_BYTES + 1),
+    };
+    assert!(matches!(
+        oversized_reply.validate(),
+        Err(ProtocolError::FieldTooLarge {
+            field: "csr_pem",
+            ..
+        })
+    ));
+    assert_eq!(
+        EnrollmentCsrReply::decode_frame(&vec![b' '; MAX_ENROLLMENT_PAIRING_FRAME_BYTES + 1]),
+        Err(ProtocolError::FrameTooLarge {
+            field: "enrollment_csr_reply",
+            maximum: MAX_ENROLLMENT_PAIRING_FRAME_BYTES,
+        })
+    );
 }
 
 #[test]

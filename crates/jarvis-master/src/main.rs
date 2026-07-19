@@ -14,8 +14,10 @@ use jarvis_master::{
 };
 use jarvis_protocol::{
     AuthenticatedHandshakeRequest, CapabilityDescriptor, CapabilityKind, DeviceId, DeviceRole,
-    HandshakeRequest, HandshakeResponse, HandshakeStatus, JobEnvelope, JobResultEnvelope,
-    JobResultStatus, Sensitivity, StepId, TaskId, MAX_WIRE_FRAME_BYTES, PROTOCOL_VERSION,
+    EnrollmentCsrReply, EnrollmentInvitation, HandshakeRequest, HandshakeResponse, HandshakeStatus,
+    JobEnvelope, JobResultEnvelope, JobResultStatus, Sensitivity, StepId, TaskId,
+    ENROLLMENT_INVITATION_READY_STATUS, ENROLLMENT_PAIRING_SCHEMA_VERSION,
+    MAX_ENROLLMENT_PAIRING_FRAME_BYTES, MAX_WIRE_FRAME_BYTES, PROTOCOL_VERSION,
 };
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::server::WebPkiClientVerifier;
@@ -36,8 +38,7 @@ use tracing::info;
 use uuid::Uuid;
 use x509_parser::extensions::GeneralName;
 use x509_parser::prelude::FromDer;
-#[cfg(windows)]
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 #[cfg(windows)]
 mod windows_service_host;
@@ -239,6 +240,22 @@ enum EnrollmentCommand {
         /// JSON file containing an array of capability descriptors.
         #[arg(long)]
         capabilities_file: PathBuf,
+        /// Confirm this local operator enrollment action.
+        #[arg(long)]
+        confirm: bool,
+    },
+    /// Pair one Mac without exposing the short-lived enrollment secret.
+    Pair {
+        #[arg(long)]
+        device_name: String,
+        #[arg(long, value_enum)]
+        role: CliDeviceRole,
+        /// JSON file containing an array of capability descriptors.
+        #[arg(long)]
+        capabilities_file: PathBuf,
+        /// Concrete local or private-overlay IP endpoint used by remote mTLS.
+        #[arg(long)]
+        master_endpoint: SocketAddr,
         /// Confirm this local operator enrollment action.
         #[arg(long)]
         confirm: bool,
@@ -863,6 +880,25 @@ fn setup(data_dir: &Path) -> anyhow::Result<()> {
 }
 
 fn enrollment(data_dir: &Path, command: EnrollmentCommand) -> anyhow::Result<()> {
+    let command = match command {
+        EnrollmentCommand::Pair {
+            device_name,
+            role,
+            capabilities_file,
+            master_endpoint,
+            confirm,
+        } => {
+            return enrollment_pair(
+                data_dir,
+                device_name,
+                role,
+                capabilities_file,
+                master_endpoint,
+                confirm,
+            );
+        }
+        command => command,
+    };
     let now_ms = current_time_ms()?;
     let mut process = MasterProcess::acquire(data_dir)?;
     let protector = PlatformSecretProtector;
@@ -925,6 +961,9 @@ fn enrollment(data_dir: &Path, command: EnrollmentCommand) -> anyhow::Result<()>
                 .issue_device_certificate(&authority, &request, now_ms)?;
             println!("{}", serde_json::to_string(&certificate)?);
         }
+        EnrollmentCommand::Pair { .. } => {
+            unreachable!("pairing commands are handled before authority acquisition")
+        }
         EnrollmentCommand::Revoke {
             device_id,
             reason,
@@ -950,6 +989,136 @@ fn enrollment(data_dir: &Path, command: EnrollmentCommand) -> anyhow::Result<()>
     Ok(())
 }
 
+fn enrollment_pair(
+    data_dir: &Path,
+    device_name: String,
+    role: CliDeviceRole,
+    capabilities_file: PathBuf,
+    master_endpoint: SocketAddr,
+    confirm: bool,
+) -> anyhow::Result<()> {
+    require_operator_confirmation(confirm, "Mac enrollment pairing")?;
+    let role: DeviceRole = role.into();
+    if role != DeviceRole::MacBridge {
+        bail!("enrollment pair accepts only --role mac-bridge");
+    }
+    require_concrete_remote_bind(master_endpoint)
+        .context("validate the advertised master endpoint before creating an enrollment grant")?;
+
+    // Validate all operator-controlled planning input before acquiring authority
+    // and creating the durable grant.
+    let capabilities_bytes = read_bounded_file(&capabilities_file)?;
+    let capabilities: Vec<CapabilityDescriptor> = serde_json::from_slice(&capabilities_bytes)
+        .with_context(|| {
+            format!(
+                "decode capability array from {}",
+                capabilities_file.display()
+            )
+        })?;
+    HandshakeRequest {
+        protocol_version: PROTOCOL_VERSION,
+        device_id: DeviceId::new(Uuid::from_u128(1)),
+        device_name: device_name.clone(),
+        role,
+        registry_revision: 1,
+        capabilities: capabilities.clone(),
+    }
+    .validate()
+    .context("validate Mac enrollment pairing inputs")?;
+
+    // The single-owner database lease also proves the service is stopped. No
+    // online authority can race this interactive pairing transaction.
+    let started_at_ms = current_time_ms()?;
+    let mut process = MasterProcess::acquire(data_dir)
+        .context("acquire the stopped Windows master authority for enrollment pairing")?;
+    let protector = PlatformSecretProtector;
+    let authority = if process.kernel().identity_authority_recorded()? {
+        IdentityAuthority::open_existing(process.data_dir(), &protector, started_at_ms)?
+    } else {
+        IdentityAuthority::open_or_initialize(process.data_dir(), &protector, started_at_ms)?
+    };
+    process
+        .kernel_mut()
+        .record_identity_authority(authority.receipt())?;
+
+    let mut grant = process.kernel_mut().create_enrollment_grant(
+        EnrollmentGrantSpec {
+            device_name,
+            role,
+            capabilities: capabilities.clone(),
+        },
+        started_at_ms,
+    )?;
+    let mut grant_secret = Zeroizing::new(std::mem::take(&mut grant.grant_secret));
+    let invitation = EnrollmentInvitation {
+        schema_version: ENROLLMENT_PAIRING_SCHEMA_VERSION,
+        status: ENROLLMENT_INVITATION_READY_STATUS.to_string(),
+        grant_id: grant.grant_id,
+        device_id: grant.device_id,
+        device_name: grant.device_name,
+        role: grant.role,
+        registry_revision: grant.registry_revision,
+        expires_at_ms: grant.expires_at_ms,
+        capabilities,
+        master_endpoint,
+        ca_fingerprint_sha256: authority.receipt().ca_fingerprint_sha256.clone(),
+    };
+    invitation.validate_at(started_at_ms)?;
+
+    // stdout is the machine-readable two-document bridge. Flush the invitation
+    // before blocking for exactly one bounded reply. Ctrl-C/EOF before issuance
+    // drops and zeroizes the only raw secret; its digest-only row expires.
+    write_json_line(std::io::stdout().lock(), &invitation)?;
+    eprintln!(
+        "pairing invitation ready: interruption before CSR acceptance issues no certificate; after CSR submission, a missing receipt is ambiguous and requires device-registry inspection or revocation before retry"
+    );
+    let reply_bytes =
+        read_bounded_stdin_with_limit(MAX_ENROLLMENT_PAIRING_FRAME_BYTES, "enrollment CSR reply")?;
+    let reply = EnrollmentCsrReply::decode_frame(&reply_bytes)
+        .context("decode strict enrollment CSR reply from stdin")?;
+    let issue_at_ms = current_time_ms()?;
+    validate_pairing_reply(&invitation, &reply, issue_at_ms)?;
+
+    let mut request = EnrollmentRequest {
+        grant_id: reply.grant_id,
+        grant_secret: std::mem::take(&mut *grant_secret),
+        csr_pem: reply.csr_pem,
+    };
+    let certificate =
+        process
+            .kernel_mut()
+            .issue_device_certificate(&authority, &request, issue_at_ms);
+    request.grant_secret.zeroize();
+    let certificate = certificate?;
+    write_json_line(std::io::stdout().lock(), &certificate).context(
+        "certificate issuance committed but the receipt could not be written; treat enrollment as ambiguous and inspect or revoke the device before retrying",
+    )?;
+    Ok(())
+}
+
+fn validate_pairing_reply(
+    invitation: &EnrollmentInvitation,
+    reply: &EnrollmentCsrReply,
+    now_ms: u64,
+) -> anyhow::Result<()> {
+    invitation.validate_at(now_ms)?;
+    reply.validate()?;
+    if reply.grant_id != invitation.grant_id {
+        bail!("enrollment CSR reply grant_id does not match the invitation");
+    }
+    if reply.device_id != invitation.device_id {
+        bail!("enrollment CSR reply device_id does not match the invitation");
+    }
+    Ok(())
+}
+
+fn write_json_line(mut writer: impl Write, value: &impl Serialize) -> anyhow::Result<()> {
+    serde_json::to_writer(&mut writer, value)?;
+    writer.write_all(b"\n")?;
+    writer.flush()?;
+    Ok(())
+}
+
 fn require_operator_confirmation(confirmed: bool, action: &str) -> anyhow::Result<()> {
     if !confirmed {
         bail!("{action} requires explicit --confirm");
@@ -967,15 +1136,19 @@ fn read_bounded_file(path: &Path) -> anyhow::Result<Vec<u8>> {
 }
 
 fn read_bounded_stdin() -> anyhow::Result<Vec<u8>> {
+    read_bounded_stdin_with_limit(MAX_WIRE_FRAME_BYTES, "stdin document")
+}
+
+fn read_bounded_stdin_with_limit(limit: usize, label: &str) -> anyhow::Result<Vec<u8>> {
     let mut bytes = Vec::new();
     std::io::stdin()
-        .take((MAX_WIRE_FRAME_BYTES + 1) as u64)
+        .take((limit + 1) as u64)
         .read_to_end(&mut bytes)?;
-    if bytes.len() > MAX_WIRE_FRAME_BYTES {
-        bail!("stdin document exceeds the wire-frame limit");
+    if bytes.len() > limit {
+        bail!("{label} exceeds the {limit}-byte limit");
     }
     if bytes.is_empty() {
-        bail!("stdin document is empty");
+        bail!("{label} is empty");
     }
     Ok(bytes)
 }
@@ -1249,7 +1422,7 @@ async fn remote_get_health(
     State(state): State<AppState>,
     Extension(session): Extension<RemoteSession>,
 ) -> ApiResult<HealthResponse> {
-    revalidate_remote_session(&state, &session)?;
+    require_remote_application_session(&state, &session, None)?;
     let (maintenance_active, maintenance_reason) = state.lifecycle.maintenance_snapshot();
     let process = lock_process(&state)?;
     Ok(Json(HealthResponse {
@@ -1858,6 +2031,31 @@ fn hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
+    fn pairing_invitation() -> EnrollmentInvitation {
+        EnrollmentInvitation {
+            schema_version: ENROLLMENT_PAIRING_SCHEMA_VERSION,
+            status: ENROLLMENT_INVITATION_READY_STATUS.to_string(),
+            grant_id: Uuid::parse_str("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa").unwrap(),
+            device_id: DeviceId::new(
+                Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap(),
+            ),
+            device_name: "owner-mac-bridge".to_string(),
+            role: DeviceRole::MacBridge,
+            registry_revision: 1,
+            expires_at_ms: 2_000_000,
+            capabilities: vec![CapabilityDescriptor {
+                id: "mlx.reasoning".to_string(),
+                kind: CapabilityKind::LocalInference,
+                provider: "mlx".to_string(),
+                model: "test-model".to_string(),
+                max_context_bytes: 262_144,
+                max_result_bytes: 786_432,
+            }],
+            master_endpoint: "100.64.23.14:7792".parse().unwrap(),
+            ca_fingerprint_sha256: "ab".repeat(32),
+        }
+    }
+
     #[test]
     fn constant_time_token_comparison_requires_exact_digest() {
         assert!(constant_time_equal(&[7; 32], &[7; 32]));
@@ -1885,6 +2083,55 @@ mod tests {
         let token = read_development_token(&token_path).unwrap();
         assert_eq!(token.len(), 64);
         assert!(token.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn pairing_invitation_output_is_flushed_json_without_a_grant_secret() {
+        let mut output = Vec::new();
+        write_json_line(&mut output, &pairing_invitation()).unwrap();
+        assert!(output.ends_with(b"\n"));
+        let document: Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(document["status"], ENROLLMENT_INVITATION_READY_STATUS);
+        assert!(document.get("grant_secret").is_none());
+        assert!(!String::from_utf8(output).unwrap().contains("grant_secret"));
+    }
+
+    #[test]
+    fn pairing_reply_mismatches_and_expiry_fail_closed() {
+        let invitation = pairing_invitation();
+        let reply = EnrollmentCsrReply {
+            schema_version: ENROLLMENT_PAIRING_SCHEMA_VERSION,
+            status: jarvis_protocol::ENROLLMENT_CSR_READY_STATUS.to_string(),
+            grant_id: invitation.grant_id,
+            device_id: invitation.device_id,
+            csr_pem: "-----BEGIN CERTIFICATE REQUEST-----\npublic-key-only\n-----END CERTIFICATE REQUEST-----".to_string(),
+        };
+        validate_pairing_reply(&invitation, &reply, invitation.expires_at_ms - 1).unwrap();
+
+        let mut wrong_grant = reply.clone();
+        wrong_grant.grant_id = Uuid::new_v4();
+        assert!(
+            validate_pairing_reply(&invitation, &wrong_grant, invitation.expires_at_ms - 1)
+                .unwrap_err()
+                .to_string()
+                .contains("grant_id")
+        );
+
+        let mut wrong_device = reply.clone();
+        wrong_device.device_id = DeviceId::new(Uuid::new_v4());
+        assert!(
+            validate_pairing_reply(&invitation, &wrong_device, invitation.expires_at_ms - 1)
+                .unwrap_err()
+                .to_string()
+                .contains("device_id")
+        );
+
+        assert!(
+            validate_pairing_reply(&invitation, &reply, invitation.expires_at_ms)
+                .unwrap_err()
+                .to_string()
+                .contains("expired")
+        );
     }
 
     #[test]

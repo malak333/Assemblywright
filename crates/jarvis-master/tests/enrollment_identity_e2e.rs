@@ -506,3 +506,148 @@ fn windows_enrollment_cli_uses_stdin_for_grant_secrets_and_emits_bounded_receipt
     assert!(!missing_stdin_ack.status.success());
     assert!(String::from_utf8_lossy(&missing_stdin_ack.stderr).contains("--request-stdin"));
 }
+
+#[cfg(windows)]
+#[test]
+fn windows_pair_cli_emits_no_secret_and_preserves_unconsumed_grant_on_mismatch() {
+    use jarvis_protocol::{EnrollmentCsrReply, EnrollmentInvitation};
+    use std::io::{BufRead as _, BufReader, Read as _, Write as _};
+    use std::process::{Command, Stdio};
+
+    let binary = env!("CARGO_BIN_EXE_jarvis-master");
+    let directory = tempfile::tempdir().expect("pairing identity directory");
+    let data_dir = directory.path().to_string_lossy().into_owned();
+    let capabilities_path = directory.path().join("capabilities.json");
+    std::fs::write(
+        &capabilities_path,
+        serde_json::to_vec(&spec().capabilities).expect("capability JSON"),
+    )
+    .expect("write capability fixture");
+    let capabilities_path = capabilities_path.to_string_lossy().into_owned();
+
+    let unconfirmed_data = directory.path().join("unconfirmed-master");
+    let unconfirmed_data_arg = unconfirmed_data.to_string_lossy().into_owned();
+    let unconfirmed = Command::new(binary)
+        .args([
+            "--data-dir",
+            &unconfirmed_data_arg,
+            "enrollment",
+            "pair",
+            "--device-name",
+            "cli-mac-bridge",
+            "--role",
+            "mac-bridge",
+            "--capabilities-file",
+            &capabilities_path,
+            "--master-endpoint",
+            "100.64.23.14:7792",
+        ])
+        .output()
+        .expect("run unconfirmed pair");
+    assert!(!unconfirmed.status.success());
+    assert!(String::from_utf8_lossy(&unconfirmed.stderr).contains("--confirm"));
+    assert!(
+        !unconfirmed_data.exists(),
+        "unconfirmed pairing must not create authority or database state"
+    );
+
+    let spawn_pair = || {
+        Command::new(binary)
+            .args([
+                "--data-dir",
+                &data_dir,
+                "enrollment",
+                "pair",
+                "--device-name",
+                "cli-mac-bridge",
+                "--role",
+                "mac-bridge",
+                "--capabilities-file",
+                &capabilities_path,
+                "--master-endpoint",
+                "100.64.23.14:7792",
+                "--confirm",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn enrollment pair")
+    };
+
+    let mut pair = spawn_pair();
+    let mut stdout = BufReader::new(pair.stdout.take().expect("pair stdout"));
+    let mut invitation_line = String::new();
+    stdout
+        .read_line(&mut invitation_line)
+        .expect("read flushed invitation");
+    assert!(!invitation_line.contains("grant_secret"));
+    let invitation = EnrollmentInvitation::decode_frame(invitation_line.as_bytes())
+        .expect("decode secret-free invitation");
+    let reply = EnrollmentCsrReply {
+        schema_version: 1,
+        status: "enrollment_csr_ready".to_string(),
+        grant_id: invitation.grant_id,
+        device_id: invitation.device_id,
+        csr_pem: csr("pair-cli-request"),
+    };
+    pair.stdin
+        .take()
+        .expect("pair stdin")
+        .write_all(&serde_json::to_vec(&reply).expect("reply JSON"))
+        .expect("write CSR reply");
+    let mut issued_line = String::new();
+    stdout
+        .read_to_string(&mut issued_line)
+        .expect("read issued receipt");
+    let status = pair.wait().expect("wait for successful pair");
+    assert!(status.success());
+    assert!(!issued_line.contains("grant_secret"));
+    let issued: serde_json::Value =
+        serde_json::from_str(&issued_line).expect("issued certificate receipt");
+    assert_eq!(issued["status"], "device_certificate_issued");
+
+    let mut mismatch = spawn_pair();
+    let mut mismatch_stdout = BufReader::new(mismatch.stdout.take().expect("mismatch stdout"));
+    let mut mismatch_invitation_line = String::new();
+    mismatch_stdout
+        .read_line(&mut mismatch_invitation_line)
+        .expect("read mismatch invitation");
+    let mismatch_invitation =
+        EnrollmentInvitation::decode_frame(mismatch_invitation_line.as_bytes())
+            .expect("decode mismatch invitation");
+    let wrong_reply = EnrollmentCsrReply {
+        schema_version: 1,
+        status: "enrollment_csr_ready".to_string(),
+        grant_id: mismatch_invitation.grant_id,
+        device_id: jarvis_protocol::DeviceId::new(uuid::Uuid::new_v4()),
+        csr_pem: csr("wrong-device-request"),
+    };
+    mismatch
+        .stdin
+        .take()
+        .expect("mismatch stdin")
+        .write_all(&serde_json::to_vec(&wrong_reply).expect("wrong reply JSON"))
+        .expect("write mismatched reply");
+    let mut unexpected_receipt = String::new();
+    mismatch_stdout
+        .read_to_string(&mut unexpected_receipt)
+        .expect("read mismatch stdout");
+    let mut mismatch_stderr = String::new();
+    mismatch
+        .stderr
+        .take()
+        .expect("mismatch stderr")
+        .read_to_string(&mut mismatch_stderr)
+        .expect("read mismatch stderr");
+    let mismatch_status = mismatch.wait().expect("wait for mismatch rejection");
+    assert!(!mismatch_status.success());
+    assert!(unexpected_receipt.is_empty());
+    assert!(mismatch_stderr.contains("device_id"));
+
+    let master =
+        MasterKernel::open(directory.path().join("master.sqlite3")).expect("open pairing database");
+    let health = master.health_snapshot().expect("pairing health");
+    assert_eq!(health.registered_devices, 1);
+    assert_eq!(health.unconsumed_enrollment_grants, 1);
+}

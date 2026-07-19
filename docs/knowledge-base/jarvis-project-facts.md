@@ -149,12 +149,48 @@ These notes capture durable facts for future agents working on this repository.
   the existing reconciliation path.
 - `remote_mtls_e2e` is the phase E2E for this transport. On Windows it uses real
   DPAPI identity material and real master/client processes to prove TLS 1.3
-  mutual authentication, enrolled health, exporter replay denial, epoch advance
+  mutual authentication, pre-handshake health denial, exporter-bound health,
+  exporter replay denial, epoch advance
   after disconnect, revoked-certificate denial, and the role boundary on a
   persistent authenticated connection: MacBridge enqueue succeeds and enrolled
   inference-worker enqueue is unauthorized. It is same-host loopback proof with
   generated Rust clients, not private-overlay discovery/reachability, live Mac
   Keychain enrollment, Windows service installation, or live inference.
+- The next Mac bridge slice adds shared `EnrollmentInvitation` and
+  `EnrollmentCsrReply` contracts plus Windows `enrollment pair`. The confirmed
+  pairing process holds the raw grant only in zeroizing memory, flushes a
+  public endpoint/CA/device invitation, accepts one public CSR reply on stdin,
+  and never emits the grant. A failed or interrupted pre-issuance exchange
+  leaves only its digest-only, ten-minute grant to expire.
+- `KeychainJarvisMacBridgeIdentityStore` generates a non-exported Secure Enclave
+  P-256 key and stores staged/installed public binding state in a distinct
+  device-only Keychain namespace. Certificate promotion requires the staged
+  device/role/revision, public key, exact CA fingerprint, certificate digest,
+  signed device SAN, and current validity to match. Normal Jarvis startup does
+  not load these items.
+- `NetworkJarvisMacTLSChannelFactory` pins the enrollment CA and exact IP,
+  presents the Keychain identity, forces TLS 1.3 and HTTP/1.1, derives
+  `EXPORTER-Jarvis-Developer-Mode-v1`, and keeps the application handshake and
+  authenticated health request on the same bounded persistent connection.
+  `DeveloperBridgeTests` proves exact document decoding, fail-closed binding,
+  exporter encoding, accepted registry revision, and channel cancellation with
+  deterministic seams. Tailscale plus a real Windows owner-account service and
+  real Keychain identity remain an owner-recorded live proof, not CI evidence.
+- Adversarial review of this slice caught four reusable trust-boundary lessons.
+  Certificate authentication alone must not expose even remote health before
+  the exporter-bound application handshake. Swift actors are reentrant across
+  awaits, so one persistent HTTP/1.1 channel needs an explicit single-request
+  gate plus hard connection/request deadlines. A non-exported key must produce
+  its CSR before the staged journal is persisted so a signing failure cannot
+  strand an unrecoverable journal. A redacted receipt must select allowed
+  fields rather than embedding a larger health object that can contain an
+  operator-entered maintenance reason.
+- `scripts/mac-windows-bridge-live-e2e.sh --check` validates and builds the live
+  harness without credentials. After enrollment, `--run` exercises the
+  production Keychain/TLS CLI across Tailscale, requires authenticated remote
+  master health plus a positive epoch, and forbids grant, certificate PEM, and
+  raw maintenance-reason fields. This is a repeatable owner/device E2E, not
+  hermetic CI or release-signing evidence.
 - The sixth distributed-development slice adds an explicit Windows Service
   Control Manager lifecycle without removing foreground mode. The same
   single-owner master runtime can be installed, started, stopped, inspected,
@@ -210,7 +246,7 @@ These notes capture durable facts for future agents working on this repository.
   service lifecycle, fixture worker, and restart boundaries described above.
   It does not compile the current Unix/macOS runtime and does not prove
   owner-account remote-service identity, private-overlay reliability, live Mac
-  exchange/inference, Codex-account dispatch, repository mutation, signing, or
+  exchange/inference beyond the bridge foundation, Codex-account dispatch, repository mutation, signing, or
   live-device behavior.
 - On Windows, do not include
   `cargo check -p jarvis-core --features distributed-development --locked` in

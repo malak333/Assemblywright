@@ -59,6 +59,7 @@
 | Capability scopes plus risk tiers | Simple allow/deny prompts, risk tiers only | High autonomy needs both explicit permission boundaries and per-action risk evaluation. |
 | SQLite as primary structured storage | Flat files only, external database | SQLite is durable, inspectable, easy to migrate, and enough for single-user v1. |
 | macOS Keychain for secrets | Store credentials in SQLite or config files | Secrets should use the platform credential store. |
+| Keep Developer Mode device keys in device-only Keychain items and pair through a secret-free public exchange | Export a PKCS#12 bundle, persist PEM keys, print the one-time grant, or treat Tailscale membership as device identity | The Windows master keeps the ten-minute grant secret in one confirmed local pairing process while the Mac returns only a signed CSR. The Mac validates and installs the issued certificate against the staged key, invitation identity, endpoint, and CA fingerprint before an outbound TLS 1.3 session can authenticate. Tailscale supplies reachability only; the exporter-bound mTLS handshake supplies Jarvis device authority. |
 | First-party plugins first | Third-party marketplace in v1 | The safety model and plugin contract need to prove themselves before third-party expansion. |
 | App-owned security-scoped bookmarks for workspace roots | Put root paths in app child arguments, store plain paths, or let the model select roots | Native user selection establishes an explicit local grant; opaque IDs and bounded startup stdin keep app-selected paths out of argv, environment, model input, and audit while Rust remains the descriptor authority. Bookmark tests do not prove App Sandbox enforcement or child sandbox-extension inheritance. |
 | App-supervised Unix-domain-socket IPC with Apple audit-token code identity, same-EUID, and per-launch bearer checks | Use loopback TCP by default, rely on socket filesystem permissions alone, persist every supervised credential, trust PID/path lookup, put transport authority in argv/environment, or silently reuse a legacy unauthenticated core | The default app launch creates an owner-only runtime directory and generation-random Unix socket, sends `ipc_transport:{kind:"unix_socket_peer_identity_v1",socket_path:"/absolute/path.sock",peer_code_requirement:"...",peer_identity_profile:"adhoc_exact|developer_id_hardened"}` plus a fresh 32-byte bearer only through bounded startup stdin, and requires `LOCAL_PEERTOKEN`/Security.framework requirement validation, current-EUID credentials, and the bearer before every request. Swift validates the connected core through the same audit-token mechanism. Exact `JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true` selects the explicitly weaker authenticated loopback TCP and owner-only token-file compatibility path. Ad-hoc requirements bind one exact build by cdhash and do not establish publisher identity; the Developer ID profile requires stable app/core identifiers, the same nonempty team, and hardened runtime. This is intended-process defense in depth, not device authentication, XPC, App Sandbox, notarization, or live-device proof. |
@@ -108,6 +109,28 @@ prompts from the background or enables trusted system wake.
 ### jarvis-core
 
 `jarvis-core` is a Rust local service started and supervised by the Swift app. It owns durable execution: task planning, model routing, memory reads and writes, plugin execution, scheduled jobs, event triggers, risk policy evaluation, and audit logging.
+
+### Developer Mode Mac bridge foundation
+
+The default-inert Developer Mode bridge is a separate cross-device trust
+boundary. A confirmed Windows-local pairing command creates a bounded public
+invitation and retains the single-use grant secret only in that process. The
+Mac generates a non-exported P-256 key in a device-only Keychain item, returns
+only a signed CSR, and installs the issued client certificate and enrollment CA
+only after their device identity, role, registry revision, key, endpoint, and CA
+fingerprint match the staged invitation. Normal local Jarvis startup does not
+read this material.
+
+An explicitly invoked outbound bridge connection pins the enrolled CA and
+expected master IP, presents the Keychain identity, requires TLS 1.3, derives
+the fixed Jarvis TLS exporter, and sends the exact registered handshake on that
+same connection. A missing exporter, expired or mismatched certificate,
+unexpected trust chain, rejected registry revision, or non-accepted handshake
+closes the connection and grants no distributed authority. Tailscale is the
+private transport overlay, not an authentication or authorization boundary.
+This foundation proves enrollment and authenticated bridge health; it does not
+yet provide a continuously supervised `jarvis-agent`, live MLX execution,
+repository mutation, Git publication, or Codex dispatch.
 
 Current app-supervised IPC defaults to a Unix domain socket, not a TCP listener.
 Swift creates a current-owner `0700` runtime directory and a generation-random

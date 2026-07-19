@@ -123,6 +123,14 @@ The agent maintains an outbound authenticated connection to Windows, relays
 commands and durable event cursors, exposes eligible Apple capabilities, and
 hosts the M1 inference adapter. It holds no authoritative Jarvis state.
 
+The current default-inert implementation stops at the Mac trust/transport
+foundation: a Swift Keychain enrollment coordinator, Security.framework
+identity store, Network.framework TLS 1.3 client, and focused
+`jarvis-mac-bridge` operator CLI can complete an exporter-bound authenticated
+health session. The continuously supervised Rust `jarvis-agent`, UDS relay,
+event cursor, and M1 inference adapter in the preceding target description are
+not implemented by this slice.
+
 ### RTX And Future Workers
 
 The RTX worker is a restricted process separate from the master even when both
@@ -137,7 +145,9 @@ mutual authentication with per-device certificates and a master-owned private
 enrollment CA.
 
 1. A local Windows CLI creates a 256-bit, ten-minute, single-use enrollment
-   grant after an explicit operator confirmation.
+   grant after an explicit operator confirmation. The preferred interactive
+   pairing process retains and zeroizes that raw secret locally, emits only a
+   strict public invitation, and accepts only the public CSR reply on stdin.
 2. The Mac generates its private device key locally and submits only its public
    key through the enrollment exchange.
 3. The CA and device private keys remain in Windows credential protection or

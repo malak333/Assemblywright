@@ -1,0 +1,356 @@
+import Foundation
+import Network
+import Security
+
+public struct NetworkJarvisMacTLSChannelFactory: JarvisMacAuthenticatedTLSChannelFactory, Sendable {
+    private let identityStore: KeychainJarvisMacBridgeIdentityStore
+
+    public init(identityStore: KeychainJarvisMacBridgeIdentityStore = .init()) {
+        self.identityStore = identityStore
+    }
+
+    public func connect(profile: JarvisMacBridgeProfile) async throws -> any JarvisMacAuthenticatedTLSChannel {
+        let endpoint = try ParsedMasterEndpoint(profile.masterEndpoint)
+        let material = try identityStore.loadTLSIdentityMaterial()
+        let tls = NWProtocolTLS.Options()
+        let options = tls.securityProtocolOptions
+        sec_protocol_options_set_min_tls_protocol_version(options, .TLSv13)
+        sec_protocol_options_set_max_tls_protocol_version(options, .TLSv13)
+        sec_protocol_options_set_peer_authentication_required(options, true)
+        sec_protocol_options_set_tls_server_name(options, endpoint.host)
+        sec_protocol_options_add_tls_application_protocol(options, "http/1.1")
+        guard let protocolIdentity = sec_identity_create(material.identity) else {
+            throw JarvisMacDeveloperBridgeError.identityUnavailable
+        }
+        sec_protocol_options_set_local_identity(options, protocolIdentity)
+
+        let trustMaterial = TrustMaterial(ca: material.caCertificate, serverName: endpoint.host)
+        let verificationQueue = DispatchQueue(label: "com.nobiletechnology.jarvis.developer-bridge.verify")
+        sec_protocol_options_set_verify_block(options, { _, protocolTrust, complete in
+            let retainedTrust = sec_trust_copy_ref(protocolTrust)
+            let trust = retainedTrust.takeRetainedValue()
+            let policy = SecPolicyCreateSSL(true, trustMaterial.serverName as CFString)
+            guard SecTrustSetPolicies(trust, policy) == errSecSuccess,
+                  SecTrustSetAnchorCertificates(trust, [trustMaterial.ca] as CFArray) == errSecSuccess,
+                  SecTrustSetAnchorCertificatesOnly(trust, true) == errSecSuccess else {
+                complete(false)
+                return
+            }
+            complete(SecTrustEvaluateWithError(trust, nil))
+        }, verificationQueue)
+
+        let parameters = NWParameters(tls: tls, tcp: NWProtocolTCP.Options())
+        parameters.includePeerToPeer = false
+        let connection = NWConnection(
+            host: NWEndpoint.Host(endpoint.host),
+            port: NWEndpoint.Port(rawValue: endpoint.port)!,
+            using: parameters
+        )
+        let channel = NetworkJarvisMacTLSChannel(
+            connection: connection,
+            hostHeader: profile.masterEndpoint
+        )
+        try await channel.start()
+        return channel
+    }
+}
+
+private final class TrustMaterial: @unchecked Sendable {
+    let ca: SecCertificate
+    let serverName: String
+
+    init(ca: SecCertificate, serverName: String) {
+        self.ca = ca
+        self.serverName = serverName
+    }
+}
+
+private final class ConnectionHolder: @unchecked Sendable {
+    let connection: NWConnection
+    init(_ connection: NWConnection) { self.connection = connection }
+    func cancel() { connection.cancel() }
+}
+
+private actor NetworkJarvisMacTLSChannel: JarvisMacAuthenticatedTLSChannel {
+    static let maximumWireBytes = 1_024 * 1_024
+    static let maximumHeaderBytes = 32 * 1_024
+    static let startTimeoutNanoseconds: UInt64 = 10 * 1_000_000_000
+    static let requestTimeoutNanoseconds: UInt64 = 15 * 1_000_000_000
+
+    private let holder: ConnectionHolder
+    private let hostHeader: String
+    private var readBuffer = Data()
+    private var ready = false
+    private var closed = false
+    private var requestInFlight = false
+
+    init(connection: NWConnection, hostHeader: String) {
+        holder = ConnectionHolder(connection)
+        self.hostHeader = hostHeader
+    }
+
+    func start() async throws {
+        let holder = holder
+        let timeout = cancellationDeadline(
+            holder: holder,
+            nanoseconds: Self.startTimeoutNanoseconds
+        )
+        defer { timeout.cancel() }
+        do {
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    let gate = ContinuationGate(continuation)
+                    holder.connection.stateUpdateHandler = { state in
+                        switch state {
+                        case .ready:
+                            gate.resume()
+                        case .failed, .cancelled:
+                            gate.resume(throwing: JarvisMacDeveloperBridgeError.connectionFailed)
+                        default:
+                            break
+                        }
+                    }
+                    holder.connection.start(
+                        queue: DispatchQueue(label: "com.nobiletechnology.jarvis.developer-bridge.connection")
+                    )
+                }
+            } onCancel: {
+                holder.cancel()
+            }
+            ready = true
+        } catch is CancellationError {
+            holder.cancel()
+            closed = true
+            throw JarvisMacDeveloperBridgeError.cancelled
+        } catch {
+            holder.cancel()
+            closed = true
+            if Task.isCancelled { throw JarvisMacDeveloperBridgeError.cancelled }
+            throw error
+        }
+    }
+
+    func tlsExporter(label: String, length: Int) async throws -> Data {
+        guard ready, !closed, length == 32,
+              let metadata = holder.connection.metadata(definition: NWProtocolTLS.definition)
+                as? NWProtocolTLS.Metadata else {
+            throw JarvisMacDeveloperBridgeError.channelBindingUnavailable
+        }
+        let securityMetadata = metadata.securityProtocolMetadata
+        guard sec_protocol_metadata_get_negotiated_tls_protocol_version(securityMetadata) == .TLSv13 else {
+            throw JarvisMacDeveloperBridgeError.tlsProtocolRejected
+        }
+        let labelBytes = label.utf8CString
+        let secret: DispatchData? = labelBytes.withUnsafeBufferPointer { buffer in
+            guard let pointer = buffer.baseAddress else { return nil }
+            return sec_protocol_metadata_create_secret(
+                securityMetadata, label.utf8.count, pointer, length
+            ) as DispatchData?
+        }
+        guard let secret else {
+            throw JarvisMacDeveloperBridgeError.channelBindingUnavailable
+        }
+        let data = secret.withUnsafeBytes { (pointer: UnsafePointer<UInt8>) in
+            Data(bytes: pointer, count: secret.count)
+        }
+        guard data.count == length else {
+            throw JarvisMacDeveloperBridgeError.channelBindingUnavailable
+        }
+        return data
+    }
+
+    func send(_ request: JarvisMacBridgeHTTPRequest) async throws -> JarvisMacBridgeHTTPResponse {
+        guard ready, !closed else { throw JarvisMacDeveloperBridgeError.unauthenticatedSession }
+        guard !requestInFlight else { throw JarvisMacDeveloperBridgeError.requestInFlight }
+        guard request.method == "GET" || request.method == "POST",
+              request.path.hasPrefix("/"), !request.path.contains("\r"), !request.path.contains("\n"),
+              request.body.count <= Self.maximumWireBytes else {
+            throw JarvisMacDeveloperBridgeError.invalidDocument
+        }
+        requestInFlight = true
+        let timeout = cancellationDeadline(
+            holder: holder,
+            nanoseconds: Self.requestTimeoutNanoseconds
+        )
+        defer {
+            timeout.cancel()
+            requestInFlight = false
+        }
+        var wire = Data(
+            "\(request.method) \(request.path) HTTP/1.1\r\nHost: \(hostHeader)\r\nAccept: application/json\r\nContent-Type: application/json\r\nContent-Length: \(request.body.count)\r\nConnection: keep-alive\r\n\r\n".utf8
+        )
+        wire.append(request.body)
+        do {
+            try Task.checkCancellation()
+            try await sendData(wire)
+            return try await readResponse()
+        } catch is CancellationError {
+            await cancel()
+            throw JarvisMacDeveloperBridgeError.cancelled
+        } catch {
+            await cancel()
+            if Task.isCancelled { throw JarvisMacDeveloperBridgeError.cancelled }
+            throw error
+        }
+    }
+
+    func cancel() async {
+        guard !closed else { return }
+        closed = true
+        ready = false
+        holder.cancel()
+    }
+
+    private func sendData(_ data: Data) async throws {
+        let holder = holder
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                holder.connection.send(content: data, completion: .contentProcessed { error in
+                    if error == nil {
+                        continuation.resume(returning: ())
+                    } else {
+                        continuation.resume(throwing: JarvisMacDeveloperBridgeError.connectionFailed)
+                    }
+                })
+            }
+        } onCancel: {
+            holder.cancel()
+        }
+    }
+
+    private func readResponse() async throws -> JarvisMacBridgeHTTPResponse {
+        while true {
+            if let response = try parseResponseIfComplete() { return response }
+            let chunk = try await receiveChunk()
+            guard !chunk.isEmpty else { throw JarvisMacDeveloperBridgeError.invalidResponse }
+            guard readBuffer.count <= Self.maximumWireBytes + Self.maximumHeaderBytes - chunk.count else {
+                throw JarvisMacDeveloperBridgeError.responseTooLarge
+            }
+            readBuffer.append(chunk)
+        }
+    }
+
+    private func receiveChunk() async throws -> Data {
+        let holder = holder
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                holder.connection.receive(
+                    minimumIncompleteLength: 1,
+                    maximumLength: 64 * 1_024
+                ) { data, _, isComplete, error in
+                    if let error {
+                        _ = error
+                        continuation.resume(throwing: JarvisMacDeveloperBridgeError.connectionFailed)
+                    } else if let data, !data.isEmpty {
+                        continuation.resume(returning: data)
+                    } else if isComplete {
+                        continuation.resume(returning: Data())
+                    } else {
+                        continuation.resume(throwing: JarvisMacDeveloperBridgeError.invalidResponse)
+                    }
+                }
+            }
+        } onCancel: {
+            holder.cancel()
+        }
+    }
+
+    private func parseResponseIfComplete() throws -> JarvisMacBridgeHTTPResponse? {
+        let delimiter = Data("\r\n\r\n".utf8)
+        guard let headerRange = readBuffer.range(of: delimiter) else {
+            guard readBuffer.count <= Self.maximumHeaderBytes else {
+                throw JarvisMacDeveloperBridgeError.invalidResponse
+            }
+            return nil
+        }
+        guard headerRange.lowerBound <= Self.maximumHeaderBytes,
+              let header = String(data: readBuffer[..<headerRange.lowerBound], encoding: .ascii) else {
+            throw JarvisMacDeveloperBridgeError.invalidResponse
+        }
+        let lines = header.components(separatedBy: "\r\n")
+        guard let statusLine = lines.first else { throw JarvisMacDeveloperBridgeError.invalidResponse }
+        let statusParts = statusLine.split(separator: " ", maxSplits: 2)
+        guard statusParts.count >= 2, statusParts[0] == "HTTP/1.1",
+              let status = Int(statusParts[1]), (100...599).contains(status) else {
+            throw JarvisMacDeveloperBridgeError.invalidResponse
+        }
+        var contentLengths: [Int] = []
+        for line in lines.dropFirst() {
+            guard let separator = line.firstIndex(of: ":") else {
+                throw JarvisMacDeveloperBridgeError.invalidResponse
+            }
+            let name = line[..<separator].lowercased()
+            let value = line[line.index(after: separator)...].trimmingCharacters(in: .whitespaces)
+            if name == "transfer-encoding" { throw JarvisMacDeveloperBridgeError.invalidResponse }
+            if name == "content-length", let length = Int(value) { contentLengths.append(length) }
+        }
+        guard contentLengths.count == 1, let contentLength = contentLengths.first,
+              contentLength >= 0, contentLength <= Self.maximumWireBytes else {
+            throw JarvisMacDeveloperBridgeError.invalidResponse
+        }
+        let bodyStart = headerRange.upperBound
+        guard readBuffer.count >= bodyStart + contentLength else { return nil }
+        let body = readBuffer.subdata(in: bodyStart..<(bodyStart + contentLength))
+        readBuffer.removeSubrange(0..<(bodyStart + contentLength))
+        return JarvisMacBridgeHTTPResponse(status: status, body: body)
+    }
+}
+
+private func cancellationDeadline(
+    holder: ConnectionHolder,
+    nanoseconds: UInt64
+) -> Task<Void, Never> {
+    Task {
+        do {
+            try await Task.sleep(nanoseconds: nanoseconds)
+        } catch {
+            return
+        }
+        guard !Task.isCancelled else { return }
+        holder.cancel()
+    }
+}
+
+private final class ContinuationGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Error>?
+
+    init(_ continuation: CheckedContinuation<Void, Error>) {
+        self.continuation = continuation
+    }
+
+    func resume() {
+        let continuation = lock.withLock { () -> CheckedContinuation<Void, Error>? in
+            defer { self.continuation = nil }
+            return self.continuation
+        }
+        continuation?.resume(returning: ())
+    }
+
+    func resume(throwing error: Error) {
+        let continuation = lock.withLock { () -> CheckedContinuation<Void, Error>? in
+            defer { self.continuation = nil }
+            return self.continuation
+        }
+        continuation?.resume(throwing: error)
+    }
+}
+
+private struct ParsedMasterEndpoint {
+    let host: String
+    let port: UInt16
+
+    init(_ value: String) throws {
+        guard let separator = value.lastIndex(of: ":"), separator != value.startIndex,
+              let port = UInt16(value[value.index(after: separator)...]), port > 0 else {
+            throw JarvisMacDeveloperBridgeError.invalidInvitation
+        }
+        var host = String(value[..<separator])
+        if host.hasPrefix("[") && host.hasSuffix("]") {
+            host = String(host.dropFirst().dropLast())
+        }
+        guard !host.isEmpty else { throw JarvisMacDeveloperBridgeError.invalidInvitation }
+        self.host = host
+        self.port = port
+    }
+}

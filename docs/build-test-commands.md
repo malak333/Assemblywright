@@ -60,10 +60,12 @@ cargo test -p jarvis-master --test windows_service_lifecycle_e2e --locked -- --i
 master-process lint/test commands on `windows-latest`. The existing
 `jarvis-core` runtime is Unix/macOS-only and does not compile on Windows because
 its current release path requires Unix-domain sockets and Unix filesystem APIs.
-On a supported macOS host, the additional feature-gated integration check is:
+On a supported macOS host, the additional feature-gated integration and Mac
+bridge checks are:
 
 ```sh
 cargo check -p jarvis-core --features distributed-development --locked
+swift test --disable-sandbox --package-path apps/mac --filter DeveloperBridgeTests
 ```
 
 That check proves only that `jarvis-core` can consume the dormant contracts.
@@ -71,9 +73,11 @@ The Windows job deliberately does not build the current Unix/macOS runtime, run
 a live model, mutate a repository, or exercise a Codex account. It operates the
 local Windows enrollment CA under a temporary
 test identity, proves real DPAPI round-trip protection, and exercises the real
-master process over a loopback TLS 1.3 mutual-authentication connection. Private
-overlay reachability and a live Mac exchange remain gated target architecture in
-`docs/distributed-developer-mode-design.md`.
+master process over a loopback TLS 1.3 mutual-authentication connection. The Mac
+test compiles and exercises the strict invitation, Keychain identity-store
+seam, and exporter-bound handshake client with deterministic fakes. Private
+overlay reachability and a live two-device exchange remain owner-operated
+evidence, not a repository-only assertion.
 Wire consumers must use each top-level message's `decode_frame` entry point so
 the raw byte ceiling is checked before Serde decoding and semantic validation.
 Protocol validation also rejects nil UUID identities before handshake or job
@@ -110,7 +114,8 @@ proof and supplies the authority used by the separate transport test.
 `remote_mtls_e2e` is the fifth implemented seam and runs only on Windows. It
 issues real DPAPI-backed enrolled and revoked client certificates, starts the
 real master with loopback and remote listeners, negotiates TLS 1.3 with mutual
-certificate authentication, checks enrolled health, binds the strict
+certificate authentication, denies pre-handshake health, checks
+exporter-authenticated health, binds the strict
 application handshake to a per-connection TLS exporter digest, rejects replay
 on a different channel, advances the durable connection epoch after socket-close
 reconciliation, denies the revoked certificate, and uses persistent authenticated
@@ -160,8 +165,65 @@ cargo run -p jarvis-master -- --data-dir $jarvisData enrollment initialize
 cargo run -p jarvis-master -- --data-dir $jarvisData enrollment grant --device-name owner-mac-bridge --role mac-bridge --capabilities-file .\capabilities.json --confirm
 ```
 
-The grant command prints its 256-bit secret exactly once for direct transfer to
-the enrolling client. The master stores only its SHA-256 digest. The client
+The preferred first-time Mac ceremony keeps the grant secret inside one
+Windows-local process. Stop the Windows service first so the pairing command
+can acquire the same exclusive data-directory lease, then run:
+
+```powershell
+$jarvisData = Join-Path $env:LOCALAPPDATA 'Jarvis\master'
+$jarvisMaster = Resolve-Path '.\target\release\jarvis-master.exe'
+& $jarvisMaster --data-dir $jarvisData service stop
+& $jarvisMaster --data-dir $jarvisData enrollment pair --device-name owner-mac-bridge --role mac-bridge --capabilities-file .\capabilities.json --master-endpoint 100.64.0.10:7792 --confirm
+```
+
+The command prints and flushes one secret-free `EnrollmentInvitation`, then
+waits for one bounded `EnrollmentCsrReply` on stdin. Transfer the invitation to
+the Mac bridge enrollment command, transfer only its public CSR reply back to
+the waiting Windows stdin, signal EOF, and transfer the issued public
+certificate receipt to the Mac install command. The grant secret is zeroized
+after issuance and is never printed or copied between devices. Start the
+service again only after issuance finishes.
+
+On the Mac, build the bridge client once and use only stdin/stdout for the
+public enrollment documents:
+
+```sh
+swift build --package-path apps/mac --product jarvis-mac-bridge
+pbpaste | swift run --package-path apps/mac jarvis-mac-bridge enrollment prepare | pbcopy
+pbpaste | swift run --package-path apps/mac jarvis-mac-bridge enrollment install
+swift run --package-path apps/mac jarvis-mac-bridge status
+swift run --package-path apps/mac jarvis-mac-bridge connect
+./scripts/mac-windows-bridge-live-e2e.sh --check
+```
+
+The first clipboard pipeline replaces the public invitation with the public CSR
+reply; paste that one line into the waiting Windows pairing process and signal
+EOF. Copy only the resulting public issued-certificate receipt back for
+`enrollment install`. `connect` opens a new outbound TLS 1.3 connection,
+requires the Keychain client identity and pinned enrollment CA, completes the
+exporter-bound application handshake, checks authenticated remote health on the
+same connection, prints a redacted receipt, and closes it. Clipboard use here
+is limited to public pairing material; no grant or private key is copied.
+
+After enrollment is installed and the owner-account Windows service is running,
+record the real two-device proof with:
+
+```sh
+./scripts/mac-windows-bridge-live-e2e.sh --run
+```
+
+The harness loads the exact Keychain profile through the production CLI, pings
+its configured Windows host through Tailscale, checks the configured TCP port,
+performs the production TLS 1.3 mTLS/exporter handshake, reads authenticated
+health on that session, requires a positive connection epoch, and rejects
+secret-bearing or raw maintenance-reason receipt fields. `--check` compiles and
+validates the harness without requiring enrollment. `--run` is owner-recorded
+live-device evidence and cannot replace Windows CI, signing, or notarization.
+
+The lower-level grant command prints its 256-bit secret exactly once and remains
+available for recovery and contract testing. Prefer `enrollment pair` for an
+owner Mac because it never transfers that secret. The master stores only its
+SHA-256 digest. The client
 generates and retains its private key, submits a signed CSR, and sends the
 strict `EnrollmentRequest` JSON document through stdin to
 `enrollment issue --request-stdin`; never place the grant secret or CSR in argv,
@@ -184,7 +246,7 @@ cargo run -p jarvis-master -- --data-dir $jarvisData serve --remote-bind 100.64.
 The remote API uses `/health` and `/v1/distributed/*`; it does not accept the
 development bearer. Every connection must present an active enrolled certificate
 and complete `AuthenticatedHandshakeRequest` with the exact TLS exporter digest
-before step, lease, or result operations. Only the enrolled Mac-bridge role may
+before health, step, lease, or result operations. Only the enrolled Mac-bridge role may
 enqueue steps. The ordinary loopback listener remains available on `127.0.0.1:7791`.
 
 Build a stable release executable before installing the Windows service. Service

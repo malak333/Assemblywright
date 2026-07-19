@@ -1,7 +1,8 @@
 use crate::{i64_to_u64, parse_uuid, u64_to_i64, DeviceRegistration, MasterError, MasterKernel};
 use base64::Engine as _;
 use jarvis_protocol::{
-    CapabilityDescriptor, DeviceId, DeviceRole, HandshakeRequest, PROTOCOL_VERSION,
+    CapabilityDescriptor, DeviceId, DeviceRole, HandshakeRequest, MAX_ENROLLMENT_CSR_PEM_BYTES,
+    PROTOCOL_VERSION,
 };
 use rcgen::{
     BasicConstraints, CertificateParams, CertificateSigningRequestParams, CertifiedIssuer,
@@ -24,7 +25,6 @@ pub const DEVICE_CERTIFICATE_LIFETIME_MS: u64 = 30 * 24 * 60 * 60 * 1_000;
 pub const SERVER_CERTIFICATE_LIFETIME_MS: u64 = 24 * 60 * 60 * 1_000;
 pub const MAX_ENROLLED_DEVICES: u64 = 16;
 const MAX_OUTSTANDING_ENROLLMENT_GRANTS: u64 = 32;
-const MAX_CSR_PEM_BYTES: usize = 64 * 1_024;
 const MAX_REVOCATION_REASON_BYTES: usize = 256;
 const CA_LIFETIME_MS: u64 = 10 * 365 * 24 * 60 * 60 * 1_000;
 const CLOCK_SKEW_MS: u64 = 5 * 60 * 1_000;
@@ -489,7 +489,7 @@ impl IdentityAuthority {
         csr_pem: &str,
     ) -> Result<IssuedMaterial, IdentityError> {
         self.require_current(now_ms)?;
-        if csr_pem.is_empty() || csr_pem.len() > MAX_CSR_PEM_BYTES {
+        if csr_pem.is_empty() || csr_pem.len() > MAX_ENROLLMENT_CSR_PEM_BYTES {
             return Err(IdentityError::InvalidCertificateRequest);
         }
         let csr = CertificateSigningRequestParams::from_pem(csr_pem)
