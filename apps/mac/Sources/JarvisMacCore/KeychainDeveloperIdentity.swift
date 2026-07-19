@@ -6,6 +6,7 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
     private static let service = "com.nobiletechnology.jarvis.developer-bridge"
     private static let stagedAccount = "enrollment-staged-v1"
     private static let installedAccount = "identity-installed-v1"
+    private static let certificateLabel = "com.nobiletechnology.jarvis.developer-bridge.identity-v1"
     private static let keyTag = Data("com.nobiletechnology.jarvis.developer-bridge.p256-v1".utf8)
     private static let lock = NSLock()
 
@@ -92,11 +93,20 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
                 caCertificatePEM: receipt.caCertificatePEM,
                 caFingerprintSHA256: invitation.caFingerprintSHA256.lowercased()
             )
-            try saveRecord(record, account: Self.installedAccount)
+            let certificateWasAdded = try installCertificate(leaf, leafDER: leafDER)
+            var installedRecordWasSaved = false
             do {
+                _ = try loadIdentity(certificate: leaf)
+                try saveRecord(record, account: Self.installedAccount)
+                installedRecordWasSaved = true
                 try deleteRecord(account: Self.stagedAccount)
             } catch {
-                try? deleteRecord(account: Self.installedAccount)
+                if installedRecordWasSaved {
+                    try? deleteRecord(account: Self.installedAccount)
+                }
+                if certificateWasAdded {
+                    try? deleteInstalledCertificate()
+                }
                 throw error
             }
             return profile
@@ -120,8 +130,7 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
             let caDER = try decodePEM(record.caCertificatePEM, label: "CERTIFICATE")
             guard hex(SHA256.hash(data: caDER)) == record.caFingerprintSHA256,
                   let leaf = SecCertificateCreateWithData(nil, leafDER as CFData),
-                  let ca = SecCertificateCreateWithData(nil, caDER as CFData),
-                  let identity = SecIdentityCreate(nil, leaf, privateKey) else {
+                  let ca = SecCertificateCreateWithData(nil, caDER as CFData) else {
                 throw JarvisMacDeveloperBridgeError.certificateInvalid
             }
             try validateCertificate(
@@ -134,6 +143,7 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
                 expectedSerialHex: nil,
                 expectedNotAfterMilliseconds: record.profile.certificateNotAfterMilliseconds
             )
+            let identity = try loadIdentity(certificate: leaf)
             return JarvisMacTLSIdentityMaterial(identity: identity, caCertificate: ca)
         }
     }
@@ -202,6 +212,59 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw JarvisMacDeveloperBridgeError.keychainFailure(status)
         }
+    }
+
+    private func installCertificate(_ certificate: SecCertificate, leafDER: Data) throws -> Bool {
+        if let existing = try findInstalledCertificate() {
+            guard SecCertificateCopyData(existing) as Data == leafDER else {
+                throw JarvisMacDeveloperBridgeError.bindingMismatch
+            }
+            return false
+        }
+        var query = installedCertificateQuery()
+        query[kSecValueRef as String] = certificate
+        let status = SecItemAdd(query as CFDictionary, nil)
+        guard status == errSecSuccess else {
+            throw JarvisMacDeveloperBridgeError.keychainFailure(status)
+        }
+        return true
+    }
+
+    private func findInstalledCertificate() throws -> SecCertificate? {
+        var query = installedCertificateQuery()
+        query[kSecReturnRef as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess, let certificate = result as! SecCertificate? else {
+            throw JarvisMacDeveloperBridgeError.keychainFailure(status)
+        }
+        return certificate
+    }
+
+    private func deleteInstalledCertificate() throws {
+        let status = SecItemDelete(installedCertificateQuery() as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw JarvisMacDeveloperBridgeError.keychainFailure(status)
+        }
+    }
+
+    private func installedCertificateQuery() -> [String: Any] {
+        [
+            kSecClass as String: kSecClassCertificate,
+            kSecAttrLabel as String: Self.certificateLabel,
+            kSecUseDataProtectionKeychain as String: true
+        ]
+    }
+
+    private func loadIdentity(certificate: SecCertificate) throws -> SecIdentity {
+        var identity: SecIdentity?
+        let status = SecIdentityCreateWithCertificate(nil, certificate, &identity)
+        guard status == errSecSuccess, let identity else {
+            throw JarvisMacDeveloperBridgeError.keychainFailure(status)
+        }
+        return identity
     }
 
     private func makeCSR(
@@ -279,7 +342,6 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
               let leafBytes = SecKeyCopyExternalRepresentation(leafPublicKey, nil) as Data?,
               let keyBytes = SecKeyCopyExternalRepresentation(privatePublicKey, nil) as Data?,
               leafBytes == keyBytes,
-              SecIdentityCreate(nil, leaf, privateKey) != nil,
               certificateHasExactDeviceSAN(leafDER, deviceID: expectedDeviceID),
               certificateHasClientAuthenticationUsage(leafDER),
               commonNameStatus == errSecSuccess,

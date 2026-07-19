@@ -185,6 +185,12 @@ These notes capture durable facts for future agents working on this repository.
   strand an unrecoverable journal. A redacted receipt must select allowed
   fields rather than embedding a larger health object that can contain an
   operator-entered maintenance reason.
+- Build the Keychain identity path against the oldest supported macOS SDK, not
+  only the developer machine's current SDK. Persist the validated leaf as a
+  certificate-class Keychain item and use the long-standing
+  `SecIdentityCreateWithCertificate` lookup to pair it with the permanent
+  Secure Enclave key; `SecIdentityCreate` is absent from older supported Swift
+  Security overlays even though newer SDKs expose it.
 - `scripts/mac-windows-bridge-live-e2e.sh --check` validates and builds the live
   harness without credentials. After enrollment, `--run` exercises the
   production Keychain/TLS CLI across Tailscale, requires authenticated remote
