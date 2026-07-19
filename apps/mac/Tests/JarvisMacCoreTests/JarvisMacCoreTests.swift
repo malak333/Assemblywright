@@ -41,6 +41,39 @@ private final class IPCURLProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
+// Swift Testing serializes tests within a suite, but distinct suites may still run in parallel.
+// Keep the bearer-authorization suite on separate handler storage so it cannot overwrite the
+// main contract suite's in-flight URL protocol response.
+private final class IPCBearerURLProtocol: URLProtocol {
+    nonisolated(unsafe) static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        guard let handler = Self.handler else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+
+        do {
+            let (response, data) = try handler(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
+}
+
 @MainActor
 private final class MutableFlag {
     var value: Bool
@@ -8522,14 +8555,14 @@ struct IPCBearerAuthorizationTests {
             randomBytes: DeterministicAuthRandom().bytes
         )
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [IPCURLProtocol.self]
+        configuration.protocolClasses = [IPCBearerURLProtocol.self]
         let client = JarvisIPCClient(
             endpoint: JarvisEndpoint(baseURL: URL(string: "http://127.0.0.1:7787")!),
             session: URLSession(configuration: configuration),
             authorization: authorization
         )
         var headers: [String?] = []
-        IPCURLProtocol.handler = { request in
+        IPCBearerURLProtocol.handler = { request in
             headers.append(request.value(forHTTPHeaderField: "Authorization"))
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
             if request.url?.path == "/health" {
@@ -8537,7 +8570,7 @@ struct IPCBearerAuthorizationTests {
             }
             return (response, Data())
         }
-        defer { IPCURLProtocol.handler = nil }
+        defer { IPCBearerURLProtocol.handler = nil }
 
         do {
             _ = try await client.health()
@@ -8570,17 +8603,17 @@ struct IPCBearerAuthorizationTests {
     @Test("Explicit unauthenticated compatibility client omits the header")
     func explicitUnauthenticatedClientOmitsHeader() async throws {
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [IPCURLProtocol.self]
+        configuration.protocolClasses = [IPCBearerURLProtocol.self]
         let client = JarvisIPCClient(session: URLSession(configuration: configuration))
         var header: String?
-        IPCURLProtocol.handler = { request in
+        IPCBearerURLProtocol.handler = { request in
             header = request.value(forHTTPHeaderField: "Authorization")
             return (
                 HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
                 Data(#"{"status":"ok","version":"0.1.0","emergency_paused":false,"scheduler_jobs":0,"command_runtime":"test"}"#.utf8)
             )
         }
-        defer { IPCURLProtocol.handler = nil }
+        defer { IPCBearerURLProtocol.handler = nil }
 
         _ = try await client.health()
         #expect(header == nil)
@@ -8658,16 +8691,16 @@ struct IPCBearerAuthorizationTests {
             randomBytes: DeterministicAuthRandom().bytes
         )
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [IPCURLProtocol.self]
+        configuration.protocolClasses = [IPCBearerURLProtocol.self]
         var networkRequests = 0
-        IPCURLProtocol.handler = { request in
+        IPCBearerURLProtocol.handler = { request in
             networkRequests += 1
             return (
                 HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
                 Data(#"{"status":"ok","version":"0.1.0","emergency_paused":false,"scheduler_jobs":0,"command_runtime":"legacy"}"#.utf8)
             )
         }
-        defer { IPCURLProtocol.handler = nil }
+        defer { IPCBearerURLProtocol.handler = nil }
         let client = JarvisIPCClient(session: URLSession(configuration: configuration), authorization: authorization)
         let supervisor = JarvisCoreSupervisor(
             configuration: JarvisCoreSupervisorConfiguration(
