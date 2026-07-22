@@ -59,8 +59,11 @@ P-256 key, journals enrollment metadata and installed certificates in a
 distinct device-only Keychain namespace, pins the invitation CA and endpoint,
 requires TLS 1.3 mutual authentication, derives the fixed TLS exporter, and
 accepts the application session only when the master returns the exact registry
-revision. This is authenticated bridge health, not a continuously supervised
-agent or inference worker. The
+revision. The provisioned bridge CLI also has an explicit `monitor` mode that
+reuses one authenticated session for exact bounded health samples and drops the
+session before reconnecting with capped backoff after any transport or response
+failure. This is a signed operator supervision primitive, not the app-owned
+Rust agent, durable event relay, or inference worker. The
 accepted target and migration boundaries are recorded in
 [Distributed Developer Mode Design](docs/distributed-developer-mode-design.md).
 The protocol seam has a named serialized contract E2E. The master kernel has a
@@ -96,6 +99,8 @@ Focused Mac bridge commands are:
 swift test --disable-sandbox --package-path apps/mac --filter DeveloperBridgeTests
 swift run --package-path apps/mac jarvis-mac-bridge status
 swift run --package-path apps/mac jarvis-mac-bridge connect
+swift run --package-path apps/mac jarvis-mac-bridge monitor --samples 2
+swift run --package-path apps/mac jarvis-mac-bridge monitor --samples 2 --reconnect-between-samples
 ./scripts/mac-windows-bridge-live-e2e.sh --check
 ```
 
@@ -105,9 +110,12 @@ the CLI has no grant-secret argument or environment-variable path.
 After owner enrollment, `./scripts/mac-windows-bridge-live-e2e.sh --run` is the
 repeatable live-device E2E. It proves Tailscale reachability, the exact installed
 Keychain identity, TLS 1.3 mTLS plus exporter-bound application acceptance,
-authenticated health, and a positive connection epoch while forbidding secret
-and raw maintenance-reason fields from its receipt. It is owner/device evidence,
-not a hermetic CI test.
+authenticated health, a positive one-shot connection epoch, and two monitor
+samples on one separate persistent connection. A second bounded diagnostic
+closes its first accepted session and requires the next handshake to advance
+the Windows connection epoch. Receipts forbid secret and raw maintenance
+fields. This is owner/device evidence, not a hermetic CI test, induced network
+failure, or proof of unattended app background operation.
 `windows_service_lifecycle_e2e` installs a unique temporary real SCM service on
 the Windows CI runner, proves automatic-start configuration, starts the master
 under LocalSystem, checks runtime health, proves maintenance admission denial

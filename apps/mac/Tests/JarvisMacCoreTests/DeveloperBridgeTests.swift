@@ -79,6 +79,53 @@ private struct FakeBridgeChannelFactory: JarvisMacAuthenticatedTLSChannelFactory
     }
 }
 
+private enum FakeSupervisorOutcome: Sendable {
+    case response(JarvisMacBridgeHTTPResponse)
+    case failure
+}
+
+private struct FakeSupervisorError: Error {}
+
+private actor FakeSupervisorSession: JarvisMacBridgeSession {
+    nonisolated let connectionEpoch: UInt64
+    private var outcomes: [FakeSupervisorOutcome]
+    private(set) var requests: [JarvisMacBridgeHTTPRequest] = []
+    private(set) var cancelled = false
+
+    init(connectionEpoch: UInt64, outcomes: [FakeSupervisorOutcome]) {
+        self.connectionEpoch = connectionEpoch
+        self.outcomes = outcomes
+    }
+
+    func send(_ request: JarvisMacBridgeHTTPRequest) async throws -> JarvisMacBridgeHTTPResponse {
+        requests.append(request)
+        guard !outcomes.isEmpty else { throw FakeSupervisorError() }
+        switch outcomes.removeFirst() {
+        case let .response(response):
+            return response
+        case .failure:
+            throw FakeSupervisorError()
+        }
+    }
+
+    func cancel() async { cancelled = true }
+}
+
+private actor FakeSupervisorConnector: JarvisMacBridgeConnecting {
+    private var sessions: [FakeSupervisorSession]
+    private(set) var connectCount = 0
+
+    init(sessions: [FakeSupervisorSession]) {
+        self.sessions = sessions
+    }
+
+    func connect(profile _: JarvisMacBridgeProfile) async throws -> any JarvisMacBridgeSession {
+        connectCount += 1
+        guard !sessions.isEmpty else { throw FakeSupervisorError() }
+        return sessions.removeFirst()
+    }
+}
+
 @Suite("Mac enrollment and authenticated bridge", .serialized)
 struct DeveloperBridgeTests {
     @Test("Invitation decoding is exact and bounded before Keychain staging")
@@ -273,6 +320,98 @@ struct DeveloperBridgeTests {
         try await gate.begin()
         await gate.finish()
     }
+
+    @Test("Supervisor keeps one authenticated session for exact health samples")
+    func supervisorKeepsAuthenticatedSession() async throws {
+        let response = JarvisMacBridgeHTTPResponse(status: 200, body: validRemoteHealthData())
+        let session = FakeSupervisorSession(
+            connectionEpoch: 41,
+            outcomes: [.response(response), .response(response)]
+        )
+        let connector = FakeSupervisorConnector(sessions: [session])
+        let supervisor = JarvisMacBridgeSupervisor(profile: sampleProfile(), connector: connector)
+
+        let first = await supervisor.sample()
+        let second = await supervisor.sample()
+
+        #expect(first.phase == .authenticated)
+        #expect(first.connectionEpoch == 41)
+        #expect(first.masterStatus == "ok")
+        #expect(first.errorCode == nil)
+        #expect(second.phase == .authenticated)
+        #expect(await connector.connectCount == 1)
+        #expect(await session.requests.count == 2)
+        #expect(await session.cancelled == false)
+        await supervisor.stop()
+        #expect(await session.cancelled)
+    }
+
+    @Test("Supervisor rejects malformed health, cancels, and reconnects")
+    func supervisorReconnectsAfterInvalidHealth() async throws {
+        let invalid = FakeSupervisorSession(
+            connectionEpoch: 7,
+            outcomes: [.response(JarvisMacBridgeHTTPResponse(
+                status: 200,
+                body: Data(#"{"status":"ok","mode":"developer_remote_master"}"#.utf8)
+            ))]
+        )
+        let recovered = FakeSupervisorSession(
+            connectionEpoch: 8,
+            outcomes: [.response(JarvisMacBridgeHTTPResponse(status: 200, body: validRemoteHealthData()))]
+        )
+        let connector = FakeSupervisorConnector(sessions: [invalid, recovered])
+        let supervisor = JarvisMacBridgeSupervisor(profile: sampleProfile(), connector: connector)
+
+        let failed = await supervisor.sample()
+        let healthy = await supervisor.sample()
+
+        #expect(failed.phase == .backingOff)
+        #expect(failed.connectionEpoch == nil)
+        #expect(failed.consecutiveFailures == 1)
+        #expect(failed.nextDelayMilliseconds == 1_000)
+        #expect(failed.errorCode == "invalid_health")
+        #expect(await invalid.cancelled)
+        #expect(healthy.phase == .authenticated)
+        #expect(healthy.connectionEpoch == 8)
+        #expect(healthy.consecutiveFailures == 0)
+        #expect(await connector.connectCount == 2)
+        await supervisor.stop()
+    }
+
+    @Test("Supervisor backoff is bounded")
+    func supervisorBackoffIsBounded() {
+        #expect(JarvisMacBridgeSupervisor.backoffMilliseconds(for: 1) == 1_000)
+        #expect(JarvisMacBridgeSupervisor.backoffMilliseconds(for: 2) == 2_000)
+        #expect(JarvisMacBridgeSupervisor.backoffMilliseconds(for: 5) == 16_000)
+        #expect(JarvisMacBridgeSupervisor.backoffMilliseconds(for: 6) == 30_000)
+        #expect(JarvisMacBridgeSupervisor.backoffMilliseconds(for: .max) == 30_000)
+    }
+
+    @Test("Explicit reconnect cancels the old session and advances to a new epoch")
+    func supervisorExplicitReconnectAdvancesEpoch() async throws {
+        let response = JarvisMacBridgeHTTPResponse(status: 200, body: validRemoteHealthData())
+        let firstSession = FakeSupervisorSession(
+            connectionEpoch: 20,
+            outcomes: [.response(response)]
+        )
+        let secondSession = FakeSupervisorSession(
+            connectionEpoch: 21,
+            outcomes: [.response(response)]
+        )
+        let connector = FakeSupervisorConnector(sessions: [firstSession, secondSession])
+        let supervisor = JarvisMacBridgeSupervisor(profile: sampleProfile(), connector: connector)
+
+        let first = await supervisor.sample()
+        await supervisor.reconnectBeforeNextSample()
+        let second = await supervisor.sample()
+
+        #expect(first.connectionEpoch == 20)
+        #expect(await firstSession.cancelled)
+        #expect(second.phase == .authenticated)
+        #expect(second.connectionEpoch == 21)
+        #expect(await connector.connectCount == 2)
+        await supervisor.stop()
+    }
 }
 
 private func validInvitationData() throws -> Data {
@@ -305,5 +444,11 @@ private func sampleProfile() -> JarvisMacBridgeProfile {
         ],
         masterEndpoint: "100.64.23.14:7792",
         certificateNotAfterMilliseconds: 4_102_444_800_000
+    )
+}
+
+private func validRemoteHealthData() -> Data {
+    Data(
+        #"{"status":"ok","mode":"developer_remote_master","host_mode":"windows_service","service_identity":"MIKE-PC\\mike","maintenance_active":false,"maintenance_reason":null,"protocol_version":1,"schema_version":2,"process_id":43752,"started_at_ms":1784749559000,"startup_reconciliation":{"disconnected_connections":0,"abandoned_attempts":0,"requeued_steps":0},"state":{"registered_devices":1,"active_device_certificates":1,"unconsumed_enrollment_grants":2,"active_connections":1,"queued_steps":0,"leased_steps":0,"terminal_steps":0,"active_attempts":0},"boundary":"TLS 1.3 mutual authentication with enrolled-device certificate and durable revocation checks"}"#.utf8
     )
 }

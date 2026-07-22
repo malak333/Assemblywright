@@ -11,7 +11,7 @@ private enum BridgeCLIError: Error, CustomStringConvertible {
     var description: String {
         switch self {
         case .usage:
-            "Usage: jarvis-mac-bridge enrollment prepare|install | status | connect"
+            "Usage: jarvis-mac-bridge enrollment prepare|install | status | connect | monitor [--samples COUNT] [--interval-ms MILLISECONDS] [--reconnect-between-samples]"
         case .inputTooLarge:
             "Input exceeds the 64 KiB enrollment-document limit."
         case .notEnrolled:
@@ -97,9 +97,71 @@ private struct JarvisMacBridgeCLI {
                 await session.cancel()
                 throw error
             }
+        case let arguments where arguments.first == "monitor":
+            guard let profile = try coordinator.status() else { throw BridgeCLIError.notEnrolled }
+            let options = try monitorOptions(Array(arguments.dropFirst()))
+            let supervisor = JarvisMacBridgeSupervisor(profile: profile)
+            var completedSamples = 0
+            do {
+                while options.samples.map({ completedSamples < $0 }) ?? true {
+                    let snapshot = await supervisor.sample()
+                    try writeEncodableJSON(snapshot)
+                    completedSamples += 1
+                    if let samples = options.samples, completedSamples >= samples { break }
+                    if options.reconnectBetweenSamples, snapshot.phase == .authenticated {
+                        await supervisor.reconnectBeforeNextSample()
+                    }
+                    let delay = snapshot.phase == .authenticated
+                        ? options.intervalMilliseconds
+                        : snapshot.nextDelayMilliseconds
+                    try await Task.sleep(for: .milliseconds(delay))
+                }
+            } catch {
+                await supervisor.stop()
+                throw error
+            }
+            await supervisor.stop()
         default:
             throw BridgeCLIError.usage
         }
+    }
+
+    private static func monitorOptions(_ arguments: [String]) throws -> (
+        samples: Int?, intervalMilliseconds: UInt64, reconnectBetweenSamples: Bool
+    ) {
+        var samples: Int?
+        var intervalMilliseconds = JarvisMacBridgeSupervisor.normalPollDelayMilliseconds
+        var reconnectBetweenSamples = false
+        var index = 0
+        while index < arguments.count {
+            if arguments[index] == "--reconnect-between-samples" {
+                guard !reconnectBetweenSamples else { throw BridgeCLIError.usage }
+                reconnectBetweenSamples = true
+                index += 1
+                continue
+            }
+            guard index + 1 < arguments.count else { throw BridgeCLIError.usage }
+            let value = arguments[index + 1]
+            switch arguments[index] {
+            case "--samples":
+                guard samples == nil, let parsed = Int(value), (1 ... 10_000).contains(parsed) else {
+                    throw BridgeCLIError.usage
+                }
+                samples = parsed
+            case "--interval-ms":
+                guard let parsed = UInt64(value), (100 ... 60_000).contains(parsed) else {
+                    throw BridgeCLIError.usage
+                }
+                intervalMilliseconds = parsed
+            default:
+                throw BridgeCLIError.usage
+            }
+            index += 2
+        }
+        guard !reconnectBetweenSamples || (samples ?? 0) >= 2 else {
+            throw BridgeCLIError.usage
+        }
+        return (samples, intervalMilliseconds, reconnectBetweenSamples)
     }
 
     private static func readBoundedStdin() throws -> Data {
@@ -124,5 +186,11 @@ private struct JarvisMacBridgeCLI {
     private static func writeJSON(_ object: [String: Any]) throws {
         let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
         try writeStdout(data)
+    }
+
+    private static func writeEncodableJSON(_ value: some Encodable) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        try writeStdout(encoder.encode(value))
     }
 }

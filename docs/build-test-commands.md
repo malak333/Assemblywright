@@ -197,6 +197,8 @@ pbpaste | "$BRIDGE" enrollment prepare | pbcopy
 pbpaste | "$BRIDGE" enrollment install
 "$BRIDGE" status
 "$BRIDGE" connect
+"$BRIDGE" monitor --samples 2
+"$BRIDGE" monitor --samples 2 --reconnect-between-samples
 ```
 
 The signed builder uses Xcode automatic provisioning, derives the development
@@ -213,6 +215,14 @@ requires the Keychain client identity and pinned enrollment CA, completes the
 exporter-bound application handshake, checks authenticated remote health on the
 same connection, prints a redacted receipt, and closes it. Clipboard use here
 is limited to public pairing material; no grant or private key is copied.
+`monitor` keeps the accepted session open, validates each bounded health
+document against the exact remote-master shape, and emits allowlisted
+snapshots. Any request, transport, or validation failure cancels the session
+before a new connection attempt and applies capped exponential backoff.
+`--samples` is the bounded evidence form; omitting it runs until the operator
+stops the process. The diagnostic-only `--reconnect-between-samples` requires
+at least two bounded samples, cancels each accepted session between samples,
+and proves the next sample performs a fresh TLS/exporter-bound handshake.
 
 After enrollment is installed and the owner-account Windows service is running,
 record the real two-device proof with:
@@ -225,10 +235,15 @@ The harness rejects an ad-hoc or unentitled CLI, loads the exact Keychain
 profile through the provisioned production CLI, pings
 its configured Windows host through Tailscale, checks the configured TCP port,
 performs the production TLS 1.3 mTLS/exporter handshake, reads authenticated
-health on that session, requires a positive connection epoch, and rejects
-secret-bearing or raw maintenance-reason receipt fields. `--check` compiles and
-validates the harness without requiring enrollment. `--run` is owner-recorded
-live-device evidence and cannot replace Windows CI, signing, or notarization.
+health, requires positive connection epochs, and requires two monitor samples
+to reuse one authenticated connection. A separate bounded reconnect diagnostic
+must authenticate twice and receive a strictly higher connection epoch after
+the deliberate client-side close. It rejects secret-bearing, raw maintenance-
+reason, boundary, and service-identity fields from monitor output.
+`--check` compiles and validates the harness without requiring enrollment.
+`--run` is owner-recorded live-device evidence and cannot replace Windows CI,
+signing, notarization, unattended background reliability, or recovery under an
+induced network outage.
 
 The lower-level grant command prints its 256-bit secret exactly once and remains
 available for recovery and contract testing. Prefer `enrollment pair` for an

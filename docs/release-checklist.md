@@ -202,7 +202,8 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   `swift test --disable-sandbox --package-path apps/mac --filter DeveloperBridgeTests`
   and confirm strict secret-free invitation/CSR decoding, staged enrollment
   mismatch denial, exporter-bound handshake encoding, exact registry-revision
-  acceptance, and channel cancellation remain green. Build
+  acceptance, channel cancellation, persistent-session reuse, exact health
+  rejection, reconnect, and capped backoff remain green. Build
   `swift build --package-path apps/mac --product jarvis-mac-bridge` so the real
   Security/Keychain and Network.framework adapters compile. Run
   `./scripts/mac-windows-bridge-live-e2e.sh --check` in repository validation.
@@ -210,8 +211,12 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   the app-wrapped CLI has an embedded provisioning profile, Apple team,
   application identifier, and Keychain access group. After owner enrollment,
   run `./scripts/mac-windows-bridge-live-e2e.sh --run`
-  and archive its fixed success receipt as live-device evidence; do not treat a
-  skipped or not-enrolled result as passing. Then run
+  and archive its fixed success receipt as live-device evidence. Require the
+  two bounded monitor samples to share one positive connection epoch. Require
+  the separate reconnect diagnostic to authenticate twice and return a strictly
+  higher second epoch after deliberate client-side close. Do not treat a skipped
+  or not-enrolled result as passing or claim induced-outage recovery from this
+  diagnostic. Then run
   `cargo test -p jarvis-master --bin jarvis-master service_logon_right_is_ensured_for_current_account --locked -- --ignored --nocapture`
   in an elevated Windows environment and confirm it resolves the current account
   SID, idempotently grants `SeServiceLogonRight`, and enumerates the exact right.

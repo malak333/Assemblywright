@@ -99,5 +99,45 @@ for forbidden in grant_secret certificate_pem ca_certificate_pem maintenance_rea
     || fail "live receipt exposed forbidden field: $forbidden"
 done
 
-printf 'jarvis_mac_windows_bridge_live_e2e_ok endpoint=%s connection_epoch=%s\n' \
-  "$endpoint" "$connection_epoch"
+monitor_json="$("$BRIDGE_BIN" monitor --samples 2 --interval-ms 100)"
+monitor_first="$(printf '%s\n' "$monitor_json" | sed -n '1p')"
+monitor_second="$(printf '%s\n' "$monitor_json" | sed -n '2p')"
+monitor_third="$(printf '%s\n' "$monitor_json" | sed -n '3p')"
+[[ -n "$monitor_first" && -n "$monitor_second" && -z "$monitor_third" ]] \
+  || fail "bridge monitor did not emit exactly two bounded samples"
+[[ "$(json_value "$monitor_first" phase)" == "authenticated" ]] \
+  || fail "first bridge monitor sample was not authenticated"
+[[ "$(json_value "$monitor_second" phase)" == "authenticated" ]] \
+  || fail "second bridge monitor sample was not authenticated"
+monitor_first_epoch="$(json_value "$monitor_first" connection_epoch)"
+monitor_second_epoch="$(json_value "$monitor_second" connection_epoch)"
+[[ "$monitor_first_epoch" =~ ^[0-9]+$ && "$monitor_first_epoch" -gt 0 ]] \
+  || fail "first bridge monitor epoch was invalid"
+[[ "$monitor_first_epoch" == "$monitor_second_epoch" ]] \
+  || fail "bridge monitor did not reuse one authenticated connection"
+for forbidden in grant_secret certificate_pem ca_certificate_pem maintenance_reason boundary service_identity; do
+  [[ "$monitor_json" != *"$forbidden"* ]] \
+    || fail "live monitor exposed forbidden field: $forbidden"
+done
+
+reconnect_json="$("$BRIDGE_BIN" monitor --samples 2 --interval-ms 100 --reconnect-between-samples)"
+reconnect_first="$(printf '%s\n' "$reconnect_json" | sed -n '1p')"
+reconnect_second="$(printf '%s\n' "$reconnect_json" | sed -n '2p')"
+reconnect_third="$(printf '%s\n' "$reconnect_json" | sed -n '3p')"
+[[ -n "$reconnect_first" && -n "$reconnect_second" && -z "$reconnect_third" ]] \
+  || fail "bridge reconnect diagnostic did not emit exactly two bounded samples"
+[[ "$(json_value "$reconnect_first" phase)" == "authenticated" \
+  && "$(json_value "$reconnect_second" phase)" == "authenticated" ]] \
+  || fail "bridge reconnect diagnostic did not authenticate both sessions"
+reconnect_first_epoch="$(json_value "$reconnect_first" connection_epoch)"
+reconnect_second_epoch="$(json_value "$reconnect_second" connection_epoch)"
+[[ "$reconnect_first_epoch" =~ ^[0-9]+$ && "$reconnect_second_epoch" =~ ^[0-9]+$ \
+  && "$reconnect_second_epoch" -gt "$reconnect_first_epoch" ]] \
+  || fail "bridge reconnect diagnostic did not advance the connection epoch"
+for forbidden in grant_secret certificate_pem ca_certificate_pem maintenance_reason boundary service_identity; do
+  [[ "$reconnect_json" != *"$forbidden"* ]] \
+    || fail "live reconnect diagnostic exposed forbidden field: $forbidden"
+done
+
+printf 'jarvis_mac_windows_bridge_live_e2e_ok endpoint=%s connection_epoch=%s monitor_epoch=%s monitor_samples=2 reconnect_epoch_before=%s reconnect_epoch_after=%s\n' \
+  "$endpoint" "$connection_epoch" "$monitor_first_epoch" "$reconnect_first_epoch" "$reconnect_second_epoch"

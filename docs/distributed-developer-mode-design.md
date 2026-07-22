@@ -127,12 +127,18 @@ The current default-inert implementation stops at the Mac trust/transport
 foundation: a Swift Keychain enrollment coordinator, Security.framework
 identity store, Network.framework TLS 1.3 client, and focused
 `jarvis-mac-bridge` operator CLI can complete an exporter-bound authenticated
-health session. Live Secure Enclave enrollment runs the CLI from an
-Xcode-provisioned app wrapper with a distinct Keychain access group; an
-ad-hoc SwiftPM executable remains compile-only. The continuously supervised
-Rust `jarvis-agent`, UDS relay,
-event cursor, and M1 inference adapter in the preceding target description are
-not implemented by this slice.
+health session. Its explicit monitor mode reuses the accepted connection for
+exact bounded health samples, cancels on any failure, and reconnects with capped
+backoff while emitting only allowlisted status. Its bounded reconnect diagnostic
+also closes an accepted session and requires a fresh production handshake with
+a higher master epoch. Live Secure Enclave enrollment
+runs the CLI from an Xcode-provisioned app wrapper with a distinct Keychain
+access group; an ad-hoc SwiftPM executable remains compile-only. This is an
+operator-process supervision primitive, not app-owned background operation or
+an induced network-failure recovery drill.
+The app-supervised Rust `jarvis-agent`, UDS relay, durable event cursor, and M1
+inference adapter in the preceding target description are not implemented by
+this slice.
 
 ### RTX And Future Workers
 

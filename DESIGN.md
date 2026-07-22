@@ -128,9 +128,16 @@ same connection. A missing exporter, expired or mismatched certificate,
 unexpected trust chain, rejected registry revision, or non-accepted handshake
 closes the connection and grants no distributed authority. Tailscale is the
 private transport overlay, not an authentication or authorization boundary.
-This foundation proves enrollment and authenticated bridge health; it does not
-yet provide a continuously supervised `jarvis-agent`, live MLX execution,
-repository mutation, Git publication, or Codex dispatch.
+The signed operator bridge can now supervise one persistent authenticated
+session, validate bounded remote health exactly, and reconnect with capped
+fail-closed backoff while exposing only a redacted state snapshot. This proves
+the Mac-side connection-supervision primitive. The live bridge E2E also
+deliberately closes one accepted session and requires the next signed production
+connection to receive a higher Windows epoch. This is not app-owned background
+operation or an induced network-outage drill. It does not yet provide the
+app-supervised Rust `jarvis-agent`,
+durable event cursors, live MLX execution, repository mutation, Git
+publication, or Codex dispatch.
 
 Current app-supervised IPC defaults to a Unix domain socket, not a TCP listener.
 Swift creates a current-owner `0700` runtime directory and a generation-random

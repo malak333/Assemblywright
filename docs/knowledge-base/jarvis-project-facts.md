@@ -201,12 +201,29 @@ These notes capture durable facts for future agents working on this repository.
   macOS releases. Convert both forms explicitly before comparing the signed
   certificate expiry. Windows-issued PEM receipts use CRLF; accept uniform LF
   or uniform CRLF framing, but reject bare-CR and mixed-line-ending PEM.
+- The Mac bridge supervision phase adds `JarvisMacBridgeSupervisor` and an
+  explicit `jarvis-mac-bridge monitor` command. It retains one accepted mTLS/
+  exporter-bound session for repeated exact 64-KiB-bounded health samples,
+  cancels and discards the session on any transport or validation failure,
+  emits only allowlisted state with fixed redacted error codes, and caps
+  exponential reconnect backoff at 30 seconds. The bounded diagnostic
+  `--reconnect-between-samples` deliberately closes the accepted connection so
+  live E2E can require the next Windows epoch to increase without stopping the
+  service. This is an operator-process primitive, not the app-supervised Rust
+  agent, durable event relay, M1 inference, or unattended background operation.
 - `scripts/mac-windows-bridge-live-e2e.sh --check` validates and builds the live
   harness without credentials. After enrollment, `--run` exercises the
   provisioned production Keychain/TLS CLI across Tailscale, requires
-  authenticated remote master health plus a positive epoch, and forbids grant,
-  certificate PEM, and raw maintenance-reason fields. This is a repeatable
-  owner/device E2E, not hermetic CI or release-signing evidence.
+  authenticated remote master health plus positive epochs, and requires two
+  bounded monitor samples to reuse one persistent authenticated connection.
+  It separately requires a deliberate client-side reconnect to authenticate
+  twice and advance the master epoch.
+  The supervisor cancels before reconnect, caps backoff at 30 seconds, validates
+  the exact bounded health shape, and emits only allowlisted state. The harness
+  forbids grant, certificate PEM, raw maintenance-reason, boundary, and service
+  identity fields. This is a repeatable healthy-session owner/device E2E, not
+  hermetic CI, release-signing evidence, app background supervision, durable
+  event relay, or induced-outage recovery proof.
 - The sixth distributed-development slice adds an explicit Windows Service
   Control Manager lifecycle without removing foreground mode. The same
   single-owner master runtime can be installed, started, stopped, inspected,
