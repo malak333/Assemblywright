@@ -211,19 +211,34 @@ These notes capture durable facts for future agents working on this repository.
   live E2E can require the next Windows epoch to increase without stopping the
   service. This is an operator-process primitive, not the app-supervised Rust
   agent, durable event relay, M1 inference, or unattended background operation.
+- The Swift app's bridge lifecycle is an exact default-off development opt-in
+  through `JARVIS_MAC_DEVELOPER_BRIDGE_EXECUTABLE` plus independently supplied
+  `JARVIS_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER`. Before launching the child,
+  it requires an Apple-anchored pinned-team requirement, the fixed bridge
+  identifier, the exact executable, and the bridge-only Keychain access group,
+  then revalidates the running PID and prevalidated CDHash before accepting stdout. It launches only
+  `monitor` with an empty environment, owns one boundedly reaped child, bounds
+  the snapshot queue, parses strict phase-specific NDJSON with duplicate-key
+  rejection, and fails closed to Master Offline on replacement,
+  malformed/extra/oversized/overproduced output, EOF, or launch failure. The Developer tab
+  is read-only; `Jarvis.app` never loads the bridge identity. The helper is not
+  yet bundled, so this does not establish unattended background operation.
 - `scripts/mac-windows-bridge-live-e2e.sh --check` validates and builds the live
   harness without credentials. After enrollment, `--run` exercises the
-  provisioned production Keychain/TLS CLI across Tailscale, requires
-  authenticated remote master health plus positive epochs, and requires two
-  bounded monitor samples to reuse one persistent authenticated connection.
+  provisioned production Keychain/TLS CLI across Tailscale and the production
+  app lifecycle with the real signed helper. It requires static and running-PID
+  code validation, a strict live app snapshot, bounded helper reaping,
+  authenticated remote master health plus positive epochs, and two bounded
+  monitor samples over one persistent authenticated connection.
   It separately requires a deliberate client-side reconnect to authenticate
   twice and advance the master epoch.
   The supervisor cancels before reconnect, caps backoff at 30 seconds, validates
   the exact bounded health shape, and emits only allowlisted state. The harness
   forbids grant, certificate PEM, raw maintenance-reason, boundary, and service
-  identity fields. This is a repeatable healthy-session owner/device E2E, not
-  hermetic CI, release-signing evidence, app background supervision, durable
-  event relay, or induced-outage recovery proof.
+  identity fields. This is a repeatable healthy-session owner/device and
+  development app-supervision E2E, not hermetic CI, release-signing evidence,
+  bundled-helper or unattended background proof, durable event relay, or
+  induced-outage recovery proof.
 - The sixth distributed-development slice adds an explicit Windows Service
   Control Manager lifecycle without removing foreground mode. The same
   single-owner master runtime can be installed, started, stopped, inspected,

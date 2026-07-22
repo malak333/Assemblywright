@@ -203,7 +203,14 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   and confirm strict secret-free invitation/CSR decoding, staged enrollment
   mismatch denial, exporter-bound handshake encoding, exact registry-revision
   acceptance, channel cancellation, persistent-session reuse, exact health
-  rejection, reconnect, and capped backoff remain green. Build
+  rejection, reconnect, capped backoff, strict app-helper snapshot decoding,
+  one-child ownership, and fail-closed helper EOF/signature behavior remain
+  green. Confirm normal app startup is inert without
+  `JARVIS_MAC_DEVELOPER_BRIDGE_EXECUTABLE` plus an independently trusted
+  `JARVIS_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER`, and an opted-in development launch
+  validates the separately signed helper, pins its prelaunch CDHash against the
+  running PID, and shows read-only bridge state
+  without granting `Jarvis.app` the bridge Keychain group. Build
   `swift build --package-path apps/mac --product jarvis-mac-bridge` so the real
   Security/Keychain and Network.framework adapters compile. Run
   `./scripts/mac-windows-bridge-live-e2e.sh --check` in repository validation.
@@ -211,7 +218,10 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   the app-wrapped CLI has an embedded provisioning profile, Apple team,
   application identifier, and Keychain access group. After owner enrollment,
   run `./scripts/mac-windows-bridge-live-e2e.sh --run`
-  and archive its fixed success receipt as live-device evidence. Require the
+  and archive its fixed success receipt as live-device evidence. Require
+  `app_supervision=verified` so the production app lifecycle has validated and
+  launched the real signed helper, observed live strict state, and boundedly
+  reaped the child. Require the
   two bounded monitor samples to share one positive connection epoch. Require
   the separate reconnect diagnostic to authenticate twice and return a strictly
   higher second epoch after deliberate client-side close. Do not treat a skipped

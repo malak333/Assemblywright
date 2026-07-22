@@ -199,6 +199,10 @@ pbpaste | "$BRIDGE" enrollment install
 "$BRIDGE" connect
 "$BRIDGE" monitor --samples 2
 "$BRIDGE" monitor --samples 2 --reconnect-between-samples
+TEAM="${JARVIS_APPLE_DEVELOPMENT_TEAM:?set the independently trusted 10-character Apple team used to build the bridge}"
+JARVIS_MAC_DEVELOPER_BRIDGE_EXECUTABLE="$PWD/$BRIDGE" \
+  JARVIS_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER="$TEAM" \
+  swift run --package-path apps/mac JarvisMacApp
 ```
 
 The signed builder uses Xcode automatic provisioning, derives the development
@@ -223,6 +227,19 @@ before a new connection attempt and applies capped exponential backoff.
 stops the process. The diagnostic-only `--reconnect-between-samples` requires
 at least two bounded samples, cancels each accepted session between samples,
 and proves the next sample performs a fresh TLS/exporter-bound handshake.
+The app launch is an exact, default-off development opt-in. The separately
+captured team variable is required so the candidate does not select its own
+trust root. The app validates the
+separately signed helper's Apple code identity, team-bound requirement,
+executable, and distinct Keychain access group before launch, then revalidates
+the running PID plus the prevalidated CDHash before accepting output. It
+launches only `monitor` with a cleared environment, bounds the snapshot queue,
+and accepts only exact redacted NDJSON. The Developer tab is read-only. EOF,
+launch/signature failure,
+duplicate keys, malformed or extra fields, and oversized or overproduced output
+fail closed to Master Offline; shutdown uses bounded TERM-to-KILL reaping. The
+current distribution does not bundle this helper, and the app never reads its
+Keychain identity.
 
 After enrollment is installed and the owner-account Windows service is running,
 record the real two-device proof with:
@@ -240,6 +257,12 @@ to reuse one authenticated connection. A separate bounded reconnect diagnostic
 must authenticate twice and receive a strictly higher connection epoch after
 the deliberate client-side close. It rejects secret-bearing, raw maintenance-
 reason, boundary, and service-identity fields from monitor output.
+The same run passes the helper path and independently extracted signing team
+into the production `JarvisDeveloperBridgeProcessLifecycle`. That test performs
+the app's static and running-PID code checks, launches the real helper with an
+empty environment, observes a strict connected or maintenance snapshot from
+the live Windows master, and boundedly stops and reaps the helper. The fixed
+success marker includes `app_supervision=verified`.
 `--check` compiles and validates the harness without requiring enrollment.
 `--run` is owner-recorded live-device evidence and cannot replace Windows CI,
 signing, notarization, unattended background reliability, or recovery under an

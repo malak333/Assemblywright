@@ -128,14 +128,24 @@ same connection. A missing exporter, expired or mismatched certificate,
 unexpected trust chain, rejected registry revision, or non-accepted handshake
 closes the connection and grants no distributed authority. Tailscale is the
 private transport overlay, not an authentication or authorization boundary.
-The signed operator bridge can now supervise one persistent authenticated
+The signed bridge helper can now supervise one persistent authenticated
 session, validate bounded remote health exactly, and reconnect with capped
-fail-closed backoff while exposing only a redacted state snapshot. This proves
-the Mac-side connection-supervision primitive. The live bridge E2E also
+fail-closed backoff while exposing only a redacted state snapshot. An exact,
+default-off executable plus independently supplied Apple-team opt-in lets the
+Swift app supervise that separately signed helper and render only Disabled, Starting,
+Connected, Master Offline, Maintenance, or Stopped state. The app validates the
+helper's Apple signature, independently pinned team requirement, exact
+executable, and distinct Keychain access group before launch, then revalidates
+the running child by PID and prevalidated CDHash before accepting output. It
+clears the child environment, bounds the snapshot
+queue, uses bounded TERM-to-KILL reaping, and fails closed on duplicate keys,
+malformed, oversized, extra, or terminated output. `Jarvis.app`
+never reads the bridge identity. This proves the Mac-side development
+connection-supervision primitive. The live bridge E2E also
 deliberately closes one accepted session and requires the next signed production
-connection to receive a higher Windows epoch. This is not app-owned background
-operation or an induced network-outage drill. It does not yet provide the
-app-supervised Rust `jarvis-agent`,
+connection to receive a higher Windows epoch. The helper is not yet bundled in
+the distribution and this is not unattended background operation. It does not
+yet provide the app-supervised Rust `jarvis-agent`,
 durable event cursors, live MLX execution, repository mutation, Git
 publication, or Codex dispatch.
 

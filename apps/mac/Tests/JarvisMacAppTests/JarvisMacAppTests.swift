@@ -6,6 +6,27 @@ import UserNotifications
 @MainActor
 @Suite("Jarvis Mac app release presentation")
 struct JarvisMacAppTests {
+    @Test("Developer bridge presentation maps every read-only lifecycle state")
+    func developerBridgePresentationMapsEveryLifecycleState() {
+        let cases: [(JarvisDeveloperBridgeAppPhase, String)] = [
+            (.disabled, "Disabled"),
+            (.starting, "Starting"),
+            (.connected, "Connected"),
+            (.masterOffline, "Master Offline"),
+            (.maintenance, "Maintenance"),
+            (.stopped, "Stopped")
+        ]
+
+        for (phase, expectedLabel) in cases {
+            let presentation = DeveloperBridgeStatusPresentation(
+                status: JarvisDeveloperBridgeAppStatus(phase: phase)
+            )
+            #expect(presentation.phaseLabel == expectedLabel)
+        }
+        #expect(JarvisDeveloperBridgeProcessLifecycle.proofBoundary.contains("Read-only"))
+        #expect(JarvisDeveloperBridgeProcessLifecycle.proofBoundary.contains("does not enable"))
+    }
+
     @Test("Plugin enablement confirmation states authority and containment boundaries")
     func pluginEnablementConfirmationIsExplicit() {
         let network = PluginEnablementConfirmation(

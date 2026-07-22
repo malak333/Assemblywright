@@ -24,6 +24,7 @@ struct JarvisMacApp: App {
     @StateObject private var voiceAdapter: VoiceAdapterStateModel
     @StateObject private var speechOutput: SpeechOutputStateModel
     @StateObject private var modelConfiguration: ModelConfigurationModel
+    @StateObject private var developerBridge: JarvisDeveloperBridgeProcessLifecycle
     private let releaseSmokeProbe: JarvisReleaseSmokeProbe
 
     init() {
@@ -124,6 +125,7 @@ struct JarvisMacApp: App {
         )
         _speechOutput = StateObject(wrappedValue: SpeechOutputStateModel(adapter: MacSpeechOutputAdapter()))
         _modelConfiguration = StateObject(wrappedValue: ModelConfigurationModel())
+        _developerBridge = StateObject(wrappedValue: JarvisDeveloperBridgeProcessLifecycle())
     }
 
     @MainActor
@@ -157,7 +159,8 @@ struct JarvisMacApp: App {
                 voice: voice,
                 voiceAdapter: voiceAdapter,
                 speechOutput: speechOutput,
-                modelConfiguration: modelConfiguration
+                modelConfiguration: modelConfiguration,
+                developerBridge: developerBridge
             )
                 .background(AppActivationView())
                 .task {
@@ -176,6 +179,9 @@ struct JarvisMacApp: App {
                     } else if case let .degraded(reason) = supervisor.mode {
                         console.markDegraded(reason)
                     }
+                }
+                .task {
+                    await developerBridge.superviseUntilCancelled()
                 }
         }
         .commands {
@@ -242,6 +248,7 @@ struct JarvisShellView: View {
     @ObservedObject var voiceAdapter: VoiceAdapterStateModel
     @ObservedObject var speechOutput: SpeechOutputStateModel
     @ObservedObject var modelConfiguration: ModelConfigurationModel
+    @ObservedObject var developerBridge: JarvisDeveloperBridgeProcessLifecycle
 
     var body: some View {
         VStack(spacing: 0) {
@@ -292,9 +299,71 @@ struct JarvisShellView: View {
                     .tabItem { Text("Release") }
                 VoiceStateView(model: voice, adapter: voiceAdapter, speechOutput: speechOutput, console: console)
                     .tabItem { Text("Voice") }
+                DeveloperBridgeStatusView(model: developerBridge)
+                    .tabItem { Text("Developer") }
             }
         }
         .frame(minWidth: 860, minHeight: 560)
+    }
+}
+
+struct DeveloperBridgeStatusView: View {
+    @ObservedObject var model: JarvisDeveloperBridgeProcessLifecycle
+
+    private var presentation: DeveloperBridgeStatusPresentation {
+        DeveloperBridgeStatusPresentation(status: model.status)
+    }
+
+    var body: some View {
+        Form {
+            Section("Windows-primary Developer Mode") {
+                LabeledContent("Bridge", value: presentation.phaseLabel)
+
+                if let endpoint = model.status.masterEndpoint,
+                   let epoch = model.status.connectionEpoch {
+                    LabeledContent("Master", value: endpoint)
+                    LabeledContent("Connection epoch", value: String(epoch))
+                }
+
+                if let errorCode = model.status.errorCode {
+                    LabeledContent("Status code", value: errorCode)
+                }
+
+                Text(JarvisDeveloperBridgeProcessLifecycle.proofBoundary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if model.status.phase == .disabled {
+                    Text(
+                        "Development opt-in is disabled. Set \(JarvisDeveloperBridgeProcessConfiguration.executableEnvironmentKey) to the exact separately signed helper and \(JarvisDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey) to its independently verified Apple team before launching Jarvis."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+struct DeveloperBridgeStatusPresentation: Equatable {
+    let phaseLabel: String
+
+    init(status: JarvisDeveloperBridgeAppStatus) {
+        switch status.phase {
+        case .disabled:
+            phaseLabel = "Disabled"
+        case .starting:
+            phaseLabel = "Starting"
+        case .connected:
+            phaseLabel = "Connected"
+        case .masterOffline:
+            phaseLabel = "Master Offline"
+        case .maintenance:
+            phaseLabel = "Maintenance"
+        case .stopped:
+            phaseLabel = "Stopped"
+        }
     }
 }
 

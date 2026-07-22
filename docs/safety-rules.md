@@ -99,6 +99,18 @@ release requirements, not optional UX guidance.
   certificate/key mismatch, expiry, revocation, role or capability drift,
   registry-revision mismatch, replay, or non-accepted handshake fails closed
   and cancels the channel. Tailscale reachability is never Jarvis authority.
+- `Jarvis.app` may supervise the Mac bridge only through an explicit exact
+  helper path plus an independently supplied Apple team. It must validate an
+  Apple-anchored, pinned-team requirement, the
+  fixed bridge identifier and exact executable, plus the bridge-only Keychain
+  access group before launch, then revalidate the running child and prevalidated
+  CDHash before accepting output. It must launch only the monitor command with a cleared environment;
+  own and boundedly TERM-to-KILL reap at most one child; and bound both the
+  phase-specific redacted snapshot and its queue. Replacement, duplicate or
+  extra fields, malformed, oversized, or overproduced output, EOF, and launch
+  or signature failure must fail closed. The app must not load or share the bridge
+  private-key identity, infer command authority from health, or claim bundled,
+  unattended background operation before packaging and live evidence exist.
 - Model-originated tool calls must be constrained to runtime-derived inventory.
   The default inventory is the registered first-party `PluginHost` manifests.
   A separate installed-tool catalog may be added only when the individual

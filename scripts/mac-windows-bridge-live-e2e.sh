@@ -53,6 +53,9 @@ bridge_entitlements="$(codesign -d --entitlements :- "$BRIDGE_BIN" 2>/dev/null)"
   || fail "Mac bridge is not signed with an Apple application identity"
 [[ "$bridge_codesign" != *"TeamIdentifier=not set"* ]] \
   || fail "Mac bridge signature has no Apple team identifier"
+bridge_team="$(printf '%s\n' "$bridge_codesign" | sed -n 's/^TeamIdentifier=//p' | head -1)"
+[[ "$bridge_team" =~ ^[A-Z0-9]{10}$ ]] \
+  || fail "Mac bridge signature has an invalid Apple team identifier"
 [[ "$bridge_entitlements" == *"<key>com.apple.application-identifier</key>"* ]] \
   || fail "Mac bridge signature omitted its application identifier entitlement"
 [[ "$bridge_entitlements" == *"<key>keychain-access-groups</key>"* ]] \
@@ -139,5 +142,18 @@ for forbidden in grant_secret certificate_pem ca_certificate_pem maintenance_rea
     || fail "live reconnect diagnostic exposed forbidden field: $forbidden"
 done
 
-printf 'jarvis_mac_windows_bridge_live_e2e_ok endpoint=%s connection_epoch=%s monitor_epoch=%s monitor_samples=2 reconnect_epoch_before=%s reconnect_epoch_after=%s\n' \
-  "$endpoint" "$connection_epoch" "$monitor_first_epoch" "$reconnect_first_epoch" "$reconnect_second_epoch"
+if ! app_lifecycle_output="$(
+  JARVIS_MAC_DEVELOPER_BRIDGE_LIVE_E2E=true \
+  JARVIS_MAC_DEVELOPER_BRIDGE_EXECUTABLE="$BRIDGE_BIN" \
+  JARVIS_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER="$bridge_team" \
+    swift test --disable-sandbox --package-path "$PACKAGE_PATH" \
+      --filter liveSignedHelperAppLifecycleReachesWindowsMaster 2>&1
+)"; then
+  printf '%s\n' "$app_lifecycle_output" >&2
+  fail "production app bridge lifecycle did not reach the Windows master"
+fi
+[[ "$app_lifecycle_output" == *"jarvis_mac_app_bridge_live_e2e_ok"* ]] \
+  || fail "production app bridge lifecycle omitted its live E2E marker"
+
+printf 'jarvis_mac_windows_bridge_live_e2e_ok endpoint=%s connection_epoch=%s monitor_epoch=%s monitor_samples=2 reconnect_epoch_before=%s reconnect_epoch_after=%s app_supervision=verified team=%s\n' \
+  "$endpoint" "$connection_epoch" "$monitor_first_epoch" "$reconnect_first_epoch" "$reconnect_second_epoch" "$bridge_team"

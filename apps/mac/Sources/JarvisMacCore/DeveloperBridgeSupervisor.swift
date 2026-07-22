@@ -56,6 +56,230 @@ public struct JarvisMacBridgeSupervisorSnapshot: Codable, Equatable, Sendable {
         case schemaVersion = "schema_version"
         case errorCode = "error_code"
     }
+
+    public static func decodeStrict(_ data: Data) throws -> Self {
+        var keyScanner = JarvisStrictJSONObjectKeyScanner(data: data)
+        let rawKeys = try keyScanner.scanTopLevelKeys()
+        guard Set(rawKeys).count == rawKeys.count else {
+            throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+        }
+        guard !data.isEmpty,
+              data.count <= JarvisDeveloperBridgeProcessLifecycle.maximumLineBytes,
+              let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let phaseText = object["phase"] as? String,
+              let phase = JarvisMacBridgeSupervisorPhase(rawValue: phaseText) else {
+            throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+        }
+        let authenticated = Set([
+            "phase", "device_id", "master_endpoint", "connection_epoch",
+            "consecutive_failures", "next_delay_ms", "master_status",
+            "maintenance_active", "protocol_version", "schema_version"
+        ])
+        let backingOff = Set([
+            "phase", "device_id", "master_endpoint", "consecutive_failures",
+            "next_delay_ms", "error_code"
+        ])
+        let stopped = Set([
+            "phase", "device_id", "master_endpoint", "consecutive_failures",
+            "next_delay_ms"
+        ])
+        let expectedKeys: Set<String>
+        switch phase {
+        case .authenticated: expectedKeys = authenticated
+        case .backingOff: expectedKeys = backingOff
+        case .stopped: expectedKeys = stopped
+        }
+        guard Set(object.keys) == expectedKeys else {
+            throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+        }
+        let snapshot: Self
+        do {
+            snapshot = try JSONDecoder().decode(Self.self, from: data)
+        } catch {
+            throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+        }
+        let canonicalUUID = UUID(uuidString: snapshot.deviceID)?.uuidString.lowercased()
+        guard canonicalUUID == snapshot.deviceID.lowercased(),
+              !snapshot.masterEndpoint.isEmpty,
+              snapshot.masterEndpoint.utf8.count <= 512,
+              !snapshot.masterEndpoint.contains(where: { $0.isWhitespace || $0.isNewline }) else {
+            throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+        }
+        switch snapshot.phase {
+        case .authenticated:
+            guard snapshot.connectionEpoch.map({ $0 > 0 }) == true,
+                  snapshot.consecutiveFailures == 0,
+                  snapshot.nextDelayMilliseconds > 0,
+                  snapshot.nextDelayMilliseconds <= 60_000,
+                  snapshot.maintenanceActive != nil,
+                  snapshot.masterStatus == (snapshot.maintenanceActive == true ? "maintenance" : "ok"),
+                  snapshot.protocolVersion == JarvisMacMTLSBridgeTransport.protocolVersion,
+                  snapshot.schemaVersion.map({ $0 > 0 }) == true,
+                  snapshot.errorCode == nil else {
+                throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+            }
+        case .backingOff:
+            guard snapshot.connectionEpoch == nil,
+                  snapshot.consecutiveFailures > 0,
+                  (1 ... JarvisMacBridgeSupervisor.maximumBackoffMilliseconds)
+                    .contains(snapshot.nextDelayMilliseconds),
+                  ["invalid_health", "bridge_unavailable", "connection_failed"]
+                    .contains(snapshot.errorCode),
+                  snapshot.masterStatus == nil,
+                  snapshot.maintenanceActive == nil,
+                  snapshot.protocolVersion == nil,
+                  snapshot.schemaVersion == nil else {
+                throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+            }
+        case .stopped:
+            guard snapshot.connectionEpoch == nil,
+                  snapshot.nextDelayMilliseconds == 0,
+                  snapshot.masterStatus == nil,
+                  snapshot.maintenanceActive == nil,
+                  snapshot.protocolVersion == nil,
+                  snapshot.schemaVersion == nil,
+                  snapshot.errorCode == nil else {
+                throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+            }
+        }
+        return snapshot
+    }
+}
+
+private struct JarvisStrictJSONObjectKeyScanner {
+    private let bytes: [UInt8]
+    private var index = 0
+
+    init(data: Data) {
+        bytes = Array(data)
+    }
+
+    mutating func scanTopLevelKeys() throws -> [String] {
+        skipWhitespace()
+        try consume(0x7b)
+        skipWhitespace()
+        var keys: [String] = []
+        if consumeIfPresent(0x7d) {
+            skipWhitespace()
+            try requireEnd()
+            return keys
+        }
+        while true {
+            skipWhitespace()
+            keys.append(try parseString())
+            skipWhitespace()
+            try consume(0x3a)
+            try skipValue()
+            skipWhitespace()
+            if consumeIfPresent(0x2c) { continue }
+            try consume(0x7d)
+            skipWhitespace()
+            try requireEnd()
+            return keys
+        }
+    }
+
+    private mutating func parseString() throws -> String {
+        let start = index
+        try consume(0x22)
+        var escaped = false
+        while index < bytes.count {
+            let byte = bytes[index]
+            index += 1
+            if escaped {
+                escaped = false
+                continue
+            }
+            if byte == 0x5c {
+                escaped = true
+                continue
+            }
+            if byte == 0x22 {
+                let encoded = Data(bytes[start ..< index])
+                do {
+                    return try JSONDecoder().decode(String.self, from: encoded)
+                } catch {
+                    throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+                }
+            }
+            if byte < 0x20 {
+                throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+            }
+        }
+        throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+    }
+
+    private mutating func skipValue() throws {
+        skipWhitespace()
+        guard index < bytes.count else {
+            throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+        }
+        if bytes[index] == 0x22 {
+            _ = try parseString()
+            return
+        }
+        if bytes[index] == 0x7b || bytes[index] == 0x5b {
+            try skipContainer()
+            return
+        }
+        let start = index
+        while index < bytes.count, bytes[index] != 0x2c, bytes[index] != 0x7d {
+            index += 1
+        }
+        guard bytes[start ..< index].contains(where: { !Self.isWhitespace($0) }) else {
+            throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+        }
+    }
+
+    private mutating func skipContainer() throws {
+        var stack: [UInt8] = []
+        while index < bytes.count {
+            let byte = bytes[index]
+            if byte == 0x22 {
+                _ = try parseString()
+                continue
+            }
+            index += 1
+            switch byte {
+            case 0x7b: stack.append(0x7d)
+            case 0x5b: stack.append(0x5d)
+            case 0x7d, 0x5d:
+                guard stack.popLast() == byte else {
+                    throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+                }
+                if stack.isEmpty { return }
+            default:
+                break
+            }
+        }
+        throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+    }
+
+    private mutating func skipWhitespace() {
+        while index < bytes.count, Self.isWhitespace(bytes[index]) { index += 1 }
+    }
+
+    private mutating func consume(_ expected: UInt8) throws {
+        guard consumeIfPresent(expected) else {
+            throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+        }
+    }
+
+    private mutating func consumeIfPresent(_ expected: UInt8) -> Bool {
+        guard index < bytes.count, bytes[index] == expected else { return false }
+        index += 1
+        return true
+    }
+
+    private func requireEnd() throws {
+        guard index == bytes.count else {
+            throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+        }
+    }
+
+    private static func isWhitespace(_ byte: UInt8) -> Bool {
+        byte == 0x20 || byte == 0x09 || byte == 0x0a || byte == 0x0d
+    }
 }
 
 public actor JarvisMacBridgeSupervisor {

@@ -133,9 +133,13 @@ backoff while emitting only allowlisted status. Its bounded reconnect diagnostic
 also closes an accepted session and requires a fresh production handshake with
 a higher master epoch. Live Secure Enclave enrollment
 runs the CLI from an Xcode-provisioned app wrapper with a distinct Keychain
-access group; an ad-hoc SwiftPM executable remains compile-only. This is an
-operator-process supervision primitive, not app-owned background operation or
-an induced network-failure recovery drill.
+access group; an ad-hoc SwiftPM executable remains compile-only. The current
+Swift app may supervise that exact separately signed helper only through the
+default-off executable plus independently supplied Apple-team development
+opt-in. It validates the helper's Apple code identity, exact CDHash, and distinct Keychain group, clears
+the child environment, accepts only strict bounded redacted monitor snapshots,
+and exposes read-only bridge state. The helper is not bundled and this is not
+unattended background operation.
 The app-supervised Rust `jarvis-agent`, UDS relay, durable event cursor, and M1
 inference adapter in the preceding target description are not implemented by
 this slice.

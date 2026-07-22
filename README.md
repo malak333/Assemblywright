@@ -62,8 +62,14 @@ accepts the application session only when the master returns the exact registry
 revision. The provisioned bridge CLI also has an explicit `monitor` mode that
 reuses one authenticated session for exact bounded health samples and drops the
 session before reconnecting with capped backoff after any transport or response
-failure. This is a signed operator supervision primitive, not the app-owned
-Rust agent, durable event relay, or inference worker. The
+failure. The Swift app can explicitly supervise this separately signed helper
+when `JARVIS_MAC_DEVELOPER_BRIDGE_EXECUTABLE` names its exact executable and
+`JARVIS_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER` independently pins its Apple
+team. The opt-in is absent by default, verifies Apple code identity plus the distinct
+bridge Keychain group, clears the child environment, parses only strict bounded
+redacted snapshots, and exposes a read-only Developer tab. This is a
+development supervision primitive, not a bundled helper, unattended app
+background service, Rust agent, durable event relay, or inference worker. The
 accepted target and migration boundaries are recorded in
 [Distributed Developer Mode Design](docs/distributed-developer-mode-design.md).
 The protocol seam has a named serialized contract E2E. The master kernel has a
@@ -104,9 +110,24 @@ swift run --package-path apps/mac jarvis-mac-bridge monitor --samples 2 --reconn
 ./scripts/mac-windows-bridge-live-e2e.sh --check
 ```
 
+After the signed helper is built and enrollment is installed, a development
+launch may opt in the app-owned monitor lifecycle without sharing bridge
+Keychain authority with `Jarvis.app`:
+
+```sh
+BRIDGE="$PWD/apps/mac/.build/jarvis-mac-bridge-signed/Build/Products/Debug/jarvis-mac-bridge.app/Contents/MacOS/jarvis-mac-bridge"
+TEAM="${JARVIS_APPLE_DEVELOPMENT_TEAM:?set the independently trusted 10-character Apple team used to build the bridge}"
+JARVIS_MAC_DEVELOPER_BRIDGE_EXECUTABLE="$BRIDGE" \
+  JARVIS_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER="$TEAM" \
+  swift run --package-path apps/mac JarvisMacApp
+```
+
 The complete secret-free Windows/Mac pairing ceremony is documented in
 `docs/build-test-commands.md`. Enrollment documents are accepted only on stdin;
 the CLI has no grant-secret argument or environment-variable path.
+The live two-device harness also invokes the signed helper through the
+production app lifecycle, including static and running-PID code validation,
+strict snapshot parsing, visible connected state, and bounded child reaping.
 After owner enrollment, `./scripts/mac-windows-bridge-live-e2e.sh --run` is the
 repeatable live-device E2E. It proves Tailscale reachability, the exact installed
 Keychain identity, TLS 1.3 mTLS plus exporter-bound application acceptance,

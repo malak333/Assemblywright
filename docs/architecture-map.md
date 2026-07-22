@@ -122,7 +122,12 @@ DPAPI CA and accepts credentials only through bounded stdin. Installation
 resolves that account to its exact SID and idempotently grants the native
 `SeServiceLogonRight`; failure rolls back the partial service. The Mac bridge
 uses an explicitly configured private-overlay IP and provides authenticated
-health proof, but adds no discovery or continuous agent supervision. It adds no
+health proof. The Swift app has a default-off development lifecycle that may
+supervise only the exact separately Apple-signed bridge helper, validates its
+fixed identifier and distinct Keychain group, clears its environment, and
+renders strict bounded redacted health in a read-only Developer tab. The helper
+is not bundled and this adds no discovery or continuous Rust-agent supervision.
+It adds no
 live cross-device reliability claim, supplied-password or
 owner-account remote-mTLS E2E, host hardening, upgrade/backup/restore automation,
 live scheduler loop, live inference worker, Codex dispatch, integration with
