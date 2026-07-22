@@ -32,6 +32,8 @@ MAC_BRIDGE_KEYCHAIN="apps/mac/Sources/JarvisMacCore/KeychainDeveloperIdentity.sw
 MAC_BRIDGE_NETWORK="apps/mac/Sources/JarvisMacCore/NetworkMTLSBridge.swift"
 MAC_BRIDGE_TESTS="apps/mac/Tests/JarvisMacCoreTests/DeveloperBridgeTests.swift"
 MAC_BRIDGE_LIVE_E2E="scripts/mac-windows-bridge-live-e2e.sh"
+MAC_BRIDGE_SIGNED_BUILD="scripts/build-mac-bridge-signed.sh"
+MAC_BRIDGE_ENTITLEMENTS="packaging/JarvisMacBridge.entitlements"
 
 fail() {
   printf 'error: %s\n' "$1" >&2
@@ -147,7 +149,12 @@ require_text "Mac bridge supported-SDK identity lookup" "$MAC_BRIDGE_KEYCHAIN" "
 forbid_text "Mac bridge new-SDK-only identity constructor" "$MAC_BRIDGE_KEYCHAIN" "SecIdentityCreate(nil"
 require_text "Mac bridge TLS 1.3" "$MAC_BRIDGE_NETWORK" "sec_protocol_options_set_min_tls_protocol_version"
 require_text "Mac bridge focused tests" "$MAC_BRIDGE_TESTS" "DeveloperBridgeTests"
+require_text "Mac bridge Windows CRLF receipt regression" "$MAC_BRIDGE_TESTS" "windowsCRLFIssuedReceiptInstalls"
+require_text "Mac bridge current Security validity regression" "$MAC_BRIDGE_TESTS" "securityValidityNumberUsesReferenceDate"
+require_text "Mac bridge signed builder provisioning" "$MAC_BRIDGE_SIGNED_BUILD" "-allowProvisioningUpdates"
+require_text "Mac bridge distinct Keychain entitlement" "$MAC_BRIDGE_ENTITLEMENTS" "keychain-access-groups"
 require_text "Mac bridge live E2E authenticated marker" "$MAC_BRIDGE_LIVE_E2E" "jarvis_mac_windows_bridge_live_e2e_ok"
+require_text "Mac bridge live E2E signed binary guard" "$MAC_BRIDGE_LIVE_E2E" "Mac bridge signature is invalid"
 require_text "Mac bridge live E2E Keychain precondition" "$MAC_BRIDGE_LIVE_E2E" "not installed in Keychain"
 require_text "local release Mac bridge E2E preflight" "$LOCAL_GATE" "./scripts/mac-windows-bridge-live-e2e.sh --check"
 for file in "$BUILD_DOCS" "$CHECKLIST" "$ARCHITECTURE" "$KB"; do

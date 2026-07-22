@@ -86,8 +86,12 @@ P-256 key plus public binding journal in device-only Keychain items, validates
 the issued certificate against that key and pinned CA, and uses
 Network.framework for a TLS 1.3-only, client-authenticated, exporter-bound
 handshake on one persistent outbound connection.
-The separate `mac-windows-bridge-live-e2e.sh` harness uses that production CLI
-and installed Keychain identity to prove the real Tailscale path and
+Live enrollment uses the separately provisioned `JarvisMacBridge` app target;
+its embedded CLI receives an Apple application identifier and distinct
+Keychain access group, while the SwiftPM executable remains compile-only.
+The separate `mac-windows-bridge-live-e2e.sh` harness rejects unentitled or
+ad-hoc binaries and uses that production CLI and installed Keychain identity
+to prove the real Tailscale path and
 authenticated health after owner enrollment; CI uses its `--check` preflight
 and retains live execution as external device evidence.
 

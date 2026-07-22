@@ -206,7 +206,10 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   `swift build --package-path apps/mac --product jarvis-mac-bridge` so the real
   Security/Keychain and Network.framework adapters compile. Run
   `./scripts/mac-windows-bridge-live-e2e.sh --check` in repository validation.
-  After owner enrollment, run `./scripts/mac-windows-bridge-live-e2e.sh --run`
+  For owner enrollment, run `./scripts/build-mac-bridge-signed.sh` and confirm
+  the app-wrapped CLI has an embedded provisioning profile, Apple team,
+  application identifier, and Keychain access group. After owner enrollment,
+  run `./scripts/mac-windows-bridge-live-e2e.sh --run`
   and archive its fixed success receipt as live-device evidence; do not treat a
   skipped or not-enrolled result as passing. Then run
   `cargo test -p jarvis-master --bin jarvis-master service_logon_right_is_ensured_for_current_account --locked -- --ignored --nocapture`

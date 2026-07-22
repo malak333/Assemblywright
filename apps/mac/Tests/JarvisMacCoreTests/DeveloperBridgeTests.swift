@@ -175,6 +175,37 @@ struct DeveloperBridgeTests {
         #expect(store.installed == nil)
     }
 
+    @Test("Windows CRLF certificate receipts install without relaxing PEM framing")
+    func windowsCRLFIssuedReceiptInstalls() throws {
+        let store = FakeBridgeIdentityStore()
+        let enrollment = JarvisMacEnrollmentCoordinator(identityStore: store)
+        _ = try enrollment.prepare(invitationData: validInvitationData())
+        let receipt = try #require(String(data: validIssuedReceiptData(), encoding: .utf8))
+            .replacingOccurrences(of: "\\n", with: "\\r\\n")
+
+        let profile = try enrollment.install(issuedReceiptData: Data(receipt.utf8))
+
+        #expect(profile.deviceID == "22222222-2222-4222-8222-222222222222")
+        #expect(store.installed?.certificatePEM.contains("\r\n") == true)
+
+        let mixed = receipt.replacingOccurrences(
+            of: "-----END CERTIFICATE-----\\r\\n",
+            with: "-----END CERTIFICATE-----\\n",
+            options: [],
+            range: receipt.range(of: "-----END CERTIFICATE-----\\r\\n")
+        )
+        #expect(throws: JarvisMacDeveloperBridgeError.invalidDocument) {
+            _ = try enrollment.install(issuedReceiptData: Data(mixed.utf8))
+        }
+    }
+
+    @Test("Security validity numbers use the Apple reference date")
+    func securityValidityNumberUsesReferenceDate() throws {
+        let date = try #require(jarvisCertificatePropertyDate(NSNumber(value: 809_033_786)))
+        #expect(UInt64(date.timeIntervalSince1970 * 1_000) == 1_787_340_986_000)
+        #expect(jarvisCertificatePropertyDate(NSNumber(value: Double.nan)) == nil)
+    }
+
     @Test("Handshake is exporter-bound and accepts only the exact registered profile")
     func handshakeIsExporterBound() async throws {
         let profile = sampleProfile()

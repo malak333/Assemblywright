@@ -500,12 +500,21 @@ private func certificateNotAfterMilliseconds(_ certificate: SecCertificate) -> U
         nil
     ) as? [CFString: Any],
     let property = values[kSecOIDX509V1ValidityNotAfter] as? [CFString: Any],
-    let date = property[kSecPropertyKeyValue] as? Date else { return nil }
+    let rawValue = property[kSecPropertyKeyValue],
+    let date = jarvisCertificatePropertyDate(rawValue) else { return nil }
     let milliseconds = date.timeIntervalSince1970 * 1_000
     guard milliseconds.isFinite, milliseconds >= 0, milliseconds <= Double(UInt64.max) else {
         return nil
     }
     return UInt64(milliseconds.rounded(.down))
+}
+
+func jarvisCertificatePropertyDate(_ value: Any) -> Date? {
+    if let date = value as? Date { return date }
+    guard let number = value as? NSNumber else { return nil }
+    let interval = number.doubleValue
+    guard interval.isFinite else { return nil }
+    return Date(timeIntervalSinceReferenceDate: interval)
 }
 
 private struct DERTLV {

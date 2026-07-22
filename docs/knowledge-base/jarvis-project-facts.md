@@ -191,12 +191,22 @@ These notes capture durable facts for future agents working on this repository.
   `SecIdentityCreateWithCertificate` lookup to pair it with the permanent
   Secure Enclave key; `SecIdentityCreate` is absent from older supported Swift
   Security overlays even though newer SDKs expose it.
+- Data-protection Keychain and Secure Enclave operations require a provisioned
+  application identifier and Keychain access group. `build-mac-bridge-signed.sh`
+  builds the app-wrapped CLI through Xcode automatic provisioning; a directly
+  signed or SwiftPM-built standalone executable is insufficient and fails
+  closed. The live E2E rejects ad-hoc, teamless, or unentitled binaries.
+- Security.framework may expose X.509 validity fields as `Date` on older SDKs
+  or as an `NSNumber` containing seconds since Apple's reference date on newer
+  macOS releases. Convert both forms explicitly before comparing the signed
+  certificate expiry. Windows-issued PEM receipts use CRLF; accept uniform LF
+  or uniform CRLF framing, but reject bare-CR and mixed-line-ending PEM.
 - `scripts/mac-windows-bridge-live-e2e.sh --check` validates and builds the live
   harness without credentials. After enrollment, `--run` exercises the
-  production Keychain/TLS CLI across Tailscale, requires authenticated remote
-  master health plus a positive epoch, and forbids grant, certificate PEM, and
-  raw maintenance-reason fields. This is a repeatable owner/device E2E, not
-  hermetic CI or release-signing evidence.
+  provisioned production Keychain/TLS CLI across Tailscale, requires
+  authenticated remote master health plus a positive epoch, and forbids grant,
+  certificate PEM, and raw maintenance-reason fields. This is a repeatable
+  owner/device E2E, not hermetic CI or release-signing evidence.
 - The sixth distributed-development slice adds an explicit Windows Service
   Control Manager lifecycle without removing foreground mode. The same
   single-owner master runtime can be installed, started, stopped, inspected,

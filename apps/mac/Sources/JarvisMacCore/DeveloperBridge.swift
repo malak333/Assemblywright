@@ -559,9 +559,18 @@ private func isLowercaseHex(_ byte: UInt8) -> Bool {
 }
 
 private func validPEM(_ value: String, label: String) -> Bool {
-    value.utf8.count <= 64 * 1_024
-        && value.hasPrefix("-----BEGIN \(label)-----\n")
-        && value.hasSuffix("-----END \(label)-----\n")
+    guard value.utf8.count <= 64 * 1_024 else { return false }
+    let normalized: String
+    if value.contains("\r\n") {
+        let withoutCRLF = value.replacingOccurrences(of: "\r\n", with: "")
+        guard !withoutCRLF.contains("\r"), !withoutCRLF.contains("\n") else { return false }
+        normalized = value.replacingOccurrences(of: "\r\n", with: "\n")
+    } else {
+        guard !value.contains("\r") else { return false }
+        normalized = value
+    }
+    return normalized.hasPrefix("-----BEGIN \(label)-----\n")
+        && normalized.hasSuffix("-----END \(label)-----\n")
 }
 
 private func validEndpoint(_ value: String) -> Bool {

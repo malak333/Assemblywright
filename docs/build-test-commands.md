@@ -184,17 +184,26 @@ certificate receipt to the Mac install command. The grant secret is zeroized
 after issuance and is never printed or copied between devices. Start the
 service again only after issuance finishes.
 
-On the Mac, build the bridge client once and use only stdin/stdout for the
-public enrollment documents:
+On the Mac, compile the portable target for repository validation, then build
+the provisioned app-wrapped CLI for live Keychain enrollment. Use only
+stdin/stdout for the public enrollment documents:
 
 ```sh
 swift build --package-path apps/mac --product jarvis-mac-bridge
-pbpaste | swift run --package-path apps/mac jarvis-mac-bridge enrollment prepare | pbcopy
-pbpaste | swift run --package-path apps/mac jarvis-mac-bridge enrollment install
-swift run --package-path apps/mac jarvis-mac-bridge status
-swift run --package-path apps/mac jarvis-mac-bridge connect
 ./scripts/mac-windows-bridge-live-e2e.sh --check
+./scripts/build-mac-bridge-signed.sh
+BRIDGE=apps/mac/.build/jarvis-mac-bridge-signed/Build/Products/Debug/jarvis-mac-bridge.app/Contents/MacOS/jarvis-mac-bridge
+pbpaste | "$BRIDGE" enrollment prepare | pbcopy
+pbpaste | "$BRIDGE" enrollment install
+"$BRIDGE" status
+"$BRIDGE" connect
 ```
+
+The signed builder uses Xcode automatic provisioning, derives the development
+team when exactly one valid Apple Development identity exists, and otherwise
+requires `JARVIS_APPLE_DEVELOPMENT_TEAM`. A plain `swift run` binary is a
+compile-time proof only: it has no embedded provisioning profile or restricted
+Keychain access group and must not be used for live Secure Enclave enrollment.
 
 The first clipboard pipeline replaces the public invitation with the public CSR
 reply; paste that one line into the waiting Windows pairing process and signal
@@ -212,7 +221,8 @@ record the real two-device proof with:
 ./scripts/mac-windows-bridge-live-e2e.sh --run
 ```
 
-The harness loads the exact Keychain profile through the production CLI, pings
+The harness rejects an ad-hoc or unentitled CLI, loads the exact Keychain
+profile through the provisioned production CLI, pings
 its configured Windows host through Tailscale, checks the configured TCP port,
 performs the production TLS 1.3 mTLS/exporter handshake, reads authenticated
 health on that session, requires a positive connection epoch, and rejects
