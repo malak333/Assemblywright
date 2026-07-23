@@ -15,6 +15,8 @@ pub const MAX_HANDSHAKE_FRAME_BYTES: usize = 64 * 1024;
 pub const MAX_JOB_CONTEXT_BYTES: usize = 256 * 1024;
 pub const MAX_JOB_RESULT_BYTES: usize = 768 * 1024;
 pub const MAX_WIRE_FRAME_BYTES: usize = 1024 * 1024;
+pub const MAX_DISTRIBUTED_EVENT_BATCH_BYTES: usize = 64 * 1024;
+pub const MAX_DISTRIBUTED_EVENTS_PER_BATCH: usize = 64;
 pub const MAX_LEASE_DURATION_MS: u64 = 10 * 60 * 1000;
 pub const MAX_STEP_DEADLINE_MS: u64 = 2 * 60 * 60 * 1000;
 pub const ENROLLMENT_PAIRING_SCHEMA_VERSION: u16 = 1;
@@ -75,6 +77,14 @@ pub enum ProtocolError {
     InvalidSha256Hex { field: &'static str },
     #[error("enrollment invitation is expired")]
     EnrollmentInvitationExpired,
+    #[error("event cursor stream id must not be nil")]
+    NilEventStreamIdentifier,
+    #[error("event cursor sequence must advance contiguously")]
+    EventCursorGap,
+    #[error("event batch exceeds the {maximum}-entry limit")]
+    TooManyDistributedEvents { maximum: usize },
+    #[error("distributed event identity fields do not match its kind")]
+    DistributedEventIdentityMismatch,
 }
 
 macro_rules! uuid_id {
@@ -372,6 +382,175 @@ pub struct HandshakeResponse {
     pub connection_epoch: u64,
     pub accepted_registry_revision: u64,
     pub reason_code: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DistributedEventCursor {
+    pub stream_id: Uuid,
+    pub sequence: u64,
+}
+
+impl DistributedEventCursor {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.stream_id.is_nil() {
+            return Err(ProtocolError::NilEventStreamIdentifier);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DistributedEventKind {
+    DeviceConnected,
+    DeviceDisconnected,
+    StepQueued,
+    StepLeased,
+    StepSucceeded,
+    StepFailed,
+    StepCancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DistributedEvent {
+    pub protocol_version: u16,
+    pub cursor: DistributedEventCursor,
+    pub occurred_at_ms: u64,
+    pub kind: DistributedEventKind,
+    pub task_id: Option<TaskId>,
+    pub step_id: Option<StepId>,
+    pub device_id: Option<DeviceId>,
+    pub connection_epoch: Option<u64>,
+}
+
+impl DistributedEvent {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_version(self.protocol_version)?;
+        self.cursor.validate()?;
+        validate_positive_limit("occurred_at_ms", self.occurred_at_ms, u64::MAX)?;
+        if self.task_id.is_some_and(|value| value.0.is_nil())
+            || self.step_id.is_some_and(|value| value.0.is_nil())
+            || self.device_id.is_some_and(|value| value.0.is_nil())
+            || self.connection_epoch == Some(0)
+        {
+            return Err(ProtocolError::DistributedEventIdentityMismatch);
+        }
+        let identity_matches = match self.kind {
+            DistributedEventKind::DeviceConnected | DistributedEventKind::DeviceDisconnected => {
+                self.task_id.is_none()
+                    && self.step_id.is_none()
+                    && self.device_id.is_some()
+                    && self.connection_epoch.is_some()
+            }
+            DistributedEventKind::StepQueued => {
+                self.task_id.is_some()
+                    && self.step_id.is_some()
+                    && self.device_id.is_none()
+                    && self.connection_epoch.is_none()
+            }
+            DistributedEventKind::StepLeased
+            | DistributedEventKind::StepSucceeded
+            | DistributedEventKind::StepFailed => {
+                self.task_id.is_some()
+                    && self.step_id.is_some()
+                    && self.device_id.is_some()
+                    && self.connection_epoch.is_some()
+            }
+            DistributedEventKind::StepCancelled => {
+                self.task_id.is_some()
+                    && self.step_id.is_some()
+                    && self.device_id.is_none()
+                    && self.connection_epoch.is_none()
+            }
+        };
+        if !identity_matches {
+            return Err(ProtocolError::DistributedEventIdentityMismatch);
+        }
+        validate_serialized_limit("distributed_event", self, MAX_DISTRIBUTED_EVENT_BATCH_BYTES)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DistributedEventBatchRequest {
+    pub protocol_version: u16,
+    pub connection_epoch: u64,
+    pub after: Option<DistributedEventCursor>,
+    pub limit: u16,
+}
+
+impl DistributedEventBatchRequest {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_version(self.protocol_version)?;
+        validate_positive_limit("connection_epoch", self.connection_epoch, u64::MAX)?;
+        validate_positive_limit(
+            "limit",
+            u64::from(self.limit),
+            MAX_DISTRIBUTED_EVENTS_PER_BATCH as u64,
+        )?;
+        if let Some(after) = self.after {
+            after.validate()?;
+        }
+        validate_serialized_limit(
+            "distributed_event_batch_request",
+            self,
+            MAX_DISTRIBUTED_EVENT_BATCH_BYTES,
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DistributedEventBatch {
+    pub protocol_version: u16,
+    pub stream_id: Uuid,
+    pub after_sequence: u64,
+    pub next_sequence: u64,
+    pub events: Vec<DistributedEvent>,
+    pub has_more: bool,
+}
+
+impl DistributedEventBatch {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_and_validate_frame(
+            "distributed_event_batch",
+            frame,
+            MAX_DISTRIBUTED_EVENT_BATCH_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_version(self.protocol_version)?;
+        if self.stream_id.is_nil() {
+            return Err(ProtocolError::NilEventStreamIdentifier);
+        }
+        if self.events.len() > MAX_DISTRIBUTED_EVENTS_PER_BATCH {
+            return Err(ProtocolError::TooManyDistributedEvents {
+                maximum: MAX_DISTRIBUTED_EVENTS_PER_BATCH,
+            });
+        }
+        let mut expected = self.after_sequence;
+        for event in &self.events {
+            event.validate()?;
+            expected = expected
+                .checked_add(1)
+                .ok_or(ProtocolError::EventCursorGap)?;
+            if event.cursor.stream_id != self.stream_id || event.cursor.sequence != expected {
+                return Err(ProtocolError::EventCursorGap);
+            }
+        }
+        if self.next_sequence != expected {
+            return Err(ProtocolError::EventCursorGap);
+        }
+        validate_serialized_limit(
+            "distributed_event_batch",
+            self,
+            MAX_DISTRIBUTED_EVENT_BATCH_BYTES,
+        )
+    }
 }
 
 impl HandshakeResponse {

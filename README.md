@@ -31,14 +31,18 @@ authenticated loopback development transport, and a separate deterministic
 fake-worker process. A Windows-only enrollment CLI adds a DPAPI-current-user
 protected ECDSA P-256 enrollment CA, ten-minute single-use digest-only grants,
 verified client CSRs, 30-day client certificates, server-bound device identity,
-rotation, and immediate certificate/device revocation. Schema v2 migrates the
-existing lifecycle database transactionally and retains the v1 state. An
+rotation, and immediate certificate/device revocation. Schema v3 migrates the
+existing lifecycle database transactionally, retains the v1/v2 state, and adds
+a metadata-only event journal with a server-issued durable stream cursor. An
 explicit `serve --remote-bind <concrete-ip>:<port>` additionally starts a TLS
 1.3-only listener beside the loopback listener. It requires enrolled client
 certificates, rechecks durable certificate/device revocation on every request,
 binds the application handshake to the TLS exporter, enforces certificate-owned
-device identity and role, and reconciles the accepted connection when its TLS
-socket closes. These surfaces are checked by the Windows distributed gate. The
+device identity and role, reconciles the accepted connection when its TLS
+socket closes, and exposes MacBridge-only bounded event pages. Enqueue, lease,
+terminal result, cancellation, disconnect, expiry, and restart reconciliation
+commit cursor events with their authoritative state transitions. These surfaces
+are checked by the Windows distributed gate. The
 Windows service lifecycle adds explicit install/start/stop/status,
 maintenance-enter/exit, recovery, and uninstall commands. The SCM service uses
 automatic start, bounded 5/15/60-second restart attempts, the existing
@@ -67,9 +71,16 @@ when `JARVIS_MAC_DEVELOPER_BRIDGE_EXECUTABLE` names its exact executable and
 `JARVIS_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER` independently pins its Apple
 team. The opt-in is absent by default, verifies Apple code identity plus the distinct
 bridge Keychain group, clears the child environment, parses only strict bounded
-redacted snapshots, and exposes a read-only Developer tab. This is a
-development supervision primitive, not a bundled helper, unattended app
-background service, Rust agent, durable event relay, or inference worker. The
+redacted snapshots, and exposes a read-only Developer tab. The workspace now
+also includes a default-inert Rust `jarvis-agent` relay. It requires a matching
+direct parent before storage opens, receives socket/code-identity/bearer policy
+through bounded stdin, reuses the secure owner-only UDS framing, and persists
+only the exact accepted event cursor. A macOS cross-process E2E proves bearer
+and code-identity enforcement, argv non-disclosure, exact cursor advance, replay
+denial, and parent-mismatch denial. `Jarvis.app` does not yet launch this agent,
+and the agent does not yet own the enrolled outbound mTLS connection. This is
+not a bundled helper, unattended background service, integrated durable relay,
+or inference worker. The
 accepted target and migration boundaries are recorded in
 [Distributed Developer Mode Design](docs/distributed-developer-mode-design.md).
 The protocol seam has a named serialized contract E2E. The master kernel has a
@@ -84,12 +95,16 @@ authenticated cross-device or production-service proof.
 `enrollment_identity_e2e` proves DPAPI round-trip protection on Windows,
 digest-only grant persistence, strict stdin issuance, signed-CSR verification,
 expiry and replay denial, rotation, revocation, the 16-device ceiling, and the
-schema-v1-to-v2 migration. `remote_mtls_e2e` provisions that real Windows
+schema-v1-to-v3 migration. `event_cursor_e2e` proves durable, contiguous,
+metadata-only events plus disconnect/requeue reconciliation.
+`remote_mtls_e2e` provisions that real Windows
 identity, starts the real master child process, negotiates TLS 1.3 mutual
 authentication, denies pre-handshake health, proves exporter-bound health, channel-exporter replay denial,
 monotonic reconnect epochs, socket-close reconciliation, revoked-certificate
-denial, and the MacBridge-only enqueue boundary against an enrolled inference
-worker. It is loopback cross-process transport proof with generated test clients,
+denial, the MacBridge-only enqueue boundary against an enrolled inference
+worker, MacBridge-only event retrieval without step-context leakage, and
+inference-worker event-route denial. It is
+loopback cross-process transport proof with generated test clients,
 not private-overlay reachability or a live Mac enrollment exchange.
 `DeveloperBridgeTests` adds the Mac-side contract proof: exact secret-free
 invitation and CSR documents, Keychain staging/install fail-closed seams,

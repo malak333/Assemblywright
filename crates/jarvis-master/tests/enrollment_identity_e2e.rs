@@ -3,7 +3,8 @@ use jarvis_master::{
     MasterKernel, SecretProtector, DEVICE_CERTIFICATE_LIFETIME_MS, ENROLLMENT_GRANT_TTL_MS,
 };
 use jarvis_protocol::{
-    CapabilityDescriptor, CapabilityKind, DeviceRole, MAX_JOB_CONTEXT_BYTES, MAX_JOB_RESULT_BYTES,
+    CapabilityDescriptor, CapabilityKind, DeviceRole, DistributedEventBatchRequest,
+    MAX_JOB_CONTEXT_BYTES, MAX_JOB_RESULT_BYTES, PROTOCOL_VERSION,
 };
 use rcgen::{CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
 use x509_parser::prelude::{FromDer, GeneralName, X509Certificate};
@@ -239,7 +240,7 @@ fn expired_grant_and_invalid_csr_fail_without_consuming_the_grant() {
 }
 
 #[test]
-fn schema_v1_migrates_transactionally_to_enrollment_identity_v2() {
+fn schema_v1_migrates_transactionally_to_enrollment_identity_and_event_cursor_v3() {
     let directory = tempfile::tempdir().expect("migration directory");
     let database = directory.path().join("master.sqlite3");
     let connection = rusqlite::Connection::open(&database).expect("create v1 database");
@@ -311,11 +312,22 @@ fn schema_v1_migrates_transactionally_to_enrollment_identity_v2() {
     drop(connection);
 
     let master = MasterKernel::open(&database).expect("migrate v1 database");
-    assert_eq!(master.schema_version().expect("schema version"), 2);
+    assert_eq!(master.schema_version().expect("schema version"), 3);
     let health = master.health_snapshot().expect("migrated health");
     assert_eq!(health.registered_devices, 1);
     assert_eq!(health.active_device_certificates, 0);
     assert_eq!(health.unconsumed_enrollment_grants, 0);
+    let events = master
+        .distributed_events(&DistributedEventBatchRequest {
+            protocol_version: PROTOCOL_VERSION,
+            connection_epoch: 1,
+            after: None,
+            limit: 1,
+        })
+        .expect("read migrated event stream");
+    assert!(!events.stream_id.is_nil());
+    assert_eq!(events.next_sequence, 0);
+    assert!(events.events.is_empty());
 }
 
 #[test]

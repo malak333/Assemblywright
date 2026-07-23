@@ -119,6 +119,24 @@ release requirements, not optional UX guidance.
   higher epoch. Coordination artifacts may contain only epochs and fixed
   redacted error codes. A service stop/start does not prove Tailscale or network-
   interface outage recovery, bundled background operation, or command safety.
+- Distributed task events are Windows-authoritative metadata, not a second task
+  database. Enqueue, lease, terminal result, cancellation, disconnect, expiry,
+  and startup reconciliation must append a contiguous server-issued event in
+  the same SQLite transaction as the corresponding state transition. Event
+  batches contain only typed IDs, event kind, timestamp, connection epoch, and
+  cursor; prompt text, retrieved context, source snippets, results, policy
+  payloads, credentials, paths, and raw errors are forbidden. A cursor from a
+  different stream, a future cursor, a gap, replay, oversized batch, invalid
+  identity shape, or non-MacBridge remote session fails closed.
+- The Mac-local `jarvis-agent` cursor is a bounded replica checkpoint only. Its
+  owner-only data directory, single-owner lock, and SQLite cursor may persist
+  only stream ID, sequence, and update time. The agent must validate its direct
+  parent before opening storage, watch that relationship for its lifetime, use
+  the same owner-only UDS, same-EUID, Apple audit-token code-identity, framed
+  request, and fresh 32-byte bearer controls as app-supervised core IPC, and
+  require authorization even for health. It must never infer Windows health or
+  task authority from its local cursor. Until the app launch and outbound mTLS
+  integration exist, repository tests are relay-boundary proof only.
 - Model-originated tool calls must be constrained to runtime-derived inventory.
   The default inventory is the registered first-party `PluginHost` manifests.
   A separate installed-tool catalog may be added only when the individual

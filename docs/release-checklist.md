@@ -189,7 +189,7 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   `cargo test -p jarvis-master --test enrollment_identity_e2e --locked` and
   confirm digest-only ten-minute grants, CSR signature verification,
   server-selected identity, certificate expiry/rotation/revocation,
-  schema-v1-to-v2 migration, Windows DPAPI protection, and stdin-only real-CLI
+  schema-v1-to-v3 migration, Windows DPAPI protection, and stdin-only real-CLI
   issuance remain green. Then run
   `cargo test -p jarvis-master --test remote_mtls_e2e --locked` on Windows and
   confirm the real master and generated enrolled client prove TLS 1.3-only
@@ -198,7 +198,20 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   exporter-bound handshake replay denial, reconnect epoch advance,
   socket-close reconciliation, revoked-certificate denial, MacBridge enqueue
   acceptance, and enrolled inference-worker enqueue rejection on persistent
-  authenticated sessions. On macOS, run
+  authenticated sessions. Also confirm the MacBridge event route returns only
+  bounded metadata, never the enqueued step context, and denies an authenticated
+  inference-worker session.
+  Run
+  `cargo test -p jarvis-protocol --test distributed_event_cursor_contract --locked`,
+  `cargo test -p jarvis-master --test event_cursor_e2e --locked`, and
+  `cargo test -p jarvis-agent --locked`. Confirm strict contiguous stream
+  validation, schema-v3 cursor durability, transactional disconnect/requeue
+  events, owner-only agent state, startup-stdin bearer and code-identity
+  enforcement, parent mismatch denial before storage, cursor replay denial,
+  and macOS cross-process UDS coverage. Record that `Jarvis.app` does not yet
+  launch the agent and the agent does not yet own the enrolled outbound mTLS
+  connection; these gates are not integrated cross-device relay evidence.
+  On macOS, run
   `swift test --disable-sandbox --package-path apps/mac --filter DeveloperBridgeTests`
   and confirm strict secret-free invitation/CSR decoding, staged enrollment
   mismatch denial, exporter-bound handshake encoding, exact registry-revision

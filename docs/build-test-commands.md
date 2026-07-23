@@ -106,7 +106,7 @@ production service credential.
 `enrollment_identity_e2e` exercises the fourth implemented seam. On every host
 it proves digest-only single-use grant storage, signed-CSR verification,
 server-selected identity, 10-minute expiry, replay denial, 30-day certificate
-issuance, rotation, revocation, and schema-v1-to-v2 migration with an injected
+issuance, rotation, revocation, and schema-v1-to-v3 migration with an injected
 test protector. On Windows it additionally calls DPAPI directly and starts the
 real CLI to prove initialization receipts, secret-bearing issuance through
 stdin rather than argv, and protected-key non-equivalence. It is local identity
@@ -120,9 +120,31 @@ application handshake to a per-connection TLS exporter digest, rejects replay
 on a different channel, advances the durable connection epoch after socket-close
 reconciliation, denies the revoked certificate, and uses persistent authenticated
 sessions to prove MacBridge enqueue succeeds while inference-worker enqueue is
-unauthorized. It is process/network proof against generated Rust clients on one
-Windows host, not private-overlay setup, live Mac Keychain enrollment, service
-installation, or remote-device reliability.
+unauthorized. The same MacBridge session can retrieve strict, bounded,
+metadata-only event pages without step context, while an authenticated
+inference-worker session is denied that event route. It is process/network proof
+against generated Rust clients on one Windows host, not private-overlay setup,
+live Mac Keychain enrollment, service installation, or remote-device
+reliability.
+
+The next bounded relay slice has three focused gates:
+
+```sh
+cargo test -p jarvis-protocol --test distributed_event_cursor_contract --locked
+cargo test -p jarvis-master --test event_cursor_e2e --locked
+cargo test -p jarvis-agent --locked
+```
+
+The protocol gate rejects gaps, stream replacement, invalid identity shapes,
+unknown content fields, and oversized pages. The master gate proves schema-v3
+durability, bounded paging, context redaction, and transactional disconnect plus
+requeue events after restart. The macOS agent gate includes a real child
+process over the hardened UDS. It proves startup-stdin bearer and code-identity
+enforcement, bearer/socket absence from argv, parent validation before storage,
+exact cursor acceptance, replay denial, and durable cursor reload. These are
+local relay mechanics. `Jarvis.app` does not yet launch `jarvis-agent`, and the
+agent does not yet own or receive the enrolled mTLS channel; therefore these
+commands do not prove an integrated cross-device event stream.
 `windows_service_lifecycle_e2e` is the sixth implemented seam. The ordinary test
 suite compiles but ignores it because SCM mutation requires elevation. The
 Windows CI job sets `JARVIS_REQUIRE_WINDOWS_SERVICE_E2E=1` and runs the ignored

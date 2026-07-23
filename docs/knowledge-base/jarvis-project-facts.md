@@ -127,7 +127,7 @@ These notes capture durable facts for future agents working on this repository.
   work through the existing abandonment path.
 - `enrollment_identity_e2e` proves grant secrecy, invalid-secret and replay
   denial, expiry, invalid-CSR recovery, issuance, rotation, revocation, and
-  transactional schema-v1-to-v2 migration on every supported host through an
+  transactional schema-v1-to-v3 migration on every supported host through an
   injected protector. On Windows it additionally exercises real DPAPI and the
   real CLI stdin boundary. This is local identity issuance proof and supplies
   the authority used by the separate remote transport proof.
@@ -251,6 +251,30 @@ These notes capture durable facts for future agents working on this repository.
   exit. This is not Tailscale/network-
   interface outage, unattended background, command-admission, signing, or
   notarization evidence.
+- The seventh distributed-development foundation adds a durable metadata event
+  cursor and Mac-local relay boundary. `jarvis-master` schema version 3 owns one
+  random event stream ID and contiguous sequence; enqueue, lease, terminal
+  result, cancellation, disconnect, expiry, and startup reconciliation append
+  metadata events transactionally with authoritative state. The remote route is
+  MacBridge-only and pages at most 64 events/64 KiB. Events never contain
+  prompts, step context, results, source content, policy payloads, paths,
+  credentials, or raw errors.
+- `event_cursor_e2e` is the durable master cursor proof, and
+  `distributed_event_cursor_contract` is the strict portable protocol proof.
+  The Windows-only `remote_mtls_e2e` additionally proves an enrolled MacBridge
+  can retrieve the metadata stream without step-context leakage while an
+  authenticated inference-worker certificate is denied the route.
+- The new default-inert `jarvis-agent` stores only stream ID, sequence, and
+  update time in an owner-only single-owner SQLite directory. It accepts strict
+  contiguous batches over the shared hardened UDS transport, requires the
+  startup-stdin 32-byte bearer on every route, validates the direct parent
+  before storage, and watches that relationship for self-exit. Its macOS
+  cross-process E2E proves code-identity/bearer enforcement, argv
+  non-disclosure, exact cursor advance, replay denial, durable reload, and
+  parent-mismatch denial. `Jarvis.app` does not yet launch this agent and the
+  agent does not yet own or receive the enrolled outbound mTLS channel, so this
+  is not integrated event delivery, bundled background operation, M1
+  inference, or unattended evidence.
 - Signed helper teardown must remain bounded even when Foundation process
   notifications race with a killed child. Cancel and close the output reader,
   poll the launched `Process` through fixed TERM and KILL deadlines, require

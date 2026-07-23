@@ -43,7 +43,8 @@ pub use ipc::{
     IPC_BEARER_TOKEN_LENGTH, MAX_ACTIVITY_EVENT_LIMIT, MAX_SCHEDULER_BACKGROUND_LIMIT,
 };
 pub use ipc_transport::{
-    serve_unix_socket, serve_unix_socket_with_peer_identity, MAX_UNIX_IPC_CONNECTIONS,
+    serve_router_unix_socket_with_peer_identity, serve_unix_socket,
+    serve_unix_socket_with_peer_identity, MAX_UNIX_IPC_CONNECTIONS,
     MAX_UNIX_IPC_PATH_AND_QUERY_BYTES, MAX_UNIX_IPC_REQUEST_BODY_BYTES,
     MAX_UNIX_IPC_REQUEST_FRAME_BYTES, MAX_UNIX_IPC_REQUEST_HEADER_VALUE_BYTES,
     MAX_UNIX_IPC_RESPONSE_BODY_BYTES, MAX_UNIX_IPC_RESPONSE_CONTENT_TYPE_BYTES,

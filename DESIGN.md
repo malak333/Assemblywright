@@ -150,10 +150,20 @@ to Master Offline while the service is stopped, and return to Connected only
 with a strictly higher authenticated epoch after restart. This is bounded
 service-outage evidence, not a Tailscale/network-interface outage or long-run
 background reliability proof. The helper is not yet bundled in the
-distribution and this is not unattended background operation. It does not
-yet provide the app-supervised Rust `jarvis-agent`,
-durable event cursors, live MLX execution, repository mutation, Git
-publication, or Codex dispatch.
+distribution and this is not unattended background operation. The repository
+now contains the next bounded control-plane foundation: schema-v3 Windows
+metadata events with a server-issued durable stream cursor, an authenticated
+Mac-local `jarvis-agent` Unix-socket relay, and an owner-only local cursor
+store. Master enqueue, lease, terminal result, cancellation, disconnect,
+expiry, and startup reconciliation append their metadata events in the same
+SQLite transaction as the authoritative state change. The agent accepts only
+one contiguous stream and rejects replay, gaps, or stream replacement. It must
+be launched by its declared direct parent and receives socket, peer code
+requirement, and a fresh 32-byte bearer only through bounded startup stdin.
+This repository proof does not yet mean `Jarvis.app` launches the agent or that
+the agent owns the enrolled outbound mTLS connection. Live MLX execution,
+repository mutation, Git publication, Codex dispatch, bundled installation,
+and unattended operation remain unimplemented.
 
 Current app-supervised IPC defaults to a Unix domain socket, not a TCP listener.
 Swift creates a current-owner `0700` runtime directory and a generation-random

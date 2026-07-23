@@ -1,0 +1,32 @@
+[package]
+name = "jarvis-agent"
+version = "0.1.4"
+description = "App-supervised Mac control-plane relay for Jarvis Developer Mode."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+base64.workspace = true
+clap.workspace = true
+fs2.workspace = true
+jarvis-core = { path = "../jarvis-core", version = "0.1.4" }
+jarvis-protocol = { path = "../jarvis-protocol", version = "0.1.4" }
+libc.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

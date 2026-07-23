@@ -14,10 +14,11 @@ use jarvis_master::{
 };
 use jarvis_protocol::{
     AuthenticatedHandshakeRequest, CapabilityDescriptor, CapabilityKind, DeviceId, DeviceRole,
-    EnrollmentCsrReply, EnrollmentInvitation, HandshakeRequest, HandshakeResponse, HandshakeStatus,
-    JobEnvelope, JobResultEnvelope, JobResultStatus, Sensitivity, StepId, TaskId,
-    ENROLLMENT_INVITATION_READY_STATUS, ENROLLMENT_PAIRING_SCHEMA_VERSION,
-    MAX_ENROLLMENT_PAIRING_FRAME_BYTES, MAX_WIRE_FRAME_BYTES, PROTOCOL_VERSION,
+    DistributedEventBatch, DistributedEventBatchRequest, EnrollmentCsrReply, EnrollmentInvitation,
+    HandshakeRequest, HandshakeResponse, HandshakeStatus, JobEnvelope, JobResultEnvelope,
+    JobResultStatus, Sensitivity, StepId, TaskId, ENROLLMENT_INVITATION_READY_STATUS,
+    ENROLLMENT_PAIRING_SCHEMA_VERSION, MAX_ENROLLMENT_PAIRING_FRAME_BYTES, MAX_WIRE_FRAME_BYTES,
+    PROTOCOL_VERSION,
 };
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::server::WebPkiClientVerifier;
@@ -1410,6 +1411,7 @@ fn remote_router(state: AppState) -> Router {
         .route("/v1/distributed/steps", post(remote_enqueue_step))
         .route("/v1/distributed/leases/next", post(remote_lease_next))
         .route("/v1/distributed/results", post(remote_accept_result))
+        .route("/v1/distributed/events/next", post(remote_events_next))
         .layer(DefaultBodyLimit::max(MAX_WIRE_FRAME_BYTES))
         .with_state(state)
 }
@@ -1535,6 +1537,39 @@ async fn remote_accept_result(
         .accept_result(&result, current_time_ms().map_err(api_error)?)
         .map_err(api_error)?;
     Ok(Json(accepted))
+}
+
+async fn remote_events_next(
+    State(state): State<AppState>,
+    Extension(session): Extension<RemoteSession>,
+    Json(request): Json<DistributedEventBatchRequest>,
+) -> ApiResult<DistributedEventBatch> {
+    request.validate().map_err(api_error)?;
+    let registration =
+        require_remote_application_session(&state, &session, Some(request.connection_epoch))?;
+    if registration.role != DeviceRole::MacBridge {
+        return Err(unauthorized());
+    }
+    let events = lock_process(&state)?
+        .kernel()
+        .distributed_events(&request)
+        .map_err(distributed_event_error)?;
+    Ok(Json(events))
+}
+
+fn distributed_event_error(error: jarvis_master::MasterError) -> ApiError {
+    let code = match error {
+        jarvis_master::MasterError::EventCursorStreamMismatch => "event_cursor_stream_mismatch",
+        jarvis_master::MasterError::EventCursorAhead => "event_cursor_ahead",
+        jarvis_master::MasterError::Protocol(_) => "invalid_event_cursor_request",
+        _ => return internal_error(),
+    };
+    (
+        StatusCode::CONFLICT,
+        Json(ErrorResponse {
+            error: code.to_string(),
+        }),
+    )
 }
 
 fn revalidate_remote_session(

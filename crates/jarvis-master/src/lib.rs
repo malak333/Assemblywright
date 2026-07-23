@@ -1,8 +1,10 @@
 use jarvis_protocol::{
     AttemptId, CancellationId, CapabilityDescriptor, ContextHandlingPolicy, DeviceId, DeviceRole,
-    HandshakeRequest, HandshakeResponse, HandshakeStatus, JobEnvelope, JobResultEnvelope,
-    JobResultStatus, LeaseId, ProtocolError, Sensitivity, StepId, TaskId, MAX_CAPABILITY_ID_BYTES,
-    MAX_JOB_CONTEXT_BYTES, MAX_LEASE_DURATION_MS, MAX_STEP_DEADLINE_MS, PROTOCOL_VERSION,
+    DistributedEvent, DistributedEventBatch, DistributedEventBatchRequest, DistributedEventCursor,
+    DistributedEventKind, HandshakeRequest, HandshakeResponse, HandshakeStatus, JobEnvelope,
+    JobResultEnvelope, JobResultStatus, LeaseId, ProtocolError, Sensitivity, StepId, TaskId,
+    MAX_CAPABILITY_ID_BYTES, MAX_JOB_CONTEXT_BYTES, MAX_LEASE_DURATION_MS, MAX_STEP_DEADLINE_MS,
+    PROTOCOL_VERSION,
 };
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
@@ -26,7 +28,7 @@ pub use identity::{
     SERVER_CERTIFICATE_LIFETIME_MS,
 };
 
-pub const MASTER_SCHEMA_VERSION: i64 = 2;
+pub const MASTER_SCHEMA_VERSION: i64 = 3;
 pub const MAX_QUEUED_OR_LEASED_STEPS: u64 = 256;
 pub const MAX_CONCURRENT_JOBS: u64 = 4;
 
@@ -89,6 +91,10 @@ pub enum MasterError {
     SequenceReplay,
     #[error("the result arrived after its lease expired")]
     LeaseExpired,
+    #[error("event cursor belongs to a different master event stream")]
+    EventCursorStreamMismatch,
+    #[error("event cursor is ahead of the durable master event high-water mark")]
+    EventCursorAhead,
     #[error("stored integer cannot be represented safely")]
     IntegerOutOfRange,
     #[error("stored state is invalid: {0}")]
@@ -395,6 +401,112 @@ impl MasterKernel {
         })
     }
 
+    pub fn distributed_events(
+        &self,
+        request: &DistributedEventBatchRequest,
+    ) -> Result<DistributedEventBatch, MasterError> {
+        request.validate()?;
+        let (stream_id_text, high_water): (String, i64) = self.connection.query_row(
+            "SELECT stream_id, next_sequence FROM master_event_stream WHERE singleton = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let stream_id = parse_uuid(&stream_id_text)?;
+        let durable_high_water = i64_to_u64(high_water)?;
+        let after_sequence = match request.after {
+            Some(cursor) => {
+                if cursor.stream_id != stream_id {
+                    return Err(MasterError::EventCursorStreamMismatch);
+                }
+                if cursor.sequence > durable_high_water {
+                    return Err(MasterError::EventCursorAhead);
+                }
+                cursor.sequence
+            }
+            None => 0,
+        };
+        let query_limit = usize::from(request.limit)
+            .checked_add(1)
+            .ok_or(MasterError::IntegerOutOfRange)?;
+        let mut statement = self.connection.prepare(
+            "SELECT sequence, occurred_at_ms, kind_json, task_id, step_id, device_id, connection_epoch\n\
+             FROM master_events WHERE sequence > ?1 ORDER BY sequence ASC LIMIT ?2",
+        )?;
+        let mut events = statement
+            .query_map(
+                params![
+                    u64_to_i64(after_sequence)?,
+                    i64::try_from(query_limit).map_err(|_| MasterError::IntegerOutOfRange)?,
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, Option<i64>>(6)?,
+                    ))
+                },
+            )?
+            .map(|row| {
+                let (
+                    sequence,
+                    occurred_at_ms,
+                    kind_json,
+                    task_id,
+                    step_id,
+                    device_id,
+                    connection_epoch,
+                ) = row?;
+                Ok::<DistributedEvent, MasterError>(DistributedEvent {
+                    protocol_version: PROTOCOL_VERSION,
+                    cursor: DistributedEventCursor {
+                        stream_id,
+                        sequence: i64_to_u64(sequence)?,
+                    },
+                    occurred_at_ms: i64_to_u64(occurred_at_ms)?,
+                    kind: serde_json::from_str(&kind_json)?,
+                    task_id: task_id
+                        .as_deref()
+                        .map(parse_uuid)
+                        .transpose()?
+                        .map(TaskId::new),
+                    step_id: step_id
+                        .as_deref()
+                        .map(parse_uuid)
+                        .transpose()?
+                        .map(StepId::new),
+                    device_id: device_id
+                        .as_deref()
+                        .map(parse_uuid)
+                        .transpose()?
+                        .map(DeviceId::new),
+                    connection_epoch: connection_epoch.map(i64_to_u64).transpose()?,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let has_more = events.len() > usize::from(request.limit);
+        if has_more {
+            events.truncate(usize::from(request.limit));
+        }
+        let next_sequence = events
+            .last()
+            .map(|event| event.cursor.sequence)
+            .unwrap_or(after_sequence);
+        let batch = DistributedEventBatch {
+            protocol_version: PROTOCOL_VERSION,
+            stream_id,
+            after_sequence,
+            next_sequence,
+            events,
+            has_more,
+        };
+        batch.validate()?;
+        Ok(batch)
+    }
+
     pub fn register_device(
         &mut self,
         registration: &DeviceRegistration,
@@ -541,6 +653,17 @@ impl MasterKernel {
                 u64_to_i64(now_ms)?,
             ],
         )?;
+        append_distributed_event_tx(
+            &tx,
+            DistributedEventKind::DeviceConnected,
+            now_ms,
+            DistributedEventIdentity {
+                task_id: None,
+                step_id: None,
+                device_id: Some(handshake.device_id),
+                connection_epoch: Some(i64_to_u64(next_epoch)?),
+            },
+        )?;
 
         let response = HandshakeResponse {
             protocol_version: PROTOCOL_VERSION,
@@ -606,6 +729,17 @@ impl MasterKernel {
                 u64_to_i64(step.deadline_after_ms)?,
                 u64_to_i64(now_ms)?,
             ],
+        )?;
+        append_distributed_event_tx(
+            &tx,
+            DistributedEventKind::StepQueued,
+            now_ms,
+            DistributedEventIdentity {
+                task_id: Some(step.task_id),
+                step_id: Some(step.step_id),
+                device_id: None,
+                connection_epoch: None,
+            },
         )?;
         tx.commit()?;
         Ok(())
@@ -733,6 +867,17 @@ impl MasterKernel {
         if connection_changed != 1 {
             return Err(MasterError::ConnectionNotActive);
         }
+        append_distributed_event_tx(
+            &tx,
+            DistributedEventKind::StepLeased,
+            now_ms,
+            DistributedEventIdentity {
+                task_id: Some(step.task_id),
+                step_id: Some(step.step_id),
+                device_id: Some(device_id),
+                connection_epoch: Some(connection_epoch),
+            },
+        )?;
         tx.commit()?;
         Ok(job)
     }
@@ -757,10 +902,23 @@ impl MasterKernel {
                 "UPDATE master_attempts SET status = 'expired', completed_at_ms = ?1\n                 WHERE attempt_id = ?2 AND status = 'leased'",
                 params![u64_to_i64(now_ms)?, result.attempt_id.0.to_string()],
             )?;
-            tx.execute(
+            let requeued = tx.execute(
                 "UPDATE master_steps SET status = 'queued'\n                 WHERE step_id = ?1 AND status = 'leased'",
                 [result.step_id.0.to_string()],
             )?;
+            if requeued == 1 {
+                append_distributed_event_tx(
+                    &tx,
+                    DistributedEventKind::StepQueued,
+                    now_ms,
+                    DistributedEventIdentity {
+                        task_id: Some(result.task_id),
+                        step_id: Some(result.step_id),
+                        device_id: None,
+                        connection_epoch: None,
+                    },
+                )?;
+            }
             tx.commit()?;
             return Err(MasterError::LeaseExpired);
         }
@@ -818,6 +976,32 @@ impl MasterKernel {
                 u64_to_i64(result.connection_epoch)?,
             ],
         )?;
+        let event_kind = match step_status {
+            StepStatus::Succeeded => DistributedEventKind::StepSucceeded,
+            StepStatus::Failed => DistributedEventKind::StepFailed,
+            StepStatus::Cancelled => DistributedEventKind::StepCancelled,
+            StepStatus::Queued | StepStatus::Leased => {
+                return Err(MasterError::InvalidStoredState(
+                    "accepted result produced a nonterminal step state".to_string(),
+                ));
+            }
+        };
+        let event_identity = if event_kind == DistributedEventKind::StepCancelled {
+            DistributedEventIdentity {
+                task_id: Some(result.task_id),
+                step_id: Some(result.step_id),
+                device_id: None,
+                connection_epoch: None,
+            }
+        } else {
+            DistributedEventIdentity {
+                task_id: Some(result.task_id),
+                step_id: Some(result.step_id),
+                device_id: Some(attempt.device_id),
+                connection_epoch: Some(result.connection_epoch),
+            }
+        };
+        append_distributed_event_tx(&tx, event_kind, now_ms, event_identity)?;
         tx.commit()?;
         Ok(AcceptedResult {
             task_id: result.task_id,
@@ -831,6 +1015,15 @@ impl MasterKernel {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let task_id = tx
+            .query_row(
+                "SELECT task_id FROM master_steps WHERE step_id = ?1",
+                [step_id.0.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .ok_or(MasterError::StepNotFound)?;
+        let task_id = TaskId::new(parse_uuid(&task_id)?);
         let status = step_status_tx(&tx, step_id)?;
         match status {
             StepStatus::Queued => {
@@ -851,6 +1044,17 @@ impl MasterKernel {
             }
             terminal => return Err(MasterError::StepNotCancellable(terminal)),
         }
+        append_distributed_event_tx(
+            &tx,
+            DistributedEventKind::StepCancelled,
+            now_ms,
+            DistributedEventIdentity {
+                task_id: Some(task_id),
+                step_id: Some(step_id),
+                device_id: None,
+                connection_epoch: None,
+            },
+        )?;
         tx.commit()?;
         Ok(())
     }
@@ -1005,7 +1209,27 @@ impl MasterKernel {
                  );\n\
                  CREATE INDEX master_device_certificates_active_idx\n\
                    ON master_device_certificates(device_id, revoked_at_ms);\n\
-                 PRAGMA user_version = 2;\n\
+                 CREATE TABLE master_event_stream (\n\
+                   singleton INTEGER PRIMARY KEY NOT NULL CHECK (singleton = 1),\n\
+                   stream_id TEXT NOT NULL UNIQUE,\n\
+                   next_sequence INTEGER NOT NULL CHECK (next_sequence >= 0)\n\
+                 );\n\
+                 INSERT INTO master_event_stream (singleton, stream_id, next_sequence)\n\
+                   VALUES (1, lower(substr(hex(randomblob(16)), 1, 8) || '-' ||\n\
+                     substr(hex(randomblob(16)), 1, 4) || '-4' ||\n\
+                     substr(hex(randomblob(16)), 1, 3) || '-8' ||\n\
+                     substr(hex(randomblob(16)), 1, 3) || '-' ||\n\
+                     substr(hex(randomblob(16)), 1, 12)), 0);\n\
+                 CREATE TABLE master_events (\n\
+                   sequence INTEGER PRIMARY KEY NOT NULL CHECK (sequence > 0),\n\
+                   occurred_at_ms INTEGER NOT NULL CHECK (occurred_at_ms > 0),\n\
+                   kind_json TEXT NOT NULL,\n\
+                   task_id TEXT,\n\
+                   step_id TEXT,\n\
+                   device_id TEXT,\n\
+                   connection_epoch INTEGER\n\
+                 );\n\
+                 PRAGMA user_version = 3;\n\
                  COMMIT;",
             )?;
             return Ok(());
@@ -1053,6 +1277,34 @@ impl MasterKernel {
                  PRAGMA user_version = 2;\n\
                  COMMIT;",
             )?;
+        }
+        let version = self.schema_version()?;
+        if version == 2 {
+            self.connection.execute_batch(
+                "BEGIN IMMEDIATE;\n\
+                 CREATE TABLE master_event_stream (\n\
+                   singleton INTEGER PRIMARY KEY NOT NULL CHECK (singleton = 1),\n\
+                   stream_id TEXT NOT NULL UNIQUE,\n\
+                   next_sequence INTEGER NOT NULL CHECK (next_sequence >= 0)\n\
+                 );\n\
+                 INSERT INTO master_event_stream (singleton, stream_id, next_sequence)\n\
+                   VALUES (1, lower(substr(hex(randomblob(16)), 1, 8) || '-' ||\n\
+                     substr(hex(randomblob(16)), 1, 4) || '-4' ||\n\
+                     substr(hex(randomblob(16)), 1, 3) || '-8' ||\n\
+                     substr(hex(randomblob(16)), 1, 3) || '-' ||\n\
+                     substr(hex(randomblob(16)), 1, 12)), 0);\n\
+                 CREATE TABLE master_events (\n\
+                   sequence INTEGER PRIMARY KEY NOT NULL CHECK (sequence > 0),\n\
+                   occurred_at_ms INTEGER NOT NULL CHECK (occurred_at_ms > 0),\n\
+                   kind_json TEXT NOT NULL,\n\
+                   task_id TEXT,\n\
+                   step_id TEXT,\n\
+                   device_id TEXT,\n\
+                   connection_epoch INTEGER\n\
+                 );\n\
+                 PRAGMA user_version = 3;\n\
+                 COMMIT;",
+            )?;
             return Ok(());
         }
         if version != MASTER_SCHEMA_VERSION {
@@ -1071,25 +1323,62 @@ impl MasterKernel {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let step_ids = leased_step_ids(&tx, None)?;
+        let active_connections = active_connections(&tx)?;
+        let leased_steps = leased_steps(&tx, None)?;
         let abandoned_attempts = tx.execute(
             "UPDATE master_attempts SET status = 'abandoned', completed_at_ms = ?1\n             WHERE status = 'leased'",
             [u64_to_i64(now_ms)?],
         )?;
-        let mut requeued_steps = 0_u64;
-        for step_id in step_ids {
-            requeued_steps += tx.execute(
-                "UPDATE master_steps SET status = 'queued' WHERE step_id = ?1 AND status = 'leased'",
-                [step_id],
-            )? as u64;
+        let mut disconnected_connections = 0_u64;
+        for (device_id, connection_epoch) in active_connections {
+            let changed = tx.execute(
+                "UPDATE master_connections SET active = 0, disconnected_at_ms = ?1\n\
+                 WHERE device_id = ?2 AND connection_epoch = ?3 AND active = 1",
+                params![
+                    u64_to_i64(now_ms)?,
+                    device_id.0.to_string(),
+                    u64_to_i64(connection_epoch)?,
+                ],
+            )?;
+            if changed == 1 {
+                disconnected_connections += 1;
+                append_distributed_event_tx(
+                    &tx,
+                    DistributedEventKind::DeviceDisconnected,
+                    now_ms,
+                    DistributedEventIdentity {
+                        task_id: None,
+                        step_id: None,
+                        device_id: Some(device_id),
+                        connection_epoch: Some(connection_epoch),
+                    },
+                )?;
+            }
         }
-        let disconnected_connections = tx.execute(
-            "UPDATE master_connections SET active = 0, disconnected_at_ms = ?1\n             WHERE active = 1",
-            [u64_to_i64(now_ms)?],
-        )?;
+        let mut requeued_steps = 0_u64;
+        for (task_id, step_id) in leased_steps {
+            let changed = tx.execute(
+                "UPDATE master_steps SET status = 'queued' WHERE step_id = ?1 AND status = 'leased'",
+                [step_id.0.to_string()],
+            )?;
+            if changed == 1 {
+                requeued_steps += 1;
+                append_distributed_event_tx(
+                    &tx,
+                    DistributedEventKind::StepQueued,
+                    now_ms,
+                    DistributedEventIdentity {
+                        task_id: Some(task_id),
+                        step_id: Some(step_id),
+                        device_id: None,
+                        connection_epoch: None,
+                    },
+                )?;
+            }
+        }
         tx.commit()?;
         Ok(StartupReconciliation {
-            disconnected_connections: disconnected_connections as u64,
+            disconnected_connections,
             abandoned_attempts: abandoned_attempts as u64,
             requeued_steps,
         })
@@ -1121,6 +1410,70 @@ struct StoredAttempt {
     status: AttemptStatus,
     job_json: String,
     lease_expires_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DistributedEventIdentity {
+    task_id: Option<TaskId>,
+    step_id: Option<StepId>,
+    device_id: Option<DeviceId>,
+    connection_epoch: Option<u64>,
+}
+
+fn append_distributed_event_tx(
+    tx: &Transaction<'_>,
+    kind: DistributedEventKind,
+    occurred_at_ms: u64,
+    identity: DistributedEventIdentity,
+) -> Result<DistributedEvent, MasterError> {
+    let (stream_id_text, current_sequence): (String, i64) = tx.query_row(
+        "SELECT stream_id, next_sequence FROM master_event_stream WHERE singleton = 1",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let stream_id = parse_uuid(&stream_id_text)?;
+    let next_sequence = current_sequence
+        .checked_add(1)
+        .ok_or(MasterError::IntegerOutOfRange)?;
+    let event = DistributedEvent {
+        protocol_version: PROTOCOL_VERSION,
+        cursor: DistributedEventCursor {
+            stream_id,
+            sequence: i64_to_u64(next_sequence)?,
+        },
+        occurred_at_ms,
+        kind,
+        task_id: identity.task_id,
+        step_id: identity.step_id,
+        device_id: identity.device_id,
+        connection_epoch: identity.connection_epoch,
+    };
+    event.validate()?;
+    let changed = tx.execute(
+        "UPDATE master_event_stream SET next_sequence = ?1\n\
+         WHERE singleton = 1 AND next_sequence = ?2",
+        params![next_sequence, current_sequence],
+    )?;
+    if changed != 1 {
+        return Err(MasterError::InvalidStoredState(
+            "master event cursor changed before append".to_string(),
+        ));
+    }
+    tx.execute(
+        "INSERT INTO master_events\n\
+         (sequence, occurred_at_ms, kind_json, task_id, step_id, device_id, connection_epoch)\n\
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            next_sequence,
+            u64_to_i64(occurred_at_ms)?,
+            serde_json::to_string(&kind)?,
+            identity.task_id.map(|value| value.0.to_string()),
+            identity.step_id.map(|value| value.0.to_string()),
+            identity.device_id.map(|value| value.0.to_string()),
+            identity.connection_epoch.map(u64_to_i64).transpose()?,
+        ],
+    )?;
+    Ok(event)
 }
 
 fn validate_new_step(step: &NewStep) -> Result<(), MasterError> {
@@ -1230,7 +1583,7 @@ fn disconnect_device_tx(
     if connection.epoch != connection_epoch {
         return Err(MasterError::ConnectionEpochMismatch);
     }
-    let step_ids = leased_step_ids(tx, Some((device_id, connection_epoch)))?;
+    let leased_steps = leased_steps(tx, Some((device_id, connection_epoch)))?;
     let abandoned_attempts = tx.execute(
         "UPDATE master_attempts SET status = 'abandoned', completed_at_ms = ?1\n         WHERE device_id = ?2 AND connection_epoch = ?3 AND status = 'leased'",
         params![
@@ -1239,13 +1592,6 @@ fn disconnect_device_tx(
             u64_to_i64(connection_epoch)?,
         ],
     )?;
-    let mut requeued_steps = 0_u64;
-    for step_id in step_ids {
-        requeued_steps += tx.execute(
-            "UPDATE master_steps SET status = 'queued' WHERE step_id = ?1 AND status = 'leased'",
-            [step_id],
-        )? as u64;
-    }
     let disconnected_connections = tx.execute(
         "UPDATE master_connections SET active = 0, disconnected_at_ms = ?1\n         WHERE device_id = ?2 AND connection_epoch = ?3 AND active = 1",
         params![
@@ -1254,6 +1600,40 @@ fn disconnect_device_tx(
             u64_to_i64(connection_epoch)?,
         ],
     )?;
+    if disconnected_connections == 1 {
+        append_distributed_event_tx(
+            tx,
+            DistributedEventKind::DeviceDisconnected,
+            now_ms,
+            DistributedEventIdentity {
+                task_id: None,
+                step_id: None,
+                device_id: Some(device_id),
+                connection_epoch: Some(connection_epoch),
+            },
+        )?;
+    }
+    let mut requeued_steps = 0_u64;
+    for (task_id, step_id) in leased_steps {
+        let changed = tx.execute(
+            "UPDATE master_steps SET status = 'queued' WHERE step_id = ?1 AND status = 'leased'",
+            [step_id.0.to_string()],
+        )?;
+        if changed == 1 {
+            requeued_steps += 1;
+            append_distributed_event_tx(
+                tx,
+                DistributedEventKind::StepQueued,
+                now_ms,
+                DistributedEventIdentity {
+                    task_id: Some(task_id),
+                    step_id: Some(step_id),
+                    device_id: None,
+                    connection_epoch: None,
+                },
+            )?;
+        }
+    }
     Ok(StartupReconciliation {
         disconnected_connections: disconnected_connections as u64,
         abandoned_attempts: abandoned_attempts as u64,
@@ -1267,10 +1647,14 @@ fn reconcile_expired_leases_tx(
 ) -> Result<LeaseReconciliation, MasterError> {
     let now = u64_to_i64(now_ms)?;
     let mut statement = tx.prepare(
-        "SELECT step_id FROM master_attempts\n         WHERE status = 'leased' AND lease_expires_at_ms <= ?1",
+        "SELECT s.task_id, a.step_id FROM master_attempts a\n\
+         JOIN master_steps s ON s.step_id = a.step_id\n\
+         WHERE a.status = 'leased' AND a.lease_expires_at_ms <= ?1",
     )?;
-    let step_ids = statement
-        .query_map([now], |row| row.get::<_, String>(0))?
+    let leased_steps = statement
+        .query_map([now], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
         .collect::<Result<Vec<_>, _>>()?;
     drop(statement);
     let expired_attempts = tx.execute(
@@ -1278,11 +1662,27 @@ fn reconcile_expired_leases_tx(
         [now],
     )?;
     let mut requeued_steps = 0_u64;
-    for step_id in step_ids {
-        requeued_steps += tx.execute(
+    for (task_id, step_id) in leased_steps {
+        let task_id = TaskId::new(parse_uuid(&task_id)?);
+        let step_id = StepId::new(parse_uuid(&step_id)?);
+        let changed = tx.execute(
             "UPDATE master_steps SET status = 'queued' WHERE step_id = ?1 AND status = 'leased'",
-            [step_id],
-        )? as u64;
+            [step_id.0.to_string()],
+        )?;
+        if changed == 1 {
+            requeued_steps += 1;
+            append_distributed_event_tx(
+                tx,
+                DistributedEventKind::StepQueued,
+                now_ms,
+                DistributedEventIdentity {
+                    task_id: Some(task_id),
+                    step_id: Some(step_id),
+                    device_id: None,
+                    connection_epoch: None,
+                },
+            )?;
+        }
     }
     Ok(LeaseReconciliation {
         expired_attempts: expired_attempts as u64,
@@ -1309,30 +1709,57 @@ fn capability_for_device(
         ))
 }
 
-fn leased_step_ids(
+fn active_connections(tx: &Transaction<'_>) -> Result<Vec<(DeviceId, u64)>, MasterError> {
+    let mut statement = tx.prepare(
+        "SELECT device_id, connection_epoch FROM master_connections\n\
+         WHERE active = 1 ORDER BY device_id ASC",
+    )?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    rows.into_iter()
+        .map(|(device_id, connection_epoch)| {
+            Ok((
+                DeviceId::new(parse_uuid(&device_id)?),
+                i64_to_u64(connection_epoch)?,
+            ))
+        })
+        .collect()
+}
+
+fn leased_steps(
     tx: &Transaction<'_>,
     connection: Option<(DeviceId, u64)>,
-) -> Result<Vec<String>, MasterError> {
+) -> Result<Vec<(TaskId, StepId)>, MasterError> {
     let (sql, parameters): (&str, Vec<rusqlite::types::Value>) = match connection {
         Some((device_id, epoch)) => (
-            "SELECT step_id FROM master_attempts\n             WHERE status = 'leased' AND device_id = ?1 AND connection_epoch = ?2",
-            vec![
-                device_id.0.to_string().into(),
-                u64_to_i64(epoch)?.into(),
-            ],
+            "SELECT s.task_id, a.step_id FROM master_attempts a\n\
+             JOIN master_steps s ON s.step_id = a.step_id\n\
+             WHERE a.status = 'leased' AND a.device_id = ?1 AND a.connection_epoch = ?2",
+            vec![device_id.0.to_string().into(), u64_to_i64(epoch)?.into()],
         ),
         None => (
-            "SELECT step_id FROM master_attempts WHERE status = 'leased'",
+            "SELECT s.task_id, a.step_id FROM master_attempts a\n\
+             JOIN master_steps s ON s.step_id = a.step_id WHERE a.status = 'leased'",
             Vec::new(),
         ),
     };
     let mut statement = tx.prepare(sql)?;
     let rows = statement
         .query_map(rusqlite::params_from_iter(parameters), |row| {
-            row.get::<_, String>(0)
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })?
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(rows)
+    rows.into_iter()
+        .map(|(task_id, step_id)| {
+            Ok((
+                TaskId::new(parse_uuid(&task_id)?),
+                StepId::new(parse_uuid(&step_id)?),
+            ))
+        })
+        .collect()
 }
 
 fn load_queued_steps(tx: &Transaction<'_>) -> Result<Vec<StoredStep>, MasterError> {

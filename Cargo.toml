@@ -2,6 +2,7 @@
 members = [
   "crates/jarvis-protocol",
   "crates/jarvis-master",
+  "crates/jarvis-agent",
   "crates/jarvis-core",
   "crates/jarvis-cli",
 ]

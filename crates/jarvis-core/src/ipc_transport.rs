@@ -109,10 +109,10 @@ pub async fn serve_unix_socket(
     state: IpcState,
     auth: IpcAuth,
 ) -> anyhow::Result<()> {
+    let app = router_with_auth(state, Some(auth));
     serve_unix_socket_inner(
         socket_path.as_ref(),
-        state,
-        auth,
+        app,
         #[cfg(target_os = "macos")]
         None,
         #[cfg(test)]
@@ -132,6 +132,26 @@ pub async fn serve_unix_socket_with_peer_identity(
     peer_code_requirement: &str,
     peer_identity_profile: PeerIdentityProfile,
 ) -> anyhow::Result<()> {
+    let app = router_with_auth(state, Some(auth));
+    serve_router_unix_socket_with_peer_identity(
+        socket_path,
+        app,
+        peer_code_requirement,
+        peer_identity_profile,
+    )
+    .await
+}
+
+/// Serves a caller-supplied Axum router over the same owner-only, same-EUID,
+/// Apple audit-token-bound Unix transport used by the app-supervised core.
+/// The caller remains responsible for applying per-route bearer authorization.
+#[cfg(target_os = "macos")]
+pub async fn serve_router_unix_socket_with_peer_identity(
+    socket_path: impl AsRef<Path>,
+    app: Router,
+    peer_code_requirement: &str,
+    peer_identity_profile: PeerIdentityProfile,
+) -> anyhow::Result<()> {
     validate_peer_code_requirement(peer_code_requirement, peer_identity_profile)
         .map_err(anyhow::Error::new)?;
     let requirement = Arc::new(CompiledPeerRequirement::compile(
@@ -140,8 +160,7 @@ pub async fn serve_unix_socket_with_peer_identity(
     )?);
     serve_unix_socket_inner(
         socket_path.as_ref(),
-        state,
-        auth,
+        app,
         Some(requirement),
         #[cfg(test)]
         None,
@@ -160,15 +179,23 @@ pub async fn serve_unix_socket_with_peer_identity(
     bail!("Apple peer code identity verification is supported only on macOS")
 }
 
+#[cfg(not(target_os = "macos"))]
+pub async fn serve_router_unix_socket_with_peer_identity(
+    _socket_path: impl AsRef<Path>,
+    _app: Router,
+    _peer_code_requirement: &str,
+    _peer_identity_profile: PeerIdentityProfile,
+) -> anyhow::Result<()> {
+    bail!("Apple peer code identity verification is supported only on macOS")
+}
+
 async fn serve_unix_socket_inner(
     socket_path: &Path,
-    state: IpcState,
-    auth: IpcAuth,
+    app: Router,
     #[cfg(target_os = "macos")] peer_requirement: Option<Arc<CompiledPeerRequirement>>,
     #[cfg(test)] accepted_connections: Option<Arc<AtomicUsize>>,
 ) -> anyhow::Result<()> {
     let (listener, _cleanup) = bind_secure_unix_listener(socket_path)?;
-    let app = router_with_auth(state, Some(auth));
     let permits = Arc::new(Semaphore::new(MAX_UNIX_IPC_CONNECTIONS));
     let mut shutdown = Box::pin(unix_shutdown_signal());
 
@@ -809,8 +836,10 @@ mod tests {
         let server = tokio::spawn(async move {
             serve_unix_socket_inner(
                 &server_path,
-                IpcState::new(),
-                IpcAuth::new(TEST_TOKEN, 1).expect("auth"),
+                router_with_auth(
+                    IpcState::new(),
+                    Some(IpcAuth::new(TEST_TOKEN, 1).expect("auth")),
+                ),
                 None,
                 Some(server_accepted_connections),
             )

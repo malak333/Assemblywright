@@ -16,6 +16,8 @@ flowchart LR
   Grants --> Certificates["30-day device certificates, rotation, and revocation"]
   Certificates --> Remote["Optional TLS 1.3 mTLS listener with exact-IP ephemeral server identity"]
   Remote --> Binding["Certificate registry checks, TLS exporter binding, role and epoch enforcement"]
+  Master --> Events["Schema-v3 metadata event journal and server-issued durable cursor"]
+  Events --> Agent["Mac jarvis-agent owner-only cursor and authenticated local UDS relay"]
   Process --> Service["Windows SCM host: automatic start, bounded recovery, status, maintenance, uninstall"]
   Service --> Maintenance["Durable fail-closed marker blocks new enqueue and lease admission"]
   Master --> Durable["Registered devices, epochs, queue, attempts, cancellation, expiry, restart reconciliation, exact results"]
@@ -42,15 +44,19 @@ a headless master executable. The contract seam provides protocol version 1, typ
 device/task/step/attempt/lease/cancellation identifiers, bounded capability
 advertisements, handshake messages, job and result envelopes, strict
 bound-before-decode JSON entry points, nil-identity rejection, and a golden
-compatibility fixture. `jarvis-master` schema version 2 persists explicitly
+compatibility fixture. `jarvis-master` schema version 3 persists explicitly
 registered device metadata, active connection epoch and sequence state, queued
 steps, immutable leased job envelopes, attempts, cancellation/expiry outcome,
 accepted payload digests, the enrollment authority binding, digest-only grants,
-and device-certificate serial/revocation state. It migrates existing schema-v1
-databases transactionally. It enforces the 256-step admission ceiling, four
+device-certificate serial/revocation state, and a metadata-only event journal
+with one server-issued stream ID and contiguous sequence. It migrates existing
+schema-v1/v2 databases transactionally. It enforces the 256-step admission ceiling, four
 global leases, one live lease per device connection, registered capability
 context/result limits, exact leased-attempt result identity, and durable
-abandon-before-reissue on disconnect or restart. `jarvis-core` re-exports the
+abandon-before-reissue on disconnect or restart. Each authoritative enqueue,
+lease, terminal result, cancellation, disconnect, expiry, and restart
+reconciliation transition appends its event in the same transaction.
+`jarvis-core` re-exports the
 contracts only when the default-off `distributed-development` feature is
 selected; it does not yet consume `jarvis-master`.
 The `distributed_protocol_contract_e2e` test serializes the current seam from
@@ -64,15 +70,24 @@ fixture-worker child processes, proves one-owner database exclusion, bearer
 non-disclosure, unauthorized and oversized-body denial, authenticated loopback
 health and job completion, and restart reconciliation.
 `enrollment_identity_e2e` proves digest-only grants, signed-CSR issuance,
-expiry/replay denial, rotation, revocation, schema-v1-to-v2 migration, real
+expiry/replay denial, rotation, revocation, schema-v1-to-v3 migration, real
 Windows DPAPI round trips, and the real CLI stdin boundary.
+`event_cursor_e2e` proves bounded paging, durable resume, stream mismatch and
+future-cursor rejection, metadata redaction, plus disconnect and requeue events
+after restart. The Mac `jarvis-agent` reuses the hardened local UDS transport,
+requires direct-parent supervision and a fresh startup-stdin bearer, and stores
+only stream ID, sequence, and update time under a single-owner lock.
+`local_relay_e2e` proves that boundary cross-process on macOS. The app does not
+yet launch the agent and the agent does not yet own the enrolled outbound mTLS
+session.
 `remote_mtls_e2e` adds a real master process and generated enrolled client over
 loopback TLS 1.3. It proves mutual certificate authentication, durable
 certificate/device checks, pre-handshake health denial, exporter-bound health
 and application-handshake replay denial,
 reconnect epoch advance, socket-close reconciliation, and revoked-certificate
 denial. A persistent authenticated session also proves a MacBridge certificate
-may enqueue while an enrolled inference-worker certificate cannot.
+may enqueue and retrieve metadata events while an enrolled inference-worker
+certificate cannot enqueue or retrieve the MacBridge event stream.
 `windows_service_lifecycle_e2e` installs a unique real SCM service on an elevated
 Windows runner and proves automatic-start/recovery configuration, LocalSystem
 loopback hosting, SCM plus runtime health, durable maintenance admission denial,

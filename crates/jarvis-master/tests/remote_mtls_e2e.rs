@@ -6,8 +6,9 @@ use jarvis_master::{
 };
 use jarvis_protocol::{
     AuthenticatedHandshakeRequest, CapabilityDescriptor, CapabilityKind, DeviceRole,
-    HandshakeRequest, HandshakeResponse, HandshakeStatus, Sensitivity, StepId, TaskId,
-    MAX_JOB_CONTEXT_BYTES, MAX_JOB_RESULT_BYTES, PROTOCOL_VERSION,
+    DistributedEventBatch, DistributedEventBatchRequest, DistributedEventKind, HandshakeRequest,
+    HandshakeResponse, HandshakeStatus, Sensitivity, StepId, TaskId, MAX_JOB_CONTEXT_BYTES,
+    MAX_JOB_RESULT_BYTES, PROTOCOL_VERSION,
 };
 use rcgen::{CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
@@ -215,6 +216,37 @@ async fn remote_listener_requires_enrollment_tls13_and_channel_bound_identity() 
         bridge_enqueue.starts_with("HTTP/1.1 200 OK"),
         "{bridge_enqueue}"
     );
+    let (events_handshake, events_response) = authenticated_application_request_with_body(
+        remote_endpoint,
+        &valid,
+        "POST",
+        "/v1/distributed/events/next",
+        |handshake| DistributedEventBatchRequest {
+            protocol_version: PROTOCOL_VERSION,
+            connection_epoch: handshake.connection_epoch,
+            after: None,
+            limit: 64,
+        },
+    )
+    .await;
+    assert_eq!(events_handshake.status, HandshakeStatus::Accepted);
+    assert!(
+        events_response.starts_with("HTTP/1.1 200 OK"),
+        "{events_response}"
+    );
+    let events: DistributedEventBatch = response_json(&events_response);
+    assert!(events
+        .events
+        .iter()
+        .any(|event| event.kind == DistributedEventKind::DeviceConnected));
+    assert!(events
+        .events
+        .iter()
+        .any(|event| event.kind == DistributedEventKind::StepQueued));
+    assert!(
+        !events_response.contains("bridge may enqueue"),
+        "metadata event stream leaked step context"
+    );
 
     let (worker_handshake, worker_enqueue) = authenticated_application_request(
         remote_endpoint,
@@ -228,6 +260,24 @@ async fn remote_listener_requires_enrollment_tls13_and_channel_bound_identity() 
     assert!(
         worker_enqueue.starts_with("HTTP/1.1 401 Unauthorized"),
         "{worker_enqueue}"
+    );
+    let (worker_events_handshake, worker_events) = authenticated_application_request_with_body(
+        remote_endpoint,
+        &inference_worker,
+        "POST",
+        "/v1/distributed/events/next",
+        |handshake| DistributedEventBatchRequest {
+            protocol_version: PROTOCOL_VERSION,
+            connection_epoch: handshake.connection_epoch,
+            after: None,
+            limit: 64,
+        },
+    )
+    .await;
+    assert_eq!(worker_events_handshake.status, HandshakeStatus::Accepted);
+    assert!(
+        worker_events.starts_with("HTTP/1.1 401 Unauthorized"),
+        "inference worker reached MacBridge-only event route: {worker_events}"
     );
 
     let revoked_result = try_tls_request(
@@ -444,6 +494,48 @@ async fn authenticated_application_request<T: Serialize + ?Sized>(
     );
     let handshake = response_json(&handshake_response);
     let body = serde_json::to_vec(body).expect("serialize authenticated application request");
+    let response = send_http(&mut stream, endpoint, method, path, &body)
+        .await
+        .expect("complete authenticated application request");
+    (handshake, response)
+}
+
+async fn authenticated_application_request_with_body<T: Serialize>(
+    endpoint: SocketAddr,
+    client: &EnrolledClient,
+    method: &str,
+    path: &str,
+    body: impl FnOnce(&HandshakeResponse) -> T,
+) -> (HandshakeResponse, String) {
+    let stream = tokio::net::TcpStream::connect(endpoint)
+        .await
+        .expect("connect remote listener for authenticated application request");
+    let server_name = ServerName::IpAddress(endpoint.ip().into());
+    let mut stream = TlsConnector::from(client.config.clone())
+        .connect(server_name, stream)
+        .await
+        .expect("complete mutual TLS application handshake");
+    let handshake_body = serde_json::to_vec(&AuthenticatedHandshakeRequest {
+        handshake: client.handshake.clone(),
+        tls_exporter_sha256: exporter_digest(stream.get_ref().1),
+    })
+    .expect("serialize authenticated handshake");
+    let handshake_response = send_http_keep_alive(
+        &mut stream,
+        endpoint,
+        "POST",
+        "/v1/distributed/connections/accept",
+        &handshake_body,
+    )
+    .await
+    .expect("accept application handshake on persistent TLS connection");
+    assert!(
+        handshake_response.starts_with("HTTP/1.1 200 OK"),
+        "{handshake_response}"
+    );
+    let handshake: HandshakeResponse = response_json(&handshake_response);
+    let body =
+        serde_json::to_vec(&body(&handshake)).expect("serialize authenticated application request");
     let response = send_http(&mut stream, endpoint, method, path, &body)
         .await
         .expect("complete authenticated application request");

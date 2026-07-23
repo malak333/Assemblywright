@@ -123,8 +123,17 @@ The agent maintains an outbound authenticated connection to Windows, relays
 commands and durable event cursors, exposes eligible Apple capabilities, and
 hosts the M1 inference adapter. It holds no authoritative Jarvis state.
 
-The current default-inert implementation stops at the Mac trust/transport
-foundation: a Swift Keychain enrollment coordinator, Security.framework
+The current default-inert implementation now extends the Mac trust/transport
+foundation with a bounded Rust relay seam. Windows schema version 3 stores a
+metadata-only event journal with one server-issued stream ID and contiguous
+cursor. State transitions and their events commit atomically. The
+`jarvis-agent` executable stores only its last accepted cursor and serves
+authenticated health and event acceptance over the shared owner-only,
+same-EUID, Apple code-identity-checked UDS transport. Startup policy and its
+fresh bearer arrive through bounded stdin, and a direct-parent mismatch fails
+before storage opens.
+
+The earlier bridge foundation remains a Swift Keychain enrollment coordinator, Security.framework
 identity store, Network.framework TLS 1.3 client, and focused
 `jarvis-mac-bridge` operator CLI can complete an exporter-bound authenticated
 health session. Its explicit monitor mode reuses the accepted connection for
@@ -139,10 +148,11 @@ default-off executable plus independently supplied Apple-team development
 opt-in. It validates the helper's Apple code identity, exact CDHash, and distinct Keychain group, clears
 the child environment, accepts only strict bounded redacted monitor snapshots,
 and exposes read-only bridge state. The helper is not bundled and this is not
-unattended background operation.
-The app-supervised Rust `jarvis-agent`, UDS relay, durable event cursor, and M1
-inference adapter in the preceding target description are not implemented by
-this slice.
+unattended background operation. `Jarvis.app` does not yet launch the Rust
+agent, and the agent does not yet own or receive the enrolled outbound mTLS
+session. The UDS relay and durable cursor are therefore repository-tested
+foundations, not an integrated distributed runtime. The M1 inference adapter
+is not implemented.
 
 ### RTX And Future Workers
 
