@@ -3,10 +3,13 @@
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use jarvis_protocol::{
-    DistributedEvent, DistributedEventBatch, DistributedEventCursor, DistributedEventKind, StepId,
-    TaskId, PROTOCOL_VERSION,
+    AttemptId, CancellationId, CancellationInstruction, ContextHandlingPolicy, DistributedEvent,
+    DistributedEventBatch, DistributedEventCursor, DistributedEventKind, JobEnvelope, LeaseId,
+    Sensitivity, StepId, TaskId, CANCELLATION_ACK_DEADLINE_MS, FIXTURE_REASONING_CAPABILITY_ID,
+    FIXTURE_REASONING_MODEL, PROTOCOL_VERSION,
 };
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -37,7 +40,7 @@ fn supervised_agent_uds_requires_identity_and_bearer_and_persists_exact_cursor()
         .expect("secure runtime directory");
     let socket_path = runtime_dir.join("agent.sock");
     let data_dir = temporary.path().join("data");
-    let mut child = start_agent(&data_dir, &socket_path);
+    let mut child = start_agent(&data_dir, &socket_path, false);
 
     let pid = child.id().to_string();
     let process = Command::new("ps")
@@ -100,7 +103,7 @@ fn supervised_agent_uds_requires_identity_and_bearer_and_persists_exact_cursor()
     child.kill().expect("stop first agent process");
     child.wait().expect("reap first agent process");
     let restart_socket_path = runtime_dir.join("agent-restart.sock");
-    let restarted = start_agent(&data_dir, &restart_socket_path);
+    let restarted = start_agent(&data_dir, &restart_socket_path, false);
     let restarted_health = send(
         &restart_socket_path,
         request("GET", "/health", Some(format!("Bearer {TOKEN}")), None),
@@ -115,6 +118,71 @@ fn supervised_agent_uds_requires_identity_and_bearer_and_persists_exact_cursor()
         1
     );
     ChildGuard(restarted);
+}
+
+#[test]
+fn authenticated_uds_fixture_success_and_cancellation_suppress_late_output() {
+    let temporary = tempfile::tempdir().expect("agent fixture job");
+    let runtime_dir = temporary.path().join("run");
+    fs::create_dir(&runtime_dir).expect("create runtime");
+    fs::set_permissions(&runtime_dir, fs::Permissions::from_mode(0o700)).expect("secure runtime");
+    let socket_path = runtime_dir.join("agent.sock");
+    let child = start_agent(&temporary.path().join("data"), &socket_path, true);
+    let bearer = Some(format!("Bearer {TOKEN}"));
+    let health = send(
+        &socket_path,
+        request("GET", "/health", bearer.clone(), None),
+    );
+    let health_body = response_body(&health);
+    assert_eq!(health_body["fixture_jobs_enabled"], true);
+    assert_eq!(
+        health_body["boundary"],
+        "metadata_cursor_plus_in_memory_public_fixture_jobs_no_retention"
+    );
+
+    let completed = send(
+        &socket_path,
+        request(
+            "POST",
+            "/v1/jobs/execute",
+            bearer.clone(),
+            Some(serde_json::to_value(fixture_job(0, "bounded")).unwrap()),
+        ),
+    );
+    assert_eq!(completed["status"], 200);
+    assert_eq!(response_body(&completed)["payload"]["output"], "bounded");
+
+    let delayed = fixture_job(5_000, "must-not-escape");
+    let delayed_for_thread = delayed.clone();
+    let socket_for_thread = socket_path.clone();
+    let bearer_for_thread = bearer.clone();
+    let execution = thread::spawn(move || {
+        send(
+            &socket_for_thread,
+            request(
+                "POST",
+                "/v1/jobs/execute",
+                bearer_for_thread,
+                Some(serde_json::to_value(delayed_for_thread).unwrap()),
+            ),
+        )
+    });
+    thread::sleep(Duration::from_millis(100));
+    let cancelled = send(
+        &socket_path,
+        request(
+            "POST",
+            "/v1/jobs/cancel",
+            bearer,
+            Some(serde_json::to_value(cancellation(&delayed)).unwrap()),
+        ),
+    );
+    assert_eq!(cancelled["status"], 200);
+    assert_eq!(response_body(&cancelled)["status"], "cancelled");
+    let late = execution.join().expect("join delayed fixture");
+    assert_eq!(late["status"], 409);
+    assert_eq!(response_body(&late)["error"], "job_cancelled");
+    ChildGuard(child);
 }
 
 #[test]
@@ -212,6 +280,42 @@ fn batch(stream_id: Uuid, after_sequence: u64, next_sequence: u64) -> Distribute
     }
 }
 
+fn fixture_job(delay_ms: u64, input: &str) -> JobEnvelope {
+    let context = json!({"operation":"synthetic_echo","input":input,"delay_ms":delay_ms});
+    JobEnvelope {
+        protocol_version: PROTOCOL_VERSION,
+        connection_epoch: 17,
+        sequence: 1,
+        task_id: TaskId::new(Uuid::new_v4()),
+        step_id: StepId::new(Uuid::new_v4()),
+        attempt_id: AttemptId::new(Uuid::new_v4()),
+        lease_id: LeaseId::new(Uuid::new_v4()),
+        cancellation_id: CancellationId::new(Uuid::new_v4()),
+        capability_id: FIXTURE_REASONING_CAPABILITY_ID.to_string(),
+        selected_model: FIXTURE_REASONING_MODEL.to_string(),
+        sensitivity: Sensitivity::Public,
+        context_handling: ContextHandlingPolicy::EphemeralNoRetention,
+        lease_duration_ms: 60_000,
+        deadline_after_ms: 60_000,
+        context_sha256: Sha256::digest(serde_json::to_vec(&context).unwrap()).into(),
+        context,
+    }
+}
+
+fn cancellation(job: &JobEnvelope) -> CancellationInstruction {
+    CancellationInstruction {
+        protocol_version: PROTOCOL_VERSION,
+        connection_epoch: job.connection_epoch,
+        sequence: job.sequence + 1,
+        task_id: job.task_id,
+        step_id: job.step_id,
+        attempt_id: job.attempt_id,
+        lease_id: job.lease_id,
+        cancellation_id: job.cancellation_id,
+        deadline_after_ms: CANCELLATION_ACK_DEADLINE_MS,
+    }
+}
+
 fn request(method: &str, path: &str, authorization: Option<String>, body: Option<Value>) -> Value {
     json!({
         "version": 1,
@@ -259,14 +363,15 @@ fn response_body(response: &Value) -> Value {
     serde_json::from_slice(&body).expect("decode body JSON")
 }
 
-fn start_agent(data_dir: &Path, socket_path: &Path) -> Child {
+fn start_agent(data_dir: &Path, socket_path: &Path, fixture_jobs_enabled: bool) -> Child {
     let startup = json!({
         "version": 1,
         "supervised_parent_pid": std::process::id(),
         "socket_path": socket_path,
         "peer_code_requirement": current_process_designated_requirement(),
         "peer_identity_profile": "adhoc_exact",
-        "bearer_token": TOKEN
+        "bearer_token": TOKEN,
+        "fixture_jobs_enabled": fixture_jobs_enabled
     })
     .to_string();
     let mut child = Command::new(env!("CARGO_BIN_EXE_jarvis-agent"))
@@ -288,10 +393,14 @@ fn start_agent(data_dir: &Path, socket_path: &Path) -> Child {
 
 fn wait_for_socket(child: &mut Child, socket_path: &Path) {
     let deadline = Instant::now() + Duration::from_secs(10);
+    let mut observed_mode = None;
     loop {
         if let Ok(metadata) = fs::symlink_metadata(socket_path) {
-            assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
-            return;
+            let mode = metadata.permissions().mode() & 0o777;
+            if mode == 0o600 {
+                return;
+            }
+            observed_mode = Some(mode);
         }
         if let Some(status) = child.try_wait().expect("inspect agent process") {
             let mut stderr = String::new();
@@ -303,7 +412,13 @@ fn wait_for_socket(child: &mut Child, socket_path: &Path) {
                 .expect("read agent stderr");
             panic!("agent exited early ({status}): {stderr}");
         }
-        assert!(Instant::now() < deadline, "agent socket startup timed out");
+        assert!(
+            Instant::now() < deadline,
+            "agent socket startup timed out; final observed mode was {}",
+            observed_mode
+                .map(|mode| format!("{mode:04o}"))
+                .unwrap_or_else(|| "missing".to_string())
+        );
         thread::sleep(Duration::from_millis(10));
     }
 }

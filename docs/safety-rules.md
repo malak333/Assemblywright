@@ -135,8 +135,31 @@ release requirements, not optional UX guidance.
   the same owner-only UDS, same-EUID, Apple audit-token code-identity, framed
   request, and fresh 32-byte bearer controls as app-supervised core IPC, and
   require authorization even for health. It must never infer Windows health or
-  task authority from its local cursor. Until the app launch and outbound mTLS
-  integration exist, repository tests are relay-boundary proof only.
+  task authority from its local cursor. Repository tests are relay/fixture
+  boundary proof only unless a separately named live-device receipt is captured.
+- Fixture-job execution is a separate default-off diagnostic, never an implied
+  consequence of enabling the metadata cursor. It requires the exact registered
+  `fixture.reasoning` / `jarvis-fixture` / `jarvis-fixture-v1` descriptor and
+  accepts only Public `synthetic_echo` context with at most 4 KiB of UTF-8 input,
+  an 8 KiB context/result ceiling, a 5-second synthetic delay ceiling, and
+  `ephemeral_no_retention`. The agent may hold one active fixture in memory but
+  must not persist its context, output, job, result, cancellation, or
+  acknowledgement. The adapter has no model, tool, file, repository, credential,
+  network, Codex, or Git authority.
+- Remote raw-step enqueue is forbidden. Fixture work is queued only through the
+  Windows-local authenticated development seam, then leased only to the
+  authenticated device that registered the exact fixture capability. Result and
+  cancellation acceptance must bind device, connection epoch, task, step,
+  attempt, lease, cancellation ID, sequence, and digests. Emergency pause,
+  maintenance, expiry, disconnect, cancellation, or acknowledgement timeout
+  dominates result acceptance; late or duplicate output is suppressed and
+  rejected.
+- Fixture emergency-pause mutation is Windows-local and owner-authenticated.
+  The loopback activate/resume actions accept only `{}`, expose no planning or
+  enqueue authority, and must not be registered on the enrolled-device mTLS
+  router. Activating pause must atomically move active fixture attempts into
+  durable cancellation; deliberate resume may reopen admission but must never
+  revive an old lease or permit its late output.
 - Model-originated tool calls must be constrained to runtime-derived inventory.
   The default inventory is the registered first-party `PluginHost` manifests.
   A separate installed-tool catalog may be added only when the individual
@@ -233,13 +256,18 @@ release requirements, not optional UX guidance.
   and exact CDHash before framing; the agent must reject any requirement text
   that is not canonical for its declared profile before opening durable state.
   The agent cursor may store only stream ID, sequence, and update time.
-- The helper may request only the authenticated MacBridge metadata event route
-  and may forward only its exact bounded response body to the agent. The agent
+- By default the helper may request only the authenticated MacBridge metadata
+  event route and may forward only its exact bounded response body to the agent.
+  The separate exact fixture opt-in may additionally use only lease, result,
+  cancellation-poll, and cancellation-acknowledgement routes for the registered
+  Public synthetic fixture contract. The agent
   remains the final strict protocol validator and rejects gaps, replay, stream
   replacement, unknown fields, or identity-shape mismatches before cursor
-  commit. Any master, helper, UDS, identity, or cursor failure cancels the
-  current mTLS session and enters fixed redacted backoff; it never authorizes a
-  job, model, repository, Codex, or Git action.
+  commit, and rejects malformed, oversized, non-Public, non-fixture, mismatched,
+  concurrent, cancelled, or late fixture work before output forwarding. Any
+  master, helper, UDS, identity, cursor, fixture, cancellation, or deadline
+  failure cancels the current mTLS session and enters fixed redacted backoff; it
+  never authorizes a model, tool, file, repository, Codex, or Git action.
 - Artifact-producing distribution packaging must inspect the exact configured
   `Jarvis.app` and bundled-core executable immediately before removing the
   distribution directory. If either executable is active, packaging fails

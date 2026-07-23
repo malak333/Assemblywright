@@ -1,10 +1,11 @@
 use jarvis_protocol::{
-    AttemptId, CancellationId, CapabilityDescriptor, ContextHandlingPolicy, DeviceId, DeviceRole,
-    DistributedEvent, DistributedEventBatch, DistributedEventBatchRequest, DistributedEventCursor,
+    AttemptId, CancellationAcknowledgement, CancellationId, CancellationInstruction,
+    CapabilityDescriptor, ContextHandlingPolicy, DeviceId, DeviceRole, DistributedEvent,
+    DistributedEventBatch, DistributedEventBatchRequest, DistributedEventCursor,
     DistributedEventKind, HandshakeRequest, HandshakeResponse, HandshakeStatus, JobEnvelope,
     JobResultEnvelope, JobResultStatus, LeaseId, ProtocolError, Sensitivity, StepId, TaskId,
-    MAX_CAPABILITY_ID_BYTES, MAX_JOB_CONTEXT_BYTES, MAX_LEASE_DURATION_MS, MAX_STEP_DEADLINE_MS,
-    PROTOCOL_VERSION,
+    CANCELLATION_ACK_DEADLINE_MS, FIXTURE_REASONING_CAPABILITY_ID, MAX_CAPABILITY_ID_BYTES,
+    MAX_JOB_CONTEXT_BYTES, MAX_LEASE_DURATION_MS, MAX_STEP_DEADLINE_MS, PROTOCOL_VERSION,
 };
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
@@ -28,7 +29,7 @@ pub use identity::{
     SERVER_CERTIFICATE_LIFETIME_MS,
 };
 
-pub const MASTER_SCHEMA_VERSION: i64 = 3;
+pub const MASTER_SCHEMA_VERSION: i64 = 4;
 pub const MAX_QUEUED_OR_LEASED_STEPS: u64 = 256;
 pub const MAX_CONCURRENT_JOBS: u64 = 4;
 
@@ -61,6 +62,8 @@ pub enum MasterError {
     DeviceAlreadyLeased,
     #[error("the global concurrent-job limit has been reached")]
     ConcurrentJobLimit,
+    #[error("authoritative emergency pause blocks distributed work")]
+    EmergencyPaused,
     #[error("no queued step is eligible for this device")]
     NoEligibleStep,
     #[error("job context or result exceeds the selected capability limit")]
@@ -85,12 +88,16 @@ pub enum MasterError {
     StepNotCancellable(StepStatus),
     #[error("attempt was not found")]
     AttemptNotFound,
+    #[error("authenticated device does not own this attempt")]
+    ResultDeviceMismatch,
     #[error("attempt is not accepting results from status {0:?}")]
     ResultNotAccepting(AttemptStatus),
     #[error("result sequence is not newer than the connection high-water mark")]
     SequenceReplay,
     #[error("the result arrived after its lease expired")]
     LeaseExpired,
+    #[error("cancellation acknowledgement deadline expired")]
+    CancellationExpired,
     #[error("event cursor belongs to a different master event stream")]
     EventCursorStreamMismatch,
     #[error("event cursor is ahead of the durable master event high-water mark")]
@@ -186,6 +193,7 @@ impl StepStatus {
 #[serde(rename_all = "snake_case")]
 pub enum AttemptStatus {
     Leased,
+    CancellationPending,
     Succeeded,
     Failed,
     Cancelled,
@@ -197,6 +205,7 @@ impl AttemptStatus {
     fn as_str(self) -> &'static str {
         match self {
             Self::Leased => "leased",
+            Self::CancellationPending => "cancellation_pending",
             Self::Succeeded => "succeeded",
             Self::Failed => "failed",
             Self::Cancelled => "cancelled",
@@ -208,6 +217,7 @@ impl AttemptStatus {
     fn parse(value: &str) -> Result<Self, MasterError> {
         match value {
             "leased" => Ok(Self::Leased),
+            "cancellation_pending" => Ok(Self::CancellationPending),
             "succeeded" => Ok(Self::Succeeded),
             "failed" => Ok(Self::Failed),
             "cancelled" => Ok(Self::Cancelled),
@@ -247,6 +257,13 @@ pub struct StartupReconciliation {
 pub struct LeaseReconciliation {
     pub expired_attempts: u64,
     pub requeued_steps: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcceptedCancellation {
+    pub accepted: bool,
+    pub status: StepStatus,
 }
 
 pub struct MasterKernel {
@@ -348,6 +365,11 @@ impl MasterKernel {
             startup_reconciliation: StartupReconciliation::default(),
         };
         kernel.migrate()?;
+        kernel.connection.execute(
+            "INSERT OR IGNORE INTO master_metadata (key, integer_value)\n\
+             VALUES ('emergency_paused', 0)",
+            [],
+        )?;
         kernel.startup_reconciliation = kernel.reconcile_interrupted_state(current_time_ms()?)?;
         Ok(kernel)
     }
@@ -360,6 +382,51 @@ impl MasterKernel {
 
     pub fn startup_reconciliation(&self) -> StartupReconciliation {
         self.startup_reconciliation
+    }
+
+    pub fn emergency_paused(&self) -> Result<bool, MasterError> {
+        let value: i64 = self.connection.query_row(
+            "SELECT integer_value FROM master_metadata WHERE key = 'emergency_paused'",
+            [],
+            |row| row.get(0),
+        )?;
+        match value {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(MasterError::InvalidStoredState(
+                "emergency pause state is not boolean".to_string(),
+            )),
+        }
+    }
+
+    pub fn set_emergency_paused(&mut self, paused: bool) -> Result<(), MasterError> {
+        self.set_emergency_paused_at(paused, current_time_ms()?)
+    }
+
+    pub fn set_emergency_paused_at(
+        &mut self,
+        paused: bool,
+        now_ms: u64,
+    ) -> Result<(), MasterError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let was_paused = emergency_paused_tx(&tx)?;
+        if paused && !was_paused {
+            request_active_fixture_cancellations_tx(&tx, now_ms)?;
+        }
+        let changed = tx.execute(
+            "UPDATE master_metadata SET integer_value = ?1\n\
+             WHERE key = 'emergency_paused'",
+            [i64::from(paused)],
+        )?;
+        if changed != 1 {
+            return Err(MasterError::InvalidStoredState(
+                "emergency pause state is missing".to_string(),
+            ));
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn health_snapshot(&self) -> Result<MasterHealthSnapshot, MasterError> {
@@ -396,7 +463,8 @@ impl MasterKernel {
             )?,
             active_attempts: count(
                 &self.connection,
-                "SELECT COUNT(*) FROM master_attempts WHERE status = 'leased'",
+                "SELECT COUNT(*) FROM master_attempts\n\
+                 WHERE status IN ('leased', 'cancellation_pending')",
             )?,
         })
     }
@@ -751,9 +819,29 @@ impl MasterKernel {
         connection_epoch: u64,
         now_ms: u64,
     ) -> Result<JobEnvelope, MasterError> {
+        self.lease_next_step_bound(device_id, connection_epoch, now_ms, false)
+    }
+
+    pub fn lease_next_fixture_step(
+        &mut self,
+        device_id: DeviceId,
+        connection_epoch: u64,
+        now_ms: u64,
+    ) -> Result<JobEnvelope, MasterError> {
+        self.lease_next_step_bound(device_id, connection_epoch, now_ms, true)
+    }
+
+    fn lease_next_step_bound(
+        &mut self,
+        device_id: DeviceId,
+        connection_epoch: u64,
+        now_ms: u64,
+        fixture_only: bool,
+    ) -> Result<JobEnvelope, MasterError> {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_emergency_unpaused_tx(&tx)?;
         reconcile_expired_leases_tx(&tx, now_ms)?;
         let connection = connection_state(&tx, device_id)?;
         if !connection.active {
@@ -763,7 +851,9 @@ impl MasterKernel {
             return Err(MasterError::ConnectionEpochMismatch);
         }
         let device_leases: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM master_attempts\n             WHERE device_id = ?1 AND connection_epoch = ?2 AND status = 'leased'",
+            "SELECT COUNT(*) FROM master_attempts\n\
+             WHERE device_id = ?1 AND connection_epoch = ?2\n\
+               AND status IN ('leased', 'cancellation_pending')",
             params![device_id.0.to_string(), u64_to_i64(connection_epoch)?],
             |row| row.get(0),
         )?;
@@ -771,7 +861,8 @@ impl MasterKernel {
             return Err(MasterError::DeviceAlreadyLeased);
         }
         let global_leases: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM master_attempts WHERE status = 'leased'",
+            "SELECT COUNT(*) FROM master_attempts\n\
+             WHERE status IN ('leased', 'cancellation_pending')",
             [],
             |row| row.get(0),
         )?;
@@ -831,6 +922,9 @@ impl MasterKernel {
             context,
         };
         job.validate()?;
+        if fixture_only {
+            job.validate_fixture_reasoning()?;
+        }
         let job_json = serde_json::to_string(&job)?;
 
         tx.execute(
@@ -887,13 +981,49 @@ impl MasterKernel {
         result: &JobResultEnvelope,
         now_ms: u64,
     ) -> Result<AcceptedResult, MasterError> {
+        self.accept_result_bound(None, result, now_ms, false)
+    }
+
+    pub fn accept_result_from(
+        &mut self,
+        authenticated_device_id: DeviceId,
+        result: &JobResultEnvelope,
+        now_ms: u64,
+    ) -> Result<AcceptedResult, MasterError> {
+        self.accept_result_bound(Some(authenticated_device_id), result, now_ms, false)
+    }
+
+    pub fn accept_fixture_result_from(
+        &mut self,
+        authenticated_device_id: DeviceId,
+        result: &JobResultEnvelope,
+        now_ms: u64,
+    ) -> Result<AcceptedResult, MasterError> {
+        self.accept_result_bound(Some(authenticated_device_id), result, now_ms, true)
+    }
+
+    fn accept_result_bound(
+        &mut self,
+        authenticated_device_id: Option<DeviceId>,
+        result: &JobResultEnvelope,
+        now_ms: u64,
+        fixture_only: bool,
+    ) -> Result<AcceptedResult, MasterError> {
         result.validate()?;
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_emergency_unpaused_tx(&tx)?;
         let attempt = load_attempt(&tx, result.attempt_id)?.ok_or(MasterError::AttemptNotFound)?;
+        if authenticated_device_id.is_some_and(|device_id| device_id != attempt.device_id) {
+            return Err(MasterError::ResultDeviceMismatch);
+        }
         let job: JobEnvelope = serde_json::from_str(&attempt.job_json)?;
-        result.validate_for_job(&job)?;
+        if fixture_only {
+            result.validate_fixture_reasoning_result(&job)?;
+        } else {
+            result.validate_for_job(&job)?;
+        }
         if attempt.status != AttemptStatus::Leased {
             return Err(MasterError::ResultNotAccepting(attempt.status));
         }
@@ -901,6 +1031,17 @@ impl MasterKernel {
             tx.execute(
                 "UPDATE master_attempts SET status = 'expired', completed_at_ms = ?1\n                 WHERE attempt_id = ?2 AND status = 'leased'",
                 params![u64_to_i64(now_ms)?, result.attempt_id.0.to_string()],
+            )?;
+            append_distributed_event_tx(
+                &tx,
+                DistributedEventKind::StepLeaseExpired,
+                now_ms,
+                DistributedEventIdentity {
+                    task_id: Some(result.task_id),
+                    step_id: Some(result.step_id),
+                    device_id: Some(attempt.device_id),
+                    connection_epoch: Some(result.connection_epoch),
+                },
             )?;
             let requeued = tx.execute(
                 "UPDATE master_steps SET status = 'queued'\n                 WHERE step_id = ?1 AND status = 'leased'",
@@ -1033,14 +1174,9 @@ impl MasterKernel {
                 )?;
             }
             StepStatus::Leased => {
-                tx.execute(
-                    "UPDATE master_attempts SET status = 'cancelled', completed_at_ms = ?1\n                     WHERE step_id = ?2 AND status = 'leased'",
-                    params![u64_to_i64(now_ms)?, step_id.0.to_string()],
-                )?;
-                tx.execute(
-                    "UPDATE master_steps SET status = 'cancelled', completed_at_ms = ?1\n                     WHERE step_id = ?2 AND status = 'leased'",
-                    params![u64_to_i64(now_ms)?, step_id.0.to_string()],
-                )?;
+                request_leased_step_cancellation_tx(&tx, task_id, step_id, now_ms)?;
+                tx.commit()?;
+                return Ok(());
             }
             terminal => return Err(MasterError::StepNotCancellable(terminal)),
         }
@@ -1057,6 +1193,175 @@ impl MasterKernel {
         )?;
         tx.commit()?;
         Ok(())
+    }
+
+    pub fn next_cancellation(
+        &mut self,
+        device_id: DeviceId,
+        connection_epoch: u64,
+        now_ms: u64,
+    ) -> Result<Option<CancellationInstruction>, MasterError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        reconcile_cancellation_deadlines_tx(&tx, now_ms)?;
+        let connection = connection_state(&tx, device_id)?;
+        if !connection.active {
+            return Err(MasterError::ConnectionNotActive);
+        }
+        if connection.epoch != connection_epoch {
+            return Err(MasterError::ConnectionEpochMismatch);
+        }
+        let stored = tx
+            .query_row(
+                "SELECT job_json, cancellation_sequence, cancellation_deadline_at_ms\n\
+                 FROM master_attempts\n\
+                 WHERE device_id = ?1 AND connection_epoch = ?2\n\
+                   AND status = 'cancellation_pending'\n\
+                 ORDER BY cancellation_requested_at_ms ASC LIMIT 1",
+                params![device_id.0.to_string(), u64_to_i64(connection_epoch)?,],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let instruction = stored
+            .map(|(job_json, sequence, deadline_at_ms)| {
+                let job: JobEnvelope = serde_json::from_str(&job_json)?;
+                let deadline_after_ms = i64_to_u64(deadline_at_ms)?
+                    .checked_sub(now_ms)
+                    .ok_or(MasterError::CancellationExpired)?;
+                let instruction = CancellationInstruction {
+                    protocol_version: PROTOCOL_VERSION,
+                    connection_epoch,
+                    sequence: i64_to_u64(sequence)?,
+                    task_id: job.task_id,
+                    step_id: job.step_id,
+                    attempt_id: job.attempt_id,
+                    lease_id: job.lease_id,
+                    cancellation_id: job.cancellation_id,
+                    deadline_after_ms,
+                };
+                instruction.validate_for_job(&job)?;
+                Ok::<CancellationInstruction, MasterError>(instruction)
+            })
+            .transpose()?;
+        tx.commit()?;
+        Ok(instruction)
+    }
+
+    pub fn accept_cancellation_ack_from(
+        &mut self,
+        authenticated_device_id: DeviceId,
+        acknowledgement: &CancellationAcknowledgement,
+        now_ms: u64,
+    ) -> Result<AcceptedCancellation, MasterError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let attempt =
+            load_attempt(&tx, acknowledgement.attempt_id)?.ok_or(MasterError::AttemptNotFound)?;
+        if attempt.device_id != authenticated_device_id {
+            return Err(MasterError::ResultDeviceMismatch);
+        }
+        if attempt.status != AttemptStatus::CancellationPending {
+            return Err(MasterError::ResultNotAccepting(attempt.status));
+        }
+        let job: JobEnvelope = serde_json::from_str(&attempt.job_json)?;
+        let instruction = CancellationInstruction {
+            protocol_version: PROTOCOL_VERSION,
+            connection_epoch: job.connection_epoch,
+            sequence: attempt.cancellation_sequence.ok_or_else(|| {
+                MasterError::InvalidStoredState("missing cancellation sequence".into())
+            })?,
+            task_id: job.task_id,
+            step_id: job.step_id,
+            attempt_id: job.attempt_id,
+            lease_id: job.lease_id,
+            cancellation_id: job.cancellation_id,
+            deadline_after_ms: CANCELLATION_ACK_DEADLINE_MS,
+        };
+        acknowledgement.validate_for_instruction(&instruction)?;
+        if now_ms
+            >= attempt.cancellation_deadline_at_ms.ok_or_else(|| {
+                MasterError::InvalidStoredState("missing cancellation deadline".into())
+            })?
+        {
+            reconcile_cancellation_deadlines_tx(&tx, now_ms)?;
+            tx.commit()?;
+            return Err(MasterError::CancellationExpired);
+        }
+        let connection = connection_state(&tx, authenticated_device_id)?;
+        if !connection.active || connection.epoch != acknowledgement.connection_epoch {
+            return Err(MasterError::ConnectionNotActive);
+        }
+        if acknowledgement.sequence <= connection.last_sequence {
+            return Err(MasterError::SequenceReplay);
+        }
+        tx.execute(
+            "UPDATE master_attempts SET status = 'cancelled', completed_at_ms = ?1,\n\
+               cancellation_ack_sequence = ?2\n\
+             WHERE attempt_id = ?3 AND status = 'cancellation_pending'",
+            params![
+                u64_to_i64(now_ms)?,
+                u64_to_i64(acknowledgement.sequence)?,
+                acknowledgement.attempt_id.0.to_string(),
+            ],
+        )?;
+        tx.execute(
+            "UPDATE master_steps SET status = 'cancelled', completed_at_ms = ?1\n\
+             WHERE step_id = ?2 AND status = 'leased'",
+            params![u64_to_i64(now_ms)?, acknowledgement.step_id.0.to_string()],
+        )?;
+        tx.execute(
+            "UPDATE master_connections SET last_sequence = ?1\n\
+             WHERE device_id = ?2 AND connection_epoch = ?3 AND active = 1",
+            params![
+                u64_to_i64(acknowledgement.sequence)?,
+                authenticated_device_id.0.to_string(),
+                u64_to_i64(acknowledgement.connection_epoch)?,
+            ],
+        )?;
+        append_distributed_event_tx(
+            &tx,
+            DistributedEventKind::StepCancellationAcknowledged,
+            now_ms,
+            DistributedEventIdentity {
+                task_id: Some(acknowledgement.task_id),
+                step_id: Some(acknowledgement.step_id),
+                device_id: Some(authenticated_device_id),
+                connection_epoch: Some(acknowledgement.connection_epoch),
+            },
+        )?;
+        append_distributed_event_tx(
+            &tx,
+            DistributedEventKind::StepCancelled,
+            now_ms,
+            DistributedEventIdentity {
+                task_id: Some(acknowledgement.task_id),
+                step_id: Some(acknowledgement.step_id),
+                device_id: None,
+                connection_epoch: None,
+            },
+        )?;
+        tx.commit()?;
+        Ok(AcceptedCancellation {
+            accepted: true,
+            status: StepStatus::Cancelled,
+        })
+    }
+
+    pub fn reconcile_cancellation_deadlines(&mut self, now_ms: u64) -> Result<u64, MasterError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let expired = reconcile_cancellation_deadlines_tx(&tx, now_ms)?;
+        tx.commit()?;
+        Ok(expired)
     }
 
     pub fn reconcile_expired_leases(
@@ -1122,6 +1427,7 @@ impl MasterKernel {
                    integer_value INTEGER NOT NULL\n\
                  );\n\
                  INSERT INTO master_metadata (key, integer_value) VALUES ('next_connection_epoch', 0);\n\
+                 INSERT INTO master_metadata (key, integer_value) VALUES ('emergency_paused', 0);\n\
                  CREATE TABLE master_devices (\n\
                    device_id TEXT PRIMARY KEY NOT NULL,\n\
                    device_name TEXT NOT NULL,\n\
@@ -1166,7 +1472,11 @@ impl MasterKernel {
                    lease_expires_at_ms INTEGER NOT NULL,\n\
                    completed_at_ms INTEGER,\n\
                    result_sequence INTEGER,\n\
-                   payload_sha256 BLOB\n\
+                   payload_sha256 BLOB,\n\
+                   cancellation_sequence INTEGER,\n\
+                   cancellation_requested_at_ms INTEGER,\n\
+                   cancellation_deadline_at_ms INTEGER,\n\
+                   cancellation_ack_sequence INTEGER\n\
                  );\n\
                  CREATE INDEX master_steps_status_created_idx\n\
                    ON master_steps(status, created_at_ms, step_id);\n\
@@ -1229,7 +1539,19 @@ impl MasterKernel {
                    device_id TEXT,\n\
                    connection_epoch INTEGER\n\
                  );\n\
-                 PRAGMA user_version = 3;\n\
+                 PRAGMA user_version = 4;\n\
+                 COMMIT;",
+            )?;
+        }
+        let version = self.schema_version()?;
+        if version == 3 {
+            self.connection.execute_batch(
+                "BEGIN IMMEDIATE;\n\
+                 ALTER TABLE master_attempts ADD COLUMN cancellation_sequence INTEGER;\n\
+                 ALTER TABLE master_attempts ADD COLUMN cancellation_requested_at_ms INTEGER;\n\
+                 ALTER TABLE master_attempts ADD COLUMN cancellation_deadline_at_ms INTEGER;\n\
+                 ALTER TABLE master_attempts ADD COLUMN cancellation_ack_sequence INTEGER;\n\
+                 PRAGMA user_version = 4;\n\
                  COMMIT;",
             )?;
             return Ok(());
@@ -1305,6 +1627,18 @@ impl MasterKernel {
                  PRAGMA user_version = 3;\n\
                  COMMIT;",
             )?;
+        }
+        let version = self.schema_version()?;
+        if version == 3 {
+            self.connection.execute_batch(
+                "BEGIN IMMEDIATE;\n\
+                 ALTER TABLE master_attempts ADD COLUMN cancellation_sequence INTEGER;\n\
+                 ALTER TABLE master_attempts ADD COLUMN cancellation_requested_at_ms INTEGER;\n\
+                 ALTER TABLE master_attempts ADD COLUMN cancellation_deadline_at_ms INTEGER;\n\
+                 ALTER TABLE master_attempts ADD COLUMN cancellation_ack_sequence INTEGER;\n\
+                 PRAGMA user_version = 4;\n\
+                 COMMIT;",
+            )?;
             return Ok(());
         }
         if version != MASTER_SCHEMA_VERSION {
@@ -1323,6 +1657,12 @@ impl MasterKernel {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "UPDATE master_attempts SET cancellation_deadline_at_ms = ?1\n\
+             WHERE status = 'cancellation_pending'",
+            [u64_to_i64(now_ms)?],
+        )?;
+        let interrupted_cancellations = reconcile_cancellation_deadlines_tx(&tx, now_ms)?;
         let active_connections = active_connections(&tx)?;
         let leased_steps = leased_steps(&tx, None)?;
         let abandoned_attempts = tx.execute(
@@ -1379,7 +1719,7 @@ impl MasterKernel {
         tx.commit()?;
         Ok(StartupReconciliation {
             disconnected_connections,
-            abandoned_attempts: abandoned_attempts as u64,
+            abandoned_attempts: abandoned_attempts as u64 + interrupted_cancellations,
             requeued_steps,
         })
     }
@@ -1410,6 +1750,8 @@ struct StoredAttempt {
     status: AttemptStatus,
     job_json: String,
     lease_expires_at_ms: u64,
+    cancellation_sequence: Option<u64>,
+    cancellation_deadline_at_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1556,6 +1898,172 @@ fn connection_state(
     .ok_or(MasterError::ConnectionNotActive)
 }
 
+fn require_emergency_unpaused_tx(tx: &Transaction<'_>) -> Result<(), MasterError> {
+    if emergency_paused_tx(tx)? {
+        Err(MasterError::EmergencyPaused)
+    } else {
+        Ok(())
+    }
+}
+
+fn emergency_paused_tx(tx: &Transaction<'_>) -> Result<bool, MasterError> {
+    let value: i64 = tx.query_row(
+        "SELECT integer_value FROM master_metadata WHERE key = 'emergency_paused'",
+        [],
+        |row| row.get(0),
+    )?;
+    match value {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(MasterError::InvalidStoredState(
+            "emergency pause state is not boolean".to_string(),
+        )),
+    }
+}
+
+fn request_active_fixture_cancellations_tx(
+    tx: &Transaction<'_>,
+    now_ms: u64,
+) -> Result<(), MasterError> {
+    let mut statement = tx.prepare(
+        "SELECT s.task_id, s.step_id FROM master_steps s\n\
+         JOIN master_attempts a ON a.step_id = s.step_id\n\
+         WHERE s.capability_id = ?1 AND s.status = 'leased' AND a.status = 'leased'\n\
+         ORDER BY a.leased_at_ms ASC",
+    )?;
+    let fixture_steps = statement
+        .query_map([FIXTURE_REASONING_CAPABILITY_ID], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(statement);
+    for (task_id, step_id) in fixture_steps {
+        request_fixture_pause_cancellation_tx(
+            tx,
+            TaskId::new(parse_uuid(&task_id)?),
+            StepId::new(parse_uuid(&step_id)?),
+            now_ms,
+        )?;
+    }
+    Ok(())
+}
+
+fn request_fixture_pause_cancellation_tx(
+    tx: &Transaction<'_>,
+    task_id: TaskId,
+    step_id: StepId,
+    now_ms: u64,
+) -> Result<(), MasterError> {
+    let (attempt_epoch, connection_epoch, connection_active): (i64, Option<i64>, Option<i64>) = tx
+        .query_row(
+            "SELECT a.connection_epoch, c.connection_epoch, c.active\n\
+             FROM master_attempts a\n\
+             LEFT JOIN master_connections c ON c.device_id = a.device_id\n\
+             WHERE a.step_id = ?1 AND a.status = 'leased'",
+            [step_id.0.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+    if connection_active == Some(1) && connection_epoch == Some(attempt_epoch) {
+        return request_leased_step_cancellation_tx(tx, task_id, step_id, now_ms);
+    }
+
+    let attempt_changed = tx.execute(
+        "UPDATE master_attempts SET status = 'abandoned', completed_at_ms = ?1\n\
+         WHERE step_id = ?2 AND status = 'leased'",
+        params![u64_to_i64(now_ms)?, step_id.0.to_string()],
+    )?;
+    let step_changed = tx.execute(
+        "UPDATE master_steps SET status = 'cancelled', completed_at_ms = ?1\n\
+         WHERE step_id = ?2 AND status = 'leased'",
+        params![u64_to_i64(now_ms)?, step_id.0.to_string()],
+    )?;
+    if attempt_changed != 1 || step_changed != 1 {
+        return Err(MasterError::InvalidStoredState(
+            "inactive fixture attempt changed before pause cancellation commit".to_string(),
+        ));
+    }
+    append_distributed_event_tx(
+        tx,
+        DistributedEventKind::StepCancelled,
+        now_ms,
+        DistributedEventIdentity {
+            task_id: Some(task_id),
+            step_id: Some(step_id),
+            device_id: None,
+            connection_epoch: None,
+        },
+    )?;
+    Ok(())
+}
+
+fn request_leased_step_cancellation_tx(
+    tx: &Transaction<'_>,
+    task_id: TaskId,
+    step_id: StepId,
+    now_ms: u64,
+) -> Result<(), MasterError> {
+    let (attempt_id, device_id, connection_epoch): (String, String, i64) = tx.query_row(
+        "SELECT attempt_id, device_id, connection_epoch FROM master_attempts\n\
+         WHERE step_id = ?1 AND status = 'leased'",
+        [step_id.0.to_string()],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    let device_id = DeviceId::new(parse_uuid(&device_id)?);
+    let connection_epoch = i64_to_u64(connection_epoch)?;
+    let connection = connection_state(tx, device_id)?;
+    if !connection.active || connection.epoch != connection_epoch {
+        return Err(MasterError::ConnectionNotActive);
+    }
+    let sequence = connection
+        .last_sequence
+        .checked_add(1)
+        .ok_or(MasterError::IntegerOutOfRange)?;
+    let deadline = now_ms
+        .checked_add(CANCELLATION_ACK_DEADLINE_MS)
+        .ok_or(MasterError::IntegerOutOfRange)?;
+    let attempt_changed = tx.execute(
+        "UPDATE master_attempts\n\
+         SET status = 'cancellation_pending', cancellation_sequence = ?1,\n\
+             cancellation_requested_at_ms = ?2, cancellation_deadline_at_ms = ?3\n\
+         WHERE attempt_id = ?4 AND status = 'leased'",
+        params![
+            u64_to_i64(sequence)?,
+            u64_to_i64(now_ms)?,
+            u64_to_i64(deadline)?,
+            attempt_id,
+        ],
+    )?;
+    if attempt_changed != 1 {
+        return Err(MasterError::InvalidStoredState(
+            "leased attempt changed before cancellation commit".to_string(),
+        ));
+    }
+    let connection_changed = tx.execute(
+        "UPDATE master_connections SET last_sequence = ?1\n\
+         WHERE device_id = ?2 AND connection_epoch = ?3 AND active = 1",
+        params![
+            u64_to_i64(sequence)?,
+            device_id.0.to_string(),
+            u64_to_i64(connection_epoch)?,
+        ],
+    )?;
+    if connection_changed != 1 {
+        return Err(MasterError::ConnectionNotActive);
+    }
+    append_distributed_event_tx(
+        tx,
+        DistributedEventKind::StepCancellationRequested,
+        now_ms,
+        DistributedEventIdentity {
+            task_id: Some(task_id),
+            step_id: Some(step_id),
+            device_id: Some(device_id),
+            connection_epoch: Some(connection_epoch),
+        },
+    )?;
+    Ok(())
+}
+
 fn active_connection_epoch(
     tx: &Transaction<'_>,
     device_id: DeviceId,
@@ -1582,6 +2090,53 @@ fn disconnect_device_tx(
     }
     if connection.epoch != connection_epoch {
         return Err(MasterError::ConnectionEpochMismatch);
+    }
+    let pending_cancellation = tx
+        .query_row(
+            "SELECT s.task_id, a.step_id FROM master_attempts a\n\
+             JOIN master_steps s ON s.step_id = a.step_id\n\
+             WHERE a.device_id = ?1 AND a.connection_epoch = ?2\n\
+               AND a.status = 'cancellation_pending'",
+            params![device_id.0.to_string(), u64_to_i64(connection_epoch)?],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()?;
+    let mut cancelled_pending = 0_u64;
+    if let Some((task_id, step_id)) = pending_cancellation {
+        let task_id = TaskId::new(parse_uuid(&task_id)?);
+        let step_id = StepId::new(parse_uuid(&step_id)?);
+        cancelled_pending = tx.execute(
+            "UPDATE master_attempts SET status = 'abandoned', completed_at_ms = ?1\n\
+             WHERE step_id = ?2 AND status = 'cancellation_pending'",
+            params![u64_to_i64(now_ms)?, step_id.0.to_string()],
+        )? as u64;
+        tx.execute(
+            "UPDATE master_steps SET status = 'cancelled', completed_at_ms = ?1\n\
+             WHERE step_id = ?2 AND status = 'leased'",
+            params![u64_to_i64(now_ms)?, step_id.0.to_string()],
+        )?;
+        append_distributed_event_tx(
+            tx,
+            DistributedEventKind::StepCancellationExpired,
+            now_ms,
+            DistributedEventIdentity {
+                task_id: Some(task_id),
+                step_id: Some(step_id),
+                device_id: Some(device_id),
+                connection_epoch: Some(connection_epoch),
+            },
+        )?;
+        append_distributed_event_tx(
+            tx,
+            DistributedEventKind::StepCancelled,
+            now_ms,
+            DistributedEventIdentity {
+                task_id: Some(task_id),
+                step_id: Some(step_id),
+                device_id: None,
+                connection_epoch: None,
+            },
+        )?;
     }
     let leased_steps = leased_steps(tx, Some((device_id, connection_epoch)))?;
     let abandoned_attempts = tx.execute(
@@ -1636,7 +2191,7 @@ fn disconnect_device_tx(
     }
     Ok(StartupReconciliation {
         disconnected_connections: disconnected_connections as u64,
-        abandoned_attempts: abandoned_attempts as u64,
+        abandoned_attempts: abandoned_attempts as u64 + cancelled_pending,
         requeued_steps,
     })
 }
@@ -1647,13 +2202,18 @@ fn reconcile_expired_leases_tx(
 ) -> Result<LeaseReconciliation, MasterError> {
     let now = u64_to_i64(now_ms)?;
     let mut statement = tx.prepare(
-        "SELECT s.task_id, a.step_id FROM master_attempts a\n\
+        "SELECT s.task_id, a.step_id, a.device_id, a.connection_epoch FROM master_attempts a\n\
          JOIN master_steps s ON s.step_id = a.step_id\n\
          WHERE a.status = 'leased' AND a.lease_expires_at_ms <= ?1",
     )?;
     let leased_steps = statement
         .query_map([now], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
     drop(statement);
@@ -1662,9 +2222,22 @@ fn reconcile_expired_leases_tx(
         [now],
     )?;
     let mut requeued_steps = 0_u64;
-    for (task_id, step_id) in leased_steps {
+    for (task_id, step_id, device_id, connection_epoch) in leased_steps {
         let task_id = TaskId::new(parse_uuid(&task_id)?);
         let step_id = StepId::new(parse_uuid(&step_id)?);
+        let device_id = DeviceId::new(parse_uuid(&device_id)?);
+        let connection_epoch = i64_to_u64(connection_epoch)?;
+        append_distributed_event_tx(
+            tx,
+            DistributedEventKind::StepLeaseExpired,
+            now_ms,
+            DistributedEventIdentity {
+                task_id: Some(task_id),
+                step_id: Some(step_id),
+                device_id: Some(device_id),
+                connection_epoch: Some(connection_epoch),
+            },
+        )?;
         let changed = tx.execute(
             "UPDATE master_steps SET status = 'queued' WHERE step_id = ?1 AND status = 'leased'",
             [step_id.0.to_string()],
@@ -1688,6 +2261,74 @@ fn reconcile_expired_leases_tx(
         expired_attempts: expired_attempts as u64,
         requeued_steps,
     })
+}
+
+fn reconcile_cancellation_deadlines_tx(
+    tx: &Transaction<'_>,
+    now_ms: u64,
+) -> Result<u64, MasterError> {
+    let mut statement = tx.prepare(
+        "SELECT a.attempt_id, s.task_id, a.step_id, a.device_id, a.connection_epoch\n\
+         FROM master_attempts a JOIN master_steps s ON s.step_id = a.step_id\n\
+         WHERE a.status = 'cancellation_pending' AND a.cancellation_deadline_at_ms <= ?1",
+    )?;
+    let rows = statement
+        .query_map([u64_to_i64(now_ms)?], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(statement);
+    let mut expired = 0_u64;
+    for (attempt_id, task_id, step_id, device_id, connection_epoch) in rows {
+        let task_id = TaskId::new(parse_uuid(&task_id)?);
+        let step_id = StepId::new(parse_uuid(&step_id)?);
+        let device_id = DeviceId::new(parse_uuid(&device_id)?);
+        let connection_epoch = i64_to_u64(connection_epoch)?;
+        let changed = tx.execute(
+            "UPDATE master_attempts SET status = 'abandoned', completed_at_ms = ?1\n\
+             WHERE attempt_id = ?2 AND status = 'cancellation_pending'",
+            params![u64_to_i64(now_ms)?, attempt_id],
+        )?;
+        if changed != 1 {
+            continue;
+        }
+        expired += 1;
+        tx.execute(
+            "UPDATE master_steps SET status = 'cancelled', completed_at_ms = ?1\n\
+             WHERE step_id = ?2 AND status = 'leased'",
+            params![u64_to_i64(now_ms)?, step_id.0.to_string()],
+        )?;
+        append_distributed_event_tx(
+            tx,
+            DistributedEventKind::StepCancellationExpired,
+            now_ms,
+            DistributedEventIdentity {
+                task_id: Some(task_id),
+                step_id: Some(step_id),
+                device_id: Some(device_id),
+                connection_epoch: Some(connection_epoch),
+            },
+        )?;
+        append_distributed_event_tx(
+            tx,
+            DistributedEventKind::StepCancelled,
+            now_ms,
+            DistributedEventIdentity {
+                task_id: Some(task_id),
+                step_id: Some(step_id),
+                device_id: None,
+                connection_epoch: None,
+            },
+        )?;
+        disconnect_device_tx(tx, device_id, connection_epoch, now_ms)?;
+    }
+    Ok(expired)
 }
 
 fn capability_for_device(
@@ -1812,7 +2453,9 @@ fn load_attempt(
     attempt_id: AttemptId,
 ) -> Result<Option<StoredAttempt>, MasterError> {
     tx.query_row(
-        "SELECT device_id, status, job_json, lease_expires_at_ms\n         FROM master_attempts WHERE attempt_id = ?1",
+        "SELECT device_id, status, job_json, lease_expires_at_ms,\n\
+                cancellation_sequence, cancellation_deadline_at_ms\n\
+         FROM master_attempts WHERE attempt_id = ?1",
         [attempt_id.0.to_string()],
         |row| {
             Ok((
@@ -1820,18 +2463,33 @@ fn load_attempt(
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
                 row.get::<_, i64>(3)?,
+                row.get::<_, Option<i64>>(4)?,
+                row.get::<_, Option<i64>>(5)?,
             ))
         },
     )
     .optional()?
-    .map(|(device_id, status, job_json, lease_expires_at_ms)| {
-        Ok(StoredAttempt {
-            device_id: DeviceId::new(parse_uuid(&device_id)?),
-            status: AttemptStatus::parse(&status)?,
+    .map(
+        |(
+            device_id,
+            status,
             job_json,
-            lease_expires_at_ms: i64_to_u64(lease_expires_at_ms)?,
-        })
-    })
+            lease_expires_at_ms,
+            cancellation_sequence,
+            cancellation_deadline_at_ms,
+        )| {
+            Ok(StoredAttempt {
+                device_id: DeviceId::new(parse_uuid(&device_id)?),
+                status: AttemptStatus::parse(&status)?,
+                job_json,
+                lease_expires_at_ms: i64_to_u64(lease_expires_at_ms)?,
+                cancellation_sequence: cancellation_sequence.map(i64_to_u64).transpose()?,
+                cancellation_deadline_at_ms: cancellation_deadline_at_ms
+                    .map(i64_to_u64)
+                    .transpose()?,
+            })
+        },
+    )
     .transpose()
 }
 

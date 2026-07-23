@@ -361,6 +361,8 @@ struct DeveloperBridgeStatusPresentation: Equatable {
             phaseLabel = "Master Offline"
         case .maintenance:
             phaseLabel = "Maintenance"
+        case .paused:
+            phaseLabel = "Paused"
         case .stopped:
             phaseLabel = "Stopped"
         }

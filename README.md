@@ -31,7 +31,7 @@ authenticated loopback development transport, and a separate deterministic
 fake-worker process. A Windows-only enrollment CLI adds a DPAPI-current-user
 protected ECDSA P-256 enrollment CA, ten-minute single-use digest-only grants,
 verified client CSRs, 30-day client certificates, server-bound device identity,
-rotation, and immediate certificate/device revocation. Schema v3 migrates the
+rotation, and immediate certificate/device revocation. Schema v4 migrates the
 existing lifecycle database transactionally, retains the v1/v2 state, and adds
 a metadata-only event journal with a server-issued durable stream cursor. An
 explicit `serve --remote-bind <concrete-ip>:<port>` additionally starts a TLS
@@ -82,8 +82,20 @@ denial, and parent-mismatch denial. With the additional
 `JARVIS_MAC_DEVELOPER_AGENT_DATA_DIR` opt-in, the app passes only those
 secret-free paths to the signed helper; the helper pins and directly supervises
 the exact agent, retains the Keychain/mTLS channel, and forwards authenticated
-metadata batches into the durable cursor. This is not a bundled helper,
-unattended background service, distributed job runtime, or inference worker. The
+metadata batches into the durable cursor. A third, exact-value opt-in,
+`JARVIS_MAC_DEVELOPER_FIXTURE_JOBS_ENABLED=true`, additionally exposes only the
+Public, no-retention `fixture.reasoning` synthetic-echo diagnostic. The master
+binds lease, result, cancellation, acknowledgement, device, epoch, and attempt;
+the agent keeps the active fixture only in memory and suppresses output after
+cancellation. This is not a bundled helper, unattended background service,
+production distributed-job runtime, MLX inference worker, repository executor,
+or Codex/Git path. The
+Windows-local bearer-authenticated master exposes exact-body
+`POST /v1/development/emergency-pause/activate` and
+`POST /v1/development/emergency-pause/resume` actions. They mutate the live
+master only on loopback, are absent from the enrolled-device mTLS router, and
+cannot accept planning or enqueue payloads. Pause durably cancels already
+leased fixture work so resume cannot make an old result acceptable again. The
 named owner-device proof is
 `./scripts/mac-windows-bridge-live-e2e.sh --run-relay`, which requires the same
 durable stream to advance across a fresh app/helper/agent chain. The
@@ -96,20 +108,25 @@ bounds, connection loss, late output rejection, restart abandonment, and safe
 reissue. `master_process_e2e` additionally starts real child processes, proves
 exclusive state ownership, bearer non-disclosure and unauthorized rejection,
 oversized-body denial, one authenticated loopback fake-worker job, and restart
-reconciliation. This remains local development transport proof, not
-authenticated cross-device or production-service proof.
+reconciliation. The fixture adapter and remote mTLS tests additionally prove the
+same exact Public synthetic contract, authenticated-device result binding,
+default-off agent admission, bounded cancellation acknowledgement, expiry, and
+late-result rejection. Repository tests remain process/transport proof; live
+cross-device fixture evidence requires a separately enrolled
+`fixture.reasoning` device and must not be inferred from the current
+`mlx.reasoning` enrollment.
 `enrollment_identity_e2e` proves DPAPI round-trip protection on Windows,
 digest-only grant persistence, strict stdin issuance, signed-CSR verification,
 expiry and replay denial, rotation, revocation, the 16-device ceiling, and the
-schema-v1-to-v3 migration. `event_cursor_e2e` proves durable, contiguous,
+schema-v1-to-v4 migration. `event_cursor_e2e` proves durable, contiguous,
 metadata-only events plus disconnect/requeue reconciliation.
 `remote_mtls_e2e` provisions that real Windows
 identity, starts the real master child process, negotiates TLS 1.3 mutual
 authentication, denies pre-handshake health, proves exporter-bound health, channel-exporter replay denial,
 monotonic reconnect epochs, socket-close reconciliation, revoked-certificate
-denial, the MacBridge-only enqueue boundary against an enrolled inference
-worker, MacBridge-only event retrieval without step-context leakage, and
-inference-worker event-route denial. It is
+denial, removal of remote raw-step enqueue, fixture-capability lease admission,
+authenticated-device result binding, MacBridge-only event retrieval without
+step-context leakage, and inference-worker event-route denial. It is
 loopback cross-process transport proof with generated test clients,
 not private-overlay reachability or a live Mac enrollment exchange.
 `DeveloperBridgeTests` adds the Mac-side contract proof: exact secret-free

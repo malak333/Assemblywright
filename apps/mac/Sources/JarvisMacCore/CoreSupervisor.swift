@@ -278,10 +278,7 @@ public struct FoundationJarvisCoreProcessLauncher: JarvisCoreProcessLaunching {
             }
             try? handle.close()
             guard outcome == .written else {
-                if process.isRunning {
-                    _ = Darwin.kill(process.processIdentifier, SIGKILL)
-                }
-                process.waitUntilExit()
+                await FoundationJarvisCoreProcessReaper(process: process).forceTerminateAndWait()
                 if outcome == .timedOut {
                     throw JarvisCoreSupervisorError.startupConfigurationWriteTimedOut
                 }
@@ -289,6 +286,23 @@ public struct FoundationJarvisCoreProcessLauncher: JarvisCoreProcessLaunching {
             }
         }
         return FoundationJarvisCoreProcess(process: process)
+    }
+}
+
+private final class FoundationJarvisCoreProcessReaper: @unchecked Sendable {
+    private let process: Process
+
+    init(process: Process) {
+        self.process = process
+    }
+
+    func forceTerminateAndWait() async {
+        if process.isRunning {
+            _ = Darwin.kill(process.processIdentifier, SIGKILL)
+        }
+        await Task.detached(priority: .userInitiated) { [self] in
+            process.waitUntilExit()
+        }.value
     }
 }
 

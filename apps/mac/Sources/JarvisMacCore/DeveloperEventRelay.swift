@@ -1,24 +1,44 @@
 import Darwin
+import CryptoKit
 import Foundation
 import Security
 
+private actor JarvisMacFixtureRaceResolution {
+    private var resolved = false
+
+    func markResolved() {
+        resolved = true
+    }
+
+    func isResolved() -> Bool {
+        resolved
+    }
+}
+
 public struct JarvisMacDeveloperEventRelayConfiguration: Equatable, Sendable {
-    public static let version = 1
+    public static let version = 2
     public static let maximumDocumentBytes = 16 * 1_024
 
     public let agentExecutableURL: URL
     public let agentDataDirectoryURL: URL
+    public let fixtureJobsEnabled: Bool
 
-    public init(agentExecutableURL: URL, agentDataDirectoryURL: URL) {
+    public init(
+        agentExecutableURL: URL,
+        agentDataDirectoryURL: URL,
+        fixtureJobsEnabled: Bool = false
+    ) {
         self.agentExecutableURL = agentExecutableURL.standardizedFileURL
         self.agentDataDirectoryURL = agentDataDirectoryURL.standardizedFileURL
+        self.fixtureJobsEnabled = fixtureJobsEnabled
     }
 
     public func encodeStartupDocument() throws -> Data {
         let object: [String: Any] = [
             "version": Self.version,
             "agent_executable_path": agentExecutableURL.path,
-            "agent_data_dir": agentDataDirectoryURL.path
+            "agent_data_dir": agentDataDirectoryURL.path,
+            "fixture_jobs_enabled": fixtureJobsEnabled
         ]
         let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
         guard data.count <= Self.maximumDocumentBytes else {
@@ -30,17 +50,22 @@ public struct JarvisMacDeveloperEventRelayConfiguration: Equatable, Sendable {
     public static func decodeStartupDocument(_ data: Data) throws -> Self {
         guard !data.isEmpty, data.count <= maximumDocumentBytes,
               let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              Set(object.keys) == Set(["version", "agent_executable_path", "agent_data_dir"]),
+              Set(object.keys) == Set([
+                  "version", "agent_executable_path", "agent_data_dir",
+                  "fixture_jobs_enabled"
+              ]),
               let version = object["version"] as? NSNumber,
               CFGetTypeID(version) != CFBooleanGetTypeID(),
               version.intValue == Self.version,
               let executablePath = object["agent_executable_path"] as? String,
-              let dataDirectoryPath = object["agent_data_dir"] as? String else {
+              let dataDirectoryPath = object["agent_data_dir"] as? String,
+              let fixtureJobsEnabled = object["fixture_jobs_enabled"] as? Bool else {
             throw JarvisMacDeveloperEventRelayError.invalidStartupDocument
         }
         let configuration = Self(
             agentExecutableURL: URL(fileURLWithPath: executablePath),
-            agentDataDirectoryURL: URL(fileURLWithPath: dataDirectoryPath, isDirectory: true)
+            agentDataDirectoryURL: URL(fileURLWithPath: dataDirectoryPath, isDirectory: true),
+            fixtureJobsEnabled: fixtureJobsEnabled
         )
         try configuration.validatePaths()
         return configuration
@@ -72,6 +97,8 @@ public enum JarvisMacDeveloperEventRelayError: Error, Equatable, Sendable {
     case invalidAgentResponse
     case invalidMasterResponse
     case eventCursorRejected
+    case fixtureJobRejected
+    case fixtureJobTimedOut
     case teardownFailed
 }
 
@@ -111,6 +138,8 @@ public protocol JarvisMacBridgeEventRelaying: Sendable {
 public protocol JarvisMacDeveloperAgentSession: Sendable {
     func health() async throws -> JarvisMacDeveloperAgentCursorSnapshot
     func accept(batch: Data) async throws -> JarvisMacDeveloperAgentCursorSnapshot
+    func executeFixtureJob(_ job: Data) async throws -> Data
+    func cancelFixtureJob(_ instruction: Data) async throws -> Data
     func stop() async throws
 }
 
@@ -122,19 +151,27 @@ public protocol JarvisMacDeveloperAgentLaunching: Sendable {
 
 public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
     public static let remoteEventsPath = "/v1/distributed/events/next"
+    public static let remoteLeasePath = "/v1/distributed/leases/next"
+    public static let remoteResultPath = "/v1/distributed/results"
+    public static let remoteCancellationPath = "/v1/distributed/cancellations/next"
+    public static let remoteCancellationAcknowledgementPath =
+        "/v1/distributed/cancellations/ack"
     public static let maximumEventsPerBatch = 64
 
     private let configuration: JarvisMacDeveloperEventRelayConfiguration
+    private let deviceID: UUID?
     private let launcher: any JarvisMacDeveloperAgentLaunching
     private var agent: (any JarvisMacDeveloperAgentSession)?
     private var stopped = false
 
     public init(
         configuration: JarvisMacDeveloperEventRelayConfiguration,
+        deviceID: UUID? = nil,
         launcher: any JarvisMacDeveloperAgentLaunching =
             FoundationJarvisMacDeveloperAgentLauncher()
     ) {
         self.configuration = configuration
+        self.deviceID = deviceID
         self.launcher = launcher
     }
 
@@ -169,6 +206,16 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
         guard accepted.cursor == batch.cursor else {
             throw JarvisMacDeveloperEventRelayError.eventCursorRejected
         }
+        if configuration.fixtureJobsEnabled {
+            guard let deviceID else {
+                throw JarvisMacDeveloperEventRelayError.fixtureJobRejected
+            }
+            try await relayOneFixtureJob(
+                using: session,
+                deviceID: deviceID,
+                agent: activeAgent
+            )
+        }
         return JarvisMacDeveloperEventRelayProgress(
             cursor: batch.cursor,
             acceptedEventCount: batch.eventCount,
@@ -181,6 +228,407 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
         guard let agent else { return }
         try await agent.stop()
         self.agent = nil
+    }
+
+    private struct ValidatedFixtureJob: Sendable {
+        let body: Data
+        let connectionEpoch: UInt64
+        let sequence: UInt64
+        let taskID: UUID
+        let stepID: UUID
+        let attemptID: UUID
+        let leaseID: UUID
+        let cancellationID: UUID
+        let contextDigest: [UInt8]
+        let input: String
+        let leaseDurationMilliseconds: UInt64
+        let deadlineAfterMilliseconds: UInt64
+    }
+
+    private struct ValidatedCancellation: Sendable {
+        let body: Data
+        let sequence: UInt64
+    }
+
+    private enum FixtureRaceOutcome: Sendable {
+        case result(Data)
+        case cancellation(ValidatedCancellation)
+        case timedOut
+        case settled
+    }
+
+    private func relayOneFixtureJob(
+        using session: any JarvisMacBridgeSession,
+        deviceID: UUID,
+        agent: any JarvisMacDeveloperAgentSession
+    ) async throws {
+        let leaseRequest = try JSONSerialization.data(
+            withJSONObject: [
+                "device_id": deviceID.uuidString.lowercased(),
+                "connection_epoch": NSNumber(value: session.connectionEpoch)
+            ],
+            options: [.sortedKeys]
+        )
+        let leased = try await session.send(
+            JarvisMacBridgeHTTPRequest(
+                method: "POST",
+                path: Self.remoteLeasePath,
+                body: leaseRequest
+            )
+        )
+        if leased.status == 204 {
+            guard leased.body.isEmpty else {
+                throw JarvisMacDeveloperEventRelayError.invalidMasterResponse
+            }
+            return
+        }
+        guard leased.status == 200 else {
+            throw JarvisMacDeveloperEventRelayError.invalidMasterResponse
+        }
+        let job = try Self.validateFixtureJob(
+            leased.body,
+            expectedConnectionEpoch: session.connectionEpoch
+        )
+
+        let resolution = JarvisMacFixtureRaceResolution()
+        let outcome = try await withThrowingTaskGroup(
+            of: FixtureRaceOutcome.self,
+            returning: FixtureRaceOutcome.self
+        ) { group in
+            group.addTask {
+                .result(try await agent.executeFixtureJob(job.body))
+            }
+            group.addTask {
+                while !Task.isCancelled {
+                    if await resolution.isResolved() {
+                        return .settled
+                    }
+                    if let cancellation = try await Self.pollFixtureCancellation(
+                        using: session,
+                        job: job
+                    ) {
+                        return .cancellation(cancellation)
+                    }
+                    if await resolution.isResolved() {
+                        return .settled
+                    }
+                    try await Task.sleep(for: .milliseconds(25))
+                }
+                throw CancellationError()
+            }
+            group.addTask {
+                let timeout = min(
+                    job.leaseDurationMilliseconds,
+                    job.deadlineAfterMilliseconds
+                )
+                let clock = ContinuousClock()
+                let deadline = clock.now + .milliseconds(timeout)
+                while clock.now < deadline {
+                    if await resolution.isResolved() {
+                        return .settled
+                    }
+                    try await Task.sleep(
+                        for: min(.milliseconds(25), clock.now.duration(to: deadline))
+                    )
+                }
+                return await resolution.isResolved() ? .settled : .timedOut
+            }
+            guard let first = try await group.next() else {
+                throw JarvisMacDeveloperEventRelayError.fixtureJobRejected
+            }
+            if case .result = first {
+                // Cancellation polling shares this serialized mTLS session with
+                // result submission. Allow an in-flight poll to finish normally;
+                // cancelling its network task would close the session.
+                await resolution.markResolved()
+                while try await group.next() != nil {}
+            } else {
+                group.cancelAll()
+            }
+            return first
+        }
+
+        switch outcome {
+        case let .result(result):
+            let resultDigest = try Self.validateFixtureResult(result, for: job)
+            let accepted = try await session.send(
+                JarvisMacBridgeHTTPRequest(
+                    method: "POST",
+                    path: Self.remoteResultPath,
+                    body: result
+                )
+            )
+            try Self.validateAcceptedFixtureResult(
+                accepted,
+                for: job,
+                expectedPayloadDigest: resultDigest
+            )
+        case let .cancellation(instruction):
+            let acknowledgement = try await agent.cancelFixtureJob(instruction.body)
+            try Self.validateCancellationAcknowledgement(
+                acknowledgement,
+                instruction: instruction,
+                job: job
+            )
+            let accepted = try await session.send(
+                JarvisMacBridgeHTTPRequest(
+                    method: "POST",
+                    path: Self.remoteCancellationAcknowledgementPath,
+                    body: acknowledgement
+                )
+            )
+            try Self.validateAcceptedCancellation(accepted)
+        case .timedOut:
+            try await agent.stop()
+            self.agent = nil
+            throw JarvisMacDeveloperEventRelayError.fixtureJobTimedOut
+        case .settled:
+            throw JarvisMacDeveloperEventRelayError.fixtureJobRejected
+        }
+    }
+
+    private static func pollFixtureCancellation(
+        using session: any JarvisMacBridgeSession,
+        job: ValidatedFixtureJob
+    ) async throws -> ValidatedCancellation? {
+        let request = try JSONSerialization.data(
+            withJSONObject: [
+                "protocol_version": Int(JarvisMacMTLSBridgeTransport.protocolVersion),
+                "connection_epoch": NSNumber(value: session.connectionEpoch)
+            ],
+            options: [.sortedKeys]
+        )
+        let response = try await session.send(
+            JarvisMacBridgeHTTPRequest(
+                method: "POST",
+                path: remoteCancellationPath,
+                body: request
+            )
+        )
+        if response.status == 204 {
+            guard response.body.isEmpty else {
+                throw JarvisMacDeveloperEventRelayError.invalidMasterResponse
+            }
+            return nil
+        }
+        guard response.status == 200,
+              let object = strictJSONObject(response.body),
+              Set(object.keys) == Set([
+                  "protocol_version", "connection_epoch", "sequence",
+                  "task_id", "step_id", "attempt_id", "lease_id",
+                  "cancellation_id", "deadline_after_ms"
+              ]),
+              strictInteger(object["protocol_version"])
+                == UInt64(JarvisMacMTLSBridgeTransport.protocolVersion),
+              strictInteger(object["connection_epoch"]) == job.connectionEpoch,
+              let sequence = strictInteger(object["sequence"]),
+              sequence > job.sequence,
+              strictUUID(object["task_id"]) == job.taskID,
+              strictUUID(object["step_id"]) == job.stepID,
+              strictUUID(object["attempt_id"]) == job.attemptID,
+              strictUUID(object["lease_id"]) == job.leaseID,
+              strictUUID(object["cancellation_id"]) == job.cancellationID,
+              let deadline = strictInteger(object["deadline_after_ms"]),
+              (1 ... 2_000).contains(deadline) else {
+            throw JarvisMacDeveloperEventRelayError.invalidMasterResponse
+        }
+        return ValidatedCancellation(body: response.body, sequence: sequence)
+    }
+
+    private static func validateFixtureJob(
+        _ body: Data,
+        expectedConnectionEpoch: UInt64
+    ) throws -> ValidatedFixtureJob {
+        guard !body.isEmpty,
+              body.count <= 16 * 1_024,
+              let object = strictJSONObject(body),
+              Set(object.keys) == Set([
+                  "protocol_version", "connection_epoch", "sequence",
+                  "task_id", "step_id", "attempt_id", "lease_id",
+                  "cancellation_id", "capability_id", "selected_model",
+                  "sensitivity", "context_handling", "lease_duration_ms",
+                  "deadline_after_ms", "context_sha256", "context"
+              ]),
+              strictInteger(object["protocol_version"])
+                == UInt64(JarvisMacMTLSBridgeTransport.protocolVersion),
+              strictInteger(object["connection_epoch"]) == expectedConnectionEpoch,
+              let sequence = strictInteger(object["sequence"]),
+              sequence > 0,
+              let taskID = strictUUID(object["task_id"]),
+              let stepID = strictUUID(object["step_id"]),
+              let attemptID = strictUUID(object["attempt_id"]),
+              let leaseID = strictUUID(object["lease_id"]),
+              let cancellationID = strictUUID(object["cancellation_id"]),
+              object["capability_id"] as? String == "fixture.reasoning",
+              object["selected_model"] as? String == "jarvis-fixture-v1",
+              object["sensitivity"] as? String == "public",
+              object["context_handling"] as? String == "ephemeral_no_retention",
+              let leaseDuration = strictInteger(object["lease_duration_ms"]),
+              (1 ... 600_000).contains(leaseDuration),
+              let deadline = strictInteger(object["deadline_after_ms"]),
+              (1 ... 7_200_000).contains(deadline),
+              let contextDigest = strictDigest(object["context_sha256"]),
+              let context = object["context"] as? [String: Any],
+              Set(context.keys) == Set(["operation", "input", "delay_ms"]),
+              context["operation"] as? String == "synthetic_echo",
+              let input = context["input"] as? String,
+              input.utf8.count <= 4_096,
+              let delay = strictInteger(context["delay_ms"]),
+              delay <= 5_000,
+              let contextData = try? JSONSerialization.data(
+                  withJSONObject: context,
+                  options: [.sortedKeys]
+              ),
+              contextData.count <= 8_192,
+              Array(SHA256.hash(data: contextData)) == contextDigest else {
+            throw JarvisMacDeveloperEventRelayError.fixtureJobRejected
+        }
+        return ValidatedFixtureJob(
+            body: body,
+            connectionEpoch: expectedConnectionEpoch,
+            sequence: sequence,
+            taskID: taskID,
+            stepID: stepID,
+            attemptID: attemptID,
+            leaseID: leaseID,
+            cancellationID: cancellationID,
+            contextDigest: contextDigest,
+            input: input,
+            leaseDurationMilliseconds: leaseDuration,
+            deadlineAfterMilliseconds: deadline
+        )
+    }
+
+    private static func validateFixtureResult(
+        _ body: Data,
+        for job: ValidatedFixtureJob
+    ) throws -> [UInt8] {
+        guard !body.isEmpty,
+              body.count <= 16 * 1_024,
+              let object = strictJSONObject(body),
+              Set(object.keys) == Set([
+                  "protocol_version", "connection_epoch", "sequence",
+                  "task_id", "step_id", "attempt_id", "lease_id",
+                  "cancellation_id", "status", "context_sha256",
+                  "payload_sha256", "payload"
+              ]),
+              strictInteger(object["protocol_version"])
+                == UInt64(JarvisMacMTLSBridgeTransport.protocolVersion),
+              strictInteger(object["connection_epoch"]) == job.connectionEpoch,
+              strictInteger(object["sequence"]).map({ $0 > job.sequence }) == true,
+              strictUUID(object["task_id"]) == job.taskID,
+              strictUUID(object["step_id"]) == job.stepID,
+              strictUUID(object["attempt_id"]) == job.attemptID,
+              strictUUID(object["lease_id"]) == job.leaseID,
+              strictUUID(object["cancellation_id"]) == job.cancellationID,
+              object["status"] as? String == "completed",
+              strictDigest(object["context_sha256"]) == job.contextDigest,
+              let payloadDigest = strictDigest(object["payload_sha256"]),
+              let payload = object["payload"] as? [String: Any],
+              Set(payload.keys) == Set(["operation", "output", "synthetic"]),
+              payload["operation"] as? String == "synthetic_echo",
+              payload["output"] as? String == job.input,
+              payload["synthetic"] as? Bool == true,
+              let payloadData = try? JSONSerialization.data(
+                  withJSONObject: payload,
+                  options: [.sortedKeys]
+              ),
+              payloadData.count <= 8_192,
+              Array(SHA256.hash(data: payloadData)) == payloadDigest else {
+            throw JarvisMacDeveloperEventRelayError.fixtureJobRejected
+        }
+        return payloadDigest
+    }
+
+    private static func validateAcceptedFixtureResult(
+        _ response: JarvisMacBridgeHTTPResponse,
+        for job: ValidatedFixtureJob,
+        expectedPayloadDigest: [UInt8]
+    ) throws {
+        guard response.status == 200,
+              let object = strictJSONObject(response.body),
+              Set(object.keys) == Set([
+                  "task_id", "step_id", "status", "payload_sha256"
+              ]),
+              strictUUID(object["task_id"]) == job.taskID,
+              strictUUID(object["step_id"]) == job.stepID,
+              object["status"] as? String == "succeeded",
+              strictDigest(object["payload_sha256"]) == expectedPayloadDigest else {
+            throw JarvisMacDeveloperEventRelayError.invalidMasterResponse
+        }
+    }
+
+    private static func validateCancellationAcknowledgement(
+        _ body: Data,
+        instruction: ValidatedCancellation,
+        job: ValidatedFixtureJob
+    ) throws {
+        guard let object = strictJSONObject(body),
+              Set(object.keys) == Set([
+                  "protocol_version", "connection_epoch", "sequence",
+                  "task_id", "step_id", "attempt_id", "lease_id",
+                  "cancellation_id", "status"
+              ]),
+              strictInteger(object["protocol_version"])
+                == UInt64(JarvisMacMTLSBridgeTransport.protocolVersion),
+              strictInteger(object["connection_epoch"]) == job.connectionEpoch,
+              strictInteger(object["sequence"]).map({ $0 > instruction.sequence }) == true,
+              strictUUID(object["task_id"]) == job.taskID,
+              strictUUID(object["step_id"]) == job.stepID,
+              strictUUID(object["attempt_id"]) == job.attemptID,
+              strictUUID(object["lease_id"]) == job.leaseID,
+              strictUUID(object["cancellation_id"]) == job.cancellationID,
+              object["status"] as? String == "cancelled" else {
+            throw JarvisMacDeveloperEventRelayError.fixtureJobRejected
+        }
+    }
+
+    private static func validateAcceptedCancellation(
+        _ response: JarvisMacBridgeHTTPResponse
+    ) throws {
+        guard response.status == 200,
+              let object = strictJSONObject(response.body),
+              Set(object.keys) == Set(["accepted", "status"]),
+              object["accepted"] as? Bool == true,
+              object["status"] as? String == "cancelled" else {
+            throw JarvisMacDeveloperEventRelayError.invalidMasterResponse
+        }
+    }
+
+    private static func strictJSONObject(_ data: Data) -> [String: Any]? {
+        guard !data.isEmpty,
+              let object = try? JSONSerialization.jsonObject(
+                  with: data,
+                  options: []
+              ) as? [String: Any] else {
+            return nil
+        }
+        return object
+    }
+
+    private static func strictUUID(_ value: Any?) -> UUID? {
+        guard let text = value as? String,
+              text == text.lowercased(),
+              let value = UUID(uuidString: text),
+              value != UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) else {
+            return nil
+        }
+        return value
+    }
+
+    private static func strictDigest(_ value: Any?) -> [UInt8]? {
+        guard let values = value as? [NSNumber], values.count == 32 else {
+            return nil
+        }
+        var digest = [UInt8]()
+        digest.reserveCapacity(32)
+        for value in values {
+            guard CFGetTypeID(value) != CFBooleanGetTypeID() else { return nil }
+            let text = value.stringValue
+            guard let parsed = UInt8(text), String(parsed) == text else { return nil }
+            digest.append(parsed)
+        }
+        return digest
     }
 
     private static func eventRequest(
@@ -448,6 +896,7 @@ private actor FoundationJarvisMacDeveloperAgentSession:
     private let socketURL: URL
     private let bearerToken: String
     private let transport: DarwinJarvisUnixSocketTransport
+    private let configurationFixtureJobsEnabled: Bool
     private var stopped = false
 
     private init(
@@ -455,13 +904,15 @@ private actor FoundationJarvisMacDeveloperAgentSession:
         runtimeDirectoryURL: URL,
         socketURL: URL,
         bearerToken: String,
-        transport: DarwinJarvisUnixSocketTransport
+        transport: DarwinJarvisUnixSocketTransport,
+        configurationFixtureJobsEnabled: Bool
     ) {
         self.process = process
         self.runtimeDirectoryURL = runtimeDirectoryURL
         self.socketURL = socketURL
         self.bearerToken = bearerToken
         self.transport = transport
+        self.configurationFixtureJobsEnabled = configurationFixtureJobsEnabled
     }
 
     static func start(
@@ -514,7 +965,8 @@ private actor FoundationJarvisMacDeveloperAgentSession:
                 "socket_path": socketURL.path,
                 "peer_code_requirement": helperIdentity.requirement,
                 "peer_identity_profile": JarvisIPCPeerIdentityProfile.adhocExact.rawValue,
-                "bearer_token": bearer
+                "bearer_token": bearer,
+                "fixture_jobs_enabled": configuration.fixtureJobsEnabled
             ]
             let startupData = try JSONSerialization.data(
                 withJSONObject: startup,
@@ -530,7 +982,8 @@ private actor FoundationJarvisMacDeveloperAgentSession:
                 runtimeDirectoryURL: runtimeDirectoryURL,
                 socketURL: socketURL,
                 bearerToken: bearer,
-                transport: transport
+                transport: transport,
+                configurationFixtureJobsEnabled: configuration.fixtureJobsEnabled
             )
             try await session.waitUntilHealthy()
             return session
@@ -550,14 +1003,19 @@ private actor FoundationJarvisMacDeveloperAgentSession:
                 as? [String: Any],
               Set(object.keys) == Set([
                   "status", "mode", "protocol_version", "schema_version",
-                  "cursor", "boundary"
+                  "cursor", "boundary", "fixture_jobs_enabled"
               ]),
               object["status"] as? String == "ok",
               object["mode"] as? String == "developer_event_relay",
               (object["protocol_version"] as? NSNumber)?.intValue
                 == Int(JarvisMacMTLSBridgeTransport.protocolVersion),
               (object["schema_version"] as? NSNumber)?.intValue == 1,
-              object["boundary"] as? String == "metadata_only_no_authoritative_state",
+              object["fixture_jobs_enabled"] as? Bool
+                == configurationFixtureJobsEnabled,
+              object["boundary"] as? String
+                == (configurationFixtureJobsEnabled
+                    ? "metadata_cursor_plus_in_memory_public_fixture_jobs_no_retention"
+                    : "metadata_only_no_authoritative_state"),
               let cursorObject = object["cursor"] as? [String: Any],
               Set(cursorObject.keys) == Set(["cursor", "updated_at_ms"]) else {
             throw JarvisMacDeveloperEventRelayError.invalidAgentResponse
@@ -595,6 +1053,40 @@ private actor FoundationJarvisMacDeveloperAgentSession:
         } catch {
             throw JarvisMacDeveloperEventRelayError.invalidAgentResponse
         }
+    }
+
+    func executeFixtureJob(_ job: Data) async throws -> Data {
+        guard configurationFixtureJobsEnabled else {
+            throw JarvisMacDeveloperEventRelayError.fixtureJobRejected
+        }
+        let response = try await send(
+            method: "POST",
+            path: "/v1/jobs/execute",
+            body: job
+        )
+        guard response.status == 200,
+              !response.body.isEmpty,
+              response.body.count <= 16 * 1_024 else {
+            throw JarvisMacDeveloperEventRelayError.fixtureJobRejected
+        }
+        return response.body
+    }
+
+    func cancelFixtureJob(_ instruction: Data) async throws -> Data {
+        guard configurationFixtureJobsEnabled else {
+            throw JarvisMacDeveloperEventRelayError.fixtureJobRejected
+        }
+        let response = try await send(
+            method: "POST",
+            path: "/v1/jobs/cancel",
+            body: instruction
+        )
+        guard response.status == 200,
+              !response.body.isEmpty,
+              response.body.count <= 16 * 1_024 else {
+            throw JarvisMacDeveloperEventRelayError.fixtureJobRejected
+        }
+        return response.body
     }
 
     func stop() async throws {

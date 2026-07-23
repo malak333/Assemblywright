@@ -106,7 +106,7 @@ production service credential.
 `enrollment_identity_e2e` exercises the fourth implemented seam. On every host
 it proves digest-only single-use grant storage, signed-CSR verification,
 server-selected identity, 10-minute expiry, replay denial, 30-day certificate
-issuance, rotation, revocation, and schema-v1-to-v3 migration with an injected
+issuance, rotation, revocation, and schema-v1-to-v4 migration with an injected
 test protector. On Windows it additionally calls DPAPI directly and starts the
 real CLI to prove initialization receipts, secret-bearing issuance through
 stdin rather than argv, and protected-key non-equivalence. It is local identity
@@ -118,31 +118,48 @@ certificate authentication, denies pre-handshake health, checks
 exporter-authenticated health, binds the strict
 application handshake to a per-connection TLS exporter digest, rejects replay
 on a different channel, advances the durable connection epoch after socket-close
-reconciliation, denies the revoked certificate, and uses persistent authenticated
-sessions to prove MacBridge enqueue succeeds while inference-worker enqueue is
-unauthorized. The same MacBridge session can retrieve strict, bounded,
+reconciliation and denies the revoked certificate. Raw remote step enqueue is
+absent. A persistent authenticated session proves an exact fixture-capability
+device can lease Windows-locally queued Public synthetic work, while result and
+cancellation acceptance is bound to that device and epoch. A MacBridge session
+can retrieve strict, bounded,
 metadata-only event pages without step context, while an authenticated
 inference-worker session is denied that event route. It is process/network proof
 against generated Rust clients on one Windows host, not private-overlay setup,
 live Mac Keychain enrollment, service installation, or remote-device
 reliability.
 
-The next bounded relay slice has three focused gates:
+The bounded relay and fixture-job slice has these focused gates:
 
 ```sh
 cargo test -p jarvis-protocol --test distributed_event_cursor_contract --locked
 cargo test -p jarvis-master --test event_cursor_e2e --locked
 cargo test -p jarvis-agent --locked
+cargo test -p jarvis-master --test master_lifecycle_e2e --locked
+cargo test -p jarvis-master --test master_process_e2e --locked
+cargo test -p jarvis-master --test remote_mtls_e2e --locked
+swift test --disable-sandbox --package-path apps/mac --filter fixtureJobRelay
 ```
 
 The protocol gate rejects gaps, stream replacement, invalid identity shapes,
-unknown content fields, and oversized pages. The master gate proves schema-v3
+unknown content fields, and oversized pages. The master gate proves schema-v4
 durability, bounded paging, context redaction, and transactional disconnect plus
 requeue events after restart. The macOS agent gate includes a real child
 process over the hardened UDS. It proves startup-stdin bearer and code-identity
 enforcement, bearer/socket absence from argv, parent validation before storage,
-exact cursor acceptance, replay denial, and durable cursor reload. These are
-local relay mechanics. The focused Swift bridge gate additionally proves the
+exact cursor acceptance, replay denial, durable cursor reload, default-off
+fixture admission, exact Public synthetic bounds, in-memory-only execution,
+cancellation acknowledgement, and late-output suppression. The master gates
+prove authenticated-device result binding, cancellation/expiry dominance,
+restart reconciliation, raw remote-enqueue removal, and no-work `204`
+semantics. The process gate additionally proves the local bearer-authenticated
+pause/resume actions reject unauthenticated and planning-shaped requests,
+mutate live health, block admission, reopen only fresh admission after resume,
+and are absent from the remote mTLS router. Durable active-lease cancellation,
+acknowledgement, and permanent late-result rejection are master-kernel
+coverage. These are repository/process mechanics.
+The focused Swift bridge
+gate additionally proves the
 secret-free app-to-helper startup document, exact helper/agent supervision,
 authenticated event paging, malformed-batch denial before cursor mutation, and
 fail-closed session cancellation. Repository tests do not by themselves prove
@@ -260,6 +277,12 @@ itself, keeps the Keychain/mTLS identity, and advances the agent's metadata-only
 cursor from `/v1/distributed/events/next`. Omitting both agent opt-ins retains
 health-only `monitor` mode; supplying only one fails closed and disables the
 bridge lifecycle.
+The separately explicit
+`JARVIS_MAC_DEVELOPER_FIXTURE_JOBS_ENABLED=true` value adds only the registered
+Public `fixture.reasoning` synthetic-echo diagnostic. Any other value fails
+closed. The helper may then use only lease/result and cancellation/acknowledgement
+routes, and the agent keeps the active fixture only in memory. Do not set this
+for an `mlx.reasoning` enrollment or describe it as inference evidence.
 `--samples` is the bounded evidence form; omitting it runs until the operator
 stops the process. The diagnostic-only `--reconnect-between-samples` requires
 at least two bounded samples, cancels each accepted session between samples,
@@ -324,6 +347,12 @@ state and requires the same stream ID to advance. Success emits
 database is removed on exit. This proves bounded live metadata delivery and
 durable cursor resume; it does not prove distributed job execution, inference,
 bundling, unattended operation, or release readiness.
+
+The repository fixture-job tests do not add a live-device mode to this command.
+A truthful live fixture receipt requires a separately enrolled device whose
+durable capability is exactly `fixture.reasoning`; the current MLX enrollment
+must not be reused. Until that owner-controlled enrollment/revocation ceremony
+is added to the harness, keep the proof repository/process-scoped.
 
 To record bounded Windows service-outage recovery through the production Swift
 lifecycle, run the stronger coordinated mode from the Mac:

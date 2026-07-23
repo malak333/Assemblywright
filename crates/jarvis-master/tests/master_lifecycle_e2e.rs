@@ -2,9 +2,10 @@ use jarvis_master::{
     AttemptStatus, DeviceRegistration, MasterError, MasterKernel, NewStep, StepStatus,
 };
 use jarvis_protocol::{
-    CapabilityDescriptor, CapabilityKind, DeviceId, DeviceRole, HandshakeRequest, HandshakeStatus,
-    JobEnvelope, JobResultEnvelope, JobResultStatus, LeaseId, ProtocolError, Sensitivity, StepId,
-    TaskId, PROTOCOL_VERSION,
+    CancellationAcknowledgement, CancellationAcknowledgementStatus, CapabilityDescriptor,
+    CapabilityKind, DeviceId, DeviceRole, DistributedEventBatchRequest, DistributedEventKind,
+    HandshakeRequest, HandshakeStatus, JobEnvelope, JobResultEnvelope, JobResultStatus, LeaseId,
+    ProtocolError, Sensitivity, StepId, TaskId, PROTOCOL_VERSION,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -251,10 +252,55 @@ fn master_rejects_duplicate_wrong_lease_cancelled_and_expired_work() {
     master
         .cancel_step(cancellable.step_id, 23_000)
         .expect("durably cancel leased step");
+    let blocked_while_cancelling = step(
+        "19191919-1919-4191-8191-191919191919",
+        "20202020-2020-4202-8202-202020202020",
+        "must wait for cancellation acknowledgement",
+    );
+    master
+        .enqueue_step(&blocked_while_cancelling, 23_001)
+        .expect("queue successor");
+    assert!(matches!(
+        master.lease_next_step(registration.device_id, accepted.connection_epoch, 23_002),
+        Err(MasterError::DeviceAlreadyLeased)
+    ));
+    master
+        .cancel_step(blocked_while_cancelling.step_id, 23_003)
+        .expect("remove queued concurrency probe");
     assert!(matches!(
         master.accept_result(&result, 23_500),
-        Err(MasterError::ResultNotAccepting(AttemptStatus::Cancelled))
+        Err(MasterError::ResultNotAccepting(
+            AttemptStatus::CancellationPending
+        ))
     ));
+    let instruction = master
+        .next_cancellation(registration.device_id, accepted.connection_epoch, 23_500)
+        .expect("poll cancellation")
+        .expect("pending cancellation");
+    master
+        .accept_cancellation_ack_from(
+            registration.device_id,
+            &CancellationAcknowledgement {
+                protocol_version: PROTOCOL_VERSION,
+                connection_epoch: instruction.connection_epoch,
+                sequence: instruction.sequence + 1,
+                task_id: instruction.task_id,
+                step_id: instruction.step_id,
+                attempt_id: instruction.attempt_id,
+                lease_id: instruction.lease_id,
+                cancellation_id: instruction.cancellation_id,
+                status: CancellationAcknowledgementStatus::Cancelled,
+            },
+            23_501,
+        )
+        .expect("accept bounded cancellation acknowledgement");
+    assert_eq!(
+        master
+            .step_snapshot(cancellable.step_id)
+            .expect("cancelled snapshot")
+            .status,
+        StepStatus::Cancelled
+    );
 
     let expiring = step(
         "99999999-9999-4999-8999-999999999999",
@@ -356,5 +402,443 @@ fn master_enforces_registered_capability_context_and_result_limits() {
             110_003,
         ),
         Err(MasterError::CapabilityLimitExceeded)
+    ));
+}
+
+#[test]
+fn authenticated_result_is_bound_to_the_leased_device() {
+    let owner = registration();
+    let mut wrong = registration();
+    wrong.device_id = DeviceId::new(id("12121212-1212-4121-8121-121212121212"));
+    wrong.device_name = "wrong-worker".to_string();
+    let mut master = MasterKernel::in_memory().expect("open master");
+    master.register_device(&owner).expect("register owner");
+    master
+        .register_device(&wrong)
+        .expect("register wrong worker");
+    let accepted = master
+        .accept_handshake(&handshake(&owner), 120_000)
+        .expect("accept owner");
+    let queued = step(
+        "13131313-1313-4131-8131-131313131313",
+        "14141414-1414-4141-8141-141414141414",
+        "bind result identity",
+    );
+    master.enqueue_step(&queued, 120_001).expect("queue");
+    let job = master
+        .lease_next_step(owner.device_id, accepted.connection_epoch, 120_002)
+        .expect("lease");
+    let result = fake_worker_result(&job, json!({"bound":true}));
+    assert!(matches!(
+        master.accept_result_from(wrong.device_id, &result, 120_003),
+        Err(MasterError::ResultDeviceMismatch)
+    ));
+    master
+        .accept_result_from(owner.device_id, &result, 120_004)
+        .expect("accept owning authenticated device");
+}
+
+#[test]
+fn cancellation_expiry_revokes_connection_and_restart_suppresses_old_attempt() {
+    let directory = tempdir().expect("temporary master directory");
+    let database = directory.path().join("master.sqlite3");
+    let registration = registration();
+    let queued = step(
+        "15151515-1515-4151-8151-151515151515",
+        "16161616-1616-4161-8161-161616161616",
+        "expire cancellation",
+    );
+    let mut master = MasterKernel::open(&database).expect("open master");
+    master.register_device(&registration).expect("register");
+    let accepted = master
+        .accept_handshake(&handshake(&registration), 130_000)
+        .expect("accept");
+    master.enqueue_step(&queued, 130_001).expect("queue");
+    let job = master
+        .lease_next_step(registration.device_id, accepted.connection_epoch, 130_002)
+        .expect("lease");
+    master
+        .cancel_step(queued.step_id, 130_003)
+        .expect("request cancellation");
+    assert_eq!(
+        master
+            .reconcile_cancellation_deadlines(132_003)
+            .expect("expire cancellation"),
+        1
+    );
+    assert_eq!(
+        master.attempt_status(job.attempt_id).expect("attempt"),
+        AttemptStatus::Abandoned
+    );
+    assert_eq!(
+        master.step_snapshot(queued.step_id).expect("step").status,
+        StepStatus::Cancelled
+    );
+    assert!(matches!(
+        master.accept_result(&fake_worker_result(&job, json!({"late":true})), 132_004),
+        Err(MasterError::ResultNotAccepting(AttemptStatus::Abandoned))
+    ));
+    let evidence = master
+        .distributed_events(&DistributedEventBatchRequest {
+            protocol_version: PROTOCOL_VERSION,
+            connection_epoch: accepted.connection_epoch,
+            after: None,
+            limit: 64,
+        })
+        .expect("metadata cancellation evidence");
+    for expected in [
+        DistributedEventKind::StepCancellationRequested,
+        DistributedEventKind::StepCancellationExpired,
+        DistributedEventKind::StepCancelled,
+        DistributedEventKind::DeviceDisconnected,
+    ] {
+        assert!(
+            evidence.events.iter().any(|event| event.kind == expected),
+            "missing transactional metadata event {expected:?}"
+        );
+    }
+    let fresh = master
+        .accept_handshake(&handshake(&registration), 132_005)
+        .expect("fresh epoch after revocation");
+    assert!(fresh.connection_epoch > accepted.connection_epoch);
+
+    let restart_step = step(
+        "17171717-1717-4171-8171-171717171717",
+        "18181818-1818-4181-8181-181818181818",
+        "restart pending cancellation",
+    );
+    master.enqueue_step(&restart_step, 132_006).expect("queue");
+    let restart_job = master
+        .lease_next_step(registration.device_id, fresh.connection_epoch, 132_007)
+        .expect("lease");
+    master
+        .cancel_step(restart_step.step_id, 132_008)
+        .expect("request cancellation");
+    drop(master);
+
+    let restarted = MasterKernel::open(&database).expect("restart master");
+    assert_eq!(
+        restarted
+            .attempt_status(restart_job.attempt_id)
+            .expect("reconciled attempt"),
+        AttemptStatus::Abandoned
+    );
+    assert_eq!(
+        restarted
+            .step_snapshot(restart_step.step_id)
+            .expect("reconciled step")
+            .status,
+        StepStatus::Cancelled
+    );
+}
+
+#[test]
+fn remote_fixture_kernel_revalidates_stored_job_and_result_contracts() {
+    let fixture_registration = DeviceRegistration {
+        device_id: DeviceId::new(id("21212121-2121-4212-8212-212121212121")),
+        device_name: "fixture-only-worker".to_string(),
+        role: DeviceRole::MacBridge,
+        registry_revision: 1,
+        capabilities: vec![CapabilityDescriptor::fixture_reasoning()],
+    };
+    let mut master = MasterKernel::in_memory().expect("fixture master");
+    master
+        .register_device(&fixture_registration)
+        .expect("register exact fixture");
+    let accepted = master
+        .accept_handshake(&handshake(&fixture_registration), 140_000)
+        .expect("accept fixture");
+    let invalid = NewStep {
+        task_id: TaskId::new(id("22222222-2121-4212-8212-212121212121")),
+        step_id: StepId::new(id("23232323-2323-4232-8232-232323232323")),
+        capability_id: "fixture.reasoning".to_string(),
+        sensitivity: Sensitivity::Workspace,
+        context: json!({"operation":"synthetic_echo","input":"not-public","delay_ms":0}),
+        lease_duration_ms: 60_000,
+        deadline_after_ms: 60_000,
+    };
+    master
+        .enqueue_step(&invalid, 140_001)
+        .expect("queue invalid");
+    assert!(matches!(
+        master.lease_next_fixture_step(
+            fixture_registration.device_id,
+            accepted.connection_epoch,
+            140_002,
+        ),
+        Err(MasterError::Protocol(ProtocolError::InvalidFixtureJob))
+    ));
+    assert_eq!(
+        master
+            .step_snapshot(invalid.step_id)
+            .expect("invalid step")
+            .status,
+        StepStatus::Queued
+    );
+    master
+        .cancel_step(invalid.step_id, 140_003)
+        .expect("remove invalid fixture");
+
+    let valid = NewStep {
+        task_id: TaskId::new(id("24242424-2424-4242-8242-242424242424")),
+        step_id: StepId::new(id("25252525-2525-4252-8252-252525252525")),
+        capability_id: "fixture.reasoning".to_string(),
+        sensitivity: Sensitivity::Public,
+        context: json!({"operation":"synthetic_echo","input":"exact","delay_ms":0}),
+        lease_duration_ms: 60_000,
+        deadline_after_ms: 60_000,
+    };
+    master.enqueue_step(&valid, 140_004).expect("queue valid");
+    let job = master
+        .lease_next_fixture_step(
+            fixture_registration.device_id,
+            accepted.connection_epoch,
+            140_005,
+        )
+        .expect("lease exact fixture");
+    let wrong_payload = json!({"operation":"synthetic_echo","output":"wrong","synthetic":true});
+    let wrong_result = fake_worker_result(&job, wrong_payload);
+    assert!(matches!(
+        master.accept_fixture_result_from(fixture_registration.device_id, &wrong_result, 140_006,),
+        Err(MasterError::Protocol(ProtocolError::InvalidFixtureJob))
+    ));
+    master
+        .accept_fixture_result_from(
+            fixture_registration.device_id,
+            &fake_worker_result(
+                &job,
+                json!({"operation":"synthetic_echo","output":"exact","synthetic":true}),
+            ),
+            140_007,
+        )
+        .expect("accept exact fixture result");
+
+    let ordinary = registration();
+    let mut ordinary_master = MasterKernel::in_memory().expect("ordinary master");
+    ordinary_master
+        .register_device(&ordinary)
+        .expect("register ordinary worker");
+    let ordinary_connection = ordinary_master
+        .accept_handshake(&handshake(&ordinary), 141_000)
+        .expect("accept ordinary worker");
+    let ordinary_step = step(
+        "26262626-2626-4262-8262-262626262626",
+        "27272727-2727-4272-8272-272727272727",
+        "non-fixture stored attempt",
+    );
+    ordinary_master
+        .enqueue_step(&ordinary_step, 141_001)
+        .expect("queue ordinary");
+    let ordinary_job = ordinary_master
+        .lease_next_step(
+            ordinary.device_id,
+            ordinary_connection.connection_epoch,
+            141_002,
+        )
+        .expect("lease ordinary");
+    assert!(matches!(
+        ordinary_master.accept_fixture_result_from(
+            ordinary.device_id,
+            &fake_worker_result(&ordinary_job, json!({"ordinary":true})),
+            141_003,
+        ),
+        Err(MasterError::Protocol(ProtocolError::InvalidFixtureJob))
+    ));
+}
+
+#[test]
+fn authoritative_emergency_pause_dominates_fixture_lease_and_result_acceptance() {
+    let registration = DeviceRegistration {
+        device_id: DeviceId::new(id("28282828-2828-4282-8282-282828282828")),
+        device_name: "paused-fixture-worker".to_string(),
+        role: DeviceRole::MacBridge,
+        registry_revision: 1,
+        capabilities: vec![CapabilityDescriptor::fixture_reasoning()],
+    };
+    let mut master = MasterKernel::in_memory().expect("paused fixture master");
+    master.register_device(&registration).expect("register");
+    let connection = master
+        .accept_handshake(&handshake(&registration), 145_000)
+        .expect("connect");
+    let queued = NewStep {
+        task_id: TaskId::new(id("29292929-2929-4292-8292-292929292929")),
+        step_id: StepId::new(id("30303030-3030-4303-8303-303030303030")),
+        capability_id: "fixture.reasoning".to_string(),
+        sensitivity: Sensitivity::Public,
+        context: json!({"operation":"synthetic_echo","input":"pause-wins","delay_ms":0}),
+        lease_duration_ms: 60_000,
+        deadline_after_ms: 60_000,
+    };
+    master.enqueue_step(&queued, 145_001).expect("queue");
+    master
+        .set_emergency_paused_at(true, 145_002)
+        .expect("activate authoritative pause");
+    assert!(matches!(
+        master.lease_next_fixture_step(
+            registration.device_id,
+            connection.connection_epoch,
+            145_003,
+        ),
+        Err(MasterError::EmergencyPaused)
+    ));
+    master
+        .set_emergency_paused_at(false, 145_004)
+        .expect("resume for lease");
+    let job = master
+        .lease_next_fixture_step(registration.device_id, connection.connection_epoch, 145_005)
+        .expect("lease after deliberate resume");
+    let result = fake_worker_result(
+        &job,
+        json!({"operation":"synthetic_echo","output":"pause-wins","synthetic":true}),
+    );
+    master
+        .set_emergency_paused_at(true, 145_006)
+        .expect("pause before result");
+    assert!(matches!(
+        master.accept_fixture_result_from(registration.device_id, &result, 145_007),
+        Err(MasterError::EmergencyPaused)
+    ));
+    assert_eq!(
+        master
+            .step_snapshot(queued.step_id)
+            .expect("paused step")
+            .status,
+        StepStatus::Leased
+    );
+    assert_eq!(
+        master.attempt_status(job.attempt_id).expect("attempt"),
+        AttemptStatus::CancellationPending
+    );
+    assert_eq!(
+        master
+            .health_snapshot()
+            .expect("paused health")
+            .active_attempts,
+        1,
+        "pause cancellation must retain its concurrency slot"
+    );
+    let instruction = master
+        .next_cancellation(registration.device_id, connection.connection_epoch, 145_008)
+        .expect("poll pause cancellation")
+        .expect("pause cancellation instruction");
+    assert_eq!(instruction.attempt_id, job.attempt_id);
+    master
+        .set_emergency_paused_at(false, 145_009)
+        .expect("deliberately resume admission");
+    assert!(matches!(
+        master.accept_fixture_result_from(registration.device_id, &result, 145_010),
+        Err(MasterError::ResultNotAccepting(
+            AttemptStatus::CancellationPending
+        ))
+    ));
+    master
+        .accept_cancellation_ack_from(
+            registration.device_id,
+            &CancellationAcknowledgement {
+                protocol_version: PROTOCOL_VERSION,
+                connection_epoch: instruction.connection_epoch,
+                sequence: instruction.sequence + 1,
+                task_id: instruction.task_id,
+                step_id: instruction.step_id,
+                attempt_id: instruction.attempt_id,
+                lease_id: instruction.lease_id,
+                cancellation_id: instruction.cancellation_id,
+                status: CancellationAcknowledgementStatus::Cancelled,
+            },
+            145_011,
+        )
+        .expect("acknowledge pause cancellation");
+    assert!(matches!(
+        master.accept_fixture_result_from(registration.device_id, &result, 145_012),
+        Err(MasterError::ResultNotAccepting(AttemptStatus::Cancelled))
+    ));
+    assert_eq!(
+        master
+            .step_snapshot(queued.step_id)
+            .expect("cancelled step")
+            .status,
+        StepStatus::Cancelled
+    );
+    let evidence = master
+        .distributed_events(&DistributedEventBatchRequest {
+            protocol_version: PROTOCOL_VERSION,
+            connection_epoch: connection.connection_epoch,
+            after: None,
+            limit: 64,
+        })
+        .expect("pause cancellation evidence");
+    for expected in [
+        DistributedEventKind::StepCancellationRequested,
+        DistributedEventKind::StepCancellationAcknowledged,
+        DistributedEventKind::StepCancelled,
+    ] {
+        assert!(
+            evidence.events.iter().any(|event| event.kind == expected),
+            "missing pause cancellation event {expected:?}"
+        );
+    }
+}
+
+#[test]
+fn cancellation_pending_consumes_global_concurrency_until_terminal() {
+    let mut master = MasterKernel::in_memory().expect("global concurrency master");
+    let mut workers = Vec::new();
+    for index in 0..5_u128 {
+        let registration = DeviceRegistration {
+            device_id: DeviceId::new(Uuid::from_u128(
+                0x30000000000040008000000000000000_u128 + index,
+            )),
+            device_name: format!("worker-{index}"),
+            role: DeviceRole::MacBridge,
+            registry_revision: 1,
+            capabilities: vec![CapabilityDescriptor {
+                id: "m1.reasoning".to_string(),
+                kind: CapabilityKind::LocalInference,
+                provider: "fake-mlx".to_string(),
+                model: "fake-qwen".to_string(),
+                max_context_bytes: 262_144,
+                max_result_bytes: 786_432,
+            }],
+        };
+        master
+            .register_device(&registration)
+            .expect("register concurrency worker");
+        let connection = master
+            .accept_handshake(&handshake(&registration), 150_000 + index as u64)
+            .expect("accept concurrency worker");
+        workers.push((registration, connection.connection_epoch));
+    }
+    for index in 0..5_u128 {
+        master
+            .enqueue_step(
+                &NewStep {
+                    task_id: TaskId::new(Uuid::from_u128(
+                        0x40000000000040008000000000000000_u128 + index,
+                    )),
+                    step_id: StepId::new(Uuid::from_u128(
+                        0x50000000000040008000000000000000_u128 + index,
+                    )),
+                    capability_id: "m1.reasoning".to_string(),
+                    sensitivity: Sensitivity::Workspace,
+                    context: json!({"prompt":format!("job-{index}")}),
+                    lease_duration_ms: 60_000,
+                    deadline_after_ms: 60_000,
+                },
+                151_000 + index as u64,
+            )
+            .expect("queue concurrency job");
+    }
+    for (index, (registration, epoch)) in workers.iter().take(4).enumerate() {
+        let job = master
+            .lease_next_step(registration.device_id, *epoch, 152_000 + index as u64)
+            .expect("lease concurrency slot");
+        master
+            .cancel_step(job.step_id, 153_000 + index as u64)
+            .expect("leave slot cancellation pending");
+    }
+    assert_eq!(master.health_snapshot().expect("health").active_attempts, 4);
+    assert!(matches!(
+        master.lease_next_step(workers[4].0.device_id, workers[4].1, 154_000),
+        Err(MasterError::ConcurrentJobLimit)
     ));
 }

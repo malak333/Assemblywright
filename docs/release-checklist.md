@@ -189,35 +189,46 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   `cargo test -p jarvis-master --test enrollment_identity_e2e --locked` and
   confirm digest-only ten-minute grants, CSR signature verification,
   server-selected identity, certificate expiry/rotation/revocation,
-  schema-v1-to-v3 migration, Windows DPAPI protection, and stdin-only real-CLI
+  schema-v1-to-v4 migration, Windows DPAPI protection, and stdin-only real-CLI
   issuance remain green. Then run
   `cargo test -p jarvis-master --test remote_mtls_e2e --locked` on Windows and
   confirm the real master and generated enrolled client prove TLS 1.3-only
   mutual authentication, exact certificate/device registry checks,
   pre-handshake health denial and exporter-authenticated health,
   exporter-bound handshake replay denial, reconnect epoch advance,
-  socket-close reconciliation, revoked-certificate denial, MacBridge enqueue
-  acceptance, and enrolled inference-worker enqueue rejection on persistent
-  authenticated sessions. Also confirm the MacBridge event route returns only
+  socket-close reconciliation, revoked-certificate denial, removal of raw remote
+  step enqueue, exact fixture-capability lease admission, and authenticated-device
+  result/cancellation binding on persistent sessions. Also confirm the
+  MacBridge event route returns only
   bounded metadata, never the enqueued step context, and denies an authenticated
   inference-worker session.
   Run
   `cargo test -p jarvis-protocol --test distributed_event_cursor_contract --locked`,
   `cargo test -p jarvis-master --test event_cursor_e2e --locked`, and
   `cargo test -p jarvis-agent --locked`. Confirm strict contiguous stream
-  validation, schema-v3 cursor durability, transactional disconnect/requeue
+  validation, schema-v4 cursor/cancellation durability, transactional disconnect/requeue
   events, owner-only agent state, startup-stdin bearer and code-identity
   enforcement, parent mismatch denial before storage, cursor replay denial,
   non-exact requirement rejection before storage, and macOS cross-process UDS
   coverage. Record that the signed helper, not the agent, retains the
   non-exportable Keychain identity and mTLS session.
+  Also confirm the default-off fixture tests accept only the exact Public
+  `fixture.reasoning` synthetic echo, keep active job state in memory, reject
+  malformed/oversized/non-fixture work, acknowledge bound cancellation within
+  its fixed deadline, suppress late output, and preserve
+  pause/expiry/disconnect dominance.
+  Confirm the bearer-authenticated Windows-local pause/resume actions accept
+  only `{}`, are absent from the enrolled-device mTLS router, mutate live
+  health, durably cancel active fixture attempts, and reject the old result
+  before and after deliberate resume.
   On macOS, run
   `swift test --disable-sandbox --package-path apps/mac --filter DeveloperBridgeTests`
   and confirm strict secret-free invitation/CSR decoding, staged enrollment
   mismatch denial, exporter-bound handshake encoding, exact registry-revision
   acceptance, channel cancellation, persistent-session reuse, exact health
   rejection, reconnect, capped backoff, strict app-helper snapshot decoding,
-  one-child ownership, and fail-closed helper EOF/signature behavior remain
+  one-child ownership, exact-value fixture opt-in, fixture result binding,
+  cancellation-result suppression, and fail-closed helper EOF/signature behavior remain
   green. Also confirm secret-free relay startup, exact agent supervision,
   cursor resume, malformed remote-batch denial before local acceptance, and
   mTLS-session cancellation on relay failure. Confirm normal app startup is inert without
@@ -268,16 +279,24 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   Treat these as same-host Windows
   process/network/service and Mac contract/adapter compilation proofs, including
   the native owner-account policy mutation but not a supplied password;
-  live MLX inference, unified state migration, Codex execution, Tailscale or
+  live MLX inference, a production distributed-job runtime, unified state
+  migration, Codex execution, Tailscale or
   network-interface outage recovery, and unattended cross-machine recovery
   remain unimplemented and unproven. Owner-recorded remote-service mTLS,
   private-overlay reachability, live Mac enrollment/Keychain identity, and
   bounded service stop/start recovery require the separate live receipts above.
+  Repository fixture-job coverage is not live inference or cross-device fixture
+  evidence. A live fixture receipt requires a separately enrolled exact
+  `fixture.reasoning` device; do not reuse an `mlx.reasoning` enrollment.
 - For workspace grants, confirm app-selected paths are absent from child argv,
   environment, health, UI presentation, diagnostics, and audit; malformed or
   stale bookmarks block the complete launch; trusted-wake restarts share the
   bounded versioned startup envelope; delivery timeout/failure force-reaps the
-  child; access is released on every stop/failure/unexpected child exit;
+  child without synchronously blocking the main actor on
+  `Process.waitUntilExit()`; the immediate-failure and delivery-timeout
+  regressions both pass; TERM-ignoring teardown fixtures preserve the same PID
+  with a non-spinning bounded executable; access is released on every
+  stop/failure/unexpected child exit;
   and the proof boundary still excludes App Sandbox, child sandbox-extension
   inheritance, same-user/process IPC isolation, signing, and live-device QA.
 - Confirm app-supervised IPC defaults to a generation-random UDS in a

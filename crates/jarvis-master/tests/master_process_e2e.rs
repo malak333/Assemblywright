@@ -27,7 +27,7 @@ fn windows_master_process_owns_state_and_completes_cross_process_fixture() {
     let setup_receipt: Value = serde_json::from_slice(&setup.stdout).expect("setup JSON receipt");
     assert_eq!(setup_receipt["status"], "setup_complete");
     assert_eq!(setup_receipt["protocol_version"], 1);
-    assert_eq!(setup_receipt["schema_version"], 3);
+    assert_eq!(setup_receipt["schema_version"], 4);
     assert!(directory.path().join("master.sqlite3").is_file());
     assert!(directory.path().join("development.token").is_file());
     let development_token = std::fs::read_to_string(directory.path().join("development.token"))
@@ -46,6 +46,16 @@ fn windows_master_process_owns_state_and_completes_cross_process_fixture() {
     assert_eq!(ready["endpoint"], endpoint.to_string());
     assert_unauthorized_without_bearer(endpoint);
     assert_oversized_body_is_rejected(endpoint, development_token);
+    let unauthorized_pause = post_request(
+        endpoint,
+        "/v1/development/emergency-pause/activate",
+        None,
+        "{}",
+    );
+    assert!(
+        unauthorized_pause.starts_with("HTTP/1.1 401 Unauthorized"),
+        "unauthenticated owner pause control was reachable: {unauthorized_pause}"
+    );
 
     let health = run(
         binary,
@@ -55,7 +65,76 @@ fn windows_master_process_owns_state_and_completes_cross_process_fixture() {
     assert_success(&health, "initial health");
     let health_json: Value = serde_json::from_slice(&health.stdout).expect("health JSON");
     assert_eq!(health_json["status"], "ok");
+    assert_eq!(health_json["emergency_paused"], false);
     assert_eq!(health_json["state"]["terminal_steps"], 0);
+
+    let mixed_plan_action = post_request(
+        endpoint,
+        "/v1/development/emergency-pause/activate",
+        Some(development_token),
+        r#"{"step":{"capability_id":"fixture.reasoning"}}"#,
+    );
+    assert!(
+        mixed_plan_action.starts_with("HTTP/1.1 422 Unprocessable Entity"),
+        "pause action accepted a mixed planning payload: {mixed_plan_action}"
+    );
+    let still_unpaused = run(
+        binary,
+        directory.path(),
+        ["health", "--endpoint", &endpoint.to_string()],
+    );
+    assert_success(&still_unpaused, "health after rejected mixed action");
+    let still_unpaused_json: Value =
+        serde_json::from_slice(&still_unpaused.stdout).expect("unpaused health JSON");
+    assert_eq!(still_unpaused_json["emergency_paused"], false);
+
+    let pause = post_request(
+        endpoint,
+        "/v1/development/emergency-pause/activate",
+        Some(development_token),
+        "{}",
+    );
+    assert!(pause.starts_with("HTTP/1.1 200 OK"), "{pause}");
+    assert_eq!(response_json(&pause)["emergency_paused"], true);
+    let paused_health = run(
+        binary,
+        directory.path(),
+        ["health", "--endpoint", &endpoint.to_string()],
+    );
+    assert_success(&paused_health, "paused health");
+    let paused_health_json: Value =
+        serde_json::from_slice(&paused_health.stdout).expect("paused health JSON");
+    assert_eq!(paused_health_json["status"], "paused");
+    assert_eq!(paused_health_json["emergency_paused"], true);
+    let blocked_work = post_request(
+        endpoint,
+        "/v1/development/leases/next",
+        Some(development_token),
+        r#"{"device_id":"11111111-1111-4111-8111-111111111111","connection_epoch":1}"#,
+    );
+    assert!(
+        blocked_work.starts_with("HTTP/1.1 503 Service Unavailable")
+            && blocked_work.contains("emergency_pause_blocks_work"),
+        "pause did not dominate live process work admission: {blocked_work}"
+    );
+    let resume = post_request(
+        endpoint,
+        "/v1/development/emergency-pause/resume",
+        Some(development_token),
+        "{}",
+    );
+    assert!(resume.starts_with("HTTP/1.1 200 OK"), "{resume}");
+    assert_eq!(response_json(&resume)["emergency_paused"], false);
+    let resumed_health = run(
+        binary,
+        directory.path(),
+        ["health", "--endpoint", &endpoint.to_string()],
+    );
+    assert_success(&resumed_health, "resumed health");
+    let resumed_health_json: Value =
+        serde_json::from_slice(&resumed_health.stdout).expect("resumed health JSON");
+    assert_eq!(resumed_health_json["status"], "ok");
+    assert_eq!(resumed_health_json["emergency_paused"], false);
 
     let second_endpoint = unused_loopback_addr();
     let second_owner = run(
@@ -203,6 +282,31 @@ fn assert_oversized_body_is_rejected(endpoint: SocketAddr, token: &str) {
         response.starts_with("HTTP/1.1 413 Payload Too Large"),
         "unexpected oversized response status"
     );
+}
+
+fn post_request(endpoint: SocketAddr, path: &str, token: Option<&str>, body: &str) -> String {
+    let mut stream = TcpStream::connect(endpoint).expect("connect owner action");
+    let authorization = token
+        .map(|token| format!("Authorization: Bearer {token}\r\n"))
+        .unwrap_or_default();
+    write!(
+        stream,
+        "POST {path} HTTP/1.1\r\nHost: {endpoint}\r\n{authorization}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .expect("write owner action request");
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .expect("read owner action response");
+    response
+}
+
+fn response_json(response: &str) -> Value {
+    let (_, body) = response
+        .split_once("\r\n\r\n")
+        .expect("HTTP response body delimiter");
+    serde_json::from_str(body).expect("decode response JSON")
 }
 
 fn assert_success(output: &Output, operation: &str) {

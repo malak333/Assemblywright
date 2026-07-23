@@ -127,7 +127,7 @@ These notes capture durable facts for future agents working on this repository.
   work through the existing abandonment path.
 - `enrollment_identity_e2e` proves grant secrecy, invalid-secret and replay
   denial, expiry, invalid-CSR recovery, issuance, rotation, revocation, and
-  transactional schema-v1-to-v3 migration on every supported host through an
+  transactional schema-v1-to-v4 migration on every supported host through an
   injected protector. On Windows it additionally exercises real DPAPI and the
   real CLI stdin boundary. This is local identity issuance proof and supplies
   the authority used by the separate remote transport proof.
@@ -144,16 +144,19 @@ These notes capture durable facts for future agents working on this repository.
   `AuthenticatedHandshakeRequest` must repeat the server-owned registration and
   SHA-256 digest of the fixed-label 32-byte TLS exporter. Replaying it on a new
   TLS channel fails. Subsequent requests are bound to the accepted connection
-  epoch and certificate device; only a Mac-bridge certificate may enqueue work.
+  epoch and certificate device. Raw remote work enqueue is unavailable; only a
+  durably registered exact fixture capability may lease Windows-locally queued
+  fixture work, and result/cancellation acceptance is bound to that device.
   Socket close durably disconnects the epoch and abandons affected work through
   the existing reconciliation path.
 - `remote_mtls_e2e` is the phase E2E for this transport. On Windows it uses real
   DPAPI identity material and real master/client processes to prove TLS 1.3
   mutual authentication, pre-handshake health denial, exporter-bound health,
   exporter replay denial, epoch advance
-  after disconnect, revoked-certificate denial, and the role boundary on a
-  persistent authenticated connection: MacBridge enqueue succeeds and enrolled
-  inference-worker enqueue is unauthorized. It is same-host loopback proof with
+  after disconnect, revoked-certificate denial, raw remote-enqueue removal,
+  exact fixture lease admission, authenticated-device result binding, and the
+  metadata event-route role boundary on persistent authenticated connections.
+  It is same-host loopback proof with
   generated Rust clients, not private-overlay discovery/reachability, live Mac
   Keychain enrollment, Windows service installation, or live inference.
 - The next Mac bridge slice adds shared `EnrollmentInvitation` and
@@ -288,7 +291,7 @@ These notes capture durable facts for future agents working on this repository.
   interface outage, unattended background, command-admission, signing, or
   notarization evidence.
 - The seventh distributed-development foundation adds a durable metadata event
-  cursor and Mac-local relay boundary. `jarvis-master` schema version 3 owns one
+  cursor and Mac-local relay boundary. `jarvis-master` schema version 4 owns one
   random event stream ID and contiguous sequence; enqueue, lease, terminal
   result, cancellation, disconnect, expiry, and startup reconciliation append
   metadata events transactionally with authoritative state. The remote route is
@@ -310,8 +313,37 @@ These notes capture durable facts for future agents working on this repository.
   parent-mismatch plus non-exact-requirement denial. The explicit app/helper
   relay now connects this cursor to the authenticated Windows metadata route
   without exporting the Keychain identity into Rust. This is still not bundled
-  background operation, distributed jobs, M1 inference, or unattended
+  background operation, a production distributed-job runtime, M1 inference, or unattended
   evidence.
+- The eighth distributed-development slice adds a default-off, fixture-only
+  cross-device job diagnostic. The exact capability is
+  `fixture.reasoning` / `jarvis-fixture` / `jarvis-fixture-v1` with 8 KiB
+  context/result limits. It accepts only Public `synthetic_echo`, at most 4 KiB
+  of UTF-8 input, at most five seconds of synthetic delay, and
+  `ephemeral_no_retention`. The agent holds one active attempt in memory and
+  never persists job context or result. It has no model, tool, file, repository,
+  credential, network, Codex, or Git authority.
+- Raw remote step enqueue is removed. Windows-local authenticated development
+  code is the fixture enqueue seam; remote lease requires the exact durable
+  fixture registration, and result/cancellation acceptance binds the
+  authenticated device, connection epoch, task, step, attempt, lease,
+  cancellation ID, sequence, and digests. Cancellation has a two-second
+  acknowledgement deadline; pause, maintenance, expiry, disconnect, or missed
+  acknowledgement makes the attempt non-accepting and late output is suppressed.
+- The live master exposes fixture pause/resume only on its bearer-authenticated
+  Windows-local loopback router at
+  `/v1/development/emergency-pause/activate` and `/resume`. Both accept only
+  `{}`; enrolled remote mTLS devices receive no such route. Pause atomically
+  moves active fixture attempts into durable cancellation, and resume cannot
+  revive or accept their late results.
+- Swift enables this diagnostic only when the existing exact helper/agent paths
+  are accompanied by
+  `JARVIS_MAC_DEVELOPER_FIXTURE_JOBS_ENABLED=true`; missing, partial, or
+  non-exact configuration remains inert or fails closed. Repository tests prove
+  the bounded protocol/process/UDS path. A live fixture receipt requires a
+  separately enrolled exact fixture capability. The existing
+  `mlx.reasoning` certificate must not be reused or described as fixture or MLX
+  execution proof.
 - Signed helper teardown must remain bounded even when Foundation process
   notifications race with a killed child. Cancel and close the output reader,
   poll the launched `Process` through fixed TERM and KILL deadlines, require
@@ -323,6 +355,15 @@ These notes capture durable facts for future agents working on this repository.
   ownership. The focused regressions must assert both relaunch refusal and
   OS-level child disappearance, and remain part of the full parallel Swift
   suite rather than only standalone filters.
+- Foundation child cleanup must not call synchronous `Process.waitUntilExit()`
+  from a main-actor startup failure path. Even after `SIGKILL` and apparent
+  child exit, Foundation notification delivery can leave that actor blocked.
+  Move only the final reap wait onto a sendable detached reaper, retain the
+  exact force-termination result, and cover both immediate startup-input
+  failure and bounded startup-input timeout. TERM-to-KILL process fixtures must
+  also avoid CPU-spinning shell loops: ignore `TERM`, then `exec` a bounded
+  sleeping process so the same PID remains stubborn without starving the full
+  parallel Swift suite.
 - The sixth distributed-development slice adds an explicit Windows Service
   Control Manager lifecycle without removing foreground mode. The same
   single-owner master runtime can be installed, started, stopped, inspected,

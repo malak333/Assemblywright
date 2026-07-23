@@ -39,6 +39,7 @@ public struct JarvisMacBridgeSupervisorSnapshot: Codable, Equatable, Sendable {
     public let nextDelayMilliseconds: UInt64
     public let masterStatus: String?
     public let maintenanceActive: Bool?
+    public let emergencyPaused: Bool?
     public let protocolVersion: UInt16?
     public let schemaVersion: Int64?
     public let errorCode: String?
@@ -52,6 +53,7 @@ public struct JarvisMacBridgeSupervisorSnapshot: Codable, Equatable, Sendable {
         case nextDelayMilliseconds = "next_delay_ms"
         case masterStatus = "master_status"
         case maintenanceActive = "maintenance_active"
+        case emergencyPaused = "emergency_paused"
         case protocolVersion = "protocol_version"
         case schemaVersion = "schema_version"
         case errorCode = "error_code"
@@ -73,7 +75,8 @@ public struct JarvisMacBridgeSupervisorSnapshot: Codable, Equatable, Sendable {
         let authenticated = Set([
             "phase", "device_id", "master_endpoint", "connection_epoch",
             "consecutive_failures", "next_delay_ms", "master_status",
-            "maintenance_active", "protocol_version", "schema_version"
+            "maintenance_active", "emergency_paused", "protocol_version",
+            "schema_version"
         ])
         let backingOff = Set([
             "phase", "device_id", "master_endpoint", "consecutive_failures",
@@ -112,7 +115,12 @@ public struct JarvisMacBridgeSupervisorSnapshot: Codable, Equatable, Sendable {
                   snapshot.nextDelayMilliseconds > 0,
                   snapshot.nextDelayMilliseconds <= 60_000,
                   snapshot.maintenanceActive != nil,
-                  snapshot.masterStatus == (snapshot.maintenanceActive == true ? "maintenance" : "ok"),
+                  snapshot.emergencyPaused != nil,
+                  snapshot.masterStatus == (
+                    snapshot.maintenanceActive == true
+                        ? "maintenance"
+                        : snapshot.emergencyPaused == true ? "paused" : "ok"
+                  ),
                   snapshot.protocolVersion == JarvisMacMTLSBridgeTransport.protocolVersion,
                   snapshot.schemaVersion.map({ $0 > 0 }) == true,
                   snapshot.errorCode == nil else {
@@ -130,6 +138,7 @@ public struct JarvisMacBridgeSupervisorSnapshot: Codable, Equatable, Sendable {
                     .contains(snapshot.errorCode),
                   snapshot.masterStatus == nil,
                   snapshot.maintenanceActive == nil,
+                  snapshot.emergencyPaused == nil,
                   snapshot.protocolVersion == nil,
                   snapshot.schemaVersion == nil else {
                 throw JarvisDeveloperBridgeProcessError.invalidSnapshot
@@ -139,6 +148,7 @@ public struct JarvisMacBridgeSupervisorSnapshot: Codable, Equatable, Sendable {
                   snapshot.nextDelayMilliseconds == 0,
                   snapshot.masterStatus == nil,
                   snapshot.maintenanceActive == nil,
+                  snapshot.emergencyPaused == nil,
                   snapshot.protocolVersion == nil,
                   snapshot.schemaVersion == nil,
                   snapshot.errorCode == nil else {
@@ -335,6 +345,7 @@ public actor JarvisMacBridgeSupervisor {
                 nextDelayMilliseconds: Self.normalPollDelayMilliseconds,
                 masterStatus: health.status,
                 maintenanceActive: health.maintenanceActive,
+                emergencyPaused: health.emergencyPaused,
                 protocolVersion: health.protocolVersion,
                 schemaVersion: health.schemaVersion,
                 errorCode: nil
@@ -355,6 +366,7 @@ public actor JarvisMacBridgeSupervisor {
                 nextDelayMilliseconds: Self.backoffMilliseconds(for: consecutiveFailures),
                 masterStatus: nil,
                 maintenanceActive: nil,
+                emergencyPaused: nil,
                 protocolVersion: nil,
                 schemaVersion: nil,
                 errorCode: Self.redactedErrorCode(for: error)
@@ -392,6 +404,7 @@ public actor JarvisMacBridgeSupervisor {
             nextDelayMilliseconds: 0,
             masterStatus: nil,
             maintenanceActive: nil,
+            emergencyPaused: nil,
             protocolVersion: nil,
             schemaVersion: nil,
             errorCode: nil
@@ -417,6 +430,7 @@ private struct JarvisMacRemoteMasterHealth: Decodable {
     let serviceIdentity: String
     let maintenanceActive: Bool
     let maintenanceReason: String?
+    let emergencyPaused: Bool
     let protocolVersion: UInt16
     let schemaVersion: Int64
     let processID: UInt32
@@ -466,6 +480,7 @@ private struct JarvisMacRemoteMasterHealth: Decodable {
         case serviceIdentity = "service_identity"
         case maintenanceActive = "maintenance_active"
         case maintenanceReason = "maintenance_reason"
+        case emergencyPaused = "emergency_paused"
         case protocolVersion = "protocol_version"
         case schemaVersion = "schema_version"
         case processID = "process_id"
@@ -493,7 +508,9 @@ private struct JarvisMacRemoteMasterHealth: Decodable {
         } catch {
             throw JarvisMacRemoteMasterHealthError.invalid
         }
-        let expectedStatus = health.maintenanceActive ? "maintenance" : "ok"
+        let expectedStatus = health.maintenanceActive
+            ? "maintenance"
+            : health.emergencyPaused ? "paused" : "ok"
         guard health.status == expectedStatus,
               health.maintenanceActive || health.maintenanceReason == nil,
               health.mode == "developer_remote_master",

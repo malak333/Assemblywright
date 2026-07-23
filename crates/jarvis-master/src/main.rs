@@ -1,6 +1,7 @@
 use anyhow::{bail, Context};
-use axum::extract::{DefaultBodyLimit, State};
+use axum::extract::{DefaultBodyLimit, Path as AxumPath, State};
 use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -8,13 +9,16 @@ use hyper::server::conn::http1;
 use hyper_util::rt::TokioIo;
 use hyper_util::service::TowerToHyperService;
 use jarvis_master::{
-    current_time_ms, AcceptedResult, DeviceRegistration, EnrollmentGrantSpec, EnrollmentRequest,
-    EphemeralServerIdentity, IdentityAuthority, MasterHealthSnapshot, MasterProcess, NewStep,
-    PlatformSecretProtector, StartupReconciliation,
+    current_time_ms, AcceptedCancellation, AcceptedResult, DeviceRegistration, EnrollmentGrantSpec,
+    EnrollmentRequest, EphemeralServerIdentity, IdentityAuthority, MasterHealthSnapshot,
+    MasterProcess, NewStep, PlatformSecretProtector, StartupReconciliation,
 };
+#[cfg(test)]
+use jarvis_protocol::CapabilityKind;
 use jarvis_protocol::{
-    AuthenticatedHandshakeRequest, CapabilityDescriptor, CapabilityKind, DeviceId, DeviceRole,
-    DistributedEventBatch, DistributedEventBatchRequest, EnrollmentCsrReply, EnrollmentInvitation,
+    AuthenticatedHandshakeRequest, CancellationAcknowledgement, CancellationPollRequest,
+    CapabilityDescriptor, DeviceId, DeviceRole, DistributedEventBatch,
+    DistributedEventBatchRequest, EnrollmentCsrReply, EnrollmentInvitation, FixtureJobResult,
     HandshakeRequest, HandshakeResponse, HandshakeStatus, JobEnvelope, JobResultEnvelope,
     JobResultStatus, Sensitivity, StepId, TaskId, ENROLLMENT_INVITATION_READY_STATUS,
     ENROLLMENT_PAIRING_SCHEMA_VERSION, MAX_ENROLLMENT_PAIRING_FRAME_BYTES, MAX_WIRE_FRAME_BYTES,
@@ -25,7 +29,9 @@ use rustls::server::WebPkiClientVerifier;
 use rustls::{RootCertStore, ServerConfig};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::json;
+#[cfg(any(windows, test))]
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
@@ -339,6 +345,7 @@ struct HealthResponse {
     service_identity: String,
     maintenance_active: bool,
     maintenance_reason: Option<String>,
+    emergency_paused: bool,
     protocol_version: u16,
     schema_version: i64,
     process_id: u32,
@@ -371,6 +378,16 @@ struct LeaseRequest {
 struct AcceptedResponse {
     accepted: bool,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EmergencyPauseResponse {
+    emergency_paused: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EmergencyPauseActionRequest {}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ErrorResponse {
@@ -1207,6 +1224,18 @@ async fn serve_runtime(
         .route("/v1/development/devices/register", post(register_device))
         .route("/v1/development/connections/accept", post(accept_handshake))
         .route("/v1/development/steps", post(enqueue_step))
+        .route(
+            "/v1/development/steps/:step_id/cancel",
+            post(cancel_development_step),
+        )
+        .route(
+            "/v1/development/emergency-pause/activate",
+            post(activate_emergency_pause),
+        )
+        .route(
+            "/v1/development/emergency-pause/resume",
+            post(resume_emergency_pause),
+        )
         .route("/v1/development/leases/next", post(lease_next))
         .route("/v1/development/results", post(accept_result))
         .layer(DefaultBodyLimit::max(MAX_WIRE_FRAME_BYTES))
@@ -1408,9 +1437,16 @@ fn remote_router(state: AppState) -> Router {
             "/v1/distributed/connections/accept",
             post(remote_accept_handshake),
         )
-        .route("/v1/distributed/steps", post(remote_enqueue_step))
         .route("/v1/distributed/leases/next", post(remote_lease_next))
         .route("/v1/distributed/results", post(remote_accept_result))
+        .route(
+            "/v1/distributed/cancellations/next",
+            post(remote_cancellation_next),
+        )
+        .route(
+            "/v1/distributed/cancellations/ack",
+            post(remote_cancellation_ack),
+        )
         .route("/v1/distributed/events/next", post(remote_events_next))
         .layer(DefaultBodyLimit::max(MAX_WIRE_FRAME_BYTES))
         .with_state(state)
@@ -1427,13 +1463,22 @@ async fn remote_get_health(
     require_remote_application_session(&state, &session, None)?;
     let (maintenance_active, maintenance_reason) = state.lifecycle.maintenance_snapshot();
     let process = lock_process(&state)?;
+    let emergency_paused = process.kernel().emergency_paused().map_err(api_error)?;
     Ok(Json(HealthResponse {
-        status: if maintenance_active { "maintenance" } else { "ok" }.to_string(),
+        status: if maintenance_active {
+            "maintenance"
+        } else if emergency_paused {
+            "paused"
+        } else {
+            "ok"
+        }
+        .to_string(),
         mode: "developer_remote_master".to_string(),
         host_mode: state.lifecycle.host_mode.clone(),
         service_identity: state.lifecycle.service_identity.clone(),
         maintenance_active,
         maintenance_reason,
+        emergency_paused,
         protocol_version: PROTOCOL_VERSION,
         schema_version: process.kernel().schema_version().map_err(api_error)?,
         process_id: std::process::id(),
@@ -1487,43 +1532,32 @@ async fn remote_accept_handshake(
     Ok(Json(response))
 }
 
-async fn remote_enqueue_step(
-    State(state): State<AppState>,
-    Extension(session): Extension<RemoteSession>,
-    Json(step): Json<NewStep>,
-) -> ApiResult<AcceptedResponse> {
-    require_work_admission(&state)?;
-    let registration = require_remote_application_session(&state, &session, None)?;
-    if registration.role != DeviceRole::MacBridge {
-        return Err(unauthorized());
-    }
-    lock_process(&state)?
-        .kernel_mut()
-        .enqueue_step(&step, current_time_ms().map_err(api_error)?)
-        .map_err(api_error)?;
-    Ok(Json(AcceptedResponse { accepted: true }))
-}
-
 async fn remote_lease_next(
     State(state): State<AppState>,
     Extension(session): Extension<RemoteSession>,
     Json(request): Json<LeaseRequest>,
-) -> ApiResult<JobEnvelope> {
+) -> Result<Response, ApiError> {
     require_work_admission(&state)?;
     let registration =
         require_remote_application_session(&state, &session, Some(request.connection_epoch))?;
     if request.device_id != registration.device_id {
         return Err(unauthorized());
     }
-    let job = lock_process(&state)?
-        .kernel_mut()
-        .lease_next_step(
-            registration.device_id,
-            request.connection_epoch,
-            current_time_ms().map_err(api_error)?,
-        )
-        .map_err(api_error)?;
-    Ok(Json(job))
+    if !registration_can_execute_fixture(&registration) {
+        return Err(unauthorized());
+    }
+    let job = lock_process(&state)?.kernel_mut().lease_next_fixture_step(
+        registration.device_id,
+        request.connection_epoch,
+        current_time_ms().map_err(api_error)?,
+    );
+    match job {
+        Ok(job) => Ok(Json(job).into_response()),
+        Err(jarvis_master::MasterError::NoEligibleStep) => {
+            Ok(StatusCode::NO_CONTENT.into_response())
+        }
+        Err(error) => Err(api_error(error)),
+    }
 }
 
 async fn remote_accept_result(
@@ -1531,12 +1565,100 @@ async fn remote_accept_result(
     Extension(session): Extension<RemoteSession>,
     Json(result): Json<JobResultEnvelope>,
 ) -> ApiResult<AcceptedResult> {
-    require_remote_application_session(&state, &session, Some(result.connection_epoch))?;
+    require_work_admission(&state)?;
+    let registration =
+        require_remote_application_session(&state, &session, Some(result.connection_epoch))?;
+    if !registration_can_execute_fixture(&registration) {
+        return Err(unauthorized());
+    }
     let accepted = lock_process(&state)?
         .kernel_mut()
-        .accept_result(&result, current_time_ms().map_err(api_error)?)
-        .map_err(api_error)?;
+        .accept_fixture_result_from(
+            registration.device_id,
+            &result,
+            current_time_ms().map_err(api_error)?,
+        )
+        .map_err(bound_worker_error)?;
     Ok(Json(accepted))
+}
+
+async fn remote_cancellation_next(
+    State(state): State<AppState>,
+    Extension(session): Extension<RemoteSession>,
+    Json(request): Json<CancellationPollRequest>,
+) -> Result<Response, ApiError> {
+    request.validate().map_err(api_error)?;
+    let registration =
+        require_remote_application_session(&state, &session, Some(request.connection_epoch))?;
+    if !registration_can_execute_fixture(&registration) {
+        return Err(unauthorized());
+    }
+    match lock_process(&state)?
+        .kernel_mut()
+        .next_cancellation(
+            registration.device_id,
+            request.connection_epoch,
+            current_time_ms().map_err(api_error)?,
+        )
+        .map_err(bound_worker_error)?
+    {
+        Some(instruction) => Ok(Json(instruction).into_response()),
+        None => Ok(StatusCode::NO_CONTENT.into_response()),
+    }
+}
+
+async fn remote_cancellation_ack(
+    State(state): State<AppState>,
+    Extension(session): Extension<RemoteSession>,
+    Json(acknowledgement): Json<CancellationAcknowledgement>,
+) -> ApiResult<AcceptedCancellation> {
+    let registration = require_remote_application_session(
+        &state,
+        &session,
+        Some(acknowledgement.connection_epoch),
+    )?;
+    if !registration_can_execute_fixture(&registration) {
+        return Err(unauthorized());
+    }
+    let accepted = lock_process(&state)?
+        .kernel_mut()
+        .accept_cancellation_ack_from(
+            registration.device_id,
+            &acknowledgement,
+            current_time_ms().map_err(api_error)?,
+        )
+        .map_err(bound_worker_error)?;
+    Ok(Json(accepted))
+}
+
+fn bound_worker_error(error: jarvis_master::MasterError) -> ApiError {
+    match error {
+        jarvis_master::MasterError::ResultDeviceMismatch => unauthorized(),
+        jarvis_master::MasterError::CancellationExpired
+        | jarvis_master::MasterError::ResultNotAccepting(_)
+        | jarvis_master::MasterError::ConnectionNotActive
+        | jarvis_master::MasterError::ConnectionEpochMismatch
+        | jarvis_master::MasterError::SequenceReplay => (
+            StatusCode::CONFLICT,
+            Json(ErrorResponse {
+                error: "distributed_work_rejected".to_string(),
+            }),
+        ),
+        jarvis_master::MasterError::EmergencyPaused => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: "emergency_pause_blocks_work".to_string(),
+            }),
+        ),
+        other => api_error(other),
+    }
+}
+
+fn registration_can_execute_fixture(registration: &DeviceRegistration) -> bool {
+    matches!(
+        registration.role,
+        DeviceRole::MacBridge | DeviceRole::InferenceWorker
+    ) && registration.capabilities == vec![CapabilityDescriptor::fixture_reasoning()]
 }
 
 async fn remote_events_next(
@@ -1612,13 +1734,22 @@ async fn get_health(
     authorize(&headers, &state)?;
     let (maintenance_active, maintenance_reason) = state.lifecycle.maintenance_snapshot();
     let process = lock_process(&state)?;
+    let emergency_paused = process.kernel().emergency_paused().map_err(api_error)?;
     Ok(Json(HealthResponse {
-        status: if maintenance_active { "maintenance" } else { "ok" }.to_string(),
+        status: if maintenance_active {
+            "maintenance"
+        } else if emergency_paused {
+            "paused"
+        } else {
+            "ok"
+        }
+        .to_string(),
         mode: "developer_foundation".to_string(),
         host_mode: state.lifecycle.host_mode.clone(),
         service_identity: state.lifecycle.service_identity.clone(),
         maintenance_active,
         maintenance_reason,
+        emergency_paused,
         protocol_version: PROTOCOL_VERSION,
         schema_version: process.kernel().schema_version().map_err(api_error)?,
         process_id: std::process::id(),
@@ -1672,6 +1803,74 @@ async fn enqueue_step(
     Ok(Json(AcceptedResponse { accepted: true }))
 }
 
+async fn cancel_development_step(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(step_id): AxumPath<String>,
+) -> ApiResult<AcceptedResponse> {
+    authorize(&headers, &state)?;
+    let step_id = Uuid::parse_str(&step_id).map(StepId::new).map_err(|_| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ErrorResponse {
+                error: "invalid_step_id".to_string(),
+            }),
+        )
+    })?;
+    lock_process(&state)?
+        .kernel_mut()
+        .cancel_step(step_id, current_time_ms().map_err(api_error)?)
+        .map_err(api_error)?;
+    schedule_cancellation_deadline_reconciliation(&state);
+    Ok(Json(AcceptedResponse { accepted: true }))
+}
+
+async fn activate_emergency_pause(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(_request): Json<EmergencyPauseActionRequest>,
+) -> ApiResult<EmergencyPauseResponse> {
+    authorize(&headers, &state)?;
+    lock_process(&state)?
+        .kernel_mut()
+        .set_emergency_paused(true)
+        .map_err(api_error)?;
+    schedule_cancellation_deadline_reconciliation(&state);
+    Ok(Json(EmergencyPauseResponse {
+        emergency_paused: true,
+    }))
+}
+
+async fn resume_emergency_pause(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(_request): Json<EmergencyPauseActionRequest>,
+) -> ApiResult<EmergencyPauseResponse> {
+    authorize(&headers, &state)?;
+    lock_process(&state)?
+        .kernel_mut()
+        .set_emergency_paused(false)
+        .map_err(api_error)?;
+    Ok(Json(EmergencyPauseResponse {
+        emergency_paused: false,
+    }))
+}
+
+fn schedule_cancellation_deadline_reconciliation(state: &AppState) {
+    let process = state.process.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(
+            jarvis_protocol::CANCELLATION_ACK_DEADLINE_MS,
+        ))
+        .await;
+        if let Ok(mut process) = process.lock() {
+            let _ = process
+                .kernel_mut()
+                .reconcile_cancellation_deadlines(current_time_ms().unwrap_or(u64::MAX));
+        }
+    });
+}
+
 async fn lease_next(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1693,6 +1892,7 @@ async fn accept_result(
     Json(result): Json<JobResultEnvelope>,
 ) -> ApiResult<AcceptedResult> {
     authorize(&headers, &state)?;
+    require_work_admission(&state)?;
     let now_ms = current_time_ms().map_err(api_error)?;
     let accepted = lock_process(&state)?
         .kernel_mut()
@@ -1724,6 +1924,18 @@ fn require_work_admission(state: &AppState) -> Result<(), ApiError> {
             StatusCode::SERVICE_UNAVAILABLE,
             Json(ErrorResponse {
                 error: "maintenance_mode_blocks_new_work".to_string(),
+            }),
+        ));
+    }
+    if lock_process(state)?
+        .kernel()
+        .emergency_paused()
+        .map_err(api_error)?
+    {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: "emergency_pause_blocks_work".to_string(),
             }),
         ));
     }
@@ -1822,14 +2034,7 @@ async fn fixture_worker(
     require_loopback(endpoint)?;
     let token = read_development_token(&data_dir.join(DEVELOPMENT_TOKEN_FILE))?;
     let device_id = DeviceId::new(Uuid::new_v4());
-    let capability = CapabilityDescriptor {
-        id: "fixture.reasoning".to_string(),
-        kind: CapabilityKind::LocalInference,
-        provider: "cross-process-fixture".to_string(),
-        model: "deterministic-fixture".to_string(),
-        max_context_bytes: 262_144,
-        max_result_bytes: 786_432,
-    };
+    let capability = CapabilityDescriptor::fixture_reasoning();
     let registration = DeviceRegistration {
         device_id,
         device_name: "cross-process-fixture-worker".to_string(),
@@ -1871,8 +2076,8 @@ async fn fixture_worker(
         task_id,
         step_id,
         capability_id: "fixture.reasoning".to_string(),
-        sensitivity: Sensitivity::Workspace,
-        context: json!({"prompt": prompt, "retain": false}),
+        sensitivity: Sensitivity::Public,
+        context: json!({"operation":"synthetic_echo","input":prompt,"delay_ms":0}),
         lease_duration_ms: 60_000,
         deadline_after_ms: 300_000,
     };
@@ -1887,10 +2092,12 @@ async fn fixture_worker(
         },
     )
     .await?;
-    let payload: Value = json!({
-        "summary": "cross-process fixture completed",
-        "context_sha256": hex(&job.context_sha256)
-    });
+    let payload = serde_json::to_value(FixtureJobResult::synthetic_echo(
+        job.context["input"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+    ))?;
     let result = JobResultEnvelope {
         protocol_version: PROTOCOL_VERSION,
         connection_epoch: job.connection_epoch,
@@ -2193,5 +2400,51 @@ mod tests {
             maintenance_snapshot(directory.path()),
             (true, Some("invalid_marker".to_string()))
         );
+    }
+
+    #[test]
+    fn authoritative_pause_blocks_shared_work_admission_guard() {
+        let directory = tempfile::tempdir().unwrap();
+        let lifecycle =
+            RuntimeLifecycle::load(directory.path(), "test", "test-owner").expect("load pause");
+        let mut process = MasterProcess::acquire(directory.path().join("master")).unwrap();
+        process
+            .kernel_mut()
+            .set_emergency_paused(true)
+            .expect("activate authoritative pause");
+        let state = AppState {
+            process: Arc::new(Mutex::new(process)),
+            token_sha256: [1; 32],
+            started_at_ms: 1,
+            lifecycle,
+        };
+        let rejection = require_work_admission(&state).expect_err("pause must dominate work");
+        assert_eq!(rejection.0, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(rejection.1.error, "emergency_pause_blocks_work");
+    }
+
+    #[test]
+    fn remote_fixture_registration_must_be_exact_and_fixture_only() {
+        let mut registration = DeviceRegistration {
+            device_id: DeviceId::new(Uuid::new_v4()),
+            device_name: "fixture-worker".to_string(),
+            role: DeviceRole::MacBridge,
+            registry_revision: 1,
+            capabilities: vec![CapabilityDescriptor::fixture_reasoning()],
+        };
+        assert!(registration_can_execute_fixture(&registration));
+
+        registration.capabilities.push(CapabilityDescriptor {
+            id: "mlx.reasoning".to_string(),
+            kind: CapabilityKind::LocalInference,
+            provider: "mlx".to_string(),
+            model: "real-model".to_string(),
+            max_context_bytes: 8_192,
+            max_result_bytes: 8_192,
+        });
+        assert!(!registration_can_execute_fixture(&registration));
+        registration.capabilities = vec![CapabilityDescriptor::fixture_reasoning()];
+        registration.capabilities[0].model = "jarvis-fixture-v2".to_string();
+        assert!(!registration_can_execute_fixture(&registration));
     }
 }

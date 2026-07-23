@@ -151,7 +151,7 @@ with a strictly higher authenticated epoch after restart. This is bounded
 service-outage evidence, not a Tailscale/network-interface outage or long-run
 background reliability proof. The helper is not yet bundled in the
 distribution and this is not unattended background operation. The repository
-now contains the next bounded control-plane foundation: schema-v3 Windows
+now contains the next bounded control-plane foundation: schema-v4 Windows
 metadata events with a server-issued durable stream cursor, an authenticated
 Mac-local `jarvis-agent` Unix-socket relay, and an owner-only local cursor
 store. Master enqueue, lease, terminal result, cancellation, disconnect,
@@ -167,9 +167,22 @@ the UDS path and bearer internally, retains the non-exportable Keychain identity
 and outbound mTLS session, pages the authenticated Windows metadata route, and
 forwards each exact batch into the agent cursor store. Exact audit-token,
 same-EUID, executable-path, and CDHash checks protect both sides of that local
-socket. Live MLX execution, distributed jobs, repository mutation, Git
+socket. Live MLX execution, a production distributed-job runtime, repository mutation, Git
 publication, Codex dispatch, bundled installation, and unattended operation
-remain unimplemented.
+remain unimplemented. A separate default-off diagnostic now exercises one
+cross-device job path without claiming any of those capabilities: an enrolled
+device must advertise the exact `fixture.reasoning` descriptor, the Windows
+master alone enqueues a Public `synthetic_echo`, and the helper leases it over
+mTLS, runs it in the agent's in-memory fixture adapter, and returns the
+digest-bound result. The adapter accepts no model, tool, file, repository,
+credential, Codex, or Git input, persists no job or result, and implements
+attempt/lease/epoch-bound cancellation with bounded acknowledgement and late
+output suppression. Existing MLX enrollment is not valid fixture-job evidence.
+The running master exposes pause and deliberate resume only through
+bearer-authenticated Windows-local loopback actions with exact empty request
+documents. Enrolled remote devices have no pause mutation route. Activating
+pause atomically moves active fixture attempts into durable cancellation, so
+resume cannot revive their leases or make late output acceptable.
 The named live-device closeout is
 `scripts/mac-windows-bridge-live-e2e.sh --run-relay`: it must advance one
 concrete cursor, restart the app/helper/agent chain against the same owner-only

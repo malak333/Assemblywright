@@ -240,7 +240,7 @@ fn expired_grant_and_invalid_csr_fail_without_consuming_the_grant() {
 }
 
 #[test]
-fn schema_v1_migrates_transactionally_to_enrollment_identity_and_event_cursor_v3() {
+fn schema_v1_migrates_transactionally_to_enrollment_identity_event_cursor_and_cancellation_v4() {
     let directory = tempfile::tempdir().expect("migration directory");
     let database = directory.path().join("master.sqlite3");
     let connection = rusqlite::Connection::open(&database).expect("create v1 database");
@@ -312,7 +312,7 @@ fn schema_v1_migrates_transactionally_to_enrollment_identity_and_event_cursor_v3
     drop(connection);
 
     let master = MasterKernel::open(&database).expect("migrate v1 database");
-    assert_eq!(master.schema_version().expect("schema version"), 3);
+    assert_eq!(master.schema_version().expect("schema version"), 4);
     let health = master.health_snapshot().expect("migrated health");
     assert_eq!(health.registered_devices, 1);
     assert_eq!(health.active_device_certificates, 0);

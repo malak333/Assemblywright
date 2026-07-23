@@ -16,7 +16,7 @@ flowchart LR
   Grants --> Certificates["30-day device certificates, rotation, and revocation"]
   Certificates --> Remote["Optional TLS 1.3 mTLS listener with exact-IP ephemeral server identity"]
   Remote --> Binding["Certificate registry checks, TLS exporter binding, role and epoch enforcement"]
-  Master --> Events["Schema-v3 metadata event journal and server-issued durable cursor"]
+  Master --> Events["Schema-v4 metadata event journal, cancellation state, and server-issued durable cursor"]
   Events --> Helper["Signed Swift bridge keeps Keychain identity and outbound mTLS"]
   Helper --> Agent["Directly supervised Mac jarvis-agent owner-only cursor over mutually pinned local UDS"]
   Process --> Service["Windows SCM host: automatic start, bounded recovery, status, maintenance, uninstall"]
@@ -45,7 +45,7 @@ a headless master executable. The contract seam provides protocol version 1, typ
 device/task/step/attempt/lease/cancellation identifiers, bounded capability
 advertisements, handshake messages, job and result envelopes, strict
 bound-before-decode JSON entry points, nil-identity rejection, and a golden
-compatibility fixture. `jarvis-master` schema version 3 persists explicitly
+compatibility fixture. `jarvis-master` schema version 4 persists explicitly
 registered device metadata, active connection epoch and sequence state, queued
 steps, immutable leased job envelopes, attempts, cancellation/expiry outcome,
 accepted payload digests, the enrollment authority binding, digest-only grants,
@@ -71,26 +71,38 @@ fixture-worker child processes, proves one-owner database exclusion, bearer
 non-disclosure, unauthorized and oversized-body denial, authenticated loopback
 health and job completion, and restart reconciliation.
 `enrollment_identity_e2e` proves digest-only grants, signed-CSR issuance,
-expiry/replay denial, rotation, revocation, schema-v1-to-v3 migration, real
+expiry/replay denial, rotation, revocation, schema-v1-to-v4 migration, real
 Windows DPAPI round trips, and the real CLI stdin boundary.
 `event_cursor_e2e` proves bounded paging, durable resume, stream mismatch and
 future-cursor rejection, metadata redaction, plus disconnect and requeue events
 after restart. The Mac `jarvis-agent` reuses the hardened local UDS transport,
 requires direct-parent supervision and a fresh startup-stdin bearer, and stores
 only stream ID, sequence, and update time under a single-owner lock.
-`local_relay_e2e` proves that boundary cross-process on macOS. The app does not
+Its default-off fixture adapter can hold at most one exact Public
+`fixture.reasoning` synthetic-echo attempt in memory. It accepts no model, tool,
+file, repository, credential, Codex, or Git input; cancellation suppresses the
+result and produces an attempt/lease/epoch-bound acknowledgement. No fixture job
+or result is written to the cursor database. `local_relay_e2e` proves those
+default-off, bounded execution, cancellation, late-output, bearer, identity,
+and cursor boundaries cross-process on macOS. The app does not
 export the enrolled identity to the agent: the separately signed helper keeps
 the Keychain/mTLS session, directly supervises the exact agent build, and
 forwards only authenticated metadata batches over a mutually code-identity-
-pinned local socket when the explicit agent paths are configured.
+pinned local socket when the explicit agent paths are configured. Only the
+additional exact `JARVIS_MAC_DEVELOPER_FIXTURE_JOBS_ENABLED=true` diagnostic may
+lease the registered fixture capability and forward its exact job/result or
+cancellation/acknowledgement envelopes.
 `remote_mtls_e2e` adds a real master process and generated enrolled client over
 loopback TLS 1.3. It proves mutual certificate authentication, durable
 certificate/device checks, pre-handshake health denial, exporter-bound health
 and application-handshake replay denial,
 reconnect epoch advance, socket-close reconciliation, and revoked-certificate
-denial. A persistent authenticated session also proves a MacBridge certificate
-may enqueue and retrieve metadata events while an enrolled inference-worker
-certificate cannot enqueue or retrieve the MacBridge event stream.
+denial. Raw remote step enqueue is absent. A persistent authenticated session
+proves only a device registered with the exact fixture descriptor may lease its
+Windows-locally queued synthetic job, and the result/cancellation path is bound
+to that authenticated device and connection epoch. MacBridge metadata retrieval
+remains bounded and an enrolled inference-worker cannot retrieve that event
+stream.
 `windows_service_lifecycle_e2e` installs a unique real SCM service on an elevated
 Windows runner and proves automatic-start/recovery configuration, LocalSystem
 loopback hosting, SCM plus runtime health, durable maintenance admission denial,
@@ -113,10 +125,11 @@ to prove the real Tailscale path and
 authenticated health after owner enrollment; CI uses its `--check` preflight
 and retains live execution as external device evidence.
 
-This slice does not make Windows the runtime authority yet. It adds a foreground
+This slice does not make Windows the production runtime authority yet. It adds a foreground
 headless executable, process-ownership lock, authenticated loopback development
 listener, deterministic fixture-worker process, a separate local enrollment
-CLI, an explicit optional remote listener, and an explicit Windows SCM lifecycle.
+CLI, an explicit optional remote listener, an explicit Windows SCM lifecycle,
+and a default-off cross-device Public synthetic fixture-job diagnostic.
 The identity flow creates or
 reloads an ECDSA P-256 CA whose PKCS#8 private
 key is protected by Windows DPAPI for the current operator identity; SQLite

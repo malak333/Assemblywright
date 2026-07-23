@@ -81,8 +81,12 @@ private struct JarvisMacBridgeCLI {
                       let masterMode = healthObject["mode"] as? String,
                       masterMode == "developer_remote_master",
                       let maintenanceActive = healthObject["maintenance_active"] as? Bool,
+                      let emergencyPaused = healthObject["emergency_paused"] as? Bool,
                       let protocolVersion = healthObject["protocol_version"] as? Int,
-                      let schemaVersion = healthObject["schema_version"] as? Int else {
+                      let schemaVersion = healthObject["schema_version"] as? Int,
+                      masterStatus == (
+                        maintenanceActive ? "maintenance" : emergencyPaused ? "paused" : "ok"
+                      ) else {
                     throw BridgeCLIError.invalidHealth
                 }
                 try writeJSON([
@@ -93,6 +97,7 @@ private struct JarvisMacBridgeCLI {
                     "master_status": masterStatus,
                     "master_mode": masterMode,
                     "maintenance_active": maintenanceActive,
+                    "emergency_paused": emergencyPaused,
                     "protocol_version": protocolVersion,
                     "schema_version": schemaVersion
                 ])
@@ -112,9 +117,14 @@ private struct JarvisMacBridgeCLI {
                     readBoundedStdin(
                         maximum: JarvisMacDeveloperEventRelayConfiguration.maximumDocumentBytes
                     )
-                )
+            )
             let options = try monitorOptions(Array(arguments.dropFirst()))
-            let relay = JarvisMacDeveloperEventRelay(configuration: configuration)
+            let relay = JarvisMacDeveloperEventRelay(
+                configuration: configuration,
+                deviceID: configuration.fixtureJobsEnabled
+                    ? UUID(uuidString: profile.deviceID)
+                    : nil
+            )
             try await runMonitor(profile: profile, options: options, eventRelay: relay)
         default:
             throw BridgeCLIError.usage

@@ -5,10 +5,9 @@ use jarvis_master::{
     NewStep, PlatformSecretProtector,
 };
 use jarvis_protocol::{
-    AuthenticatedHandshakeRequest, CapabilityDescriptor, CapabilityKind, DeviceRole,
-    DistributedEventBatch, DistributedEventBatchRequest, DistributedEventKind, HandshakeRequest,
-    HandshakeResponse, HandshakeStatus, Sensitivity, StepId, TaskId, MAX_JOB_CONTEXT_BYTES,
-    MAX_JOB_RESULT_BYTES, PROTOCOL_VERSION,
+    AuthenticatedHandshakeRequest, CapabilityDescriptor, DeviceRole, DistributedEventBatch,
+    DistributedEventBatchRequest, DistributedEventKind, HandshakeRequest, HandshakeResponse,
+    HandshakeStatus, Sensitivity, StepId, TaskId, PROTOCOL_VERSION,
 };
 use rcgen::{CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
@@ -213,8 +212,21 @@ async fn remote_listener_requires_enrollment_tls13_and_channel_bound_identity() 
     .await;
     assert_eq!(bridge_handshake.status, HandshakeStatus::Accepted);
     assert!(
-        bridge_enqueue.starts_with("HTTP/1.1 200 OK"),
-        "{bridge_enqueue}"
+        bridge_enqueue.starts_with("HTTP/1.1 404 Not Found"),
+        "remote raw step enqueue remained available: {bridge_enqueue}"
+    );
+    let (pause_handshake, remote_pause) = authenticated_application_request(
+        remote_endpoint,
+        &valid,
+        "POST",
+        "/v1/development/emergency-pause/activate",
+        &serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(pause_handshake.status, HandshakeStatus::Accepted);
+    assert!(
+        remote_pause.starts_with("HTTP/1.1 404 Not Found"),
+        "owner-local emergency pause control leaked onto the enrolled-device router: {remote_pause}"
     );
     let (events_handshake, events_response) = authenticated_application_request_with_body(
         remote_endpoint,
@@ -239,10 +251,6 @@ async fn remote_listener_requires_enrollment_tls13_and_channel_bound_identity() 
         .events
         .iter()
         .any(|event| event.kind == DistributedEventKind::DeviceConnected));
-    assert!(events
-        .events
-        .iter()
-        .any(|event| event.kind == DistributedEventKind::StepQueued));
     assert!(
         !events_response.contains("bridge may enqueue"),
         "metadata event stream leaked step context"
@@ -258,7 +266,7 @@ async fn remote_listener_requires_enrollment_tls13_and_channel_bound_identity() 
     .await;
     assert_eq!(worker_handshake.status, HandshakeStatus::Accepted);
     assert!(
-        worker_enqueue.starts_with("HTTP/1.1 401 Unauthorized"),
+        worker_enqueue.starts_with("HTTP/1.1 404 Not Found"),
         "{worker_enqueue}"
     );
     let (worker_events_handshake, worker_events) = authenticated_application_request_with_body(
@@ -306,14 +314,7 @@ fn enroll_client(data_dir: &Path, name: &str, role: DeviceRole, revoke: bool) ->
         .kernel_mut()
         .record_identity_authority(authority.receipt())
         .expect("bind enrollment authority");
-    let capabilities = vec![CapabilityDescriptor {
-        id: "mlx.reasoning".to_string(),
-        kind: CapabilityKind::LocalInference,
-        provider: "mlx".to_string(),
-        model: "test-model".to_string(),
-        max_context_bytes: MAX_JOB_CONTEXT_BYTES as u32,
-        max_result_bytes: MAX_JOB_RESULT_BYTES as u32,
-    }];
+    let capabilities = vec![CapabilityDescriptor::fixture_reasoning()];
     let grant = process
         .kernel_mut()
         .create_enrollment_grant(
@@ -401,9 +402,13 @@ fn test_step(prompt: &str) -> NewStep {
     NewStep {
         task_id: TaskId::new(Uuid::new_v4()),
         step_id: StepId::new(Uuid::new_v4()),
-        capability_id: "mlx.reasoning".to_string(),
-        sensitivity: Sensitivity::Workspace,
-        context: serde_json::json!({"prompt": prompt, "retain": false}),
+        capability_id: "fixture.reasoning".to_string(),
+        sensitivity: Sensitivity::Public,
+        context: serde_json::json!({
+            "operation":"synthetic_echo",
+            "input":prompt,
+            "delay_ms":0
+        }),
         lease_duration_ms: 60_000,
         deadline_after_ms: 300_000,
     }

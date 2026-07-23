@@ -1,4 +1,5 @@
 import Darwin
+import CryptoKit
 import Foundation
 import Testing
 @testable import JarvisMacCore
@@ -127,13 +128,95 @@ private actor FakeSupervisorConnector: JarvisMacBridgeConnecting {
     }
 }
 
+private actor FakeFixtureBridgeSession: JarvisMacBridgeSession {
+    nonisolated let connectionEpoch: UInt64
+    let eventBatch: Data
+    let job: Data
+    let cancellation: Data?
+    let acceptedResult: Data
+    let cancellationPollDelayMilliseconds: UInt64
+    private(set) var requests: [JarvisMacBridgeHTTPRequest] = []
+    private(set) var cancelled = false
+    private var cancellationDelivered = false
+
+    init(
+        connectionEpoch: UInt64,
+        eventBatch: Data,
+        job: Data,
+        cancellation: Data? = nil,
+        acceptedResult: Data,
+        cancellationPollDelayMilliseconds: UInt64 = 0
+    ) {
+        self.connectionEpoch = connectionEpoch
+        self.eventBatch = eventBatch
+        self.job = job
+        self.cancellation = cancellation
+        self.acceptedResult = acceptedResult
+        self.cancellationPollDelayMilliseconds = cancellationPollDelayMilliseconds
+    }
+
+    func send(_ request: JarvisMacBridgeHTTPRequest) async throws
+        -> JarvisMacBridgeHTTPResponse
+    {
+        requests.append(request)
+        switch request.path {
+        case JarvisMacDeveloperEventRelay.remoteEventsPath:
+            return .init(status: 200, body: eventBatch)
+        case JarvisMacDeveloperEventRelay.remoteLeasePath:
+            return .init(status: 200, body: job)
+        case JarvisMacDeveloperEventRelay.remoteCancellationPath:
+            if cancellationPollDelayMilliseconds > 0 {
+                do {
+                    try await Task.sleep(
+                        for: .milliseconds(cancellationPollDelayMilliseconds)
+                    )
+                } catch {
+                    cancelled = true
+                    throw error
+                }
+            }
+            if let cancellation, !cancellationDelivered {
+                cancellationDelivered = true
+                return .init(status: 200, body: cancellation)
+            }
+            return .init(status: 204, body: Data())
+        case JarvisMacDeveloperEventRelay.remoteResultPath:
+            return .init(status: 200, body: acceptedResult)
+        case JarvisMacDeveloperEventRelay.remoteCancellationAcknowledgementPath:
+            return .init(
+                status: 200,
+                body: Data(#"{"accepted":true,"status":"cancelled"}"#.utf8)
+            )
+        default:
+            throw FakeSupervisorError()
+        }
+    }
+
+    func cancel() async {
+        cancelled = true
+    }
+}
+
 private actor FakeDeveloperAgentSession: JarvisMacDeveloperAgentSession {
     private var cursor: JarvisMacDeveloperEventCursor?
     private(set) var acceptedBatches: [Data] = []
+    private(set) var executedJobs: [Data] = []
+    private(set) var cancellations: [Data] = []
+    var fixtureResult: Data?
+    var cancellationAcknowledgement: Data?
+    let fixtureDelayMilliseconds: UInt64
     private(set) var stopped = false
 
-    init(cursor: JarvisMacDeveloperEventCursor? = nil) {
+    init(
+        cursor: JarvisMacDeveloperEventCursor? = nil,
+        fixtureResult: Data? = nil,
+        cancellationAcknowledgement: Data? = nil,
+        fixtureDelayMilliseconds: UInt64 = 0
+    ) {
         self.cursor = cursor
+        self.fixtureResult = fixtureResult
+        self.cancellationAcknowledgement = cancellationAcknowledgement
+        self.fixtureDelayMilliseconds = fixtureDelayMilliseconds
     }
 
     func health() async throws -> JarvisMacDeveloperAgentCursorSnapshot {
@@ -160,6 +243,25 @@ private actor FakeDeveloperAgentSession: JarvisMacDeveloperAgentSession {
             cursor: cursor,
             updatedAtMilliseconds: 1_000
         )
+    }
+
+    func executeFixtureJob(_ job: Data) async throws -> Data {
+        executedJobs.append(job)
+        if fixtureDelayMilliseconds > 0 {
+            try await Task.sleep(for: .milliseconds(fixtureDelayMilliseconds))
+        }
+        guard let fixtureResult else {
+            throw JarvisMacDeveloperEventRelayError.fixtureJobRejected
+        }
+        return fixtureResult
+    }
+
+    func cancelFixtureJob(_ instruction: Data) async throws -> Data {
+        cancellations.append(instruction)
+        guard let cancellationAcknowledgement else {
+            throw JarvisMacDeveloperEventRelayError.fixtureJobRejected
+        }
+        return cancellationAcknowledgement
     }
 
     func stop() async throws {
@@ -564,6 +666,27 @@ struct DeveloperBridgeTests {
         #expect(await session.cancelled)
     }
 
+    @Test("Supervisor accepts the exact authoritative paused health projection")
+    func supervisorAcceptsPausedHealth() async {
+        let session = FakeSupervisorSession(
+            connectionEpoch: 42,
+            outcomes: [.response(.init(status: 200, body: pausedRemoteHealthData()))]
+        )
+        let supervisor = JarvisMacBridgeSupervisor(
+            profile: sampleProfile(),
+            connector: FakeSupervisorConnector(sessions: [session])
+        )
+
+        let snapshot = await supervisor.sample()
+
+        #expect(snapshot.phase == .authenticated)
+        #expect(snapshot.masterStatus == "paused")
+        #expect(snapshot.maintenanceActive == false)
+        #expect(snapshot.emergencyPaused == true)
+        #expect(!(await session.cancelled))
+        await supervisor.stop()
+    }
+
     @Test("Supervisor rejects malformed health, cancels, and reconnects")
     func supervisorReconnectsAfterInvalidHealth() async throws {
         let invalid = FakeSupervisorSession(
@@ -667,6 +790,78 @@ struct DeveloperBridgeTests {
         try await relay.stop()
     }
 
+    @Test("Explicit fixture mode relays one exact Public synthetic job and result")
+    func fixtureJobRelayCompletesExactSyntheticJob() async throws {
+        let fixture = try fixtureJobDocuments(connectionEpoch: 61, delayMilliseconds: 0)
+        let agent = FakeDeveloperAgentSession(fixtureResult: fixture.result)
+        let relay = JarvisMacDeveloperEventRelay(
+            configuration: JarvisMacDeveloperEventRelayConfiguration(
+                agentExecutableURL: URL(fileURLWithPath: "/tmp/jarvis-agent"),
+                agentDataDirectoryURL: URL(fileURLWithPath: "/tmp/jarvis-agent-data"),
+                fixtureJobsEnabled: true
+            ),
+            deviceID: UUID(uuidString: "22222222-2222-4222-8222-222222222222"),
+            launcher: FakeDeveloperAgentLauncher(session: agent)
+        )
+        let master = FakeFixtureBridgeSession(
+            connectionEpoch: 61,
+            eventBatch: emptyEventBatch(),
+            job: fixture.job,
+            acceptedResult: fixture.acceptedResult,
+            cancellationPollDelayMilliseconds: 50
+        )
+
+        _ = try await relay.relayEvents(using: master)
+
+        #expect(await agent.executedJobs == [fixture.job])
+        #expect(await agent.cancellations.isEmpty)
+        let paths = await master.requests.map(\.path)
+        #expect(paths.contains(JarvisMacDeveloperEventRelay.remoteLeasePath))
+        #expect(paths.contains(JarvisMacDeveloperEventRelay.remoteResultPath))
+        #expect(!paths.contains(
+            JarvisMacDeveloperEventRelay.remoteCancellationAcknowledgementPath
+        ))
+        #expect(!(await master.cancelled))
+        try await relay.stop()
+    }
+
+    @Test("Authoritative cancellation wins and suppresses the fixture result")
+    func fixtureJobRelayAcknowledgesCancellationWithoutResult() async throws {
+        let fixture = try fixtureJobDocuments(connectionEpoch: 62, delayMilliseconds: 5_000)
+        let agent = FakeDeveloperAgentSession(
+            fixtureResult: fixture.result,
+            cancellationAcknowledgement: fixture.cancellationAcknowledgement,
+            fixtureDelayMilliseconds: 5_000
+        )
+        let relay = JarvisMacDeveloperEventRelay(
+            configuration: JarvisMacDeveloperEventRelayConfiguration(
+                agentExecutableURL: URL(fileURLWithPath: "/tmp/jarvis-agent"),
+                agentDataDirectoryURL: URL(fileURLWithPath: "/tmp/jarvis-agent-data"),
+                fixtureJobsEnabled: true
+            ),
+            deviceID: UUID(uuidString: "22222222-2222-4222-8222-222222222222"),
+            launcher: FakeDeveloperAgentLauncher(session: agent)
+        )
+        let master = FakeFixtureBridgeSession(
+            connectionEpoch: 62,
+            eventBatch: emptyEventBatch(),
+            job: fixture.job,
+            cancellation: fixture.cancellation,
+            acceptedResult: fixture.acceptedResult
+        )
+
+        _ = try await relay.relayEvents(using: master)
+
+        #expect(await agent.executedJobs == [fixture.job])
+        #expect(await agent.cancellations == [fixture.cancellation])
+        let paths = await master.requests.map(\.path)
+        #expect(paths.contains(
+            JarvisMacDeveloperEventRelay.remoteCancellationAcknowledgementPath
+        ))
+        #expect(!paths.contains(JarvisMacDeveloperEventRelay.remoteResultPath))
+        try await relay.stop()
+    }
+
     @Test("Supervisor cancels the authenticated session when its local relay fails")
     func supervisorFailsClosedOnEventRelayFailure() async {
         let session = FakeSupervisorSession(
@@ -710,6 +905,7 @@ struct DeveloperBridgeTests {
             .decodeStartupDocument(document)
         #expect(decoded == relay)
         #expect(!String(decoding: document, as: UTF8.self).contains("bearer"))
+        #expect(!relay.fixtureJobsEnabled)
 
         let partial = JarvisDeveloperBridgeProcessConfiguration(environment: [
             JarvisDeveloperBridgeProcessConfiguration.executableEnvironmentKey:
@@ -721,6 +917,30 @@ struct DeveloperBridgeTests {
         ])
         #expect(partial.executableURL == nil)
         #expect(partial.eventRelayConfiguration == nil)
+
+        let fixture = JarvisDeveloperBridgeProcessConfiguration(environment: [
+            JarvisDeveloperBridgeProcessConfiguration.executableEnvironmentKey:
+                "/tmp/jarvis-mac-bridge",
+            JarvisDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey:
+                "ABCDEFGHIJ",
+            JarvisDeveloperBridgeProcessConfiguration.agentExecutableEnvironmentKey:
+                "/tmp/jarvis-agent",
+            JarvisDeveloperBridgeProcessConfiguration.agentDataDirectoryEnvironmentKey:
+                "/tmp/jarvis-agent-data",
+            JarvisDeveloperBridgeProcessConfiguration.fixtureJobsEnabledEnvironmentKey:
+                "true"
+        ])
+        #expect(fixture.eventRelayConfiguration?.fixtureJobsEnabled == true)
+
+        let unsafeFixture = JarvisDeveloperBridgeProcessConfiguration(environment: [
+            JarvisDeveloperBridgeProcessConfiguration.executableEnvironmentKey:
+                "/tmp/jarvis-mac-bridge",
+            JarvisDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey:
+                "ABCDEFGHIJ",
+            JarvisDeveloperBridgeProcessConfiguration.fixtureJobsEnabledEnvironmentKey:
+                "true"
+        ])
+        #expect(unsafeFixture.executableURL == nil)
 
         let extra = try #require(
             JSONSerialization.jsonObject(with: document) as? [String: Any]
@@ -772,32 +992,38 @@ struct DeveloperBridgeTests {
     @Test("App helper snapshots decode exact redacted connected and maintenance states")
     func appHelperSnapshotStrictDecoding() throws {
         let connected = Data(
-            #"{"connection_epoch":22,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":1,"schema_version":2}"#.utf8
+            #"{"connection_epoch":22,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":1,"schema_version":2}"#.utf8
         )
         let maintenance = Data(
-            #"{"connection_epoch":23,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","maintenance_active":true,"master_endpoint":"100.64.23.14:7792","master_status":"maintenance","next_delay_ms":5000,"phase":"authenticated","protocol_version":1,"schema_version":2}"#.utf8
+            #"{"connection_epoch":23,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":true,"master_endpoint":"100.64.23.14:7792","master_status":"maintenance","next_delay_ms":5000,"phase":"authenticated","protocol_version":1,"schema_version":2}"#.utf8
+        )
+        let paused = Data(
+            #"{"connection_epoch":24,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":true,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"paused","next_delay_ms":5000,"phase":"authenticated","protocol_version":1,"schema_version":2}"#.utf8
         )
 
         let connectedStatus = try JarvisDeveloperBridgeProcessLifecycle.status(from: connected)
         let maintenanceStatus = try JarvisDeveloperBridgeProcessLifecycle.status(from: maintenance)
+        let pausedStatus = try JarvisDeveloperBridgeProcessLifecycle.status(from: paused)
 
         #expect(connectedStatus.phase == .connected)
         #expect(connectedStatus.masterEndpoint == "100.64.23.14:7792")
         #expect(connectedStatus.connectionEpoch == 22)
         #expect(maintenanceStatus.phase == .maintenance)
         #expect(maintenanceStatus.connectionEpoch == 23)
+        #expect(pausedStatus.phase == .paused)
+        #expect(pausedStatus.connectionEpoch == 24)
     }
 
     @Test("App helper snapshots reject extra keys, invalid shapes, and oversized lines")
     func appHelperSnapshotRejectsUntrustedOutput() {
         let extra = Data(
-            #"{"connection_epoch":22,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":1,"schema_version":2,"service_identity":"forbidden"}"#.utf8
+            #"{"connection_epoch":22,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":1,"schema_version":2,"service_identity":"forbidden"}"#.utf8
         )
         let contradictory = Data(
-            #"{"connection_epoch":22,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","maintenance_active":true,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":1,"schema_version":2}"#.utf8
+            #"{"connection_epoch":22,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":true,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":1,"schema_version":2}"#.utf8
         )
         let duplicate = Data(
-            #"{"connection_epoch":22,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","\u0070hase":"authenticated","protocol_version":1,"schema_version":2}"#.utf8
+            #"{"connection_epoch":22,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","\u0070hase":"authenticated","protocol_version":1,"schema_version":2}"#.utf8
         )
         let oversized = Data(repeating: 0x61, count: JarvisDeveloperBridgeProcessLifecycle.maximumLineBytes + 1)
 
@@ -849,7 +1075,7 @@ struct DeveloperBridgeTests {
     @Test("App helper lifecycle publishes connected state and stops its child")
     func appHelperLifecyclePublishesAndStops() async {
         let line = Data(
-            #"{"connection_epoch":44,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":1,"schema_version":2}"#.utf8
+            #"{"connection_epoch":44,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":1,"schema_version":2}"#.utf8
         )
         let session = FakeBridgeProcessSession(lines: [line])
         let launcher = FakeBridgeProcessLauncher(session: session)
@@ -880,7 +1106,7 @@ struct DeveloperBridgeTests {
     @Test("App helper lifecycle cleanup stops its child after cancellation")
     func appHelperLifecycleCleanupStopsAfterCancellation() async {
         let line = Data(
-            #"{"connection_epoch":44,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":1,"schema_version":2}"#.utf8
+            #"{"connection_epoch":44,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":1,"schema_version":2}"#.utf8
         )
         let session = FakeBridgeProcessSession(lines: [line])
         let lifecycle = JarvisDeveloperBridgeProcessLifecycle(
@@ -914,7 +1140,7 @@ struct DeveloperBridgeTests {
     @Test("Failed helper teardown retains ownership and blocks relaunch until retry")
     func appHelperTeardownFailureBlocksRelaunchUntilRetry() async {
         let line = Data(
-            #"{"connection_epoch":44,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":1,"schema_version":2}"#.utf8
+            #"{"connection_epoch":44,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":1,"schema_version":2}"#.utf8
         )
         let session = FakeBridgeProcessSession(lines: [line], stopFailures: 2)
         let launcher = FakeBridgeProcessLauncher(session: session)
@@ -961,7 +1187,7 @@ struct DeveloperBridgeTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: directory) }
         let executable = directory.appendingPathComponent("bridge-fixture")
-        let snapshot = #"{"connection_epoch":45,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":1,"schema_version":2}"#
+        let snapshot = #"{"connection_epoch":45,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":1,"schema_version":2}"#
         let script = "#!/bin/sh\nprintf '%s\\n' '\(snapshot)'\nexec /bin/sleep 30\n"
         try Data(script.utf8).write(to: executable, options: .atomic)
         try FileManager.default.setAttributes(
@@ -998,7 +1224,7 @@ struct DeveloperBridgeTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: directory) }
         let executable = directory.appendingPathComponent("bridge-fixture")
-        let snapshot = #"{"connection_epoch":46,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":1,"schema_version":2}"#
+        let snapshot = #"{"connection_epoch":46,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":1,"schema_version":2}"#
         let script = "#!/bin/sh\ni=0\nwhile [ $i -lt 1000 ]; do\n  printf '%s\\n' '\(snapshot)'\n  i=$((i + 1))\ndone\nexec /bin/sleep 30\n"
         try Data(script.utf8).write(to: executable, options: .atomic)
         try FileManager.default.setAttributes(
@@ -1034,8 +1260,8 @@ struct DeveloperBridgeTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: directory) }
         let executable = directory.appendingPathComponent("bridge-fixture")
-        let snapshot = #"{"connection_epoch":47,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":1,"schema_version":2}"#
-        let script = "#!/bin/sh\ntrap '' TERM\nprintf '%s\\n' '\(snapshot)'\nwhile :; do :; done\n"
+        let snapshot = #"{"connection_epoch":47,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":1,"schema_version":2}"#
+        let script = "#!/bin/sh\ntrap '' TERM\nprintf '%s\\n' '\(snapshot)'\nexec /bin/sleep 30\n"
         try Data(script.utf8).write(to: executable, options: .atomic)
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o700],
@@ -1263,6 +1489,130 @@ struct DeveloperBridgeTests {
     }
 }
 
+private struct FixtureJobDocuments {
+    let job: Data
+    let result: Data
+    let cancellation: Data
+    let cancellationAcknowledgement: Data
+    let acceptedResult: Data
+}
+
+private func fixtureJobDocuments(
+    connectionEpoch: UInt64,
+    delayMilliseconds: UInt64
+) throws -> FixtureJobDocuments {
+    let taskID = "11111111-1111-4111-8111-111111111111"
+    let stepID = "22222222-2222-4222-8222-222222222222"
+    let attemptID = "33333333-3333-4333-8333-333333333333"
+    let leaseID = "44444444-4444-4444-8444-444444444444"
+    let cancellationID = "55555555-5555-4555-8555-555555555555"
+    let context: [String: Any] = [
+        "operation": "synthetic_echo",
+        "input": "fixture-public-input",
+        "delay_ms": NSNumber(value: delayMilliseconds)
+    ]
+    let contextData = try JSONSerialization.data(
+        withJSONObject: context,
+        options: [.sortedKeys]
+    )
+    let contextDigest = Array(SHA256.hash(data: contextData))
+    let jobObject: [String: Any] = [
+        "protocol_version": 1,
+        "connection_epoch": NSNumber(value: connectionEpoch),
+        "sequence": 10,
+        "task_id": taskID,
+        "step_id": stepID,
+        "attempt_id": attemptID,
+        "lease_id": leaseID,
+        "cancellation_id": cancellationID,
+        "capability_id": "fixture.reasoning",
+        "selected_model": "jarvis-fixture-v1",
+        "sensitivity": "public",
+        "context_handling": "ephemeral_no_retention",
+        "lease_duration_ms": 10_000,
+        "deadline_after_ms": 10_000,
+        "context_sha256": contextDigest,
+        "context": context
+    ]
+    let payload: [String: Any] = [
+        "operation": "synthetic_echo",
+        "output": "fixture-public-input",
+        "synthetic": true
+    ]
+    let payloadData = try JSONSerialization.data(
+        withJSONObject: payload,
+        options: [.sortedKeys]
+    )
+    let payloadDigest = Array(SHA256.hash(data: payloadData))
+    let resultObject: [String: Any] = [
+        "protocol_version": 1,
+        "connection_epoch": NSNumber(value: connectionEpoch),
+        "sequence": 11,
+        "task_id": taskID,
+        "step_id": stepID,
+        "attempt_id": attemptID,
+        "lease_id": leaseID,
+        "cancellation_id": cancellationID,
+        "status": "completed",
+        "context_sha256": contextDigest,
+        "payload_sha256": payloadDigest,
+        "payload": payload
+    ]
+    let cancellationObject: [String: Any] = [
+        "protocol_version": 1,
+        "connection_epoch": NSNumber(value: connectionEpoch),
+        "sequence": 11,
+        "task_id": taskID,
+        "step_id": stepID,
+        "attempt_id": attemptID,
+        "lease_id": leaseID,
+        "cancellation_id": cancellationID,
+        "deadline_after_ms": 2_000
+    ]
+    let acknowledgementObject: [String: Any] = [
+        "protocol_version": 1,
+        "connection_epoch": NSNumber(value: connectionEpoch),
+        "sequence": 12,
+        "task_id": taskID,
+        "step_id": stepID,
+        "attempt_id": attemptID,
+        "lease_id": leaseID,
+        "cancellation_id": cancellationID,
+        "status": "cancelled"
+    ]
+    let acceptedResultObject: [String: Any] = [
+        "task_id": taskID,
+        "step_id": stepID,
+        "status": "succeeded",
+        "payload_sha256": payloadDigest
+    ]
+    return FixtureJobDocuments(
+        job: try JSONSerialization.data(withJSONObject: jobObject, options: [.sortedKeys]),
+        result: try JSONSerialization.data(
+            withJSONObject: resultObject,
+            options: [.sortedKeys]
+        ),
+        cancellation: try JSONSerialization.data(
+            withJSONObject: cancellationObject,
+            options: [.sortedKeys]
+        ),
+        cancellationAcknowledgement: try JSONSerialization.data(
+            withJSONObject: acknowledgementObject,
+            options: [.sortedKeys]
+        ),
+        acceptedResult: try JSONSerialization.data(
+            withJSONObject: acceptedResultObject,
+            options: [.sortedKeys]
+        )
+    )
+}
+
+private func emptyEventBatch() -> Data {
+    Data(
+        #"{"after_sequence":0,"events":[],"has_more":false,"next_sequence":0,"protocol_version":1,"stream_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}"#.utf8
+    )
+}
+
 private func validInvitationData() throws -> Data {
     Data(
         #"{"schema_version":1,"status":"enrollment_invitation_ready","grant_id":"11111111-1111-4111-8111-111111111111","device_id":"22222222-2222-4222-8222-222222222222","device_name":"owner-mac-bridge","role":"mac_bridge","registry_revision":3,"expires_at_ms":4102444800000,"capabilities":[{"id":"mlx.reasoning","kind":"local_inference","provider":"mlx","model":"test-model","max_context_bytes":262144,"max_result_bytes":786432}],"master_endpoint":"100.64.23.14:7792","ca_fingerprint_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#.utf8
@@ -1298,6 +1648,12 @@ private func sampleProfile() -> JarvisMacBridgeProfile {
 
 private func validRemoteHealthData() -> Data {
     Data(
-        #"{"status":"ok","mode":"developer_remote_master","host_mode":"windows_service","service_identity":"MIKE-PC\\mike","maintenance_active":false,"maintenance_reason":null,"protocol_version":1,"schema_version":2,"process_id":43752,"started_at_ms":1784749559000,"startup_reconciliation":{"disconnected_connections":0,"abandoned_attempts":0,"requeued_steps":0},"state":{"registered_devices":1,"active_device_certificates":1,"unconsumed_enrollment_grants":2,"active_connections":1,"queued_steps":0,"leased_steps":0,"terminal_steps":0,"active_attempts":0},"boundary":"TLS 1.3 mutual authentication with enrolled-device certificate and durable revocation checks"}"#.utf8
+        #"{"status":"ok","mode":"developer_remote_master","host_mode":"windows_service","service_identity":"MIKE-PC\\mike","maintenance_active":false,"maintenance_reason":null,"emergency_paused":false,"protocol_version":1,"schema_version":2,"process_id":43752,"started_at_ms":1784749559000,"startup_reconciliation":{"disconnected_connections":0,"abandoned_attempts":0,"requeued_steps":0},"state":{"registered_devices":1,"active_device_certificates":1,"unconsumed_enrollment_grants":2,"active_connections":1,"queued_steps":0,"leased_steps":0,"terminal_steps":0,"active_attempts":0},"boundary":"TLS 1.3 mutual authentication with enrolled-device certificate and durable revocation checks"}"#.utf8
+    )
+}
+
+private func pausedRemoteHealthData() -> Data {
+    Data(
+        #"{"status":"paused","mode":"developer_remote_master","host_mode":"windows_service","service_identity":"MIKE-PC\\mike","maintenance_active":false,"maintenance_reason":null,"emergency_paused":true,"protocol_version":1,"schema_version":2,"process_id":43752,"started_at_ms":1784749559000,"startup_reconciliation":{"disconnected_connections":0,"abandoned_attempts":0,"requeued_steps":0},"state":{"registered_devices":1,"active_device_certificates":1,"unconsumed_enrollment_grants":2,"active_connections":1,"queued_steps":0,"leased_steps":1,"terminal_steps":0,"active_attempts":1},"boundary":"TLS 1.3 mutual authentication with enrolled-device certificate and durable revocation checks"}"#.utf8
     )
 }

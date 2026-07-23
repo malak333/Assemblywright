@@ -8,12 +8,18 @@ use axum::{Json, Router};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use clap::{Parser, Subcommand};
-use jarvis_agent::{AgentCursorSnapshot, AgentCursorStore, AGENT_SCHEMA_VERSION};
+use jarvis_agent::{
+    AgentCursorSnapshot, AgentCursorStore, FixtureJobRuntime, FixtureRuntimeError,
+    AGENT_SCHEMA_VERSION,
+};
 use jarvis_core::{
     serve_router_unix_socket_with_peer_identity, validate_peer_code_requirement,
     validate_unix_socket_path, PeerIdentityProfile, MAX_PEER_CODE_REQUIREMENT_BYTES,
 };
-use jarvis_protocol::{DistributedEventBatch, MAX_DISTRIBUTED_EVENT_BATCH_BYTES, PROTOCOL_VERSION};
+use jarvis_protocol::{
+    CancellationAcknowledgement, CancellationInstruction, DistributedEventBatch, JobEnvelope,
+    JobResultEnvelope, MAX_WIRE_FRAME_BYTES, PROTOCOL_VERSION,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -58,12 +64,16 @@ struct AgentStartupDocument {
     peer_code_requirement: String,
     peer_identity_profile: PeerIdentityProfile,
     bearer_token: String,
+    #[serde(default)]
+    fixture_jobs_enabled: bool,
 }
 
 #[derive(Clone)]
 struct AgentState {
     store: Arc<Mutex<AgentCursorStore>>,
     token_sha256: [u8; 32],
+    fixture_runtime: FixtureJobRuntime,
+    fixture_jobs_enabled: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -75,6 +85,7 @@ struct AgentHealth {
     schema_version: i64,
     cursor: AgentCursorSnapshot,
     boundary: &'static str,
+    fixture_jobs_enabled: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -120,11 +131,15 @@ async fn serve(data_dir: PathBuf) -> anyhow::Result<()> {
         let state = AgentState {
             store: Arc::new(Mutex::new(store)),
             token_sha256,
+            fixture_runtime: FixtureJobRuntime::new(startup.fixture_jobs_enabled),
+            fixture_jobs_enabled: startup.fixture_jobs_enabled,
         };
         let app = Router::new()
             .route("/health", get(health))
             .route("/v1/events/accept", post(accept_events))
-            .layer(DefaultBodyLimit::max(MAX_DISTRIBUTED_EVENT_BATCH_BYTES))
+            .route("/v1/jobs/execute", post(execute_fixture_job))
+            .route("/v1/jobs/cancel", post(cancel_fixture_job))
+            .layer(DefaultBodyLimit::max(MAX_WIRE_FRAME_BYTES))
             .layer(middleware::from_fn_with_state(
                 state.clone(),
                 enforce_bearer,
@@ -269,8 +284,61 @@ async fn health(
         protocol_version: PROTOCOL_VERSION,
         schema_version: AGENT_SCHEMA_VERSION,
         cursor,
-        boundary: "metadata_only_no_authoritative_state",
+        boundary: if state.fixture_jobs_enabled {
+            "metadata_cursor_plus_in_memory_public_fixture_jobs_no_retention"
+        } else {
+            "metadata_only_no_authoritative_state"
+        },
+        fixture_jobs_enabled: state.fixture_jobs_enabled,
     }))
+}
+
+async fn execute_fixture_job(
+    State(state): State<AgentState>,
+    Json(job): Json<JobEnvelope>,
+) -> Result<Json<JobResultEnvelope>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .fixture_runtime
+        .execute(job)
+        .await
+        .map(Json)
+        .map_err(fixture_error)
+}
+
+async fn cancel_fixture_job(
+    State(state): State<AgentState>,
+    Json(instruction): Json<CancellationInstruction>,
+) -> Result<Json<CancellationAcknowledgement>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .fixture_runtime
+        .cancel(&instruction)
+        .map(Json)
+        .map_err(fixture_error)
+}
+
+fn fixture_error(error: FixtureRuntimeError) -> (StatusCode, Json<serde_json::Value>) {
+    match error {
+        FixtureRuntimeError::Disabled => (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error":"fixture_jobs_disabled"})),
+        ),
+        FixtureRuntimeError::Cancelled => {
+            (StatusCode::CONFLICT, Json(json!({"error":"job_cancelled"})))
+        }
+        FixtureRuntimeError::NotActive => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error":"job_not_active"})),
+        ),
+        FixtureRuntimeError::AlreadyActive => (
+            StatusCode::CONFLICT,
+            Json(json!({"error":"job_already_active"})),
+        ),
+        FixtureRuntimeError::Protocol(_) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({"error":"fixture_contract_rejected"})),
+        ),
+        FixtureRuntimeError::Unavailable | FixtureRuntimeError::Serialization => internal_error(),
+    }
 }
 
 async fn accept_events(

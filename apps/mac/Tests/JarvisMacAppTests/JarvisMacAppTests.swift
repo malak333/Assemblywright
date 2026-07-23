@@ -14,6 +14,7 @@ struct JarvisMacAppTests {
             (.connected, "Connected"),
             (.masterOffline, "Master Offline"),
             (.maintenance, "Maintenance"),
+            (.paused, "Paused"),
             (.stopped, "Stopped")
         ]
 

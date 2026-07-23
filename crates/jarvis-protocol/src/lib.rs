@@ -24,6 +24,15 @@ pub const MAX_ENROLLMENT_CSR_PEM_BYTES: usize = 64 * 1024;
 pub const MAX_ENROLLMENT_PAIRING_FRAME_BYTES: usize = 64 * 1024;
 pub const ENROLLMENT_INVITATION_READY_STATUS: &str = "enrollment_invitation_ready";
 pub const ENROLLMENT_CSR_READY_STATUS: &str = "enrollment_csr_ready";
+pub const FIXTURE_REASONING_CAPABILITY_ID: &str = "fixture.reasoning";
+pub const FIXTURE_REASONING_PROVIDER: &str = "jarvis-fixture";
+pub const FIXTURE_REASONING_MODEL: &str = "jarvis-fixture-v1";
+pub const FIXTURE_SYNTHETIC_ECHO_OPERATION: &str = "synthetic_echo";
+pub const MAX_FIXTURE_CONTEXT_BYTES: usize = 8 * 1024;
+pub const MAX_FIXTURE_RESULT_BYTES: usize = 8 * 1024;
+pub const MAX_FIXTURE_INPUT_BYTES: usize = 4 * 1024;
+pub const MAX_FIXTURE_DELAY_MS: u64 = 5_000;
+pub const CANCELLATION_ACK_DEADLINE_MS: u64 = 2_000;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ProtocolError {
@@ -85,6 +94,10 @@ pub enum ProtocolError {
     TooManyDistributedEvents { maximum: usize },
     #[error("distributed event identity fields do not match its kind")]
     DistributedEventIdentityMismatch,
+    #[error("fixture reasoning capability must use the exact fixture contract")]
+    InvalidFixtureCapability,
+    #[error("fixture job must use the exact bounded public synthetic contract")]
+    InvalidFixtureJob,
 }
 
 macro_rules! uuid_id {
@@ -302,7 +315,28 @@ impl CapabilityDescriptor {
             "capability.max_result_bytes",
             u64::from(self.max_result_bytes),
             MAX_JOB_RESULT_BYTES as u64,
-        )
+        )?;
+        if self.id == FIXTURE_REASONING_CAPABILITY_ID
+            && (self.kind != CapabilityKind::LocalInference
+                || self.provider != FIXTURE_REASONING_PROVIDER
+                || self.model != FIXTURE_REASONING_MODEL
+                || self.max_context_bytes != MAX_FIXTURE_CONTEXT_BYTES as u32
+                || self.max_result_bytes != MAX_FIXTURE_RESULT_BYTES as u32)
+        {
+            return Err(ProtocolError::InvalidFixtureCapability);
+        }
+        Ok(())
+    }
+
+    pub fn fixture_reasoning() -> Self {
+        Self {
+            id: FIXTURE_REASONING_CAPABILITY_ID.to_string(),
+            kind: CapabilityKind::LocalInference,
+            provider: FIXTURE_REASONING_PROVIDER.to_string(),
+            model: FIXTURE_REASONING_MODEL.to_string(),
+            max_context_bytes: MAX_FIXTURE_CONTEXT_BYTES as u32,
+            max_result_bytes: MAX_FIXTURE_RESULT_BYTES as u32,
+        }
     }
 }
 
@@ -410,6 +444,10 @@ pub enum DistributedEventKind {
     StepSucceeded,
     StepFailed,
     StepCancelled,
+    StepCancellationRequested,
+    StepCancellationAcknowledged,
+    StepCancellationExpired,
+    StepLeaseExpired,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -452,7 +490,11 @@ impl DistributedEvent {
             }
             DistributedEventKind::StepLeased
             | DistributedEventKind::StepSucceeded
-            | DistributedEventKind::StepFailed => {
+            | DistributedEventKind::StepFailed
+            | DistributedEventKind::StepCancellationRequested
+            | DistributedEventKind::StepCancellationAcknowledged
+            | DistributedEventKind::StepCancellationExpired
+            | DistributedEventKind::StepLeaseExpired => {
                 self.task_id.is_some()
                     && self.step_id.is_some()
                     && self.device_id.is_some()
@@ -626,6 +668,174 @@ impl JobEnvelope {
         validate_payload_digest("context_sha256", &self.context, &self.context_sha256)?;
         validate_serialized_limit("job", self, MAX_WIRE_FRAME_BYTES)
     }
+
+    pub fn validate_fixture_reasoning(&self) -> Result<FixtureJobRequest, ProtocolError> {
+        self.validate()?;
+        if self.capability_id != FIXTURE_REASONING_CAPABILITY_ID
+            || self.selected_model != FIXTURE_REASONING_MODEL
+            || self.sensitivity != Sensitivity::Public
+            || self.context_handling != ContextHandlingPolicy::EphemeralNoRetention
+            || serde_json::to_vec(&self.context)
+                .map_err(|error| ProtocolError::Serialization {
+                    field: "fixture_context",
+                    message: error.to_string(),
+                })?
+                .len()
+                > MAX_FIXTURE_CONTEXT_BYTES
+        {
+            return Err(ProtocolError::InvalidFixtureJob);
+        }
+        let request: FixtureJobRequest = serde_json::from_value(self.context.clone())
+            .map_err(|_| ProtocolError::InvalidFixtureJob)?;
+        request.validate()?;
+        Ok(request)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FixtureJobRequest {
+    pub operation: String,
+    pub input: String,
+    pub delay_ms: u64,
+}
+
+impl FixtureJobRequest {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.operation != FIXTURE_SYNTHETIC_ECHO_OPERATION
+            || self.input.len() > MAX_FIXTURE_INPUT_BYTES
+            || self.delay_ms > MAX_FIXTURE_DELAY_MS
+        {
+            return Err(ProtocolError::InvalidFixtureJob);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FixtureJobResult {
+    pub operation: String,
+    pub output: String,
+    pub synthetic: bool,
+}
+
+impl FixtureJobResult {
+    pub fn synthetic_echo(input: String) -> Self {
+        Self {
+            operation: FIXTURE_SYNTHETIC_ECHO_OPERATION.to_string(),
+            output: input,
+            synthetic: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CancellationInstruction {
+    pub protocol_version: u16,
+    pub connection_epoch: u64,
+    pub sequence: u64,
+    pub task_id: TaskId,
+    pub step_id: StepId,
+    pub attempt_id: AttemptId,
+    pub lease_id: LeaseId,
+    pub cancellation_id: CancellationId,
+    pub deadline_after_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CancellationPollRequest {
+    pub protocol_version: u16,
+    pub connection_epoch: u64,
+}
+
+impl CancellationPollRequest {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_version(self.protocol_version)?;
+        validate_positive_limit("connection_epoch", self.connection_epoch, u64::MAX)?;
+        validate_serialized_limit("cancellation_poll_request", self, MAX_WIRE_FRAME_BYTES)
+    }
+}
+
+impl CancellationInstruction {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_version(self.protocol_version)?;
+        validate_positive_limit("connection_epoch", self.connection_epoch, u64::MAX)?;
+        validate_positive_limit("sequence", self.sequence, u64::MAX)?;
+        validate_uuid("task_id", self.task_id.0)?;
+        validate_uuid("step_id", self.step_id.0)?;
+        validate_uuid("attempt_id", self.attempt_id.0)?;
+        validate_uuid("lease_id", self.lease_id.0)?;
+        validate_uuid("cancellation_id", self.cancellation_id.0)?;
+        validate_positive_limit(
+            "deadline_after_ms",
+            self.deadline_after_ms,
+            CANCELLATION_ACK_DEADLINE_MS,
+        )?;
+        validate_serialized_limit("cancellation_instruction", self, MAX_WIRE_FRAME_BYTES)
+    }
+
+    pub fn validate_for_job(&self, job: &JobEnvelope) -> Result<(), ProtocolError> {
+        self.validate()?;
+        job.validate()?;
+        if self.protocol_version != job.protocol_version
+            || self.connection_epoch != job.connection_epoch
+            || self.sequence <= job.sequence
+            || self.task_id != job.task_id
+            || self.step_id != job.step_id
+            || self.attempt_id != job.attempt_id
+            || self.lease_id != job.lease_id
+            || self.cancellation_id != job.cancellation_id
+        {
+            return Err(ProtocolError::ResultIdentityMismatch);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CancellationAcknowledgementStatus {
+    Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CancellationAcknowledgement {
+    pub protocol_version: u16,
+    pub connection_epoch: u64,
+    pub sequence: u64,
+    pub task_id: TaskId,
+    pub step_id: StepId,
+    pub attempt_id: AttemptId,
+    pub lease_id: LeaseId,
+    pub cancellation_id: CancellationId,
+    pub status: CancellationAcknowledgementStatus,
+}
+
+impl CancellationAcknowledgement {
+    pub fn validate_for_instruction(
+        &self,
+        instruction: &CancellationInstruction,
+    ) -> Result<(), ProtocolError> {
+        instruction.validate()?;
+        validate_version(self.protocol_version)?;
+        validate_positive_limit("sequence", self.sequence, u64::MAX)?;
+        if self.protocol_version != instruction.protocol_version
+            || self.connection_epoch != instruction.connection_epoch
+            || self.sequence <= instruction.sequence
+            || self.task_id != instruction.task_id
+            || self.step_id != instruction.step_id
+            || self.attempt_id != instruction.attempt_id
+            || self.lease_id != instruction.lease_id
+            || self.cancellation_id != instruction.cancellation_id
+        {
+            return Err(ProtocolError::ResultIdentityMismatch);
+        }
+        validate_serialized_limit("cancellation_acknowledgement", self, MAX_WIRE_FRAME_BYTES)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -685,6 +895,34 @@ impl JobResultEnvelope {
             || self.context_sha256 != job.context_sha256
         {
             return Err(ProtocolError::ResultIdentityMismatch);
+        }
+        Ok(())
+    }
+
+    pub fn validate_fixture_reasoning_result(
+        &self,
+        job: &JobEnvelope,
+    ) -> Result<(), ProtocolError> {
+        let request = job.validate_fixture_reasoning()?;
+        self.validate_for_job(job)?;
+        if self.status != JobResultStatus::Completed
+            || serde_json::to_vec(&self.payload)
+                .map_err(|error| ProtocolError::Serialization {
+                    field: "fixture_result",
+                    message: error.to_string(),
+                })?
+                .len()
+                > MAX_FIXTURE_RESULT_BYTES
+        {
+            return Err(ProtocolError::InvalidFixtureJob);
+        }
+        let result: FixtureJobResult = serde_json::from_value(self.payload.clone())
+            .map_err(|_| ProtocolError::InvalidFixtureJob)?;
+        if result.operation != FIXTURE_SYNTHETIC_ECHO_OPERATION
+            || result.output != request.input
+            || !result.synthetic
+        {
+            return Err(ProtocolError::InvalidFixtureJob);
         }
         Ok(())
     }

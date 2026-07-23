@@ -1,15 +1,175 @@
 use fs2::FileExt;
-use jarvis_protocol::{DistributedEventBatch, DistributedEventCursor};
+use jarvis_protocol::{
+    CancellationAcknowledgement, CancellationAcknowledgementStatus, CancellationId,
+    CancellationInstruction, DistributedEventBatch, DistributedEventCursor, FixtureJobResult,
+    JobEnvelope, JobResultEnvelope, JobResultStatus, ProtocolError, PROTOCOL_VERSION,
+};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
+use std::time::Duration;
+use tokio::sync::Notify;
 use uuid::Uuid;
 
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 
 pub const AGENT_SCHEMA_VERSION: i64 = 1;
+
+#[derive(Debug, thiserror::Error)]
+pub enum FixtureRuntimeError {
+    #[error(transparent)]
+    Protocol(#[from] ProtocolError),
+    #[error("fixture jobs are disabled")]
+    Disabled,
+    #[error("fixture job is already active")]
+    AlreadyActive,
+    #[error("fixture job is not active")]
+    NotActive,
+    #[error("fixture job was cancelled")]
+    Cancelled,
+    #[error("fixture runtime state is unavailable")]
+    Unavailable,
+    #[error("fixture result serialization failed")]
+    Serialization,
+}
+
+#[derive(Clone)]
+pub struct FixtureJobRuntime {
+    enabled: bool,
+    active: Arc<Mutex<HashMap<CancellationId, ActiveFixtureJob>>>,
+}
+
+#[derive(Clone)]
+struct ActiveFixtureJob {
+    job: JobEnvelope,
+    cancelled: Arc<AtomicBool>,
+    notify: Arc<Notify>,
+}
+
+impl FixtureJobRuntime {
+    pub fn new(enabled: bool) -> Self {
+        Self {
+            enabled,
+            active: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    pub async fn execute(
+        &self,
+        job: JobEnvelope,
+    ) -> Result<JobResultEnvelope, FixtureRuntimeError> {
+        if !self.enabled {
+            return Err(FixtureRuntimeError::Disabled);
+        }
+        let request = job.validate_fixture_reasoning()?;
+        let active = ActiveFixtureJob {
+            job: job.clone(),
+            cancelled: Arc::new(AtomicBool::new(false)),
+            notify: Arc::new(Notify::new()),
+        };
+        {
+            let mut jobs = self
+                .active
+                .lock()
+                .map_err(|_| FixtureRuntimeError::Unavailable)?;
+            if !jobs.is_empty() {
+                return Err(FixtureRuntimeError::AlreadyActive);
+            }
+            jobs.insert(job.cancellation_id, active.clone());
+        }
+
+        if request.delay_ms > 0 {
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_millis(request.delay_ms)) => {}
+                _ = active.notify.notified() => {}
+            }
+        }
+        let cancelled = {
+            let mut jobs = self
+                .active
+                .lock()
+                .map_err(|_| FixtureRuntimeError::Unavailable)?;
+            let cancelled = active.cancelled.load(Ordering::SeqCst);
+            jobs.remove(&job.cancellation_id);
+            cancelled
+        };
+        if cancelled {
+            return Err(FixtureRuntimeError::Cancelled);
+        }
+
+        let payload = serde_json::to_value(FixtureJobResult::synthetic_echo(request.input))
+            .map_err(|_| FixtureRuntimeError::Serialization)?;
+        let payload_bytes =
+            serde_json::to_vec(&payload).map_err(|_| FixtureRuntimeError::Serialization)?;
+        let result = JobResultEnvelope {
+            protocol_version: PROTOCOL_VERSION,
+            connection_epoch: job.connection_epoch,
+            sequence: job
+                .sequence
+                .checked_add(1)
+                .ok_or(FixtureRuntimeError::Unavailable)?,
+            task_id: job.task_id,
+            step_id: job.step_id,
+            attempt_id: job.attempt_id,
+            lease_id: job.lease_id,
+            cancellation_id: job.cancellation_id,
+            status: JobResultStatus::Completed,
+            context_sha256: job.context_sha256,
+            payload_sha256: Sha256::digest(&payload_bytes).into(),
+            payload,
+        };
+        result.validate_for_job(&job)?;
+        Ok(result)
+    }
+
+    pub fn cancel(
+        &self,
+        instruction: &CancellationInstruction,
+    ) -> Result<CancellationAcknowledgement, FixtureRuntimeError> {
+        if !self.enabled {
+            return Err(FixtureRuntimeError::Disabled);
+        }
+        let active = {
+            let mut jobs = self
+                .active
+                .lock()
+                .map_err(|_| FixtureRuntimeError::Unavailable)?;
+            let active = jobs
+                .get(&instruction.cancellation_id)
+                .cloned()
+                .ok_or(FixtureRuntimeError::NotActive)?;
+            instruction.validate_for_job(&active.job)?;
+            active.cancelled.store(true, Ordering::SeqCst);
+            jobs.remove(&instruction.cancellation_id);
+            active
+        };
+        active.notify.notify_waiters();
+        let acknowledgement = CancellationAcknowledgement {
+            protocol_version: PROTOCOL_VERSION,
+            connection_epoch: instruction.connection_epoch,
+            sequence: instruction
+                .sequence
+                .checked_add(1)
+                .ok_or(FixtureRuntimeError::Unavailable)?,
+            task_id: instruction.task_id,
+            step_id: instruction.step_id,
+            attempt_id: instruction.attempt_id,
+            lease_id: instruction.lease_id,
+            cancellation_id: instruction.cancellation_id,
+            status: CancellationAcknowledgementStatus::Cancelled,
+        };
+        acknowledgement.validate_for_instruction(instruction)?;
+        Ok(acknowledgement)
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
@@ -253,8 +413,12 @@ fn open_owner_lock(path: &Path) -> Result<File, AgentError> {
 mod tests {
     use super::*;
     use jarvis_protocol::{
-        DistributedEvent, DistributedEventKind, StepId, TaskId, PROTOCOL_VERSION,
+        AttemptId, CancellationInstruction, ContextHandlingPolicy, DistributedEvent,
+        DistributedEventKind, LeaseId, Sensitivity, StepId, TaskId, CANCELLATION_ACK_DEADLINE_MS,
+        FIXTURE_REASONING_CAPABILITY_ID, FIXTURE_REASONING_MODEL, MAX_FIXTURE_INPUT_BYTES,
+        PROTOCOL_VERSION,
     };
+    use serde_json::json;
     use tempfile::tempdir;
 
     fn batch(stream_id: Uuid, after_sequence: u64, next_sequence: u64) -> DistributedEventBatch {
@@ -282,6 +446,46 @@ mod tests {
             next_sequence,
             events,
             has_more: false,
+        }
+    }
+
+    fn fixture_job(delay_ms: u64, input: &str) -> JobEnvelope {
+        let context = json!({
+            "operation": "synthetic_echo",
+            "input": input,
+            "delay_ms": delay_ms
+        });
+        JobEnvelope {
+            protocol_version: PROTOCOL_VERSION,
+            connection_epoch: 7,
+            sequence: 1,
+            task_id: TaskId::new(Uuid::new_v4()),
+            step_id: StepId::new(Uuid::new_v4()),
+            attempt_id: AttemptId::new(Uuid::new_v4()),
+            lease_id: LeaseId::new(Uuid::new_v4()),
+            cancellation_id: CancellationId::new(Uuid::new_v4()),
+            capability_id: FIXTURE_REASONING_CAPABILITY_ID.to_string(),
+            selected_model: FIXTURE_REASONING_MODEL.to_string(),
+            sensitivity: Sensitivity::Public,
+            context_handling: ContextHandlingPolicy::EphemeralNoRetention,
+            lease_duration_ms: 60_000,
+            deadline_after_ms: 60_000,
+            context_sha256: Sha256::digest(serde_json::to_vec(&context).unwrap()).into(),
+            context,
+        }
+    }
+
+    fn cancellation(job: &JobEnvelope) -> CancellationInstruction {
+        CancellationInstruction {
+            protocol_version: PROTOCOL_VERSION,
+            connection_epoch: job.connection_epoch,
+            sequence: job.sequence + 1,
+            task_id: job.task_id,
+            step_id: job.step_id,
+            attempt_id: job.attempt_id,
+            lease_id: job.lease_id,
+            cancellation_id: job.cancellation_id,
+            deadline_after_ms: CANCELLATION_ACK_DEADLINE_MS,
         }
     }
 
@@ -322,5 +526,70 @@ mod tests {
         reopened
             .accept_batch(&batch(stream_id, 1, 2), 3_001)
             .expect("accept exact successor");
+    }
+
+    #[tokio::test]
+    async fn fixture_runtime_is_default_off_and_accepts_only_exact_bounded_contract() {
+        let job = fixture_job(0, "fixture");
+        assert!(matches!(
+            FixtureJobRuntime::new(false).execute(job.clone()).await,
+            Err(FixtureRuntimeError::Disabled)
+        ));
+        let result = FixtureJobRuntime::new(true)
+            .execute(job.clone())
+            .await
+            .expect("execute fixed fixture");
+        assert_eq!(result.payload["output"], "fixture");
+        assert_eq!(result.payload["synthetic"], true);
+
+        let mut wrong_model = job.clone();
+        wrong_model.selected_model = "mlx-real-model".to_string();
+        assert!(matches!(
+            FixtureJobRuntime::new(true).execute(wrong_model).await,
+            Err(FixtureRuntimeError::Protocol(_))
+        ));
+        let oversized = "x".repeat(MAX_FIXTURE_INPUT_BYTES + 1);
+        assert!(matches!(
+            FixtureJobRuntime::new(true)
+                .execute(fixture_job(0, &oversized))
+                .await,
+            Err(FixtureRuntimeError::Protocol(_))
+        ));
+        let mut malformed = job;
+        malformed.context =
+            json!({"operation":"synthetic_echo","input":"x","delay_ms":0,"extra":true});
+        malformed.context_sha256 =
+            Sha256::digest(serde_json::to_vec(&malformed.context).unwrap()).into();
+        assert!(matches!(
+            FixtureJobRuntime::new(true).execute(malformed).await,
+            Err(FixtureRuntimeError::Protocol(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn cancellation_suppresses_late_fixture_output() {
+        let runtime = FixtureJobRuntime::new(true);
+        let job = fixture_job(5_000, "must-not-escape");
+        let execution = {
+            let runtime = runtime.clone();
+            let job = job.clone();
+            tokio::spawn(async move { runtime.execute(job).await })
+        };
+        tokio::task::yield_now().await;
+        let acknowledgement = runtime
+            .cancel(&cancellation(&job))
+            .expect("cancel active fixture");
+        assert_eq!(
+            acknowledgement.status,
+            CancellationAcknowledgementStatus::Cancelled
+        );
+        assert!(matches!(
+            execution.await.expect("join fixture"),
+            Err(FixtureRuntimeError::Cancelled)
+        ));
+        assert!(matches!(
+            runtime.cancel(&cancellation(&job)),
+            Err(FixtureRuntimeError::NotActive)
+        ));
     }
 }

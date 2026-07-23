@@ -9,6 +9,7 @@ public enum JarvisDeveloperBridgeAppPhase: String, Equatable, Sendable {
     case connected
     case masterOffline = "master_offline"
     case maintenance
+    case paused
     case stopped
 }
 
@@ -41,6 +42,8 @@ public struct JarvisDeveloperBridgeProcessConfiguration: Equatable, Sendable {
         "JARVIS_MAC_DEVELOPER_AGENT_EXECUTABLE"
     public static let agentDataDirectoryEnvironmentKey =
         "JARVIS_MAC_DEVELOPER_AGENT_DATA_DIR"
+    public static let fixtureJobsEnabledEnvironmentKey =
+        "JARVIS_MAC_DEVELOPER_FIXTURE_JOBS_ENABLED"
     public let executableURL: URL?
     public let expectedTeamIdentifier: String?
     public let eventRelayConfiguration: JarvisMacDeveloperEventRelayConfiguration?
@@ -56,6 +59,16 @@ public struct JarvisDeveloperBridgeProcessConfiguration: Equatable, Sendable {
         }
         let agentExecutable = environment[Self.agentExecutableEnvironmentKey]
         let agentDataDirectory = environment[Self.agentDataDirectoryEnvironmentKey]
+        let fixtureJobsValue = environment[Self.fixtureJobsEnabledEnvironmentKey]
+        guard fixtureJobsValue == nil
+                || fixtureJobsValue == "false"
+                || fixtureJobsValue == "true" else {
+            executableURL = nil
+            expectedTeamIdentifier = nil
+            eventRelayConfiguration = nil
+            return
+        }
+        let fixtureJobsEnabled = fixtureJobsValue == "true"
         guard (agentExecutable == nil) == (agentDataDirectory == nil) else {
             executableURL = nil
             expectedTeamIdentifier = nil
@@ -70,7 +83,8 @@ public struct JarvisDeveloperBridgeProcessConfiguration: Equatable, Sendable {
                 agentDataDirectoryURL: URL(
                     fileURLWithPath: agentDataDirectory,
                     isDirectory: true
-                )
+                ),
+                fixtureJobsEnabled: fixtureJobsEnabled
             )
             guard (try? relay.validatePaths()) != nil else {
                 executableURL = nil
@@ -80,6 +94,12 @@ public struct JarvisDeveloperBridgeProcessConfiguration: Equatable, Sendable {
             }
             relayConfiguration = relay
         } else {
+            guard !fixtureJobsEnabled else {
+                executableURL = nil
+                expectedTeamIdentifier = nil
+                eventRelayConfiguration = nil
+                return
+            }
             relayConfiguration = nil
         }
         executableURL = URL(fileURLWithPath: value)
@@ -455,7 +475,7 @@ public final class JarvisDeveloperBridgeProcessLifecycle: ObservableObject {
     nonisolated public static let maximumLineBytes = 16 * 1_024
     nonisolated public static let maximumBufferedBytes = maximumLineBytes + 1
     nonisolated public static let proofBoundary =
-        "Read-only Developer Mode health and metadata event relay. This does not enable distributed commands, jobs, models, repositories, Codex, or Git authority."
+        "Read-only Developer Mode health and metadata relay, with a separately explicit Public synthetic fixture-job diagnostic. This does not enable models, tools, files, repositories, Codex, or Git authority."
 
     @Published public private(set) var status: JarvisDeveloperBridgeAppStatus
 
@@ -560,8 +580,16 @@ public final class JarvisDeveloperBridgeProcessLifecycle: ObservableObject {
         let snapshot = try JarvisMacBridgeSupervisorSnapshot.decodeStrict(line)
         switch snapshot.phase {
         case .authenticated:
+            let phase: JarvisDeveloperBridgeAppPhase
+            if snapshot.maintenanceActive == true {
+                phase = .maintenance
+            } else if snapshot.emergencyPaused == true {
+                phase = .paused
+            } else {
+                phase = .connected
+            }
             return JarvisDeveloperBridgeAppStatus(
-                phase: snapshot.maintenanceActive == true ? .maintenance : .connected,
+                phase: phase,
                 masterEndpoint: snapshot.masterEndpoint,
                 connectionEpoch: snapshot.connectionEpoch
             )

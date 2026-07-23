@@ -126,7 +126,7 @@ host eligible Apple capabilities and the M1 inference adapter. Neither holds
 authoritative Jarvis state.
 
 The current default-inert implementation now extends the Mac trust/transport
-foundation with a bounded Rust relay seam. Windows schema version 3 stores a
+foundation with a bounded Rust relay seam. Windows schema version 4 stores a
 metadata-only event journal with one server-issued stream ID and contiguous
 cursor. State transitions and their events commit atomically. The
 `jarvis-agent` executable stores only its last accepted cursor and serves
@@ -134,6 +134,27 @@ authenticated health and event acceptance over the shared owner-only,
 same-EUID, Apple code-identity-checked UDS transport. Startup policy and its
 fresh bearer arrive through bounded stdin, and a direct-parent mismatch fails
 before storage opens.
+
+The next repository slice adds a deliberately non-production execution proof.
+An exact, separately enabled `fixture.reasoning` adapter accepts only a Public,
+no-retention `synthetic_echo`, holds at most one active attempt in memory, and
+returns the same bounded input in a typed synthetic result. The Windows master
+is the only enqueue authority; raw remote enqueue is absent. Lease, result,
+cancellation, acknowledgement, device, connection epoch, attempt, and digest
+identity are bound end to end. A two-second cancellation acknowledgement
+deadline, disconnect, expiry, maintenance, or emergency pause makes the attempt
+non-accepting and suppresses late output. This adapter is transport/lifecycle
+evidence only and grants no MLX, model, tool, file, repository, Codex, or Git
+authority.
+
+Emergency pause and deliberate resume are reachable only through the
+Windows-local bearer-authenticated loopback actions
+`POST /v1/development/emergency-pause/activate` and
+`POST /v1/development/emergency-pause/resume`. Both require an exact empty JSON
+object, accept no planning or enqueue fields, and are absent from the remote
+mTLS router. Pause activation atomically transitions active fixture attempts
+into durable cancellation; resume reopens admission but never revives an old
+lease or permits its late result.
 
 The earlier bridge foundation remains a Swift Keychain enrollment coordinator, Security.framework
 identity store, Network.framework TLS 1.3 client, and focused
@@ -155,9 +176,14 @@ those paths to the helper through bounded stdin. The helper validates and
 directly launches the exact agent, creates its owner-only runtime socket and
 fresh bearer internally, pins both local peers by audit token, EUID, path, and
 CDHash, and forwards bounded authenticated Windows event batches into the
-agent's durable cursor. The Keychain identity and mTLS connection never enter
-the Rust process. The helper is not bundled and this is not unattended
-background operation, distributed job execution, or an M1 inference adapter.
+agent's durable cursor. The additional exact fixture opt-in permits only the
+registered synthetic lease/result and cancellation/acknowledgement routes
+through that same helper/agent boundary. The Keychain identity and mTLS
+connection never enter the Rust process. The helper is not bundled and this is
+not unattended background operation, a production distributed-job runtime, or
+an M1 inference adapter. Live fixture evidence requires a separately enrolled
+fixture-capability device; an existing `mlx.reasoning` enrollment is not valid
+fixture proof.
 
 ### RTX And Future Workers
 
@@ -464,10 +490,11 @@ reconciliation.
   continue. M1 and Apple-specific steps pause. The Mac resumes durable event
   streaming from a server-issued cursor after reconnect.
 
-Emergency pause is authoritative on Windows and available from both the
-connected Mac app and a local Windows operator CLI. It blocks new leases and
-publication, cancels safe active work, and marks potentially effectful
-interruptions for review.
+Emergency pause is authoritative on Windows. The implemented Developer Mode
+control is the owner-authenticated local loopback action above; a connected-Mac
+control and a dedicated Windows operator CLI remain presentation work. Pause
+blocks new leases and publication, durably cancels safe active fixture work,
+and marks potentially effectful interruptions for review.
 
 ## User Experience And Operations
 
