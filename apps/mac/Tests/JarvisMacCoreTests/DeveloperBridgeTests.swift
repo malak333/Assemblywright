@@ -192,9 +192,9 @@ private actor FakeBridgeProcessLauncher: JarvisDeveloperBridgeProcessLaunching {
 }
 
 @MainActor
-private func withStartedBridgeLifecycle<T>(
+private func withStartedBridgeLifecycle<T: Sendable>(
     _ lifecycle: JarvisDeveloperBridgeProcessLifecycle,
-    operation: () async throws -> T
+    operation: @MainActor () async throws -> T
 ) async throws -> T {
     lifecycle.start()
     do {
