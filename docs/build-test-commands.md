@@ -268,6 +268,29 @@ success marker includes `app_supervision=verified`.
 signing, notarization, unattended background reliability, or recovery under an
 induced network outage.
 
+To record bounded Windows service-outage recovery through the production Swift
+lifecycle, run the stronger coordinated mode from the Mac:
+
+```sh
+./scripts/mac-windows-bridge-live-e2e.sh --run-outage
+```
+
+This first runs the normal enrolled bridge proof. It then launches the exact
+signed helper through `JarvisDeveloperBridgeProcessLifecycle` and emits
+`jarvis_mac_windows_outage_stop_required` only after the app lifecycle has
+observed an authenticated positive epoch. At that marker, stop `JarvisMaster`
+from the already authenticated Windows operator session. Wait for
+`jarvis_mac_windows_outage_start_required`, which is emitted only after the app
+has recorded Master Offline with no connection epoch and a fixed redacted error,
+then start the same service. The run succeeds only when the app reconnects on a
+strictly higher epoch and emits
+`jarvis_mac_windows_outage_recovery_live_e2e_ok`. The temporary owner-only
+coordination directory contains epochs and a fixed redacted error code only and
+is removed on exit. Swift stdout/stderr is captured in a separate owner-only
+temporary log and is also removed on exit. This proves bounded service stop/start recovery; it does not
+prove Tailscale or network-interface outage recovery, unattended background
+operation, command admission behavior, signing, or notarization.
+
 The lower-level grant command prints its 256-bit secret exactly once and remains
 available for recovery and contract testing. Prefer `enrollment pair` for an
 owner Mac because it never transfers that secret. The master stores only its

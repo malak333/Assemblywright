@@ -239,6 +239,29 @@ These notes capture durable facts for future agents working on this repository.
   development app-supervision E2E, not hermetic CI, release-signing evidence,
   bundled-helper or unattended background proof, durable event relay, or
   induced-outage recovery proof.
+- `scripts/mac-windows-bridge-live-e2e.sh --run-outage` is the separate bounded
+  service-outage proof. It first completes the normal live bridge proof, then
+  coordinates an owner-controlled `JarvisMaster` stop/start with the production
+  `JarvisDeveloperBridgeProcessLifecycle`. It accepts success only after an
+  authenticated positive epoch, a Master Offline observation with no epoch and
+  a fixed redacted error, and a fresh Connected observation with
+  a strictly higher epoch. Its owner-only temporary coordination files contain
+  only those epochs and the fixed error code; unrestricted Swift output is kept
+  in a separate owner-only temporary log, and both locations are removed on
+  exit. This is not Tailscale/network-
+  interface outage, unattended background, command-admission, signing, or
+  notarization evidence.
+- Signed helper teardown must remain bounded even when Foundation process
+  notifications race with a killed child. Cancel and close the output reader,
+  poll the launched `Process` through fixed TERM and KILL deadlines, require
+  both a successful signal and confirmed child exit before reporting Stopped,
+  and never put an unbounded `waitUntilExit()` after that escalation path.
+  Teardown timeout is a fixed `helper_teardown_failed` Master Offline state
+  whose retained session can be retried; the lifecycle refuses every new start
+  until that retained session stops successfully, preserving one-helper
+  ownership. The focused regressions must assert both relaunch refusal and
+  OS-level child disappearance, and remain part of the full parallel Swift
+  suite rather than only standalone filters.
 - The sixth distributed-development slice adds an explicit Windows Service
   Control Manager lifecycle without removing foreground mode. The same
   single-owner master runtime can be installed, started, stopped, inspected,

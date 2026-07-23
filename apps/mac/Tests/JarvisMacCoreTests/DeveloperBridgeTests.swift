@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Testing
 @testable import JarvisMacCore
@@ -151,16 +152,24 @@ private actor FakeBridgeProcessSession: JarvisDeveloperBridgeProcessSession {
     nonisolated let outputLines: AsyncThrowingStream<Data, Error>
     private let continuation: AsyncThrowingStream<Data, Error>.Continuation
     private(set) var stopped = false
+    private(set) var stopAttempts = 0
+    private var stopFailuresRemaining: Int
 
-    init(lines: [Data], finish: Bool = false) {
+    init(lines: [Data], finish: Bool = false, stopFailures: Int = 0) {
         var saved: AsyncThrowingStream<Data, Error>.Continuation!
         outputLines = AsyncThrowingStream { saved = $0 }
         continuation = saved
+        stopFailuresRemaining = stopFailures
         for line in lines { saved.yield(line) }
         if finish { saved.finish() }
     }
 
-    func stop() async {
+    func stop() async throws {
+        stopAttempts += 1
+        if stopFailuresRemaining > 0 {
+            stopFailuresRemaining -= 1
+            throw JarvisDeveloperBridgeProcessError.teardownFailed
+        }
         stopped = true
         continuation.finish()
     }
@@ -182,6 +191,22 @@ private actor FakeBridgeProcessLauncher: JarvisDeveloperBridgeProcessLaunching {
     }
 }
 
+@MainActor
+private func withStartedBridgeLifecycle<T>(
+    _ lifecycle: JarvisDeveloperBridgeProcessLifecycle,
+    operation: () async throws -> T
+) async throws -> T {
+    lifecycle.start()
+    do {
+        let result = try await operation()
+        await lifecycle.stop()
+        return result
+    } catch {
+        await lifecycle.stop()
+        throw error
+    }
+}
+
 private struct FakeBridgeRunningProcessValidator:
     JarvisDeveloperBridgeRunningProcessValidating
 {
@@ -197,6 +222,40 @@ private struct FakeBridgeRunningProcessValidator:
     ) throws {
         if let error { throw error }
     }
+}
+
+private final class RecordingBridgeRunningProcessValidator:
+    JarvisDeveloperBridgeRunningProcessValidating, @unchecked Sendable
+{
+    private let lock = NSLock()
+    private let error: JarvisDeveloperBridgeProcessError?
+    private var recordedProcessIdentifier: Int32?
+
+    init(error: JarvisDeveloperBridgeProcessError? = nil) {
+        self.error = error
+    }
+
+    func validate(
+        processIdentifier: Int32,
+        expected _: JarvisDeveloperBridgeValidatedExecutable
+    ) throws {
+        lock.withLock {
+            recordedProcessIdentifier = processIdentifier
+        }
+        if let error { throw error }
+    }
+
+    var processIdentifier: Int32? {
+        lock.withLock { recordedProcessIdentifier }
+    }
+}
+
+private func processExists(_ processIdentifier: Int32) -> Bool {
+    errno = 0
+    if Darwin.kill(processIdentifier, 0) == 0 {
+        return true
+    }
+    return errno != ESRCH
 }
 
 @Suite("Mac enrollment and authenticated bridge", .serialized)
@@ -594,6 +653,83 @@ struct DeveloperBridgeTests {
     }
 
     @MainActor
+    @Test("App helper lifecycle cleanup stops its child after cancellation")
+    func appHelperLifecycleCleanupStopsAfterCancellation() async {
+        let line = Data(
+            #"{"connection_epoch":44,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":1,"schema_version":2}"#.utf8
+        )
+        let session = FakeBridgeProcessSession(lines: [line])
+        let lifecycle = JarvisDeveloperBridgeProcessLifecycle(
+            configuration: .init(environment: [
+                JarvisDeveloperBridgeProcessConfiguration.executableEnvironmentKey: "/tmp/jarvis-mac-bridge",
+                JarvisDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey: "ABCDEFGHIJ"
+            ]),
+            validator: FakeBridgeExecutableValidator(),
+            launcher: FakeBridgeProcessLauncher(session: session)
+        )
+
+        do {
+            try await withStartedBridgeLifecycle(lifecycle) {
+                for _ in 0 ..< 50 where lifecycle.status.phase != .connected {
+                    await Task.yield()
+                }
+                #expect(lifecycle.status.phase == .connected)
+                throw CancellationError()
+            }
+        } catch is CancellationError {
+            // Expected: the shared cleanup path must stop the launched helper.
+        } catch {
+            Issue.record("unexpected lifecycle cleanup error: \(error)")
+        }
+
+        #expect(await session.stopped)
+        #expect(lifecycle.status.phase == .stopped)
+    }
+
+    @MainActor
+    @Test("Failed helper teardown retains ownership and blocks relaunch until retry")
+    func appHelperTeardownFailureBlocksRelaunchUntilRetry() async {
+        let line = Data(
+            #"{"connection_epoch":44,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":1,"schema_version":2}"#.utf8
+        )
+        let session = FakeBridgeProcessSession(lines: [line], stopFailures: 2)
+        let launcher = FakeBridgeProcessLauncher(session: session)
+        let lifecycle = JarvisDeveloperBridgeProcessLifecycle(
+            configuration: .init(environment: [
+                JarvisDeveloperBridgeProcessConfiguration.executableEnvironmentKey: "/tmp/jarvis-mac-bridge",
+                JarvisDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey: "ABCDEFGHIJ"
+            ]),
+            validator: FakeBridgeExecutableValidator(),
+            launcher: launcher
+        )
+
+        lifecycle.start()
+        for _ in 0 ..< 50 where lifecycle.status.phase != .connected {
+            await Task.yield()
+        }
+        await lifecycle.stop()
+        #expect(lifecycle.status.phase == .masterOffline)
+        #expect(lifecycle.status.errorCode == "helper_teardown_failed")
+        #expect(await session.stopAttempts == 2)
+
+        lifecycle.start()
+        await Task.yield()
+        #expect(await launcher.launchCount == 1)
+
+        await lifecycle.stop()
+        #expect(await session.stopAttempts == 3)
+        #expect(await session.stopped)
+        #expect(lifecycle.status.phase == .stopped)
+
+        lifecycle.start()
+        for _ in 0 ..< 50 where await launcher.launchCount != 2 {
+            await Task.yield()
+        }
+        #expect(await launcher.launchCount == 2)
+        await lifecycle.stop()
+    }
+
+    @MainActor
     @Test("Foundation helper session streams one bounded snapshot and is reaped on stop")
     func foundationHelperSessionStreamsAndStops() async throws {
         let directory = FileManager.default.temporaryDirectory
@@ -682,6 +818,9 @@ struct DeveloperBridgeTests {
             ofItemAtPath: executable.path
         )
 
+        let rejectedRunningValidator = RecordingBridgeRunningProcessValidator(
+            error: .invalidExecutableSignature
+        )
         let rejected = JarvisDeveloperBridgeProcessLifecycle(
             configuration: .init(environment: [
                 JarvisDeveloperBridgeProcessConfiguration.executableEnvironmentKey: executable.path,
@@ -689,9 +828,7 @@ struct DeveloperBridgeTests {
             ]),
             validator: FakeBridgeExecutableValidator(),
             launcher: FoundationJarvisDeveloperBridgeProcessLauncher(
-                runningProcessValidator: FakeBridgeRunningProcessValidator(
-                    error: .invalidExecutableSignature
-                )
+                runningProcessValidator: rejectedRunningValidator
             )
         )
         rejected.start()
@@ -699,8 +836,13 @@ struct DeveloperBridgeTests {
             try? await Task.sleep(for: .milliseconds(10))
         }
         #expect(rejected.status.errorCode == "invalid_helper_signature")
+        let rejectedProcessIdentifier = try #require(
+            rejectedRunningValidator.processIdentifier
+        )
+        #expect(!processExists(rejectedProcessIdentifier))
         await rejected.stop()
 
+        let stubbornRunningValidator = RecordingBridgeRunningProcessValidator()
         let stubborn = JarvisDeveloperBridgeProcessLifecycle(
             configuration: .init(environment: [
                 JarvisDeveloperBridgeProcessConfiguration.executableEnvironmentKey: executable.path,
@@ -708,7 +850,7 @@ struct DeveloperBridgeTests {
             ]),
             validator: FakeBridgeExecutableValidator(),
             launcher: FoundationJarvisDeveloperBridgeProcessLauncher(
-                runningProcessValidator: FakeBridgeRunningProcessValidator()
+                runningProcessValidator: stubbornRunningValidator
             )
         )
         stubborn.start()
@@ -720,6 +862,10 @@ struct DeveloperBridgeTests {
         await stubborn.stop()
         #expect(start.duration(to: .now) < .seconds(2))
         #expect(stubborn.status.phase == .stopped)
+        let stubbornProcessIdentifier = try #require(
+            stubbornRunningValidator.processIdentifier
+        )
+        #expect(!processExists(stubbornProcessIdentifier))
     }
 
     @MainActor
@@ -791,6 +937,104 @@ struct DeveloperBridgeTests {
             "jarvis_mac_app_bridge_live_e2e_ok "
                 + "endpoint=\(liveStatus.masterEndpoint ?? "missing") "
                 + "connection_epoch=\(liveStatus.connectionEpoch ?? 0)"
+        )
+    }
+
+    @MainActor
+    @Test("Live production app lifecycle fails closed and recovers across a Windows outage")
+    func liveSignedHelperAppLifecycleRecoversFromWindowsOutage() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["JARVIS_MAC_DEVELOPER_BRIDGE_OUTAGE_LIVE_E2E"] == "true" else {
+            return
+        }
+        let configuration = JarvisDeveloperBridgeProcessConfiguration(environment: environment)
+        try #require(configuration.executableURL != nil)
+        try #require(configuration.expectedTeamIdentifier != nil)
+        let coordinationDirectory = try #require(
+            environment["JARVIS_MAC_DEVELOPER_BRIDGE_OUTAGE_COORDINATION_DIR"]
+        )
+        try #require(coordinationDirectory.hasPrefix("/"))
+        var directoryMetadata = stat()
+        try #require(
+            lstat(coordinationDirectory, &directoryMetadata) == 0
+                && directoryMetadata.st_mode & S_IFMT == S_IFDIR
+                && directoryMetadata.st_uid == geteuid()
+                && directoryMetadata.st_mode & 0o777 == 0o700
+        )
+        let coordinationURL = URL(
+            fileURLWithPath: coordinationDirectory,
+            isDirectory: true
+        ).standardizedFileURL
+        let lifecycle = JarvisDeveloperBridgeProcessLifecycle(configuration: configuration)
+
+        let evidence = try await withStartedBridgeLifecycle(lifecycle) {
+            func checkForHarnessCancellation() throws {
+                try Task.checkCancellation()
+                if FileManager.default.fileExists(
+                    atPath: coordinationURL.appendingPathComponent("cancel").path
+                ) {
+                    throw CancellationError()
+                }
+            }
+
+            for _ in 0 ..< 1_200 where lifecycle.status.phase != .connected {
+                try checkForHarnessCancellation()
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            let connectedBefore = lifecycle.status
+            try #require(connectedBefore.phase == .connected)
+            let epochBefore = try #require(connectedBefore.connectionEpoch)
+            try #require(epochBefore > 0)
+            try Data("\(epochBefore)\n".utf8).write(
+                to: coordinationURL.appendingPathComponent("connected-before"),
+                options: .atomic
+            )
+
+            for _ in 0 ..< 2_400 where lifecycle.status.phase != .masterOffline {
+                try checkForHarnessCancellation()
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            let offline = lifecycle.status
+            try #require(offline.phase == .masterOffline)
+            try #require(offline.connectionEpoch == nil)
+            let offlineError = try #require(offline.errorCode)
+            try #require(!offlineError.isEmpty)
+            try Data("\(offlineError)\n".utf8).write(
+                to: coordinationURL.appendingPathComponent("master-offline"),
+                options: .atomic
+            )
+
+            for _ in 0 ..< 3_600
+                where lifecycle.status.connectionEpoch.map({ $0 > epochBefore }) != true
+                    || lifecycle.status.phase != .connected
+            {
+                try checkForHarnessCancellation()
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            let connectedAfter = lifecycle.status
+            try #require(connectedAfter.phase == .connected)
+            let epochAfter = try #require(connectedAfter.connectionEpoch)
+            try #require(epochAfter > epochBefore)
+            try #require(connectedAfter.masterEndpoint == connectedBefore.masterEndpoint)
+            try Data("\(epochAfter)\n".utf8).write(
+                to: coordinationURL.appendingPathComponent("connected-after"),
+                options: .atomic
+            )
+            return (
+                connectedAfter: connectedAfter,
+                epochBefore: epochBefore,
+                epochAfter: epochAfter,
+                offlineError: offlineError
+            )
+        }
+
+        #expect(lifecycle.status.phase == .stopped)
+        print(
+            "jarvis_mac_app_bridge_outage_recovery_live_e2e_ok "
+                + "endpoint=\(evidence.connectedAfter.masterEndpoint ?? "missing") "
+                + "connection_epoch_before=\(evidence.epochBefore) "
+                + "connection_epoch_after=\(evidence.epochAfter) "
+                + "offline_error=\(evidence.offlineError)"
         )
     }
 }

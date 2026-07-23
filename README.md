@@ -108,6 +108,7 @@ swift run --package-path apps/mac jarvis-mac-bridge connect
 swift run --package-path apps/mac jarvis-mac-bridge monitor --samples 2
 swift run --package-path apps/mac jarvis-mac-bridge monitor --samples 2 --reconnect-between-samples
 ./scripts/mac-windows-bridge-live-e2e.sh --check
+./scripts/mac-windows-bridge-live-e2e.sh --run-outage
 ```
 
 After the signed helper is built and enrollment is installed, a development
@@ -137,6 +138,13 @@ closes its first accepted session and requires the next handshake to advance
 the Windows connection epoch. Receipts forbid secret and raw maintenance
 fields. This is owner/device evidence, not a hermetic CI test, induced network
 failure, or proof of unattended app background operation.
+The explicit `--run-outage` mode adds a coordinated live Windows-service
+stop/start. It emits fixed stop/start-required markers so the owner can control
+the enrolled service from the Windows console, and succeeds only after the
+production Swift lifecycle records Connected, then Master Offline with a fixed
+redacted error, then Connected on a strictly higher authenticated epoch. It is
+service-outage recovery evidence, not a Tailscale adapter outage or long-run
+unattended proof.
 `windows_service_lifecycle_e2e` installs a unique temporary real SCM service on
 the Windows CI runner, proves automatic-start configuration, starts the master
 under LocalSystem, checks runtime health, proves maintenance admission denial

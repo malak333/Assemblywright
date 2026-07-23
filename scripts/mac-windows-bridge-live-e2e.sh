@@ -36,8 +36,10 @@ case "$MODE" in
     ;;
   --run)
     ;;
+  --run-outage)
+    ;;
   *)
-    fail "usage: $0 [--check|--run]"
+    fail "usage: $0 [--check|--run|--run-outage]"
     ;;
 esac
 
@@ -154,6 +156,111 @@ if ! app_lifecycle_output="$(
 fi
 [[ "$app_lifecycle_output" == *"jarvis_mac_app_bridge_live_e2e_ok"* ]] \
   || fail "production app bridge lifecycle omitted its live E2E marker"
+
+if [[ "$MODE" == "--run-outage" ]]; then
+  outage_directory="$(mktemp -d -t jarvis-mac-bridge-outage)"
+  chmod 700 "$outage_directory"
+  outage_output="$(mktemp -t jarvis-mac-bridge-outage-log)"
+  chmod 600 "$outage_output"
+  outage_pid=""
+  outage_descendants() {
+    local parent_pid="$1"
+    local child_pid
+    for child_pid in $(/usr/bin/pgrep -P "$parent_pid" 2>/dev/null || true); do
+      outage_descendants "$child_pid"
+      printf '%s\n' "$child_pid"
+    done
+  }
+  cleanup_outage() {
+    local child_pid
+    if [[ -n "$outage_pid" ]] && kill -0 "$outage_pid" >/dev/null 2>&1; then
+      : >"$outage_directory/cancel"
+      local graceful_deadline=$((SECONDS + 5))
+      while kill -0 "$outage_pid" >/dev/null 2>&1 \
+        && (( SECONDS < graceful_deadline )); do
+        sleep 0.1
+      done
+    fi
+    if [[ -n "$outage_pid" ]] && kill -0 "$outage_pid" >/dev/null 2>&1; then
+      local descendant_pids
+      descendant_pids="$(outage_descendants "$outage_pid")"
+      for child_pid in $descendant_pids; do
+        kill "$child_pid" >/dev/null 2>&1 || true
+      done
+      kill "$outage_pid" >/dev/null 2>&1 || true
+      sleep 0.5
+      for child_pid in $descendant_pids; do
+        kill -KILL "$child_pid" >/dev/null 2>&1 || true
+      done
+      kill -KILL "$outage_pid" >/dev/null 2>&1 || true
+    fi
+    if [[ -n "$outage_pid" ]]; then
+      wait "$outage_pid" >/dev/null 2>&1 || true
+    fi
+    rm -f -- "$outage_output"
+    rm -rf -- "$outage_directory"
+  }
+  trap cleanup_outage EXIT
+
+  JARVIS_MAC_DEVELOPER_BRIDGE_OUTAGE_LIVE_E2E=true \
+  JARVIS_MAC_DEVELOPER_BRIDGE_OUTAGE_COORDINATION_DIR="$outage_directory" \
+  JARVIS_MAC_DEVELOPER_BRIDGE_EXECUTABLE="$BRIDGE_BIN" \
+  JARVIS_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER="$bridge_team" \
+    swift test --disable-sandbox --package-path "$PACKAGE_PATH" \
+      --filter liveSignedHelperAppLifecycleRecoversFromWindowsOutage \
+      >"$outage_output" 2>&1 &
+  outage_pid="$!"
+
+  wait_for_outage_marker() {
+    local marker="$1"
+    local timeout_seconds="$2"
+    local label="$3"
+    local deadline=$((SECONDS + timeout_seconds))
+    while [[ ! -s "$outage_directory/$marker" ]]; do
+      if ! kill -0 "$outage_pid" >/dev/null 2>&1; then
+        wait "$outage_pid" >/dev/null 2>&1 || true
+        cat "$outage_output" >&2
+        fail "production app outage lifecycle exited before $label"
+      fi
+      (( SECONDS < deadline )) || {
+        cat "$outage_output" >&2
+        fail "timed out waiting for $label"
+      }
+      sleep 0.25
+    done
+  }
+
+  wait_for_outage_marker "connected-before" 120 "the initial authenticated state"
+  outage_epoch_before="$(tr -d '\r\n' <"$outage_directory/connected-before")"
+  [[ "$outage_epoch_before" =~ ^[0-9]+$ && "$outage_epoch_before" -gt 0 ]] \
+    || fail "outage lifecycle emitted an invalid initial epoch"
+  printf 'jarvis_mac_windows_outage_stop_required service=JarvisMaster connection_epoch=%s\n' \
+    "$outage_epoch_before"
+
+  wait_for_outage_marker "master-offline" 180 "Master Offline after the induced outage"
+  outage_error="$(tr -d '\r\n' <"$outage_directory/master-offline")"
+  [[ "$outage_error" == "bridge_unavailable" \
+    || "$outage_error" == "connection_failed" \
+    || "$outage_error" == "invalid_health" ]] \
+    || fail "outage lifecycle emitted a non-redacted offline error"
+  printf 'jarvis_mac_windows_outage_start_required service=JarvisMaster offline_error=%s\n' \
+    "$outage_error"
+
+  wait_for_outage_marker "connected-after" 240 "authenticated recovery"
+  outage_epoch_after="$(tr -d '\r\n' <"$outage_directory/connected-after")"
+  [[ "$outage_epoch_after" =~ ^[0-9]+$ \
+    && "$outage_epoch_after" -gt "$outage_epoch_before" ]] \
+    || fail "outage lifecycle did not advance the connection epoch"
+  if ! wait "$outage_pid"; then
+    cat "$outage_output" >&2
+    fail "production app outage lifecycle failed"
+  fi
+  outage_pid=""
+  [[ "$(cat "$outage_output")" == *"jarvis_mac_app_bridge_outage_recovery_live_e2e_ok"* ]] \
+    || fail "production app outage lifecycle omitted its live E2E marker"
+  printf 'jarvis_mac_windows_outage_recovery_live_e2e_ok endpoint=%s connection_epoch_before=%s connection_epoch_after=%s offline_error=%s app_supervision=verified\n' \
+    "$endpoint" "$outage_epoch_before" "$outage_epoch_after" "$outage_error"
+fi
 
 printf 'jarvis_mac_windows_bridge_live_e2e_ok endpoint=%s connection_epoch=%s monitor_epoch=%s monitor_samples=2 reconnect_epoch_before=%s reconnect_epoch_after=%s app_supervision=verified team=%s\n' \
   "$endpoint" "$connection_epoch" "$monitor_first_epoch" "$reconnect_first_epoch" "$reconnect_second_epoch" "$bridge_team"

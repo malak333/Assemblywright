@@ -226,7 +226,13 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   the separate reconnect diagnostic to authenticate twice and return a strictly
   higher second epoch after deliberate client-side close. Do not treat a skipped
   or not-enrolled result as passing or claim induced-outage recovery from this
-  diagnostic. Then run
+  diagnostic. For live service-outage evidence, run
+  `./scripts/mac-windows-bridge-live-e2e.sh --run-outage`, stop and start the
+  enrolled `JarvisMaster` only at its fixed coordination markers, and require
+  `jarvis_mac_windows_outage_recovery_live_e2e_ok` with Connected, Master
+  Offline, and higher-epoch Connected observations from the production Swift
+  lifecycle. Do not generalize that receipt to Tailscale/network-interface
+  outage or unattended background recovery. Then run
   `cargo test -p jarvis-master --bin jarvis-master service_logon_right_is_ensured_for_current_account --locked -- --ignored --nocapture`
   in an elevated Windows environment and confirm it resolves the current account
   SID, idempotently grants `SeServiceLogonRight`, and enumerates the exact right.
@@ -242,9 +248,11 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   Treat these as same-host Windows
   process/network/service and Mac contract/adapter compilation proofs, including
   the native owner-account policy mutation but not a supplied password;
-  repeatable owner-account remote-service mTLS, private-overlay reachability
-  from another device, live Mac enrollment/Keychain identity, live MLX inference, unified state migration,
-  Codex execution, and cross-machine recovery remain unimplemented and unproven.
+  live MLX inference, unified state migration, Codex execution, Tailscale or
+  network-interface outage recovery, and unattended cross-machine recovery
+  remain unimplemented and unproven. Owner-recorded remote-service mTLS,
+  private-overlay reachability, live Mac enrollment/Keychain identity, and
+  bounded service stop/start recovery require the separate live receipts above.
 - For workspace grants, confirm app-selected paths are absent from child argv,
   environment, health, UI presentation, diagnostics, and audit; malformed or
   stale bookmarks block the complete launch; trusted-wake restarts share the

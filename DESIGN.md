@@ -143,8 +143,14 @@ malformed, oversized, extra, or terminated output. `Jarvis.app`
 never reads the bridge identity. This proves the Mac-side development
 connection-supervision primitive. The live bridge E2E also
 deliberately closes one accepted session and requires the next signed production
-connection to receive a higher Windows epoch. The helper is not yet bundled in
-the distribution and this is not unattended background operation. It does not
+connection to receive a higher Windows epoch. Its separately invoked outage
+mode coordinates an owner-controlled Windows service stop/start with the
+production Swift lifecycle: the app must first observe Connected, fail closed
+to Master Offline while the service is stopped, and return to Connected only
+with a strictly higher authenticated epoch after restart. This is bounded
+service-outage evidence, not a Tailscale/network-interface outage or long-run
+background reliability proof. The helper is not yet bundled in the
+distribution and this is not unattended background operation. It does not
 yet provide the app-supervised Rust `jarvis-agent`,
 durable event cursors, live MLX execution, repository mutation, Git
 publication, or Codex dispatch.

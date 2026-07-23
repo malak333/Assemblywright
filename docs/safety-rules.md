@@ -111,6 +111,14 @@ release requirements, not optional UX guidance.
   or signature failure must fail closed. The app must not load or share the bridge
   private-key identity, infer command authority from health, or claim bundled,
   unattended background operation before packaging and live evidence exist.
+- A live Developer Mode outage claim must be observed through the production
+  Swift lifecycle, not inferred from Windows service status alone. The proof
+  must begin on an authenticated positive epoch, record fail-closed Master
+  Offline with no retained connection epoch while the service is stopped, and
+  accept recovery only after a fresh authenticated session returns a strictly
+  higher epoch. Coordination artifacts may contain only epochs and fixed
+  redacted error codes. A service stop/start does not prove Tailscale or network-
+  interface outage recovery, bundled background operation, or command safety.
 - Model-originated tool calls must be constrained to runtime-derived inventory.
   The default inventory is the registered first-party `PluginHost` manifests.
   A separate installed-tool catalog may be added only when the individual

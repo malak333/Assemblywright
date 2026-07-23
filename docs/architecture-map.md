@@ -126,9 +126,13 @@ health proof. The Swift app has a default-off development lifecycle that may
 supervise only the exact separately Apple-signed bridge helper, validates its
 fixed identifier and distinct Keychain group, clears its environment, and
 renders strict bounded redacted health in a read-only Developer tab. The helper
-is not bundled and this adds no discovery or continuous Rust-agent supervision.
+is not bundled. A separate owner-controlled live mode now coordinates a real
+Windows service stop/start and requires the production Swift lifecycle to
+observe Connected, Master Offline, and a fresh Connected state with a higher
+epoch. This adds bounded service-outage recovery evidence, but no discovery,
+Tailscale/network-interface outage claim, or continuous Rust-agent supervision.
 It adds no
-live cross-device reliability claim, supplied-password or
+general live cross-device reliability claim, supplied-password or
 owner-account remote-mTLS E2E, host hardening, upgrade/backup/restore automation,
 live scheduler loop, live inference worker, Codex dispatch, integration with
 the existing task/policy/audit/memory store, repository mutation, or Connection

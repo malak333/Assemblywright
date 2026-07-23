@@ -63,6 +63,7 @@ public enum JarvisDeveloperBridgeProcessError: Error, Equatable, Sendable {
     case invalidExecutablePath
     case invalidExecutableSignature
     case launchFailed
+    case teardownFailed
     case outputTooLarge
     case invalidSnapshot
     case helperExited
@@ -235,7 +236,7 @@ public struct SecurityJarvisDeveloperBridgeRunningProcessValidator:
 
 public protocol JarvisDeveloperBridgeProcessSession: Sendable {
     var outputLines: AsyncThrowingStream<Data, Error> { get }
-    func stop() async
+    func stop() async throws
 }
 
 public protocol JarvisDeveloperBridgeProcessLaunching: Sendable {
@@ -306,10 +307,10 @@ private actor FoundationJarvisDeveloperBridgeProcessSession:
                 expected: executable
             )
         } catch {
-            if process.isRunning {
-                _ = Darwin.kill(process.processIdentifier, SIGKILL)
+            try? pipe.fileHandleForReading.close()
+            guard Self.killAndReapRejectedProcess(process) else {
+                throw JarvisDeveloperBridgeProcessError.teardownFailed
             }
-            process.waitUntilExit()
             throw JarvisDeveloperBridgeProcessError.invalidExecutableSignature
         }
 
@@ -358,23 +359,47 @@ private actor FoundationJarvisDeveloperBridgeProcessSession:
         }
     }
 
-    func stop() async {
+    func stop() async throws {
         guard !stopped else { return }
-        stopped = true
         reader.cancel()
         if process.isRunning {
             process.terminate()
-            let deadline = ContinuousClock.now + .milliseconds(500)
-            while process.isRunning, ContinuousClock.now < deadline {
-                try? await Task.sleep(for: .milliseconds(20))
+        }
+        try? pipe.fileHandleForReading.close()
+        await waitForProcessExit(until: .now + .milliseconds(500))
+        if process.isRunning {
+            let result = Darwin.kill(process.processIdentifier, SIGKILL)
+            guard result == 0 || errno == ESRCH else {
+                throw JarvisDeveloperBridgeProcessError.teardownFailed
             }
-            if process.isRunning {
-                _ = Darwin.kill(process.processIdentifier, SIGKILL)
-            }
+            await waitForProcessExit(until: .now + .seconds(1))
+        }
+        guard !process.isRunning else {
+            throw JarvisDeveloperBridgeProcessError.teardownFailed
         }
         process.waitUntilExit()
-        try? pipe.fileHandleForReading.close()
         await reader.value
+        stopped = true
+    }
+
+    private func waitForProcessExit(until deadline: ContinuousClock.Instant) async {
+        while process.isRunning, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+    }
+
+    private nonisolated static func killAndReapRejectedProcess(_ process: Process) -> Bool {
+        if process.isRunning {
+            let result = Darwin.kill(process.processIdentifier, SIGKILL)
+            guard result == 0 || errno == ESRCH else { return false }
+        }
+        let deadline = ContinuousClock.now + .seconds(1)
+        while process.isRunning, ContinuousClock.now < deadline {
+            usleep(20_000)
+        }
+        guard !process.isRunning else { return false }
+        process.waitUntilExit()
+        return true
     }
 
 }
@@ -408,7 +433,7 @@ public final class JarvisDeveloperBridgeProcessLifecycle: ObservableObject {
     }
 
     public func start() {
-        guard task == nil else { return }
+        guard task == nil, session == nil else { return }
         guard let executableURL = configuration.executableURL,
               let expectedTeamIdentifier = configuration.expectedTeamIdentifier else {
             status = .disabled
@@ -439,7 +464,14 @@ public final class JarvisDeveloperBridgeProcessLifecycle: ObservableObject {
                     )
                 }
             }
-            await launchedSessionStop()
+            do {
+                try await launchedSessionStop()
+            } catch {
+                status = .init(
+                    phase: .masterOffline,
+                    errorCode: Self.errorCode(for: error)
+                )
+            }
             task = nil
         }
     }
@@ -447,10 +479,20 @@ public final class JarvisDeveloperBridgeProcessLifecycle: ObservableObject {
     public func stop() async {
         let running = task
         running?.cancel()
-        await launchedSessionStop()
+        var stopError: Error?
+        do {
+            try await launchedSessionStop()
+        } catch {
+            stopError = error
+        }
         if let running { await running.value }
         task = nil
-        if configuration.executableURL != nil {
+        if let stopError {
+            status = .init(
+                phase: .masterOffline,
+                errorCode: Self.errorCode(for: stopError)
+            )
+        } else if configuration.executableURL != nil {
             status = .init(phase: .stopped)
         } else {
             status = .disabled
@@ -484,10 +526,10 @@ public final class JarvisDeveloperBridgeProcessLifecycle: ObservableObject {
         }
     }
 
-    private func launchedSessionStop() async {
-        let launched = session
+    private func launchedSessionStop() async throws {
+        guard let launched = session else { return }
+        try await launched.stop()
         session = nil
-        await launched?.stop()
     }
 
     private static func errorCode(for error: Error) -> String {
@@ -495,6 +537,7 @@ public final class JarvisDeveloperBridgeProcessLifecycle: ObservableObject {
         case .invalidExecutablePath: "invalid_helper_path"
         case .invalidExecutableSignature: "invalid_helper_signature"
         case .launchFailed: "helper_launch_failed"
+        case .teardownFailed: "helper_teardown_failed"
         case .outputTooLarge: "helper_output_too_large"
         case .invalidSnapshot: "invalid_helper_snapshot"
         case .helperExited: "helper_exited"
