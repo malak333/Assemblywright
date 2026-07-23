@@ -209,20 +209,34 @@ These notes capture durable facts for future agents working on this repository.
   exponential reconnect backoff at 30 seconds. The bounded diagnostic
   `--reconnect-between-samples` deliberately closes the accepted connection so
   live E2E can require the next Windows epoch to increase without stopping the
-  service. This is an operator-process primitive, not the app-supervised Rust
-  agent, durable event relay, M1 inference, or unattended background operation.
+  service. This remains the health-only operator mode; `relay` is the separate
+  app-supervised metadata cursor mode. Neither is M1 inference or unattended
+  background operation.
 - The Swift app's bridge lifecycle is an exact default-off development opt-in
   through `JARVIS_MAC_DEVELOPER_BRIDGE_EXECUTABLE` plus independently supplied
   `JARVIS_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER`. Before launching the child,
   it requires an Apple-anchored pinned-team requirement, the fixed bridge
   identifier, the exact executable, and the bridge-only Keychain access group,
-  then revalidates the running PID and prevalidated CDHash before accepting stdout. It launches only
-  `monitor` with an empty environment, owns one boundedly reaped child, bounds
+  then revalidates the running PID and prevalidated CDHash before accepting
+  stdout. It launches `monitor` with an empty environment unless both
+  `JARVIS_MAC_DEVELOPER_AGENT_EXECUTABLE` and
+  `JARVIS_MAC_DEVELOPER_AGENT_DATA_DIR` are present. That exact pair selects
+  `relay` and travels as a strict bounded secret-free startup document. The
+  lifecycle owns one boundedly reaped helper child, bounds
   the snapshot queue, parses strict phase-specific NDJSON with duplicate-key
   rejection, and fails closed to Master Offline on replacement,
   malformed/extra/oversized/overproduced output, EOF, or launch failure. The Developer tab
   is read-only; `Jarvis.app` never loads the bridge identity. The helper is not
   yet bundled, so this does not establish unattended background operation.
+- In `relay` mode the signed helper validates the agent's static signature,
+  identifier, path, and CDHash, launches it as a direct child, revalidates its
+  running PID, and generates the owner-only UDS path plus fresh bearer
+  internally. The helper's exact code requirement reaches the agent only over
+  bounded stdin. Each side checks same EUID, audit-token identity, exact path,
+  and exact CDHash. The helper retains the enrolled Keychain identity and mTLS
+  session, requests only the MacBridge metadata event page, and forwards the
+  exact bounded body to the agent. The agent remains the strict protocol and
+  contiguous-cursor validator.
 - `scripts/mac-windows-bridge-live-e2e.sh --check` validates and builds the live
   harness without credentials. After enrollment, `--run` exercises the
   provisioned production Keychain/TLS CLI across Tailscale and the production
@@ -239,6 +253,28 @@ These notes capture durable facts for future agents working on this repository.
   development app-supervision E2E, not hermetic CI, release-signing evidence,
   bundled-helper or unattended background proof, durable event relay, or
   induced-outage recovery proof.
+- `scripts/mac-windows-bridge-live-e2e.sh --run-relay` is the named integrated
+  metadata-relay proof. It includes the healthy bridge checks, launches the
+  separately signed helper through the production app lifecycle with only the
+  exact agent executable/data paths, requires a concrete nonzero cursor, then
+  starts a fresh app/helper/agent chain against the same owner-only SQLite state.
+  It succeeds only when the same stream ID advances and emits
+  `jarvis_mac_windows_event_relay_live_e2e_ok` with app supervision and agent
+  restart verified. The temporary database is removed on exit. This is bounded
+  live metadata delivery and durable resume evidence, not distributed jobs,
+  inference, bundling, unattended operation, or release readiness.
+  The July 23 closeout receipt used endpoint `100.64.23.14:7792`, retained stream
+  `1b66bdd0-f56a-4ffe-844f-62b336bbdc91`, advanced sequence 13 to 15 across the
+  restart, and observed authenticated bridge epochs 54 through 57.
+- During the July 23 integrated-relay proof, a signed helper connected to a
+  Windows service built from `473c35f` but failed closed with
+  `event_relay_failed`; the new agent database remained at a null stream and
+  sequence zero. The deployed service predated the event route. After the clean
+  Windows checkout and service binary advanced to `e956aab`, the same proof
+  authenticated at epochs 52 and 53 and one durable stream advanced from
+  sequence 1 to 3 across a fresh helper/agent process. The durable diagnostic
+  lesson is to verify the running Windows binary/repository revision before
+  treating a relay failure as a Keychain, mTLS, or local-agent fault.
 - `scripts/mac-windows-bridge-live-e2e.sh --run-outage` is the separate bounded
   service-outage proof. It first completes the normal live bridge proof, then
   coordinates an owner-controlled `JarvisMaster` stop/start with the production
@@ -271,10 +307,11 @@ These notes capture durable facts for future agents working on this repository.
   before storage, and watches that relationship for self-exit. Its macOS
   cross-process E2E proves code-identity/bearer enforcement, argv
   non-disclosure, exact cursor advance, replay denial, durable reload, and
-  parent-mismatch denial. `Jarvis.app` does not yet launch this agent and the
-  agent does not yet own or receive the enrolled outbound mTLS channel, so this
-  is not integrated event delivery, bundled background operation, M1
-  inference, or unattended evidence.
+  parent-mismatch plus non-exact-requirement denial. The explicit app/helper
+  relay now connects this cursor to the authenticated Windows metadata route
+  without exporting the Keychain identity into Rust. This is still not bundled
+  background operation, distributed jobs, M1 inference, or unattended
+  evidence.
 - Signed helper teardown must remain bounded even when Foundation process
   notifications race with a killed child. Cancel and close the output reader,
   poll the launched `Process` through fixed TERM and KILL deadlines, require

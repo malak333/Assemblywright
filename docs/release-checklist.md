@@ -208,9 +208,9 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   validation, schema-v3 cursor durability, transactional disconnect/requeue
   events, owner-only agent state, startup-stdin bearer and code-identity
   enforcement, parent mismatch denial before storage, cursor replay denial,
-  and macOS cross-process UDS coverage. Record that `Jarvis.app` does not yet
-  launch the agent and the agent does not yet own the enrolled outbound mTLS
-  connection; these gates are not integrated cross-device relay evidence.
+  non-exact requirement rejection before storage, and macOS cross-process UDS
+  coverage. Record that the signed helper, not the agent, retains the
+  non-exportable Keychain identity and mTLS session.
   On macOS, run
   `swift test --disable-sandbox --package-path apps/mac --filter DeveloperBridgeTests`
   and confirm strict secret-free invitation/CSR decoding, staged enrollment
@@ -218,7 +218,9 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   acceptance, channel cancellation, persistent-session reuse, exact health
   rejection, reconnect, capped backoff, strict app-helper snapshot decoding,
   one-child ownership, and fail-closed helper EOF/signature behavior remain
-  green. Confirm normal app startup is inert without
+  green. Also confirm secret-free relay startup, exact agent supervision,
+  cursor resume, malformed remote-batch denial before local acceptance, and
+  mTLS-session cancellation on relay failure. Confirm normal app startup is inert without
   `JARVIS_MAC_DEVELOPER_BRIDGE_EXECUTABLE` plus an independently trusted
   `JARVIS_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER`, and an opted-in development launch
   validates the separately signed helper, pins its prelaunch CDHash against the
@@ -234,7 +236,12 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   and archive its fixed success receipt as live-device evidence. Require
   `app_supervision=verified` so the production app lifecycle has validated and
   launched the real signed helper, observed live strict state, and boundedly
-  reaped the child. Require the
+  reaped the child. For integrated metadata relay evidence, additionally
+  run `./scripts/mac-windows-bridge-live-e2e.sh --run-relay` and require
+  `jarvis_mac_windows_event_relay_live_e2e_ok` with
+  `app_supervision=verified`, `agent_restart=verified`, one stable stream ID,
+  and a strictly advancing cursor across a fresh app/helper/agent chain. The
+  harness must remove its temporary owner-only cursor state on exit. Require the
   two bounded monitor samples to share one positive connection epoch. Require
   the separate reconnect diagnostic to authenticate twice and return a strictly
   higher second epoch after deliberate client-side close. Do not treat a skipped

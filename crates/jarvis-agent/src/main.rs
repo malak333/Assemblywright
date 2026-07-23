@@ -10,8 +10,8 @@ use base64::Engine;
 use clap::{Parser, Subcommand};
 use jarvis_agent::{AgentCursorSnapshot, AgentCursorStore, AGENT_SCHEMA_VERSION};
 use jarvis_core::{
-    serve_router_unix_socket_with_peer_identity, validate_unix_socket_path, PeerIdentityProfile,
-    MAX_PEER_CODE_REQUIREMENT_BYTES,
+    serve_router_unix_socket_with_peer_identity, validate_peer_code_requirement,
+    validate_unix_socket_path, PeerIdentityProfile, MAX_PEER_CODE_REQUIREMENT_BYTES,
 };
 use jarvis_protocol::{DistributedEventBatch, MAX_DISTRIBUTED_EVENT_BATCH_BYTES, PROTOCOL_VERSION};
 use serde::{Deserialize, Serialize};
@@ -168,6 +168,11 @@ fn validate_startup(startup: &AgentStartupDocument) -> anyhow::Result<()> {
     {
         bail!("jarvis-agent peer code requirement is invalid");
     }
+    validate_peer_code_requirement(
+        &startup.peer_code_requirement,
+        startup.peer_identity_profile,
+    )
+    .map_err(anyhow::Error::new)?;
     let _ = digest_bearer_token(&startup.bearer_token)?;
     Ok(())
 }

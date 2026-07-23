@@ -229,7 +229,7 @@ fn parse_ipc_transport(wire: IpcTransportWire) -> JarvisResult<ServeIpcTransport
     }
 }
 
-pub(crate) fn validate_peer_code_requirement(
+pub fn validate_peer_code_requirement(
     requirement: &str,
     profile: PeerIdentityProfile,
 ) -> JarvisResult<()> {

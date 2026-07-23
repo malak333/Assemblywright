@@ -119,9 +119,11 @@ voice, notification, and permission presentation. It communicates only with an
 app-supervised Rust `jarvis-agent` over the existing local UDS, bearer,
 same-EUID, and Apple code-identity boundary.
 
-The agent maintains an outbound authenticated connection to Windows, relays
-commands and durable event cursors, exposes eligible Apple capabilities, and
-hosts the M1 inference adapter. It holds no authoritative Jarvis state.
+The signed Mac bridge helper maintains the outbound authenticated connection to
+Windows because it alone owns the non-exportable enrolled Keychain identity.
+The directly supervised Rust agent owns the durable event cursor and will later
+host eligible Apple capabilities and the M1 inference adapter. Neither holds
+authoritative Jarvis state.
 
 The current default-inert implementation now extends the Mac trust/transport
 foundation with a bounded Rust relay seam. Windows schema version 3 stores a
@@ -147,12 +149,15 @@ Swift app may supervise that exact separately signed helper only through the
 default-off executable plus independently supplied Apple-team development
 opt-in. It validates the helper's Apple code identity, exact CDHash, and distinct Keychain group, clears
 the child environment, accepts only strict bounded redacted monitor snapshots,
-and exposes read-only bridge state. The helper is not bundled and this is not
-unattended background operation. `Jarvis.app` does not yet launch the Rust
-agent, and the agent does not yet own or receive the enrolled outbound mTLS
-session. The UDS relay and durable cursor are therefore repository-tested
-foundations, not an integrated distributed runtime. The M1 inference adapter
-is not implemented.
+and exposes read-only bridge state. When the independently supplied agent
+executable and data-directory opt-ins are also present, the app sends only
+those paths to the helper through bounded stdin. The helper validates and
+directly launches the exact agent, creates its owner-only runtime socket and
+fresh bearer internally, pins both local peers by audit token, EUID, path, and
+CDHash, and forwards bounded authenticated Windows event batches into the
+agent's durable cursor. The Keychain identity and mTLS connection never enter
+the Rust process. The helper is not bundled and this is not unattended
+background operation, distributed job execution, or an M1 inference adapter.
 
 ### RTX And Future Workers
 

@@ -17,7 +17,8 @@ flowchart LR
   Certificates --> Remote["Optional TLS 1.3 mTLS listener with exact-IP ephemeral server identity"]
   Remote --> Binding["Certificate registry checks, TLS exporter binding, role and epoch enforcement"]
   Master --> Events["Schema-v3 metadata event journal and server-issued durable cursor"]
-  Events --> Agent["Mac jarvis-agent owner-only cursor and authenticated local UDS relay"]
+  Events --> Helper["Signed Swift bridge keeps Keychain identity and outbound mTLS"]
+  Helper --> Agent["Directly supervised Mac jarvis-agent owner-only cursor over mutually pinned local UDS"]
   Process --> Service["Windows SCM host: automatic start, bounded recovery, status, maintenance, uninstall"]
   Service --> Maintenance["Durable fail-closed marker blocks new enqueue and lease admission"]
   Master --> Durable["Registered devices, epochs, queue, attempts, cancellation, expiry, restart reconciliation, exact results"]
@@ -78,8 +79,10 @@ after restart. The Mac `jarvis-agent` reuses the hardened local UDS transport,
 requires direct-parent supervision and a fresh startup-stdin bearer, and stores
 only stream ID, sequence, and update time under a single-owner lock.
 `local_relay_e2e` proves that boundary cross-process on macOS. The app does not
-yet launch the agent and the agent does not yet own the enrolled outbound mTLS
-session.
+export the enrolled identity to the agent: the separately signed helper keeps
+the Keychain/mTLS session, directly supervises the exact agent build, and
+forwards only authenticated metadata batches over a mutually code-identity-
+pinned local socket when the explicit agent paths are configured.
 `remote_mtls_e2e` adds a real master process and generated enrolled client over
 loopback TLS 1.3. It proves mutual certificate authentication, durable
 certificate/device checks, pre-handshake health denial, exporter-bound health
@@ -141,11 +144,15 @@ health proof. The Swift app has a default-off development lifecycle that may
 supervise only the exact separately Apple-signed bridge helper, validates its
 fixed identifier and distinct Keychain group, clears its environment, and
 renders strict bounded redacted health in a read-only Developer tab. The helper
-is not bundled. A separate owner-controlled live mode now coordinates a real
+may additionally receive only exact agent executable/data paths through bounded
+stdin, then pin, launch, and directly supervise that agent while forwarding
+authenticated metadata pages into its durable cursor. The enrolled key and mTLS
+session stay in the helper. The helper is not bundled. A separate owner-controlled live mode now coordinates a real
 Windows service stop/start and requires the production Swift lifecycle to
 observe Connected, Master Offline, and a fresh Connected state with a higher
 epoch. This adds bounded service-outage recovery evidence, but no discovery,
-Tailscale/network-interface outage claim, or continuous Rust-agent supervision.
+Tailscale/network-interface outage claim, bundled Rust-agent supervision, or
+unattended reliability.
 It adds no
 general live cross-device reliability claim, supplied-password or
 owner-account remote-mTLS E2E, host hardening, upgrade/backup/restore automation,

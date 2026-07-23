@@ -11,7 +11,7 @@ private enum BridgeCLIError: Error, CustomStringConvertible {
     var description: String {
         switch self {
         case .usage:
-            "Usage: jarvis-mac-bridge enrollment prepare|install | status | connect | monitor [--samples COUNT] [--interval-ms MILLISECONDS] [--reconnect-between-samples]"
+            "Usage: jarvis-mac-bridge enrollment prepare|install | status | connect | monitor|relay [--samples COUNT] [--interval-ms MILLISECONDS] [--reconnect-between-samples]"
         case .inputTooLarge:
             "Input exceeds the 64 KiB enrollment-document limit."
         case .notEnrolled:
@@ -37,10 +37,14 @@ private struct JarvisMacBridgeCLI {
         let coordinator = JarvisMacEnrollmentCoordinator()
         switch arguments {
         case ["enrollment", "prepare"]:
-            let invitation = try readBoundedStdin()
+            let invitation = try readBoundedStdin(
+                maximum: JarvisMacEnrollmentCoordinator.maximumDocumentBytes
+            )
             try writeStdout(coordinator.prepare(invitationData: invitation))
         case ["enrollment", "install"]:
-            let receipt = try readBoundedStdin()
+            let receipt = try readBoundedStdin(
+                maximum: JarvisMacEnrollmentCoordinator.maximumDocumentBytes
+            )
             let profile = try coordinator.install(issuedReceiptData: receipt)
             try writeJSON([
                 "status": "enrollment_installed",
@@ -100,27 +104,18 @@ private struct JarvisMacBridgeCLI {
         case let arguments where arguments.first == "monitor":
             guard let profile = try coordinator.status() else { throw BridgeCLIError.notEnrolled }
             let options = try monitorOptions(Array(arguments.dropFirst()))
-            let supervisor = JarvisMacBridgeSupervisor(profile: profile)
-            var completedSamples = 0
-            do {
-                while options.samples.map({ completedSamples < $0 }) ?? true {
-                    let snapshot = await supervisor.sample()
-                    try writeEncodableJSON(snapshot)
-                    completedSamples += 1
-                    if let samples = options.samples, completedSamples >= samples { break }
-                    if options.reconnectBetweenSamples, snapshot.phase == .authenticated {
-                        await supervisor.reconnectBeforeNextSample()
-                    }
-                    let delay = snapshot.phase == .authenticated
-                        ? options.intervalMilliseconds
-                        : snapshot.nextDelayMilliseconds
-                    try await Task.sleep(for: .milliseconds(delay))
-                }
-            } catch {
-                await supervisor.stop()
-                throw error
-            }
-            await supervisor.stop()
+            try await runMonitor(profile: profile, options: options, eventRelay: nil)
+        case let arguments where arguments.first == "relay":
+            guard let profile = try coordinator.status() else { throw BridgeCLIError.notEnrolled }
+            let configuration = try JarvisMacDeveloperEventRelayConfiguration
+                .decodeStartupDocument(
+                    readBoundedStdin(
+                        maximum: JarvisMacDeveloperEventRelayConfiguration.maximumDocumentBytes
+                    )
+                )
+            let options = try monitorOptions(Array(arguments.dropFirst()))
+            let relay = JarvisMacDeveloperEventRelay(configuration: configuration)
+            try await runMonitor(profile: profile, options: options, eventRelay: relay)
         default:
             throw BridgeCLIError.usage
         }
@@ -164,8 +159,40 @@ private struct JarvisMacBridgeCLI {
         return (samples, intervalMilliseconds, reconnectBetweenSamples)
     }
 
-    private static func readBoundedStdin() throws -> Data {
-        let maximum = JarvisMacEnrollmentCoordinator.maximumDocumentBytes
+    private static func runMonitor(
+        profile: JarvisMacBridgeProfile,
+        options: (samples: Int?, intervalMilliseconds: UInt64, reconnectBetweenSamples: Bool),
+        eventRelay: (any JarvisMacBridgeEventRelaying)?
+    ) async throws {
+        let supervisor = JarvisMacBridgeSupervisor(
+            profile: profile,
+            eventRelay: eventRelay
+        )
+        var completedSamples = 0
+        do {
+            while options.samples.map({ completedSamples < $0 }) ?? true {
+                let snapshot = await supervisor.sample()
+                try writeEncodableJSON(snapshot)
+                completedSamples += 1
+                if let samples = options.samples, completedSamples >= samples { break }
+                if options.reconnectBetweenSamples, snapshot.phase == .authenticated {
+                    await supervisor.reconnectBeforeNextSample()
+                }
+                let delay = snapshot.phase == .authenticated
+                    ? options.intervalMilliseconds
+                    : snapshot.nextDelayMilliseconds
+                try await Task.sleep(for: .milliseconds(delay))
+            }
+        } catch {
+            await supervisor.stop()
+            try? await eventRelay?.stop()
+            throw error
+        }
+        await supervisor.stop()
+        try await eventRelay?.stop()
+    }
+
+    private static func readBoundedStdin(maximum: Int) throws -> Data {
         var input = Data()
         while true {
             let remaining = maximum + 1 - input.count

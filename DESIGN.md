@@ -160,10 +160,20 @@ SQLite transaction as the authoritative state change. The agent accepts only
 one contiguous stream and rejects replay, gaps, or stream replacement. It must
 be launched by its declared direct parent and receives socket, peer code
 requirement, and a fresh 32-byte bearer only through bounded startup stdin.
-This repository proof does not yet mean `Jarvis.app` launches the agent or that
-the agent owns the enrolled outbound mTLS connection. Live MLX execution,
-repository mutation, Git publication, Codex dispatch, bundled installation,
-and unattended operation remain unimplemented.
+The explicit app opt-in can now pass only the agent executable and owner-only
+data-directory paths to the signed bridge helper through strict bounded stdin.
+The helper validates and directly supervises that exact agent build, generates
+the UDS path and bearer internally, retains the non-exportable Keychain identity
+and outbound mTLS session, pages the authenticated Windows metadata route, and
+forwards each exact batch into the agent cursor store. Exact audit-token,
+same-EUID, executable-path, and CDHash checks protect both sides of that local
+socket. Live MLX execution, distributed jobs, repository mutation, Git
+publication, Codex dispatch, bundled installation, and unattended operation
+remain unimplemented.
+The named live-device closeout is
+`scripts/mac-windows-bridge-live-e2e.sh --run-relay`: it must advance one
+concrete cursor, restart the app/helper/agent chain against the same owner-only
+state, and advance the same stream again before emitting its fixed receipt.
 
 Current app-supervised IPC defaults to a Unix domain socket, not a TCP listener.
 Swift creates a current-owner `0700` runtime directory and a generation-random

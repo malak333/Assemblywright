@@ -142,9 +142,12 @@ requeue events after restart. The macOS agent gate includes a real child
 process over the hardened UDS. It proves startup-stdin bearer and code-identity
 enforcement, bearer/socket absence from argv, parent validation before storage,
 exact cursor acceptance, replay denial, and durable cursor reload. These are
-local relay mechanics. `Jarvis.app` does not yet launch `jarvis-agent`, and the
-agent does not yet own or receive the enrolled mTLS channel; therefore these
-commands do not prove an integrated cross-device event stream.
+local relay mechanics. The focused Swift bridge gate additionally proves the
+secret-free app-to-helper startup document, exact helper/agent supervision,
+authenticated event paging, malformed-batch denial before cursor mutation, and
+fail-closed session cancellation. Repository tests do not by themselves prove
+the enrolled cross-device event stream; use the bounded signed-helper live
+procedure below for that device evidence.
 `windows_service_lifecycle_e2e` is the sixth implemented seam. The ordinary test
 suite compiles but ignores it because SCM mutation requires elevation. The
 Windows CI job sets `JARVIS_REQUIRE_WINDOWS_SERVICE_E2E=1` and runs the ignored
@@ -221,9 +224,14 @@ pbpaste | "$BRIDGE" enrollment install
 "$BRIDGE" connect
 "$BRIDGE" monitor --samples 2
 "$BRIDGE" monitor --samples 2 --reconnect-between-samples
+cargo build -p jarvis-agent --locked
+AGENT="$PWD/target/debug/jarvis-agent"
+AGENT_DATA="$HOME/Library/Application Support/Jarvis/developer-agent"
 TEAM="${JARVIS_APPLE_DEVELOPMENT_TEAM:?set the independently trusted 10-character Apple team used to build the bridge}"
 JARVIS_MAC_DEVELOPER_BRIDGE_EXECUTABLE="$PWD/$BRIDGE" \
   JARVIS_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER="$TEAM" \
+  JARVIS_MAC_DEVELOPER_AGENT_EXECUTABLE="$AGENT" \
+  JARVIS_MAC_DEVELOPER_AGENT_DATA_DIR="$AGENT_DATA" \
   swift run --package-path apps/mac JarvisMacApp
 ```
 
@@ -245,6 +253,13 @@ is limited to public pairing material; no grant or private key is copied.
 document against the exact remote-master shape, and emits allowlisted
 snapshots. Any request, transport, or validation failure cancels the session
 before a new connection attempt and applies capped exponential backoff.
+When both agent opt-ins are present, the app starts the helper in `relay` mode
+with a secret-free startup document. The signed helper pins and directly
+supervises the exact `jarvis-agent` build, generates the local socket and bearer
+itself, keeps the Keychain/mTLS identity, and advances the agent's metadata-only
+cursor from `/v1/distributed/events/next`. Omitting both agent opt-ins retains
+health-only `monitor` mode; supplying only one fails closed and disables the
+bridge lifecycle.
 `--samples` is the bounded evidence form; omitting it runs until the operator
 stops the process. The diagnostic-only `--reconnect-between-samples` requires
 at least two bounded samples, cancels each accepted session between samples,
@@ -289,6 +304,26 @@ success marker includes `app_supervision=verified`.
 `--run` is owner-recorded live-device evidence and cannot replace Windows CI,
 signing, notarization, unattended background reliability, or recovery under an
 induced network outage.
+
+To prove the complete app-supervised metadata relay and durable resume path,
+run:
+
+```sh
+./scripts/mac-windows-bridge-live-e2e.sh --run-relay
+```
+
+This includes the normal live bridge checks, builds or accepts the exact
+`jarvis-agent`, and passes its executable plus a temporary owner-only data
+directory through the production app lifecycle. The signed helper must retain
+the enrolled Keychain/mTLS identity, pin and directly launch the agent, retrieve
+an authenticated Windows event page, and persist a concrete nonzero cursor.
+The harness then starts a fresh app/helper/agent chain against the same SQLite
+state and requires the same stream ID to advance. Success emits
+`jarvis_mac_windows_event_relay_live_e2e_ok` with
+`app_supervision=verified` and `agent_restart=verified`. The temporary cursor
+database is removed on exit. This proves bounded live metadata delivery and
+durable cursor resume; it does not prove distributed job execution, inference,
+bundling, unattended operation, or release readiness.
 
 To record bounded Windows service-outage recovery through the production Swift
 lifecycle, run the stronger coordinated mode from the Mac:

@@ -77,10 +77,16 @@ direct parent before storage opens, receives socket/code-identity/bearer policy
 through bounded stdin, reuses the secure owner-only UDS framing, and persists
 only the exact accepted event cursor. A macOS cross-process E2E proves bearer
 and code-identity enforcement, argv non-disclosure, exact cursor advance, replay
-denial, and parent-mismatch denial. `Jarvis.app` does not yet launch this agent,
-and the agent does not yet own the enrolled outbound mTLS connection. This is
-not a bundled helper, unattended background service, integrated durable relay,
-or inference worker. The
+denial, and parent-mismatch denial. With the additional
+`JARVIS_MAC_DEVELOPER_AGENT_EXECUTABLE` and
+`JARVIS_MAC_DEVELOPER_AGENT_DATA_DIR` opt-in, the app passes only those
+secret-free paths to the signed helper; the helper pins and directly supervises
+the exact agent, retains the Keychain/mTLS channel, and forwards authenticated
+metadata batches into the durable cursor. This is not a bundled helper,
+unattended background service, distributed job runtime, or inference worker. The
+named owner-device proof is
+`./scripts/mac-windows-bridge-live-e2e.sh --run-relay`, which requires the same
+durable stream to advance across a fresh app/helper/agent chain. The
 accepted target and migration boundaries are recorded in
 [Distributed Developer Mode Design](docs/distributed-developer-mode-design.md).
 The protocol seam has a named serialized contract E2E. The master kernel has a

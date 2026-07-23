@@ -127,6 +127,91 @@ private actor FakeSupervisorConnector: JarvisMacBridgeConnecting {
     }
 }
 
+private actor FakeDeveloperAgentSession: JarvisMacDeveloperAgentSession {
+    private var cursor: JarvisMacDeveloperEventCursor?
+    private(set) var acceptedBatches: [Data] = []
+    private(set) var stopped = false
+
+    init(cursor: JarvisMacDeveloperEventCursor? = nil) {
+        self.cursor = cursor
+    }
+
+    func health() async throws -> JarvisMacDeveloperAgentCursorSnapshot {
+        JarvisMacDeveloperAgentCursorSnapshot(
+            cursor: cursor,
+            updatedAtMilliseconds: cursor == nil ? nil : 1_000
+        )
+    }
+
+    func accept(batch: Data) async throws -> JarvisMacDeveloperAgentCursorSnapshot {
+        let object = try #require(
+            JSONSerialization.jsonObject(with: batch) as? [String: Any]
+        )
+        let stream = try #require(object["stream_id"] as? String)
+        let sequence = try #require(
+            (object["next_sequence"] as? NSNumber)?.uint64Value
+        )
+        cursor = JarvisMacDeveloperEventCursor(
+            streamID: try #require(UUID(uuidString: stream)),
+            sequence: sequence
+        )
+        acceptedBatches.append(batch)
+        return JarvisMacDeveloperAgentCursorSnapshot(
+            cursor: cursor,
+            updatedAtMilliseconds: 1_000
+        )
+    }
+
+    func stop() async throws {
+        stopped = true
+    }
+}
+
+private actor FakeDeveloperAgentLauncher: JarvisMacDeveloperAgentLaunching {
+    let session: FakeDeveloperAgentSession
+    private(set) var configurations: [JarvisMacDeveloperEventRelayConfiguration] = []
+
+    init(session: FakeDeveloperAgentSession) {
+        self.session = session
+    }
+
+    func launch(
+        configuration: JarvisMacDeveloperEventRelayConfiguration
+    ) async throws -> any JarvisMacDeveloperAgentSession {
+        configurations.append(configuration)
+        return session
+    }
+}
+
+private actor FakeBridgeEventRelay: JarvisMacBridgeEventRelaying {
+    let error: JarvisMacDeveloperEventRelayError?
+    private(set) var epochs: [UInt64] = []
+    private(set) var stopped = false
+
+    init(error: JarvisMacDeveloperEventRelayError? = nil) {
+        self.error = error
+    }
+
+    func relayEvents(
+        using session: any JarvisMacBridgeSession
+    ) async throws -> JarvisMacDeveloperEventRelayProgress {
+        epochs.append(session.connectionEpoch)
+        if let error { throw error }
+        return JarvisMacDeveloperEventRelayProgress(
+            cursor: JarvisMacDeveloperEventCursor(
+                streamID: UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")!,
+                sequence: 1
+            ),
+            acceptedEventCount: 1,
+            hasMore: false
+        )
+    }
+
+    func stop() async throws {
+        stopped = true
+    }
+}
+
 private struct FakeBridgeExecutableValidator: JarvisDeveloperBridgeExecutableValidating {
     let error: JarvisDeveloperBridgeProcessError?
 
@@ -184,7 +269,8 @@ private actor FakeBridgeProcessLauncher: JarvisDeveloperBridgeProcessLaunching {
     }
 
     func launch(
-        executable _: JarvisDeveloperBridgeValidatedExecutable
+        executable _: JarvisDeveloperBridgeValidatedExecutable,
+        eventRelayConfiguration _: JarvisMacDeveloperEventRelayConfiguration?
     ) async throws -> any JarvisDeveloperBridgeProcessSession {
         launchCount += 1
         return session
@@ -508,6 +594,144 @@ struct DeveloperBridgeTests {
         #expect(healthy.consecutiveFailures == 0)
         #expect(await connector.connectCount == 2)
         await supervisor.stop()
+    }
+
+    @Test("Event relay resumes from the agent cursor and forwards only an exact bounded batch")
+    func eventRelayUsesDurableAgentCursor() async throws {
+        let streamID = UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")!
+        let agent = FakeDeveloperAgentSession()
+        let launcher = FakeDeveloperAgentLauncher(session: agent)
+        let configuration = JarvisMacDeveloperEventRelayConfiguration(
+            agentExecutableURL: URL(fileURLWithPath: "/tmp/jarvis-agent"),
+            agentDataDirectoryURL: URL(fileURLWithPath: "/tmp/jarvis-agent-data")
+        )
+        let relay = JarvisMacDeveloperEventRelay(
+            configuration: configuration,
+            launcher: launcher
+        )
+        let batch = Data(
+            """
+            {"after_sequence":0,"events":[{"connection_epoch":null,"cursor":{"sequence":1,"stream_id":"\(streamID.uuidString.lowercased())"},"device_id":null,"kind":"step_queued","occurred_at_ms":1000,"protocol_version":1,"step_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","task_id":"cccccccc-cccc-4ccc-8ccc-cccccccccccc"}],"has_more":false,"next_sequence":1,"protocol_version":1,"stream_id":"\(streamID.uuidString.lowercased())"}
+            """.utf8
+        )
+        let master = FakeSupervisorSession(
+            connectionEpoch: 51,
+            outcomes: [.response(JarvisMacBridgeHTTPResponse(status: 200, body: batch))]
+        )
+
+        let progress = try await relay.relayEvents(using: master)
+
+        #expect(progress.cursor == JarvisMacDeveloperEventCursor(
+            streamID: streamID,
+            sequence: 1
+        ))
+        #expect(progress.acceptedEventCount == 1)
+        #expect(progress.hasMore == false)
+        #expect(await agent.acceptedBatches == [batch])
+        #expect(await launcher.configurations == [configuration])
+        let request = try #require(await master.requests.first)
+        #expect(request.method == "POST")
+        #expect(request.path == JarvisMacDeveloperEventRelay.remoteEventsPath)
+        let requestObject = try #require(
+            JSONSerialization.jsonObject(with: request.body) as? [String: Any]
+        )
+        #expect((requestObject["connection_epoch"] as? NSNumber)?.uint64Value == 51)
+        #expect(requestObject["after"] is NSNull)
+        #expect((requestObject["limit"] as? NSNumber)?.intValue == 64)
+        try await relay.stop()
+        #expect(await agent.stopped)
+    }
+
+    @Test("Malformed master event batch fails before the local agent cursor changes")
+    func eventRelayRejectsMalformedMasterBatch() async throws {
+        let agent = FakeDeveloperAgentSession()
+        let relay = JarvisMacDeveloperEventRelay(
+            configuration: JarvisMacDeveloperEventRelayConfiguration(
+                agentExecutableURL: URL(fileURLWithPath: "/tmp/jarvis-agent"),
+                agentDataDirectoryURL: URL(fileURLWithPath: "/tmp/jarvis-agent-data")
+            ),
+            launcher: FakeDeveloperAgentLauncher(session: agent)
+        )
+        let malformed = Data(
+            #"{"after_sequence":0,"events":[],"has_more":false,"next_sequence":2,"protocol_version":1,"stream_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}"#.utf8
+        )
+        let master = FakeSupervisorSession(
+            connectionEpoch: 52,
+            outcomes: [.response(JarvisMacBridgeHTTPResponse(status: 200, body: malformed))]
+        )
+
+        await #expect(throws: JarvisMacDeveloperEventRelayError.invalidMasterResponse) {
+            _ = try await relay.relayEvents(using: master)
+        }
+        #expect(await agent.acceptedBatches.isEmpty)
+        try await relay.stop()
+    }
+
+    @Test("Supervisor cancels the authenticated session when its local relay fails")
+    func supervisorFailsClosedOnEventRelayFailure() async {
+        let session = FakeSupervisorSession(
+            connectionEpoch: 53,
+            outcomes: [.response(JarvisMacBridgeHTTPResponse(
+                status: 200,
+                body: validRemoteHealthData()
+            ))]
+        )
+        let relay = FakeBridgeEventRelay(error: .eventCursorRejected)
+        let supervisor = JarvisMacBridgeSupervisor(
+            profile: sampleProfile(),
+            connector: FakeSupervisorConnector(sessions: [session]),
+            eventRelay: relay
+        )
+
+        let failed = await supervisor.sample()
+
+        #expect(failed.phase == .backingOff)
+        #expect(failed.errorCode == "event_relay_failed")
+        #expect(await relay.epochs == [53])
+        #expect(await session.cancelled)
+        await supervisor.stop()
+    }
+
+    @Test("App relay opt-in requires both absolute agent paths and keeps startup secret-free")
+    func appRelayConfigurationIsExactAndSecretFree() throws {
+        let complete = JarvisDeveloperBridgeProcessConfiguration(environment: [
+            JarvisDeveloperBridgeProcessConfiguration.executableEnvironmentKey:
+                "/tmp/jarvis-mac-bridge",
+            JarvisDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey:
+                "ABCDEFGHIJ",
+            JarvisDeveloperBridgeProcessConfiguration.agentExecutableEnvironmentKey:
+                "/tmp/jarvis-agent",
+            JarvisDeveloperBridgeProcessConfiguration.agentDataDirectoryEnvironmentKey:
+                "/tmp/jarvis-agent-data"
+        ])
+        let relay = try #require(complete.eventRelayConfiguration)
+        let document = try relay.encodeStartupDocument()
+        let decoded = try JarvisMacDeveloperEventRelayConfiguration
+            .decodeStartupDocument(document)
+        #expect(decoded == relay)
+        #expect(!String(decoding: document, as: UTF8.self).contains("bearer"))
+
+        let partial = JarvisDeveloperBridgeProcessConfiguration(environment: [
+            JarvisDeveloperBridgeProcessConfiguration.executableEnvironmentKey:
+                "/tmp/jarvis-mac-bridge",
+            JarvisDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey:
+                "ABCDEFGHIJ",
+            JarvisDeveloperBridgeProcessConfiguration.agentExecutableEnvironmentKey:
+                "/tmp/jarvis-agent"
+        ])
+        #expect(partial.executableURL == nil)
+        #expect(partial.eventRelayConfiguration == nil)
+
+        let extra = try #require(
+            JSONSerialization.jsonObject(with: document) as? [String: Any]
+        )
+        var modified = extra
+        modified["bearer_token"] = "must-not-be-accepted"
+        #expect(throws: JarvisMacDeveloperEventRelayError.invalidStartupDocument) {
+            _ = try JarvisMacDeveloperEventRelayConfiguration.decodeStartupDocument(
+                try JSONSerialization.data(withJSONObject: modified)
+            )
+        }
     }
 
     @Test("Supervisor backoff is bounded")

@@ -92,9 +92,10 @@ pub use runtime::{
 };
 pub use scheduler::{Scheduler, SchedulerJob, SchedulerJobSpec, SchedulerJobStatus, TriggerKind};
 pub use startup::{
-    validate_unix_socket_path, PeerIdentityProfile, ServeIpcTransport, ServeStartupConfig,
-    TrustedWakeStartupDocument, MAX_PEER_CODE_REQUIREMENT_BYTES, MAX_SERVE_STARTUP_CONFIG_BYTES,
-    MAX_UNIX_SOCKET_PATH_BYTES, SERVE_STARTUP_CONFIG_VERSION,
+    validate_peer_code_requirement, validate_unix_socket_path, PeerIdentityProfile,
+    ServeIpcTransport, ServeStartupConfig, TrustedWakeStartupDocument,
+    MAX_PEER_CODE_REQUIREMENT_BYTES, MAX_SERVE_STARTUP_CONFIG_BYTES, MAX_UNIX_SOCKET_PATH_BYTES,
+    SERVE_STARTUP_CONFIG_VERSION,
 };
 pub use storage::{
     ApprovalExecutionAttention, ApprovalExecutionRecord, ApprovalExecutionState,

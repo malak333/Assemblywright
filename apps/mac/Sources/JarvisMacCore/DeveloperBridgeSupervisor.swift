@@ -123,7 +123,10 @@ public struct JarvisMacBridgeSupervisorSnapshot: Codable, Equatable, Sendable {
                   snapshot.consecutiveFailures > 0,
                   (1 ... JarvisMacBridgeSupervisor.maximumBackoffMilliseconds)
                     .contains(snapshot.nextDelayMilliseconds),
-                  ["invalid_health", "bridge_unavailable", "connection_failed"]
+                  [
+                      "invalid_health", "bridge_unavailable", "connection_failed",
+                      "event_relay_failed"
+                  ]
                     .contains(snapshot.errorCode),
                   snapshot.masterStatus == nil,
                   snapshot.maintenanceActive == nil,
@@ -290,16 +293,19 @@ public actor JarvisMacBridgeSupervisor {
 
     private let profile: JarvisMacBridgeProfile
     private let connector: any JarvisMacBridgeConnecting
+    private let eventRelay: (any JarvisMacBridgeEventRelaying)?
     private var session: (any JarvisMacBridgeSession)?
     private var consecutiveFailures: UInt32 = 0
     private var stopped = false
 
     public init(
         profile: JarvisMacBridgeProfile,
-        connector: any JarvisMacBridgeConnecting = JarvisMacDefaultBridgeConnector()
+        connector: any JarvisMacBridgeConnecting = JarvisMacDefaultBridgeConnector(),
+        eventRelay: (any JarvisMacBridgeEventRelaying)? = nil
     ) {
         self.profile = profile
         self.connector = connector
+        self.eventRelay = eventRelay
     }
 
     public func sample() async -> JarvisMacBridgeSupervisorSnapshot {
@@ -316,6 +322,9 @@ public actor JarvisMacBridgeSupervisor {
                 JarvisMacBridgeHTTPRequest(method: "GET", path: Self.healthPath)
             )
             let health = try JarvisMacRemoteMasterHealth.decode(response)
+            if let eventRelay {
+                _ = try await eventRelay.relayEvents(using: activeSession)
+            }
             consecutiveFailures = 0
             return JarvisMacBridgeSupervisorSnapshot(
                 phase: .authenticated,
@@ -392,6 +401,7 @@ public actor JarvisMacBridgeSupervisor {
     private static func redactedErrorCode(for error: Error) -> String {
         if error is JarvisMacRemoteMasterHealthError { return "invalid_health" }
         if error is JarvisMacDeveloperBridgeError { return "bridge_unavailable" }
+        if error is JarvisMacDeveloperEventRelayError { return "event_relay_failed" }
         return "connection_failed"
     }
 }

@@ -37,8 +37,13 @@ public struct JarvisDeveloperBridgeProcessConfiguration: Equatable, Sendable {
     public static let executableEnvironmentKey = "JARVIS_MAC_DEVELOPER_BRIDGE_EXECUTABLE"
     public static let teamIdentifierEnvironmentKey =
         "JARVIS_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER"
+    public static let agentExecutableEnvironmentKey =
+        "JARVIS_MAC_DEVELOPER_AGENT_EXECUTABLE"
+    public static let agentDataDirectoryEnvironmentKey =
+        "JARVIS_MAC_DEVELOPER_AGENT_DATA_DIR"
     public let executableURL: URL?
     public let expectedTeamIdentifier: String?
+    public let eventRelayConfiguration: JarvisMacDeveloperEventRelayConfiguration?
 
     public init(environment: [String: String] = ProcessInfo.processInfo.environment) {
         guard let value = environment[Self.executableEnvironmentKey], !value.isEmpty,
@@ -46,10 +51,40 @@ public struct JarvisDeveloperBridgeProcessConfiguration: Equatable, Sendable {
               Self.isValidTeamIdentifier(teamIdentifier) else {
             executableURL = nil
             expectedTeamIdentifier = nil
+            eventRelayConfiguration = nil
             return
+        }
+        let agentExecutable = environment[Self.agentExecutableEnvironmentKey]
+        let agentDataDirectory = environment[Self.agentDataDirectoryEnvironmentKey]
+        guard (agentExecutable == nil) == (agentDataDirectory == nil) else {
+            executableURL = nil
+            expectedTeamIdentifier = nil
+            eventRelayConfiguration = nil
+            return
+        }
+        let relayConfiguration: JarvisMacDeveloperEventRelayConfiguration?
+        if let agentExecutable, !agentExecutable.isEmpty,
+           let agentDataDirectory, !agentDataDirectory.isEmpty {
+            let relay = JarvisMacDeveloperEventRelayConfiguration(
+                agentExecutableURL: URL(fileURLWithPath: agentExecutable),
+                agentDataDirectoryURL: URL(
+                    fileURLWithPath: agentDataDirectory,
+                    isDirectory: true
+                )
+            )
+            guard (try? relay.validatePaths()) != nil else {
+                executableURL = nil
+                expectedTeamIdentifier = nil
+                eventRelayConfiguration = nil
+                return
+            }
+            relayConfiguration = relay
+        } else {
+            relayConfiguration = nil
         }
         executableURL = URL(fileURLWithPath: value)
         expectedTeamIdentifier = teamIdentifier
+        eventRelayConfiguration = relayConfiguration
     }
 
     private static func isValidTeamIdentifier(_ value: String) -> Bool {
@@ -241,7 +276,8 @@ public protocol JarvisDeveloperBridgeProcessSession: Sendable {
 
 public protocol JarvisDeveloperBridgeProcessLaunching: Sendable {
     func launch(
-        executable: JarvisDeveloperBridgeValidatedExecutable
+        executable: JarvisDeveloperBridgeValidatedExecutable,
+        eventRelayConfiguration: JarvisMacDeveloperEventRelayConfiguration?
     ) async throws -> any JarvisDeveloperBridgeProcessSession
 }
 
@@ -258,10 +294,12 @@ public struct FoundationJarvisDeveloperBridgeProcessLauncher:
     }
 
     public func launch(
-        executable: JarvisDeveloperBridgeValidatedExecutable
+        executable: JarvisDeveloperBridgeValidatedExecutable,
+        eventRelayConfiguration: JarvisMacDeveloperEventRelayConfiguration?
     ) async throws -> any JarvisDeveloperBridgeProcessSession {
         try FoundationJarvisDeveloperBridgeProcessSession(
             executable: executable,
+            eventRelayConfiguration: eventRelayConfiguration,
             runningProcessValidator: runningProcessValidator
         )
     }
@@ -278,10 +316,12 @@ private actor FoundationJarvisDeveloperBridgeProcessSession:
 
     init(
         executable: JarvisDeveloperBridgeValidatedExecutable,
+        eventRelayConfiguration: JarvisMacDeveloperEventRelayConfiguration?,
         runningProcessValidator: any JarvisDeveloperBridgeRunningProcessValidating
     ) throws {
         let process = Process()
         let pipe = Pipe()
+        let input = eventRelayConfiguration == nil ? nil : Pipe()
         var continuation: AsyncThrowingStream<Data, Error>.Continuation!
         outputLines = AsyncThrowingStream(bufferingPolicy: .bufferingOldest(1)) {
             continuation = $0
@@ -290,9 +330,9 @@ private actor FoundationJarvisDeveloperBridgeProcessSession:
         self.pipe = pipe
 
         process.executableURL = executable.executableURL
-        process.arguments = ["monitor"]
+        process.arguments = [eventRelayConfiguration == nil ? "monitor" : "relay"]
         process.environment = [:]
-        process.standardInput = FileHandle.nullDevice
+        process.standardInput = input ?? FileHandle.nullDevice
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
         do {
@@ -306,7 +346,13 @@ private actor FoundationJarvisDeveloperBridgeProcessSession:
                 processIdentifier: process.processIdentifier,
                 expected: executable
             )
+            if let eventRelayConfiguration, let input {
+                let document = try eventRelayConfiguration.encodeStartupDocument()
+                try input.fileHandleForWriting.write(contentsOf: document)
+                try input.fileHandleForWriting.close()
+            }
         } catch {
+            try? input?.fileHandleForWriting.close()
             try? pipe.fileHandleForReading.close()
             guard Self.killAndReapRejectedProcess(process) else {
                 throw JarvisDeveloperBridgeProcessError.teardownFailed
@@ -409,7 +455,7 @@ public final class JarvisDeveloperBridgeProcessLifecycle: ObservableObject {
     nonisolated public static let maximumLineBytes = 16 * 1_024
     nonisolated public static let maximumBufferedBytes = maximumLineBytes + 1
     nonisolated public static let proofBoundary =
-        "Read-only Developer Mode bridge health. This does not enable distributed commands, jobs, models, repositories, Codex, or Git authority."
+        "Read-only Developer Mode health and metadata event relay. This does not enable distributed commands, jobs, models, repositories, Codex, or Git authority."
 
     @Published public private(set) var status: JarvisDeveloperBridgeAppStatus
 
@@ -447,7 +493,10 @@ public final class JarvisDeveloperBridgeProcessLifecycle: ObservableObject {
                     executableURL: executableURL,
                     expectedTeamIdentifier: expectedTeamIdentifier
                 )
-                let launched = try await launcher.launch(executable: validated)
+                let launched = try await launcher.launch(
+                    executable: validated,
+                    eventRelayConfiguration: configuration.eventRelayConfiguration
+                )
                 session = launched
                 for try await line in launched.outputLines {
                     if Task.isCancelled { break }

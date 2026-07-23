@@ -125,7 +125,7 @@ fn agent_rejects_parent_mismatch_before_creating_durable_state() {
         "version": 1,
         "supervised_parent_pid": u32::MAX,
         "socket_path": temporary.path().join("agent.sock"),
-        "peer_code_requirement": "true",
+        "peer_code_requirement": "cdhash H\"0123456789abcdef0123456789abcdef01234567\"",
         "peer_identity_profile": "adhoc_exact",
         "bearer_token": TOKEN
     })
@@ -147,6 +147,42 @@ fn agent_rejects_parent_mismatch_before_creating_durable_state() {
     assert!(!output.status.success());
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("direct parent"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!data_dir.exists());
+}
+
+#[test]
+fn agent_rejects_non_exact_peer_requirement_before_creating_durable_state() {
+    let temporary = tempfile::tempdir().expect("peer requirement fixture");
+    let data_dir = temporary.path().join("data");
+    let startup = json!({
+        "version": 1,
+        "supervised_parent_pid": std::process::id(),
+        "socket_path": temporary.path().join("agent.sock"),
+        "peer_code_requirement": "true",
+        "peer_identity_profile": "adhoc_exact",
+        "bearer_token": TOKEN
+    })
+    .to_string();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_jarvis-agent"))
+        .args(["--data-dir", data_dir.to_str().expect("data path"), "serve"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn invalid-policy agent");
+    child
+        .stdin
+        .take()
+        .expect("startup stdin")
+        .write_all(startup.as_bytes())
+        .expect("write startup document");
+    let output = child.wait_with_output().expect("wait for policy rejection");
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("identity profile"),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );

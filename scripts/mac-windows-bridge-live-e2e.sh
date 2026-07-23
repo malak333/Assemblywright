@@ -25,21 +25,28 @@ case "$MODE" in
     [[ -f "$PACKAGE_PATH/Package.swift" ]] || fail "missing Mac Swift package"
     [[ -f "$PACKAGE_PATH/Sources/JarvisMacBridgeCLI/JarvisMacBridgeCLI.swift" ]] \
       || fail "missing Mac bridge CLI"
+    [[ -f "$PACKAGE_PATH/Sources/JarvisMacCore/DeveloperEventRelay.swift" ]] \
+      || fail "missing Mac event relay"
     [[ -f "$PACKAGE_PATH/JarvisMacBridge.xcodeproj/project.pbxproj" ]] \
       || fail "missing provisioned Mac bridge Xcode project"
+    [[ -f "$ROOT_DIR/crates/jarvis-agent/src/main.rs" ]] \
+      || fail "missing supervised Rust agent"
     [[ -f "$ROOT_DIR/packaging/JarvisMacBridge.entitlements" ]] \
       || fail "missing Mac bridge Keychain entitlement"
     bash -n "$ROOT_DIR/scripts/build-mac-bridge-signed.sh"
     swift build --package-path "$PACKAGE_PATH" --product "$PRODUCT"
+    cargo build --manifest-path "$ROOT_DIR/Cargo.toml" -p jarvis-agent --locked
     printf 'Jarvis Mac-Windows bridge live E2E harness: ready\n'
     exit 0
     ;;
   --run)
     ;;
+  --run-relay)
+    ;;
   --run-outage)
     ;;
   *)
-    fail "usage: $0 [--check|--run|--run-outage]"
+    fail "usage: $0 [--check|--run|--run-relay|--run-outage]"
     ;;
 esac
 
@@ -144,10 +151,44 @@ for forbidden in grant_secret certificate_pem ca_certificate_pem maintenance_rea
     || fail "live reconnect diagnostic exposed forbidden field: $forbidden"
 done
 
+relay_directory=""
+relay_data_directory=""
+relay_agent_bin=""
+app_lifecycle_environment=()
+cleanup_relay() {
+  if [[ -n "$relay_directory" ]]; then
+    rm -rf -- "$relay_directory"
+  fi
+}
+if [[ "$MODE" == "--run-relay" ]]; then
+  command -v sqlite3 >/dev/null 2>&1 \
+    || fail "sqlite3 is required for the durable relay proof"
+  if [[ -n "${JARVIS_MAC_AGENT_BIN:-}" ]]; then
+    relay_agent_bin="$JARVIS_MAC_AGENT_BIN"
+  else
+    cargo build --manifest-path "$ROOT_DIR/Cargo.toml" -p jarvis-agent --locked
+    relay_agent_bin="$ROOT_DIR/target/debug/jarvis-agent"
+  fi
+  [[ -x "$relay_agent_bin" ]] \
+    || fail "jarvis-agent executable is unavailable"
+  codesign --verify --strict "$relay_agent_bin" >/dev/null 2>&1 \
+    || fail "jarvis-agent signature is invalid"
+  relay_directory="$(mktemp -d -t jarvis-mac-agent-relay)"
+  chmod 700 "$relay_directory"
+  relay_data_directory="$relay_directory/data"
+  app_lifecycle_environment=(
+    "JARVIS_MAC_DEVELOPER_AGENT_EXECUTABLE=$relay_agent_bin"
+    "JARVIS_MAC_DEVELOPER_AGENT_DATA_DIR=$relay_data_directory"
+  )
+  trap cleanup_relay EXIT
+fi
+
 if ! app_lifecycle_output="$(
-  JARVIS_MAC_DEVELOPER_BRIDGE_LIVE_E2E=true \
-  JARVIS_MAC_DEVELOPER_BRIDGE_EXECUTABLE="$BRIDGE_BIN" \
-  JARVIS_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER="$bridge_team" \
+  env \
+    JARVIS_MAC_DEVELOPER_BRIDGE_LIVE_E2E=true \
+    JARVIS_MAC_DEVELOPER_BRIDGE_EXECUTABLE="$BRIDGE_BIN" \
+    JARVIS_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER="$bridge_team" \
+    "${app_lifecycle_environment[@]}" \
     swift test --disable-sandbox --package-path "$PACKAGE_PATH" \
       --filter liveSignedHelperAppLifecycleReachesWindowsMaster 2>&1
 )"; then
@@ -156,6 +197,50 @@ if ! app_lifecycle_output="$(
 fi
 [[ "$app_lifecycle_output" == *"jarvis_mac_app_bridge_live_e2e_ok"* ]] \
   || fail "production app bridge lifecycle omitted its live E2E marker"
+
+if [[ "$MODE" == "--run-relay" ]]; then
+  relay_database="$relay_data_directory/agent.sqlite3"
+  [[ -f "$relay_database" ]] \
+    || fail "production app relay did not create the durable agent cursor database"
+  first_cursor="$(
+    sqlite3 "$relay_database" \
+      'SELECT COALESCE(stream_id, ""), sequence FROM agent_event_cursor WHERE singleton = 1;'
+  )"
+  first_stream="${first_cursor%%|*}"
+  first_sequence="${first_cursor##*|}"
+  [[ "$first_stream" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ \
+    && "$first_sequence" =~ ^[0-9]+$ \
+    && "$first_sequence" -gt 0 ]] \
+    || fail "production app relay did not persist a concrete event cursor"
+
+  if ! relay_resume_output="$(
+    env \
+      JARVIS_MAC_DEVELOPER_BRIDGE_LIVE_E2E=true \
+      JARVIS_MAC_DEVELOPER_BRIDGE_EXECUTABLE="$BRIDGE_BIN" \
+      JARVIS_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER="$bridge_team" \
+      "${app_lifecycle_environment[@]}" \
+      swift test --disable-sandbox --package-path "$PACKAGE_PATH" \
+        --filter liveSignedHelperAppLifecycleReachesWindowsMaster 2>&1
+  )"; then
+    printf '%s\n' "$relay_resume_output" >&2
+    fail "production app relay did not resume through a fresh helper and agent"
+  fi
+  [[ "$relay_resume_output" == *"jarvis_mac_app_bridge_live_e2e_ok"* ]] \
+    || fail "production app relay resume omitted its live E2E marker"
+
+  resumed_cursor="$(
+    sqlite3 "$relay_database" \
+      'SELECT COALESCE(stream_id, ""), sequence FROM agent_event_cursor WHERE singleton = 1;'
+  )"
+  resumed_stream="${resumed_cursor%%|*}"
+  resumed_sequence="${resumed_cursor##*|}"
+  [[ "$resumed_stream" == "$first_stream" \
+    && "$resumed_sequence" =~ ^[0-9]+$ \
+    && "$resumed_sequence" -gt "$first_sequence" ]] \
+    || fail "production app relay did not durably resume the same advancing stream"
+  printf 'jarvis_mac_windows_event_relay_live_e2e_ok endpoint=%s stream_id=%s sequence_before=%s sequence_after=%s app_supervision=verified agent_restart=verified\n' \
+    "$endpoint" "$first_stream" "$first_sequence" "$resumed_sequence"
+fi
 
 if [[ "$MODE" == "--run-outage" ]]; then
   outage_directory="$(mktemp -d -t jarvis-mac-bridge-outage)"

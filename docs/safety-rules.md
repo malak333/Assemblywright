@@ -217,6 +217,29 @@ release requirements, not optional UX guidance.
   `com.nobiletechnology.jarvis.core` identifier. Alternate package bundle
   identifiers are rejected because they cannot satisfy the fixed production
   code-identity contract.
+- The optional Developer Mode event relay keeps the enrolled private key and
+  TLS session inside the separately signed Swift helper. `Jarvis.app` may pass
+  only an absolute agent executable path and absolute agent data-directory path
+  through one strict, bounded, secret-free helper startup document; a partial,
+  relative, extra-field, oversized, or malformed opt-in disables the launch.
+  The helper must validate the exact agent static signature, path, identifier,
+  and CDHash before launch and revalidate the running PID before sending its
+  startup document. It must be the agent's declared direct parent.
+- The helper alone creates the agent's current-owner `0700` runtime directory,
+  bounded `0600` socket leaf, and fresh 32-byte bearer. Those values and the
+  helper's exact designated requirement travel only through bounded agent
+  stdin, never argv, environment, status, logs, or app-to-helper configuration.
+  Both UDS peers must validate audit token, current EUID, exact executable path,
+  and exact CDHash before framing; the agent must reject any requirement text
+  that is not canonical for its declared profile before opening durable state.
+  The agent cursor may store only stream ID, sequence, and update time.
+- The helper may request only the authenticated MacBridge metadata event route
+  and may forward only its exact bounded response body to the agent. The agent
+  remains the final strict protocol validator and rejects gaps, replay, stream
+  replacement, unknown fields, or identity-shape mismatches before cursor
+  commit. Any master, helper, UDS, identity, or cursor failure cancels the
+  current mTLS session and enters fixed redacted backoff; it never authorizes a
+  job, model, repository, Codex, or Git action.
 - Artifact-producing distribution packaging must inspect the exact configured
   `Jarvis.app` and bundled-core executable immediately before removing the
   distribution directory. If either executable is active, packaging fails
