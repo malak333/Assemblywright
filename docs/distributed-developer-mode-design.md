@@ -135,7 +135,7 @@ same-EUID, Apple code-identity-checked UDS transport. Startup policy and its
 fresh bearer arrive through bounded stdin, and a direct-parent mismatch fails
 before storage opens.
 
-The next repository slice adds a deliberately non-production execution proof.
+The completed fixture slice adds a deliberately non-production execution proof.
 An exact, separately enabled `fixture.reasoning` adapter accepts only a Public,
 no-retention `synthetic_echo`, holds at most one active attempt in memory, and
 returns the same bounded input in a typed synthetic result. The Windows master
@@ -147,7 +147,7 @@ non-accepting and suppresses late output. This adapter is transport/lifecycle
 evidence only and grants no MLX, model, tool, file, repository, Codex, or Git
 authority.
 
-The following bounded slice adds the first real M1 inference worker without
+The completed bounded MLX slice adds the first real M1 inference worker without
 expanding planning authority. A separately enabled standard-profile
 `mlx.reasoning` lane accepts only Public, `ephemeral_no_retention`
 `generate_text` requests with a nonempty 32 KiB prompt ceiling, 1 to 512
