@@ -45,6 +45,16 @@ fn windows_master_process_owns_state_and_completes_cross_process_fixture() {
     assert_eq!(ready["status"], "ready");
     assert_eq!(ready["endpoint"], endpoint.to_string());
     assert_unauthorized_without_bearer(endpoint);
+    let unauthorized_events = post_request(
+        endpoint,
+        "/v1/development/events/next",
+        None,
+        r#"{"protocol_version":1,"connection_epoch":1,"after":null,"limit":64}"#,
+    );
+    assert!(
+        unauthorized_events.starts_with("HTTP/1.1 401 Unauthorized"),
+        "unauthenticated local event metadata was reachable: {unauthorized_events}"
+    );
     assert_oversized_body_is_rejected(endpoint, development_token);
     let unauthorized_pause = post_request(
         endpoint,
@@ -167,6 +177,46 @@ fn windows_master_process_owns_state_and_completes_cross_process_fixture() {
     let fixture_json: Value = serde_json::from_slice(&fixture.stdout).expect("fixture JSON");
     assert_eq!(fixture_json["status"], "fixture_complete");
     assert_eq!(fixture_json["accepted_result"]["status"], "succeeded");
+    let fixture_task_id = fixture_json["task_id"]
+        .as_str()
+        .expect("fixture receipt task identifier");
+    let fixture_step_id = fixture_json["step_id"]
+        .as_str()
+        .expect("fixture receipt step identifier");
+    let event_response = post_request(
+        endpoint,
+        "/v1/development/events/next",
+        Some(development_token),
+        r#"{"protocol_version":1,"connection_epoch":1,"after":null,"limit":64}"#,
+    );
+    assert!(
+        event_response.starts_with("HTTP/1.1 200 OK"),
+        "authenticated local event query failed: {event_response}"
+    );
+    let event_batch = response_json(&event_response);
+    let events = event_batch["events"]
+        .as_array()
+        .expect("local event metadata array");
+    let fixture_kinds = events
+        .iter()
+        .filter(|event| event["task_id"] == fixture_task_id && event["step_id"] == fixture_step_id)
+        .map(|event| event["kind"].as_str().expect("event kind"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        fixture_kinds,
+        ["step_queued", "step_leased", "step_succeeded"],
+        "local event metadata did not bind the exact fixture lifecycle"
+    );
+    let event_body = event_response
+        .split_once("\r\n\r\n")
+        .expect("event response body delimiter")
+        .1;
+    for forbidden in ["context", "payload", "result", "prompt", "input", "output"] {
+        assert!(
+            !event_body.contains(forbidden),
+            "local event metadata exposed forbidden field: {forbidden}"
+        );
+    }
 
     let completed_health = run(
         binary,

@@ -240,6 +240,40 @@ public struct JarvisMacBridgeProfile: Codable, Equatable, Sendable {
     }
 }
 
+public enum JarvisMacBridgeIdentityProfile: String, Equatable, Sendable {
+    case standard
+    case fixtureReasoning = "fixture"
+
+    public init?(selector: String) {
+        self.init(rawValue: selector)
+    }
+
+    func validate(invitation: JarvisMacEnrollmentInvitation) throws {
+        guard self == .fixtureReasoning else { return }
+        try validate(capabilities: invitation.capabilities)
+    }
+
+    func validate(profile: JarvisMacBridgeProfile) throws {
+        guard self == .fixtureReasoning else { return }
+        try validate(capabilities: profile.capabilities)
+    }
+
+    private func validate(capabilities: [JarvisMacBridgeCapability]) throws {
+        guard capabilities == [
+            JarvisMacBridgeCapability(
+                id: "fixture.reasoning",
+                kind: "local_inference",
+                provider: "jarvis-fixture",
+                model: "jarvis-fixture-v1",
+                maxContextBytes: 8 * 1_024,
+                maxResultBytes: 8 * 1_024
+            )
+        ] else {
+            throw JarvisMacDeveloperBridgeError.bindingMismatch
+        }
+    }
+}
+
 public protocol JarvisMacBridgeIdentityStore: Sendable {
     func stageIdentity(for invitation: JarvisMacEnrollmentInvitation) throws -> JarvisMacEnrollmentCSR
     func loadStagedInvitation() throws -> JarvisMacEnrollmentInvitation?
@@ -253,15 +287,18 @@ public protocol JarvisMacBridgeIdentityStore: Sendable {
 public struct JarvisMacEnrollmentCoordinator: Sendable {
     public static let maximumDocumentBytes = 64 * 1_024
     private let identityStore: any JarvisMacBridgeIdentityStore
+    private let identityProfile: JarvisMacBridgeIdentityProfile
     private let nowMilliseconds: @Sendable () -> UInt64
 
     public init(
         identityStore: any JarvisMacBridgeIdentityStore = KeychainJarvisMacBridgeIdentityStore(),
+        identityProfile: JarvisMacBridgeIdentityProfile = .standard,
         nowMilliseconds: @escaping @Sendable () -> UInt64 = {
             UInt64(max(Date().timeIntervalSince1970 * 1_000, 0))
         }
     ) {
         self.identityStore = identityStore
+        self.identityProfile = identityProfile
         self.nowMilliseconds = nowMilliseconds
     }
 
@@ -276,6 +313,7 @@ public struct JarvisMacEnrollmentCoordinator: Sendable {
             ]
         )
         try invitation.validate(nowMilliseconds: nowMilliseconds())
+        try identityProfile.validate(invitation: invitation)
         let reply = try identityStore.stageIdentity(for: invitation)
         guard reply.schemaVersion == 1,
               reply.status == "enrollment_csr_ready",
@@ -304,6 +342,7 @@ public struct JarvisMacEnrollmentCoordinator: Sendable {
         guard let invitation = try identityStore.loadStagedInvitation() else {
             throw JarvisMacDeveloperBridgeError.noStagedEnrollment
         }
+        try identityProfile.validate(invitation: invitation)
         guard receipt.deviceID == invitation.deviceID,
               receipt.deviceName == invitation.deviceName,
               receipt.role == invitation.role,
@@ -314,7 +353,11 @@ public struct JarvisMacEnrollmentCoordinator: Sendable {
     }
 
     public func status() throws -> JarvisMacBridgeProfile? {
-        try identityStore.loadInstalledProfile()
+        let profile = try identityStore.loadInstalledProfile()
+        if let profile {
+            try identityProfile.validate(profile: profile)
+        }
+        return profile
     }
 }
 

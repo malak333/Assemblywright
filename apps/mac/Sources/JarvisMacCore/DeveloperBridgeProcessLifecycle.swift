@@ -323,6 +323,15 @@ public struct FoundationJarvisDeveloperBridgeProcessLauncher:
             runningProcessValidator: runningProcessValidator
         )
     }
+
+    static func helperArguments(
+        eventRelayConfiguration: JarvisMacDeveloperEventRelayConfiguration?
+    ) -> [String] {
+        if let eventRelayConfiguration, eventRelayConfiguration.fixtureJobsEnabled {
+            return ["relay", "--identity-profile", "fixture"]
+        }
+        return [eventRelayConfiguration == nil ? "monitor" : "relay"]
+    }
 }
 
 private actor FoundationJarvisDeveloperBridgeProcessSession:
@@ -350,7 +359,9 @@ private actor FoundationJarvisDeveloperBridgeProcessSession:
         self.pipe = pipe
 
         process.executableURL = executable.executableURL
-        process.arguments = [eventRelayConfiguration == nil ? "monitor" : "relay"]
+        process.arguments = FoundationJarvisDeveloperBridgeProcessLauncher.helperArguments(
+            eventRelayConfiguration: eventRelayConfiguration
+        )
         process.environment = [:]
         process.standardInput = input ?? FileHandle.nullDevice
         process.standardOutput = pipe
@@ -443,7 +454,6 @@ private actor FoundationJarvisDeveloperBridgeProcessSession:
         guard !process.isRunning else {
             throw JarvisDeveloperBridgeProcessError.teardownFailed
         }
-        process.waitUntilExit()
         await reader.value
         stopped = true
     }
@@ -463,9 +473,7 @@ private actor FoundationJarvisDeveloperBridgeProcessSession:
         while process.isRunning, ContinuousClock.now < deadline {
             usleep(20_000)
         }
-        guard !process.isRunning else { return false }
-        process.waitUntilExit()
-        return true
+        return !process.isRunning
     }
 
 }

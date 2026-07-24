@@ -126,6 +126,7 @@ public struct JarvisMacDeveloperEventRelayProgress: Equatable, Sendable {
     public let cursor: JarvisMacDeveloperEventCursor
     public let acceptedEventCount: Int
     public let hasMore: Bool
+    public let requiresFreshConnection: Bool
 }
 
 public protocol JarvisMacBridgeEventRelaying: Sendable {
@@ -210,16 +211,23 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
             guard let deviceID else {
                 throw JarvisMacDeveloperEventRelayError.fixtureJobRejected
             }
-            try await relayOneFixtureJob(
+            let requiresFreshConnection = try await relayOneFixtureJob(
                 using: session,
                 deviceID: deviceID,
                 agent: activeAgent
+            )
+            return JarvisMacDeveloperEventRelayProgress(
+                cursor: batch.cursor,
+                acceptedEventCount: batch.eventCount,
+                hasMore: batch.hasMore,
+                requiresFreshConnection: requiresFreshConnection
             )
         }
         return JarvisMacDeveloperEventRelayProgress(
             cursor: batch.cursor,
             acceptedEventCount: batch.eventCount,
-            hasMore: batch.hasMore
+            hasMore: batch.hasMore,
+            requiresFreshConnection: false
         )
     }
 
@@ -261,7 +269,7 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
         using session: any JarvisMacBridgeSession,
         deviceID: UUID,
         agent: any JarvisMacDeveloperAgentSession
-    ) async throws {
+    ) async throws -> Bool {
         let leaseRequest = try JSONSerialization.data(
             withJSONObject: [
                 "device_id": deviceID.uuidString.lowercased(),
@@ -280,7 +288,16 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
             guard leased.body.isEmpty else {
                 throw JarvisMacDeveloperEventRelayError.invalidMasterResponse
             }
-            return
+            return true
+        }
+        if leased.status == 503 {
+            guard let object = try? JSONSerialization.jsonObject(with: leased.body)
+                    as? [String: Any],
+                  Set(object.keys) == Set(["error"]),
+                  object["error"] as? String == "emergency_pause_blocks_work" else {
+                throw JarvisMacDeveloperEventRelayError.invalidMasterResponse
+            }
+            return false
         }
         guard leased.status == 200 else {
             throw JarvisMacDeveloperEventRelayError.invalidMasterResponse
@@ -385,6 +402,7 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
         case .settled:
             throw JarvisMacDeveloperEventRelayError.fixtureJobRejected
         }
+        return false
     }
 
     private static func pollFixtureCancellation(
@@ -405,15 +423,15 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
                 body: request
             )
         )
-        if response.status == 204 {
-            guard response.body.isEmpty else {
-                throw JarvisMacDeveloperEventRelayError.invalidMasterResponse
-            }
+        guard response.status == 200,
+              let object = strictJSONObject(response.body) else {
+            throw JarvisMacDeveloperEventRelayError.invalidMasterResponse
+        }
+        if Set(object.keys) == Set(["status"]),
+           object["status"] as? String == "no_cancellation" {
             return nil
         }
-        guard response.status == 200,
-              let object = strictJSONObject(response.body),
-              Set(object.keys) == Set([
+        guard Set(object.keys) == Set([
                   "protocol_version", "connection_epoch", "sequence",
                   "task_id", "step_id", "attempt_id", "lease_id",
                   "cancellation_id", "deadline_after_ms"
@@ -596,7 +614,10 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
     }
 
     private static func strictJSONObject(_ data: Data) -> [String: Any]? {
+        var scanner = JarvisStrictJSONObjectKeyScanner(data: data)
         guard !data.isEmpty,
+              let keys = try? scanner.scanTopLevelKeys(),
+              Set(keys).count == keys.count,
               let object = try? JSONSerialization.jsonObject(
                   with: data,
                   options: []
@@ -935,7 +956,9 @@ private actor FoundationJarvisMacDeveloperAgentSession:
             expectedCoreExecutableURL: agentIdentity.executableURL
         )
         let transport = DarwinJarvisUnixSocketTransport(
-            timeoutSeconds: 5,
+            // A valid fixture may deliberately wait for up to five seconds.
+            // Keep bounded framing and scheduling overhead outside that budget.
+            timeoutSeconds: 10,
             peerIdentityPolicy: { peerPolicy }
         )
         let process = Process()

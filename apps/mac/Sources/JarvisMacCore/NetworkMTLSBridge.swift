@@ -5,11 +5,17 @@ import Security
 public struct NetworkJarvisMacTLSChannelFactory: JarvisMacAuthenticatedTLSChannelFactory, Sendable {
     private let identityStore: KeychainJarvisMacBridgeIdentityStore
 
-    public init(identityStore: KeychainJarvisMacBridgeIdentityStore = .init()) {
+    public init(
+        identityStore: KeychainJarvisMacBridgeIdentityStore =
+            .init(identityProfile: .standard)
+    ) {
         self.identityStore = identityStore
     }
 
     public func connect(profile: JarvisMacBridgeProfile) async throws -> any JarvisMacAuthenticatedTLSChannel {
+        guard try identityStore.loadInstalledProfile() == profile else {
+            throw JarvisMacDeveloperBridgeError.bindingMismatch
+        }
         let endpoint = try ParsedMasterEndpoint(profile.masterEndpoint)
         let material = try identityStore.loadTLSIdentityMaterial()
         let tls = NWProtocolTLS.Options()
@@ -69,6 +75,98 @@ private final class ConnectionHolder: @unchecked Sendable {
     let connection: NWConnection
     init(_ connection: NWConnection) { self.connection = connection }
     func cancel() { connection.cancel() }
+}
+
+enum JarvisMacHTTP1ResponseParser {
+    static func parseResponseIfComplete(
+        _ readBuffer: inout Data,
+        maximumHeaderBytes: Int,
+        maximumWireBytes: Int
+    ) throws -> JarvisMacBridgeHTTPResponse? {
+        let delimiter = Data("\r\n\r\n".utf8)
+        guard let headerRange = readBuffer.range(of: delimiter) else {
+            guard readBuffer.count <= maximumHeaderBytes else {
+                throw JarvisMacDeveloperBridgeError.invalidResponse
+            }
+            return nil
+        }
+        guard headerRange.lowerBound <= maximumHeaderBytes,
+              let header = String(data: readBuffer[..<headerRange.lowerBound], encoding: .ascii)
+        else {
+            throw JarvisMacDeveloperBridgeError.invalidResponse
+        }
+        let lines = header.components(separatedBy: "\r\n")
+        guard let statusLine = lines.first else {
+            throw JarvisMacDeveloperBridgeError.invalidResponse
+        }
+        let statusParts = statusLine.split(separator: " ", maxSplits: 2)
+        guard statusParts.count >= 2, statusParts[0] == "HTTP/1.1",
+              let status = Int(statusParts[1]), (100 ... 599).contains(status)
+        else {
+            throw JarvisMacDeveloperBridgeError.invalidResponse
+        }
+        var contentLengths: [Int] = []
+        for line in lines.dropFirst() {
+            guard let separator = line.firstIndex(of: ":") else {
+                throw JarvisMacDeveloperBridgeError.invalidResponse
+            }
+            let rawName = line[..<separator]
+            guard !rawName.isEmpty,
+                  rawName.utf8.allSatisfy(Self.isHTTPFieldNameByte) else {
+                throw JarvisMacDeveloperBridgeError.invalidResponse
+            }
+            let name = rawName.lowercased()
+            let value = line[line.index(after: separator)...]
+                .trimmingCharacters(in: .whitespaces)
+            if name == "transfer-encoding" {
+                throw JarvisMacDeveloperBridgeError.invalidResponse
+            }
+            if name == "content-length" {
+                guard !value.isEmpty,
+                      value.utf8.allSatisfy({ (48 ... 57).contains($0) }),
+                      let length = Int(value) else {
+                    throw JarvisMacDeveloperBridgeError.invalidResponse
+                }
+                contentLengths.append(length)
+            }
+        }
+        let contentLength: Int
+        if status == 204 {
+            guard contentLengths.isEmpty
+                    || (contentLengths.count == 1 && contentLengths.first == 0)
+            else {
+                throw JarvisMacDeveloperBridgeError.invalidResponse
+            }
+            contentLength = 0
+        } else {
+            guard contentLengths.count == 1, let length = contentLengths.first else {
+                throw JarvisMacDeveloperBridgeError.invalidResponse
+            }
+            contentLength = length
+        }
+        guard contentLength >= 0, contentLength <= maximumWireBytes else {
+            throw JarvisMacDeveloperBridgeError.invalidResponse
+        }
+        let bodyStart = headerRange.upperBound
+        guard readBuffer.count >= bodyStart + contentLength else { return nil }
+        if status == 204, readBuffer.count != bodyStart {
+            throw JarvisMacDeveloperBridgeError.invalidResponse
+        }
+        let body = readBuffer.subdata(in: bodyStart ..< (bodyStart + contentLength))
+        readBuffer.removeSubrange(0 ..< (bodyStart + contentLength))
+        return JarvisMacBridgeHTTPResponse(status: status, body: body)
+    }
+
+    private static func isHTTPFieldNameByte(_ byte: UInt8) -> Bool {
+        switch byte {
+        case 48 ... 57, 65 ... 90, 97 ... 122:
+            true
+        case 33, 35, 36, 37, 38, 39, 42, 43, 45, 46, 94, 95, 96, 124, 126:
+            true
+        default:
+            false
+        }
+    }
 }
 
 private actor NetworkJarvisMacTLSChannel: JarvisMacAuthenticatedTLSChannel {
@@ -256,43 +354,11 @@ private actor NetworkJarvisMacTLSChannel: JarvisMacAuthenticatedTLSChannel {
     }
 
     private func parseResponseIfComplete() throws -> JarvisMacBridgeHTTPResponse? {
-        let delimiter = Data("\r\n\r\n".utf8)
-        guard let headerRange = readBuffer.range(of: delimiter) else {
-            guard readBuffer.count <= Self.maximumHeaderBytes else {
-                throw JarvisMacDeveloperBridgeError.invalidResponse
-            }
-            return nil
-        }
-        guard headerRange.lowerBound <= Self.maximumHeaderBytes,
-              let header = String(data: readBuffer[..<headerRange.lowerBound], encoding: .ascii) else {
-            throw JarvisMacDeveloperBridgeError.invalidResponse
-        }
-        let lines = header.components(separatedBy: "\r\n")
-        guard let statusLine = lines.first else { throw JarvisMacDeveloperBridgeError.invalidResponse }
-        let statusParts = statusLine.split(separator: " ", maxSplits: 2)
-        guard statusParts.count >= 2, statusParts[0] == "HTTP/1.1",
-              let status = Int(statusParts[1]), (100...599).contains(status) else {
-            throw JarvisMacDeveloperBridgeError.invalidResponse
-        }
-        var contentLengths: [Int] = []
-        for line in lines.dropFirst() {
-            guard let separator = line.firstIndex(of: ":") else {
-                throw JarvisMacDeveloperBridgeError.invalidResponse
-            }
-            let name = line[..<separator].lowercased()
-            let value = line[line.index(after: separator)...].trimmingCharacters(in: .whitespaces)
-            if name == "transfer-encoding" { throw JarvisMacDeveloperBridgeError.invalidResponse }
-            if name == "content-length", let length = Int(value) { contentLengths.append(length) }
-        }
-        guard contentLengths.count == 1, let contentLength = contentLengths.first,
-              contentLength >= 0, contentLength <= Self.maximumWireBytes else {
-            throw JarvisMacDeveloperBridgeError.invalidResponse
-        }
-        let bodyStart = headerRange.upperBound
-        guard readBuffer.count >= bodyStart + contentLength else { return nil }
-        let body = readBuffer.subdata(in: bodyStart..<(bodyStart + contentLength))
-        readBuffer.removeSubrange(0..<(bodyStart + contentLength))
-        return JarvisMacBridgeHTTPResponse(status: status, body: body)
+        try JarvisMacHTTP1ResponseParser.parseResponseIfComplete(
+            &readBuffer,
+            maximumHeaderBytes: Self.maximumHeaderBytes,
+            maximumWireBytes: Self.maximumWireBytes
+        )
     }
 }
 

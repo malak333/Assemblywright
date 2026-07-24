@@ -11,7 +11,7 @@ private enum BridgeCLIError: Error, CustomStringConvertible {
     var description: String {
         switch self {
         case .usage:
-            "Usage: jarvis-mac-bridge enrollment prepare|install | status | connect | monitor|relay [--samples COUNT] [--interval-ms MILLISECONDS] [--reconnect-between-samples]"
+            "Usage: jarvis-mac-bridge enrollment prepare|install [--identity-profile fixture] | enrollment remove --confirm --identity-profile fixture | status|connect [--identity-profile fixture] | monitor|relay [--identity-profile fixture] [--samples COUNT] [--interval-ms MILLISECONDS] [--reconnect-between-samples]"
         case .inputTooLarge:
             "Input exceeds the 64 KiB enrollment-document limit."
         case .notEnrolled:
@@ -34,8 +34,15 @@ private struct JarvisMacBridgeCLI {
     }
 
     private static func run(arguments: [String]) async throws {
-        let coordinator = JarvisMacEnrollmentCoordinator()
-        switch arguments {
+        let parsed = try identityProfileArguments(arguments)
+        let identityStore = KeychainJarvisMacBridgeIdentityStore(
+            identityProfile: parsed.profile
+        )
+        let coordinator = JarvisMacEnrollmentCoordinator(
+            identityStore: identityStore,
+            identityProfile: parsed.profile
+        )
+        switch parsed.arguments {
         case ["enrollment", "prepare"]:
             let invitation = try readBoundedStdin(
                 maximum: JarvisMacEnrollmentCoordinator.maximumDocumentBytes
@@ -54,6 +61,13 @@ private struct JarvisMacBridgeCLI {
                 "registry_revision": profile.registryRevision,
                 "certificate_not_after_ms": profile.certificateNotAfterMilliseconds
             ])
+        case ["enrollment", "remove", "--confirm"]
+            where parsed.profile == .fixtureReasoning:
+            try identityStore.removeFixtureIdentity()
+            try writeJSON([
+                "status": "fixture_identity_removed",
+                "identity_profile": JarvisMacBridgeIdentityProfile.fixtureReasoning.rawValue
+            ])
         case ["status"]:
             guard let profile = try coordinator.status() else {
                 try writeJSON(["status": "not_enrolled"])
@@ -69,7 +83,9 @@ private struct JarvisMacBridgeCLI {
             ])
         case ["connect"]:
             guard let profile = try coordinator.status() else { throw BridgeCLIError.notEnrolled }
-            let session = try await JarvisMacMTLSBridgeTransport().connect(profile: profile)
+            let session = try await JarvisMacMTLSBridgeTransport(
+                factory: NetworkJarvisMacTLSChannelFactory(identityStore: identityStore)
+            ).connect(profile: profile)
             do {
                 let health = try await session.send(
                     JarvisMacBridgeHTTPRequest(method: "GET", path: "/health")
@@ -109,7 +125,12 @@ private struct JarvisMacBridgeCLI {
         case let arguments where arguments.first == "monitor":
             guard let profile = try coordinator.status() else { throw BridgeCLIError.notEnrolled }
             let options = try monitorOptions(Array(arguments.dropFirst()))
-            try await runMonitor(profile: profile, options: options, eventRelay: nil)
+            try await runMonitor(
+                profile: profile,
+                options: options,
+                eventRelay: nil,
+                identityStore: identityStore
+            )
         case let arguments where arguments.first == "relay":
             guard let profile = try coordinator.status() else { throw BridgeCLIError.notEnrolled }
             let configuration = try JarvisMacDeveloperEventRelayConfiguration
@@ -125,10 +146,40 @@ private struct JarvisMacBridgeCLI {
                     ? UUID(uuidString: profile.deviceID)
                     : nil
             )
-            try await runMonitor(profile: profile, options: options, eventRelay: relay)
+            try await runMonitor(
+                profile: profile,
+                options: options,
+                eventRelay: relay,
+                identityStore: identityStore
+            )
         default:
             throw BridgeCLIError.usage
         }
+    }
+
+    private static func identityProfileArguments(
+        _ arguments: [String]
+    ) throws -> (arguments: [String], profile: JarvisMacBridgeIdentityProfile) {
+        var remaining: [String] = []
+        var profile = JarvisMacBridgeIdentityProfile.standard
+        var selected = false
+        var index = 0
+        while index < arguments.count {
+            if arguments[index] == "--identity-profile" {
+                guard !selected, index + 1 < arguments.count,
+                      arguments[index + 1]
+                        == JarvisMacBridgeIdentityProfile.fixtureReasoning.rawValue else {
+                    throw BridgeCLIError.usage
+                }
+                selected = true
+                profile = .fixtureReasoning
+                index += 2
+            } else {
+                remaining.append(arguments[index])
+                index += 1
+            }
+        }
+        return (remaining, profile)
     }
 
     private static func monitorOptions(_ arguments: [String]) throws -> (
@@ -172,10 +223,16 @@ private struct JarvisMacBridgeCLI {
     private static func runMonitor(
         profile: JarvisMacBridgeProfile,
         options: (samples: Int?, intervalMilliseconds: UInt64, reconnectBetweenSamples: Bool),
-        eventRelay: (any JarvisMacBridgeEventRelaying)?
+        eventRelay: (any JarvisMacBridgeEventRelaying)?,
+        identityStore: KeychainJarvisMacBridgeIdentityStore
     ) async throws {
         let supervisor = JarvisMacBridgeSupervisor(
             profile: profile,
+            connector: JarvisMacDefaultBridgeConnector(
+                transport: JarvisMacMTLSBridgeTransport(
+                    factory: NetworkJarvisMacTLSChannelFactory(identityStore: identityStore)
+                )
+            ),
             eventRelay: eventRelay
         )
         var completedSamples = 0

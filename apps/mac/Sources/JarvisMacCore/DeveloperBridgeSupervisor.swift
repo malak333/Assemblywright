@@ -159,7 +159,7 @@ public struct JarvisMacBridgeSupervisorSnapshot: Codable, Equatable, Sendable {
     }
 }
 
-private struct JarvisStrictJSONObjectKeyScanner {
+struct JarvisStrictJSONObjectKeyScanner {
     private let bytes: [UInt8]
     private var index = 0
 
@@ -295,6 +295,134 @@ private struct JarvisStrictJSONObjectKeyScanner {
     }
 }
 
+struct JarvisMacFixtureControlReceipt: Equatable, Sendable {
+    enum Status: String, Sendable {
+        case successObserved = "fixture_success_observed"
+        case cancellationLeased = "fixture_cancellation_leased"
+        case cancellationObserved = "fixture_cancellation_observed"
+        case emergencyResumed = "fixture_emergency_resumed"
+    }
+
+    static let maximumBytes = 4 * 1_024
+
+    let status: Status
+    let taskID: UUID?
+    let stepID: UUID?
+    let streamID: UUID?
+    let queuedSequence: UInt64?
+    let leasedSequence: UInt64?
+    let succeededSequence: UInt64?
+    let requestedSequence: UInt64?
+    let acknowledgedSequence: UInt64?
+    let cancelledSequence: UInt64?
+    let lateOutputWindowMilliseconds: UInt64?
+
+    static func decodeStrict(_ data: Data) throws -> Self {
+        var scanner = JarvisStrictJSONObjectKeyScanner(data: data)
+        let rawKeys = try scanner.scanTopLevelKeys()
+        guard !data.isEmpty,
+              data.count <= maximumBytes,
+              Set(rawKeys).count == rawKeys.count,
+              let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              strictInteger(object["schema_version"]) == 1,
+              let statusText = object["status"] as? String,
+              let status = Status(rawValue: statusText) else {
+            throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+        }
+
+        let successKeys = Set([
+            "schema_version", "status", "task_id", "step_id", "stream_id",
+            "queued_sequence", "leased_sequence", "succeeded_sequence"
+        ])
+        let leasedKeys = Set([
+            "schema_version", "status", "task_id", "step_id", "stream_id",
+            "queued_sequence", "leased_sequence"
+        ])
+        let cancellationKeys = Set([
+            "schema_version", "status", "task_id", "step_id", "stream_id",
+            "requested_sequence", "acknowledged_sequence", "cancelled_sequence",
+            "late_output_window_ms"
+        ])
+        let resumeKeys = Set(["schema_version", "status"])
+
+        let taskID = strictUUID(object["task_id"])
+        let stepID = strictUUID(object["step_id"])
+        let streamID = strictUUID(object["stream_id"])
+        let queued = strictInteger(object["queued_sequence"])
+        let leased = strictInteger(object["leased_sequence"])
+        let succeeded = strictInteger(object["succeeded_sequence"])
+        let requested = strictInteger(object["requested_sequence"])
+        let acknowledged = strictInteger(object["acknowledged_sequence"])
+        let cancelled = strictInteger(object["cancelled_sequence"])
+        let lateOutputWindow = strictInteger(object["late_output_window_ms"])
+
+        switch status {
+        case .successObserved:
+            guard Set(object.keys) == successKeys,
+                  taskID != nil, stepID != nil, streamID != nil,
+                  let queued, let leased, let succeeded,
+                  queued > 0, queued < leased, leased < succeeded else {
+                throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+            }
+        case .cancellationLeased:
+            guard Set(object.keys) == leasedKeys,
+                  taskID != nil, stepID != nil, streamID != nil,
+                  let queued, let leased,
+                  queued > 0, queued < leased else {
+                throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+            }
+        case .cancellationObserved:
+            guard Set(object.keys) == cancellationKeys,
+                  taskID != nil, stepID != nil, streamID != nil,
+                  let requested, let acknowledged, let cancelled,
+                  requested > 0, requested < acknowledged, acknowledged < cancelled,
+                  lateOutputWindow == 7_000 else {
+                throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+            }
+        case .emergencyResumed:
+            guard Set(object.keys) == resumeKeys else {
+                throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+            }
+        }
+
+        return Self(
+            status: status,
+            taskID: taskID,
+            stepID: stepID,
+            streamID: streamID,
+            queuedSequence: queued,
+            leasedSequence: leased,
+            succeededSequence: succeeded,
+            requestedSequence: requested,
+            acknowledgedSequence: acknowledged,
+            cancelledSequence: cancelled,
+            lateOutputWindowMilliseconds: lateOutputWindow
+        )
+    }
+
+    private static func strictUUID(_ value: Any?) -> UUID? {
+        guard let text = value as? String,
+              text == text.lowercased(),
+              let uuid = UUID(uuidString: text),
+              uuid != UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) else {
+            return nil
+        }
+        return uuid
+    }
+
+    private static func strictInteger(_ value: Any?) -> UInt64? {
+        guard let number = value as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID() else {
+            return nil
+        }
+        let text = number.stringValue
+        guard let parsed = UInt64(text), String(parsed) == text else {
+            return nil
+        }
+        return parsed
+    }
+}
+
 public actor JarvisMacBridgeSupervisor {
     public static let healthPath = "/health"
     public static let healthMaximumBytes = 64 * 1_024
@@ -333,7 +461,11 @@ public actor JarvisMacBridgeSupervisor {
             )
             let health = try JarvisMacRemoteMasterHealth.decode(response)
             if let eventRelay {
-                _ = try await eventRelay.relayEvents(using: activeSession)
+                let progress = try await eventRelay.relayEvents(using: activeSession)
+                if progress.requiresFreshConnection {
+                    await activeSession.cancel()
+                    session = nil
+                }
             }
             consecutiveFailures = 0
             return JarvisMacBridgeSupervisorSnapshot(

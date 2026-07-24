@@ -229,7 +229,11 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   rejection, reconnect, capped backoff, strict app-helper snapshot decoding,
   one-child ownership, exact-value fixture opt-in, fixture result binding,
   cancellation-result suppression, and fail-closed helper EOF/signature behavior remain
-  green. Also confirm secret-free relay startup, exact agent supervision,
+  green. Confirm the default Keychain account/key/certificate names remain
+  unchanged, the secondary fixture namespace is distinct, MLX/mixed capability
+  fixture enrollment and corrupt fixture status fail closed, and the app passes
+  exact `relay --identity-profile fixture` without inheriting environment.
+  Also confirm secret-free relay startup, exact agent supervision,
   cursor resume, malformed remote-batch denial before local acceptance, and
   mTLS-session cancellation on relay failure. Confirm normal app startup is inert without
   `JARVIS_MAC_DEVELOPER_BRIDGE_EXECUTABLE` plus an independently trusted
@@ -253,6 +257,21 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   `app_supervision=verified`, `agent_restart=verified`, one stable stream ID,
   and a strictly advancing cursor across a fresh app/helper/agent chain. The
   harness must remove its temporary owner-only cursor state on exit. Require the
+  separately enrolled fixture-only profile before running
+  `./scripts/mac-windows-bridge-live-e2e.sh --run-fixture`. At each fixed marker
+  use `scripts/windows-fixture-live-control.ps1 -Action <action>
+  -ConfirmAction` on Windows. Require the payload-free fixture receipt to report
+  exact task/step event kinds with strictly increasing same-stream sequences,
+  agent consumption through the exact terminal cursors, a seven-second
+  no-late-event cancellation window followed by a fully paged durable head
+  observed after the deadline, same-stream agent restart, and fresh
+  standard-profile authentication with an unchanged stable projection. The
+  loopback event query must reject missing bearer authentication and expose no
+  context or result. Revoke the fixture certificate on Windows before confirmed
+  `jarvis-mac-bridge enrollment remove --identity-profile fixture --confirm`
+  cleanup. This is synthetic diagnostic evidence, not MLX,
+  repository/Codex/Git, unattended, signing/notarization, or release evidence.
+  Require the
   two bounded monitor samples to share one positive connection epoch. Require
   the separate reconnect diagnostic to authenticate twice and return a strictly
   higher second epoch after deliberate client-side close. Do not treat a skipped
@@ -286,8 +305,15 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   private-overlay reachability, live Mac enrollment/Keychain identity, and
   bounded service stop/start recovery require the separate live receipts above.
   Repository fixture-job coverage is not live inference or cross-device fixture
-  evidence. A live fixture receipt requires a separately enrolled exact
-  `fixture.reasoning` device; do not reuse an `mlx.reasoning` enrollment.
+  evidence. A live fixture receipt requires the separately enrolled exact
+  `fixture.reasoning` device/profile and owner-controlled `--run-fixture`
+  ceremony; do not reuse or overwrite an `mlx.reasoning` enrollment.
+- Confirm the Mac transport accepts Hyper's bodyless no-work `204` without a
+  `Content-Length`, rejects malformed or nonzero length, malformed field names,
+  transfer encoding, and same-read hidden body bytes, then reconnects before
+  the next sample. Confirm cancellation no-work is exact length-delimited JSON
+  with duplicate and escaped-equivalent keys rejected, and keep the exact
+  receipt sequence distinct from a later global agent cursor.
 - For workspace grants, confirm app-selected paths are absent from child argv,
   environment, health, UI presentation, diagnostics, and audit; malformed or
   stale bookmarks block the complete launch; trusted-wake restarts share the

@@ -18,6 +18,7 @@ flowchart LR
   Remote --> Binding["Certificate registry checks, TLS exporter binding, role and epoch enforcement"]
   Master --> Events["Schema-v4 metadata event journal, cancellation state, and server-issued durable cursor"]
   Events --> Helper["Signed Swift bridge keeps Keychain identity and outbound mTLS"]
+  Helper --> FixtureIdentity["Exact secondary fixture-only Keychain profile; standard identity unchanged"]
   Helper --> Agent["Directly supervised Mac jarvis-agent owner-only cursor over mutually pinned local UDS"]
   Process --> Service["Windows SCM host: automatic start, bounded recovery, status, maintenance, uninstall"]
   Service --> Maintenance["Durable fail-closed marker blocks new enqueue and lease admission"]
@@ -92,6 +93,12 @@ pinned local socket when the explicit agent paths are configured. Only the
 additional exact `JARVIS_MAC_DEVELOPER_FIXTURE_JOBS_ENABLED=true` diagnostic may
 lease the registered fixture capability and forward its exact job/result or
 cancellation/acknowledgement envelopes.
+That opt-in also makes the app launch the helper with the exact
+`--identity-profile fixture` argument. The helper selects a separate
+device-only Keychain service, Secure Enclave key tag, certificate label, and
+staged/installed records; absence of the argument preserves the original
+standard profile and command behavior. The fixture profile rejects every
+capability other than exact `fixture.reasoning` before staging or connecting.
 `remote_mtls_e2e` adds a real master process and generated enrolled client over
 loopback TLS 1.3. It proves mutual certificate authentication, durable
 certificate/device checks, pre-handshake health denial, exporter-bound health
@@ -103,6 +110,21 @@ Windows-locally queued synthetic job, and the result/cancellation path is bound
 to that authenticated device and connection epoch. MacBridge metadata retrieval
 remains bounded and an enrolled inference-worker cannot retrieve that event
 stream.
+The default-off live closeout `scripts/mac-windows-bridge-live-e2e.sh
+--run-fixture` keeps enqueue, pause, and resume on the authenticated Windows
+loopback control plane. The Mac side observes only fixed coordination markers,
+redacted status, owner-only sanitized task/step event receipts, and the metadata
+cursor. A loopback bearer-authenticated metadata-only event query supports that
+binding without adding any remote raw enqueue or data route. Its fixed receipt
+requires the agent cursor to consume the exact success and cancellation terminal
+sequences, seven seconds without late or duplicate cancellation events, and a
+full page drain to a post-deadline durable head. Unexpected same-task kinds,
+cursor regressions, and an unbounded unrelated-event tail fail closed.
+The proof also requires same-stream resume after a fresh app/helper/agent chain and a fresh
+authenticated standard-profile connection with an unchanged stable projection.
+Certificate revocation and confirmed local fixture profile removal remain
+explicit owner cleanup; the receipt is not inference, repository/Codex/Git,
+unattended, or release evidence.
 `windows_service_lifecycle_e2e` installs a unique real SCM service on an elevated
 Windows runner and proves automatic-start/recovery configuration, LocalSystem
 loopback hosting, SCM plus runtime health, durable maintenance admission denial,

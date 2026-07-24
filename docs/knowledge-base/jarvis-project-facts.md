@@ -171,6 +171,15 @@ These notes capture durable facts for future agents working on this repository.
   device/role/revision, public key, exact CA fingerprint, certificate digest,
   signed device SAN, and current validity to match. Normal Jarvis startup does
   not load these items.
+- The fixture live profile is a second device-only Keychain namespace, not a
+  replacement for the standard bridge identity. Exact
+  `--identity-profile fixture` selects distinct generic-password service
+  records, Secure Enclave key tag, and certificate label; absence preserves the
+  original names byte-for-byte. Fixture staging/status/TLS accepts only exact
+  `fixture.reasoning` / `jarvis-fixture-v1` capability metadata. The production
+  app passes the selector explicitly because it clears helper environment.
+  Confirmed local fixture removal cannot delete the standard namespace, and
+  Windows certificate revocation remains the authoritative first cleanup step.
 - `NetworkJarvisMacTLSChannelFactory` pins the enrollment CA and exact IP,
   presents the Keychain identity, forces TLS 1.3 and HTTP/1.1, derives
   `EXPORTER-Jarvis-Developer-Mode-v1`, and keeps the application handshake and
@@ -269,6 +278,25 @@ These notes capture durable facts for future agents working on this repository.
   The July 23 closeout receipt used endpoint `100.64.23.14:7792`, retained stream
   `1b66bdd0-f56a-4ffe-844f-62b336bbdc91`, advanced sequence 13 to 15 across the
   restart, and observed authenticated bridge epochs 54 through 57.
+- `scripts/mac-windows-bridge-live-e2e.sh --run-fixture` is the separate
+  default-off live synthetic-job proof. It requires the exact secondary fixture
+  identity, preserves and rechecks the standard profile, and holds the
+  production app/helper/agent chain open while the owner runs only the fixed
+  Windows-local `windows-fixture-live-control.ps1` success, delayed
+  cancellation, pause, and resume actions. The payload-free receipt requires
+  strict sanitized control receipts whose exact task/step kinds and increasing
+  sequences belong to the agent's stream. The Mac cursor must reach the exact
+  terminal sequences, cancellation rejects any further matching event for
+  seven seconds, then drains unrelated pagination until a post-deadline query
+  reaches `has_more:false`. Unexpected same-task kinds, cursor regression, or a
+  tail beyond the bounded drain fail closed. The same stream advances after a
+  fresh chain. A fresh
+  standard-profile mTLS/application connection—not status equality alone—proves
+  the compatibility profile remains usable. The loopback event evidence route
+  exposes metadata only and is not remote authority. This is not MLX inference,
+  repository/Codex/Git authority, unattended reliability, or release proof.
+  Revoke the fixture certificate on Windows before the confirmed Mac
+  fixture-profile removal.
 - During the July 23 integrated-relay proof, a signed helper connected to a
   Windows service built from `473c35f` but failed closed with
   `event_relay_failed`; the new agent database remained at a null stream and
@@ -344,6 +372,14 @@ These notes capture durable facts for future agents working on this repository.
   separately enrolled exact fixture capability. The existing
   `mlx.reasoning` certificate must not be reused or described as fixture or MLX
   execution proof.
+- The strict Mac HTTP/1.1 transport treats the master's lease `204 No Content`
+  as bodyless even when Hyper omits `Content-Length`. It accepts only an absent
+  length or exact zero and rejects malformed or nonzero length, malformed field
+  names, transfer encoding, and same-read trailing body bytes. After lease
+  no-work, the supervisor closes that authenticated connection and reconnects
+  before the next sample; cancellation no-work is instead exact
+  `{"status":"no_cancellation"}` JSON with ordinary length framing and strict
+  duplicate/escaped-equivalent top-level-key rejection.
 - Signed helper teardown must remain bounded even when Foundation process
   notifications race with a killed child. Cancel and close the output reader,
   poll the launched `Process` through fixed TERM and KILL deadlines, require

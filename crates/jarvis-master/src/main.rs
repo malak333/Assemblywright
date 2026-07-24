@@ -1223,6 +1223,7 @@ async fn serve_runtime(
         .route("/health", get(get_health))
         .route("/v1/development/devices/register", post(register_device))
         .route("/v1/development/connections/accept", post(accept_handshake))
+        .route("/v1/development/events/next", post(development_events_next))
         .route("/v1/development/steps", post(enqueue_step))
         .route(
             "/v1/development/steps/:step_id/cancel",
@@ -1603,7 +1604,7 @@ async fn remote_cancellation_next(
         .map_err(bound_worker_error)?
     {
         Some(instruction) => Ok(Json(instruction).into_response()),
-        None => Ok(StatusCode::NO_CONTENT.into_response()),
+        None => Ok(Json(json!({"status": "no_cancellation"})).into_response()),
     }
 }
 
@@ -1801,6 +1802,20 @@ async fn enqueue_step(
         .enqueue_step(&step, now_ms)
         .map_err(api_error)?;
     Ok(Json(AcceptedResponse { accepted: true }))
+}
+
+async fn development_events_next(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<DistributedEventBatchRequest>,
+) -> ApiResult<DistributedEventBatch> {
+    authorize(&headers, &state)?;
+    request.validate().map_err(api_error)?;
+    let events = lock_process(&state)?
+        .kernel()
+        .distributed_events(&request)
+        .map_err(distributed_event_error)?;
+    Ok(Json(events))
 }
 
 async fn cancel_development_step(

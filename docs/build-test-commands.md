@@ -152,7 +152,15 @@ fixture admission, exact Public synthetic bounds, in-memory-only execution,
 cancellation acknowledgement, and late-output suppression. The master gates
 prove authenticated-device result binding, cancellation/expiry dominance,
 restart reconciliation, raw remote-enqueue removal, and no-work `204`
-semantics. The process gate additionally proves the local bearer-authenticated
+semantics. The focused Swift parser gate accepts a `204 No Content` response
+with either no `Content-Length` or an exact zero length, while rejecting a
+malformed or nonzero length, malformed field name, transfer encoding, or any
+same-read hidden body bytes. A lease no-work response also closes the
+authenticated connection before the next poll, while cancellation no-work uses
+an exact length-delimited JSON response with duplicate and escaped-equivalent
+top-level keys rejected, so later network chunks or ambiguous fields cannot
+cross a request boundary. The process gate
+additionally proves the local bearer-authenticated
 pause/resume actions reject unauthenticated and planning-shaped requests,
 mutate live health, block admission, reopen only fresh admission after resume,
 and are absent from the remote mTLS router. Durable active-lease cancellation,
@@ -348,11 +356,84 @@ database is removed on exit. This proves bounded live metadata delivery and
 durable cursor resume; it does not prove distributed job execution, inference,
 bundling, unattended operation, or release readiness.
 
-The repository fixture-job tests do not add a live-device mode to this command.
-A truthful live fixture receipt requires a separately enrolled device whose
-durable capability is exactly `fixture.reasoning`; the current MLX enrollment
-must not be reused. Until that owner-controlled enrollment/revocation ceremony
-is added to the harness, keep the proof repository/process-scoped.
+The repository fixture-job tests remain repository/process evidence. The live
+fixture mode requires a second enrollment whose sole capability descriptor is
+exactly:
+
+```json
+[
+  {
+    "id": "fixture.reasoning",
+    "kind": "local_inference",
+    "provider": "jarvis-fixture",
+    "model": "jarvis-fixture-v1",
+    "max_context_bytes": 8192,
+    "max_result_bytes": 8192
+  }
+]
+```
+
+Run the same secret-free Windows pairing ceremony with a new device ID/name and
+that capabilities file. On the Mac, select the secondary profile explicitly;
+absence of the selector continues to address the existing standard identity:
+
+```sh
+pbpaste | "$BRIDGE" enrollment prepare --identity-profile fixture | pbcopy
+pbpaste | "$BRIDGE" enrollment install --identity-profile fixture
+"$BRIDGE" status --identity-profile fixture
+./scripts/mac-windows-bridge-live-e2e.sh --run-fixture
+```
+
+The harness first proves the standard profile still exists and differs from the
+exact fixture profile. It then holds the production app/helper/agent chain open
+and emits fixed action markers. Keep the harness in its foreground Mac shell.
+At each marker, use a separate owner-controlled Windows PowerShell checkout,
+then paste only the single sanitized JSON line into the waiting Mac harness:
+
+```powershell
+$success = .\scripts\windows-fixture-live-control.ps1 -Action EnqueueSuccess -ConfirmAction
+$success
+
+$cancel = .\scripts\windows-fixture-live-control.ps1 -Action EnqueueCancellation -ConfirmAction
+$cancel
+
+$c = $cancel | ConvertFrom-Json
+$paused = .\scripts\windows-fixture-live-control.ps1 -Action Pause -TaskId $c.task_id -StepId $c.step_id -StreamId $c.stream_id -AfterSequence $c.leased_sequence -ConfirmAction
+$paused
+
+$resumed = .\scripts\windows-fixture-live-control.ps1 -Action Resume -ConfirmAction
+$resumed
+```
+
+Success emits `jarvis_mac_windows_fixture_live_e2e_ok` only after exact
+synthetic completion and pause-dominated cancellation receipts bind the exact
+task ID, step ID, event kinds, stream, and strictly increasing sequences. The
+Windows-local bearer-authenticated `/v1/development/events/next` query returns
+only redacted event metadata; it exposes no job context/result and is absent
+from the remote mTLS router. The Mac durable cursor must reach those exact
+terminal sequences, and cancellation then rejects late or duplicate matching
+events for seven seconds. It must then drain every page—including more than 64
+unrelated events—until a query completed after the deadline observes
+`has_more:false` at the durable head; that terminal query must also have begun
+after the deadline so a boundary-crossing response is insufficient. Any
+same-task kind outside the exact expected order or any stream/cursor regression
+fails closed. The same-stream cursor must advance across a fresh app/helper/agent
+chain. Finally, the unchanged stable standard-profile
+projection must freshly authenticate. The final receipt contains no fixture
+identity/input/result, certificate, bearer, path, or raw error.
+
+Cleanup is deliberately separate. Revoke the fixture device certificate from
+the Windows enrollment authority first using the current
+`jarvis-master enrollment revoke ... --confirm` command and its exact device
+ID plus a bounded operator reason. Then remove only the secondary Mac namespace:
+
+```sh
+"$BRIDGE" enrollment remove --identity-profile fixture --confirm
+```
+
+Never reuse or overwrite the `mlx.reasoning` enrollment. This live receipt is a
+bounded synthetic diagnostic, not MLX inference, repository/Codex/Git
+authority, unattended operation, signing/notarization, or release readiness.
 
 To record bounded Windows service-outage recovery through the production Swift
 lifecycle, run the stronger coordinated mode from the Mac:

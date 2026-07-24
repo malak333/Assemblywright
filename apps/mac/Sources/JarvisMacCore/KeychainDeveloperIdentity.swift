@@ -2,25 +2,58 @@ import CryptoKit
 import Foundation
 import Security
 
-public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore, Sendable {
-    private static let service = "com.nobiletechnology.jarvis.developer-bridge"
-    private static let stagedAccount = "enrollment-staged-v1"
-    private static let installedAccount = "identity-installed-v1"
-    private static let certificateLabel = "com.nobiletechnology.jarvis.developer-bridge.identity-v1"
-    private static let keyTag = Data("com.nobiletechnology.jarvis.developer-bridge.p256-v1".utf8)
-    private static let lock = NSLock()
+struct JarvisMacBridgeKeychainNamespace: Equatable, Sendable {
+    let service: String
+    let stagedAccount: String
+    let installedAccount: String
+    let certificateLabel: String
+    let keyTag: Data
 
-    public init() {}
+    static func identityProfile(_ profile: JarvisMacBridgeIdentityProfile) -> Self {
+        switch profile {
+        case .standard:
+            Self(
+                service: "com.nobiletechnology.jarvis.developer-bridge",
+                stagedAccount: "enrollment-staged-v1",
+                installedAccount: "identity-installed-v1",
+                certificateLabel: "com.nobiletechnology.jarvis.developer-bridge.identity-v1",
+                keyTag: Data("com.nobiletechnology.jarvis.developer-bridge.p256-v1".utf8)
+            )
+        case .fixtureReasoning:
+            Self(
+                service: "com.nobiletechnology.jarvis.developer-bridge.fixture",
+                stagedAccount: "enrollment-staged-v1",
+                installedAccount: "identity-installed-v1",
+                certificateLabel:
+                    "com.nobiletechnology.jarvis.developer-bridge.fixture.identity-v1",
+                keyTag: Data(
+                    "com.nobiletechnology.jarvis.developer-bridge.fixture.p256-v1".utf8
+                )
+            )
+        }
+    }
+}
+
+public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore, Sendable {
+    private static let lock = NSLock()
+    private let identityProfile: JarvisMacBridgeIdentityProfile
+    private let namespace: JarvisMacBridgeKeychainNamespace
+
+    public init(identityProfile: JarvisMacBridgeIdentityProfile = .standard) {
+        self.identityProfile = identityProfile
+        namespace = .identityProfile(identityProfile)
+    }
 
     public func stageIdentity(for invitation: JarvisMacEnrollmentInvitation) throws -> JarvisMacEnrollmentCSR {
         try Self.lock.withLock {
-            if let installed: InstalledRecord = try readRecord(account: Self.installedAccount) {
+            try identityProfile.validate(invitation: invitation)
+            if let installed: InstalledRecord = try readRecord(account: namespace.installedAccount) {
                 guard installed.profile.deviceID == invitation.deviceID else {
                     throw JarvisMacDeveloperBridgeError.bindingMismatch
                 }
                 throw JarvisMacDeveloperBridgeError.identityUnavailable
             }
-            if let staged: StagedRecord = try readRecord(account: Self.stagedAccount) {
+            if let staged: StagedRecord = try readRecord(account: namespace.stagedAccount) {
                 guard staged.invitation == invitation else {
                     throw JarvisMacDeveloperBridgeError.bindingMismatch
                 }
@@ -34,7 +67,7 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
             do {
                 let reply = try makeCSR(invitation: invitation, privateKey: key)
                 let record = StagedRecord(invitation: invitation)
-                try saveRecord(record, account: Self.stagedAccount)
+                try saveRecord(record, account: namespace.stagedAccount)
                 return reply
             } catch {
                 try? deletePrivateKey()
@@ -45,7 +78,10 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
 
     public func loadStagedInvitation() throws -> JarvisMacEnrollmentInvitation? {
         try Self.lock.withLock {
-            let staged: StagedRecord? = try readRecord(account: Self.stagedAccount)
+            let staged: StagedRecord? = try readRecord(account: namespace.stagedAccount)
+            if let invitation = staged?.invitation {
+                try identityProfile.validate(invitation: invitation)
+            }
             return staged?.invitation
         }
     }
@@ -55,7 +91,8 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
         for invitation: JarvisMacEnrollmentInvitation
     ) throws -> JarvisMacBridgeProfile {
         try Self.lock.withLock {
-            let staged: StagedRecord? = try readRecord(account: Self.stagedAccount)
+            try identityProfile.validate(invitation: invitation)
+            let staged: StagedRecord? = try readRecord(account: namespace.stagedAccount)
             guard staged?.invitation == invitation else {
                 throw JarvisMacDeveloperBridgeError.noStagedEnrollment
             }
@@ -97,12 +134,12 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
             var installedRecordWasSaved = false
             do {
                 _ = try loadIdentity(certificate: leaf)
-                try saveRecord(record, account: Self.installedAccount)
+                try saveRecord(record, account: namespace.installedAccount)
                 installedRecordWasSaved = true
-                try deleteRecord(account: Self.stagedAccount)
+                try deleteRecord(account: namespace.stagedAccount)
             } catch {
                 if installedRecordWasSaved {
-                    try? deleteRecord(account: Self.installedAccount)
+                    try? deleteRecord(account: namespace.installedAccount)
                 }
                 if certificateWasAdded {
                     try? deleteInstalledCertificate()
@@ -115,16 +152,22 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
 
     public func loadInstalledProfile() throws -> JarvisMacBridgeProfile? {
         try Self.lock.withLock {
-            let record: InstalledRecord? = try readRecord(account: Self.installedAccount)
+            let record: InstalledRecord? = try readRecord(account: namespace.installedAccount)
+            if let profile = record?.profile {
+                try identityProfile.validate(profile: profile)
+            }
             return record?.profile
         }
     }
 
     func loadTLSIdentityMaterial() throws -> JarvisMacTLSIdentityMaterial {
         try Self.lock.withLock {
-            guard let record: InstalledRecord = try readRecord(account: Self.installedAccount) else {
+            guard let record: InstalledRecord = try readRecord(
+                account: namespace.installedAccount
+            ) else {
                 throw JarvisMacDeveloperBridgeError.identityUnavailable
             }
+            try identityProfile.validate(profile: record.profile)
             let privateKey = try loadPrivateKey()
             let leafDER = try decodePEM(record.certificatePEM, label: "CERTIFICATE")
             let caDER = try decodePEM(record.caCertificatePEM, label: "CERTIFICATE")
@@ -148,6 +191,18 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
         }
     }
 
+    public func removeFixtureIdentity() throws {
+        guard identityProfile == .fixtureReasoning else {
+            throw JarvisMacDeveloperBridgeError.bindingMismatch
+        }
+        try Self.lock.withLock {
+            try deleteInstalledCertificate()
+            try deletePrivateKey()
+            try deleteRecord(account: namespace.stagedAccount)
+            try deleteRecord(account: namespace.installedAccount)
+        }
+    }
+
     private func createSecureEnclaveKey() throws -> SecKey {
         var accessError: Unmanaged<CFError>?
         guard let access = SecAccessControlCreateWithFlags(
@@ -165,7 +220,7 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
             kSecUseDataProtectionKeychain as String: true,
             kSecPrivateKeyAttrs as String: [
                 kSecAttrIsPermanent as String: true,
-                kSecAttrApplicationTag as String: Self.keyTag,
+                kSecAttrApplicationTag as String: namespace.keyTag,
                 kSecAttrAccessControl as String: access
             ]
         ]
@@ -180,7 +235,7 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
         let query: [String: Any] = [
             kSecClass as String: kSecClassKey,
             kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
-            kSecAttrApplicationTag as String: Self.keyTag,
+            kSecAttrApplicationTag as String: namespace.keyTag,
             kSecReturnRef as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
             kSecUseDataProtectionKeychain as String: true
@@ -205,7 +260,7 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
         let query: [String: Any] = [
             kSecClass as String: kSecClassKey,
             kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
-            kSecAttrApplicationTag as String: Self.keyTag,
+            kSecAttrApplicationTag as String: namespace.keyTag,
             kSecUseDataProtectionKeychain as String: true
         ]
         let status = SecItemDelete(query as CFDictionary)
@@ -253,7 +308,7 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
     private func installedCertificateQuery() -> [String: Any] {
         [
             kSecClass as String: kSecClassCertificate,
-            kSecAttrLabel as String: Self.certificateLabel,
+            kSecAttrLabel as String: namespace.certificateLabel,
             kSecUseDataProtectionKeychain as String: true
         ]
     }
@@ -417,7 +472,7 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
     private func baseRecordQuery(account: String) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.service,
+            kSecAttrService as String: namespace.service,
             kSecAttrAccount as String: account,
             kSecUseDataProtectionKeychain as String: true
         ]

@@ -90,6 +90,15 @@ release requirements, not optional UX guidance.
   before promotion unless the signed leaf matches the staged public key and
   invitation device, role, registry revision, validity, endpoint, and pinned CA
   fingerprint. Pending enrollment material must not authorize a connection.
+- The live fixture device must use a second device-only Keychain namespace.
+  Absence of an exact `--identity-profile fixture` argument must keep using the
+  existing standard accounts, key tag, certificate label, and installed
+  profile. The fixture namespace must reject staging, installation, status, or
+  TLS use unless its capability list is exactly
+  `fixture.reasoning` / `jarvis-fixture` / `jarvis-fixture-v1` with the fixed
+  8 KiB bounds. MLX, mixed, corrupt, or cross-profile material fails closed.
+  Local fixture removal requires a confirmed fixture-only command and never
+  deletes the standard identity; Windows revocation remains authoritative.
 - Every Mac-to-Windows Developer Mode session must be outbound, use the exact
   private-overlay IP from enrollment, pin the enrolled CA, present the enrolled
   client identity, require TLS 1.3, and bind the strict application handshake
@@ -104,7 +113,10 @@ release requirements, not optional UX guidance.
   Apple-anchored, pinned-team requirement, the
   fixed bridge identifier and exact executable, plus the bridge-only Keychain
   access group before launch, then revalidate the running child and prevalidated
-  CDHash before accepting output. It must launch only the monitor command with a cleared environment;
+  CDHash before accepting output. It must launch only the monitor or exact
+  relay command with a cleared environment; fixture relay additionally requires
+  the explicit `--identity-profile fixture` child argument rather than inherited
+  environment.
   own and boundedly TERM-to-KILL reap at most one child; and bound both the
   phase-specific redacted snapshot and its queue. Replacement, duplicate or
   extra fields, malformed, oversized, or overproduced output, EOF, and launch
@@ -159,7 +171,34 @@ release requirements, not optional UX guidance.
   enqueue authority, and must not be registered on the enrolled-device mTLS
   router. Activating pause must atomically move active fixture attempts into
   durable cancellation; deliberate resume may reopen admission but must never
-  revive an old lease or permit its late output.
+  revive an old lease or permit its late output. While paused, only the exact
+  authenticated `503 {"error":"emergency_pause_blocks_work"}` lease response
+  is treated as bounded no-work so cancellation events and paused health can be
+  observed; other 503/error shapes still fail the session.
+- A fixture no-work `204` is accepted only as a strictly bodyless HTTP/1.1
+  response with absent or zero `Content-Length`; malformed field names or
+  lengths, transfer encoding, a nonzero length, or same-read trailing bytes
+  must fail closed. The connection must then close before another request so
+  later chunks cannot become a false next response. Cancellation polling uses
+  an exact length-delimited `{"status":"no_cancellation"}` response instead of
+  `204`, with duplicate and escaped-equivalent top-level keys rejected,
+  preserving the active lease epoch without reusing ambiguous framing.
+- The owner-run `--run-fixture` harness may coordinate only fixed redacted
+  markers and owner-only `0600` sanitized receipts with those Windows-local
+  controls. The bearer-authenticated loopback event query may return only
+  task/step identity, event kind, cursor, device/epoch metadata, and timing from
+  the existing batch; it must never expose context, payload, result, prompt, or
+  raw error and must remain absent from the remote router. Require exact ordered
+  event binding, agent consumption through each terminal sequence, a bounded
+  seven-second no-late-event cancellation window followed by a fully paged
+  durable-head observation completed after the deadline. Reject every
+  same-task event that is not the next expected kind, every stream/cursor
+  regression, and any tail that exceeds the bounded drain. Require cursor
+  restart and a fresh
+  standard-profile authentication. The final receipt must omit fixture
+  identity, input/result, tokens, certificates, paths, and raw errors and remain
+  synthetic live-device evidence rather than model, repository, Codex, Git,
+  unattended, or release proof.
 - Model-originated tool calls must be constrained to runtime-derived inventory.
   The default inventory is the registered first-party `PluginHost` manifests.
   A separate installed-tool catalog may be added only when the individual

@@ -43,10 +43,12 @@ case "$MODE" in
     ;;
   --run-relay)
     ;;
+  --run-fixture)
+    ;;
   --run-outage)
     ;;
   *)
-    fail "usage: $0 [--check|--run|--run-relay|--run-outage]"
+    fail "usage: $0 [--check|--run|--run-relay|--run-fixture|--run-outage]"
     ;;
 esac
 
@@ -75,9 +77,30 @@ TAILSCALE_BIN="${JARVIS_TAILSCALE_BIN:-$(command -v tailscale || true)}"
   || fail "Tailscale CLI is required; set JARVIS_TAILSCALE_BIN to its executable"
 command -v nc >/dev/null 2>&1 || fail "nc is required for the live TCP preflight"
 
-status_json="$("$BRIDGE_BIN" status)"
+identity_profile_arguments=()
+standard_status_json="$("$BRIDGE_BIN" status)"
+[[ "$(json_value "$standard_status_json" status)" == "enrolled" ]] \
+  || fail "standard Mac bridge identity is not installed in Keychain"
+standard_device_id="$(json_value "$standard_status_json" device_id)"
+standard_device_name="$(json_value "$standard_status_json" device_name)"
+standard_master_endpoint="$(json_value "$standard_status_json" master_endpoint)"
+standard_registry_revision="$(json_value "$standard_status_json" registry_revision)"
+standard_certificate_not_after_ms="$(
+  json_value "$standard_status_json" certificate_not_after_ms
+)"
+if [[ "$MODE" == "--run-fixture" ]]; then
+  identity_profile_arguments=(--identity-profile fixture)
+  status_json="$("$BRIDGE_BIN" status "${identity_profile_arguments[@]}")"
+else
+  status_json="$standard_status_json"
+fi
 [[ "$(json_value "$status_json" status)" == "enrolled" ]] \
   || fail "Mac bridge identity is not installed in Keychain"
+device_id="$(json_value "$status_json" device_id)"
+if [[ "$MODE" == "--run-fixture" ]]; then
+  [[ "$device_id" != "$standard_device_id" ]] \
+    || fail "fixture identity must be separately enrolled from the standard profile"
+fi
 endpoint="$(json_value "$status_json" master_endpoint)"
 
 if [[ "$endpoint" == \[*\]:* ]]; then
@@ -95,7 +118,7 @@ fi
 nc -z -w 3 "$host" "$port" >/dev/null 2>&1 \
   || fail "Windows master mTLS endpoint is unreachable"
 
-connect_json="$("$BRIDGE_BIN" connect)"
+connect_json="$("$BRIDGE_BIN" connect "${identity_profile_arguments[@]}")"
 [[ "$(json_value "$connect_json" status)" == "authenticated" ]] \
   || fail "bridge did not complete authenticated application handshake"
 [[ "$(json_value "$connect_json" master_mode)" == "developer_remote_master" ]] \
@@ -111,7 +134,9 @@ for forbidden in grant_secret certificate_pem ca_certificate_pem maintenance_rea
     || fail "live receipt exposed forbidden field: $forbidden"
 done
 
-monitor_json="$("$BRIDGE_BIN" monitor --samples 2 --interval-ms 100)"
+monitor_json="$(
+  "$BRIDGE_BIN" monitor "${identity_profile_arguments[@]}" --samples 2 --interval-ms 100
+)"
 monitor_first="$(printf '%s\n' "$monitor_json" | sed -n '1p')"
 monitor_second="$(printf '%s\n' "$monitor_json" | sed -n '2p')"
 monitor_third="$(printf '%s\n' "$monitor_json" | sed -n '3p')"
@@ -132,7 +157,10 @@ for forbidden in grant_secret certificate_pem ca_certificate_pem maintenance_rea
     || fail "live monitor exposed forbidden field: $forbidden"
 done
 
-reconnect_json="$("$BRIDGE_BIN" monitor --samples 2 --interval-ms 100 --reconnect-between-samples)"
+reconnect_json="$(
+  "$BRIDGE_BIN" monitor "${identity_profile_arguments[@]}" \
+    --samples 2 --interval-ms 100 --reconnect-between-samples
+)"
 reconnect_first="$(printf '%s\n' "$reconnect_json" | sed -n '1p')"
 reconnect_second="$(printf '%s\n' "$reconnect_json" | sed -n '2p')"
 reconnect_third="$(printf '%s\n' "$reconnect_json" | sed -n '3p')"
@@ -160,7 +188,7 @@ cleanup_relay() {
     rm -rf -- "$relay_directory"
   fi
 }
-if [[ "$MODE" == "--run-relay" ]]; then
+if [[ "$MODE" == "--run-relay" || "$MODE" == "--run-fixture" ]]; then
   command -v sqlite3 >/dev/null 2>&1 \
     || fail "sqlite3 is required for the durable relay proof"
   if [[ -n "${JARVIS_MAC_AGENT_BIN:-}" ]]; then
@@ -180,10 +208,15 @@ if [[ "$MODE" == "--run-relay" ]]; then
     "JARVIS_MAC_DEVELOPER_AGENT_EXECUTABLE=$relay_agent_bin"
     "JARVIS_MAC_DEVELOPER_AGENT_DATA_DIR=$relay_data_directory"
   )
+  if [[ "$MODE" == "--run-fixture" ]]; then
+    app_lifecycle_environment+=(
+      "JARVIS_MAC_DEVELOPER_FIXTURE_JOBS_ENABLED=true"
+    )
+  fi
   trap cleanup_relay EXIT
 fi
 
-if ! app_lifecycle_output="$(
+if [[ "$MODE" != "--run-fixture" ]] && ! app_lifecycle_output="$(
   env \
     JARVIS_MAC_DEVELOPER_BRIDGE_LIVE_E2E=true \
     JARVIS_MAC_DEVELOPER_BRIDGE_EXECUTABLE="$BRIDGE_BIN" \
@@ -195,8 +228,10 @@ if ! app_lifecycle_output="$(
   printf '%s\n' "$app_lifecycle_output" >&2
   fail "production app bridge lifecycle did not reach the Windows master"
 fi
-[[ "$app_lifecycle_output" == *"jarvis_mac_app_bridge_live_e2e_ok"* ]] \
-  || fail "production app bridge lifecycle omitted its live E2E marker"
+if [[ "$MODE" != "--run-fixture" ]]; then
+  [[ "$app_lifecycle_output" == *"jarvis_mac_app_bridge_live_e2e_ok"* ]] \
+    || fail "production app bridge lifecycle omitted its live E2E marker"
+fi
 
 if [[ "$MODE" == "--run-relay" ]]; then
   relay_database="$relay_data_directory/agent.sqlite3"
@@ -240,6 +275,237 @@ if [[ "$MODE" == "--run-relay" ]]; then
     || fail "production app relay did not durably resume the same advancing stream"
   printf 'jarvis_mac_windows_event_relay_live_e2e_ok endpoint=%s stream_id=%s sequence_before=%s sequence_after=%s app_supervision=verified agent_restart=verified\n' \
     "$endpoint" "$first_stream" "$first_sequence" "$resumed_sequence"
+fi
+
+if [[ "$MODE" == "--run-fixture" ]]; then
+  fixture_coordination_directory="$relay_directory/fixture-coordination"
+  mkdir "$fixture_coordination_directory"
+  chmod 700 "$fixture_coordination_directory"
+  fixture_output="$relay_directory/fixture-live.log"
+  : >"$fixture_output"
+  chmod 600 "$fixture_output"
+  fixture_pid=""
+
+  cleanup_fixture() {
+    if [[ -n "$fixture_pid" ]] && kill -0 "$fixture_pid" >/dev/null 2>&1; then
+      : >"$fixture_coordination_directory/cancel"
+      kill "$fixture_pid" >/dev/null 2>&1 || true
+      local deadline=$((SECONDS + 5))
+      while kill -0 "$fixture_pid" >/dev/null 2>&1 \
+        && (( SECONDS < deadline )); do
+        sleep 0.1
+      done
+      if kill -0 "$fixture_pid" >/dev/null 2>&1; then
+        kill -KILL "$fixture_pid" >/dev/null 2>&1 || true
+      fi
+      wait "$fixture_pid" >/dev/null 2>&1 || true
+    fi
+    cleanup_relay
+  }
+  trap cleanup_fixture EXIT
+
+  fixture_cursor() {
+    local database="$relay_data_directory/agent.sqlite3"
+    [[ -f "$database" ]] || return 1
+    sqlite3 "$database" \
+      'SELECT COALESCE(stream_id, ""), sequence FROM agent_event_cursor WHERE singleton = 1;'
+  }
+  wait_for_fixture_marker() {
+    local marker="$1"
+    local timeout_seconds="$2"
+    local label="$3"
+    local deadline=$((SECONDS + timeout_seconds))
+    while [[ ! -s "$fixture_coordination_directory/$marker" ]]; do
+      if ! kill -0 "$fixture_pid" >/dev/null 2>&1; then
+        wait "$fixture_pid" >/dev/null 2>&1 || true
+        fail "production app fixture lifecycle exited before $label"
+      fi
+      (( SECONDS < deadline )) || {
+        fail "timed out waiting for $label"
+      }
+      sleep 0.25
+    done
+  }
+  wait_for_fixture_sequence() {
+    local minimum="$1"
+    local timeout_seconds="$2"
+    local label="$3"
+    local deadline=$((SECONDS + timeout_seconds))
+    local observed=""
+    while true; do
+      observed="$(fixture_cursor 2>/dev/null || true)"
+      local sequence="${observed##*|}"
+      if [[ "$sequence" =~ ^[0-9]+$ && "$sequence" -ge "$minimum" ]]; then
+        printf '%s' "$observed"
+        return
+      fi
+      if ! kill -0 "$fixture_pid" >/dev/null 2>&1; then
+        wait "$fixture_pid" >/dev/null 2>&1 || true
+        fail "production app fixture lifecycle exited before $label"
+      fi
+      (( SECONDS < deadline )) || {
+        fail "timed out waiting for $label"
+      }
+      sleep 0.25
+    done
+  }
+  capture_fixture_control_receipt() {
+    local filename="$1"
+    local label="$2"
+    local receipt=""
+    if ! IFS= read -r -t 300 receipt; then
+      fail "timed out waiting for the sanitized $label receipt on stdin"
+    fi
+    [[ -n "$receipt" && "${#receipt}" -le 4096 ]] \
+      || fail "the sanitized $label receipt was empty or oversized"
+    (
+      umask 077
+      printf '%s' "$receipt" >"$fixture_coordination_directory/$filename.tmp"
+    )
+    chmod 600 "$fixture_coordination_directory/$filename.tmp"
+    mv "$fixture_coordination_directory/$filename.tmp" \
+      "$fixture_coordination_directory/$filename"
+  }
+
+  env \
+    JARVIS_MAC_DEVELOPER_FIXTURE_LIVE_E2E=true \
+    JARVIS_MAC_DEVELOPER_FIXTURE_COORDINATION_DIR="$fixture_coordination_directory" \
+    JARVIS_MAC_DEVELOPER_BRIDGE_EXECUTABLE="$BRIDGE_BIN" \
+    JARVIS_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER="$bridge_team" \
+    "${app_lifecycle_environment[@]}" \
+    swift test --disable-sandbox --package-path "$PACKAGE_PATH" \
+      --filter liveSignedHelperAppLifecycleRunsFixtureJob \
+      >"$fixture_output" 2>&1 </dev/null &
+  fixture_pid="$!"
+
+  wait_for_fixture_marker "fixture-ready" 120 "the exact fixture-profile connection"
+  fixture_ready_epoch="$(
+    tr -d '\r\n' <"$fixture_coordination_directory/fixture-ready"
+  )"
+  [[ "$fixture_ready_epoch" =~ ^[0-9]+$ && "$fixture_ready_epoch" -gt 0 ]] \
+    || fail "fixture lifecycle emitted an invalid connection epoch"
+  initial_cursor="$(fixture_cursor)" \
+    || fail "fixture lifecycle did not create the durable agent cursor"
+  fixture_stream="${initial_cursor%%|*}"
+  fixture_sequence_before="${initial_cursor##*|}"
+  [[ "$fixture_stream" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ \
+    && "$fixture_sequence_before" =~ ^[0-9]+$ ]] \
+    || fail "fixture lifecycle emitted an invalid initial cursor"
+
+  printf '%s\n' \
+    'jarvis_mac_windows_fixture_success_enqueue_required action=EnqueueSuccess script=scripts/windows-fixture-live-control.ps1 receipt_stdin=required'
+  capture_fixture_control_receipt "success-control.json" "fixture success"
+  wait_for_fixture_marker "success-observed" 30 "strict success receipt validation"
+  success_receipt="$(<"$fixture_coordination_directory/success-control.json")"
+  success_receipt_stream="$(json_value "$success_receipt" stream_id)"
+  success_receipt_sequence="$(json_value "$success_receipt" succeeded_sequence)"
+  [[ "$success_receipt_stream" == "$fixture_stream" \
+    && "$success_receipt_sequence" =~ ^[0-9]+$ \
+    && "$success_receipt_sequence" -gt "$fixture_sequence_before" ]] \
+    || fail "strict success receipt did not bind the active fixture stream"
+  success_cursor="$(
+    wait_for_fixture_sequence "$success_receipt_sequence" 120 \
+      "the exact synthetic success terminal event"
+  )"
+  success_stream="${success_cursor%%|*}"
+  fixture_sequence_success="${success_cursor##*|}"
+  [[ "$success_stream" == "$fixture_stream" ]] \
+    || fail "fixture success replaced the durable event stream"
+
+  printf '%s\n' \
+    'jarvis_mac_windows_fixture_cancellation_enqueue_required action=EnqueueCancellation script=scripts/windows-fixture-live-control.ps1 receipt_stdin=required'
+  capture_fixture_control_receipt "cancellation-control.json" "fixture cancellation lease"
+  wait_for_fixture_marker \
+    "cancellation-leased-observed" 30 "strict cancellation lease receipt validation"
+  cancellation_receipt="$(<"$fixture_coordination_directory/cancellation-control.json")"
+  cancellation_receipt_stream="$(json_value "$cancellation_receipt" stream_id)"
+  cancellation_receipt_leased_sequence="$(
+    json_value "$cancellation_receipt" leased_sequence
+  )"
+  [[ "$cancellation_receipt_stream" == "$fixture_stream" \
+    && "$cancellation_receipt_leased_sequence" =~ ^[0-9]+$ \
+    && "$cancellation_receipt_leased_sequence" -gt "$fixture_sequence_success" ]] \
+    || fail "strict cancellation receipt did not bind the active fixture stream"
+  leased_cursor="$(
+    wait_for_fixture_sequence "$cancellation_receipt_leased_sequence" 120 \
+      "the exact delayed cancellation fixture lease"
+  )"
+  leased_stream="${leased_cursor%%|*}"
+  [[ "$leased_stream" == "$fixture_stream" ]] \
+    || fail "fixture cancellation lease replaced the durable event stream"
+  fixture_sequence_leased="$cancellation_receipt_leased_sequence"
+  printf '%s\n' \
+    'jarvis_mac_windows_fixture_pause_required action=Pause script=scripts/windows-fixture-live-control.ps1 args=prior_cancellation_receipt receipt_stdin=required'
+  capture_fixture_control_receipt "pause-control.json" "fixture cancellation"
+  wait_for_fixture_marker "cancellation-observed" 240 "the fail-closed paused state"
+  pause_receipt="$(<"$fixture_coordination_directory/pause-control.json")"
+  pause_receipt_stream="$(json_value "$pause_receipt" stream_id)"
+  pause_receipt_cancelled_sequence="$(json_value "$pause_receipt" cancelled_sequence)"
+  [[ "$pause_receipt_stream" == "$fixture_stream" \
+    && "$pause_receipt_cancelled_sequence" =~ ^[0-9]+$ \
+    && "$pause_receipt_cancelled_sequence" -gt "$fixture_sequence_leased" ]] \
+    || fail "strict cancellation receipt did not bind the active fixture stream"
+  cancellation_cursor="$(
+    wait_for_fixture_sequence "$pause_receipt_cancelled_sequence" 120 \
+      "the exact cancellation acknowledgement and late-output suppression"
+  )"
+  cancellation_stream="${cancellation_cursor%%|*}"
+  fixture_sequence_cancelled="${cancellation_cursor##*|}"
+  [[ "$cancellation_stream" == "$fixture_stream" ]] \
+    || fail "fixture cancellation replaced the durable event stream"
+
+  printf '%s\n' \
+    'jarvis_mac_windows_fixture_resume_required action=Resume script=scripts/windows-fixture-live-control.ps1 receipt_stdin=required'
+  capture_fixture_control_receipt "resume-control.json" "fixture resume"
+  wait_for_fixture_marker "fixture-complete" 240 "deliberate fixture admission resume"
+  if ! wait "$fixture_pid"; then
+    fail "production app fixture lifecycle failed"
+  fi
+  fixture_pid=""
+  [[ "$(cat "$fixture_output")" == *"jarvis_mac_app_fixture_live_e2e_ok"* ]] \
+    || fail "production app fixture lifecycle omitted its live E2E marker"
+
+  if ! fixture_restart_output="$(
+    env \
+      JARVIS_MAC_DEVELOPER_BRIDGE_LIVE_E2E=true \
+      JARVIS_MAC_DEVELOPER_BRIDGE_EXECUTABLE="$BRIDGE_BIN" \
+      JARVIS_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER="$bridge_team" \
+      "${app_lifecycle_environment[@]}" \
+      swift test --disable-sandbox --package-path "$PACKAGE_PATH" \
+        --filter liveSignedHelperAppLifecycleReachesWindowsMaster 2>&1
+  )"; then
+    printf '%s\n' "$fixture_restart_output" >&2
+    fail "fixture cursor did not survive a fresh app/helper/agent chain"
+  fi
+  [[ "$fixture_restart_output" == *"jarvis_mac_app_bridge_live_e2e_ok"* ]] \
+    || fail "fixture restart omitted its live E2E marker"
+  restarted_cursor="$(fixture_cursor)" \
+    || fail "fixture restart lost the durable agent cursor"
+  restarted_stream="${restarted_cursor%%|*}"
+  fixture_sequence_restarted="${restarted_cursor##*|}"
+  [[ "$restarted_stream" == "$fixture_stream" \
+    && "$fixture_sequence_restarted" =~ ^[0-9]+$ \
+    && "$fixture_sequence_restarted" -gt "$fixture_sequence_cancelled" ]] \
+    || fail "fixture restart did not resume the same advancing cursor"
+
+  standard_status_after="$("$BRIDGE_BIN" status)"
+  [[ "$(json_value "$standard_status_after" status)" == "enrolled" \
+    && "$(json_value "$standard_status_after" device_id)" == "$standard_device_id" \
+    && "$(json_value "$standard_status_after" device_name)" == "$standard_device_name" \
+    && "$(json_value "$standard_status_after" master_endpoint)" == "$standard_master_endpoint" \
+    && "$(json_value "$standard_status_after" registry_revision)" == "$standard_registry_revision" \
+    && "$(json_value "$standard_status_after" certificate_not_after_ms)" \
+      == "$standard_certificate_not_after_ms" ]] \
+    || fail "fixture run changed the stable standard Mac bridge profile projection"
+  standard_connect_after="$("$BRIDGE_BIN" connect)"
+  [[ "$(json_value "$standard_connect_after" status)" == "authenticated" \
+    && "$(json_value "$standard_connect_after" device_id)" == "$standard_device_id" \
+    && "$(json_value "$standard_connect_after" master_endpoint)" \
+      == "$standard_master_endpoint" ]] \
+    || fail "standard Mac bridge profile did not freshly reauthenticate after the fixture run"
+  printf 'jarvis_mac_windows_fixture_live_e2e_ok endpoint=%s sequence_before=%s sequence_success=%s sequence_cancelled=%s sequence_restarted=%s fixture_profile=verified exact_event_binding=verified standard_profile_preserved=verified standard_profile_reauthenticated=verified cancellation=verified late_output_suppression=verified agent_restart=verified\n' \
+    "$endpoint" "$fixture_sequence_before" "$fixture_sequence_success" \
+    "$fixture_sequence_cancelled" "$fixture_sequence_restarted"
 fi
 
 if [[ "$MODE" == "--run-outage" ]]; then

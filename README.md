@@ -89,7 +89,12 @@ binds lease, result, cancellation, acknowledgement, device, epoch, and attempt;
 the agent keeps the active fixture only in memory and suppresses output after
 cancellation. This is not a bundled helper, unattended background service,
 production distributed-job runtime, MLX inference worker, repository executor,
-or Codex/Git path. The
+or Codex/Git path. Fixture enrollment uses a second exact Keychain identity
+profile selected only by `--identity-profile fixture`; the original standard
+identity namespace and default monitor/relay commands remain unchanged. The
+fixture profile rejects MLX or mixed capabilities before key creation or TLS.
+The app clears helper environment and passes that exact selector as a child
+argument only with the existing fixture opt-in. The
 Windows-local bearer-authenticated master exposes exact-body
 `POST /v1/development/emergency-pause/activate` and
 `POST /v1/development/emergency-pause/resume` actions. They mutate the live
@@ -99,6 +104,12 @@ leased fixture work so resume cannot make an old result acceptable again. The
 named owner-device proof is
 `./scripts/mac-windows-bridge-live-e2e.sh --run-relay`, which requires the same
 durable stream to advance across a fresh app/helper/agent chain. The
+separate live fixture proof is
+`./scripts/mac-windows-bridge-live-e2e.sh --run-fixture`. It coordinates only
+fixed Windows-local enqueue/pause/resume actions, verifies success,
+cancellation/late-output suppression, same-cursor restart, and standard-profile
+preservation, and emits a payload-free receipt. It does not self-approve or
+grant remote enqueue/pause authority. The
 accepted target and migration boundaries are recorded in
 [Distributed Developer Mode Design](docs/distributed-developer-mode-design.md).
 The protocol seam has a named serialized contract E2E. The master kernel has a
@@ -183,6 +194,23 @@ production Swift lifecycle records Connected, then Master Offline with a fixed
 redacted error, then Connected on a strictly higher authenticated epoch. It is
 service-outage recovery evidence, not a Tailscale adapter outage or long-run
 unattended proof.
+The explicit `--run-fixture` mode additionally requires a separately enrolled
+fixture-only Keychain profile. At its fixed markers the owner runs
+`scripts/windows-fixture-live-control.ps1` on Windows for the exact success,
+delayed cancellation, pause, and resume actions. The harness accepts success
+only after strict sanitized Windows receipts bind the exact task/step event
+kinds and sequences to the same metadata stream, and the Mac agent cursor
+reaches those exact sequences. Cancellation includes a seven-second
+post-terminal observation rejecting late or duplicate task events, followed by
+a complete page drain to a durable head observed after the deadline. Unexpected
+same-task kinds and cursor regression fail closed. The cursor
+then survives a fresh app/helper/agent chain, while the stable standard profile
+projection remains unchanged and freshly reauthenticates. Windows certificate
+revocation and confirmed
+`jarvis-mac-bridge enrollment remove --identity-profile fixture --confirm`
+remain separate cleanup steps. This receipt is live synthetic diagnostics
+evidence, not MLX inference, repository/Codex/Git authority, unattended
+reliability, signing/notarization, or release readiness.
 `windows_service_lifecycle_e2e` installs a unique temporary real SCM service on
 the Windows CI runner, proves automatic-start configuration, starts the master
 under LocalSystem, checks runtime health, proves maintenance admission denial

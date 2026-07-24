@@ -43,6 +43,7 @@ MAC_APP="apps/mac/Sources/JarvisMacApp/JarvisMacApp.swift"
 MAC_BRIDGE_TESTS="apps/mac/Tests/JarvisMacCoreTests/DeveloperBridgeTests.swift"
 MAC_CORE_TESTS="apps/mac/Tests/JarvisMacCoreTests/JarvisMacCoreTests.swift"
 MAC_BRIDGE_LIVE_E2E="scripts/mac-windows-bridge-live-e2e.sh"
+WINDOWS_FIXTURE_LIVE_CONTROL="scripts/windows-fixture-live-control.ps1"
 MAC_BRIDGE_SIGNED_BUILD="scripts/build-mac-bridge-signed.sh"
 MAC_BRIDGE_ENTITLEMENTS="packaging/JarvisMacBridge.entitlements"
 
@@ -112,6 +113,7 @@ require_file "$MAC_APP"
 require_file "$MAC_BRIDGE_TESTS"
 require_file "$MAC_CORE_TESTS"
 require_file "$MAC_BRIDGE_LIVE_E2E"
+require_file "$WINDOWS_FIXTURE_LIVE_CONTROL"
 
 for file in "$BUILD_DOCS" "$ARCHITECTURE" "$KB" "$README"; do
   require_text "distributed protocol crate" "$file" "jarvis-protocol"
@@ -168,12 +170,18 @@ require_text "protocol event cursor limit" "$PROTOCOL_CRATE" "MAX_DISTRIBUTED_EV
 require_text "protocol event cursor contract" "$PROTOCOL_EVENT_E2E" "distributed_event_batch_requires_one_contiguous_server_stream"
 require_text "master event cursor E2E" "$MASTER_EVENT_E2E" "master_event_cursor_is_durable_contiguous_and_stream_bound"
 require_text "master remote event route" "$MASTER_PROCESS" "/v1/distributed/events/next"
+require_text "master local authenticated event evidence route" "$MASTER_PROCESS" "/v1/development/events/next"
+require_text "master local event bearer denial regression" "$MASTER_PROCESS_E2E" "unauthenticated local event metadata was reachable"
+require_text "master local event payload redaction regression" "$MASTER_PROCESS_E2E" "local event metadata exposed forbidden field"
 require_text "master remote event redaction E2E" "$MASTER_REMOTE_MTLS_E2E" "metadata event stream leaked step context"
 require_text "master remote event role denial E2E" "$MASTER_REMOTE_MTLS_E2E" "inference worker reached MacBridge-only event route"
 require_text "protocol exact fixture capability" "$PROTOCOL_CRATE" "FIXTURE_REASONING_CAPABILITY_ID"
 forbid_text "master remote raw-step route" "$MASTER_PROCESS" '"/v1/distributed/steps"'
 require_text "master remote fixture lease route" "$MASTER_PROCESS" '"/v1/distributed/leases/next"'
 require_text "master remote cancellation poll route" "$MASTER_PROCESS" '"/v1/distributed/cancellations/next"'
+require_text "master cancellation no-work framing" "$MASTER_PROCESS" '"status": "no_cancellation"'
+require_text "Mac fixture no-work fresh connection" "$MAC_EVENT_RELAY" "requiresFreshConnection"
+require_text "Mac fixture strict JSON key scan" "$MAC_EVENT_RELAY" "JarvisStrictJSONObjectKeyScanner"
 require_text "master local emergency pause activate route" "$MASTER_PROCESS" '"/v1/development/emergency-pause/activate"'
 require_text "master local emergency pause resume route" "$MASTER_PROCESS" '"/v1/development/emergency-pause/resume"'
 require_text "master process live pause control regression" "$MASTER_PROCESS_E2E" "pause action accepted a mixed planning payload"
@@ -191,6 +199,8 @@ require_text "master secret-free pairing command" "$MASTER_PROCESS" "enrollment_
 require_text "protocol enrollment invitation" "$PROTOCOL_CRATE" "pub struct EnrollmentInvitation"
 require_text "Mac bridge exporter binding" "$MAC_BRIDGE" "EXPORTER-Jarvis-Developer-Mode-v1"
 require_text "Mac bridge device-only Keychain" "$MAC_BRIDGE_KEYCHAIN" "kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly"
+require_text "Mac bridge isolated fixture Keychain namespace" "$MAC_BRIDGE_KEYCHAIN" "developer-bridge.fixture"
+require_text "Mac bridge fixture-only confirmed cleanup" "$MAC_BRIDGE_KEYCHAIN" "removeFixtureIdentity"
 require_text "Mac bridge certificate Keychain item" "$MAC_BRIDGE_KEYCHAIN" "kSecClassCertificate"
 require_text "Mac bridge supported-SDK identity lookup" "$MAC_BRIDGE_KEYCHAIN" "SecIdentityCreateWithCertificate"
 forbid_text "Mac bridge new-SDK-only identity constructor" "$MAC_BRIDGE_KEYCHAIN" "SecIdentityCreate(nil"
@@ -200,6 +210,7 @@ require_text "Mac app bridge independent team pin" "$MAC_BRIDGE_PROCESS" "JARVIS
 require_text "Mac app agent exact opt-in" "$MAC_BRIDGE_PROCESS" "JARVIS_MAC_DEVELOPER_AGENT_EXECUTABLE"
 require_text "Mac app agent data opt-in" "$MAC_BRIDGE_PROCESS" "JARVIS_MAC_DEVELOPER_AGENT_DATA_DIR"
 require_text "Mac app fixture exact opt-in" "$MAC_BRIDGE_PROCESS" "JARVIS_MAC_DEVELOPER_FIXTURE_JOBS_ENABLED"
+require_text "Mac app fixture identity child argument" "$MAC_BRIDGE_PROCESS" '["relay", "--identity-profile", "fixture"]'
 require_text "Mac app bridge signature validation" "$MAC_BRIDGE_PROCESS" "anchor apple generic"
 require_text "Mac app bridge running-child validation" "$MAC_BRIDGE_PROCESS" "kSecGuestAttributePid"
 require_text "Mac app bridge exact code digest" "$MAC_BRIDGE_PROCESS" "kSecCodeInfoUnique"
@@ -231,8 +242,26 @@ require_text "Mac bridge paused-health projection" "$MAC_BRIDGE_SUPERVISOR" "eme
 require_text "Mac bridge paused-health regression" "$MAC_BRIDGE_TESTS" "supervisorAcceptsPausedHealth"
 require_text "Mac fixture result relay regression" "$MAC_BRIDGE_TESTS" "fixtureJobRelayCompletesExactSyntheticJob"
 require_text "Mac fixture cancellation suppression regression" "$MAC_BRIDGE_TESTS" "fixtureJobRelayAcknowledgesCancellationWithoutResult"
+require_text "Mac fixture paused no-work regression" "$MAC_BRIDGE_TESTS" "fixturePauseIsExactNoWork"
+require_text "Mac fixture identity isolation regression" "$MAC_BRIDGE_TESTS" "fixtureEnrollmentIsExactAndProfileIsolated"
+require_text "Mac fixture live app lifecycle" "$MAC_BRIDGE_TESTS" "liveSignedHelperAppLifecycleRunsFixtureJob"
+require_text "Mac fixture strict receipt regression" "$MAC_BRIDGE_TESTS" "fixtureControlReceiptsAreStrict"
 require_text "Mac live event relay mode" "$MAC_BRIDGE_LIVE_E2E" "--run-relay"
 require_text "Mac live event relay receipt" "$MAC_BRIDGE_LIVE_E2E" "jarvis_mac_windows_event_relay_live_e2e_ok"
+require_text "Mac live fixture mode" "$MAC_BRIDGE_LIVE_E2E" "--run-fixture"
+require_text "Mac live fixture redacted receipt" "$MAC_BRIDGE_LIVE_E2E" "jarvis_mac_windows_fixture_live_e2e_ok"
+forbid_text "Mac live fixture raw failure log emission" "$MAC_BRIDGE_LIVE_E2E" 'cat "$fixture_output" >&2'
+require_text "Windows fixture live exact success control" "$WINDOWS_FIXTURE_LIVE_CONTROL" '"EnqueueSuccess"'
+require_text "Windows fixture live exact cancellation control" "$WINDOWS_FIXTURE_LIVE_CONTROL" '"EnqueueCancellation"'
+require_text "Windows fixture live explicit confirmation" "$WINDOWS_FIXTURE_LIVE_CONTROL" "ConfirmAction"
+require_text "Windows fixture exact event binding" "$WINDOWS_FIXTURE_LIVE_CONTROL" "Wait-ExactFixtureEvents"
+require_text "Windows fixture bounded late-output check" "$WINDOWS_FIXTURE_LIVE_CONTROL" "ObservationMilliseconds = 7000"
+require_text "Windows fixture exact unexpected-kind denial" "$WINDOWS_FIXTURE_LIVE_CONTROL" 'event.kind -ne $ExpectedKinds[$expectedIndex]'
+require_text "Windows fixture post-deadline query boundary" "$WINDOWS_FIXTURE_LIVE_CONTROL" 'queryStartedAfterDeadline ='
+require_text "Windows fixture post-deadline durable head" "$WINDOWS_FIXTURE_LIVE_CONTROL" 'queryStartedAfterDeadline -and -not $batch.has_more'
+require_text "Windows fixture bounded post-deadline page drain" "$WINDOWS_FIXTURE_LIVE_CONTROL" "maximumPostDeadlinePages = 256"
+require_text "Windows fixture fail-closed no-event observer" "$WINDOWS_FIXTURE_LIVE_CONTROL" "Wait-NoExactFixtureEvent"
+require_text "Mac fixture fresh standard reauthentication" "$MAC_BRIDGE_LIVE_E2E" "standard_profile_reauthenticated=verified"
 require_text "Mac app bridge OS child disappearance regression" "$MAC_BRIDGE_TESTS" "processExists"
 require_text "Mac bridge Windows CRLF receipt regression" "$MAC_BRIDGE_TESTS" "windowsCRLFIssuedReceiptInstalls"
 require_text "Mac bridge current Security validity regression" "$MAC_BRIDGE_TESTS" "securityValidityNumberUsesReferenceDate"
@@ -259,6 +288,12 @@ for file in "$BUILD_DOCS" "$CHECKLIST" "$ARCHITECTURE" "$KB"; do
   require_text "distributed remote mTLS E2E documentation" "$file" "remote_mtls_e2e"
   require_text "distributed Windows service E2E documentation" "$file" "windows_service_lifecycle_e2e"
   require_text "distributed event cursor E2E documentation" "$file" "event_cursor_e2e"
+  require_text "live fixture closeout documentation" "$file" "--run-fixture"
+  require_text "fixture profile isolation documentation" "$file" "--identity-profile fixture"
+done
+for file in "$DESIGN" "$SAFETY_RULES" "$DISTRIBUTED_DESIGN" "$README"; do
+  require_text "fixture identity profile contract" "$file" "--identity-profile fixture"
+  require_text "live fixture proof contract" "$file" "--run-fixture"
 done
 for file in "$DESIGN" "$SAFETY_RULES" "$DISTRIBUTED_DESIGN" "$BUILD_DOCS" "$CHECKLIST" "$ARCHITECTURE" "$KB" "$README"; do
   require_text "jarvis-agent boundary documentation" "$file" "jarvis-agent"

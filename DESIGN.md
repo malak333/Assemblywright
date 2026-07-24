@@ -178,15 +178,42 @@ digest-bound result. The adapter accepts no model, tool, file, repository,
 credential, Codex, or Git input, persists no job or result, and implements
 attempt/lease/epoch-bound cancellation with bounded acknowledgement and late
 output suppression. Existing MLX enrollment is not valid fixture-job evidence.
+The signed helper therefore keeps the existing standard identity in its
+original Keychain accounts and uses a second device-only key, certificate,
+staging journal, and installed-profile namespace only when the exact
+`--identity-profile fixture` helper/CLI argument is present. That profile
+rejects every enrollment and installed record except the one exact fixture
+descriptor. The app passes the selector as an explicit child argument because
+the helper environment remains cleared; default monitor/relay behavior and the
+standard profile are unchanged.
 The running master exposes pause and deliberate resume only through
 bearer-authenticated Windows-local loopback actions with exact empty request
 documents. Enrolled remote devices have no pause mutation route. Activating
 pause atomically moves active fixture attempts into durable cancellation, so
 resume cannot revive their leases or make late output acceptable.
-The named live-device closeout is
-`scripts/mac-windows-bridge-live-e2e.sh --run-relay`: it must advance one
-concrete cursor, restart the app/helper/agent chain against the same owner-only
-state, and advance the same stream again before emitting its fixed receipt.
+The helper treats only the master's exact authenticated emergency-pause 503
+shape as no-work, allowing cancellation metadata and paused health to advance;
+maintenance or malformed 503 shapes still cancel the session.
+The named metadata closeout remains
+`scripts/mac-windows-bridge-live-e2e.sh --run-relay`. The separate fixture
+closeout is `--run-fixture`: after an explicit fixture-only enrollment it holds
+the production app/helper/agent chain open while the owner uses only the
+Windows-local control script to enqueue one exact success, enqueue one delayed
+fixture, pause, and deliberately resume. It requires bounded success and
+cancellation event receipts bound to the exact task ID, step ID, event kind,
+stream, and strictly increasing sequences. The local bearer-authenticated
+`/v1/development/events/next` route returns only the existing redacted event
+metadata batch and is not registered on the remote router. The Mac cursor must
+reach each receipt's exact terminal sequence, cancellation must survive a
+seven-second no-late-event window and then drain every metadata page until a
+query begun after the deadline observes `has_more:false` at the durable head.
+Any same-task event outside the next exact expected kind, stream/cursor
+regression, or failure to reach that head within the page bound fails closed. A
+fresh chain must resume the same stream, and the stable standard profile
+projection must still complete a fresh
+authenticated connection. The fixed final receipt remains payload-free.
+Revocation remains Windows-authoritative and local fixture-profile removal is
+a separate confirmed cleanup step.
 
 Current app-supervised IPC defaults to a Unix domain socket, not a TCP listener.
 Swift creates a current-owner `0700` runtime directory and a generation-random

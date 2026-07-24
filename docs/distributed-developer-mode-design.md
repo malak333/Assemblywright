@@ -183,7 +183,25 @@ connection never enter the Rust process. The helper is not bundled and this is
 not unattended background operation, a production distributed-job runtime, or
 an M1 inference adapter. Live fixture evidence requires a separately enrolled
 fixture-capability device; an existing `mlx.reasoning` enrollment is not valid
-fixture proof.
+fixture proof. That enrollment occupies a second device-only Keychain namespace
+selected only by the helper/CLI's exact `--identity-profile fixture` argument.
+The original standard accounts/key/certificate remain the compatibility
+default, and the fixture profile rejects any non-exact or mixed capability
+before staging or TLS. The `--run-fixture` live harness keeps task creation and
+pause/resume in the Windows-local owner control plane, proves a bounded exact
+success plus pause-dominated cancellation through sanitized receipts bound to
+exact task/step event kinds and strictly increasing stream sequences. The
+authenticated loopback-only `/v1/development/events/next` evidence route reuses
+the redacted distributed metadata batch, exposes no context or result, and
+remains absent from the enrolled-device router. The agent cursor must consume
+the exact terminal sequences; cancellation also requires seven seconds without
+a late or duplicate event, then drains all pages until a query completed after
+the deadline observes `has_more:false`. Every observed same-task event must be
+the next exact expected kind; stream/cursor regression or an unbounded page
+tail fails closed. The harness then proves same-cursor helper/agent
+restart and a fresh authenticated standard-profile connection, and emits only a
+payload-free receipt.
+Revocation and confirmed fixture-profile removal are explicit owner cleanup.
 
 ### RTX And Future Workers
 
