@@ -147,14 +147,30 @@ non-accepting and suppresses late output. This adapter is transport/lifecycle
 evidence only and grants no MLX, model, tool, file, repository, Codex, or Git
 authority.
 
+The following bounded slice adds the first real M1 inference worker without
+expanding planning authority. A separately enabled standard-profile
+`mlx.reasoning` lane accepts only Public, `ephemeral_no_retention`
+`generate_text` requests with a nonempty 32 KiB prompt ceiling, 1 to 512
+tokens, and 0 to 2000 milli-temperature. The selected model must match the
+single registered `local_inference` / `mlx` capability. The Mac agent invokes
+only its configured absolute `mlx_lm.generate` and local model-directory paths,
+clears inherited environment, forces offline and telemetry-disabled operation,
+passes the prompt on stdin, bounds stdout, and discards stderr. One process
+group and one in-memory attempt are permitted. Timeout, cancellation, pause,
+lease loss, or disconnect owns TERM-to-KILL reaping and suppresses simultaneous
+or late output. No prompt or output enters the durable cursor or event journal.
+This is local LLM execution with frontier cloud review remaining a selective
+separate layer; it adds no remote enqueue, repository, tool, credential,
+network, Codex, Git, publication, or unattended authority.
+
 Emergency pause and deliberate resume are reachable only through the
 Windows-local bearer-authenticated loopback actions
 `POST /v1/development/emergency-pause/activate` and
 `POST /v1/development/emergency-pause/resume`. Both require an exact empty JSON
 object, accept no planning or enqueue fields, and are absent from the remote
-mTLS router. Pause activation atomically transitions active fixture attempts
-into durable cancellation; resume reopens admission but never revives an old
-lease or permits its late result.
+mTLS router. Pause activation atomically transitions active fixture or MLX
+attempts into durable cancellation; resume reopens admission but never revives
+an old lease or permits its late result.
 
 The earlier bridge foundation remains a Swift Keychain enrollment coordinator, Security.framework
 identity store, Network.framework TLS 1.3 client, and focused
@@ -180,8 +196,8 @@ agent's durable cursor. The additional exact fixture opt-in permits only the
 registered synthetic lease/result and cancellation/acknowledgement routes
 through that same helper/agent boundary. The Keychain identity and mTLS
 connection never enter the Rust process. The helper is not bundled and this is
-not unattended background operation, a production distributed-job runtime, or
-an M1 inference adapter. Live fixture evidence requires a separately enrolled
+not unattended background operation or a general production distributed-job
+runtime. Live fixture evidence requires a separately enrolled
 fixture-capability device; an existing `mlx.reasoning` enrollment is not valid
 fixture proof. That enrollment occupies a second device-only Keychain namespace
 selected only by the helper/CLI's exact `--identity-profile fixture` argument.
@@ -202,6 +218,27 @@ tail fails closed. The harness then proves same-cursor helper/agent
 restart and a fresh authenticated standard-profile connection, and emits only a
 payload-free receipt.
 Revocation and confirmed fixture-profile removal are explicit owner cleanup.
+
+The separately invoked `--run-mlx` harness uses the existing exact standard
+`mlx.reasoning` enrollment and requires the executable, model directory, and
+model identifier as explicit Mac inputs. Windows-local owner commands in
+`scripts/windows-mlx-live-control.ps1` enqueue one real success and one long
+cancellation request. The combined cancellation action waits for the exact
+lease and immediately activates emergency pause on Windows, avoiding an
+operator/bridge timing race with a warmed local model; deliberate resume
+remains separate. The harness
+accepts only strict payload-free receipts, requires the Mac durable cursor to
+reach the exact terminal sequences, binds every leased/terminal event to the
+expected Mac device and one attempt epoch, observes seven seconds without a
+late or duplicate cancelled-task event, and proves same-stream restart. It is live
+two-device local-inference evidence only, not model quality, OS sandbox,
+repository/Codex/Git authority, unattended reliability, signing/notarization,
+or release readiness.
+The MLX-only Swift request timeout is 610 seconds and the shared agent IPC
+dispatch ceiling is 620 seconds, so both outlive the protocol's ten-minute
+lease in the order needed for the agent's earlier deadline and bounded
+process-group cleanup to complete. Other relay operations keep tighter
+method-specific timeouts.
 
 ### RTX And Future Workers
 

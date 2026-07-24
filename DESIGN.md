@@ -167,8 +167,21 @@ the UDS path and bearer internally, retains the non-exportable Keychain identity
 and outbound mTLS session, pages the authenticated Windows metadata route, and
 forwards each exact batch into the agent cursor store. Exact audit-token,
 same-EUID, executable-path, and CDHash checks protect both sides of that local
-socket. Live MLX execution, a production distributed-job runtime, repository mutation, Git
-publication, Codex dispatch, bundled installation, and unattended operation
+socket. A separate default-off MLX lane now executes one exact Public,
+`ephemeral_no_retention` `mlx.reasoning` request at a time through a configured
+absolute `mlx_lm.generate` executable and offline local model directory. The
+agent clears the process environment, enables the MLX/Hugging Face offline
+switches, sends the bounded prompt only on stdin, captures bounded stdout, and
+owns a dedicated process group so timeout, cancellation, and emergency pause
+terminate and reap the inference tree before suppressing late output. The
+registered capability, selected model, task, step, attempt, lease,
+cancellation ID, epoch, context digest, and result digest remain bound end to
+end. Canonical path, executable digest/inode, and model-directory inode
+revalidation detects ordinary input replacement, but these remain
+owner-controlled development inputs rather than descriptor-backed immutable
+content or a malicious same-user process sandbox. Repository mutation, Git
+publication, Codex dispatch, bundled
+installation, general production job execution, and unattended operation
 remain unimplemented. A separate default-off diagnostic now exercises one
 cross-device job path without claiming any of those capabilities: an enrolled
 device must advertise the exact `fixture.reasoning` descriptor, the Windows

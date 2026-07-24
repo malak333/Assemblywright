@@ -1,5 +1,6 @@
 use jarvis_master::{
-    AttemptStatus, DeviceRegistration, MasterError, MasterKernel, NewStep, StepStatus,
+    AttemptStatus, DeviceRegistration, MasterError, MasterKernel, NewStep, RemoteWorkContract,
+    StepStatus,
 };
 use jarvis_protocol::{
     CancellationAcknowledgement, CancellationAcknowledgementStatus, CapabilityDescriptor,
@@ -841,4 +842,150 @@ fn cancellation_pending_consumes_global_concurrency_until_terminal() {
         master.lease_next_step(workers[4].0.device_id, workers[4].1, 154_000),
         Err(MasterError::ConcurrentJobLimit)
     ));
+}
+
+#[test]
+fn exact_singleton_mlx_remote_contract_rejects_mixed_and_model_drift() {
+    let capability = CapabilityDescriptor::mlx_reasoning("mlx-model-v1", 64 * 1024, 64 * 1024);
+    let registration = DeviceRegistration {
+        device_id: DeviceId::new(Uuid::new_v4()),
+        device_name: "mlx-only-worker".to_string(),
+        role: DeviceRole::MacBridge,
+        registry_revision: 1,
+        capabilities: vec![capability.clone()],
+    };
+    let contract =
+        RemoteWorkContract::from_registration(&registration).expect("derive exact MLX contract");
+    let mut mixed = registration.clone();
+    mixed
+        .capabilities
+        .push(CapabilityDescriptor::fixture_reasoning());
+    assert!(matches!(
+        RemoteWorkContract::from_registration(&mixed),
+        Err(MasterError::InvalidRemoteWorkContract)
+    ));
+
+    let mut master = MasterKernel::in_memory().expect("MLX master");
+    master.register_device(&registration).expect("register MLX");
+    let connection = master
+        .accept_handshake(&handshake(&registration), 160_000)
+        .expect("connect MLX");
+    let queued = NewStep {
+        task_id: TaskId::new(Uuid::new_v4()),
+        step_id: StepId::new(Uuid::new_v4()),
+        capability_id: "mlx.reasoning".to_string(),
+        sensitivity: Sensitivity::Public,
+        context: json!({
+            "operation":"generate_text",
+            "prompt":"bounded",
+            "max_tokens":64,
+            "temperature_milli":700
+        }),
+        lease_duration_ms: 60_000,
+        deadline_after_ms: 60_000,
+    };
+    master.enqueue_step(&queued, 160_001).expect("enqueue MLX");
+    let job = master
+        .lease_next_remote_step(
+            registration.device_id,
+            connection.connection_epoch,
+            160_002,
+            &contract,
+        )
+        .expect("lease MLX");
+    assert_eq!(job.selected_model, "mlx-model-v1");
+
+    let wrong = fake_worker_result(
+        &job,
+        json!({
+            "operation":"generate_text",
+            "output":"result",
+            "model":"mlx-model-v2"
+        }),
+    );
+    assert!(matches!(
+        master.accept_remote_result_from(registration.device_id, &wrong, 160_003, &contract),
+        Err(MasterError::Protocol(ProtocolError::InvalidMlxResult))
+    ));
+    let exact = fake_worker_result(
+        &job,
+        json!({
+            "operation":"generate_text",
+            "output":"result",
+            "model":"mlx-model-v1"
+        }),
+    );
+    master
+        .accept_remote_result_from(registration.device_id, &exact, 160_004, &contract)
+        .expect("accept exact MLX result");
+}
+
+#[test]
+fn emergency_pause_cancels_active_mlx_and_rejects_late_result() {
+    let capability = CapabilityDescriptor::mlx_reasoning("mlx-model", 64 * 1024, 64 * 1024);
+    let registration = DeviceRegistration {
+        device_id: DeviceId::new(Uuid::new_v4()),
+        device_name: "paused-mlx-worker".to_string(),
+        role: DeviceRole::InferenceWorker,
+        registry_revision: 1,
+        capabilities: vec![capability],
+    };
+    let contract = RemoteWorkContract::from_registration(&registration).expect("MLX contract");
+    let mut master = MasterKernel::in_memory().expect("paused MLX master");
+    master.register_device(&registration).expect("register MLX");
+    let connection = master
+        .accept_handshake(&handshake(&registration), 170_000)
+        .expect("connect MLX");
+    let queued = NewStep {
+        task_id: TaskId::new(Uuid::new_v4()),
+        step_id: StepId::new(Uuid::new_v4()),
+        capability_id: "mlx.reasoning".to_string(),
+        sensitivity: Sensitivity::Public,
+        context: json!({
+            "operation":"generate_text",
+            "prompt":"pause must win",
+            "max_tokens":64,
+            "temperature_milli":0
+        }),
+        lease_duration_ms: 60_000,
+        deadline_after_ms: 60_000,
+    };
+    master.enqueue_step(&queued, 170_001).expect("enqueue");
+    let job = master
+        .lease_next_remote_step(
+            registration.device_id,
+            connection.connection_epoch,
+            170_002,
+            &contract,
+        )
+        .expect("lease");
+    master
+        .set_emergency_paused_at(true, 170_003)
+        .expect("pause");
+    assert_eq!(
+        master.attempt_status(job.attempt_id).expect("attempt"),
+        AttemptStatus::CancellationPending
+    );
+    let late = fake_worker_result(
+        &job,
+        json!({
+            "operation":"generate_text",
+            "output":"must not escape",
+            "model":"mlx-model"
+        }),
+    );
+    assert!(matches!(
+        master.accept_remote_result_from(registration.device_id, &late, 170_004, &contract),
+        Err(MasterError::EmergencyPaused)
+    ));
+    let cancellation = master
+        .next_remote_cancellation(
+            registration.device_id,
+            connection.connection_epoch,
+            170_005,
+            &contract,
+        )
+        .expect("poll")
+        .expect("MLX cancellation");
+    assert_eq!(cancellation.attempt_id, job.attempt_id);
 }

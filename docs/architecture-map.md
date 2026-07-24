@@ -99,6 +99,15 @@ device-only Keychain service, Secure Enclave key tag, certificate label, and
 staged/installed records; absence of the argument preserves the original
 standard profile and command behavior. The fixture profile rejects every
 capability other than exact `fixture.reasoning` before staging or connecting.
+The standard profile can separately enable an exact singleton
+`mlx.reasoning` / `local_inference` / `mlx` lane. Its absolute runtime and model
+paths arrive through bounded startup stdin; one Public, no-retention request
+runs in memory with a cleared offline environment, prompt-only stdin, bounded
+stdout, null stderr, and dedicated process-group reaping. Lease, model, epoch,
+attempt, cancellation, and digest identity stay bound. Cancellation, timeout,
+disconnect, or emergency pause dominates completion and suppresses late
+output. This adds no remote planning, repository, tool, credential, network,
+Codex, Git, publication, or unattended authority.
 `remote_mtls_e2e` adds a real master process and generated enrolled client over
 loopback TLS 1.3. It proves mutual certificate authentication, durable
 certificate/device checks, pre-handshake health denial, exporter-bound health
@@ -125,6 +134,15 @@ authenticated standard-profile connection with an unchanged stable projection.
 Certificate revocation and confirmed local fixture profile removal remain
 explicit owner cleanup; the receipt is not inference, repository/Codex/Git,
 unattended, or release evidence.
+The separate live closeout
+`scripts/mac-windows-bridge-live-e2e.sh --run-mlx` uses
+`scripts/windows-mlx-live-control.ps1` on the Windows loopback control plane.
+Its payload-free receipt binds one real completion and pause-dominated
+cancellation to exact event sequences, requires seven seconds without late
+output, and proves same-stream helper/agent restart. This is live local LLM
+evidence only, with frontier cloud review selective; it is not model-quality,
+OS-sandbox, repository/Codex/Git, unattended, signing/notarization, or release
+evidence.
 `windows_service_lifecycle_e2e` installs a unique real SCM service on an elevated
 Windows runner and proves automatic-start/recovery configuration, LocalSystem
 loopback hosting, SCM plus runtime health, durable maintenance admission denial,

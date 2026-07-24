@@ -271,6 +271,21 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   `jarvis-mac-bridge enrollment remove --identity-profile fixture --confirm`
   cleanup. This is synthetic diagnostic evidence, not MLX,
   repository/Codex/Git, unattended, signing/notarization, or release evidence.
+  For real local-inference evidence, configure the exact absolute
+  `mlx_lm.generate` executable, offline model directory, and enrolled model ID,
+  then run `./scripts/mac-windows-bridge-live-e2e.sh --run-mlx`. At each marker
+  use the full commands in `docs/build-test-commands.md`: both enqueue actions
+  require the marker's `-ExpectedDeviceId`; the combined cancellation action
+  waits for the exact lease and immediately activates pause on Windows, then
+  emits separate leased and cancelled receipts; deliberate resume remains a
+  separate owner action. Every mutation requires `-ConfirmAction`. Require
+  `jarvis_mac_windows_mlx_live_e2e_ok`, exact same-stream event
+  binding for one success and pause-dominated cancellation, seven seconds of
+  late-output suppression, and same-cursor helper/agent restart. Receipts must
+  remain payload-free. Treat this as bounded live M1 local LLM evidence only,
+  with frontier cloud review selective; do not infer model quality, repository,
+  tool, credential, network, Codex/Git, OS-sandbox, unattended,
+  signing/notarization, or release authority.
   Require the
   two bounded monitor samples to share one positive connection epoch. Require
   the separate reconnect diagnostic to authenticate twice and return a strictly
@@ -298,12 +313,13 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   Treat these as same-host Windows
   process/network/service and Mac contract/adapter compilation proofs, including
   the native owner-account policy mutation but not a supplied password;
-  live MLX inference, a production distributed-job runtime, unified state
-  migration, Codex execution, Tailscale or
+  a general production distributed-job runtime, unified state migration, Codex
+  execution, Tailscale or
   network-interface outage recovery, and unattended cross-machine recovery
   remain unimplemented and unproven. Owner-recorded remote-service mTLS,
   private-overlay reachability, live Mac enrollment/Keychain identity, and
-  bounded service stop/start recovery require the separate live receipts above.
+  bounded service stop/start recovery and live MLX inference require the
+  separate live receipts above.
   Repository fixture-job coverage is not live inference or cross-device fixture
   evidence. A live fixture receipt requires the separately enrolled exact
   `fixture.reasoning` device/profile and owner-controlled `--run-fixture`

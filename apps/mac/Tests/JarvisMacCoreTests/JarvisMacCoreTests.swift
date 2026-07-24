@@ -9203,6 +9203,9 @@ struct UnixIPCTransportTests {
         #expect(DarwinJarvisUnixSocketTransport.maximumRequestBodyBytes == 1024 * 1024)
         #expect(DarwinJarvisUnixSocketTransport.maximumResponseFrameBytes == 12 * 1024 * 1024)
         #expect(DarwinJarvisUnixSocketTransport.maximumResponseBodyBytes == 8 * 1024 * 1024)
+        #expect(DarwinJarvisUnixSocketTransport.maximumTimeoutSeconds == 610)
+        #expect(DarwinJarvisUnixSocketTransport(timeoutSeconds: 0).timeoutSeconds == 1)
+        #expect(DarwinJarvisUnixSocketTransport(timeoutSeconds: 611).timeoutSeconds == 610)
         let body = Data(
             repeating: 0,
             count: DarwinJarvisUnixSocketTransport.maximumRequestBodyBytes + 1

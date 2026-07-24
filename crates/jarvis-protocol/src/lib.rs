@@ -33,6 +33,12 @@ pub const MAX_FIXTURE_RESULT_BYTES: usize = 8 * 1024;
 pub const MAX_FIXTURE_INPUT_BYTES: usize = 4 * 1024;
 pub const MAX_FIXTURE_DELAY_MS: u64 = 5_000;
 pub const CANCELLATION_ACK_DEADLINE_MS: u64 = 2_000;
+pub const MLX_REASONING_CAPABILITY_ID: &str = "mlx.reasoning";
+pub const MLX_REASONING_PROVIDER: &str = "mlx";
+pub const MLX_GENERATE_TEXT_OPERATION: &str = "generate_text";
+pub const MAX_MLX_PROMPT_BYTES: usize = 32 * 1024;
+pub const MAX_MLX_TOKENS: u32 = 512;
+pub const MAX_MLX_TEMPERATURE_MILLI: u32 = 2_000;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ProtocolError {
@@ -98,6 +104,12 @@ pub enum ProtocolError {
     InvalidFixtureCapability,
     #[error("fixture job must use the exact bounded public synthetic contract")]
     InvalidFixtureJob,
+    #[error("MLX reasoning capability must use the exact local inference contract")]
+    InvalidMlxCapability,
+    #[error("MLX job must use the exact bounded public ephemeral contract")]
+    InvalidMlxJob,
+    #[error("MLX result must use the exact bounded generate-text contract")]
+    InvalidMlxResult,
 }
 
 macro_rules! uuid_id {
@@ -325,6 +337,12 @@ impl CapabilityDescriptor {
         {
             return Err(ProtocolError::InvalidFixtureCapability);
         }
+        if self.id == MLX_REASONING_CAPABILITY_ID
+            && (self.kind != CapabilityKind::LocalInference
+                || self.provider != MLX_REASONING_PROVIDER)
+        {
+            return Err(ProtocolError::InvalidMlxCapability);
+        }
         Ok(())
     }
 
@@ -336,6 +354,21 @@ impl CapabilityDescriptor {
             model: FIXTURE_REASONING_MODEL.to_string(),
             max_context_bytes: MAX_FIXTURE_CONTEXT_BYTES as u32,
             max_result_bytes: MAX_FIXTURE_RESULT_BYTES as u32,
+        }
+    }
+
+    pub fn mlx_reasoning(
+        model: impl Into<String>,
+        max_context_bytes: u32,
+        max_result_bytes: u32,
+    ) -> Self {
+        Self {
+            id: MLX_REASONING_CAPABILITY_ID.to_string(),
+            kind: CapabilityKind::LocalInference,
+            provider: MLX_REASONING_PROVIDER.to_string(),
+            model: model.into(),
+            max_context_bytes,
+            max_result_bytes,
         }
     }
 }
@@ -690,6 +723,20 @@ impl JobEnvelope {
         request.validate()?;
         Ok(request)
     }
+
+    pub fn validate_mlx_reasoning(&self) -> Result<MlxJobRequest, ProtocolError> {
+        self.validate()?;
+        if self.capability_id != MLX_REASONING_CAPABILITY_ID
+            || self.sensitivity != Sensitivity::Public
+            || self.context_handling != ContextHandlingPolicy::EphemeralNoRetention
+        {
+            return Err(ProtocolError::InvalidMlxJob);
+        }
+        let request: MlxJobRequest = serde_json::from_value(self.context.clone())
+            .map_err(|_| ProtocolError::InvalidMlxJob)?;
+        request.validate()?;
+        Ok(request)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -728,6 +775,38 @@ impl FixtureJobResult {
             synthetic: true,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MlxJobRequest {
+    pub operation: String,
+    pub prompt: String,
+    pub max_tokens: u32,
+    pub temperature_milli: u32,
+}
+
+impl MlxJobRequest {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.operation != MLX_GENERATE_TEXT_OPERATION
+            || self.prompt.is_empty()
+            || self.prompt.len() > MAX_MLX_PROMPT_BYTES
+            || self.max_tokens == 0
+            || self.max_tokens > MAX_MLX_TOKENS
+            || self.temperature_milli > MAX_MLX_TEMPERATURE_MILLI
+        {
+            return Err(ProtocolError::InvalidMlxJob);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MlxJobResult {
+    pub operation: String,
+    pub output: String,
+    pub model: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -923,6 +1002,23 @@ impl JobResultEnvelope {
             || !result.synthetic
         {
             return Err(ProtocolError::InvalidFixtureJob);
+        }
+        Ok(())
+    }
+
+    pub fn validate_mlx_reasoning_result(&self, job: &JobEnvelope) -> Result<(), ProtocolError> {
+        job.validate_mlx_reasoning()?;
+        self.validate_for_job(job)?;
+        if self.status != JobResultStatus::Completed {
+            return Err(ProtocolError::InvalidMlxResult);
+        }
+        let result: MlxJobResult = serde_json::from_value(self.payload.clone())
+            .map_err(|_| ProtocolError::InvalidMlxResult)?;
+        if result.operation != MLX_GENERATE_TEXT_OPERATION
+            || result.output.is_empty()
+            || result.model != job.selected_model
+        {
+            return Err(ProtocolError::InvalidMlxResult);
         }
         Ok(())
     }

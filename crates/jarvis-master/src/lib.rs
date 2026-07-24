@@ -5,7 +5,8 @@ use jarvis_protocol::{
     DistributedEventKind, HandshakeRequest, HandshakeResponse, HandshakeStatus, JobEnvelope,
     JobResultEnvelope, JobResultStatus, LeaseId, ProtocolError, Sensitivity, StepId, TaskId,
     CANCELLATION_ACK_DEADLINE_MS, FIXTURE_REASONING_CAPABILITY_ID, MAX_CAPABILITY_ID_BYTES,
-    MAX_JOB_CONTEXT_BYTES, MAX_LEASE_DURATION_MS, MAX_STEP_DEADLINE_MS, PROTOCOL_VERSION,
+    MAX_JOB_CONTEXT_BYTES, MAX_LEASE_DURATION_MS, MAX_STEP_DEADLINE_MS,
+    MLX_REASONING_CAPABILITY_ID, PROTOCOL_VERSION,
 };
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
@@ -130,6 +131,8 @@ pub enum MasterError {
     InvalidEnrollmentGrant(String),
     #[error("device certificate was not found")]
     DeviceCertificateNotFound,
+    #[error("device registration does not declare one exact supported remote work capability")]
+    InvalidRemoteWorkContract,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -140,6 +143,72 @@ pub struct DeviceRegistration {
     pub role: DeviceRole,
     pub registry_revision: u64,
     pub capabilities: Vec<CapabilityDescriptor>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RemoteWorkContract {
+    Fixture,
+    Mlx(CapabilityDescriptor),
+}
+
+impl RemoteWorkContract {
+    pub fn from_registration(registration: &DeviceRegistration) -> Result<Self, MasterError> {
+        if !matches!(
+            registration.role,
+            DeviceRole::MacBridge | DeviceRole::InferenceWorker
+        ) || registration.capabilities.len() != 1
+        {
+            return Err(MasterError::InvalidRemoteWorkContract);
+        }
+        let capability = &registration.capabilities[0];
+        capability.validate()?;
+        if *capability == CapabilityDescriptor::fixture_reasoning() {
+            return Ok(Self::Fixture);
+        }
+        if capability.id == MLX_REASONING_CAPABILITY_ID {
+            return Ok(Self::Mlx(capability.clone()));
+        }
+        Err(MasterError::InvalidRemoteWorkContract)
+    }
+
+    fn capability(&self) -> CapabilityDescriptor {
+        match self {
+            Self::Fixture => CapabilityDescriptor::fixture_reasoning(),
+            Self::Mlx(capability) => capability.clone(),
+        }
+    }
+
+    fn validate_job(&self, job: &JobEnvelope) -> Result<(), MasterError> {
+        match self {
+            Self::Fixture => {
+                job.validate_fixture_reasoning()?;
+            }
+            Self::Mlx(capability) => {
+                job.validate_mlx_reasoning()?;
+                if job.selected_model != capability.model {
+                    return Err(MasterError::InvalidRemoteWorkContract);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_result(
+        &self,
+        result: &JobResultEnvelope,
+        job: &JobEnvelope,
+    ) -> Result<(), MasterError> {
+        match self {
+            Self::Fixture => result.validate_fixture_reasoning_result(job)?,
+            Self::Mlx(capability) => {
+                result.validate_mlx_reasoning_result(job)?;
+                if job.selected_model != capability.model {
+                    return Err(MasterError::InvalidRemoteWorkContract);
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -413,7 +482,7 @@ impl MasterKernel {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let was_paused = emergency_paused_tx(&tx)?;
         if paused && !was_paused {
-            request_active_fixture_cancellations_tx(&tx, now_ms)?;
+            request_active_remote_work_cancellations_tx(&tx, now_ms)?;
         }
         let changed = tx.execute(
             "UPDATE master_metadata SET integer_value = ?1\n\
@@ -819,7 +888,7 @@ impl MasterKernel {
         connection_epoch: u64,
         now_ms: u64,
     ) -> Result<JobEnvelope, MasterError> {
-        self.lease_next_step_bound(device_id, connection_epoch, now_ms, false)
+        self.lease_next_step_bound(device_id, connection_epoch, now_ms, None)
     }
 
     pub fn lease_next_fixture_step(
@@ -828,7 +897,22 @@ impl MasterKernel {
         connection_epoch: u64,
         now_ms: u64,
     ) -> Result<JobEnvelope, MasterError> {
-        self.lease_next_step_bound(device_id, connection_epoch, now_ms, true)
+        self.lease_next_step_bound(
+            device_id,
+            connection_epoch,
+            now_ms,
+            Some(&RemoteWorkContract::Fixture),
+        )
+    }
+
+    pub fn lease_next_remote_step(
+        &mut self,
+        device_id: DeviceId,
+        connection_epoch: u64,
+        now_ms: u64,
+        contract: &RemoteWorkContract,
+    ) -> Result<JobEnvelope, MasterError> {
+        self.lease_next_step_bound(device_id, connection_epoch, now_ms, Some(contract))
     }
 
     fn lease_next_step_bound(
@@ -836,7 +920,7 @@ impl MasterKernel {
         device_id: DeviceId,
         connection_epoch: u64,
         now_ms: u64,
-        fixture_only: bool,
+        remote_contract: Option<&RemoteWorkContract>,
     ) -> Result<JobEnvelope, MasterError> {
         let tx = self
             .connection
@@ -876,6 +960,11 @@ impl MasterKernel {
             |row| row.get(0),
         )?;
         let capabilities: Vec<CapabilityDescriptor> = serde_json::from_str(&capabilities_json)?;
+        if let Some(contract) = remote_contract {
+            if capabilities != vec![contract.capability()] {
+                return Err(MasterError::InvalidRemoteWorkContract);
+            }
+        }
         let queued = load_queued_steps(&tx)?;
         let (step, capability) = queued
             .into_iter()
@@ -922,8 +1011,8 @@ impl MasterKernel {
             context,
         };
         job.validate()?;
-        if fixture_only {
-            job.validate_fixture_reasoning()?;
+        if let Some(contract) = remote_contract {
+            contract.validate_job(&job)?;
         }
         let job_json = serde_json::to_string(&job)?;
 
@@ -981,7 +1070,7 @@ impl MasterKernel {
         result: &JobResultEnvelope,
         now_ms: u64,
     ) -> Result<AcceptedResult, MasterError> {
-        self.accept_result_bound(None, result, now_ms, false)
+        self.accept_result_bound(None, result, now_ms, None)
     }
 
     pub fn accept_result_from(
@@ -990,7 +1079,7 @@ impl MasterKernel {
         result: &JobResultEnvelope,
         now_ms: u64,
     ) -> Result<AcceptedResult, MasterError> {
-        self.accept_result_bound(Some(authenticated_device_id), result, now_ms, false)
+        self.accept_result_bound(Some(authenticated_device_id), result, now_ms, None)
     }
 
     pub fn accept_fixture_result_from(
@@ -999,7 +1088,27 @@ impl MasterKernel {
         result: &JobResultEnvelope,
         now_ms: u64,
     ) -> Result<AcceptedResult, MasterError> {
-        self.accept_result_bound(Some(authenticated_device_id), result, now_ms, true)
+        self.accept_result_bound(
+            Some(authenticated_device_id),
+            result,
+            now_ms,
+            Some(&RemoteWorkContract::Fixture),
+        )
+    }
+
+    pub fn accept_remote_result_from(
+        &mut self,
+        authenticated_device_id: DeviceId,
+        result: &JobResultEnvelope,
+        now_ms: u64,
+        contract: &RemoteWorkContract,
+    ) -> Result<AcceptedResult, MasterError> {
+        self.accept_result_bound(
+            Some(authenticated_device_id),
+            result,
+            now_ms,
+            Some(contract),
+        )
     }
 
     fn accept_result_bound(
@@ -1007,7 +1116,7 @@ impl MasterKernel {
         authenticated_device_id: Option<DeviceId>,
         result: &JobResultEnvelope,
         now_ms: u64,
-        fixture_only: bool,
+        remote_contract: Option<&RemoteWorkContract>,
     ) -> Result<AcceptedResult, MasterError> {
         result.validate()?;
         let tx = self
@@ -1019,8 +1128,12 @@ impl MasterKernel {
             return Err(MasterError::ResultDeviceMismatch);
         }
         let job: JobEnvelope = serde_json::from_str(&attempt.job_json)?;
-        if fixture_only {
-            result.validate_fixture_reasoning_result(&job)?;
+        if let Some(contract) = remote_contract {
+            contract.validate_result(result, &job)?;
+            let registered = capability_for_device(&tx, attempt.device_id, &job.capability_id)?;
+            if registered != contract.capability() {
+                return Err(MasterError::InvalidRemoteWorkContract);
+            }
         } else {
             result.validate_for_job(&job)?;
         }
@@ -1201,6 +1314,26 @@ impl MasterKernel {
         connection_epoch: u64,
         now_ms: u64,
     ) -> Result<Option<CancellationInstruction>, MasterError> {
+        self.next_cancellation_bound(device_id, connection_epoch, now_ms, None)
+    }
+
+    pub fn next_remote_cancellation(
+        &mut self,
+        device_id: DeviceId,
+        connection_epoch: u64,
+        now_ms: u64,
+        contract: &RemoteWorkContract,
+    ) -> Result<Option<CancellationInstruction>, MasterError> {
+        self.next_cancellation_bound(device_id, connection_epoch, now_ms, Some(contract))
+    }
+
+    fn next_cancellation_bound(
+        &mut self,
+        device_id: DeviceId,
+        connection_epoch: u64,
+        now_ms: u64,
+        remote_contract: Option<&RemoteWorkContract>,
+    ) -> Result<Option<CancellationInstruction>, MasterError> {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -1232,6 +1365,13 @@ impl MasterKernel {
         let instruction = stored
             .map(|(job_json, sequence, deadline_at_ms)| {
                 let job: JobEnvelope = serde_json::from_str(&job_json)?;
+                if let Some(contract) = remote_contract {
+                    let registered = capability_for_device(&tx, device_id, &job.capability_id)?;
+                    if registered != contract.capability() {
+                        return Err(MasterError::InvalidRemoteWorkContract);
+                    }
+                    contract.validate_job(&job)?;
+                }
                 let deadline_after_ms = i64_to_u64(deadline_at_ms)?
                     .checked_sub(now_ms)
                     .ok_or(MasterError::CancellationExpired)?;
@@ -1260,6 +1400,31 @@ impl MasterKernel {
         acknowledgement: &CancellationAcknowledgement,
         now_ms: u64,
     ) -> Result<AcceptedCancellation, MasterError> {
+        self.accept_cancellation_ack_bound(authenticated_device_id, acknowledgement, now_ms, None)
+    }
+
+    pub fn accept_remote_cancellation_ack_from(
+        &mut self,
+        authenticated_device_id: DeviceId,
+        acknowledgement: &CancellationAcknowledgement,
+        now_ms: u64,
+        contract: &RemoteWorkContract,
+    ) -> Result<AcceptedCancellation, MasterError> {
+        self.accept_cancellation_ack_bound(
+            authenticated_device_id,
+            acknowledgement,
+            now_ms,
+            Some(contract),
+        )
+    }
+
+    fn accept_cancellation_ack_bound(
+        &mut self,
+        authenticated_device_id: DeviceId,
+        acknowledgement: &CancellationAcknowledgement,
+        now_ms: u64,
+        remote_contract: Option<&RemoteWorkContract>,
+    ) -> Result<AcceptedCancellation, MasterError> {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -1272,6 +1437,14 @@ impl MasterKernel {
             return Err(MasterError::ResultNotAccepting(attempt.status));
         }
         let job: JobEnvelope = serde_json::from_str(&attempt.job_json)?;
+        if let Some(contract) = remote_contract {
+            let registered =
+                capability_for_device(&tx, authenticated_device_id, &job.capability_id)?;
+            if registered != contract.capability() {
+                return Err(MasterError::InvalidRemoteWorkContract);
+            }
+            contract.validate_job(&job)?;
+        }
         let instruction = CancellationInstruction {
             protocol_version: PROTOCOL_VERSION,
             connection_epoch: job.connection_epoch,
@@ -1921,23 +2094,24 @@ fn emergency_paused_tx(tx: &Transaction<'_>) -> Result<bool, MasterError> {
     }
 }
 
-fn request_active_fixture_cancellations_tx(
+fn request_active_remote_work_cancellations_tx(
     tx: &Transaction<'_>,
     now_ms: u64,
 ) -> Result<(), MasterError> {
     let mut statement = tx.prepare(
         "SELECT s.task_id, s.step_id FROM master_steps s\n\
          JOIN master_attempts a ON a.step_id = s.step_id\n\
-         WHERE s.capability_id = ?1 AND s.status = 'leased' AND a.status = 'leased'\n\
+         WHERE s.capability_id IN (?1, ?2) AND s.status = 'leased' AND a.status = 'leased'\n\
          ORDER BY a.leased_at_ms ASC",
     )?;
-    let fixture_steps = statement
-        .query_map([FIXTURE_REASONING_CAPABILITY_ID], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?
+    let remote_steps = statement
+        .query_map(
+            [FIXTURE_REASONING_CAPABILITY_ID, MLX_REASONING_CAPABILITY_ID],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )?
         .collect::<Result<Vec<_>, _>>()?;
     drop(statement);
-    for (task_id, step_id) in fixture_steps {
+    for (task_id, step_id) in remote_steps {
         request_fixture_pause_cancellation_tx(
             tx,
             TaskId::new(parse_uuid(&task_id)?),

@@ -142,7 +142,7 @@ private struct JarvisMacBridgeCLI {
             let options = try monitorOptions(Array(arguments.dropFirst()))
             let relay = JarvisMacDeveloperEventRelay(
                 configuration: configuration,
-                deviceID: configuration.fixtureJobsEnabled
+                deviceID: configuration.fixtureJobsEnabled || configuration.mlxJobsEnabled
                     ? UUID(uuidString: profile.deviceID)
                     : nil
             )

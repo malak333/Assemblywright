@@ -9,8 +9,8 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use clap::{Parser, Subcommand};
 use jarvis_agent::{
-    AgentCursorSnapshot, AgentCursorStore, FixtureJobRuntime, FixtureRuntimeError,
-    AGENT_SCHEMA_VERSION,
+    AgentCursorSnapshot, AgentCursorStore, FixtureJobRuntime, FixtureRuntimeError, MlxJobRuntime,
+    MlxRuntimeConfig, MlxRuntimeError, AGENT_SCHEMA_VERSION,
 };
 use jarvis_core::{
     serve_router_unix_socket_with_peer_identity, validate_peer_code_requirement,
@@ -29,7 +29,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use zeroize::{Zeroize, Zeroizing};
 
-const AGENT_STARTUP_VERSION: u16 = 1;
+const AGENT_STARTUP_VERSION: u16 = 2;
+const LEGACY_AGENT_STARTUP_VERSION: u16 = 1;
 const MAX_AGENT_STARTUP_BYTES: usize = 16 * 1024;
 const IPC_BEARER_TOKEN_BYTES: usize = 32;
 const IPC_BEARER_TOKEN_LENGTH: usize = 43;
@@ -66,6 +67,14 @@ struct AgentStartupDocument {
     bearer_token: String,
     #[serde(default)]
     fixture_jobs_enabled: bool,
+    #[serde(default)]
+    mlx_jobs_enabled: bool,
+    #[serde(default)]
+    mlx_executable_path: Option<PathBuf>,
+    #[serde(default)]
+    mlx_model_path: Option<PathBuf>,
+    #[serde(default)]
+    mlx_model_id: Option<String>,
 }
 
 #[derive(Clone)]
@@ -74,6 +83,8 @@ struct AgentState {
     token_sha256: [u8; 32],
     fixture_runtime: FixtureJobRuntime,
     fixture_jobs_enabled: bool,
+    mlx_runtime: MlxJobRuntime,
+    mlx_jobs_enabled: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -86,6 +97,7 @@ struct AgentHealth {
     cursor: AgentCursorSnapshot,
     boundary: &'static str,
     fixture_jobs_enabled: bool,
+    mlx_jobs_enabled: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -123,6 +135,7 @@ async fn serve(data_dir: PathBuf) -> anyhow::Result<()> {
         startup_bytes.zeroize();
         validate_startup(&startup)?;
         verify_supervised_parent(startup.supervised_parent_pid)?;
+        let mlx_config = mlx_config_from_startup(&startup)?;
 
         let token_sha256 = digest_bearer_token(&startup.bearer_token)?;
         startup.bearer_token.zeroize();
@@ -133,27 +146,37 @@ async fn serve(data_dir: PathBuf) -> anyhow::Result<()> {
             token_sha256,
             fixture_runtime: FixtureJobRuntime::new(startup.fixture_jobs_enabled),
             fixture_jobs_enabled: startup.fixture_jobs_enabled,
+            mlx_runtime: MlxJobRuntime::new(mlx_config),
+            mlx_jobs_enabled: startup.mlx_jobs_enabled,
         };
         let app = Router::new()
             .route("/health", get(health))
             .route("/v1/events/accept", post(accept_events))
             .route("/v1/jobs/execute", post(execute_fixture_job))
             .route("/v1/jobs/cancel", post(cancel_fixture_job))
+            .route("/v1/mlx/jobs/execute", post(execute_mlx_job))
+            .route("/v1/mlx/jobs/cancel", post(cancel_mlx_job))
             .layer(DefaultBodyLimit::max(MAX_WIRE_FRAME_BYTES))
             .layer(middleware::from_fn_with_state(
                 state.clone(),
                 enforce_bearer,
             ))
-            .with_state(state);
+            .with_state(state.clone());
 
         spawn_parent_watcher(startup.supervised_parent_pid);
-        serve_router_unix_socket_with_peer_identity(
+        let serve_result = serve_router_unix_socket_with_peer_identity(
             &startup.socket_path,
             app,
             &startup.peer_code_requirement,
             startup.peer_identity_profile,
         )
-        .await
+        .await;
+        state
+            .mlx_runtime
+            .shutdown_active()
+            .await
+            .context("reap active MLX backend during agent shutdown")?;
+        serve_result
     }
 }
 
@@ -170,8 +193,19 @@ fn read_bounded_stdin() -> anyhow::Result<Zeroizing<Vec<u8>>> {
 }
 
 fn validate_startup(startup: &AgentStartupDocument) -> anyhow::Result<()> {
-    if startup.version != AGENT_STARTUP_VERSION {
+    if startup.version != AGENT_STARTUP_VERSION && startup.version != LEGACY_AGENT_STARTUP_VERSION {
         bail!("unsupported jarvis-agent startup document version");
+    }
+    if startup.version == LEGACY_AGENT_STARTUP_VERSION
+        && (startup.mlx_jobs_enabled
+            || startup.mlx_executable_path.is_some()
+            || startup.mlx_model_path.is_some()
+            || startup.mlx_model_id.is_some())
+    {
+        bail!("legacy jarvis-agent startup documents cannot configure MLX jobs");
+    }
+    if startup.fixture_jobs_enabled && startup.mlx_jobs_enabled {
+        bail!("fixture and MLX job runtimes cannot be enabled together");
     }
     if startup.supervised_parent_pid == 0 {
         bail!("jarvis-agent requires a nonzero supervised parent PID");
@@ -189,7 +223,29 @@ fn validate_startup(startup: &AgentStartupDocument) -> anyhow::Result<()> {
     )
     .map_err(anyhow::Error::new)?;
     let _ = digest_bearer_token(&startup.bearer_token)?;
+    let _ = mlx_config_from_startup(startup)?;
     Ok(())
+}
+
+fn mlx_config_from_startup(
+    startup: &AgentStartupDocument,
+) -> anyhow::Result<Option<MlxRuntimeConfig>> {
+    match (
+        startup.mlx_jobs_enabled,
+        startup.mlx_executable_path.clone(),
+        startup.mlx_model_path.clone(),
+        startup.mlx_model_id.clone(),
+    ) {
+        (false, None, None, None) => Ok(None),
+        (true, Some(executable), Some(model), Some(model_id)) => {
+            MlxRuntimeConfig::validate(executable, model, model_id)
+                .map(Some)
+                .map_err(|_| anyhow::anyhow!("jarvis-agent MLX startup configuration is invalid"))
+        }
+        _ => bail!(
+            "jarvis-agent MLX paths and model identifier are required iff MLX jobs are enabled"
+        ),
+    }
 }
 
 fn digest_bearer_token(token: &str) -> anyhow::Result<[u8; 32]> {
@@ -286,11 +342,73 @@ async fn health(
         cursor,
         boundary: if state.fixture_jobs_enabled {
             "metadata_cursor_plus_in_memory_public_fixture_jobs_no_retention"
+        } else if state.mlx_jobs_enabled {
+            "metadata_cursor_plus_bounded_public_mlx_jobs_no_retention"
         } else {
             "metadata_only_no_authoritative_state"
         },
         fixture_jobs_enabled: state.fixture_jobs_enabled,
+        mlx_jobs_enabled: state.mlx_jobs_enabled,
     }))
+}
+
+async fn execute_mlx_job(
+    State(state): State<AgentState>,
+    Json(job): Json<JobEnvelope>,
+) -> Result<Json<JobResultEnvelope>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .mlx_runtime
+        .execute(job)
+        .await
+        .map(Json)
+        .map_err(mlx_error)
+}
+
+async fn cancel_mlx_job(
+    State(state): State<AgentState>,
+    Json(instruction): Json<CancellationInstruction>,
+) -> Result<Json<CancellationAcknowledgement>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .mlx_runtime
+        .cancel(&instruction)
+        .await
+        .map(Json)
+        .map_err(mlx_error)
+}
+
+fn mlx_error(error: MlxRuntimeError) -> (StatusCode, Json<serde_json::Value>) {
+    match error {
+        MlxRuntimeError::Disabled => (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error":"mlx_jobs_disabled"})),
+        ),
+        MlxRuntimeError::Cancelled => {
+            (StatusCode::CONFLICT, Json(json!({"error":"job_cancelled"})))
+        }
+        MlxRuntimeError::NotActive => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error":"job_not_active"})),
+        ),
+        MlxRuntimeError::AlreadyActive => (
+            StatusCode::CONFLICT,
+            Json(json!({"error":"job_already_active"})),
+        ),
+        MlxRuntimeError::Protocol(_) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({"error":"mlx_contract_rejected"})),
+        ),
+        MlxRuntimeError::Timeout => (
+            StatusCode::GATEWAY_TIMEOUT,
+            Json(json!({"error":"mlx_backend_timeout"})),
+        ),
+        MlxRuntimeError::InvalidOutput | MlxRuntimeError::BackendFailed => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({"error":"mlx_backend_failed"})),
+        ),
+        MlxRuntimeError::InvalidConfiguration
+        | MlxRuntimeError::CleanupFailed
+        | MlxRuntimeError::Unavailable => internal_error(),
+    }
 }
 
 async fn execute_fixture_job(

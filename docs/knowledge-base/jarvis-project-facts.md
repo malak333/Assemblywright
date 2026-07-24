@@ -372,6 +372,48 @@ These notes capture durable facts for future agents working on this repository.
   separately enrolled exact fixture capability. The existing
   `mlx.reasoning` certificate must not be reused or described as fixture or MLX
   execution proof.
+- The ninth distributed-development slice adds the default-off real M1
+  `mlx.reasoning` worker on the standard profile. The exact capability is a
+  singleton `local_inference` / `mlx` descriptor whose model and byte bounds
+  match the job. Jobs are Public, `ephemeral_no_retention`, and exactly
+  `generate_text`, with a nonempty 32 KiB prompt ceiling, 1 to 512 tokens, and
+  0 to 2000 milli-temperature. The agent permits one in-memory attempt and
+  persists neither prompt nor output.
+- MLX runtime configuration enters only through bounded helper-to-agent startup
+  stdin. The absolute canonical executable cannot be a symlink; the model path
+  is an absolute canonical directory. The agent clears inherited environment,
+  forces offline and telemetry-disabled execution, passes the prompt on stdin,
+  bounds stdout, discards stderr, and owns a process group. Cancellation,
+  timeout, pause, lease loss, or disconnect TERM-to-KILL reaps that group and
+  dominates simultaneous or late output.
+- Canonical path plus executable digest/inode and model-directory inode checks
+  are repeated immediately before spawn. They detect ordinary replacement of
+  owner-controlled development inputs but are not descriptor-backed immutable
+  model contents and do not claim containment from a malicious same-user
+  process racing the check.
+- `scripts/mac-windows-bridge-live-e2e.sh --run-mlx` plus
+  `scripts/windows-mlx-live-control.ps1` is the named live proof. It binds one
+  real completion and pause-dominated cancellation to exact Windows events,
+  requires seven seconds without late output, and advances the same Mac cursor
+  after helper/agent restart. This is local LLM, with frontier cloud review
+  selective; it grants no repository, tool, credential, network, Codex, Git,
+  publication, OS-sandbox, unattended, signing/notarization, or release
+  readiness claim.
+- The 2026-07-24 two-device proof used standard Mac device
+  `9f869212-6db6-4054-ab6f-32cc62e0a426`, MLX model `mlx-local`, and signed
+  Apple Development helper team `H686S3N4V9`. Windows bound real completion to
+  queued/leased/succeeded sequences `1280/1282/1283` at epoch `543`, then the
+  combined owner action bound queued/leased/requested/acknowledged/cancelled
+  sequences `1317/1319/1320/1321/1322` at epoch `560` and observed seven
+  seconds with no late event. The final same-stream marker advanced the durable
+  cursor from cancellation `1322` to fresh-chain `1324`. After proof,
+  `JarvisMaster` was restored to clean Windows `main`
+  `3e4eddc78c78a42bc86f17d7939ce83367106ab6`.
+- The MLX helper-to-agent request uses a 610-second client timeout backed by a
+  620-second agent IPC dispatch ceiling. Both exceed the ten-minute protocol
+  lease in the required order, leaving the agent's earlier deadline and
+  bounded process-group cleanup authoritative instead of dropping an active
+  runtime at the old five-minute generic dispatch ceiling.
 - The strict Mac HTTP/1.1 transport treats the master's lease `204 No Content`
   as bodyless even when Hyper omits `Content-Length`. It accepts only an absent
   length or exact zero and rejects malformed or nonzero length, malformed field

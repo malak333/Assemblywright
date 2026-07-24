@@ -158,6 +158,34 @@ release requirements, not optional UX guidance.
   must not persist its context, output, job, result, cancellation, or
   acknowledgement. The adapter has no model, tool, file, repository, credential,
   network, Codex, or Git authority.
+- MLX-job execution is a separate default-off standard-profile capability,
+  never an implied consequence of enabling the metadata cursor or fixture
+  adapter. Registration must contain the exact singleton `mlx.reasoning` /
+  `local_inference` / `mlx` descriptor and its configured model and bounds;
+  mixed, fixture, or unknown capability sets fail closed. The job must be
+  Public and `ephemeral_no_retention`, use exactly `generate_text`, contain a
+  nonempty prompt of at most 32 KiB, request 1 to 512 tokens, and use a
+  temperature from 0 to 2000 milli-units. The agent may hold only one active
+  attempt in memory and must persist no prompt, output, job, result,
+  cancellation, or acknowledgement.
+- The MLX executable and model directory must be absolute, canonical, local
+  startup-stdin configuration. The executable must be a regular executable
+  file rather than a symlink. The agent must clear inherited environment,
+  force offline/telemetry-disabled execution, pass the prompt only through
+  stdin, discard stderr, bound stdout, and run the backend in a dedicated
+  process group. Cancellation, emergency pause, timeout, lease loss, or
+  disconnect must TERM-to-KILL and reap that process group before completion;
+  a simultaneous or late result is suppressed. This lane grants no tool, file,
+  repository, credential, network, Codex, Git, publication, or unattended
+  authority.
+- The configured MLX runtime and model directories are owner-controlled
+  development inputs, not an OS sandbox boundary. The agent stores canonical
+  paths and revalidates executable digest/inode plus model-directory inode
+  immediately before spawn, but does not claim descriptor-backed immutable
+  model contents or containment from a malicious same-user process racing that
+  check. Live evidence therefore requires stable owner-only inputs and never
+  upgrades to plugin trust, hostile-local-process containment, or release
+  readiness.
 - Remote raw-step enqueue is forbidden. Fixture work is queued only through the
   Windows-local authenticated development seam, then leased only to the
   authenticated device that registered the exact fixture capability. Result and

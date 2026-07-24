@@ -7,7 +7,8 @@ use jarvis_master::{
 use jarvis_protocol::{
     AuthenticatedHandshakeRequest, CapabilityDescriptor, DeviceRole, DistributedEventBatch,
     DistributedEventBatchRequest, DistributedEventKind, HandshakeRequest, HandshakeResponse,
-    HandshakeStatus, Sensitivity, StepId, TaskId, PROTOCOL_VERSION,
+    HandshakeStatus, JobEnvelope, JobResultEnvelope, JobResultStatus, Sensitivity, StepId, TaskId,
+    PROTOCOL_VERSION,
 };
 use rcgen::{CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
@@ -304,7 +305,179 @@ async fn remote_listener_requires_enrollment_tls13_and_channel_bound_identity() 
     );
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn remote_mlx_contract_accepts_exact_singleton_and_rejects_mixed_capabilities() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let directory = tempfile::tempdir().expect("remote MLX data directory");
+    let binary = env!("CARGO_BIN_EXE_jarvis-master");
+    let setup = Command::new(binary)
+        .arg("--data-dir")
+        .arg(directory.path())
+        .arg("setup")
+        .output()
+        .expect("run setup");
+    assert_success(&setup, "setup");
+    let mlx_capability =
+        CapabilityDescriptor::mlx_reasoning("local-mlx-model", 64 * 1024, 64 * 1024);
+    let mlx = enroll_client_with_capabilities(
+        directory.path(),
+        "mlx-worker",
+        DeviceRole::InferenceWorker,
+        false,
+        vec![mlx_capability.clone()],
+    );
+    let mixed = enroll_client_with_capabilities(
+        directory.path(),
+        "mixed-worker",
+        DeviceRole::InferenceWorker,
+        false,
+        vec![mlx_capability, CapabilityDescriptor::fixture_reasoning()],
+    );
+    let context = serde_json::json!({
+        "operation":"generate_text",
+        "prompt":"bounded",
+        "max_tokens":32,
+        "temperature_milli":700
+    });
+    let queued = NewStep {
+        task_id: TaskId::new(Uuid::new_v4()),
+        step_id: StepId::new(Uuid::new_v4()),
+        capability_id: "mlx.reasoning".to_string(),
+        sensitivity: Sensitivity::Public,
+        context,
+        lease_duration_ms: 60_000,
+        deadline_after_ms: 60_000,
+    };
+    {
+        let mut process = MasterProcess::acquire(directory.path()).expect("open local master");
+        process
+            .kernel_mut()
+            .enqueue_step(&queued, current_time_ms().expect("time"))
+            .expect("Windows-local generic enqueue");
+    }
+    let local_endpoint = unused_loopback_addr();
+    let remote_endpoint = unused_loopback_addr();
+    let mut server = spawn_server(binary, directory.path(), local_endpoint, remote_endpoint);
+    read_ready(&mut server.child);
+
+    let (mixed_handshake, mixed_lease) = authenticated_application_request_with_body(
+        remote_endpoint,
+        &mixed,
+        "POST",
+        "/v1/distributed/leases/next",
+        |handshake| {
+            serde_json::json!({
+                "device_id": mixed.handshake.device_id,
+                "connection_epoch": handshake.connection_epoch
+            })
+        },
+    )
+    .await;
+    assert_eq!(mixed_handshake.status, HandshakeStatus::Accepted);
+    assert!(
+        mixed_lease.starts_with("HTTP/1.1 401 Unauthorized"),
+        "{mixed_lease}"
+    );
+
+    let mlx_tcp = tokio::net::TcpStream::connect(remote_endpoint)
+        .await
+        .expect("connect exact MLX remote listener");
+    let server_name = ServerName::IpAddress(remote_endpoint.ip().into());
+    let mut mlx_stream = TlsConnector::from(mlx.config.clone())
+        .connect(server_name, mlx_tcp)
+        .await
+        .expect("complete exact MLX mutual TLS handshake");
+    let handshake_body = serde_json::to_vec(&AuthenticatedHandshakeRequest {
+        handshake: mlx.handshake.clone(),
+        tls_exporter_sha256: exporter_digest(mlx_stream.get_ref().1),
+    })
+    .expect("serialize exact MLX handshake");
+    let handshake_response = send_http_keep_alive(
+        &mut mlx_stream,
+        remote_endpoint,
+        "POST",
+        "/v1/distributed/connections/accept",
+        &handshake_body,
+    )
+    .await
+    .expect("accept exact MLX application handshake");
+    assert!(
+        handshake_response.starts_with("HTTP/1.1 200 OK"),
+        "{handshake_response}"
+    );
+    let mlx_handshake: HandshakeResponse = response_json(&handshake_response);
+    assert_eq!(mlx_handshake.status, HandshakeStatus::Accepted);
+    let lease_body = serde_json::to_vec(&serde_json::json!({
+        "device_id": mlx.handshake.device_id,
+        "connection_epoch": mlx_handshake.connection_epoch
+    }))
+    .expect("serialize exact MLX lease request");
+    let lease_response = send_http_keep_alive(
+        &mut mlx_stream,
+        remote_endpoint,
+        "POST",
+        "/v1/distributed/leases/next",
+        &lease_body,
+    )
+    .await
+    .expect("lease exact MLX work on accepted connection");
+    assert!(
+        lease_response.starts_with("HTTP/1.1 200 OK"),
+        "{lease_response}"
+    );
+    let job: JobEnvelope = response_json(&lease_response);
+    let payload = serde_json::json!({
+        "operation":"generate_text",
+        "output":"bounded output",
+        "model":"local-mlx-model"
+    });
+    let result = JobResultEnvelope {
+        protocol_version: PROTOCOL_VERSION,
+        connection_epoch: job.connection_epoch,
+        sequence: job.sequence + 1,
+        task_id: job.task_id,
+        step_id: job.step_id,
+        attempt_id: job.attempt_id,
+        lease_id: job.lease_id,
+        cancellation_id: job.cancellation_id,
+        status: JobResultStatus::Completed,
+        context_sha256: job.context_sha256,
+        payload_sha256: Sha256::digest(serde_json::to_vec(&payload).unwrap()).into(),
+        payload,
+    };
+    let result_body = serde_json::to_vec(&result).expect("serialize exact MLX result");
+    let result_response = send_http(
+        &mut mlx_stream,
+        remote_endpoint,
+        "POST",
+        "/v1/distributed/results",
+        &result_body,
+    )
+    .await
+    .expect("submit exact MLX result on leased connection");
+    assert!(
+        result_response.starts_with("HTTP/1.1 200 OK"),
+        "{result_response}"
+    );
+}
+
 fn enroll_client(data_dir: &Path, name: &str, role: DeviceRole, revoke: bool) -> EnrolledClient {
+    enroll_client_with_capabilities(
+        data_dir,
+        name,
+        role,
+        revoke,
+        vec![CapabilityDescriptor::fixture_reasoning()],
+    )
+}
+
+fn enroll_client_with_capabilities(
+    data_dir: &Path,
+    name: &str,
+    role: DeviceRole,
+    revoke: bool,
+    capabilities: Vec<CapabilityDescriptor>,
+) -> EnrolledClient {
     let now_ms = current_time_ms().expect("current time");
     let protector = PlatformSecretProtector;
     let mut process = MasterProcess::acquire(data_dir).expect("acquire enrollment owner");
@@ -314,7 +487,6 @@ fn enroll_client(data_dir: &Path, name: &str, role: DeviceRole, revoke: bool) ->
         .kernel_mut()
         .record_identity_authority(authority.receipt())
         .expect("bind enrollment authority");
-    let capabilities = vec![CapabilityDescriptor::fixture_reasoning()];
     let grant = process
         .kernel_mut()
         .create_enrollment_grant(

@@ -16,29 +16,46 @@ private actor JarvisMacFixtureRaceResolution {
 }
 
 public struct JarvisMacDeveloperEventRelayConfiguration: Equatable, Sendable {
-    public static let version = 2
+    public static let version = 3
     public static let maximumDocumentBytes = 16 * 1_024
 
     public let agentExecutableURL: URL
     public let agentDataDirectoryURL: URL
     public let fixtureJobsEnabled: Bool
+    public let mlxJobsEnabled: Bool
+    public let mlxExecutableURL: URL?
+    public let mlxModelDirectoryURL: URL?
+    public let mlxModelID: String?
 
     public init(
         agentExecutableURL: URL,
         agentDataDirectoryURL: URL,
-        fixtureJobsEnabled: Bool = false
+        fixtureJobsEnabled: Bool = false,
+        mlxJobsEnabled: Bool = false,
+        mlxExecutableURL: URL? = nil,
+        mlxModelDirectoryURL: URL? = nil,
+        mlxModelID: String? = nil
     ) {
         self.agentExecutableURL = agentExecutableURL.standardizedFileURL
         self.agentDataDirectoryURL = agentDataDirectoryURL.standardizedFileURL
         self.fixtureJobsEnabled = fixtureJobsEnabled
+        self.mlxJobsEnabled = mlxJobsEnabled
+        self.mlxExecutableURL = mlxExecutableURL?.standardizedFileURL
+        self.mlxModelDirectoryURL = mlxModelDirectoryURL?.standardizedFileURL
+        self.mlxModelID = mlxModelID
     }
 
     public func encodeStartupDocument() throws -> Data {
+        try validatePaths()
         let object: [String: Any] = [
             "version": Self.version,
             "agent_executable_path": agentExecutableURL.path,
             "agent_data_dir": agentDataDirectoryURL.path,
-            "fixture_jobs_enabled": fixtureJobsEnabled
+            "fixture_jobs_enabled": fixtureJobsEnabled,
+            "mlx_jobs_enabled": mlxJobsEnabled,
+            "mlx_executable_path": mlxExecutableURL?.path ?? NSNull(),
+            "mlx_model_dir": mlxModelDirectoryURL?.path ?? NSNull(),
+            "mlx_model_id": mlxModelID ?? NSNull()
         ]
         let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
         guard data.count <= Self.maximumDocumentBytes else {
@@ -48,31 +65,59 @@ public struct JarvisMacDeveloperEventRelayConfiguration: Equatable, Sendable {
     }
 
     public static func decodeStartupDocument(_ data: Data) throws -> Self {
+        var scanner = JarvisStrictJSONObjectKeyScanner(data: data)
         guard !data.isEmpty, data.count <= maximumDocumentBytes,
+              let keys = try? scanner.scanTopLevelKeys(),
+              Set(keys).count == keys.count,
               let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               Set(object.keys) == Set([
                   "version", "agent_executable_path", "agent_data_dir",
-                  "fixture_jobs_enabled"
+                  "fixture_jobs_enabled", "mlx_jobs_enabled",
+                  "mlx_executable_path", "mlx_model_dir", "mlx_model_id"
               ]),
               let version = object["version"] as? NSNumber,
               CFGetTypeID(version) != CFBooleanGetTypeID(),
-              version.intValue == Self.version,
+              version.stringValue == String(Self.version),
               let executablePath = object["agent_executable_path"] as? String,
               let dataDirectoryPath = object["agent_data_dir"] as? String,
-              let fixtureJobsEnabled = object["fixture_jobs_enabled"] as? Bool else {
+              let fixtureJobsEnabled = object["fixture_jobs_enabled"] as? Bool,
+              let mlxJobsEnabled = object["mlx_jobs_enabled"] as? Bool,
+              let mlxExecutablePath = optionalString(object["mlx_executable_path"]),
+              let mlxModelDirectoryPath = optionalString(object["mlx_model_dir"]),
+              let mlxModelID = optionalString(object["mlx_model_id"]),
+              mlxExecutablePath.map(isValidAbsolutePath) ?? true,
+              mlxModelDirectoryPath.map(isValidAbsolutePath) ?? true else {
             throw JarvisMacDeveloperEventRelayError.invalidStartupDocument
         }
         let configuration = Self(
             agentExecutableURL: URL(fileURLWithPath: executablePath),
             agentDataDirectoryURL: URL(fileURLWithPath: dataDirectoryPath, isDirectory: true),
-            fixtureJobsEnabled: fixtureJobsEnabled
+            fixtureJobsEnabled: fixtureJobsEnabled,
+            mlxJobsEnabled: mlxJobsEnabled,
+            mlxExecutableURL: mlxExecutablePath.map(URL.init(fileURLWithPath:)),
+            mlxModelDirectoryURL: mlxModelDirectoryPath.map {
+                URL(fileURLWithPath: $0, isDirectory: true)
+            },
+            mlxModelID: mlxModelID
         )
         try configuration.validatePaths()
         return configuration
     }
 
     public func validatePaths() throws {
-        for url in [agentExecutableURL, agentDataDirectoryURL] {
+        guard !(fixtureJobsEnabled && mlxJobsEnabled),
+              mlxJobsEnabled
+                ? mlxExecutableURL != nil
+                    && mlxModelDirectoryURL != nil
+                    && mlxModelID != nil
+                : mlxExecutableURL == nil
+                    && mlxModelDirectoryURL == nil
+                    && mlxModelID == nil else {
+            throw JarvisMacDeveloperEventRelayError.invalidStartupDocument
+        }
+        for url in [agentExecutableURL, agentDataDirectoryURL]
+            + [mlxExecutableURL, mlxModelDirectoryURL].compactMap({ $0 })
+        {
             guard url.isFileURL,
                   url.path.hasPrefix("/"),
                   !url.path.contains("\0"),
@@ -81,6 +126,26 @@ public struct JarvisMacDeveloperEventRelayConfiguration: Equatable, Sendable {
                 throw JarvisMacDeveloperEventRelayError.invalidStartupDocument
             }
         }
+        if let mlxModelID {
+            guard !mlxModelID.isEmpty,
+                  mlxModelID.utf8.count <= 128,
+                  mlxModelID.utf8.allSatisfy({ (0x20 ... 0x7e).contains($0) }) else {
+                throw JarvisMacDeveloperEventRelayError.invalidStartupDocument
+            }
+        }
+    }
+
+    private static func optionalString(_ value: Any?) -> String?? {
+        if value is NSNull { return .some(nil) }
+        guard let value = value as? String else { return nil }
+        return .some(value)
+    }
+
+    private static func isValidAbsolutePath(_ value: String) -> Bool {
+        value.hasPrefix("/")
+            && !value.contains("\0")
+            && !value.split(separator: "/").contains("..")
+            && value.utf8.count <= 4 * 1_024
     }
 }
 
@@ -99,6 +164,8 @@ public enum JarvisMacDeveloperEventRelayError: Error, Equatable, Sendable {
     case eventCursorRejected
     case fixtureJobRejected
     case fixtureJobTimedOut
+    case mlxJobRejected
+    case mlxJobTimedOut
     case teardownFailed
 }
 
@@ -141,6 +208,8 @@ public protocol JarvisMacDeveloperAgentSession: Sendable {
     func accept(batch: Data) async throws -> JarvisMacDeveloperAgentCursorSnapshot
     func executeFixtureJob(_ job: Data) async throws -> Data
     func cancelFixtureJob(_ instruction: Data) async throws -> Data
+    func executeMLXJob(_ job: Data) async throws -> Data
+    func cancelMLXJob(_ instruction: Data) async throws -> Data
     func stop() async throws
 }
 
@@ -223,6 +292,22 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
                 requiresFreshConnection: requiresFreshConnection
             )
         }
+        if configuration.mlxJobsEnabled {
+            guard let deviceID else {
+                throw JarvisMacDeveloperEventRelayError.mlxJobRejected
+            }
+            let requiresFreshConnection = try await relayOneMLXJob(
+                using: session,
+                deviceID: deviceID,
+                agent: activeAgent
+            )
+            return JarvisMacDeveloperEventRelayProgress(
+                cursor: batch.cursor,
+                acceptedEventCount: batch.eventCount,
+                hasMore: batch.hasMore,
+                requiresFreshConnection: requiresFreshConnection
+            )
+        }
         return JarvisMacDeveloperEventRelayProgress(
             cursor: batch.cursor,
             acceptedEventCount: batch.eventCount,
@@ -259,6 +344,28 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
     }
 
     private enum FixtureRaceOutcome: Sendable {
+        case result(Data)
+        case cancellation(ValidatedCancellation)
+        case timedOut
+        case settled
+    }
+
+    private struct ValidatedMLXJob: Sendable {
+        let body: Data
+        let connectionEpoch: UInt64
+        let sequence: UInt64
+        let taskID: UUID
+        let stepID: UUID
+        let attemptID: UUID
+        let leaseID: UUID
+        let cancellationID: UUID
+        let contextDigest: [UInt8]
+        let selectedModel: String
+        let leaseDurationMilliseconds: UInt64
+        let deadlineAfterMilliseconds: UInt64
+    }
+
+    private enum MLXRaceOutcome: Sendable {
         case result(Data)
         case cancellation(ValidatedCancellation)
         case timedOut
@@ -453,6 +560,187 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
         return ValidatedCancellation(body: response.body, sequence: sequence)
     }
 
+    private func relayOneMLXJob(
+        using session: any JarvisMacBridgeSession,
+        deviceID: UUID,
+        agent: any JarvisMacDeveloperAgentSession
+    ) async throws -> Bool {
+        guard let selectedModel = configuration.mlxModelID else {
+            throw JarvisMacDeveloperEventRelayError.mlxJobRejected
+        }
+        let leaseRequest = try JSONSerialization.data(
+            withJSONObject: [
+                "device_id": deviceID.uuidString.lowercased(),
+                "connection_epoch": NSNumber(value: session.connectionEpoch)
+            ],
+            options: [.sortedKeys]
+        )
+        let leased = try await session.send(
+            JarvisMacBridgeHTTPRequest(
+                method: "POST",
+                path: Self.remoteLeasePath,
+                body: leaseRequest
+            )
+        )
+        if leased.status == 204 {
+            guard leased.body.isEmpty else {
+                throw JarvisMacDeveloperEventRelayError.invalidMasterResponse
+            }
+            return true
+        }
+        if leased.status == 503 {
+            guard let object = Self.strictJSONObject(leased.body),
+                  Set(object.keys) == Set(["error"]),
+                  object["error"] as? String == "emergency_pause_blocks_work" else {
+                throw JarvisMacDeveloperEventRelayError.invalidMasterResponse
+            }
+            return false
+        }
+        guard leased.status == 200 else {
+            throw JarvisMacDeveloperEventRelayError.invalidMasterResponse
+        }
+        let job = try Self.validateMLXJob(
+            leased.body,
+            expectedConnectionEpoch: session.connectionEpoch,
+            selectedModel: selectedModel
+        )
+        let resolution = JarvisMacFixtureRaceResolution()
+        let outcome = try await withThrowingTaskGroup(
+            of: MLXRaceOutcome.self,
+            returning: MLXRaceOutcome.self
+        ) { group in
+            group.addTask {
+                .result(try await agent.executeMLXJob(job.body))
+            }
+            group.addTask {
+                while !Task.isCancelled {
+                    if await resolution.isResolved() { return .settled }
+                    if let cancellation = try await Self.pollMLXCancellation(
+                        using: session,
+                        job: job
+                    ) {
+                        return .cancellation(cancellation)
+                    }
+                    if await resolution.isResolved() { return .settled }
+                    try await Task.sleep(for: .milliseconds(25))
+                }
+                throw CancellationError()
+            }
+            group.addTask {
+                let timeout = min(
+                    job.leaseDurationMilliseconds,
+                    job.deadlineAfterMilliseconds
+                )
+                let clock = ContinuousClock()
+                let deadline = clock.now + .milliseconds(timeout)
+                while clock.now < deadline {
+                    if await resolution.isResolved() { return .settled }
+                    try await Task.sleep(
+                        for: min(.milliseconds(25), clock.now.duration(to: deadline))
+                    )
+                }
+                return await resolution.isResolved() ? .settled : .timedOut
+            }
+            guard let first = try await group.next() else {
+                throw JarvisMacDeveloperEventRelayError.mlxJobRejected
+            }
+            if case .result = first {
+                await resolution.markResolved()
+                while try await group.next() != nil {}
+            } else {
+                group.cancelAll()
+            }
+            return first
+        }
+
+        switch outcome {
+        case let .result(result):
+            let resultDigest = try Self.validateMLXResult(result, for: job)
+            let accepted = try await session.send(
+                JarvisMacBridgeHTTPRequest(
+                    method: "POST",
+                    path: Self.remoteResultPath,
+                    body: result
+                )
+            )
+            try Self.validateAcceptedMLXResult(
+                accepted,
+                for: job,
+                expectedPayloadDigest: resultDigest
+            )
+        case let .cancellation(instruction):
+            let acknowledgement = try await agent.cancelMLXJob(instruction.body)
+            try Self.validateMLXCancellationAcknowledgement(
+                acknowledgement,
+                instruction: instruction,
+                job: job
+            )
+            let accepted = try await session.send(
+                JarvisMacBridgeHTTPRequest(
+                    method: "POST",
+                    path: Self.remoteCancellationAcknowledgementPath,
+                    body: acknowledgement
+                )
+            )
+            try Self.validateAcceptedCancellation(accepted)
+        case .timedOut:
+            try await agent.stop()
+            self.agent = nil
+            throw JarvisMacDeveloperEventRelayError.mlxJobTimedOut
+        case .settled:
+            throw JarvisMacDeveloperEventRelayError.mlxJobRejected
+        }
+        return false
+    }
+
+    private static func pollMLXCancellation(
+        using session: any JarvisMacBridgeSession,
+        job: ValidatedMLXJob
+    ) async throws -> ValidatedCancellation? {
+        let request = try JSONSerialization.data(
+            withJSONObject: [
+                "protocol_version": Int(JarvisMacMTLSBridgeTransport.protocolVersion),
+                "connection_epoch": NSNumber(value: session.connectionEpoch)
+            ],
+            options: [.sortedKeys]
+        )
+        let response = try await session.send(
+            JarvisMacBridgeHTTPRequest(
+                method: "POST",
+                path: remoteCancellationPath,
+                body: request
+            )
+        )
+        guard response.status == 200,
+              let object = strictJSONObject(response.body) else {
+            throw JarvisMacDeveloperEventRelayError.invalidMasterResponse
+        }
+        if Set(object.keys) == Set(["status"]),
+           object["status"] as? String == "no_cancellation" {
+            return nil
+        }
+        guard Set(object.keys) == Set([
+                  "protocol_version", "connection_epoch", "sequence",
+                  "task_id", "step_id", "attempt_id", "lease_id",
+                  "cancellation_id", "deadline_after_ms"
+              ]),
+              strictInteger(object["protocol_version"])
+                == UInt64(JarvisMacMTLSBridgeTransport.protocolVersion),
+              strictInteger(object["connection_epoch"]) == job.connectionEpoch,
+              let sequence = strictInteger(object["sequence"]),
+              sequence > job.sequence,
+              strictUUID(object["task_id"]) == job.taskID,
+              strictUUID(object["step_id"]) == job.stepID,
+              strictUUID(object["attempt_id"]) == job.attemptID,
+              strictUUID(object["lease_id"]) == job.leaseID,
+              strictUUID(object["cancellation_id"]) == job.cancellationID,
+              let deadline = strictInteger(object["deadline_after_ms"]),
+              (1 ... 2_000).contains(deadline) else {
+            throw JarvisMacDeveloperEventRelayError.invalidMasterResponse
+        }
+        return ValidatedCancellation(body: response.body, sequence: sequence)
+    }
+
     private static func validateFixtureJob(
         _ body: Data,
         expectedConnectionEpoch: UInt64
@@ -556,6 +844,162 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
             throw JarvisMacDeveloperEventRelayError.fixtureJobRejected
         }
         return payloadDigest
+    }
+
+    private static func validateMLXJob(
+        _ body: Data,
+        expectedConnectionEpoch: UInt64,
+        selectedModel: String
+    ) throws -> ValidatedMLXJob {
+        guard !body.isEmpty,
+              body.count <= 64 * 1_024,
+              let object = strictJSONObject(body),
+              Set(object.keys) == Set([
+                  "protocol_version", "connection_epoch", "sequence",
+                  "task_id", "step_id", "attempt_id", "lease_id",
+                  "cancellation_id", "capability_id", "selected_model",
+                  "sensitivity", "context_handling", "lease_duration_ms",
+                  "deadline_after_ms", "context_sha256", "context"
+              ]),
+              strictInteger(object["protocol_version"])
+                == UInt64(JarvisMacMTLSBridgeTransport.protocolVersion),
+              strictInteger(object["connection_epoch"]) == expectedConnectionEpoch,
+              let sequence = strictInteger(object["sequence"]),
+              sequence > 0,
+              let taskID = strictUUID(object["task_id"]),
+              let stepID = strictUUID(object["step_id"]),
+              let attemptID = strictUUID(object["attempt_id"]),
+              let leaseID = strictUUID(object["lease_id"]),
+              let cancellationID = strictUUID(object["cancellation_id"]),
+              object["capability_id"] as? String == "mlx.reasoning",
+              object["selected_model"] as? String == selectedModel,
+              object["sensitivity"] as? String == "public",
+              object["context_handling"] as? String == "ephemeral_no_retention",
+              let leaseDuration = strictInteger(object["lease_duration_ms"]),
+              (1 ... 600_000).contains(leaseDuration),
+              let deadline = strictInteger(object["deadline_after_ms"]),
+              (1 ... 7_200_000).contains(deadline),
+              let contextDigest = strictDigest(object["context_sha256"]),
+              let context = object["context"] as? [String: Any],
+              Set(context.keys) == Set([
+                  "operation", "prompt", "max_tokens", "temperature_milli"
+              ]),
+              context["operation"] as? String == "generate_text",
+              let prompt = context["prompt"] as? String,
+              !prompt.isEmpty,
+              prompt.utf8.count <= 32 * 1_024,
+              let maxTokens = strictInteger(context["max_tokens"]),
+              (1 ... 512).contains(maxTokens),
+              let temperature = strictInteger(context["temperature_milli"]),
+              temperature <= 2_000,
+              let contextData = try? JSONSerialization.data(
+                  withJSONObject: context,
+                  options: [.sortedKeys]
+              ),
+              contextData.count <= 40 * 1_024,
+              Array(SHA256.hash(data: contextData)) == contextDigest else {
+            throw JarvisMacDeveloperEventRelayError.mlxJobRejected
+        }
+        return ValidatedMLXJob(
+            body: body,
+            connectionEpoch: expectedConnectionEpoch,
+            sequence: sequence,
+            taskID: taskID,
+            stepID: stepID,
+            attemptID: attemptID,
+            leaseID: leaseID,
+            cancellationID: cancellationID,
+            contextDigest: contextDigest,
+            selectedModel: selectedModel,
+            leaseDurationMilliseconds: leaseDuration,
+            deadlineAfterMilliseconds: deadline
+        )
+    }
+
+    private static func validateMLXResult(
+        _ body: Data,
+        for job: ValidatedMLXJob
+    ) throws -> [UInt8] {
+        guard !body.isEmpty,
+              body.count <= 1_024 * 1_024,
+              let object = strictJSONObject(body),
+              Set(object.keys) == Set([
+                  "protocol_version", "connection_epoch", "sequence",
+                  "task_id", "step_id", "attempt_id", "lease_id",
+                  "cancellation_id", "status", "context_sha256",
+                  "payload_sha256", "payload"
+              ]),
+              strictInteger(object["protocol_version"])
+                == UInt64(JarvisMacMTLSBridgeTransport.protocolVersion),
+              strictInteger(object["connection_epoch"]) == job.connectionEpoch,
+              strictInteger(object["sequence"]).map({ $0 > job.sequence }) == true,
+              strictUUID(object["task_id"]) == job.taskID,
+              strictUUID(object["step_id"]) == job.stepID,
+              strictUUID(object["attempt_id"]) == job.attemptID,
+              strictUUID(object["lease_id"]) == job.leaseID,
+              strictUUID(object["cancellation_id"]) == job.cancellationID,
+              object["status"] as? String == "completed",
+              strictDigest(object["context_sha256"]) == job.contextDigest,
+              let payloadDigest = strictDigest(object["payload_sha256"]),
+              let payload = object["payload"] as? [String: Any],
+              Set(payload.keys) == Set(["operation", "output", "model"]),
+              payload["operation"] as? String == "generate_text",
+              let output = payload["output"] as? String,
+              !output.isEmpty,
+              output.utf8.count <= 768 * 1_024,
+              payload["model"] as? String == job.selectedModel,
+              let payloadData = try? JSONSerialization.data(
+                  withJSONObject: payload,
+                  options: [.sortedKeys]
+              ),
+              payloadData.count <= 800 * 1_024,
+              Array(SHA256.hash(data: payloadData)) == payloadDigest else {
+            throw JarvisMacDeveloperEventRelayError.mlxJobRejected
+        }
+        return payloadDigest
+    }
+
+    private static func validateAcceptedMLXResult(
+        _ response: JarvisMacBridgeHTTPResponse,
+        for job: ValidatedMLXJob,
+        expectedPayloadDigest: [UInt8]
+    ) throws {
+        guard response.status == 200,
+              let object = strictJSONObject(response.body),
+              Set(object.keys) == Set([
+                  "task_id", "step_id", "status", "payload_sha256"
+              ]),
+              strictUUID(object["task_id"]) == job.taskID,
+              strictUUID(object["step_id"]) == job.stepID,
+              object["status"] as? String == "succeeded",
+              strictDigest(object["payload_sha256"]) == expectedPayloadDigest else {
+            throw JarvisMacDeveloperEventRelayError.invalidMasterResponse
+        }
+    }
+
+    private static func validateMLXCancellationAcknowledgement(
+        _ body: Data,
+        instruction: ValidatedCancellation,
+        job: ValidatedMLXJob
+    ) throws {
+        guard let object = strictJSONObject(body),
+              Set(object.keys) == Set([
+                  "protocol_version", "connection_epoch", "sequence",
+                  "task_id", "step_id", "attempt_id", "lease_id",
+                  "cancellation_id", "status"
+              ]),
+              strictInteger(object["protocol_version"])
+                == UInt64(JarvisMacMTLSBridgeTransport.protocolVersion),
+              strictInteger(object["connection_epoch"]) == job.connectionEpoch,
+              strictInteger(object["sequence"]).map({ $0 > instruction.sequence }) == true,
+              strictUUID(object["task_id"]) == job.taskID,
+              strictUUID(object["step_id"]) == job.stepID,
+              strictUUID(object["attempt_id"]) == job.attemptID,
+              strictUUID(object["lease_id"]) == job.leaseID,
+              strictUUID(object["cancellation_id"]) == job.cancellationID,
+              object["status"] as? String == "cancelled" else {
+            throw JarvisMacDeveloperEventRelayError.mlxJobRejected
+        }
     }
 
     private static func validateAcceptedFixtureResult(
@@ -917,7 +1361,9 @@ private actor FoundationJarvisMacDeveloperAgentSession:
     private let socketURL: URL
     private let bearerToken: String
     private let transport: DarwinJarvisUnixSocketTransport
+    private let mlxExecutionTransport: DarwinJarvisUnixSocketTransport
     private let configurationFixtureJobsEnabled: Bool
+    private let configurationMLXJobsEnabled: Bool
     private var stopped = false
 
     private init(
@@ -926,14 +1372,18 @@ private actor FoundationJarvisMacDeveloperAgentSession:
         socketURL: URL,
         bearerToken: String,
         transport: DarwinJarvisUnixSocketTransport,
-        configurationFixtureJobsEnabled: Bool
+        mlxExecutionTransport: DarwinJarvisUnixSocketTransport,
+        configurationFixtureJobsEnabled: Bool,
+        configurationMLXJobsEnabled: Bool
     ) {
         self.process = process
         self.runtimeDirectoryURL = runtimeDirectoryURL
         self.socketURL = socketURL
         self.bearerToken = bearerToken
         self.transport = transport
+        self.mlxExecutionTransport = mlxExecutionTransport
         self.configurationFixtureJobsEnabled = configurationFixtureJobsEnabled
+        self.configurationMLXJobsEnabled = configurationMLXJobsEnabled
     }
 
     static func start(
@@ -961,6 +1411,12 @@ private actor FoundationJarvisMacDeveloperAgentSession:
             timeoutSeconds: 10,
             peerIdentityPolicy: { peerPolicy }
         )
+        let mlxExecutionTransport = DarwinJarvisUnixSocketTransport(
+            // The protocol permits a ten-minute MLX lease. The agent owns the
+            // earlier lease/deadline timeout and process-group cleanup.
+            timeoutSeconds: 610,
+            peerIdentityPolicy: { peerPolicy }
+        )
         let process = Process()
         let input = Pipe()
         process.executableURL = agentIdentity.executableURL
@@ -983,13 +1439,17 @@ private actor FoundationJarvisMacDeveloperAgentSession:
                 expected: agentIdentity
             )
             let startup: [String: Any] = [
-                "version": 1,
+                "version": 2,
                 "supervised_parent_pid": Int(getpid()),
                 "socket_path": socketURL.path,
                 "peer_code_requirement": helperIdentity.requirement,
                 "peer_identity_profile": JarvisIPCPeerIdentityProfile.adhocExact.rawValue,
                 "bearer_token": bearer,
-                "fixture_jobs_enabled": configuration.fixtureJobsEnabled
+                "fixture_jobs_enabled": configuration.fixtureJobsEnabled,
+                "mlx_jobs_enabled": configuration.mlxJobsEnabled,
+                "mlx_executable_path": configuration.mlxExecutableURL?.path ?? NSNull(),
+                "mlx_model_path": configuration.mlxModelDirectoryURL?.path ?? NSNull(),
+                "mlx_model_id": configuration.mlxModelID ?? NSNull()
             ]
             let startupData = try JSONSerialization.data(
                 withJSONObject: startup,
@@ -1006,7 +1466,9 @@ private actor FoundationJarvisMacDeveloperAgentSession:
                 socketURL: socketURL,
                 bearerToken: bearer,
                 transport: transport,
-                configurationFixtureJobsEnabled: configuration.fixtureJobsEnabled
+                mlxExecutionTransport: mlxExecutionTransport,
+                configurationFixtureJobsEnabled: configuration.fixtureJobsEnabled,
+                configurationMLXJobsEnabled: configuration.mlxJobsEnabled
             )
             try await session.waitUntilHealthy()
             return session
@@ -1026,7 +1488,7 @@ private actor FoundationJarvisMacDeveloperAgentSession:
                 as? [String: Any],
               Set(object.keys) == Set([
                   "status", "mode", "protocol_version", "schema_version",
-                  "cursor", "boundary", "fixture_jobs_enabled"
+                  "cursor", "boundary", "fixture_jobs_enabled", "mlx_jobs_enabled"
               ]),
               object["status"] as? String == "ok",
               object["mode"] as? String == "developer_event_relay",
@@ -1035,10 +1497,8 @@ private actor FoundationJarvisMacDeveloperAgentSession:
               (object["schema_version"] as? NSNumber)?.intValue == 1,
               object["fixture_jobs_enabled"] as? Bool
                 == configurationFixtureJobsEnabled,
-              object["boundary"] as? String
-                == (configurationFixtureJobsEnabled
-                    ? "metadata_cursor_plus_in_memory_public_fixture_jobs_no_retention"
-                    : "metadata_only_no_authoritative_state"),
+              object["mlx_jobs_enabled"] as? Bool == configurationMLXJobsEnabled,
+              object["boundary"] as? String == expectedBoundary,
               let cursorObject = object["cursor"] as? [String: Any],
               Set(cursorObject.keys) == Set(["cursor", "updated_at_ms"]) else {
             throw JarvisMacDeveloperEventRelayError.invalidAgentResponse
@@ -1112,10 +1572,45 @@ private actor FoundationJarvisMacDeveloperAgentSession:
         return response.body
     }
 
+    func executeMLXJob(_ job: Data) async throws -> Data {
+        guard configurationMLXJobsEnabled else {
+            throw JarvisMacDeveloperEventRelayError.mlxJobRejected
+        }
+        let response = try await send(
+            method: "POST",
+            path: "/v1/mlx/jobs/execute",
+            body: job,
+            using: mlxExecutionTransport
+        )
+        guard response.status == 200,
+              !response.body.isEmpty,
+              response.body.count <= 1_024 * 1_024 else {
+            throw JarvisMacDeveloperEventRelayError.mlxJobRejected
+        }
+        return response.body
+    }
+
+    func cancelMLXJob(_ instruction: Data) async throws -> Data {
+        guard configurationMLXJobsEnabled else {
+            throw JarvisMacDeveloperEventRelayError.mlxJobRejected
+        }
+        let response = try await send(
+            method: "POST",
+            path: "/v1/mlx/jobs/cancel",
+            body: instruction
+        )
+        guard response.status == 200,
+              !response.body.isEmpty,
+              response.body.count <= 16 * 1_024 else {
+            throw JarvisMacDeveloperEventRelayError.mlxJobRejected
+        }
+        return response.body
+    }
+
     func stop() async throws {
         guard !stopped else { return }
         if process.isRunning { process.terminate() }
-        let gracefulDeadline = ContinuousClock.now + .milliseconds(500)
+        let gracefulDeadline = ContinuousClock.now + .seconds(3)
         while process.isRunning, ContinuousClock.now < gracefulDeadline {
             try? await Task.sleep(for: .milliseconds(20))
         }
@@ -1148,12 +1643,23 @@ private actor FoundationJarvisMacDeveloperAgentSession:
         throw JarvisMacDeveloperEventRelayError.agentUnavailable
     }
 
+    private var expectedBoundary: String {
+        if configurationFixtureJobsEnabled {
+            return "metadata_cursor_plus_in_memory_public_fixture_jobs_no_retention"
+        }
+        if configurationMLXJobsEnabled {
+            return "metadata_cursor_plus_bounded_public_mlx_jobs_no_retention"
+        }
+        return "metadata_only_no_authoritative_state"
+    }
+
     private func send(
         method: String,
         path: String,
-        body: Data? = nil
+        body: Data? = nil,
+        using selectedTransport: DarwinJarvisUnixSocketTransport? = nil
     ) async throws -> JarvisIPCTransportResponse {
-        try await transport.send(
+        try await (selectedTransport ?? transport).send(
             JarvisIPCTransportRequest(
                 method: method,
                 path: path,

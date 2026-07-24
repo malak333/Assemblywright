@@ -38,7 +38,9 @@ pub const MAX_UNIX_IPC_REQUEST_HEADER_VALUE_BYTES: usize = 1024;
 pub const MAX_UNIX_IPC_RESPONSE_CONTENT_TYPE_BYTES: usize = 256;
 pub const UNIX_IPC_READ_TIMEOUT_SECONDS: u64 = 10;
 pub const UNIX_IPC_PEER_IDENTITY_TIMEOUT_SECONDS: u64 = 10;
-pub const UNIX_IPC_DISPATCH_TIMEOUT_SECONDS: u64 = 300;
+// This must outlive the protocol's ten-minute job bound plus agent-side
+// process-group cleanup. Shorter client routes retain their own tighter bounds.
+pub const UNIX_IPC_DISPATCH_TIMEOUT_SECONDS: u64 = 620;
 pub const UNIX_IPC_WRITE_TIMEOUT_SECONDS: u64 = 10;
 const UNIX_IPC_READ_TIMEOUT: Duration = Duration::from_secs(UNIX_IPC_READ_TIMEOUT_SECONDS);
 const UNIX_IPC_PEER_IDENTITY_TIMEOUT: Duration =
@@ -548,6 +550,32 @@ mod tests {
     #[test]
     fn concurrency_contract_remains_bounded() {
         assert_eq!(MAX_UNIX_IPC_CONNECTIONS, 32);
+        assert_eq!(UNIX_IPC_DISPATCH_TIMEOUT_SECONDS, 620);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn dispatch_bound_outlives_maximum_job_runtime() {
+        let app = Router::new().route(
+            "/slow",
+            axum::routing::get(|| async {
+                tokio::time::sleep(Duration::from_secs(601)).await;
+                axum::http::StatusCode::OK
+            }),
+        );
+        let request = json!({
+            "version": UNIX_IPC_FRAME_VERSION,
+            "method": "GET",
+            "path": "/slow",
+            "authorization": null,
+            "accept": null,
+            "content_type": null,
+            "body_base64": ""
+        });
+
+        let response = dispatch_frame(request.to_string().as_bytes(), app)
+            .await
+            .expect("601-second simulated dispatch stays inside cleanup-aware bound");
+        assert_eq!(response.status, axum::http::StatusCode::OK.as_u16());
     }
 
     #[test]

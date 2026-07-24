@@ -129,16 +129,18 @@ against generated Rust clients on one Windows host, not private-overlay setup,
 live Mac Keychain enrollment, service installation, or remote-device
 reliability.
 
-The bounded relay and fixture-job slice has these focused gates:
+The bounded relay, fixture-job, and MLX-job slices have these focused gates:
 
 ```sh
 cargo test -p jarvis-protocol --test distributed_event_cursor_contract --locked
+cargo test -p jarvis-protocol --test mlx_job_contract --locked
 cargo test -p jarvis-master --test event_cursor_e2e --locked
 cargo test -p jarvis-agent --locked
 cargo test -p jarvis-master --test master_lifecycle_e2e --locked
 cargo test -p jarvis-master --test master_process_e2e --locked
 cargo test -p jarvis-master --test remote_mtls_e2e --locked
 swift test --disable-sandbox --package-path apps/mac --filter fixtureJobRelay
+swift test --disable-sandbox --package-path apps/mac --filter mlx
 ```
 
 The protocol gate rejects gaps, stream replacement, invalid identity shapes,
@@ -434,6 +436,56 @@ ID plus a bounded operator reason. Then remove only the secondary Mac namespace:
 Never reuse or overwrite the `mlx.reasoning` enrollment. This live receipt is a
 bounded synthetic diagnostic, not MLX inference, repository/Codex/Git
 authority, unattended operation, signing/notarization, or release readiness.
+
+The real local-inference lane is separately default-off and uses the existing
+standard enrollment only when its capability list is the exact singleton
+`mlx.reasoning` / `local_inference` / `mlx` descriptor with the configured
+model. Install MLX-LM and an MLX-format model in owner-only directories outside
+the repository, verify an offline stdin-only smoke, build the signed bridge,
+then run from the Mac:
+
+```sh
+export JARVIS_MAC_DEVELOPER_MLX_EXECUTABLE="/absolute/path/to/mlx_lm.generate"
+export JARVIS_MAC_DEVELOPER_MLX_MODEL_DIR="/absolute/path/to/offline-mlx-model"
+export JARVIS_MAC_DEVELOPER_MLX_MODEL_ID="mlx-local"
+./scripts/build-mac-bridge-signed.sh
+./scripts/mac-windows-bridge-live-e2e.sh --run-mlx
+```
+
+The executable must be an absolute canonical executable regular file, the
+model input must be an absolute canonical directory, and the model identifier
+must exactly match enrollment. The agent revalidates the executable
+digest/inode and model-directory inode immediately before spawn. Those
+owner-controlled paths are not descriptor-backed immutable model contents or
+an OS sandbox against a malicious same-user race. The harness emits fixed
+action markers. At each marker, run these owner-authenticated loopback commands
+from the Windows checkout and paste only the sanitized JSON receipt lines back
+into the waiting Mac harness. The combined cancellation action emits the leased
+receipt first, activates pause immediately without a Mac/operator timing race,
+then emits the cancellation receipt after the bounded no-late-output window:
+
+```powershell
+$device = "<expected_device_id_from_mac_marker>"
+$success = .\scripts\windows-mlx-live-control.ps1 -Action EnqueueSuccess -ExpectedDeviceId $device -ConfirmAction
+$success
+
+$cancel = .\scripts\windows-mlx-live-control.ps1 -Action EnqueueCancellationAndPause -ExpectedDeviceId $device -ConfirmAction
+$cancel
+
+$resumed = .\scripts\windows-mlx-live-control.ps1 -Action Resume -ConfirmAction
+$resumed
+```
+
+Success emits `jarvis_mac_windows_mlx_live_e2e_ok` only after the real local
+model completes one bounded request, the Windows event stream and Mac durable
+cursor reach the exact terminal sequences, pause-dominated cancellation is
+acknowledged, seven seconds contain no late or duplicate task event, and a
+fresh helper/agent chain advances the same cursor. Receipts contain IDs,
+sequences, and status only; prompt and output remain absent. This is live
+two-device local LLM evidence with frontier cloud review still selective. It
+does not prove model quality, general distributed jobs, repository/Codex/Git
+authority, OS sandbox containment, unattended operation, signing/notarization,
+or release readiness.
 
 To record bounded Windows service-outage recovery through the production Swift
 lifecycle, run the stronger coordinated mode from the Mac:

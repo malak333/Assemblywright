@@ -87,9 +87,17 @@ metadata batches into the durable cursor. A third, exact-value opt-in,
 Public, no-retention `fixture.reasoning` synthetic-echo diagnostic. The master
 binds lease, result, cancellation, acknowledgement, device, epoch, and attempt;
 the agent keeps the active fixture only in memory and suppresses output after
-cancellation. This is not a bundled helper, unattended background service,
-production distributed-job runtime, MLX inference worker, repository executor,
-or Codex/Git path. Fixture enrollment uses a second exact Keychain identity
+cancellation. A separate exact-value
+`JARVIS_MAC_DEVELOPER_MLX_JOBS_ENABLED=true` standard-profile lane now runs one
+bounded Public, no-retention `mlx.reasoning` request at a time through an
+explicit absolute `mlx_lm.generate` executable and offline model directory.
+The prompt travels only on stdin; inherited environment and telemetry are
+cleared, stdout is bounded, stderr is discarded, and cancellation, timeout, or
+emergency pause reaps the dedicated process group before suppressing output.
+This is local LLM execution, with frontier cloud review remaining selective;
+it is not a bundled helper, unattended background service, general production
+distributed-job runtime, repository executor, or Codex/Git path. Fixture
+enrollment uses a second exact Keychain identity
 profile selected only by `--identity-profile fixture`; the original standard
 identity namespace and default monitor/relay commands remain unchanged. The
 fixture profile rejects MLX or mixed capabilities before key creation or TLS.
@@ -100,7 +108,7 @@ Windows-local bearer-authenticated master exposes exact-body
 `POST /v1/development/emergency-pause/resume` actions. They mutate the live
 master only on loopback, are absent from the enrolled-device mTLS router, and
 cannot accept planning or enqueue payloads. Pause durably cancels already
-leased fixture work so resume cannot make an old result acceptable again. The
+leased fixture or MLX work so resume cannot make an old result acceptable again. The
 named owner-device proof is
 `./scripts/mac-windows-bridge-live-e2e.sh --run-relay`, which requires the same
 durable stream to advance across a fresh app/helper/agent chain. The
@@ -109,7 +117,12 @@ separate live fixture proof is
 fixed Windows-local enqueue/pause/resume actions, verifies success,
 cancellation/late-output suppression, same-cursor restart, and standard-profile
 preservation, and emits a payload-free receipt. It does not self-approve or
-grant remote enqueue/pause authority. The
+grant remote enqueue/pause authority. The separate live MLX proof is
+`./scripts/mac-windows-bridge-live-e2e.sh --run-mlx`; it requires the explicit
+runtime/model inputs and uses `scripts/windows-mlx-live-control.ps1` for one
+real completion plus pause-dominated cancellation, seven-second late-output
+suppression, and same-cursor restart. Its payload-free receipt proves only this
+two-device local-inference boundary. The
 accepted target and migration boundaries are recorded in
 [Distributed Developer Mode Design](docs/distributed-developer-mode-design.md).
 The protocol seam has a named serialized contract E2E. The master kernel has a
@@ -211,6 +224,19 @@ revocation and confirmed
 remain separate cleanup steps. This receipt is live synthetic diagnostics
 evidence, not MLX inference, repository/Codex/Git authority, unattended
 reliability, signing/notarization, or release readiness.
+The explicit `--run-mlx` mode uses the enrolled standard `mlx.reasoning`
+identity. At its markers, the owner runs
+`scripts/windows-mlx-live-control.ps1` for success, combined long
+cancellation-and-pause, and resume, then pastes only each sanitized JSON
+receipt into the Mac harness. Combining lease observation and pause on Windows
+removes operator round-trip timing from cancellation evidence.
+Success requires exact event ordering and stream binding, the durable Mac
+cursor reaching each terminal sequence, exact expected-device and per-attempt
+connection-epoch binding, seven seconds without a late or
+duplicate cancelled-task event, and same-stream restart. It proves live local
+MLX execution and cancellation only—not model quality, repository/Codex/Git
+authority, OS sandbox containment, unattended reliability,
+signing/notarization, or release readiness.
 `windows_service_lifecycle_e2e` installs a unique temporary real SCM service on
 the Windows CI runner, proves automatic-start configuration, starts the master
 under LocalSystem, checks runtime health, proves maintenance admission denial

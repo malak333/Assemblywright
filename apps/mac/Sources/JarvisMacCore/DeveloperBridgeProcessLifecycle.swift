@@ -44,6 +44,14 @@ public struct JarvisDeveloperBridgeProcessConfiguration: Equatable, Sendable {
         "JARVIS_MAC_DEVELOPER_AGENT_DATA_DIR"
     public static let fixtureJobsEnabledEnvironmentKey =
         "JARVIS_MAC_DEVELOPER_FIXTURE_JOBS_ENABLED"
+    public static let mlxJobsEnabledEnvironmentKey =
+        "JARVIS_MAC_DEVELOPER_MLX_JOBS_ENABLED"
+    public static let mlxExecutableEnvironmentKey =
+        "JARVIS_MAC_DEVELOPER_MLX_EXECUTABLE"
+    public static let mlxModelDirectoryEnvironmentKey =
+        "JARVIS_MAC_DEVELOPER_MLX_MODEL_DIR"
+    public static let mlxModelIDEnvironmentKey =
+        "JARVIS_MAC_DEVELOPER_MLX_MODEL_ID"
     public let executableURL: URL?
     public let expectedTeamIdentifier: String?
     public let eventRelayConfiguration: JarvisMacDeveloperEventRelayConfiguration?
@@ -60,15 +68,42 @@ public struct JarvisDeveloperBridgeProcessConfiguration: Equatable, Sendable {
         let agentExecutable = environment[Self.agentExecutableEnvironmentKey]
         let agentDataDirectory = environment[Self.agentDataDirectoryEnvironmentKey]
         let fixtureJobsValue = environment[Self.fixtureJobsEnabledEnvironmentKey]
-        guard fixtureJobsValue == nil
-                || fixtureJobsValue == "false"
-                || fixtureJobsValue == "true" else {
+        let mlxJobsValue = environment[Self.mlxJobsEnabledEnvironmentKey]
+        guard Self.isValidBooleanOptIn(fixtureJobsValue),
+              Self.isValidBooleanOptIn(mlxJobsValue) else {
             executableURL = nil
             expectedTeamIdentifier = nil
             eventRelayConfiguration = nil
             return
         }
         let fixtureJobsEnabled = fixtureJobsValue == "true"
+        let mlxJobsEnabled = mlxJobsValue == "true"
+        guard !(fixtureJobsEnabled && mlxJobsEnabled) else {
+            executableURL = nil
+            expectedTeamIdentifier = nil
+            eventRelayConfiguration = nil
+            return
+        }
+        let mlxExecutable = environment[Self.mlxExecutableEnvironmentKey]
+        let mlxModelDirectory = environment[Self.mlxModelDirectoryEnvironmentKey]
+        let mlxModelID = environment[Self.mlxModelIDEnvironmentKey]
+        guard mlxJobsEnabled
+                ? mlxExecutable != nil && mlxModelDirectory != nil && mlxModelID != nil
+                : mlxExecutable == nil && mlxModelDirectory == nil && mlxModelID == nil else {
+            executableURL = nil
+            expectedTeamIdentifier = nil
+            eventRelayConfiguration = nil
+            return
+        }
+        if mlxJobsEnabled {
+            guard let mlxExecutable, Self.isValidAbsolutePath(mlxExecutable),
+                  let mlxModelDirectory, Self.isValidAbsolutePath(mlxModelDirectory) else {
+                executableURL = nil
+                expectedTeamIdentifier = nil
+                eventRelayConfiguration = nil
+                return
+            }
+        }
         guard (agentExecutable == nil) == (agentDataDirectory == nil) else {
             executableURL = nil
             expectedTeamIdentifier = nil
@@ -84,7 +119,13 @@ public struct JarvisDeveloperBridgeProcessConfiguration: Equatable, Sendable {
                     fileURLWithPath: agentDataDirectory,
                     isDirectory: true
                 ),
-                fixtureJobsEnabled: fixtureJobsEnabled
+                fixtureJobsEnabled: fixtureJobsEnabled,
+                mlxJobsEnabled: mlxJobsEnabled,
+                mlxExecutableURL: mlxExecutable.map(URL.init(fileURLWithPath:)),
+                mlxModelDirectoryURL: mlxModelDirectory.map {
+                    URL(fileURLWithPath: $0, isDirectory: true)
+                },
+                mlxModelID: mlxModelID
             )
             guard (try? relay.validatePaths()) != nil else {
                 executableURL = nil
@@ -94,7 +135,7 @@ public struct JarvisDeveloperBridgeProcessConfiguration: Equatable, Sendable {
             }
             relayConfiguration = relay
         } else {
-            guard !fixtureJobsEnabled else {
+            guard !fixtureJobsEnabled, !mlxJobsEnabled else {
                 executableURL = nil
                 expectedTeamIdentifier = nil
                 eventRelayConfiguration = nil
@@ -111,6 +152,17 @@ public struct JarvisDeveloperBridgeProcessConfiguration: Equatable, Sendable {
         value.utf8.count == 10 && value.utf8.allSatisfy({
             (0x41 ... 0x5a).contains($0) || (0x30 ... 0x39).contains($0)
         })
+    }
+
+    private static func isValidBooleanOptIn(_ value: String?) -> Bool {
+        value == nil || value == "false" || value == "true"
+    }
+
+    private static func isValidAbsolutePath(_ value: String) -> Bool {
+        value.hasPrefix("/")
+            && !value.contains("\0")
+            && !value.split(separator: "/").contains("..")
+            && value.utf8.count <= 4 * 1_024
     }
 }
 

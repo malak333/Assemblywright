@@ -11,7 +11,7 @@ use hyper_util::service::TowerToHyperService;
 use jarvis_master::{
     current_time_ms, AcceptedCancellation, AcceptedResult, DeviceRegistration, EnrollmentGrantSpec,
     EnrollmentRequest, EphemeralServerIdentity, IdentityAuthority, MasterHealthSnapshot,
-    MasterProcess, NewStep, PlatformSecretProtector, StartupReconciliation,
+    MasterProcess, NewStep, PlatformSecretProtector, RemoteWorkContract, StartupReconciliation,
 };
 #[cfg(test)]
 use jarvis_protocol::CapabilityKind;
@@ -1544,13 +1544,13 @@ async fn remote_lease_next(
     if request.device_id != registration.device_id {
         return Err(unauthorized());
     }
-    if !registration_can_execute_fixture(&registration) {
-        return Err(unauthorized());
-    }
-    let job = lock_process(&state)?.kernel_mut().lease_next_fixture_step(
+    let contract =
+        RemoteWorkContract::from_registration(&registration).map_err(|_| unauthorized())?;
+    let job = lock_process(&state)?.kernel_mut().lease_next_remote_step(
         registration.device_id,
         request.connection_epoch,
         current_time_ms().map_err(api_error)?,
+        &contract,
     );
     match job {
         Ok(job) => Ok(Json(job).into_response()),
@@ -1569,15 +1569,15 @@ async fn remote_accept_result(
     require_work_admission(&state)?;
     let registration =
         require_remote_application_session(&state, &session, Some(result.connection_epoch))?;
-    if !registration_can_execute_fixture(&registration) {
-        return Err(unauthorized());
-    }
+    let contract =
+        RemoteWorkContract::from_registration(&registration).map_err(|_| unauthorized())?;
     let accepted = lock_process(&state)?
         .kernel_mut()
-        .accept_fixture_result_from(
+        .accept_remote_result_from(
             registration.device_id,
             &result,
             current_time_ms().map_err(api_error)?,
+            &contract,
         )
         .map_err(bound_worker_error)?;
     Ok(Json(accepted))
@@ -1591,15 +1591,15 @@ async fn remote_cancellation_next(
     request.validate().map_err(api_error)?;
     let registration =
         require_remote_application_session(&state, &session, Some(request.connection_epoch))?;
-    if !registration_can_execute_fixture(&registration) {
-        return Err(unauthorized());
-    }
+    let contract =
+        RemoteWorkContract::from_registration(&registration).map_err(|_| unauthorized())?;
     match lock_process(&state)?
         .kernel_mut()
-        .next_cancellation(
+        .next_remote_cancellation(
             registration.device_id,
             request.connection_epoch,
             current_time_ms().map_err(api_error)?,
+            &contract,
         )
         .map_err(bound_worker_error)?
     {
@@ -1618,15 +1618,15 @@ async fn remote_cancellation_ack(
         &session,
         Some(acknowledgement.connection_epoch),
     )?;
-    if !registration_can_execute_fixture(&registration) {
-        return Err(unauthorized());
-    }
+    let contract =
+        RemoteWorkContract::from_registration(&registration).map_err(|_| unauthorized())?;
     let accepted = lock_process(&state)?
         .kernel_mut()
-        .accept_cancellation_ack_from(
+        .accept_remote_cancellation_ack_from(
             registration.device_id,
             &acknowledgement,
             current_time_ms().map_err(api_error)?,
+            &contract,
         )
         .map_err(bound_worker_error)?;
     Ok(Json(accepted))
@@ -1655,11 +1655,12 @@ fn bound_worker_error(error: jarvis_master::MasterError) -> ApiError {
     }
 }
 
+#[cfg(test)]
 fn registration_can_execute_fixture(registration: &DeviceRegistration) -> bool {
     matches!(
-        registration.role,
-        DeviceRole::MacBridge | DeviceRole::InferenceWorker
-    ) && registration.capabilities == vec![CapabilityDescriptor::fixture_reasoning()]
+        RemoteWorkContract::from_registration(registration),
+        Ok(RemoteWorkContract::Fixture)
+    )
 }
 
 async fn remote_events_next(

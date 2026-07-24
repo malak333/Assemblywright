@@ -59,6 +59,7 @@ public struct DarwinJarvisUnixSocketTransport: JarvisUnixSocketRequesting {
     public static let maximumRequestBodyBytes = 1 * 1024 * 1024
     public static let maximumResponseFrameBytes = 12 * 1024 * 1024
     public static let maximumResponseBodyBytes = 8 * 1024 * 1024
+    public static let maximumTimeoutSeconds = 610
     public var timeoutSeconds: Int
     private let peerIdentityPolicy: @Sendable () throws -> JarvisIPCPeerIdentityPolicy?
     private let peerIdentityVerifier: any JarvisUnixPeerIdentityVerifying
@@ -68,7 +69,7 @@ public struct DarwinJarvisUnixSocketTransport: JarvisUnixSocketRequesting {
         peerIdentityPolicy: @escaping @Sendable () throws -> JarvisIPCPeerIdentityPolicy? = { nil },
         peerIdentityVerifier: any JarvisUnixPeerIdentityVerifying = SecurityJarvisUnixPeerIdentityVerifier()
     ) {
-        self.timeoutSeconds = min(max(timeoutSeconds, 1), 300)
+        self.timeoutSeconds = min(max(timeoutSeconds, 1), Self.maximumTimeoutSeconds)
         self.peerIdentityPolicy = peerIdentityPolicy
         self.peerIdentityVerifier = peerIdentityVerifier
     }

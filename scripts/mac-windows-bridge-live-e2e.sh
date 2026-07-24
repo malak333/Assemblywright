@@ -45,10 +45,12 @@ case "$MODE" in
     ;;
   --run-fixture)
     ;;
+  --run-mlx)
+    ;;
   --run-outage)
     ;;
   *)
-    fail "usage: $0 [--check|--run|--run-relay|--run-fixture|--run-outage]"
+    fail "usage: $0 [--check|--run|--run-relay|--run-fixture|--run-mlx|--run-outage]"
     ;;
 esac
 
@@ -118,7 +120,10 @@ fi
 nc -z -w 3 "$host" "$port" >/dev/null 2>&1 \
   || fail "Windows master mTLS endpoint is unreachable"
 
-connect_json="$("$BRIDGE_BIN" connect "${identity_profile_arguments[@]}")"
+connect_json="$(
+  "$BRIDGE_BIN" connect \
+    ${identity_profile_arguments[@]+"${identity_profile_arguments[@]}"}
+)"
 [[ "$(json_value "$connect_json" status)" == "authenticated" ]] \
   || fail "bridge did not complete authenticated application handshake"
 [[ "$(json_value "$connect_json" master_mode)" == "developer_remote_master" ]] \
@@ -135,7 +140,9 @@ for forbidden in grant_secret certificate_pem ca_certificate_pem maintenance_rea
 done
 
 monitor_json="$(
-  "$BRIDGE_BIN" monitor "${identity_profile_arguments[@]}" --samples 2 --interval-ms 100
+  "$BRIDGE_BIN" monitor \
+    ${identity_profile_arguments[@]+"${identity_profile_arguments[@]}"} \
+    --samples 2 --interval-ms 100
 )"
 monitor_first="$(printf '%s\n' "$monitor_json" | sed -n '1p')"
 monitor_second="$(printf '%s\n' "$monitor_json" | sed -n '2p')"
@@ -158,7 +165,8 @@ for forbidden in grant_secret certificate_pem ca_certificate_pem maintenance_rea
 done
 
 reconnect_json="$(
-  "$BRIDGE_BIN" monitor "${identity_profile_arguments[@]}" \
+  "$BRIDGE_BIN" monitor \
+    ${identity_profile_arguments[@]+"${identity_profile_arguments[@]}"} \
     --samples 2 --interval-ms 100 --reconnect-between-samples
 )"
 reconnect_first="$(printf '%s\n' "$reconnect_json" | sed -n '1p')"
@@ -188,7 +196,7 @@ cleanup_relay() {
     rm -rf -- "$relay_directory"
   fi
 }
-if [[ "$MODE" == "--run-relay" || "$MODE" == "--run-fixture" ]]; then
+if [[ "$MODE" == "--run-relay" || "$MODE" == "--run-fixture" || "$MODE" == "--run-mlx" ]]; then
   command -v sqlite3 >/dev/null 2>&1 \
     || fail "sqlite3 is required for the durable relay proof"
   if [[ -n "${JARVIS_MAC_AGENT_BIN:-}" ]]; then
@@ -212,11 +220,27 @@ if [[ "$MODE" == "--run-relay" || "$MODE" == "--run-fixture" ]]; then
     app_lifecycle_environment+=(
       "JARVIS_MAC_DEVELOPER_FIXTURE_JOBS_ENABLED=true"
     )
+  elif [[ "$MODE" == "--run-mlx" ]]; then
+    [[ -n "${JARVIS_MAC_DEVELOPER_MLX_EXECUTABLE:-}" \
+      && -x "$JARVIS_MAC_DEVELOPER_MLX_EXECUTABLE" ]] \
+      || fail "set JARVIS_MAC_DEVELOPER_MLX_EXECUTABLE to the exact executable"
+    [[ -n "${JARVIS_MAC_DEVELOPER_MLX_MODEL_DIR:-}" \
+      && -d "$JARVIS_MAC_DEVELOPER_MLX_MODEL_DIR" ]] \
+      || fail "set JARVIS_MAC_DEVELOPER_MLX_MODEL_DIR to the offline model directory"
+    [[ -n "${JARVIS_MAC_DEVELOPER_MLX_MODEL_ID:-}" ]] \
+      || fail "set JARVIS_MAC_DEVELOPER_MLX_MODEL_ID to the enrolled model identifier"
+    app_lifecycle_environment+=(
+      "JARVIS_MAC_DEVELOPER_MLX_JOBS_ENABLED=true"
+      "JARVIS_MAC_DEVELOPER_MLX_EXECUTABLE=$JARVIS_MAC_DEVELOPER_MLX_EXECUTABLE"
+      "JARVIS_MAC_DEVELOPER_MLX_MODEL_DIR=$JARVIS_MAC_DEVELOPER_MLX_MODEL_DIR"
+      "JARVIS_MAC_DEVELOPER_MLX_MODEL_ID=$JARVIS_MAC_DEVELOPER_MLX_MODEL_ID"
+    )
   fi
   trap cleanup_relay EXIT
 fi
 
-if [[ "$MODE" != "--run-fixture" ]] && ! app_lifecycle_output="$(
+if [[ "$MODE" != "--run-fixture" && "$MODE" != "--run-mlx" ]] \
+  && ! app_lifecycle_output="$(
   env \
     JARVIS_MAC_DEVELOPER_BRIDGE_LIVE_E2E=true \
     JARVIS_MAC_DEVELOPER_BRIDGE_EXECUTABLE="$BRIDGE_BIN" \
@@ -228,7 +252,7 @@ if [[ "$MODE" != "--run-fixture" ]] && ! app_lifecycle_output="$(
   printf '%s\n' "$app_lifecycle_output" >&2
   fail "production app bridge lifecycle did not reach the Windows master"
 fi
-if [[ "$MODE" != "--run-fixture" ]]; then
+if [[ "$MODE" != "--run-fixture" && "$MODE" != "--run-mlx" ]]; then
   [[ "$app_lifecycle_output" == *"jarvis_mac_app_bridge_live_e2e_ok"* ]] \
     || fail "production app bridge lifecycle omitted its live E2E marker"
 fi
@@ -275,6 +299,236 @@ if [[ "$MODE" == "--run-relay" ]]; then
     || fail "production app relay did not durably resume the same advancing stream"
   printf 'jarvis_mac_windows_event_relay_live_e2e_ok endpoint=%s stream_id=%s sequence_before=%s sequence_after=%s app_supervision=verified agent_restart=verified\n' \
     "$endpoint" "$first_stream" "$first_sequence" "$resumed_sequence"
+fi
+
+if [[ "$MODE" == "--run-mlx" ]]; then
+  mlx_coordination_directory="$relay_directory/mlx-coordination"
+  mkdir "$mlx_coordination_directory"
+  chmod 700 "$mlx_coordination_directory"
+  mlx_output="$relay_directory/mlx-live.log"
+  : >"$mlx_output"
+  chmod 600 "$mlx_output"
+  mlx_pid=""
+
+  cleanup_mlx() {
+    if [[ -n "$mlx_pid" ]] && kill -0 "$mlx_pid" >/dev/null 2>&1; then
+      : >"$mlx_coordination_directory/cancel"
+      kill "$mlx_pid" >/dev/null 2>&1 || true
+      local deadline=$((SECONDS + 5))
+      while kill -0 "$mlx_pid" >/dev/null 2>&1 \
+        && (( SECONDS < deadline )); do
+        sleep 0.1
+      done
+      if kill -0 "$mlx_pid" >/dev/null 2>&1; then
+        kill -KILL "$mlx_pid" >/dev/null 2>&1 || true
+      fi
+      wait "$mlx_pid" >/dev/null 2>&1 || true
+    fi
+    cleanup_relay
+  }
+  trap cleanup_mlx EXIT
+
+  mlx_cursor() {
+    local database="$relay_data_directory/agent.sqlite3"
+    [[ -f "$database" ]] || return 1
+    sqlite3 "$database" \
+      'SELECT COALESCE(stream_id, ""), sequence FROM agent_event_cursor WHERE singleton = 1;'
+  }
+  wait_for_mlx_marker() {
+    local marker="$1"
+    local timeout_seconds="$2"
+    local label="$3"
+    local deadline=$((SECONDS + timeout_seconds))
+    while [[ ! -s "$mlx_coordination_directory/$marker" ]]; do
+      if ! kill -0 "$mlx_pid" >/dev/null 2>&1; then
+        wait "$mlx_pid" >/dev/null 2>&1 || true
+        cat "$mlx_output" >&2
+        fail "production app MLX lifecycle exited before $label"
+      fi
+      (( SECONDS < deadline )) || {
+        cat "$mlx_output" >&2
+        fail "timed out waiting for $label"
+      }
+      sleep 0.25
+    done
+  }
+  wait_for_mlx_sequence() {
+    local minimum="$1"
+    local timeout_seconds="$2"
+    local label="$3"
+    local deadline=$((SECONDS + timeout_seconds))
+    local observed=""
+    while true; do
+      observed="$(mlx_cursor 2>/dev/null || true)"
+      local sequence="${observed##*|}"
+      if [[ "$sequence" =~ ^[0-9]+$ && "$sequence" -ge "$minimum" ]]; then
+        printf '%s' "$observed"
+        return
+      fi
+      if ! kill -0 "$mlx_pid" >/dev/null 2>&1; then
+        wait "$mlx_pid" >/dev/null 2>&1 || true
+        cat "$mlx_output" >&2
+        fail "production app MLX lifecycle exited before $label"
+      fi
+      (( SECONDS < deadline )) || {
+        cat "$mlx_output" >&2
+        fail "timed out waiting for $label"
+      }
+      sleep 0.25
+    done
+  }
+  capture_mlx_control_receipt() {
+    local filename="$1"
+    local label="$2"
+    local receipt=""
+    if ! IFS= read -r -t 300 receipt; then
+      fail "timed out waiting for the sanitized $label receipt on stdin"
+    fi
+    [[ -n "$receipt" && "${#receipt}" -le 4096 ]] \
+      || fail "the sanitized $label receipt was empty or oversized"
+    (
+      umask 077
+      printf '%s' "$receipt" >"$mlx_coordination_directory/$filename.tmp"
+    )
+    chmod 600 "$mlx_coordination_directory/$filename.tmp"
+    mv "$mlx_coordination_directory/$filename.tmp" \
+      "$mlx_coordination_directory/$filename"
+  }
+
+  env \
+    JARVIS_MAC_DEVELOPER_MLX_LIVE_E2E=true \
+    JARVIS_MAC_DEVELOPER_MLX_COORDINATION_DIR="$mlx_coordination_directory" \
+    JARVIS_MAC_DEVELOPER_BRIDGE_EXECUTABLE="$BRIDGE_BIN" \
+    JARVIS_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER="$bridge_team" \
+    "${app_lifecycle_environment[@]}" \
+    swift test --disable-sandbox --package-path "$PACKAGE_PATH" \
+      --filter liveSignedHelperAppLifecycleRunsMLXJob \
+      >"$mlx_output" 2>&1 </dev/null &
+  mlx_pid="$!"
+
+  wait_for_mlx_marker "mlx-ready" 180 "the exact MLX-capability connection"
+  mlx_ready_epoch="$(
+    tr -d '\r\n' <"$mlx_coordination_directory/mlx-ready"
+  )"
+  [[ "$mlx_ready_epoch" =~ ^[0-9]+$ && "$mlx_ready_epoch" -gt 0 ]] \
+    || fail "MLX lifecycle emitted an invalid connection epoch"
+  initial_cursor="$(mlx_cursor)" \
+    || fail "MLX lifecycle did not create the durable agent cursor"
+  mlx_stream="${initial_cursor%%|*}"
+  mlx_sequence_before="${initial_cursor##*|}"
+  [[ "$mlx_stream" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ \
+    && "$mlx_sequence_before" =~ ^[0-9]+$ ]] \
+    || fail "MLX lifecycle emitted an invalid initial cursor"
+
+  printf '%s\n' \
+    "jarvis_mac_windows_mlx_success_enqueue_required action=EnqueueSuccess script=scripts/windows-mlx-live-control.ps1 expected_device_id=$standard_device_id receipt_stdin=required"
+  capture_mlx_control_receipt "success-control.json" "MLX success"
+  wait_for_mlx_marker "success-observed" 30 "strict MLX success receipt validation"
+  success_receipt="$(<"$mlx_coordination_directory/success-control.json")"
+  success_receipt_stream="$(json_value "$success_receipt" stream_id)"
+  success_receipt_device="$(json_value "$success_receipt" device_id)"
+  success_receipt_epoch="$(json_value "$success_receipt" connection_epoch)"
+  success_receipt_sequence="$(json_value "$success_receipt" succeeded_sequence)"
+  [[ "$success_receipt_stream" == "$mlx_stream" \
+    && "$success_receipt_device" == "$standard_device_id" \
+    && "$success_receipt_epoch" =~ ^[0-9]+$ \
+    && "$success_receipt_epoch" -ge "$mlx_ready_epoch" \
+    && "$success_receipt_sequence" =~ ^[0-9]+$ \
+    && "$success_receipt_sequence" -gt "$mlx_sequence_before" ]] \
+    || fail "strict success receipt did not bind the active MLX stream"
+  success_cursor="$(
+    wait_for_mlx_sequence "$success_receipt_sequence" 180 \
+      "the exact MLX success terminal event"
+  )"
+  mlx_sequence_success="${success_cursor##*|}"
+
+  printf '%s\n' \
+    "jarvis_mac_windows_mlx_cancellation_enqueue_required action=EnqueueCancellationAndPause script=scripts/windows-mlx-live-control.ps1 expected_device_id=$standard_device_id receipts_stdin=leased_then_cancelled"
+  capture_mlx_control_receipt "cancellation-control.json" "MLX cancellation lease"
+  wait_for_mlx_marker \
+    "cancellation-leased-observed" 30 "strict MLX cancellation lease receipt validation"
+  cancellation_receipt="$(<"$mlx_coordination_directory/cancellation-control.json")"
+  cancellation_receipt_stream="$(json_value "$cancellation_receipt" stream_id)"
+  cancellation_receipt_device="$(json_value "$cancellation_receipt" device_id)"
+  cancellation_receipt_epoch="$(json_value "$cancellation_receipt" connection_epoch)"
+  cancellation_receipt_leased_sequence="$(
+    json_value "$cancellation_receipt" leased_sequence
+  )"
+  [[ "$cancellation_receipt_stream" == "$mlx_stream" \
+    && "$cancellation_receipt_device" == "$standard_device_id" \
+    && "$cancellation_receipt_epoch" =~ ^[0-9]+$ \
+    && "$cancellation_receipt_epoch" -ge "$success_receipt_epoch" \
+    && "$cancellation_receipt_leased_sequence" =~ ^[0-9]+$ \
+    && "$cancellation_receipt_leased_sequence" -gt "$mlx_sequence_success" ]] \
+    || fail "strict cancellation receipt did not bind the active MLX stream"
+  printf '%s\n' \
+    "jarvis_mac_windows_mlx_pause_receipt_required action=EnqueueCancellationAndPause expected_device_id=$standard_device_id connection_epoch=$cancellation_receipt_epoch receipt_stdin=second_receipt"
+  capture_mlx_control_receipt "pause-control.json" "MLX cancellation"
+  wait_for_mlx_marker "cancellation-observed" 300 "the fail-closed paused MLX state"
+  pause_receipt="$(<"$mlx_coordination_directory/pause-control.json")"
+  pause_receipt_stream="$(json_value "$pause_receipt" stream_id)"
+  pause_receipt_device="$(json_value "$pause_receipt" device_id)"
+  pause_receipt_epoch="$(json_value "$pause_receipt" connection_epoch)"
+  pause_receipt_cancelled_sequence="$(json_value "$pause_receipt" cancelled_sequence)"
+  [[ "$pause_receipt_stream" == "$mlx_stream" \
+    && "$pause_receipt_device" == "$standard_device_id" \
+    && "$pause_receipt_epoch" == "$cancellation_receipt_epoch" \
+    && "$pause_receipt_cancelled_sequence" =~ ^[0-9]+$ \
+    && "$pause_receipt_cancelled_sequence" -gt "$cancellation_receipt_leased_sequence" ]] \
+    || fail "strict cancellation receipt did not bind the active MLX stream"
+  cancellation_cursor="$(
+    wait_for_mlx_sequence "$pause_receipt_cancelled_sequence" 180 \
+      "the exact MLX cancellation and late-output suppression"
+  )"
+  mlx_sequence_cancelled="${cancellation_cursor##*|}"
+
+  printf '%s\n' \
+    'jarvis_mac_windows_mlx_resume_required action=Resume script=scripts/windows-mlx-live-control.ps1 receipt_stdin=required'
+  capture_mlx_control_receipt "resume-control.json" "MLX resume"
+  wait_for_mlx_marker "mlx-complete" 300 "deliberate MLX admission resume"
+  if ! wait "$mlx_pid"; then
+    cat "$mlx_output" >&2
+    fail "production app MLX lifecycle failed"
+  fi
+  mlx_pid=""
+  [[ "$(cat "$mlx_output")" == *"jarvis_mac_app_mlx_live_e2e_ok"* ]] \
+    || fail "production app MLX lifecycle omitted its live E2E marker"
+
+  if ! mlx_restart_output="$(
+    env \
+      JARVIS_MAC_DEVELOPER_BRIDGE_LIVE_E2E=true \
+      JARVIS_MAC_DEVELOPER_BRIDGE_EXECUTABLE="$BRIDGE_BIN" \
+      JARVIS_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER="$bridge_team" \
+      "${app_lifecycle_environment[@]}" \
+      swift test --disable-sandbox --package-path "$PACKAGE_PATH" \
+        --filter liveSignedHelperAppLifecycleReachesWindowsMaster 2>&1
+  )"; then
+    printf '%s\n' "$mlx_restart_output" >&2
+    fail "MLX cursor did not survive a fresh app/helper/agent chain"
+  fi
+  [[ "$mlx_restart_output" == *"jarvis_mac_app_bridge_live_e2e_ok"* ]] \
+    || fail "MLX restart omitted its live E2E marker"
+  restarted_cursor="$(mlx_cursor)" \
+    || fail "MLX restart lost the durable agent cursor"
+  restarted_stream="${restarted_cursor%%|*}"
+  mlx_sequence_restarted="${restarted_cursor##*|}"
+  [[ "$restarted_stream" == "$mlx_stream" \
+    && "$mlx_sequence_restarted" =~ ^[0-9]+$ \
+    && "$mlx_sequence_restarted" -gt "$mlx_sequence_cancelled" ]] \
+    || fail "MLX restart did not resume the same advancing cursor"
+
+  standard_status_after="$("$BRIDGE_BIN" status)"
+  [[ "$(json_value "$standard_status_after" status)" == "enrolled" \
+    && "$(json_value "$standard_status_after" device_id)" == "$standard_device_id" \
+    && "$(json_value "$standard_status_after" device_name)" == "$standard_device_name" \
+    && "$(json_value "$standard_status_after" master_endpoint)" == "$standard_master_endpoint" \
+    && "$(json_value "$standard_status_after" registry_revision)" == "$standard_registry_revision" \
+    && "$(json_value "$standard_status_after" certificate_not_after_ms)" \
+      == "$standard_certificate_not_after_ms" ]] \
+    || fail "MLX run changed the stable standard Mac bridge profile projection"
+  printf 'jarvis_mac_windows_mlx_live_e2e_ok endpoint=%s sequence_before=%s sequence_success=%s sequence_cancelled=%s sequence_restarted=%s local_inference=verified exact_event_binding=verified cancellation=verified late_output_suppression=verified agent_restart=verified\n' \
+    "$endpoint" "$mlx_sequence_before" "$mlx_sequence_success" \
+    "$mlx_sequence_cancelled" "$mlx_sequence_restarted"
 fi
 
 if [[ "$MODE" == "--run-fixture" ]]; then

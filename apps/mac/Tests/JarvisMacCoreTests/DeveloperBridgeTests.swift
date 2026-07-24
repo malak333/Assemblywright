@@ -211,6 +211,8 @@ private actor FakeDeveloperAgentSession: JarvisMacDeveloperAgentSession {
     private(set) var acceptedBatches: [Data] = []
     private(set) var executedJobs: [Data] = []
     private(set) var cancellations: [Data] = []
+    private(set) var executedMLXJobs: [Data] = []
+    private(set) var mlxCancellations: [Data] = []
     var fixtureResult: Data?
     var cancellationAcknowledgement: Data?
     let fixtureDelayMilliseconds: UInt64
@@ -269,6 +271,25 @@ private actor FakeDeveloperAgentSession: JarvisMacDeveloperAgentSession {
         cancellations.append(instruction)
         guard let cancellationAcknowledgement else {
             throw JarvisMacDeveloperEventRelayError.fixtureJobRejected
+        }
+        return cancellationAcknowledgement
+    }
+
+    func executeMLXJob(_ job: Data) async throws -> Data {
+        executedMLXJobs.append(job)
+        if fixtureDelayMilliseconds > 0 {
+            try await Task.sleep(for: .milliseconds(fixtureDelayMilliseconds))
+        }
+        guard let fixtureResult else {
+            throw JarvisMacDeveloperEventRelayError.mlxJobRejected
+        }
+        return fixtureResult
+    }
+
+    func cancelMLXJob(_ instruction: Data) async throws -> Data {
+        mlxCancellations.append(instruction)
+        guard let cancellationAcknowledgement else {
+            throw JarvisMacDeveloperEventRelayError.mlxJobRejected
         }
         return cancellationAcknowledgement
     }
@@ -1237,6 +1258,225 @@ struct DeveloperBridgeTests {
         }
     }
 
+    @Test("MLX relay opt-in is complete, mutually exclusive, and keeps standard identity")
+    func mlxRelayConfigurationIsStrictAndUsesStandardIdentity() throws {
+        let base = [
+            JarvisDeveloperBridgeProcessConfiguration.executableEnvironmentKey:
+                "/tmp/jarvis-mac-bridge",
+            JarvisDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey:
+                "ABCDEFGHIJ",
+            JarvisDeveloperBridgeProcessConfiguration.agentExecutableEnvironmentKey:
+                "/tmp/jarvis-agent",
+            JarvisDeveloperBridgeProcessConfiguration.agentDataDirectoryEnvironmentKey:
+                "/tmp/jarvis-agent-data"
+        ]
+        var enabled = base
+        enabled[JarvisDeveloperBridgeProcessConfiguration.mlxJobsEnabledEnvironmentKey] =
+            "true"
+        enabled[JarvisDeveloperBridgeProcessConfiguration.mlxExecutableEnvironmentKey] =
+            "/opt/jarvis/bin/mlx-runner"
+        enabled[
+            JarvisDeveloperBridgeProcessConfiguration.mlxModelDirectoryEnvironmentKey
+        ] = "/opt/jarvis/models/mlx-local"
+        enabled[JarvisDeveloperBridgeProcessConfiguration.mlxModelIDEnvironmentKey] =
+            "mlx-local"
+
+        let configuration = JarvisDeveloperBridgeProcessConfiguration(environment: enabled)
+        let relay = try #require(configuration.eventRelayConfiguration)
+        #expect(relay.mlxJobsEnabled)
+        #expect(!relay.fixtureJobsEnabled)
+        #expect(relay.mlxModelID == "mlx-local")
+        #expect(
+            FoundationJarvisDeveloperBridgeProcessLauncher.helperArguments(
+                eventRelayConfiguration: relay
+            ) == ["relay"]
+        )
+        let document = try relay.encodeStartupDocument()
+        let decoded = try JarvisMacDeveloperEventRelayConfiguration
+            .decodeStartupDocument(document)
+        #expect(decoded == relay)
+        let object = try #require(
+            JSONSerialization.jsonObject(with: document) as? [String: Any]
+        )
+        #expect((object["version"] as? NSNumber)?.intValue == 3)
+        #expect(object["mlx_executable_path"] as? String == "/opt/jarvis/bin/mlx-runner")
+        #expect(object["mlx_model_dir"] as? String == "/opt/jarvis/models/mlx-local")
+        #expect(object["mlx_model_id"] as? String == "mlx-local")
+
+        for missing in [
+            JarvisDeveloperBridgeProcessConfiguration.mlxExecutableEnvironmentKey,
+            JarvisDeveloperBridgeProcessConfiguration.mlxModelDirectoryEnvironmentKey,
+            JarvisDeveloperBridgeProcessConfiguration.mlxModelIDEnvironmentKey
+        ] {
+            var partial = enabled
+            partial.removeValue(forKey: missing)
+            #expect(
+                JarvisDeveloperBridgeProcessConfiguration(environment: partial)
+                    .executableURL == nil
+            )
+        }
+        var mixed = enabled
+        mixed[
+            JarvisDeveloperBridgeProcessConfiguration.fixtureJobsEnabledEnvironmentKey
+        ] = "true"
+        #expect(
+            JarvisDeveloperBridgeProcessConfiguration(environment: mixed).executableURL
+                == nil
+        )
+        var unexpectedFields = base
+        unexpectedFields[
+            JarvisDeveloperBridgeProcessConfiguration.mlxModelIDEnvironmentKey
+        ] = "mlx-local"
+        #expect(
+            JarvisDeveloperBridgeProcessConfiguration(environment: unexpectedFields)
+                .executableURL == nil
+        )
+
+        var malformed = object
+        malformed["mlx_model_id"] = "\n"
+        #expect(throws: JarvisMacDeveloperEventRelayError.invalidStartupDocument) {
+            _ = try JarvisMacDeveloperEventRelayConfiguration.decodeStartupDocument(
+                try JSONSerialization.data(withJSONObject: malformed)
+            )
+        }
+        malformed = object
+        malformed["mlx_model_dir"] = "relative/model"
+        #expect(throws: JarvisMacDeveloperEventRelayError.invalidStartupDocument) {
+            _ = try JarvisMacDeveloperEventRelayConfiguration.decodeStartupDocument(
+                try JSONSerialization.data(withJSONObject: malformed)
+            )
+        }
+        malformed = object
+        malformed["fixture_jobs_enabled"] = true
+        #expect(throws: JarvisMacDeveloperEventRelayError.invalidStartupDocument) {
+            _ = try JarvisMacDeveloperEventRelayConfiguration.decodeStartupDocument(
+                try JSONSerialization.data(withJSONObject: malformed)
+            )
+        }
+    }
+
+    @Test("MLX relay validates bounded work and returns only a bound result")
+    func mlxJobRelayAcceptsValidWorkAndRejectsDrift() async throws {
+        let mlx = try mlxJobDocuments(connectionEpoch: 64)
+        let configuration = mlxRelayConfiguration()
+        let deviceID = UUID(uuidString: "22222222-2222-4222-8222-222222222222")
+
+        let successAgent = FakeDeveloperAgentSession(fixtureResult: mlx.result)
+        let successRelay = JarvisMacDeveloperEventRelay(
+            configuration: configuration,
+            deviceID: deviceID,
+            launcher: FakeDeveloperAgentLauncher(session: successAgent)
+        )
+        let successMaster = FakeFixtureBridgeSession(
+            connectionEpoch: 64,
+            eventBatch: emptyEventBatch(),
+            job: mlx.job,
+            acceptedResult: mlx.acceptedResult
+        )
+        _ = try await successRelay.relayEvents(using: successMaster)
+        #expect(await successAgent.executedMLXJobs == [mlx.job])
+        #expect(await successAgent.executedJobs.isEmpty)
+        #expect(
+            await successMaster.requests.map(\.path).contains(
+                JarvisMacDeveloperEventRelay.remoteResultPath
+            )
+        )
+        try await successRelay.stop()
+
+        var badJob = try #require(
+            JSONSerialization.jsonObject(with: mlx.job) as? [String: Any]
+        )
+        badJob["capability_id"] = "fixture.reasoning"
+        let rejectedAgent = FakeDeveloperAgentSession(fixtureResult: mlx.result)
+        let rejectedRelay = JarvisMacDeveloperEventRelay(
+            configuration: configuration,
+            deviceID: deviceID,
+            launcher: FakeDeveloperAgentLauncher(session: rejectedAgent)
+        )
+        let rejectedMaster = FakeFixtureBridgeSession(
+            connectionEpoch: 64,
+            eventBatch: emptyEventBatch(),
+            job: try JSONSerialization.data(withJSONObject: badJob, options: [.sortedKeys]),
+            acceptedResult: mlx.acceptedResult
+        )
+        await #expect(throws: JarvisMacDeveloperEventRelayError.mlxJobRejected) {
+            _ = try await rejectedRelay.relayEvents(using: rejectedMaster)
+        }
+        #expect(await rejectedAgent.executedMLXJobs.isEmpty)
+        try await rejectedRelay.stop()
+
+        var badResult = try #require(
+            JSONSerialization.jsonObject(with: mlx.result) as? [String: Any]
+        )
+        var badPayload = try #require(badResult["payload"] as? [String: Any])
+        badPayload["model"] = "other-model"
+        let badPayloadData = try JSONSerialization.data(
+            withJSONObject: badPayload,
+            options: [.sortedKeys]
+        )
+        badResult["payload"] = badPayload
+        badResult["payload_sha256"] = Array(SHA256.hash(data: badPayloadData))
+        let resultAgent = FakeDeveloperAgentSession(
+            fixtureResult: try JSONSerialization.data(
+                withJSONObject: badResult,
+                options: [.sortedKeys]
+            )
+        )
+        let resultRelay = JarvisMacDeveloperEventRelay(
+            configuration: configuration,
+            deviceID: deviceID,
+            launcher: FakeDeveloperAgentLauncher(session: resultAgent)
+        )
+        let resultMaster = FakeFixtureBridgeSession(
+            connectionEpoch: 64,
+            eventBatch: emptyEventBatch(),
+            job: mlx.job,
+            acceptedResult: mlx.acceptedResult
+        )
+        await #expect(throws: JarvisMacDeveloperEventRelayError.mlxJobRejected) {
+            _ = try await resultRelay.relayEvents(using: resultMaster)
+        }
+        #expect(
+            !(await resultMaster.requests.map(\.path).contains(
+                JarvisMacDeveloperEventRelay.remoteResultPath
+            ))
+        )
+        try await resultRelay.stop()
+    }
+
+    @Test("Authoritative cancellation suppresses an in-flight MLX result")
+    func mlxJobRelayAcknowledgesCancellationWithoutResult() async throws {
+        let mlx = try mlxJobDocuments(connectionEpoch: 65)
+        let agent = FakeDeveloperAgentSession(
+            fixtureResult: mlx.result,
+            cancellationAcknowledgement: mlx.cancellationAcknowledgement,
+            fixtureDelayMilliseconds: 5_000
+        )
+        let relay = JarvisMacDeveloperEventRelay(
+            configuration: mlxRelayConfiguration(),
+            deviceID: UUID(uuidString: "22222222-2222-4222-8222-222222222222"),
+            launcher: FakeDeveloperAgentLauncher(session: agent)
+        )
+        let master = FakeFixtureBridgeSession(
+            connectionEpoch: 65,
+            eventBatch: emptyEventBatch(),
+            job: mlx.job,
+            cancellation: mlx.cancellation,
+            acceptedResult: mlx.acceptedResult
+        )
+
+        _ = try await relay.relayEvents(using: master)
+
+        #expect(await agent.executedMLXJobs == [mlx.job])
+        #expect(await agent.mlxCancellations == [mlx.cancellation])
+        let paths = await master.requests.map(\.path)
+        #expect(paths.contains(
+            JarvisMacDeveloperEventRelay.remoteCancellationAcknowledgementPath
+        ))
+        #expect(!paths.contains(JarvisMacDeveloperEventRelay.remoteResultPath))
+        try await relay.stop()
+    }
+
     @Test("Supervisor backoff is bounded")
     func supervisorBackoffIsBounded() {
         #expect(JarvisMacBridgeSupervisor.backoffMilliseconds(for: 1) == 1_000)
@@ -1711,6 +1951,199 @@ struct DeveloperBridgeTests {
         }
     }
 
+    @Test("MLX control receipts bind exact identities and ordered event sequences")
+    func mlxControlReceiptsAreStrict() throws {
+        let success = try JarvisMacMLXControlReceipt.decodeStrict(Data(
+            #"{"schema_version":1,"status":"mlx_success_observed","task_id":"11111111-1111-4111-8111-111111111111","step_id":"22222222-2222-4222-8222-222222222222","stream_id":"33333333-3333-4333-8333-333333333333","device_id":"66666666-6666-4666-8666-666666666666","connection_epoch":7,"queued_sequence":10,"leased_sequence":11,"succeeded_sequence":12}"#.utf8
+        ))
+        #expect(success.status == .successObserved)
+        #expect(success.succeededSequence == 12)
+        #expect(success.connectionEpoch == 7)
+
+        let leased = try JarvisMacMLXControlReceipt.decodeStrict(Data(
+            #"{"schema_version":1,"status":"mlx_cancellation_leased","task_id":"44444444-4444-4444-8444-444444444444","step_id":"55555555-5555-4555-8555-555555555555","stream_id":"33333333-3333-4333-8333-333333333333","device_id":"66666666-6666-4666-8666-666666666666","connection_epoch":8,"queued_sequence":18,"leased_sequence":19}"#.utf8
+        ))
+        #expect(leased.status == .cancellationLeased)
+        #expect(leased.leasedSequence == 19)
+
+        let cancellation = try JarvisMacMLXControlReceipt.decodeStrict(Data(
+            #"{"schema_version":1,"status":"mlx_cancellation_observed","task_id":"44444444-4444-4444-8444-444444444444","step_id":"55555555-5555-4555-8555-555555555555","stream_id":"33333333-3333-4333-8333-333333333333","device_id":"66666666-6666-4666-8666-666666666666","connection_epoch":8,"requested_sequence":20,"acknowledged_sequence":21,"cancelled_sequence":22,"late_output_window_ms":7000}"#.utf8
+        ))
+        #expect(cancellation.status == .cancellationObserved)
+        #expect(cancellation.cancelledSequence == 22)
+
+        let resumed = try JarvisMacMLXControlReceipt.decodeStrict(Data(
+            #"{"schema_version":1,"status":"mlx_emergency_resumed"}"#.utf8
+        ))
+        #expect(resumed.status == .emergencyResumed)
+
+        for invalid in [
+            #"{"status":"mlx_emergency_resumed"}"#,
+            #"{"schema_version":1,"status":"mlx_success_observed","task_id":"11111111-1111-4111-8111-111111111111","step_id":"22222222-2222-4222-8222-222222222222","stream_id":"33333333-3333-4333-8333-333333333333","queued_sequence":10,"leased_sequence":11,"succeeded_sequence":12,"output":"forbidden"}"#,
+            #"{"schema_version":1,"status":"mlx_cancellation_observed","task_id":"44444444-4444-4444-8444-444444444444","step_id":"55555555-5555-4555-8555-555555555555","stream_id":"33333333-3333-4333-8333-333333333333","requested_sequence":20,"acknowledged_sequence":21,"cancelled_sequence":22,"late_output_window_ms":6000}"#,
+            #"{"schema_version":1,"\u0073tatus":"mlx_emergency_resumed","status":"mlx_emergency_resumed"}"#
+        ] {
+            #expect(throws: JarvisDeveloperBridgeProcessError.invalidSnapshot) {
+                _ = try JarvisMacMLXControlReceipt.decodeStrict(Data(invalid.utf8))
+            }
+        }
+    }
+
+    @MainActor
+    @Test("Live standard profile executes bounded local MLX under Windows control")
+    func liveSignedHelperAppLifecycleRunsMLXJob() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["JARVIS_MAC_DEVELOPER_MLX_LIVE_E2E"] == "true" else {
+            return
+        }
+        let configuration = JarvisDeveloperBridgeProcessConfiguration(environment: environment)
+        try #require(configuration.executableURL != nil)
+        try #require(configuration.expectedTeamIdentifier != nil)
+        try #require(configuration.eventRelayConfiguration?.mlxJobsEnabled == true)
+        try #require(configuration.eventRelayConfiguration?.fixtureJobsEnabled == false)
+        let coordinationDirectory = try #require(
+            environment["JARVIS_MAC_DEVELOPER_MLX_COORDINATION_DIR"]
+        )
+        try #require(coordinationDirectory.hasPrefix("/"))
+        var directoryMetadata = stat()
+        try #require(
+            lstat(coordinationDirectory, &directoryMetadata) == 0
+                && directoryMetadata.st_mode & S_IFMT == S_IFDIR
+                && directoryMetadata.st_uid == geteuid()
+                && directoryMetadata.st_mode & 0o777 == 0o700
+        )
+        let coordinationURL = URL(
+            fileURLWithPath: coordinationDirectory,
+            isDirectory: true
+        ).standardizedFileURL
+        let lifecycle = JarvisDeveloperBridgeProcessLifecycle(configuration: configuration)
+
+        let evidence = try await withStartedBridgeLifecycle(lifecycle) {
+            func cancelledByHarness() throws {
+                try Task.checkCancellation()
+                if FileManager.default.fileExists(
+                    atPath: coordinationURL.appendingPathComponent("cancel").path
+                ) {
+                    throw CancellationError()
+                }
+            }
+            func controlReceipt(
+                named name: String
+            ) async throws -> JarvisMacMLXControlReceipt {
+                let url = coordinationURL.appendingPathComponent(name)
+                for _ in 0 ..< 4_800 where !FileManager.default.fileExists(atPath: url.path) {
+                    try cancelledByHarness()
+                    try await Task.sleep(for: .milliseconds(50))
+                }
+                var metadata = stat()
+                try #require(
+                    lstat(url.path, &metadata) == 0
+                        && metadata.st_mode & S_IFMT == S_IFREG
+                        && metadata.st_uid == geteuid()
+                        && metadata.st_mode & 0o777 == 0o600
+                )
+                let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+                return try JarvisMacMLXControlReceipt.decodeStrict(data)
+            }
+
+            for _ in 0 ..< 2_400 where lifecycle.status.phase != .connected {
+                try cancelledByHarness()
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            let connectedBefore = lifecycle.status
+            try #require(connectedBefore.phase == .connected)
+            let epochBefore = try #require(connectedBefore.connectionEpoch)
+            try #require(epochBefore > 0)
+            try Data("\(epochBefore)\n".utf8).write(
+                to: coordinationURL.appendingPathComponent("mlx-ready"),
+                options: .atomic
+            )
+
+            let success = try await controlReceipt(named: "success-control.json")
+            try #require(success.status == .successObserved)
+            let successStreamID = try #require(success.streamID)
+            let successTaskID = try #require(success.taskID)
+            let successStepID = try #require(success.stepID)
+            let succeededSequence = try #require(success.succeededSequence)
+            let successDeviceID = try #require(success.deviceID)
+            let successEpoch = try #require(success.connectionEpoch)
+            try #require(successEpoch >= epochBefore)
+            try Data("\(succeededSequence)\n".utf8).write(
+                to: coordinationURL.appendingPathComponent("success-observed"),
+                options: .atomic
+            )
+
+            let leased = try await controlReceipt(named: "cancellation-control.json")
+            let leasedSequence = try #require(leased.leasedSequence)
+            try #require(
+                leased.status == .cancellationLeased
+                    && leased.streamID == successStreamID
+                    && leased.deviceID == successDeviceID
+                    && leased.connectionEpoch.map({ $0 >= successEpoch }) == true
+                    && leased.taskID != successTaskID
+                    && leased.stepID != successStepID
+                    && leased.queuedSequence.map({ $0 > succeededSequence }) == true
+            )
+            try Data("\(leasedSequence)\n".utf8).write(
+                to: coordinationURL.appendingPathComponent("cancellation-leased-observed"),
+                options: .atomic
+            )
+
+            for _ in 0 ..< 4_800 where lifecycle.status.phase != .paused {
+                try cancelledByHarness()
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            let paused = lifecycle.status
+            try #require(paused.phase == .paused)
+            let pausedEpoch = try #require(paused.connectionEpoch)
+            try #require(pausedEpoch >= epochBefore)
+            let cancelled = try await controlReceipt(named: "pause-control.json")
+            let cancelledSequence = try #require(cancelled.cancelledSequence)
+            try #require(
+                cancelled.status == .cancellationObserved
+                    && cancelled.taskID == leased.taskID
+                    && cancelled.stepID == leased.stepID
+                    && cancelled.streamID == successStreamID
+                    && cancelled.deviceID == successDeviceID
+                    && cancelled.connectionEpoch == leased.connectionEpoch
+                    && cancelled.requestedSequence.map({ $0 > leasedSequence }) == true
+            )
+            try Data("\(cancelledSequence)\n".utf8).write(
+                to: coordinationURL.appendingPathComponent("cancellation-observed"),
+                options: .atomic
+            )
+
+            let resumed = try await controlReceipt(named: "resume-control.json")
+            try #require(resumed.status == .emergencyResumed)
+            for _ in 0 ..< 4_800 where lifecycle.status.phase != .connected {
+                try cancelledByHarness()
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            let connectedAfter = lifecycle.status
+            try #require(connectedAfter.phase == .connected)
+            let epochAfter = try #require(connectedAfter.connectionEpoch)
+            try #require(epochAfter >= pausedEpoch)
+            try #require(connectedAfter.masterEndpoint == connectedBefore.masterEndpoint)
+            try Data("\(epochAfter)\n".utf8).write(
+                to: coordinationURL.appendingPathComponent("mlx-complete"),
+                options: .atomic
+            )
+            return (
+                connectedBefore: connectedBefore,
+                epochBefore: epochBefore,
+                epochAfter: epochAfter
+            )
+        }
+
+        #expect(lifecycle.status.phase == .stopped)
+        print(
+            "jarvis_mac_app_mlx_live_e2e_ok "
+                + "endpoint=\(evidence.connectedBefore.masterEndpoint ?? "missing") "
+                + "connection_epoch_before=\(evidence.epochBefore) "
+                + "connection_epoch_after=\(evidence.epochAfter)"
+        )
+    }
+
     @MainActor
     @Test("Live fixture profile executes only through owner-coordinated Windows control")
     func liveSignedHelperAppLifecycleRunsFixtureJob() async throws {
@@ -2006,6 +2439,125 @@ private func fixtureJobDocuments(
         "operation": "synthetic_echo",
         "output": "fixture-public-input",
         "synthetic": true
+    ]
+    let payloadData = try JSONSerialization.data(
+        withJSONObject: payload,
+        options: [.sortedKeys]
+    )
+    let payloadDigest = Array(SHA256.hash(data: payloadData))
+    let resultObject: [String: Any] = [
+        "protocol_version": 1,
+        "connection_epoch": NSNumber(value: connectionEpoch),
+        "sequence": 11,
+        "task_id": taskID,
+        "step_id": stepID,
+        "attempt_id": attemptID,
+        "lease_id": leaseID,
+        "cancellation_id": cancellationID,
+        "status": "completed",
+        "context_sha256": contextDigest,
+        "payload_sha256": payloadDigest,
+        "payload": payload
+    ]
+    let cancellationObject: [String: Any] = [
+        "protocol_version": 1,
+        "connection_epoch": NSNumber(value: connectionEpoch),
+        "sequence": 11,
+        "task_id": taskID,
+        "step_id": stepID,
+        "attempt_id": attemptID,
+        "lease_id": leaseID,
+        "cancellation_id": cancellationID,
+        "deadline_after_ms": 2_000
+    ]
+    let acknowledgementObject: [String: Any] = [
+        "protocol_version": 1,
+        "connection_epoch": NSNumber(value: connectionEpoch),
+        "sequence": 12,
+        "task_id": taskID,
+        "step_id": stepID,
+        "attempt_id": attemptID,
+        "lease_id": leaseID,
+        "cancellation_id": cancellationID,
+        "status": "cancelled"
+    ]
+    let acceptedResultObject: [String: Any] = [
+        "task_id": taskID,
+        "step_id": stepID,
+        "status": "succeeded",
+        "payload_sha256": payloadDigest
+    ]
+    return FixtureJobDocuments(
+        job: try JSONSerialization.data(withJSONObject: jobObject, options: [.sortedKeys]),
+        result: try JSONSerialization.data(
+            withJSONObject: resultObject,
+            options: [.sortedKeys]
+        ),
+        cancellation: try JSONSerialization.data(
+            withJSONObject: cancellationObject,
+            options: [.sortedKeys]
+        ),
+        cancellationAcknowledgement: try JSONSerialization.data(
+            withJSONObject: acknowledgementObject,
+            options: [.sortedKeys]
+        ),
+        acceptedResult: try JSONSerialization.data(
+            withJSONObject: acceptedResultObject,
+            options: [.sortedKeys]
+        )
+    )
+}
+
+private func mlxRelayConfiguration() -> JarvisMacDeveloperEventRelayConfiguration {
+    JarvisMacDeveloperEventRelayConfiguration(
+        agentExecutableURL: URL(fileURLWithPath: "/tmp/jarvis-agent"),
+        agentDataDirectoryURL: URL(fileURLWithPath: "/tmp/jarvis-agent-data"),
+        mlxJobsEnabled: true,
+        mlxExecutableURL: URL(fileURLWithPath: "/opt/jarvis/bin/mlx-runner"),
+        mlxModelDirectoryURL: URL(fileURLWithPath: "/opt/jarvis/models/mlx-local"),
+        mlxModelID: "mlx-local"
+    )
+}
+
+private func mlxJobDocuments(connectionEpoch: UInt64) throws -> FixtureJobDocuments {
+    let taskID = "11111111-1111-4111-8111-111111111111"
+    let stepID = "22222222-2222-4222-8222-222222222222"
+    let attemptID = "33333333-3333-4333-8333-333333333333"
+    let leaseID = "44444444-4444-4444-8444-444444444444"
+    let cancellationID = "55555555-5555-4555-8555-555555555555"
+    let context: [String: Any] = [
+        "operation": "generate_text",
+        "prompt": "Explain the local-first boundary.",
+        "max_tokens": 128,
+        "temperature_milli": 700
+    ]
+    let contextData = try JSONSerialization.data(
+        withJSONObject: context,
+        options: [.sortedKeys]
+    )
+    let contextDigest = Array(SHA256.hash(data: contextData))
+    let jobObject: [String: Any] = [
+        "protocol_version": 1,
+        "connection_epoch": NSNumber(value: connectionEpoch),
+        "sequence": 10,
+        "task_id": taskID,
+        "step_id": stepID,
+        "attempt_id": attemptID,
+        "lease_id": leaseID,
+        "cancellation_id": cancellationID,
+        "capability_id": "mlx.reasoning",
+        "selected_model": "mlx-local",
+        "sensitivity": "public",
+        "context_handling": "ephemeral_no_retention",
+        "lease_duration_ms": 10_000,
+        "deadline_after_ms": 10_000,
+        "context_sha256": contextDigest,
+        "context": context
+    ]
+    let payload: [String: Any] = [
+        "operation": "generate_text",
+        "output": "Local inference stays on the enrolled Mac worker.",
+        "model": "mlx-local"
     ]
     let payloadData = try JSONSerialization.data(
         withJSONObject: payload,
